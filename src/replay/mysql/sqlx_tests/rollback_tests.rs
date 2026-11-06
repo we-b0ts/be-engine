@@ -26,7 +26,7 @@ async fn count_distinct_union_query_allows_only_proven_session_cleanup() {
 }
 
 #[tokio::test]
-async fn matched_ranked_union_read_keeps_cleanup_required_for_excluded_calls() {
+async fn ranked_union_admits_only_effect_free_reads_without_a_transaction() {
     tokio::time::timeout(Duration::from_secs(15), async {
         for pure in [true, false] {
             let value = if pure { "id" } else { "GET_LOCK('x',1)" };
@@ -51,13 +51,17 @@ async fn matched_ranked_union_read_keeps_cleanup_required_for_excluded_calls() {
             }
             let (temp, addr, runtime, task) = fixture(&records, false).await;
             let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
-            assert_eq!(sqlx::query(&sql).fetch_one(&mut client).await.unwrap().get::<i32,_>("id"),7);
-            client.close().await.unwrap();
+            let row = sqlx::query(&sql).fetch_one(&mut client).await;
+            if pure {
+                assert_eq!(row.unwrap().get::<i32,_>("id"),7);
+                client.close().await.unwrap();
+            } else {
+                assert!(row.is_err());
+            }
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.matched_query_count, 1);
+            assert_eq!(state.mysql.events.matched_query_count, usize::from(pure));
             assert_eq!(state.allowed_unused_rollbacks().len(), if pure { 2 } else { 1 });
-            assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), usize::from(!pure),
-                "matching a query does not prove lock functions have no effects");
+            assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), if pure { 0 } else { 2 });
             task.abort();
         }
     }).await.unwrap();

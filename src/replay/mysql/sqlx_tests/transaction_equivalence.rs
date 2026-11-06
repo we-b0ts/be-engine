@@ -132,7 +132,7 @@ async fn sqlx_explicit_transactions_cover_one_persistent_source_autocommit_setti
 }
 
 #[tokio::test]
-async fn pooled_autocommit_writes_followed_by_commit_keep_the_original_dirty_setup() {
+async fn pooled_autocommit_rejects_a_required_write_before_delivery() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let values = multi_write_records();
         let (temp, addr, runtime, task) = fixture(&values, false).await;
@@ -148,27 +148,100 @@ async fn pooled_autocommit_writes_followed_by_commit_keep_the_original_dirty_set
             .fetch_one(&mut client)
             .await
             .unwrap();
-        sqlx::query("UPDATE users SET active=? WHERE id=?")
-            .bind(1_i32)
-            .bind(1_i32)
-            .execute(&mut client)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE users SET active=? WHERE id=?")
-            .bind(2_i32)
-            .bind(1_i32)
-            .execute(&mut client)
-            .await
-            .unwrap();
-        sqlx::raw_sql("COMMIT").execute(&mut client).await.unwrap();
+        assert!(
+            sqlx::query("UPDATE users SET active=? WHERE id=?")
+                .bind(1_i32)
+                .bind(1_i32)
+                .execute(&mut client)
+                .await
+                .is_err()
+        );
         let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 1);
         assert!(state.transaction_equivalent_autocommit().is_empty());
         let unused = state.unused_exchanges(ReplaySource::Case);
-        assert_eq!(unused.len(), 2);
+        for sequence in [3, 6, 7, 8] {
+            assert!(
+                unused
+                    .iter()
+                    .any(|exchange| exchange.query_sequence == Some(sequence))
+            );
+        }
+        let unmatched = state.mysql.events.unmatched_queries.last().unwrap();
+        let diagnostic = unmatched.diagnostic.as_ref().unwrap();
+        assert_eq!(diagnostic["reason"], "target_transaction_missing");
+        assert_eq!(diagnostic["stage"], "candidate_admission");
         assert_eq!(
-            unused[0].diagnostic.as_ref().unwrap()["reason"],
-            "target_transaction_missing"
+            diagnostic["source_transactions"][0]["target_status_before"],
+            2
         );
+        assert!(diagnostic["source_transactions"][0]["target_status_after"].is_null());
+        let index = unmatched.recorded_index.unwrap();
+        assert_eq!(state.mysql.exchanges[index].record.query_sequence, Some(6));
+        assert!(unmatched.target_event_index.is_some());
+        task.abort();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn autocommit_read_skips_an_identical_member_of_a_required_transaction() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let mut values = multi_write_records();
+        let mut begin = values[0].clone();
+        begin["sql"] = json!("BEGIN");
+        begin["query_sequence"] = json!(4);
+        begin["response"]["server_status"] = json!(3);
+        values[0] = begin;
+        for record in &mut values[1..] {
+            record["server_status_before"] = json!(3);
+            record["response"]["server_status"] = json!(3);
+        }
+        values.last_mut().unwrap()["response"]["server_status"] = json!(2);
+        let mut ordinary = values[1].clone();
+        let ordinary_connection = Uuid::from_u128(19);
+        ordinary["connection_id"] = json!(ordinary_connection);
+        ordinary["server_status_before"] = json!(2);
+        ordinary["response"]["server_status"] = json!(2);
+        values.push(ordinary);
+
+        let (temp, addr, runtime, task) = fixture(&values, false).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        let read = || sqlx::query("SELECT id FROM users WHERE id=?").bind(1_i32);
+        assert_eq!(
+            read()
+                .fetch_one(&mut client)
+                .await
+                .unwrap()
+                .get::<i32, _>(0),
+            1
+        );
+        {
+            let state = runtime.state.lock().await;
+            assert!(state.mysql.events.unmatched_queries.is_empty());
+            assert_eq!(
+                state.mysql.events.matched_queries[0].source_connection_id,
+                Some(ordinary_connection)
+            );
+        }
+        assert!(read().fetch_one(&mut client).await.is_err());
+        let state = runtime.state.lock().await;
+        let unmatched = state.mysql.events.unmatched_queries.last().unwrap();
+        let candidate = &state.mysql.exchanges[unmatched.recorded_index.unwrap()];
+        assert_eq!(candidate.record.query_sequence, Some(5));
+        assert!(candidate.status.is_available());
+        assert_eq!(
+            unmatched.diagnostic.as_ref().unwrap()["stage"],
+            "candidate_admission"
+        );
+        assert_eq!(state.mysql.events.matched_query_count, 1);
         task.abort();
     })
     .await
@@ -202,50 +275,40 @@ async fn sqlx_explicit_rollback_covers_a_recorded_implicit_rollback() {
 }
 
 #[tokio::test]
-async fn matching_all_business_sql_without_begin_or_commit_does_not_match_the_transaction() {
+async fn matching_all_business_sql_without_commit_does_not_match_the_transaction() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        for with_begin in [false, true] {
-            let values = multi_write_records();
-            let (temp, addr, runtime, task) = fixture(&values, false).await;
-            let mut client = connect(
-                addr,
-                &temp
-                    .path()
-                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
-            )
-            .await;
-            if with_begin {
-                sqlx::raw_sql("BEGIN").execute(&mut client).await.unwrap();
-            }
-            sqlx::query("SELECT id FROM users WHERE id=?")
-                .bind(1_i32)
-                .fetch_one(&mut client)
-                .await
-                .unwrap();
+        let values = multi_write_records();
+        let (temp, addr, runtime, task) = fixture(&values, false).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        sqlx::raw_sql("BEGIN").execute(&mut client).await.unwrap();
+        sqlx::query("SELECT id FROM users WHERE id=?")
+            .bind(1_i32)
+            .fetch_one(&mut client)
+            .await
+            .unwrap();
+        for value in [1_i32, 2_i32] {
             sqlx::query("UPDATE users SET active=? WHERE id=?")
-                .bind(1_i32)
+                .bind(value)
                 .bind(1_i32)
                 .execute(&mut client)
                 .await
                 .unwrap();
-            let state = runtime.state.lock().await;
-            drop(state);
-            sqlx::query("UPDATE users SET active=? WHERE id=?")
-                .bind(2_i32)
-                .bind(1_i32)
-                .execute(&mut client)
-                .await
-                .unwrap();
-            let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.matched_query_count, 3);
-            assert!(state.transaction_equivalent_autocommit().is_empty());
-            let unused = state.unused_exchanges(ReplaySource::Case);
-            assert_eq!(unused.len(), 2, "SET and COMMIT must both remain required");
-            assert!(unused.iter().any(|e| e.query_sequence == Some(3)));
-            assert!(unused.iter().any(|e| e.query_sequence == Some(8)));
-            assert!(state.snapshot_report().is_dirty());
-            task.abort();
         }
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 3);
+        assert!(state.transaction_equivalent_autocommit().is_empty());
+        let unused = state.unused_exchanges(ReplaySource::Case);
+        assert_eq!(unused.len(), 2, "SET and COMMIT must both remain required");
+        assert!(unused.iter().any(|e| e.query_sequence == Some(3)));
+        assert!(unused.iter().any(|e| e.query_sequence == Some(8)));
+        assert!(state.snapshot_report().is_dirty());
+        task.abort();
     })
     .await
     .unwrap();

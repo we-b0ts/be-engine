@@ -7,6 +7,24 @@ pub(in crate::replay::mysql) struct TransactionMatch<'a> {
     pub(in crate::replay::mysql) preferred_end: Option<usize>,
     pub(in crate::replay::mysql) status_flags: u16,
     pub(in crate::replay::mysql) connection: Uuid,
+    pub(in crate::replay::mysql) has_active_transaction: bool,
+}
+
+impl TransactionMatch<'_> {
+    pub(super) fn missing_for_member(
+        self,
+        registry: &super::super::transaction_equivalence::Registry,
+        index: usize,
+        exchange: &ReplayExchange,
+        normalized_sql: Option<&str>,
+    ) -> bool {
+        self.status_flags & 3 == super::super::SERVER_STATUS_AUTOCOMMIT
+            && !self.has_active_transaction
+            && !matches!(normalized_sql, Some("begin" | "start transaction"))
+            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
+            && !exchange.record.lifecycle_cleanup
+            && registry.requires_active_member(index)
+    }
 }
 
 impl ReplayState {
@@ -81,6 +99,7 @@ impl ReplayState {
             Some("commit" | "rollback")
         );
         let mut baseline_semantic_target = None;
+        let mut transaction_rejection = None;
         let actual_autocommit = sql
             .and_then(crate::mysql::autocommit::assignment)
             .filter(|_| {
@@ -104,16 +123,21 @@ impl ReplayState {
             (ReplaySource::Case, true),
         ] {
             let hypothesis = if allow_hypotheses {
-                Some(self.select_mysql_hypothesis(
-                    active_case_id.as_deref()?,
-                    identity,
-                    command,
-                    observed_sql,
-                    observed_params,
-                    transaction,
-                    request_observed_at,
-                    observation_id,
-                )?)
+                let candidate = active_case_id.as_deref().and_then(|case| {
+                    self.select_mysql_hypothesis(
+                        case,
+                        identity,
+                        command,
+                        observed_sql,
+                        observed_params,
+                        transaction,
+                        request_observed_at,
+                        observation_id,
+                        &mut transaction_rejection,
+                    )
+                });
+                let Some(candidate) = candidate else { break };
+                Some(candidate)
             } else {
                 None
             };
@@ -525,6 +549,17 @@ impl ReplayState {
                             };
                             (policy_decision, projected)
                         };
+                        if transaction.is_some_and(|context| {
+                            context.missing_for_member(
+                                &self.mysql.transaction_equivalence,
+                                index,
+                                exchange,
+                                baseline_normalized_sql.as_deref(),
+                            )
+                        }) {
+                            transaction_rejection.get_or_insert(index);
+                            continue;
+                        }
                         let mut exchange = self.mysql.exchanges[index].clone();
                         // Only the delivered copy is projected. Capture identity and
                         // consumption still refer to the original recorded exchange.
@@ -739,6 +774,29 @@ impl ReplayState {
                         });
                     }
                 }
+            }
+        }
+        if let Some((index, context)) = transaction_rejection.zip(transaction) {
+            let source = self.mysql.exchanges[index].source;
+            let diagnostic = self
+                .mysql
+                .transaction_equivalence
+                .missing_transaction_diagnostic(index, context.connection, context.status_flags);
+            self.mysql.isolation.reject_connection(context.connection);
+            self.record_unmatched_in_case(
+                active_case_id.as_deref(),
+                identity,
+                command,
+                observed_sql,
+                observed_params,
+                "MySQL transaction coverage: target_transaction_missing",
+            );
+            if let Some(report) = self.mysql.events.unmatched_queries.last_mut() {
+                report.recorded_source = Some(source);
+                report.recorded_index = Some(index);
+                report.diagnostic = diagnostic;
+                report.target_event_index = observation.event_index;
+                report.target_observation_id = self.mysql.request_observation_id.clone();
             }
         }
         None

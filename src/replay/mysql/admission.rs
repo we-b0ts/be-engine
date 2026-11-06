@@ -11,7 +11,7 @@ pub(super) struct RequestSelection {
     pub(super) case_id: Option<String>,
     pub(super) observation_id: Option<String>,
     pub(super) event_index: Option<usize>,
-    pub(super) rejection_recorded: bool,
+    pub(super) recorded_rejection: Option<String>,
     pub(super) terminal_reason: Option<&'static str>,
 }
 
@@ -22,7 +22,7 @@ struct NativeRequest<'a> {
     params: Option<&'a [RecordedMysqlValue]>,
     case: Option<String>,
     observation: Option<RequestAdmission>,
-    rejection_recorded: bool,
+    recorded_rejection: Option<String>,
     terminal_reason: std::cell::Cell<Option<&'static str>>,
 }
 
@@ -68,6 +68,7 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
                 }),
                 status_flags: self.session.status_flags,
                 connection: self.session.transaction_witness.connection(),
+                has_active_transaction: self.session.transaction_witness.has_active_transaction(),
             }
         });
         let unmatched_before = state.mysql.events.unmatched_queries.len();
@@ -80,7 +81,12 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
             transaction,
             observation,
         );
-        self.rejection_recorded = state.mysql.events.unmatched_queries.len() != unmatched_before;
+        self.recorded_rejection = state
+            .mysql
+            .events
+            .unmatched_queries
+            .get(unmatched_before)
+            .map(|query| query.reason.clone());
         selected.ok_or("no finite MySQL semantic candidate")
     }
 
@@ -118,7 +124,7 @@ pub(super) async fn match_request(
         params,
         case: None,
         observation: None,
-        rejection_recorded: false,
+        recorded_rejection: None,
         terminal_reason: std::cell::Cell::new(None),
     };
     let matched = execute(shared, &mut adapter, tokio::time::Instant::now())
@@ -131,7 +137,7 @@ pub(super) async fn match_request(
         event_index: observation
             .as_ref()
             .and_then(|observation| observation.event_index),
-        rejection_recorded: adapter.rejection_recorded,
+        recorded_rejection: adapter.recorded_rejection,
         terminal_reason: adapter.terminal_reason.get(),
         observation_id: observation
             .as_ref()

@@ -14,6 +14,7 @@ impl ReplayState {
         transaction: Option<TransactionMatch<'_>>,
         observed: DateTime<Utc>,
         observation_id: Option<uuid::Uuid>,
+        transaction_rejection: &mut Option<usize>,
     ) -> Option<(usize, crate::replay::DependencyRuleDecision)> {
         let owner = self.replay_policy.as_ref()?.request_contracts.clone();
         if !owner.pre_match_enabled() {
@@ -30,6 +31,7 @@ impl ReplayState {
         );
         let mut search = crate::replay::candidate_selection::UniqueCandidate::new(256);
         let sql_family = candidates::sql_family(sql);
+        let normalized_sql = sql.map(normalize_sql);
         for index in candidates.iter().copied() {
             let exchange = &self.mysql.exchanges[index];
             if !self.mysql.candidates.permits_sql(index, sql_family)
@@ -75,6 +77,17 @@ impl ReplayState {
             ) else {
                 continue;
             };
+            if transaction.is_some_and(|context| {
+                context.missing_for_member(
+                    &self.mysql.transaction_equivalence,
+                    index,
+                    exchange,
+                    normalized_sql.as_deref(),
+                )
+            }) {
+                transaction_rejection.get_or_insert(index);
+                continue;
+            }
             if search.accept(index, decision).is_err() {
                 self.mysql
                     .events

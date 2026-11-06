@@ -141,7 +141,13 @@ async fn transaction_ending_before_a_trailing_read_is_dirty_without_a_source_set
         write(&mut tx, 1).await;
         write(&mut tx, 2).await;
         tx.commit().await.unwrap();
-        read(&mut reader, 103).await;
+        assert!(
+            sqlx::query("SELECT id FROM items WHERE id=?")
+                .bind(103_i32)
+                .fetch_one(&mut reader)
+                .await
+                .is_err()
+        );
         let state = runtime.state.lock().await;
         assert!(state.snapshot_report().is_dirty());
         let failure = state
@@ -173,15 +179,17 @@ async fn a_single_write_rollback_cannot_be_replaced_by_autocommit() {
         let (temp, address, runtime, task) = fixture(&values, false).await;
         let mut client = connect(address, &ca(&temp)).await;
         read(&mut client, 100).await;
-        write(&mut client, 1).await;
-        read(&mut client, 103).await;
-        sqlx::raw_sql("ROLLBACK")
-            .execute(&mut client)
-            .await
-            .unwrap();
+        assert!(
+            sqlx::query("UPDATE items SET value=? WHERE id=1")
+                .bind(1_i32)
+                .execute(&mut client)
+                .await
+                .is_err()
+        );
         let state = runtime.state.lock().await;
         assert!(state.snapshot_report().is_dirty());
         assert!(state.allowed_unused_rollbacks().is_empty());
+        assert_eq!(state.mysql.events.matched_query_count, 1);
         let failure = state
             .mysql
             .events

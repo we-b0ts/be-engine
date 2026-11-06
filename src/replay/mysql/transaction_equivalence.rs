@@ -68,6 +68,10 @@ impl Transaction {
                 || self.end == "rollback"
                     && matches!(self.single_update_outcome, "error" | "zero_affected_rows"))
     }
+    fn can_cover_with_autocommit(&self, index: usize) -> bool {
+        self.autocommit_eligible() && self.members.first() == Some(&index)
+    }
+
     fn missing_sequences(&self) -> Option<Vec<u64>> {
         if self.witness.is_some() {
             return Some(Vec::new());
@@ -104,6 +108,10 @@ impl Default for Witness {
 impl Witness {
     pub(super) fn connection(&self) -> Uuid {
         self.connection
+    }
+
+    pub(super) fn has_active_transaction(&self) -> bool {
+        self.active.is_some()
     }
 }
 
@@ -148,6 +156,36 @@ impl Registry {
             let group = &self.requirements[r].transactions[t];
             (group.write_count != 0 || group.strict || group.savepoints) && group.witness.is_none()
         })
+    }
+
+    /// Only a registered, still-uncovered member can require an active Target
+    /// transaction. Ordinary prefix reads and equivalent single writes can
+    /// be admitted on an autocommitting socket.
+    pub(super) fn requires_active_member(&self, index: usize) -> bool {
+        !self.ends.contains_key(&index)
+            && self.members.get(&index).is_some_and(|&(r, t)| {
+                let group = &self.requirements[r].transactions[t];
+                group.witness.is_none() && !group.can_cover_with_autocommit(index)
+            })
+    }
+
+    pub(super) fn missing_transaction_diagnostic(
+        &self,
+        index: usize,
+        connection: Uuid,
+        status: u16,
+    ) -> Option<Value> {
+        let mut diagnostic = self.diagnostic(index)?;
+        diagnostic["reason"] = "target_transaction_missing".into();
+        diagnostic["stage"] = "candidate_admission".into();
+        // The focused interval is first. Record only the live pre-send state.
+        let group = &mut diagnostic["source_transactions"][0];
+        group["target_connection_id"] = serde_json::json!(connection);
+        group["target_transaction_id"] = Value::Null;
+        group["target_status_before"] = status.into();
+        group["target_status_after"] = Value::Null;
+        group["missing_required_query_sequences"] = Value::Null;
+        Some(diagnostic)
     }
 
     /// This socket's delivered write span selects its ordinary finite end.
@@ -428,8 +466,7 @@ impl Registry {
                 return Observation::default();
             }
             if witness.active.is_none()
-                && group.autocommit_eligible()
-                && group.members.first().copied() == index
+                && index.is_some_and(|index| group.can_cover_with_autocommit(index))
                 && before & 3 == 2
                 && after & 3 == 2
             {

@@ -1606,8 +1606,12 @@ explicit repository-wide audit.
   proof grants neither autocommit equivalence nor end omission. Its parent
   owns connection-local Target BEGIN/end witnesses, ordered finite Source window
   correspondence and delivery-confirmed setup coverage. Multi-write windows
-  include every read after the first write, through the actual matching end;
-  preceding reads remain finite ordinary dependencies. A single write can supply
+  include every read after the first write, through the actual matching end.
+  Preceding reads remain finite ordinary dependencies. The live matcher
+  rejects a required member on an inactive autocommitting
+  Target connection before claiming it. The transaction registry supplies the
+  same single-write eligibility to candidate selection and wire coverage.
+  A single write can supply
   an independent Target autocommit-1/no-active-transaction delivery witness for
   successful Source COMMIT omission. A complete segment containing exactly one
   ordinary UPDATE can also omit successful Source ROLLBACK when that UPDATE

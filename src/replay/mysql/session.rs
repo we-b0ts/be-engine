@@ -307,14 +307,14 @@ pub(in crate::replay) async fn handle_query(
         case_id,
         observation_id,
         event_index,
-        rejection_recorded,
+        recorded_rejection,
         terminal_reason,
     } = super::admission::match_request(&state, session, "COM_QUERY", Some(sql), None).await;
     if let Some(reason) = terminal_reason {
         return Err(anyhow!(reason));
     }
-    if rejection_recorded {
-        return Err(anyhow!("MySQL admitted request contract commit failed"));
+    if let Some(reason) = recorded_rejection {
+        return Err(anyhow!(reason));
     }
     if matched.is_none()
         && let Some(response) = builtin_response(sql, session.database.as_deref())
@@ -401,15 +401,15 @@ pub(in crate::replay) async fn handle_stmt_prepare(
     let super::admission::RequestSelection {
         matched: failed_prepare,
         case_id,
-        rejection_recorded,
+        recorded_rejection,
         terminal_reason,
         ..
     } = super::admission::match_request(&state, session, "COM_STMT_PREPARE", Some(sql), None).await;
     if let Some(reason) = terminal_reason {
         return Err(anyhow!(reason));
     }
-    if rejection_recorded {
-        return Err(anyhow!("MySQL admitted prepare contract commit failed"));
+    if let Some(reason) = recorded_rejection {
+        return Err(anyhow!(reason));
     }
     if let Some(matched) = failed_prepare {
         return deliver_matched(stream, state, session, matched, ResultRowEncoding::Text).await;
@@ -482,7 +482,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
         case_id,
         observation_id,
         event_index,
-        rejection_recorded,
+        recorded_rejection,
         terminal_reason,
     } = super::admission::match_request(
         &state,
@@ -495,8 +495,8 @@ pub(in crate::replay) async fn handle_stmt_execute(
     if let Some(reason) = terminal_reason {
         return Err(anyhow!(reason));
     }
-    if rejection_recorded {
-        return Err(anyhow!("MySQL admitted request contract commit failed"));
+    if let Some(reason) = recorded_rejection {
+        return Err(anyhow!(reason));
     }
     if matched.is_none()
         && let Some(response) = builtin_response(&statement.sql, session.database.as_deref())
