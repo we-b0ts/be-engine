@@ -1,7 +1,9 @@
 //! Bounded private timing queries; waiting never occupies the control server.
 use super::*;
+use crate::interaction::model::DispatchDependency;
 use crate::interaction::replay::timing::{FastTail, InputTiming};
 use futures_util::future::BoxFuture;
+use tokio::sync::watch;
 
 struct Observer {
     socket: PathBuf,
@@ -38,7 +40,22 @@ pub(crate) async fn connect(
 
 impl InputTiming for Observer {
     fn wait(&self, sequence: u64, completed: Vec<u64>) -> BoxFuture<'_, Result<Advance>> {
-        Box::pin(self.wait_for("input_timing", sequence, completed))
+        Box::pin(self.wait_for("input_timing", sequence, completed, None))
+    }
+
+    fn wait_dispatch(
+        &self,
+        sequence: u64,
+        completed: Vec<u64>,
+        events_ready: watch::Receiver<bool>,
+        unadmitted: watch::Sender<Option<DispatchDependency>>,
+    ) -> BoxFuture<'_, Result<Advance>> {
+        Box::pin(self.wait_for(
+            "input_timing",
+            sequence,
+            completed,
+            Some((events_ready, unadmitted)),
+        ))
     }
 
     fn ordered_fast(&self) -> bool {
@@ -50,24 +67,54 @@ impl InputTiming for Observer {
     }
 
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
-        Box::pin(self.wait_for("input_timing_tail", 0, Vec::new()))
+        Box::pin(self.wait_for("input_timing_tail", 0, Vec::new(), None))
     }
 }
 
+type DispatchFeedback = (
+    watch::Receiver<bool>,
+    watch::Sender<Option<DispatchDependency>>,
+);
+
 impl Observer {
-    async fn wait_for(&self, command: &str, sequence: u64, completed: Vec<u64>) -> Result<Advance> {
-        let query = Query {
+    async fn wait_for(
+        &self,
+        command: &str,
+        sequence: u64,
+        completed: Vec<u64>,
+        mut dispatch: Option<DispatchFeedback>,
+    ) -> Result<Advance> {
+        let mut query = Query {
             epoch: self.epoch,
             sequence,
             completed,
             closed_at: None,
+            events_ready: None,
         };
         loop {
+            query.events_ready = dispatch
+                .as_mut()
+                .map(|(events, _)| *events.borrow_and_update());
             let response = super::super::native_event::send(
                 &self.socket,
                 serde_json::json!({"command":command,"case_id":self.case,"input_timing":query}),
             )
             .await?;
+            if let Some((events, unadmitted)) = &mut dispatch {
+                let missing: Option<DispatchDependency> =
+                    serde_json::from_value(response["unadmitted_request"].clone())?;
+                unadmitted.send_if_modified(|previous| {
+                    if *previous == missing {
+                        return false;
+                    }
+                    *previous = missing;
+                    true
+                });
+                if query.events_ready == Some(false) && missing.is_none() {
+                    events.wait_for(|ready| *ready).await?;
+                    continue;
+                }
+            }
             if response["ready"] == true {
                 return Ok(serde_json::from_value(response["advance"].clone())?);
             }

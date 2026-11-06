@@ -1,7 +1,7 @@
 use super::*;
 use crate::replay::ReplayStreamTiming;
 
-async fn enable(runtime: &Arc<ReplayRuntime>) {
+pub(super) async fn enable(runtime: &Arc<ReplayRuntime>) {
     let mut state = runtime.state.lock().await;
     state.stream_timing = Some(ReplayStreamTiming::Fast);
     state.stream_interval_cap_ms = 5;
@@ -23,7 +23,7 @@ fn recorded_exchange(
 }
 
 #[tokio::test]
-async fn ordered_fast_replays_at_the_source_deadline_when_a_request_is_missing() {
+async fn ordered_fast_reports_missing_admission_past_the_source_deadline() {
     let temp = tempfile::tempdir().unwrap();
     let mut request = input(400);
     let actions = request["interaction"]["actions"].as_array_mut().unwrap();
@@ -57,12 +57,22 @@ async fn ordered_fast_replays_at_the_source_deadline_when_a_request_is_missing()
     assert!(observer.ordered_fast());
     let first = observer.wait(3, vec![]).await.unwrap();
     assert!(first.removed_ms > 250);
-    let second = tokio::time::timeout(Duration::from_secs(2), observer.wait(4, vec![]))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(first.removed_ms, second.removed_ms);
-    assert!(started.elapsed() >= Duration::from_millis(690));
+    let (_gate, gate) = tokio::sync::watch::channel(true);
+    let (missing_request, witness) = tokio::sync::watch::channel(None);
+    let second = tokio::time::timeout(
+        Duration::from_millis(850),
+        observer.wait_dispatch(4, vec![], gate, missing_request),
+    )
+    .await;
+    assert!(
+        second.is_err(),
+        "the recorded deadline must not release an unadmitted request"
+    );
+    assert!(matches!(
+        *witness.borrow(),
+        Some(crate::interaction::model::DispatchDependency::Mysql { sequence: 1, .. })
+    ));
+    assert!(started.elapsed() >= Duration::from_millis(850));
     control.abort();
 }
 

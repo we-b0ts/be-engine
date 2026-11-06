@@ -196,28 +196,6 @@ impl RecordedHttpClient {
         let request = build_request(&self.origin, &recorded)?;
         let request_headers = response_headers::snapshot_request_context(request.headers());
         if let Some(transcript) = &recorded.interaction {
-            let event_order = if transcript.protocol
-                == crate::interaction::model::Protocol::SocketIo
-                && self.input_registration.is_some()
-                && let Some(request_path) = request_path
-            {
-                let request_path = request_path.to_path_buf();
-                let policy = transcript.policy.clone();
-                let last_input = transcript
-                    .actions
-                    .last()
-                    .map_or(0, |action| action.offset_ms);
-                let compress = self.socketio_timing
-                    == crate::interaction::replay::timing::SocketIoTiming::Auto;
-                tokio::task::spawn_blocking(move || {
-                    socketio_order::load(&request_path, &policy, last_input, compress)
-                })
-                .await
-                .context("Socket.IO event order preparation task failed")?
-                .context("could not prepare Source Socket.IO event order")?
-            } else {
-                None
-            };
             let native_events = if transcript.protocol
                 == crate::interaction::model::Protocol::SocketIo
                 && let Some((session, case)) = &self.input_registration
@@ -242,6 +220,26 @@ impl RecordedHttpClient {
                 && let Some((session, case)) = &self.input_registration
             {
                 crate::replay::http_input_timing_observer(session, case).await?
+            } else {
+                None
+            };
+            let event_order = if input_timing
+                .as_ref()
+                .is_some_and(|timing| timing.ordered_fast())
+                && let Some(request_path) = request_path
+            {
+                let request_path = request_path.to_path_buf();
+                let policy = transcript.policy.clone();
+                let last_input = transcript
+                    .actions
+                    .last()
+                    .map_or(0, |action| action.offset_ms);
+                tokio::task::spawn_blocking(move || {
+                    socketio_order::load(&request_path, &policy, last_input)
+                })
+                .await
+                .context("Socket.IO event order preparation task failed")?
+                .context("could not prepare Source Socket.IO event order")?
             } else {
                 None
             };

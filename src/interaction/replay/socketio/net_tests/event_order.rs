@@ -1,5 +1,20 @@
 use super::*;
-use crate::interaction::replay::event_order::{Checkpoint, EventKey, Order};
+use crate::interaction::replay::{
+    event_order::{Checkpoint, EventKey, Order},
+    timing::InputTiming,
+};
+
+struct Fast;
+
+impl InputTiming for Fast {
+    fn wait(&self, _: u64, _: Vec<u64>) -> futures_util::future::BoxFuture<'_, Result<Advance>> {
+        Box::pin(async { Ok(Advance::default()) })
+    }
+
+    fn ordered_fast(&self) -> bool {
+        true
+    }
+}
 
 #[tokio::test]
 async fn missing_event_ends_the_session_without_sending_the_blocked_input() {
@@ -21,17 +36,16 @@ async fn missing_event_ends_the_session_without_sending_the_blocked_input() {
             socket.next().await.unwrap().unwrap().into_text().unwrap(),
             r#"421["ask",{"value":7}]"#
         );
-        assert_eq!(
-            socket.next().await.unwrap().unwrap().into_text().unwrap(),
-            "1"
-        );
+        let sent_at = Instant::now();
+        assert!(matches!(socket.next().await, None | Some(Err(_))));
+        assert!(sent_at.elapsed() >= Duration::from_millis(4_990));
     });
     let mut input = program();
-    input.policy.request_timeout_ms = 9_000;
-    input.policy.max_duration_ms = 9_000;
+    input.policy.request_timeout_ms = 40_000;
+    input.policy.max_duration_ms = 40_000;
     input.actions.push(InputAction {
         sequence: 3,
-        offset_ms: 50,
+        offset_ms: 30_000,
         offset_us: None,
         after: vec![],
         compressible_gap: false,
@@ -43,21 +57,18 @@ async fn missing_event_ends_the_session_without_sending_the_blocked_input() {
     });
     let mut close = input.actions.last().unwrap().clone();
     close.sequence = 4;
-    close.offset_ms = 80;
+    close.offset_ms = 30_080;
     close.action = InputActionKind::Message {
         message: WireMessage::text("1"),
     };
     input.actions.push(close);
-    let order = Order::new(
-        vec![(
-            EventKey::Ack("/".into(), 1),
-            Checkpoint {
-                sequence: 3,
-                offset_ms: 20,
-            },
-        )],
-        true,
-    );
+    let order = Order::new(vec![(
+        EventKey::Ack("/".into(), 1),
+        Checkpoint {
+            sequence: 3,
+            offset_ms: 20,
+        },
+    )]);
     let origin = format!("http://{address}");
     let request = Request::builder()
         .uri(format!("{origin}/socket.io/?EIO=4&transport=websocket"))
@@ -73,6 +84,7 @@ async fn missing_event_ends_the_session_without_sending_the_blocked_input() {
             &input,
             Duration::from_secs(1),
             Feedback {
+                input_timing: Some(std::sync::Arc::new(Fast)),
                 event_order: Some(order),
                 ..Feedback::default()
             },
@@ -90,7 +102,11 @@ async fn missing_event_ends_the_session_without_sending_the_blocked_input() {
             output_sequence: 3,
         })
     );
-    assert!(actual.end.offset_ms >= 5_050);
+    assert!(actual.end.offset_ms >= 5_000 && actual.end.offset_ms < 6_000);
+    assert_eq!(
+        actual.end.dispatch_timeout.unwrap().stage,
+        DispatchStage::Prerequisites
+    );
     assert!(!actual.end.clean);
     server.await.unwrap();
 }

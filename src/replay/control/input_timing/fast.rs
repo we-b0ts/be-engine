@@ -2,10 +2,14 @@
 use super::*;
 use crate::interaction::{
     model::{
-        EndReason, InputAction, InputTranscript, OutputObservation, Protocol, TRANSCRIPT_VERSION,
+        DispatchDependency, EndReason, InputAction, InputTranscript, OutputObservation, Protocol,
+        TRANSCRIPT_VERSION,
     },
-    replay::{heartbeat_tail, timing::FastTail},
-    socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text},
+    replay::{
+        heartbeat_tail,
+        timing::{FastTail, ordered_input},
+    },
+    socketio::{EngineIoPacket, decode_engine_io_text},
 };
 use crate::replay::adapters::{ExchangeHandle, resolve_case};
 
@@ -186,7 +190,7 @@ impl Source {
         let mut previous = SourceOffset::default();
         let mut previous_input = BTreeMap::new();
         for action in &input.actions {
-            if delivery_prefix(action) {
+            if ordered_input(action) {
                 previous_input.insert(action.sequence, previous);
             }
             if input_boundary(action) {
@@ -217,34 +221,90 @@ impl Plan {
         to: SourceOffset,
         tail: bool,
     ) -> bool {
-        let from_us = from.earliest_us();
-        let earliest_us = to.earliest_us();
-        let latest_us = to.latest_us();
+        self.requests_between(from, to).all(|(request, handle)| {
+            request.started_us < to.earliest_us()
+                && Self::request_ready(state, case, request, handle, tail)
+        })
+    }
+
+    fn requests_between(
+        &self,
+        from: SourceOffset,
+        to: SourceOffset,
+    ) -> impl Iterator<Item = (&Request, &ExchangeHandle)> {
         let first = self
             .source
             .requests
-            .partition_point(|entry| entry.started_us < from_us);
+            .partition_point(|entry| entry.started_us < from.earliest_us());
         self.source.requests[first..]
             .iter()
             .zip(&self.handles[first..])
-            .take_while(|(request, _)| request.started_us <= latest_us)
-            .all(|(request, handle)| {
-                // An equal or ambiguous Source timestamp cannot prove a prefix.
-                request.started_us < earliest_us
-                    && (match handle.delivery_state(state) {
-                        Some(ReplayExchangeStatus::Consumed) => true,
-                        Some(
-                            ReplayExchangeStatus::Responding
-                            | ReplayExchangeStatus::AwaitingClientTermination,
-                        ) => !tail,
-                        _ => false,
-                    } || dependency_tail::timing_optional(state, case, request.reference)
-                        || handle.permits_unstarted_omission(state, false, true))
-            })
+            .take_while(move |(request, _)| request.started_us <= to.latest_us())
+    }
+
+    fn request_ready(
+        state: &ReplayState,
+        case: &str,
+        request: &Request,
+        handle: &ExchangeHandle,
+        tail: bool,
+    ) -> bool {
+        (match handle.delivery_state(state) {
+            Some(ReplayExchangeStatus::Consumed) => true,
+            Some(
+                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination,
+            ) => !tail,
+            _ => false,
+        }) || dependency_tail::timing_optional(state, case, request.reference)
+            || handle.permits_unstarted_omission(state, false, true)
+    }
+
+    fn dispatch_prefix(
+        &self,
+        state: &ReplayState,
+        case: &str,
+        from: SourceOffset,
+        to: SourceOffset,
+    ) -> (bool, Option<DispatchDependency>) {
+        let mut compressible = true;
+        for (request, handle) in self.requests_between(from, to) {
+            if request.started_us >= to.earliest_us() {
+                // A request in B's ambiguous clock bucket could require B itself.
+                compressible = false;
+            } else if !Self::request_ready(state, case, request, handle, false) {
+                if request.started_us <= from.latest_us() {
+                    compressible = false;
+                    continue;
+                }
+                let dependency = match request.reference {
+                    RecordedReference::Redis {
+                        connection_id,
+                        sequence,
+                    } => DispatchDependency::Redis {
+                        connection_id,
+                        sequence,
+                    },
+                    RecordedReference::Mysql {
+                        connection_id,
+                        sequence,
+                    } => DispatchDependency::Mysql {
+                        connection_id,
+                        sequence,
+                    },
+                    _ => unreachable!("ordered fast only plans Redis and MySQL requests"),
+                };
+                return (false, Some(dependency));
+            }
+        }
+        (compressible, None)
     }
 }
 
 pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Result<Value> {
+    if let Some(events_ready) = query.events_ready {
+        ensure!(!tail, "event readiness is only valid for input dispatch");
+        return advance_dispatch(state, query, events_ready);
+    }
     let live = state.input_timing.as_ref().expect("validated timeline");
     let plan = live.fast.as_ref().expect("validated fast plan");
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -332,15 +392,57 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
     )
 }
 
+fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) -> Result<Value> {
+    let live = state.input_timing.as_ref().expect("validated timeline");
+    let plan = live.fast.as_ref().expect("validated fast plan");
+    let action = live
+        .plan
+        .input
+        .actions
+        .iter()
+        .find(|action| action.sequence == query.sequence)
+        .context("input timing sequence outside original program")?;
+    ensure!(
+        query.completed.iter().all(|id| action.after.contains(id))
+            && action.after.iter().all(|id| query.completed.contains(id)),
+        "dispatch requires all recorded completion identities"
+    );
+    let from = *plan
+        .previous_input
+        .get(&action.sequence)
+        .context("input outside ordered fast plan")?;
+    let to = SourceOffset {
+        ms: action.offset_ms,
+        us: action.offset_us,
+    };
+    let (compressible, unadmitted) = plan.dispatch_prefix(state, &live.case, from, to);
+    let live = state.input_timing.as_mut().expect("validated timeline");
+    let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let gates_ready = events_ready && unadmitted.is_none();
+    if gates_ready && compressible && live.advanced.insert(query.sequence) {
+        let cap = live.fast.as_ref().expect("validated fast plan").source.cap;
+        live.clock.compress(from.ms, to.ms, elapsed, cap);
+    }
+    let due = if compressible {
+        live.clock.effective_ms(to.ms)
+    } else {
+        to.ms
+    };
+    let remaining = due.saturating_sub(elapsed);
+    Ok(serde_json::json!({
+        "ok":true,"ready":gates_ready && remaining == 0,
+        "wait_ms":if gates_ready { remaining } else { POLL_MS },
+        "unadmitted_request": unadmitted,
+        "advance": Advance {removed_ms:live.clock.removed_ms()}
+    }))
+}
+
 fn input_boundary(action: &InputAction) -> bool {
     use crate::interaction::model::{InputActionKind, MessageKind};
     !matches!(&action.action, InputActionKind::Message { message }
     if message.kind == MessageKind::Text && matches!(
         decode_engine_io_text(&message.data, usize::MAX),
-        Ok(EngineIoPacket::Ping(_) | EngineIoPacket::Pong(_))
-            | Ok(EngineIoPacket::Message(crate::interaction::socketio::SocketIoPacket {
-                kind: SocketIoKind::Ack | SocketIoKind::BinaryAck, ..
-            }))))
+        Ok(EngineIoPacket::Ping(_) | EngineIoPacket::Pong(_))))
 }
 
 fn time(value: &Value) -> Option<DateTime<Utc>> {

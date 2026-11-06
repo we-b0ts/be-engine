@@ -2,7 +2,7 @@
 use super::*;
 
 #[tokio::test]
-async fn business_input_waits_for_recorded_events_even_without_redis_delivery() {
+async fn fast_business_input_waits_for_recorded_events_and_redis_admission() {
     let temp = tempfile::tempdir().unwrap();
     let mut input = InputTranscript::new(
         Protocol::SocketIo,
@@ -53,9 +53,10 @@ async fn business_input_waits_for_recorded_events_even_without_redis_delivery() 
     );
     get["response_kind"] = "bulk_string".into();
     get["timestamp"] = "2020-01-01T00:00:00.055Z".into();
-    get["request_started_at"] = "2020-01-01T00:00:00.030Z".into();
+    get["request_started_at"] = "2020-01-01T00:00:00.045Z".into();
     get["duration_ms"] = 25.into();
     let runtime = runtime(temp.path(), &[set, get], &[], false).await.unwrap();
+    super::ordered_fast::enable(&runtime).await;
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -91,15 +92,19 @@ async fn business_input_waits_for_recorded_events_even_without_redis_delivery() 
             .send(Message::Text(r#"42/other,["ready"]"#.into()))
             .await
             .unwrap();
-        assert_eq!(text(&mut socket).await, "42[\"heartbeat\"]");
-        // A Source Redis response before the heartbeat is not an event barrier.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), socket.next())
+                .await
+                .is_err(),
+            "the event prefix alone must not release the next input"
+        );
         let (mut redis, task) = connect(&target_runtime).await;
         assert_eq!(
             send(&mut redis, &[b"SET", b"registered", b"yes"]).await,
             b"+OK\r\n"
         );
-        // Source started this dependency before the heartbeat but finished it
-        // afterward. Its overlapping handler must not block the next input.
+        assert_eq!(text(&mut socket).await, "42[\"heartbeat\"]");
+        // This request starts after B in Source and stays outside B's prefix.
         assert_eq!(
             send(&mut redis, &[b"GET", b"after-heartbeat"]).await,
             b"$3\r\nyes\r\n"

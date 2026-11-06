@@ -142,6 +142,7 @@ impl InteractionLifecycle {
                             | EndReason::FastHeartbeatTailSkipped
                     )),
             missing_predecessor: None,
+            dispatch_timeout: None,
             partial_message: None,
             close: None,
         }

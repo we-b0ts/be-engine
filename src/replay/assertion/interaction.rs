@@ -382,6 +382,7 @@ mod tests {
                 pending: Vec::new(),
                 clean: true,
                 missing_predecessor: None,
+                dispatch_timeout: None,
                 partial_message: None,
                 close: None,
             },

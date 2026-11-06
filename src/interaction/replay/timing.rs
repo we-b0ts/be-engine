@@ -1,11 +1,12 @@
 //! Replay timing is separate from immutable recording policy and protocol completion.
 use crate::interaction::{
-    model::{InputAction, InputActionKind, MessageKind},
+    model::{DispatchDependency, InputAction, InputActionKind, MessageKind},
     socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text},
 };
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -19,6 +20,18 @@ pub(crate) enum SocketIoTiming {
 /// dependency replay owner supplies delivery facts and commits clock changes.
 pub(crate) trait InputTiming: Send + Sync {
     fn wait(&self, sequence: u64, completed: Vec<u64>) -> BoxFuture<'_, Result<Advance>>;
+    fn wait_dispatch(
+        &self,
+        sequence: u64,
+        completed: Vec<u64>,
+        mut events_ready: watch::Receiver<bool>,
+        _unadmitted: watch::Sender<Option<DispatchDependency>>,
+    ) -> BoxFuture<'_, Result<Advance>> {
+        Box::pin(async move {
+            events_ready.wait_for(|ready| *ready).await?;
+            self.wait(sequence, completed).await
+        })
+    }
     fn ordered_fast(&self) -> bool {
         false
     }
@@ -52,6 +65,10 @@ pub(crate) fn delivery_prefix(action: &InputAction) -> bool {
             Ok(EngineIoPacket::Message(crate::interaction::socketio::SocketIoPacket {
                 kind: SocketIoKind::Event | SocketIoKind::BinaryEvent, ..
             }))))
+}
+
+pub(crate) fn ordered_input(action: &InputAction) -> bool {
+    action.ack_ref.is_some() || delivery_prefix(action)
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]

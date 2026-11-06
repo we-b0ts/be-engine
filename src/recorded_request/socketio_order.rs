@@ -14,7 +14,6 @@ pub(super) fn load(
     request: &Path,
     policy: &InteractionPolicy,
     last_input: u64,
-    compress: bool,
 ) -> Result<Option<Order>> {
     let path = request.with_file_name("expected-response.json");
     let path = if path.exists() {
@@ -71,8 +70,5 @@ pub(super) fn load(
             }
         }
     }
-    Ok(Some(Order::new(
-        checkpoints,
-        compress && !policy.preserve_input_timing,
-    )))
+    Ok(Some(Order::new(checkpoints)))
 }

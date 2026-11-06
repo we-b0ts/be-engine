@@ -226,13 +226,15 @@ is unclear.
   response completion or finite dependency consumption.
   `recorded_request/socketio_order` projects the recorded server event and ACK
   identities and offsets before execution. `interaction/replay/event_order`
-  tracks their live arrivals across namespaces and admits a business input only
-  after the preceding recorded server events arrive. A missing event expires
-  five seconds after the recorded input offset. Auto timing caps the interval
-  following a proven prefix at five milliseconds. This input path does not
-  wait for the resource-delivery prefix. The existing dependency timing path
-  applies when the recording has no usable event timeline. Engine.IO heartbeats
-  and independent physical cancellation retain their own native scheduling.
+  tracks their live arrivals across namespaces. Ordered fast dispatch requires
+  both the preceding server events and admission of the proven Case request
+  prefix. Ambiguous timestamps keep conservative timing and cannot create a
+  request barrier. `interaction/replay/socketio/dispatch` supplies readiness
+  and diagnostic feedback. The driver bounds each dispatch, including its wire
+  send, to five seconds after the previous actual send. `input_timing/fast`
+  owns the existing compression cap and commits clock cuts only after both
+  conditions hold. Engine.IO heartbeats, physical cancellation and the closing
+  tail retain their own scheduling. Non-fast paths keep their existing clocks.
   Native coalescing/retiming retains native ownership; successful native completion
   projects exact covered Source references into the delivery journal for compression.
   `heartbeat` records and validates the input program's causal PING/PONG bindings;
