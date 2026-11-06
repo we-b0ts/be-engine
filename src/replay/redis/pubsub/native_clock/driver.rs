@@ -1,7 +1,7 @@
 //! The live accepted namespace and current request epoch fence original input delivery.
 use super::*;
 use std::sync::Weak;
-use tokio::time::{Duration, MissedTickBehavior};
+use tokio::time::{Duration, Instant, sleep_until};
 
 struct Job {
     entry: usize,
@@ -19,17 +19,9 @@ pub(in crate::replay) fn start(state: Arc<Mutex<ReplayState>>) {
 }
 
 async fn run(weak: Weak<Mutex<ReplayState>>) {
-    let mut interval = tokio::time::interval(Duration::from_millis(5));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut blocked = true;
     loop {
-        // Poll only while the next original input is not yet admissible. Ready
-        // inputs drain at actual I/O speed rather than a 200-message/s ceiling.
-        if blocked {
-            interval.tick().await;
-        }
         let Some(state) = weak.upgrade() else { return };
-        let job = {
+        let (job, progress, retry) = {
             let replay = state.lock().await;
             if replay.finalized_at.is_some()
                 || replay.target_session_stopped
@@ -37,13 +29,23 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             {
                 return;
             }
-            ready(&replay)
+            let now = Instant::now();
+            let retry = replay
+                .active_case_id
+                .as_deref()
+                .and_then(|case| replay.redis.pubsub.native_clock.fast_deadline(case))
+                .filter(|due| *due > now)
+                .unwrap_or(now + Duration::from_millis(5));
+            (ready(&replay), replay.redis.lifecycle.subscribe(), retry)
         };
         let Some(job) = job else {
-            blocked = true;
+            drop(state);
+            tokio::select! {
+                _ = progress.changed() => {}
+                _ = sleep_until(retry) => {}
+            }
             continue;
         };
-        blocked = false;
         let source = job.source.clone();
         let loaded = tokio::task::spawn_blocking(move || source.bytes()).await;
         let mut replay = state.lock().await;
@@ -59,12 +61,11 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 .live
                 .get(&job.case)
                 .is_none_or(|live| !live.observer || live.closed)
-            || reached(&replay, &job.case, job.epoch, job.source.lifetime)
+            || expired(&replay, &job.case, job.epoch, job.source.lifetime)
             || job.sender.is_closed()
             || !replay.redis.pubsub.is_subscribed(job.client, slot)
             || !replay.redis.pubsub.push_available(slot)
         {
-            blocked = true;
             continue;
         }
         let bytes = match loaded {
@@ -101,7 +102,15 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             .redis
             .pubsub
             .reserve_case_push(slot, &job.case, job.client);
-        replay.redis.pubsub.native_clock.retire(job.entry);
+        let native = &mut replay.redis.pubsub.native_clock;
+        if let Some(pace) = native
+            .live
+            .get_mut(&job.case)
+            .and_then(|live| live.fast.as_mut())
+        {
+            pace.queued(job.entry);
+        }
+        native.retire(job.entry);
         job.permit.send(Delivery {
             push: slot,
             bytes,
@@ -122,8 +131,16 @@ fn ready(replay: &ReplayState) -> Option<Job> {
         .filter(|live| live.observer && !live.closed)?;
     let index = *native.pending.get(case)?.front()?;
     let entry = &native.entries[index];
-    if !reached(replay, case, live.epoch, entry.offset)
-        || reached(replay, case, live.epoch, entry.lifetime)
+    let recorded_due = || reached(replay, case, live.epoch, entry.offset);
+    let due = live.fast.as_ref().map_or_else(recorded_due, |pace| {
+        replay
+            .input_timing
+            .as_ref()
+            .is_some_and(|timeline| timeline.native_fast_setup_ready(replay))
+            && pace.ready(index, &native.entries, recorded_due)
+    });
+    if !due
+        || expired(replay, case, live.epoch, entry.lifetime)
         || !live.namespaces.contains(&entry.namespace)
         || !entry
             .inputs_before
@@ -156,6 +173,22 @@ fn ready(replay: &ReplayState) -> Option<Job> {
         permit,
         source: entry.clone(),
     })
+}
+
+fn expired(
+    replay: &ReplayState,
+    case: &str,
+    epoch: DateTime<Utc>,
+    lifetime: chrono::TimeDelta,
+) -> bool {
+    replay
+        .redis
+        .pubsub
+        .native_clock
+        .live
+        .get(case)
+        .is_none_or(|live| live.fast.is_none())
+        && reached(replay, case, epoch, lifetime)
 }
 
 fn reached(

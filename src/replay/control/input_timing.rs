@@ -50,6 +50,12 @@ pub(in crate::replay) struct Live {
 }
 
 impl Live {
+    pub(in crate::replay) fn native_fast_setup_ready(&self, state: &ReplayState) -> bool {
+        self.fast
+            .as_ref()
+            .is_some_and(|plan| plan.native_fast_setup_ready(state, &self.case))
+    }
+
     /// None leaves unrelated or unsupported native scheduling unchanged.
     pub(in crate::replay) fn reached(
         &self,
@@ -121,7 +127,7 @@ pub(super) async fn accept(
             let fast = plan
                 .fast
                 .take()
-                .and_then(|source| source.resolve(&state, case, &plan.input).ok());
+                .and_then(|source| source.resolve(&mut state, case, &plan.input).ok());
             let fast_tail = fast.as_ref().and_then(fast::Plan::tail);
             let ordered_fast = fast.is_some();
             let (mut evidence, covered) = match (fast.is_some(), plan.source_start) {

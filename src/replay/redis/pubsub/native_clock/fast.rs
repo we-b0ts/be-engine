@@ -1,0 +1,157 @@
+//! Compress a proven passive stream prefix and preserve its recorded final observation window.
+use super::*;
+use crate::interaction::replay::heartbeat_tail::Passive;
+use tokio::time::{Duration, Instant};
+
+#[derive(Debug)]
+pub(in crate::replay) struct Pace {
+    first: usize,
+    last: usize,
+    last_output: Duration,
+    end: Duration,
+    cap: Duration,
+    inflight: Option<usize>,
+    written: Option<(usize, Instant)>,
+    tail_at: Option<Instant>,
+}
+
+impl NativeClock {
+    pub(in crate::replay) fn prepare_fast(
+        &mut self,
+        case: &str,
+        proof: &Passive,
+        cap_ms: u64,
+        setup_finished_ms: u64,
+    ) -> Option<()> {
+        let pending = self.pending.get(case)?;
+        let anchor = self.entries[*pending.front()?].anchor;
+        let mut positions = BTreeMap::new();
+        for &index in pending {
+            let entry = &self.entries[index];
+            if entry.anchor != anchor {
+                return None;
+            }
+            positions
+                .entry(entry.fingerprint)
+                .and_modify(|value| *value = None)
+                .or_insert(Some(index));
+        }
+        let mut positions = proof
+            .outputs
+            .iter()
+            .map(|key| positions.get(key).copied().flatten());
+        let first = positions.next()??;
+        let mut last = first;
+        for index in positions {
+            let index = index?;
+            if index <= last {
+                return None;
+            }
+            last = index;
+        }
+        let last_output = Duration::from_millis(proof.last_output_ms);
+        let end = Duration::from_millis(proof.end_ms);
+        if self.entries[first].offset.to_std().ok()? <= Duration::from_millis(setup_finished_ms)
+            || pending.iter().any(|&index| {
+                let Some(offset) = self.entries[index].offset.to_std().ok() else {
+                    return true;
+                };
+                offset >= end || index > last && offset < last_output + Duration::from_millis(1)
+            })
+        {
+            return None;
+        }
+        self.live.get_mut(case)?.fast = Some(Pace {
+            first,
+            last,
+            last_output,
+            end,
+            cap: Duration::from_millis(cap_ms),
+            inflight: None,
+            written: None,
+            tail_at: None,
+        });
+        Some(())
+    }
+
+    pub(in crate::replay) fn fast_tail_ready(&mut self, case: &str, now: Instant) -> bool {
+        let Some(pace) = self.live.get_mut(case).and_then(|live| live.fast.as_mut()) else {
+            return false;
+        };
+        let anchor = *pace.tail_at.get_or_insert(now);
+        self.pending.get(case).is_some_and(VecDeque::is_empty)
+            && pace.inflight.is_none()
+            && now >= anchor + (pace.end - pace.last_output)
+            && pace.written.is_some_and(|(index, at)| {
+                index <= pace.last
+                    || now >= at + pace.end.saturating_sub(entry_offset(&self.entries[index]))
+            })
+    }
+
+    pub(in crate::replay) fn fast_written(
+        &mut self,
+        case: &str,
+        epoch: DateTime<Utc>,
+        slot: PushId,
+        at: Instant,
+    ) {
+        if let Some(live) = self.live.get_mut(case)
+            && live.epoch == epoch
+            && let Some(pace) = &mut live.fast
+            && let Some(index) = pace.inflight
+            && self.entries[index].slot == slot
+        {
+            pace.inflight = None;
+            pace.written = Some((index, at));
+        }
+    }
+
+    pub(super) fn fast_deadline(&self, case: &str) -> Option<Instant> {
+        let pace = self.live.get(case)?.fast.as_ref()?;
+        let index = *self.pending.get(case)?.front()?;
+        pace.deadline(index, &self.entries)
+    }
+}
+
+impl Pace {
+    pub(super) fn queued(&mut self, index: usize) {
+        debug_assert!(self.inflight.is_none());
+        self.inflight = Some(index);
+    }
+
+    pub(super) fn ready(
+        &self,
+        index: usize,
+        entries: &[Entry],
+        recorded_due: impl FnOnce() -> bool,
+    ) -> bool {
+        self.inflight.is_none()
+            && if index < self.first {
+                recorded_due()
+            } else {
+                self.deadline(index, entries)
+                    .is_some_and(|due| Instant::now() >= due)
+            }
+    }
+
+    fn deadline(&self, index: usize, entries: &[Entry]) -> Option<Instant> {
+        if self.inflight.is_some() || index < self.first {
+            return None;
+        }
+        if index > self.last {
+            return self
+                .tail_at
+                .map(|at| at + entry_offset(&entries[index]).saturating_sub(self.last_output));
+        }
+        if index == self.first {
+            return Some(Instant::now());
+        }
+        let (prior, at) = self.written?;
+        let gap = entry_offset(&entries[index]).saturating_sub(entry_offset(&entries[prior]));
+        Some(at + gap.min(self.cap))
+    }
+}
+
+fn entry_offset(entry: &Entry) -> Duration {
+    entry.offset.to_std().expect("validated native push offset")
+}

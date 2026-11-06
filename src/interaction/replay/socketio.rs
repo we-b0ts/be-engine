@@ -198,7 +198,8 @@ pub(super) async fn execute_with_feedback(
         let at_fast_tail = fast_tail.as_ref().is_some_and(|tail| {
             let ready = if let Some(required) = heartbeat_acks {
                 transport.is_websocket()
-                    && output_count == tail.output_count
+                    && (output_count == tail.output_count
+                        || tail.native_observation && output_count > tail.output_count)
                     && heartbeats.complete(true)
                     && required.is_subset(&native_receipts.acknowledged)
                     && observed

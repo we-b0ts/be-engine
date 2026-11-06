@@ -9,6 +9,7 @@ mod active;
 mod ambient;
 mod delivery;
 mod encryption;
+mod fast;
 mod guards;
 mod heartbeats;
 mod observations;

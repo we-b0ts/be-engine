@@ -53,6 +53,8 @@ pub(crate) struct FastTail {
     pub idle_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat_acks: Option<std::collections::BTreeSet<u64>>,
+    #[serde(default)]
+    pub native_observation: bool,
 }
 
 /// Business inputs retain the Source dependency-delivery prefix even when no

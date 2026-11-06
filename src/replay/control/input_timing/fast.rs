@@ -23,6 +23,7 @@ pub(super) struct Source {
     covered: bool,
     requests: Vec<Request>,
     tail: Option<Tail>,
+    passive: Option<heartbeat_tail::Passive>,
 }
 
 #[derive(Debug)]
@@ -76,6 +77,7 @@ impl Source {
             covered: true,
             requests: Vec::new(),
             tail: Tail::load(path, input, cap).ok().flatten(),
+            passive: passive_proof(path, input).ok().flatten(),
         }
     }
 
@@ -92,6 +94,7 @@ impl Source {
             Some("mysql_connection" | "redis_connection") => return Ok(()),
             Some("redis_pub_sub_push") => {
                 self.tail = None;
+                self.passive = None;
                 return Ok(());
             }
             _ => {
@@ -135,7 +138,7 @@ impl Source {
 
     pub(super) fn resolve(
         mut self,
-        state: &ReplayState,
+        state: &mut ReplayState,
         case: &str,
         input: &InputTranscript,
     ) -> Result<Plan> {
@@ -176,6 +179,34 @@ impl Source {
                 tail.quiet_from = tail.quiet_from.max(completed);
             }
         }
+        if let Some(passive) = self.passive.take()
+            && let Some(setup_finished) = self.requests.iter().try_fold(0, |latest, request| {
+                let completed = request.completed?;
+                (completed >= request.started_us / 1_000).then_some(latest.max(completed))
+            })
+            && state
+                .redis
+                .pubsub
+                .native_clock
+                .prepare_fast(case, &passive, self.cap, setup_finished)
+                .is_some()
+        {
+            self.tail = Some(Tail {
+                policy: FastTail {
+                    close_sequence: None,
+                    output_count: passive.output_count,
+                    idle_ms: 0,
+                    heartbeat_acks: Some(BTreeSet::new()),
+                    native_observation: true,
+                },
+                cutoff: passive.end_ms,
+                quiet_from: passive.last_output_ms,
+            });
+            tracing::info!(
+                case_id = case,
+                "enabled ordered fast passive Pub/Sub timing"
+            );
+        }
         ensure!(
             input
                 .socket_io_heartbeat
@@ -211,6 +242,14 @@ impl Source {
 impl Plan {
     pub(super) fn tail(&self) -> Option<FastTail> {
         self.source.tail.as_ref().map(|tail| tail.policy.clone())
+    }
+
+    pub(super) fn native_fast_setup_ready(&self, state: &ReplayState, case: &str) -> bool {
+        self.source
+            .requests
+            .iter()
+            .zip(&self.handles)
+            .all(|(request, handle)| Self::request_ready(state, case, request, handle, true))
     }
 
     fn ready(
@@ -311,6 +350,25 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
     let live = state.input_timing.as_ref().expect("validated timeline");
     let plan = live.fast.as_ref().expect("validated fast plan");
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if tail
+        && plan
+            .source
+            .tail
+            .as_ref()
+            .is_some_and(|tail| tail.policy.native_observation)
+    {
+        let case = live.case.clone();
+        let ready = plan.native_fast_setup_ready(state, &case)
+            && state
+                .redis
+                .pubsub
+                .native_clock
+                .fast_tail_ready(&case, MonoInstant::now());
+        return Ok(
+            serde_json::json!({"ok":true,"ready":ready,"wait_ms":POLL_MS,
+            "advance": Advance::default()}),
+        );
+    }
     let (sequence, from, to, eligible, ready, idle_tail) = if tail {
         let tail = plan.source.tail.as_ref().context("fast tail unavailable")?;
         let ready = if tail.policy.heartbeat_acks.is_some() {
@@ -563,9 +621,28 @@ impl Tail {
                 output_count: outputs.count(),
                 idle_ms: cap.min(cutoff.saturating_sub(quiet_from)),
                 heartbeat_acks: heartbeat.map(|evidence| evidence.acknowledged),
+                native_observation: false,
             },
             cutoff,
             quiet_from,
         }))
     }
+}
+
+fn passive_proof(path: &Path, input: &InputTranscript) -> Result<Option<heartbeat_tail::Passive>> {
+    if input.socket_io_heartbeat.is_none()
+        || heartbeat_tail::Passive::input_namespace(input).is_none()
+    {
+        return Ok(None);
+    }
+    #[derive(Deserialize)]
+    struct Response {
+        interaction: OutputObservation,
+    }
+    let file = std::fs::File::open(path.join("expected-response.json"))?;
+    let response: Response = serde_json::from_reader(std::io::BufReader::new(file))?;
+    Ok(heartbeat_tail::Passive::recognize(
+        input,
+        &response.interaction,
+    ))
 }

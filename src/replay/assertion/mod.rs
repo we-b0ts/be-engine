@@ -316,7 +316,8 @@ fn assert_recorded_response_with_policy_and_time_copies(
         .as_ref()
         .zip(expected_interaction)
         .is_some_and(|(input, source)| {
-            crate::interaction::replay::heartbeat_tail::recognize(input, source).is_some()
+            use crate::interaction::replay::heartbeat_tail::{Passive, recognize};
+            recognize(input, source).is_some() || Passive::recognize(input, source).is_some()
         });
     let oneway = expected.response_expected == Some(false);
     let expected_status = match expected.status.as_ref() {

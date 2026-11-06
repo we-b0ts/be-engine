@@ -248,6 +248,7 @@ fn select(
         offset,
         ordinal,
         digest,
+        fingerprint: [0; 32],
         endpoint: endpoint(record),
         database: record.database,
         username: record.username.clone(),
@@ -265,5 +266,17 @@ fn select(
     if !skip.is_null() && !skip.as_array().is_some_and(Vec::is_empty) {
         return Ok(None);
     }
-    Ok(Some(entry))
+    let fingerprint = crate::interaction::replay::heartbeat_tail::event_fingerprint(
+        namespace,
+        broadcast.value["event"]
+            .as_str()
+            .context("broadcast event missing")?,
+        broadcast.value["data"]
+            .as_array()
+            .context("broadcast arguments missing")?,
+    );
+    Ok(Some(Entry {
+        fingerprint,
+        ..entry
+    }))
 }

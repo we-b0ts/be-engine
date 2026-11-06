@@ -1,6 +1,9 @@
 //! Recognize a recorded Engine.IO heartbeat timeout candidate from wire evidence.
 use std::collections::BTreeSet;
 
+mod passive;
+pub(crate) use passive::{Passive, event_fingerprint};
+
 use crate::interaction::{
     model::{
         EndReason, InputActionKind, InputTranscript, MessageKind, OutputObservation, Protocol,
@@ -17,6 +20,16 @@ pub(crate) struct Evidence {
 }
 
 pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Evidence> {
+    let evidence = timeout(input, output)?;
+    let last = output.events.last()?;
+    (last.offset_ms == evidence.last_ping_ms && is_ping(last)).then_some(evidence)
+}
+
+fn is_ping(event: &crate::interaction::model::OutputEvent) -> bool {
+    event.heartbeat && event.message.kind == MessageKind::Text && event.message.data == "2"
+}
+
+fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<Evidence> {
     if input.protocol != Protocol::SocketIo
         || input.policy.preserve_input_timing
         || output.protocol != Protocol::SocketIo
@@ -32,15 +45,13 @@ pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> 
         return None;
     }
     let program = input.socket_io_heartbeat.as_ref()?;
-    let last = output.events.last()?;
+    let last = output.events.iter().rev().find(|event| is_ping(event))?;
     let limit = input.policy.max_message_bytes;
     let first = output.events.first()?;
     let EngineIoPacket::Open(open) = decode_engine_io_text(&first.message.data, limit).ok()? else {
         return None;
     };
     if first.message.kind != MessageKind::Text
-        || !last.heartbeat
-        || last.message != crate::interaction::model::WireMessage::text("2")
         || output.end.offset_ms.checked_sub(last.offset_ms)? <= open.ping_timeout
     {
         return None;

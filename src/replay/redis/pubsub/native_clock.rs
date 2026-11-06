@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod driver;
+mod fast;
 mod preparation;
 mod source;
 pub(in crate::replay) use driver::start;
@@ -25,6 +26,7 @@ struct Live {
     closed: bool,
     namespaces: BTreeSet<String>,
     acknowledged: BTreeSet<u64>,
+    fast: Option<fast::Pace>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ struct Entry {
     offset: chrono::TimeDelta,
     ordinal: usize,
     digest: [u8; 32],
+    fingerprint: [u8; 32],
     endpoint: TargetKey,
     database: i64,
     username: Option<String>,
@@ -135,6 +138,7 @@ impl NativeClock {
                 closed: false,
                 namespaces: BTreeSet::new(),
                 acknowledged: BTreeSet::new(),
+                fast: None,
             },
         );
         Ok(())

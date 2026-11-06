@@ -23,6 +23,7 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
                 output_count: 3,
                 idle_ms: 5,
                 heartbeat_acks: Some([2].into()),
+                native_observation: false,
             })
         }
         fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
