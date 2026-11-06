@@ -108,6 +108,7 @@ fn sse_reused_created_at_uses_elapsed_to_each_frame_in_either_execution() {
             compiled.global_json.as_ref(),
             streams,
             requests,
+            0,
         )
         .unwrap()
     };
@@ -244,6 +245,7 @@ json:
                 copies,
                 None,
                 false,
+                0,
             )
             .unwrap()
             .passed()

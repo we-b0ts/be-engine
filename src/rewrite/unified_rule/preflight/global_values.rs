@@ -508,6 +508,7 @@ fn primary(
             target: source_pair.interaction_times.source,
         },
         clocks.case,
+        source_pair.max_interaction_message_bytes,
     )?);
     let relevant = record_source(&comparison, &selected, result)
         .context("phase=source_self_validation, document=body_or_interaction")?;
@@ -536,6 +537,7 @@ fn primary(
             Some(plan),
             pair.interaction_times,
             pair.request_times,
+            pair.max_interaction_message_bytes,
         )?);
         valid_count(&checked, &selected)
             .context("phase=independent_target_validation, document=body_or_interaction")

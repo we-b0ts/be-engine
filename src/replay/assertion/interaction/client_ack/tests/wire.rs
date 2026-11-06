@@ -128,7 +128,8 @@ async fn actual_reversed_acks_keep_payload_ownership_with_overlapping_inputs() {
             Some(&actual),
             None,
             Default::default(),
-            Default::default()
+            Default::default(),
+            8 * 1024 * 1024,
         )
         .unwrap()
         .passed()
@@ -143,6 +144,7 @@ async fn actual_reversed_acks_keep_payload_ownership_with_overlapping_inputs() {
         &Default::default(),
         Some(&context),
         false,
+        8 * 1024 * 1024,
     )
     .unwrap();
     assert!(checked.passed(), "{:?}", checked.differences);

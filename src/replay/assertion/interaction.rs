@@ -65,6 +65,7 @@ pub(super) fn compare(
     report: &mut ResponseAssertionCaseReport,
     ack_context: Option<&AckContext>,
     source_heartbeat_tail: bool,
+    max_message_bytes: usize,
 ) -> Result<()> {
     report.fast_heartbeat_tail_skipped = actual.is_some_and(|actual| {
         actual.protocol == Protocol::SocketIo
@@ -79,6 +80,7 @@ pub(super) fn compare(
         copies,
         ack_context,
         source_heartbeat_tail,
+        max_message_bytes,
     )?;
     report.identity_pairs.extend(checked.identity_pairs());
     report.applied_body_rule_ids.extend(checked.evaluated);
@@ -98,6 +100,7 @@ pub(crate) fn compare_outputs_global(
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
     request_times: super::RequestTimes,
+    max_message_bytes: usize,
 ) -> Result<Comparison> {
     compare_outputs_global_with_time_copies(
         expected,
@@ -108,6 +111,7 @@ pub(crate) fn compare_outputs_global(
         &Default::default(),
         None,
         false,
+        max_message_bytes,
     )
 }
 
@@ -121,6 +125,7 @@ fn compare_outputs_global_with_time_copies(
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     ack_context: Option<&AckContext>,
     source_heartbeat_tail: bool,
+    max_message_bytes: usize,
 ) -> Result<Comparison> {
     let mut report = Comparison::default();
     let (expected, actual) = match (expected, actual) {
@@ -212,7 +217,14 @@ fn compare_outputs_global_with_time_copies(
                 mismatch(&mut report, &pointer);
             }
             let adapted = if socketio {
-                socketio::compare_message(expected, actual, global, clocks, &pointer)?
+                socketio::compare_message(
+                    expected,
+                    actual,
+                    global,
+                    clocks,
+                    &pointer,
+                    max_message_bytes,
+                )?
             } else {
                 None
             };

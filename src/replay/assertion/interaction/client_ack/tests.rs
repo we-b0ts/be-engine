@@ -66,6 +66,7 @@ fn checked(input: Option<&InputTranscript>, source: &[&str], target: &[&str]) ->
         &Default::default(),
         context.as_ref(),
         false,
+        8 * 1024 * 1024,
     )
     .unwrap()
 }
@@ -273,6 +274,7 @@ fn paired_ack_arguments_still_evaluate_global_field_contracts() {
             &Default::default(),
             Some(&context),
             false,
+            8 * 1024 * 1024,
         )
         .unwrap()
     };

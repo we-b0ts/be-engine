@@ -8,6 +8,7 @@ pub(super) fn compare_message(
     global: &crate::policy::CompiledJsonPolicy,
     clocks: crate::value_contract::json::AnchorClocks,
     pointer: &str,
+    max_message_bytes: usize,
 ) -> Result<Option<Comparison>> {
     if source.kind != MessageKind::Text
         || !["42", "43", "45", "46"]
@@ -16,7 +17,8 @@ pub(super) fn compare_message(
     {
         return Ok(None);
     }
-    let EngineIoPacket::Message(source) = decode_engine_io_text(&source.data, 1024 * 1024)? else {
+    let EngineIoPacket::Message(source) = decode_engine_io_text(&source.data, max_message_bytes)?
+    else {
         return Ok(None);
     };
     if !matches!(
@@ -31,7 +33,7 @@ pub(super) fn compare_message(
     let prefix = format!("{pointer}/data/socketio");
     let mut result = Comparison::default();
     let target = if target.kind == MessageKind::Text {
-        decode_engine_io_text(&target.data, 1024 * 1024).ok()
+        decode_engine_io_text(&target.data, max_message_bytes).ok()
     } else {
         None
     };
