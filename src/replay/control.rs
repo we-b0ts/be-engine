@@ -262,12 +262,12 @@ pub(super) async fn handle_control_request(
             let state = state.lock().await;
             case_execution::status(&state, request.case_id.as_deref())
         }
-        "case_client_aborted" => {
+        "case_close_tail" | "case_client_aborted" => {
             let mut state = state.lock().await;
             let result = request
                 .case_id
                 .as_deref()
-                .context("case_client_aborted requires case_id")
+                .context("close tail observation requires case_id")
                 .and_then(|case| case_cleanup::mark_client_aborted(&mut state, case));
             match result {
                 Ok(()) => serde_json::json!({"ok":true}),
@@ -674,7 +674,7 @@ pub(super) async fn end_case(
         case_cleanup::drain_started(&state, case_id, deadline).await
     };
     let cleanup = match (client_aborted, deadline) {
-        // A premature client end gets its own observation bound. The normal
+        // A close with pending business gets its own observation bound. The normal
         // request's deadline and unstarted business obligations are independent.
         (Some(_), _) => Ok(()),
         (None, Some(deadline)) => tokio::time::timeout_at(deadline, cleanup)

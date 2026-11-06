@@ -323,6 +323,14 @@ impl EndObservation {
     pub(crate) fn interrupted_by_client(&self) -> bool {
         self.clean && self.reason == EndReason::ClientTransportEnd && !self.pending.is_empty()
     }
+
+    pub(crate) fn observes_close_tail(&self, protocol: Protocol) -> bool {
+        self.interrupted_by_client()
+            || (protocol == Protocol::SocketIo
+                && self.clean
+                && !self.pending.is_empty()
+                && matches!(self.reason, EndReason::ClientClose | EndReason::ServerEof))
+    }
 }
 
 pub(crate) const CLIENT_ABORT_QUIET: std::time::Duration = std::time::Duration::from_secs(15);
@@ -350,4 +358,37 @@ pub enum EndReason {
     ProtocolError,
     BudgetExceeded,
     CleanupTimeout,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socketio_close_tail_requires_a_clean_close_with_pending_work() {
+        for reason in [
+            EndReason::ServerEof,
+            EndReason::ClientClose,
+            EndReason::ClientTransportEnd,
+        ] {
+            let mut end = EndObservation {
+                reason,
+                offset_ms: 0,
+                pending: vec![1],
+                clean: true,
+                partial_message: None,
+                close: None,
+            };
+            assert!(end.observes_close_tail(Protocol::SocketIo));
+            assert_eq!(
+                end.observes_close_tail(Protocol::WebSocket),
+                reason == EndReason::ClientTransportEnd
+            );
+            end.clean = false;
+            assert!(!end.observes_close_tail(Protocol::SocketIo));
+            end.clean = true;
+            end.pending.clear();
+            assert!(!end.observes_close_tail(Protocol::SocketIo));
+        }
+    }
 }

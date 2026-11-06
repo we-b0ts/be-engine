@@ -81,7 +81,7 @@ async fn executor_peer(
 #[tokio::test]
 async fn source_close_with_pending_records_replays_and_preserves_the_source_service() {
     for reply_first in [true, false] {
-        timeout(Duration::from_secs(8), record_replay_and_next(reply_first))
+        timeout(Duration::from_secs(25), record_replay_and_next(reply_first))
             .await
             .unwrap();
     }
@@ -172,7 +172,15 @@ async fn record_replay_and_next(reply_first: bool) {
         }
     }
     assert_eq!(ping_count, if reply_first { 2 } else { 1 });
-    let case = published(&state).await;
+    assert!(
+        !state
+            .inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_secs(1))
+            .await,
+        "a Socket.IO server close with pending work must keep dependency admission open"
+    );
+    let case = published_within(&state, Duration::from_secs(18)).await;
     let input: Value = serde_json::from_slice(
         &crate::request_headers::load_request_file(&case.join("request.json")).unwrap(),
     )
@@ -409,7 +417,7 @@ async fn polling_peer(sid: &'static str) -> PollingPeer {
 
 #[tokio::test]
 async fn polling_protocol_close_with_pending_records_replays_and_does_not_invent_websocket_close() {
-    timeout(Duration::from_secs(8), async {
+    timeout(Duration::from_secs(25), async {
         let temp = tempdir().unwrap();
         let source = polling_peer("source").await;
         let mut settings = config(temp.path(), source.address);
@@ -442,7 +450,7 @@ async fn polling_protocol_close_with_pending_records_replays_and_does_not_invent
             polling_exchange(&client, &session, None).await,
             format!("{REGISTERED}\u{1e}{SYNC}\u{1e}1")
         );
-        let case = published(&state).await;
+        let case = published_within(&state, Duration::from_secs(18)).await;
         let expected: Value =
             serde_json::from_slice(&std::fs::read(case.join("expected-response.json")).unwrap())
                 .unwrap();

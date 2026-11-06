@@ -6,7 +6,7 @@ mod peer_disconnect;
 mod streaming;
 
 #[tokio::test(start_paused = true)]
-async fn replay_end_waits_only_for_aborted_cases_and_caps_rolling_quiet() {
+async fn replay_end_waits_for_close_tails_and_caps_rolling_quiet() {
     let temp = tempfile::tempdir().unwrap();
     let collection_dir = temp.path().join("api-user");
     for case_id in ["case-a", "case-b", "case-c"] {
@@ -81,21 +81,26 @@ async fn replay_end_waits_only_for_aborted_cases_and_caps_rolling_quiet() {
         input_timing: None,
         socketio_timing: None,
     };
-    for (case, activity_at, remaining) in [
-        ("case-b", Duration::from_secs(14), Duration::from_secs(15)),
-        ("case-c", Duration::from_secs(299), Duration::from_secs(1)),
+    for (case, command, activity_at, remaining) in [
+        (
+            "case-b",
+            "case_close_tail",
+            Duration::from_secs(14),
+            Duration::from_secs(15),
+        ),
+        (
+            "case-c",
+            "case_client_aborted",
+            Duration::from_secs(299),
+            Duration::from_secs(1),
+        ),
     ] {
         assert_eq!(
             begin_case(&request("begin", case), state.clone()).await["ok"],
             true
         );
-        let (observed, _) = handle_control_request(
-            request("case_client_aborted", case),
-            state.clone(),
-            None,
-            None,
-        )
-        .await;
+        let (observed, _) =
+            handle_control_request(request(command, case), state.clone(), None, None).await;
         assert_eq!(observed["ok"], true);
         tokio::time::advance(activity_at).await;
         let latest = tokio::time::Instant::now();

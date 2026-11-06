@@ -95,11 +95,15 @@ async fn gateway(state: AppState) -> (SocketAddr, JoinHandle<()>) {
 }
 
 async fn published(state: &AppState) -> PathBuf {
+    published_within(state, Duration::from_secs(3)).await
+}
+
+async fn published_within(state: &AppState, timeout: Duration) -> PathBuf {
     assert!(
         state
             .inner
             .active_cases
-            .wait_for_no_active_case(Duration::from_secs(3))
+            .wait_for_no_active_case(timeout)
             .await,
         "case guard did not release after the post-response dependency window"
     );

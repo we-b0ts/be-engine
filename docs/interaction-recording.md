@@ -407,13 +407,15 @@ does not terminate Target or require a new run for the remaining selected cases.
 
 An observed client EOF or reset at a complete framing boundary with pending
 business work uses a separate Case tail window in Recorder and managed Replay.
+For Socket.IO, this also applies after a clean protocol close initiated by
+either peer when business inputs remain pending, including WebSocket code 1000.
 The primary transport ends at its actual boundary. Case admission stays open
 until 15 continuous seconds without relevant dependency activity and without
 accepted I/O in flight, with a five-minute observation cap. Real activity
 restarts the quiet interval. The cap closes admission, then the usual bounded
 drain handles already accepted I/O. A quiet or capped observation alone does
 not fail the recorded Case, prove business completion, or waive any dependency
-comparison. A transport end after normal business completion uses the ordinary
+comparison. A close after confirmed business completion uses the ordinary
 close path. An incomplete frame or failed transport confirmation retains its
 existing failure path.
 
