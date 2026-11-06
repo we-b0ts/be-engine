@@ -16,6 +16,18 @@ fn project(record: &RecordedMysqlExchange, sql: &str) -> Option<RecordedMysqlRes
 }
 
 #[test]
+fn projection_reuses_the_source_shape_but_checks_each_recorded_result() {
+    let sql = "SELECT id AS old_id, uid AS old_uid FROM tasks WHERE id=7";
+    let source = record(sql, &["old_id", "old_uid"]);
+    let invalid = record(sql, &["invalid", "old_uid"]);
+    let mut query = Query::prepare("COM_QUERY", "SELECT uid FROM tasks WHERE id=7", None).unwrap();
+    assert!(query.response(&source).is_some());
+    assert!(query.response(&invalid).is_none());
+    assert_eq!(query.source_shapes.len(), 1);
+    assert!(query.response(&source).is_some());
+}
+
+#[test]
 fn distinct_requires_the_same_complete_projection_in_all_matching_paths() {
     for filter in ["", " WHERE tenant=7 AND status='approved'"] {
         let source_sql =

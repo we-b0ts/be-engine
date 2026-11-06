@@ -99,6 +99,7 @@ impl ReplayState {
             Some("commit" | "rollback")
         );
         let mut baseline_semantic_target = None;
+        let mut baseline_projection = None;
         let mut transaction_rejection = None;
         let actual_autocommit = sql
             .and_then(crate::mysql::autocommit::assignment)
@@ -475,11 +476,11 @@ impl ReplayState {
                             {
                                 continue;
                             }
-                            let Some(recorded_sql) =
-                                exchange.record.sql.as_deref().map(normalize_sql)
-                            else {
+                            let Some(recorded_sql) = exchange.record.sql.as_deref() else {
                                 continue;
                             };
+                            let sql_differs =
+                                || Some(normalize_sql(recorded_sql).as_str()) != normalized_sql;
                             let policy_decision = if cross_protocol {
                                 // The SQL matcher or projection adapter verifies values.
                                 // A protocol change needs no dynamic-value exemption.
@@ -499,10 +500,10 @@ impl ReplayState {
                                     actual: params,
                                 };
                                 if !project_columns
-                                    && Some(recorded_sql.as_str()) != normalized_sql
                                     && !same_autocommit
                                     && !same_savepoint
                                     && !same_prepared_values
+                                    && sql_differs()
                                     && !policy.allows_mysql_sql_difference(&context)
                                 {
                                     continue;
@@ -518,10 +519,10 @@ impl ReplayState {
                                     }
                                 }
                             } else if !project_columns
-                                && Some(recorded_sql.as_str()) != normalized_sql
                                 && !same_autocommit
                                 && !same_savepoint
                                 && !same_prepared_values
+                                && sql_differs()
                             {
                                 continue;
                             } else if same_prepared_values
@@ -533,14 +534,24 @@ impl ReplayState {
                             };
                             // Reject parameter/policy mismatches before copying any rows.
                             let projected = if project_columns {
-                                let Some(response) = sql.and_then(|sql| {
-                                    projection::query_response(
-                                        &exchange.record,
-                                        command,
-                                        sql,
-                                        params,
-                                    )
-                                }) else {
+                                let mut dynamic_projection;
+                                let projection = if dynamic.is_none() {
+                                    baseline_projection
+                                        .get_or_insert_with(|| {
+                                            sql.and_then(|sql| {
+                                                projection::Query::prepare(command, sql, params)
+                                            })
+                                        })
+                                        .as_mut()
+                                } else {
+                                    dynamic_projection = sql.and_then(|sql| {
+                                        projection::Query::prepare(command, sql, params)
+                                    });
+                                    dynamic_projection.as_mut()
+                                };
+                                let Some(response) =
+                                    projection.and_then(|query| query.response(&exchange.record))
+                                else {
                                     continue;
                                 };
                                 Some(response)

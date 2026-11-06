@@ -421,7 +421,7 @@ pub(crate) fn normalize_pattern(sql: &str) -> String {
 }
 
 pub(crate) fn normalize(sql: &str) -> String {
-    let Some(tokens) = tokens(sql) else {
+    let Some(tokens) = tokens_shared(sql) else {
         return sql.to_owned();
     };
     render(&tokens)

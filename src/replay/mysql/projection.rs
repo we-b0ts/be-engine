@@ -3,7 +3,7 @@ use super::*;
 use crate::mysql::sql::{
     Token,
     projection::{DirectColumn, DirectSelect},
-    tokens,
+    tokens, tokens_shared,
 };
 
 struct Mapping {
@@ -17,23 +17,101 @@ pub(super) fn query_response(
     sql: &str,
     params: Option<&[RecordedMysqlValue]>,
 ) -> Option<RecordedMysqlResponse> {
-    let recorded_sql = record.sql.as_deref()?;
-    let forms = match (record.command.as_str(), command) {
-        ("COM_QUERY", "COM_QUERY") => (tokens(recorded_sql)?, tokens(sql)?),
-        ("COM_STMT_EXECUTE", "COM_STMT_EXECUTE") => (
-            sql_match::materialize(recorded_sql, record.params.as_deref().unwrap_or_default())?,
-            sql_match::materialize(sql, params.unwrap_or_default())?,
-        ),
-        ("COM_QUERY", "COM_STMT_EXECUTE") => {
-            (tokens(recorded_sql)?, sql_match::materialize(sql, params?)?)
+    Query::prepare(command, sql, params)?.response(record)
+}
+
+pub(super) struct Query {
+    actual: DirectSelect,
+    prepared: bool,
+    params_present: bool,
+    source_shapes: std::collections::HashMap<String, Option<DirectSelect>>,
+}
+
+impl Query {
+    pub(super) fn prepare(
+        command: &str,
+        sql: &str,
+        params: Option<&[RecordedMysqlValue]>,
+    ) -> Option<Self> {
+        let actual = match command {
+            "COM_QUERY" => DirectSelect::parse(sql, &tokens_shared(sql)?),
+            "COM_STMT_EXECUTE" => DirectSelect::parse(
+                sql,
+                &sql_match::materialize(sql, params.unwrap_or_default())?,
+            ),
+            _ => None,
+        }?;
+        Some(Self {
+            actual,
+            prepared: command == "COM_STMT_EXECUTE",
+            params_present: params.is_some(),
+            source_shapes: Default::default(),
+        })
+    }
+
+    pub(super) fn response(
+        &mut self,
+        record: &RecordedMysqlExchange,
+    ) -> Option<RecordedMysqlResponse> {
+        if !complete_resultset(record) {
+            return None;
         }
-        ("COM_STMT_EXECUTE", "COM_QUERY") => (
-            sql_match::materialize(recorded_sql, record.params.as_deref()?)?,
-            tokens(sql)?,
-        ),
-        _ => return None,
-    };
-    let mapping = mapping(record, sql, &forms.0, &forms.1, false)?;
+        let sql = record.sql.as_deref()?;
+        let params = match record.command.as_str() {
+            "COM_QUERY" if !self.prepared || self.params_present => {
+                if let Some(shape) = self.source_shapes.get(sql) {
+                    return response_for_shapes(record, shape.as_ref()?, &self.actual);
+                }
+                let shape = self.source_shape(sql, None);
+                // A long transaction can repeat the same text hundreds of times.
+                // Keep only a bounded set of immutable shapes for this request.
+                if self.source_shapes.len() < 32 && sql.len() <= 16 * 1024 {
+                    return response_for_shapes(
+                        record,
+                        self.source_shapes
+                            .entry(sql.into())
+                            .or_insert(shape)
+                            .as_ref()?,
+                        &self.actual,
+                    );
+                }
+                return response_for_shapes(record, &shape?, &self.actual);
+            }
+            "COM_STMT_EXECUTE" if self.prepared => record.params.as_deref().unwrap_or_default(),
+            "COM_STMT_EXECUTE" => record.params.as_deref()?,
+            _ => return None,
+        };
+        let shape = self.source_shape(sql, Some(params))?;
+        response_for_shapes(record, &shape, &self.actual)
+    }
+
+    fn source_shape(
+        &self,
+        sql: &str,
+        params: Option<&[RecordedMysqlValue]>,
+    ) -> Option<DirectSelect> {
+        let tokens = tokens_shared(sql)?;
+        if !self.actual.matches_relation(&tokens) {
+            return None;
+        }
+        if let Some(params) = params {
+            let bound = sql_match::materialize_tokens((*tokens).clone(), params)?;
+            DirectSelect::parse(sql, &bound)
+        } else {
+            DirectSelect::parse(sql, &tokens)
+        }
+    }
+}
+
+fn response_for_shapes(
+    record: &RecordedMysqlExchange,
+    recorded: &DirectSelect,
+    actual: &DirectSelect,
+) -> Option<RecordedMysqlResponse> {
+    if recorded.body != actual.body {
+        return None;
+    }
+    let mapping = column_mapping(record, recorded, actual)?;
     project_response(record, mapping)
 }
 

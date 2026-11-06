@@ -20,6 +20,14 @@ pub(crate) struct DirectSelect {
 }
 
 impl DirectSelect {
+    pub(crate) fn matches_relation(&self, sql: &[Token]) -> bool {
+        let Some(from) = sql.iter().position(|token| token.is("from")) else {
+            return self.table.is_empty();
+        };
+        identifier_path(&sql[from + 1..])
+            .is_some_and(|(relation, _)| relation.last() == Some(&self.table))
+    }
+
     pub(crate) fn parse(raw: &str, sql: &[Token]) -> Option<Self> {
         let (original, spans) = tokens_with_spans(raw)?;
         if original.len() != sql.len() {
