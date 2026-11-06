@@ -2,6 +2,51 @@
 use super::*;
 use crate::rewrite::model::RewriteAction;
 
+fn mysql_tail_event(
+    connection_id: Uuid,
+    query_sequence: u64,
+    sql: &str,
+    before: u16,
+) -> RecorderEvent {
+    let now = chrono::Utc::now();
+    RecorderEvent::MysqlExchange(crate::recorder::MysqlExchangeEvent {
+        id: Uuid::new_v4(),
+        connection_id,
+        query_sequence,
+        timestamp: now,
+        request_started_at: now,
+        client_addr: None,
+        route_name: None,
+        target_host: Some("mysql.test".into()),
+        target_port: Some(3306),
+        target_addr: None,
+        upstream_addr: None,
+        username: Some("app".into()),
+        database: Some("db".into()),
+        command: "COM_QUERY".into(),
+        sql: Some(sql.into()),
+        statement_id: None,
+        params: None,
+        server_status_before: Some(before),
+        response: crate::recorder::MysqlExchangeResponse {
+            wire_prefix: vec![],
+            server_status: Some(0),
+            status: "ok".into(),
+            error_code: None,
+            error_message: None,
+            affected_rows: Some(0),
+            last_insert_id: Some(0),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            rows_truncated: false,
+        },
+        outcome: crate::DependencyExchangeOutcome::Response,
+        duration_ms: 1,
+        parse_warnings: vec![],
+    })
+}
+
 #[tokio::test]
 async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async_rule() {
     let target = crate::rewrite::worker::tests::configured_target();
@@ -17,6 +62,7 @@ async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async
     };
     let origin = case("socketio");
     let victim = case("later");
+    let mysql_connection = Uuid::new_v4();
     for (case, start, response) in [
         (
             &origin,
@@ -47,6 +93,32 @@ async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async
             .append_case_dependency(case, &http("/runtime"), "active_window")
             .await
             .unwrap();
+        if case.id == victim.id {
+            for (sequence, sql, before) in [
+                (
+                    1,
+                    "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+                    0,
+                ),
+                (2, "COMMIT", 0),
+                (3, "SET @session_value = 1", 0),
+                (4, "COMMIT", 1),
+                (
+                    5,
+                    "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+                    0,
+                ),
+            ] {
+                recorder
+                    .append_case_dependency(
+                        case,
+                        &mysql_tail_event(mysql_connection, sequence, sql, before),
+                        "active_window",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
         recorder.publish_case(case).await.unwrap();
     }
     recorder
@@ -81,16 +153,24 @@ async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async
         .exchanges
         .iter()
         .find_map(|(id, event)| {
-            matches!(event.capture.attribution, DependencyOwner::Case { origin_case_id, .. }
+            (matches!(event.capture.attribution, DependencyOwner::Case { origin_case_id, .. }
             if origin_case_id == victim.id)
-            .then_some(*id)
+                && event.selector["event_type"] == "http_exchange")
+                .then_some(*id)
         })
         .unwrap();
+    let mysql = |sequence| {
+        *source.native[&("mysql".into(), mysql_connection.to_string(), sequence)]
+            .first()
+            .unwrap()
+    };
+    let anchors = [mysql(1), mysql(3), mysql(5)];
+    let (empty_commit, active_commit) = (mysql(2), mysql(4));
     let claim: ForeignUnusedClaim = serde_json::from_value(json!({
         "id":"returned","api":"/socket.io/","method_api":"GET /socket.io/",
         "recording_run_id":state.recording_run_id,"source_revision":state.source_revision,
         "source_inventory_id":source.identity,"attempt":1,"execution_identity":"actual",
-        "report_sha256":"report","source_exchange_ids":[returned],"reason":"Source tail from earlier connection",
+        "report_sha256":"report","source_exchange_ids":[returned, anchors[0], anchors[1], anchors[2]],"reason":"Source tail from earlier connection",
         "status":"pending","rejection":null
     })).unwrap();
     state
@@ -106,7 +186,7 @@ async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async
     })
     .unwrap();
     let proposal: ProposedAttribution = serde_json::from_value(json!({
-        "claim_ids":["returned"],"source_exchange_ids":[ownerless,returned],"source_task":"socket background",
+        "claim_ids":["returned"],"source_exchange_ids":[ownerless,returned,anchors[0],anchors[1],anchors[2]],"source_task":"socket background",
         "owner":{"kind":"case","origin_case_id":origin.id},
         "proof":{"source_revision":context.source_revision,"source_locations":["src/handler.rs:10"],
             "call_chain":"handler emits both calls after close","exclusive_scope":"exact runtime event identities"},
@@ -117,6 +197,11 @@ async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async
     let mut unclaimed = proposal.clone();
     unclaimed.claim_ids.clear();
     assert!(rules::bind(target.path(), &state, &source, &mut unclaimed).is_err());
+    let mut with_control = proposal.clone();
+    with_control.source_exchange_ids.insert(empty_commit);
+    rules::bind(target.path(), &state, &source, &mut with_control).unwrap();
+    with_control.source_exchange_ids.insert(active_commit);
+    assert!(rules::bind(target.path(), &state, &source, &mut with_control).is_err());
     source
         .exchanges
         .get_mut(&ownerless)
@@ -135,7 +220,7 @@ async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async
             recording_run_id: context.recording_run_id,
             source_revision: context.source_revision,
             source_inventory_id: context.source_inventory_id,
-            decisions: vec![proposal],
+            decisions: vec![proposal.clone()],
             investigation_resolutions: vec![],
             unresolved_claim_ids: BTreeSet::new(),
             claim_rejections: vec![],
@@ -149,6 +234,18 @@ async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async
     })
     .unwrap();
     assert!(!result["pending_obligations"].as_array().unwrap().is_empty());
+    let state_after = RewriteStore::new(target.path())
+        .unwrap()
+        .load()
+        .unwrap()
+        .unwrap();
+    let source_after = source::load(&state_after).unwrap();
+    let mut companion = proposal;
+    companion.claim_ids.clear();
+    companion.source_exchange_ids = BTreeSet::from([empty_commit]);
+    assert!(rules::bind(target.path(), &state_after, &source_after, &mut companion).is_ok());
+    companion.source_exchange_ids = BTreeSet::from([active_commit]);
+    assert!(rules::bind(target.path(), &state_after, &source_after, &mut companion).is_err());
     let (effective, _) = freeze_dependency_attribution(
         Some(target.path()),
         state.case_source.as_deref().unwrap(),

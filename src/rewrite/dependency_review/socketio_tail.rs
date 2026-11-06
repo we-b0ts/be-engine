@@ -15,6 +15,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+mod mysql;
+
 pub(super) const RULE_ID: &str = "engine.socketio_close_tail:v1";
 
 pub(super) fn fingerprint() -> String {
@@ -103,6 +105,25 @@ pub(super) fn bind(
         })
         .flat_map(|claim| claim.source_exchange_ids.iter().copied())
         .collect();
+    let already_bound = |id: &Uuid| {
+        state
+            .dependency_review
+            .decisions
+            .get(id)
+            .filter(|decision| {
+                rules::current(*decision, active_rules)
+                    && decision.rule_bindings.contains_key(RULE_ID)
+                    && decision.owner == proposal.owner
+            })
+    };
+    let anchors_share_origin = |before: &Uuid, after: &Uuid| {
+        [before, after]
+            .into_iter()
+            .all(|id| claimed.contains(id) && proposal.source_exchange_ids.contains(id))
+            || already_bound(before)
+                .zip(already_bound(after))
+                .is_some_and(|(before, after)| before.proof_id == after.proof_id)
+    };
     let mut victims = BTreeMap::new();
     for id in &proposal.source_exchange_ids {
         let event = source
@@ -131,13 +152,24 @@ pub(super) fn bind(
             DependencyOwner::Case {
                 origin_case_id: victim,
                 ..
-            } if victim != origin_case_id && claimed.contains(id) => {
+            } if victim != origin_case_id => {
                 if let std::collections::btree_map::Entry::Vacant(entry) = victims.entry(victim) {
                     entry.insert(started(&request(source, victim)?)?);
                 }
                 ensure!(
                     (closed..=capture.started_at).contains(&victims[&victim]),
                     "claimed Source occurrence does not belong to a later Case"
+                );
+                ensure!(
+                    claimed.contains(id)
+                        || !state.dependency_review.decisions.contains_key(id)
+                            && mysql::is_bounded_control(
+                                source,
+                                *id,
+                                victim,
+                                anchors_share_origin
+                            )?,
+                    "Socket.IO close-tail proof requires a current unused claim or a proven transaction control companion"
                 );
             }
             _ => anyhow::bail!(
