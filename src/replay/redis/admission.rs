@@ -6,6 +6,7 @@ use crate::replay::admission::{
 };
 use crate::replay::report::command::CommandMatchDiagnostic;
 use std::time::Duration;
+mod lane;
 
 #[cfg(test)]
 mod activity_tests;
@@ -15,6 +16,7 @@ mod engine_tests;
 mod tests;
 
 const REFRESH_WAIT: Duration = Duration::from_secs(30);
+const POOLED_LANE_WAIT: Duration = Duration::from_secs(5);
 
 struct RedisRequest<'a> {
     target: &'a TargetKey,
@@ -25,6 +27,7 @@ struct RedisRequest<'a> {
     username: Option<&'a str>,
     command: &'a RedisCommand,
     connection: Option<TargetConnection>,
+    started: tokio::time::Instant,
 }
 
 impl DependencyRequestAdapter for RedisRequest<'_> {
@@ -88,6 +91,14 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         observation: &RequestAdmission,
         error: &Self::Error,
     ) -> Option<WaitDependency<'a>> {
+        if lane::enabled(state)
+            && lane::pending_predecessor(&state.redis, observation.case.as_deref(), error)
+        {
+            return Some(
+                WaitDependency::changed(&state.redis.lifecycle)
+                    .until(self.started + POOLED_LANE_WAIT),
+            );
+        }
         (pending_delivery(
             &state.redis,
             observation.case.as_deref(),
@@ -121,6 +132,9 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         if matched.requires_binding {
             self.binding
                 .bind(observation.case.as_deref(), matched.connection_id);
+        }
+        if lane::enabled(state) {
+            state.redis.lifecycle.notify_waiters();
         }
         Ok(())
     }
@@ -177,6 +191,7 @@ pub(super) async fn match_command(
     username: Option<&str>,
     command: &RedisCommand,
 ) -> std::result::Result<MatchedRedisExchange, &'static str> {
+    let started = tokio::time::Instant::now();
     request::execute(
         shared,
         &mut RedisRequest {
@@ -188,8 +203,9 @@ pub(super) async fn match_command(
             username,
             command,
             connection: None,
+            started,
         },
-        tokio::time::Instant::now() + REFRESH_WAIT,
+        started + REFRESH_WAIT,
     )
     .await
     .map_err(|error| {

@@ -9,12 +9,14 @@ use tokio::{sync::Mutex, time::Instant};
 pub(in crate::replay) struct WaitDependency<'a> {
     lifecycle: &'a Lifecycle,
     slot: Option<(usize, Barrier)>,
+    deadline: Option<Instant>,
 }
 impl<'a> WaitDependency<'a> {
     pub(in crate::replay) fn changed(lifecycle: &'a Lifecycle) -> Self {
         Self {
             lifecycle,
             slot: None,
+            deadline: None,
         }
     }
     pub(in crate::replay) fn slot(
@@ -25,13 +27,19 @@ impl<'a> WaitDependency<'a> {
         Self {
             lifecycle,
             slot: Some((index, barrier)),
+            deadline: None,
         }
     }
-    fn register(self) -> Option<WaitRegistration> {
-        match self.slot {
+    pub(in crate::replay) fn until(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+    fn register(self) -> Option<(WaitRegistration, Option<Instant>)> {
+        let registration = match self.slot {
             Some((index, barrier)) => self.lifecycle.wait_for(index, barrier),
             None => Some(self.lifecycle.subscribe()),
-        }
+        }?;
+        Some((registration, self.deadline))
     }
 }
 
@@ -86,7 +94,7 @@ pub(in crate::replay) async fn execute<A: DependencyRequestAdapter>(
     let observation = adapter.observe_once(&mut state);
     let mut result = adapter.try_select(&mut state, &observation);
     'select: while let Err(error) = &result {
-        let Some(mut waiter) = adapter
+        let Some((mut waiter, mut local_deadline)) = adapter
             .wait_dependency(&state, &observation, error)
             .and_then(WaitDependency::register)
         else {
@@ -94,26 +102,33 @@ pub(in crate::replay) async fn execute<A: DependencyRequestAdapter>(
         };
         loop {
             drop(state);
-            let outcome = waiter.wait(deadline).await;
+            let outcome = waiter
+                .wait(local_deadline.map_or(deadline, |local| local.min(deadline)))
+                .await;
             state = shared.lock().await;
             if state.finalized_at.is_some() {
                 return Err(adapter.interrupted("Replay session is finalized"));
             }
-            let interrupted = observation.cancel_reason(&state).or_else(|| {
-                (outcome == WaitOutcome::Deadline)
-                    .then_some("dependency predecessor delivery wait timed out")
-            });
-            if let Some(reason) = interrupted {
+            if let Some(reason) = observation.cancel_reason(&state) {
                 result = Err(adapter.interrupted(reason));
+                break 'select;
+            }
+            if outcome == WaitOutcome::Deadline {
+                // A bounded native retry still reports the specific blocker.
+                if local_deadline.is_none_or(|local| local > deadline) {
+                    result =
+                        Err(adapter.interrupted("dependency predecessor delivery wait timed out"));
+                }
                 break 'select;
             }
             // A notification may concern another lane. Recheck only the native
             // dependency, without decoding/observing/selecting this request again.
-            if let Some(next) = adapter
+            if let Some((next, next_deadline)) = adapter
                 .wait_dependency(&state, &observation, error)
                 .and_then(WaitDependency::register)
             {
                 waiter = next;
+                local_deadline = next_deadline;
             } else {
                 break;
             }
