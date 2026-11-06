@@ -5,7 +5,14 @@ pub(crate) const MAX_STATEMENT_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_TOKENS: usize = 32_768;
 
 pub(crate) fn statement(sql: &str) -> Option<Vec<Token>> {
-    tokens(sql).filter(|tokens| valid(tokens))
+    statement_shared(sql).map(|tokens| (*tokens).clone())
+}
+
+pub(crate) fn statement_shared(sql: &str) -> Option<std::sync::Arc<Vec<Token>>> {
+    if sql.len() > MAX_STATEMENT_BYTES {
+        return None;
+    }
+    super::tokens_shared(sql).filter(|tokens| valid(tokens))
 }
 
 /// Semantic SELECT parsing retains its existing grammar/terminator checks.

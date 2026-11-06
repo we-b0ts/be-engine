@@ -1,5 +1,5 @@
 //! Resolve direct-column SELECT projections without changing query semantics.
-use super::{Token, tokens_with_spans};
+use super::{Token, tokens_with_spans_shared};
 
 #[derive(Clone, Debug)]
 pub(crate) struct DirectColumn {
@@ -29,7 +29,7 @@ impl DirectSelect {
     }
 
     pub(crate) fn parse(raw: &str, sql: &[Token]) -> Option<Self> {
-        let (original, spans) = tokens_with_spans(raw)?;
+        let (original, spans) = tokens_with_spans_shared(raw)?;
         if original.len() != sql.len() {
             return None;
         }

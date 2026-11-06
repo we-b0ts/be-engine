@@ -35,14 +35,16 @@ pub(crate) fn tokens(sql: &str) -> Option<Vec<Token>> {
 }
 
 pub(crate) fn tokens_shared(sql: &str) -> Option<std::sync::Arc<Vec<Token>>> {
-    lexical_cache::tokens(sql)
+    tokens_with_spans_shared(sql).map(|(tokens, _)| tokens)
 }
 
 pub(crate) fn tokens_with_spans(sql: &str) -> Option<(Vec<Token>, Vec<std::ops::Range<usize>>)> {
-    let mut spans = Vec::new();
-    let tokens = scan(sql, |span| spans.push(span))?;
-    spans.truncate(tokens.len());
-    Some((tokens, spans))
+    let (tokens, spans) = tokens_with_spans_shared(sql)?;
+    Some(((*tokens).clone(), (*spans).clone()))
+}
+
+fn tokens_with_spans_shared(sql: &str) -> Option<lexical_cache::Lexed> {
+    lexical_cache::tokens_with_spans(sql)
 }
 
 fn scan(sql: &str, mut span: impl FnMut(std::ops::Range<usize>)) -> Option<Vec<Token>> {

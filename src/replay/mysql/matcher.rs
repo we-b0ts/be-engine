@@ -371,6 +371,7 @@ impl ReplayState {
         let normalized_sql = normalize_sql(sql);
         let param_count = count_sql_placeholders(sql);
         let mut semantic_target = None;
+        let mut direct_projection = None;
         for source in [ReplaySource::Case, ReplaySource::Startup] {
             let candidates =
                 self.mysql
@@ -446,7 +447,12 @@ impl ReplayState {
                         continue;
                     }
                     if project_columns {
-                        if let Some(columns) = projection::statement_columns(&exchange.record, sql)
+                        if let Some(columns) = direct_projection
+                            .get_or_insert_with(|| {
+                                projection::Query::prepare("COM_QUERY", sql, None)
+                            })
+                            .as_mut()
+                            .and_then(|projection| projection.statement_columns(&exchange.record))
                         {
                             return StatementMetadata {
                                 param_count,
@@ -469,7 +475,14 @@ impl ReplayState {
                     if matches {
                         return StatementMetadata {
                             param_count,
-                            columns: projection::statement_columns(&exchange.record, sql)
+                            columns: direct_projection
+                                .get_or_insert_with(|| {
+                                    projection::Query::prepare("COM_QUERY", sql, None)
+                                })
+                                .as_mut()
+                                .and_then(|projection| {
+                                    projection.statement_columns(&exchange.record)
+                                })
                                 .unwrap_or_else(|| exchange.record.response.columns.clone()),
                         };
                     }

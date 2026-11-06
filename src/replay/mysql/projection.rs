@@ -3,7 +3,7 @@ use super::*;
 use crate::mysql::sql::{
     Token,
     projection::{DirectColumn, DirectSelect},
-    tokens, tokens_shared,
+    tokens_shared,
 };
 
 struct Mapping {
@@ -58,31 +58,55 @@ impl Query {
         }
         let sql = record.sql.as_deref()?;
         let params = match record.command.as_str() {
-            "COM_QUERY" if !self.prepared || self.params_present => {
-                if let Some(shape) = self.source_shapes.get(sql) {
-                    return response_for_shapes(record, shape.as_ref()?, &self.actual);
-                }
-                let shape = self.source_shape(sql, None);
-                // A long transaction can repeat the same text hundreds of times.
-                // Keep only a bounded set of immutable shapes for this request.
-                if self.source_shapes.len() < 32 && sql.len() <= 16 * 1024 {
-                    return response_for_shapes(
-                        record,
-                        self.source_shapes
-                            .entry(sql.into())
-                            .or_insert(shape)
-                            .as_ref()?,
-                        &self.actual,
-                    );
-                }
-                return response_for_shapes(record, &shape?, &self.actual);
+            "COM_QUERY" if !self.prepared || self.params_present => None,
+            "COM_STMT_EXECUTE" if self.prepared => {
+                Some(record.params.as_deref().unwrap_or_default())
             }
-            "COM_STMT_EXECUTE" if self.prepared => record.params.as_deref().unwrap_or_default(),
-            "COM_STMT_EXECUTE" => record.params.as_deref()?,
+            "COM_STMT_EXECUTE" => Some(record.params.as_deref()?),
             _ => return None,
         };
-        let shape = self.source_shape(sql, Some(params))?;
-        response_for_shapes(record, &shape, &self.actual)
+        self.with_source_shape(sql, params, |source, actual| {
+            response_for_shapes(record, source, actual)
+        })
+    }
+
+    pub(super) fn statement_columns(
+        &mut self,
+        record: &RecordedMysqlExchange,
+    ) -> Option<Vec<RecordedMysqlColumn>> {
+        if !complete_resultset(record) {
+            return None;
+        }
+        let sql = record.sql.as_deref()?;
+        let params = match record.command.as_str() {
+            "COM_QUERY" => None,
+            "COM_STMT_EXECUTE" => Some(record.params.as_deref().unwrap_or_default()),
+            _ => return None,
+        };
+        self.with_source_shape(sql, params, |source, actual| {
+            statement_mapping(record, source, actual).map(|mapping| mapping.columns)
+        })
+    }
+
+    fn with_source_shape<T>(
+        &mut self,
+        sql: &str,
+        params: Option<&[RecordedMysqlValue]>,
+        compare: impl FnOnce(&DirectSelect, &DirectSelect) -> Option<T>,
+    ) -> Option<T> {
+        if params.is_none() {
+            if let Some(shape) = self.source_shapes.get(sql) {
+                return compare(shape.as_ref()?, &self.actual);
+            }
+            // Text SQL can repeat hundreds of times in a single candidate scan.
+            // Never reuse a bound Source shape across different parameter sets.
+            if self.source_shapes.len() < 32 && sql.len() <= 16 * 1024 {
+                let shape = self.source_shape(sql, None);
+                let source = self.source_shapes.entry(sql.into()).or_insert(shape);
+                return compare(source.as_ref()?, &self.actual);
+            }
+        }
+        compare(&self.source_shape(sql, params)?, &self.actual)
     }
 
     fn source_shape(
@@ -135,20 +159,12 @@ fn project_response(
     Some(response)
 }
 
-pub(super) fn statement_columns(
+#[cfg(test)]
+fn statement_columns(
     record: &RecordedMysqlExchange,
     sql: &str,
 ) -> Option<Vec<RecordedMysqlColumn>> {
-    if !matches!(record.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE") {
-        return None;
-    }
-    let recorded_sql = record.sql.as_deref()?;
-    let recorded_tokens = if record.command == "COM_STMT_EXECUTE" {
-        sql_match::materialize(recorded_sql, record.params.as_deref().unwrap_or_default())?
-    } else {
-        tokens(recorded_sql)?
-    };
-    Some(mapping(record, sql, &recorded_tokens, &tokens(sql)?, true)?.columns)
+    Query::prepare("COM_QUERY", sql, None)?.statement_columns(record)
 }
 
 fn same_column(a: &DirectColumn, b: &DirectColumn) -> bool {
@@ -159,25 +175,21 @@ fn same_column(a: &DirectColumn, b: &DirectColumn) -> bool {
     }
 }
 
-fn mapping(
+fn statement_mapping(
     record: &RecordedMysqlExchange,
-    sql: &str,
-    recorded: &[Token],
-    actual: &[Token],
-    metadata: bool,
+    recorded: &DirectSelect,
+    actual: &DirectSelect,
 ) -> Option<Mapping> {
-    let recorded = DirectSelect::parse(record.sql.as_deref()?, recorded)?;
-    let actual = DirectSelect::parse(sql, actual)?;
     if recorded.body.len() != actual.body.len()
         || !actual
             .body
             .iter()
             .zip(&recorded.body)
-            .all(|(a, r)| a == r || metadata && *a == Token::Placeholder && r.is_value())
+            .all(|(a, r)| a == r || *a == Token::Placeholder && r.is_value())
     {
         return None;
     }
-    column_mapping(record, &recorded, &actual)
+    column_mapping(record, recorded, actual)
 }
 
 fn complete_resultset(record: &RecordedMysqlExchange) -> bool {

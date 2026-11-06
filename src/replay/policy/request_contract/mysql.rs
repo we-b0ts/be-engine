@@ -95,11 +95,11 @@ impl RequestContracts {
         ) else {
             return false;
         };
-        let Some(actual) = crate::mysql::sql::bounds::statement(sql) else {
+        let Some(actual) = crate::mysql::sql::bounds::statement_shared(sql) else {
             return false;
         };
         source.len() == actual.len()
-            && source.iter().zip(&actual).all(|(source, actual)| {
+            && source.iter().zip(actual.iter()).all(|(source, actual)| {
                 source == actual
                     || (source.is_value()
                         && (actual.is_value() || *actual == crate::mysql::sql::Token::Placeholder))
@@ -123,8 +123,8 @@ impl RequestContracts {
             record
                 .sql
                 .as_deref()
-                .and_then(crate::mysql::sql::bounds::statement),
-            sql.and_then(crate::mysql::sql::bounds::statement),
+                .and_then(crate::mysql::sql::bounds::statement_shared),
+            sql.and_then(crate::mysql::sql::bounds::statement_shared),
         );
         let scalar = |token: &crate::mysql::sql::Token| {
             token.is_value() || *token == crate::mysql::sql::Token::Placeholder
@@ -132,7 +132,7 @@ impl RequestContracts {
         let related = match &token_pair {
             (Some(source), Some(actual)) => {
                 source.len() == actual.len()
-                    && source.iter().zip(actual).all(|(source, actual)| {
+                    && source.iter().zip(actual.iter()).all(|(source, actual)| {
                         source == actual || scalar(source) && scalar(actual)
                     })
             }

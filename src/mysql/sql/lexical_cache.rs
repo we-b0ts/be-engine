@@ -16,12 +16,13 @@ struct Cache {
     order: VecDeque<String>,
     bytes: usize,
 }
-type CachedTokens = (Option<Arc<Vec<Token>>>, usize);
+pub(super) type Lexed = (Arc<Vec<Token>>, Arc<Vec<std::ops::Range<usize>>>);
+type CachedTokens = (Option<Lexed>, usize);
 
-pub(super) fn tokens(sql: &str) -> Option<Arc<Vec<Token>>> {
+pub(super) fn tokens_with_spans(sql: &str) -> Option<Lexed> {
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     if sql.len() > MAX_SQL {
-        return super::scan(sql, |_| {}).map(Arc::new);
+        return scan(sql);
     }
     let cache = CACHE.get_or_init(Mutex::default);
     let hit = cache
@@ -33,10 +34,11 @@ pub(super) fn tokens(sql: &str) -> Option<Arc<Vec<Token>>> {
     if let Some(hit) = hit {
         return hit;
     }
-    let parsed = super::scan(sql, |_| {}).map(Arc::new);
+    let parsed = scan(sql);
     let charge = sql.len() * 2
-        + parsed.as_ref().map_or(0, |ts| {
+        + parsed.as_ref().map_or(0, |(ts, spans)| {
             ts.capacity() * std::mem::size_of::<Token>()
+                + spans.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
                 + ts.iter()
                     .map(|t| match t {
                         Token::Word(s)
@@ -67,6 +69,13 @@ pub(super) fn tokens(sql: &str) -> Option<Arc<Vec<Token>>> {
     parsed
 }
 
+fn scan(sql: &str) -> Option<Lexed> {
+    let mut spans = Vec::new();
+    let tokens = super::scan(sql, |span| spans.push(span))?;
+    spans.truncate(tokens.len());
+    Some((Arc::new(tokens), Arc::new(spans)))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -77,11 +86,17 @@ mod tests {
             "SELECT 'unterminated",
             "SELECT `a` FROM t WHERE x = 2",
         ] {
+            let mut expected_spans = Vec::new();
+            let expected_tokens = super::super::scan(sql, |span| expected_spans.push(span));
             for _ in 0..3 {
+                let cached = super::tokens_with_spans(sql);
                 assert_eq!(
-                    super::tokens(sql).as_deref(),
-                    super::super::scan(sql, |_| {}).as_ref()
+                    cached.as_ref().map(|(tokens, _)| tokens.as_ref()),
+                    expected_tokens.as_ref()
                 );
+                if let Some((tokens, spans)) = cached {
+                    assert_eq!(spans.as_slice(), &expected_spans[..tokens.len()]);
+                }
             }
         }
     }
