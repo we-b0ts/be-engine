@@ -11,7 +11,7 @@ pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Res
         .rule_plan
         .as_ref()
         .and_then(|plan| plan.unified.as_ref())
-        .filter(|plan| !plan.requires_api_confirmation())
+        .filter(|plan| !plan.is_api_issue())
     {
         return Ok(super::unified_rule::stale(target_root, state, plan));
     }
@@ -100,20 +100,12 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
         .context("rule plan is stale or belongs to no API work item")?;
     let _scope = super::rule_plans::events::lock_api(&root, &api)?;
     let scoped = inventory::scoped(&state, Some(&api.parse()?))?;
-    let superseded = scoped.rule_plan.as_ref().is_some_and(|plan| {
-        plan.unified.is_some()
-            && scoped.active_issue.as_ref().map(|issue| issue.id.as_str())
-                != Some(plan.issue_id.as_str())
-    });
-    // Retiring an already-proven, superseded plan grants no new rule or
-    // verification permit. Do not require dispatching a worker for a new issue
-    // merely to discard the old transaction.
-    if !superseded
-        && !scoped
-            .rule_plan
-            .as_ref()
-            .and_then(|plan| plan.unified.as_ref())
-            .is_some_and(|plan| !plan.requires_api_confirmation())
+    // A unified plan can only be retired when its frozen evidence is unusable.
+    // This is coordinator transaction recovery, independent of worker dispatch.
+    if scoped
+        .rule_plan
+        .as_ref()
+        .is_none_or(|plan| plan.unified.is_none())
     {
         super::worker::ensure_api_confirmed(&state, &api, "recovering a traffic rule")?;
     }

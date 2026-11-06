@@ -663,7 +663,7 @@ fn qualified_evidence_allows_planning_before_worker_dispatch() {
     )
     .unwrap();
     let error = recover_rewrite_rule_plan(fixture.context(), &plan.plan_id).unwrap_err();
-    assert!(error.to_string().contains("confirmed dedicated subagent"));
+    assert!(error.to_string().contains("rule evidence remains usable"));
     assert!(fixture.state().rule_plan.is_some());
     let mut state = fixture.state();
     state.active_issue.as_mut().unwrap().id = "new-dispatch".into();
@@ -676,6 +676,40 @@ fn qualified_evidence_allows_planning_before_worker_dispatch() {
         "new-dispatch"
     );
     assert!(!fixture.state().rule_replay_pending);
+}
+
+#[test]
+fn qualified_plan_applies_without_dispatch_after_a_compatible_engine_upgrade() {
+    let fixture = Fixture::new();
+    let state = fixture.state();
+    let query = evidence::commands(fixture.root(), &state)
+        .into_iter()
+        .find(|q| q.query_id.ends_with("unified-rule-candidates"))
+        .unwrap();
+    let evidence_id = evidence::query(fixture.root(), &state, &query.query_id)
+        .unwrap()
+        .evidence_id;
+    let plan = plan_rewrite_unified_rule(
+        fixture.context(),
+        RewriteUnifiedRulePlanOptions {
+            file: fixture.proposal.clone(),
+            evidence_id,
+        },
+    )
+    .unwrap();
+    let mut state = fixture.state();
+    let record = state.rule_plan.as_mut().unwrap().unified.as_mut().unwrap();
+    let mut identity = serde_json::to_value(&record.identity).unwrap();
+    identity["identity"]["engine"] = json!("prior-planner-engine");
+    record.identity = serde_json::from_value(identity).unwrap();
+    fixture.store().save(&state).unwrap();
+
+    let result = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+    assert_eq!(
+        result.traffic_e2e_report["status"],
+        "applied_pending_replay"
+    );
+    assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
 }
 
 #[test]

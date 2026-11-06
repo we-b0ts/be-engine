@@ -148,7 +148,16 @@ impl ExecutionIdentity {
                 state,
             )?)),
             Self::Batch(_) => Self::batch_current(root, state),
-            Self::ApiIssue(identity) => Self::current(root, state, identity.allows_target_drift),
+            Self::ApiIssue(identity) => {
+                // A compatible planner upgrade can recheck the same frozen
+                // attempt. Its original Replay engine is still bound below.
+                let engine = if identity.allows_target_drift {
+                    identity.engine.clone()
+                } else {
+                    fingerprint::traffic_e2e_revision()?
+                };
+                Self::api_current(root, state, identity.allows_target_drift, engine)
+            }
         }
     }
     pub(super) fn batch_current(root: &Path, state: &RewriteState) -> Result<Self> {
@@ -162,6 +171,20 @@ impl ExecutionIdentity {
         root: &Path,
         state: &RewriteState,
         allows_target_drift: bool,
+    ) -> Result<Self> {
+        Self::api_current(
+            root,
+            state,
+            allows_target_drift,
+            fingerprint::traffic_e2e_revision()?,
+        )
+    }
+
+    fn api_current(
+        root: &Path,
+        state: &RewriteState,
+        allows_target_drift: bool,
+        engine: String,
     ) -> Result<Self> {
         let context = crate::E2eRunContext {
             target_root: root.into(),
@@ -205,7 +228,7 @@ impl ExecutionIdentity {
                 fingerprint::review_fingerprint(root)?
             },
             allows_target_drift,
-            engine: fingerprint::traffic_e2e_revision()?,
+            engine,
             recorded_replay: state.replay_identity.clone(),
             recorded_engine: state
                 .attempts

@@ -13,7 +13,6 @@ use super::{
     RewriteContext, action, evidence, fingerprint, inventory,
     model::{RewriteIssueKind, RewriteRulePlanRecord, RewriteRuleReport, RewriteState},
     store::RewriteStore,
-    worker,
 };
 use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 
@@ -374,7 +373,7 @@ impl UnifiedRulePlanRecord {
     pub(in crate::rewrite) fn is_batch(&self) -> bool {
         self.identity.is_batch()
     }
-    pub(in crate::rewrite) fn requires_api_confirmation(&self) -> bool {
+    pub(in crate::rewrite) fn is_api_issue(&self) -> bool {
         self.identity.method_api().is_some()
     }
     pub(super) fn applying(&self) -> bool {
@@ -449,7 +448,7 @@ impl UnifiedRulePlanRecord {
             "applied":applied, "changed":self.original != self.updated,
             "rule_ids":self.rule_ids, "replaced_rules":self.replaced_rules, "preflight":self.preflight,
             "replace_sections":self.replace_sections,
-            "requires_fresh_replay":replay_required, "replay_scope":if self.is_batch(){json!({"kind":"complete_source_run"})}else if !self.requires_api_confirmation(){json!({"kind":"affected_owner_scopes"})}else{json!(self.identity.method_api())},
+            "requires_fresh_replay":replay_required, "replay_scope":if self.is_batch(){json!({"kind":"complete_source_run"})}else if !self.is_api_issue(){json!({"kind":"affected_owner_scopes"})}else{json!(self.identity.method_api())},
             "evidence_scope":self.identity,
             "target_replay_drift_at_plan":self.target_replay_drift_at_plan,
             "requires_attribution_review":attribution_required,
@@ -473,9 +472,6 @@ pub(super) fn apply(
         .unified
         .as_ref()
         .context("pending plan has no unified contract")?;
-    if record.requires_api_confirmation() {
-        worker::ensure_api_confirmed(state, &state.api, "applying a unified traffic rule")?;
-    }
     ensure!(
         record.apply_started,
         "unified apply requires the durable coordinator intent"
@@ -484,7 +480,7 @@ pub(super) fn apply(
     let previous_execution = super::fingerprint::replay_identity(root)?;
     crate::config::edit::write_atomic(&record.policy, record.updated.as_bytes())?;
     let mut report = record.report(true);
-    if record.requires_api_confirmation() {
+    if record.is_api_issue() {
         report["target_replay_drift_at_apply"] =
             json!(state.replay_identity.as_ref() != Some(&previous_execution));
     }
@@ -503,7 +499,7 @@ pub(super) fn apply(
             state.dependency_review.recording_run_id = None;
             state.dependency_review.revision += 1;
         }
-        if record.requires_api_confirmation()
+        if record.is_api_issue()
             && impact::affects_api(&record.original, &record.updated, &state.api)?
         {
             super::rule_replay::request(state);
@@ -538,18 +534,19 @@ pub(super) fn apply(
 
 /// Persist this marker with RewriteStore before changing the policy. A crash
 /// after the write can recognize the exact authorized updated bytes on retry.
-pub(super) fn begin_apply(root: &Path, state: &mut RewriteState) -> Result<UnifiedRulePlanRecord> {
-    let record = state
-        .rule_plan
-        .as_ref()
-        .and_then(|p| p.unified.as_ref())
+pub(super) fn begin_apply(
+    root: &Path,
+    state: &mut RewriteState,
+    plan_id: &str,
+) -> Result<UnifiedRulePlanRecord> {
+    let mut record = super::rule::pending_plan_for_apply(state, plan_id)?
+        .unified
         .context("pending unified rule plan unavailable")?;
     record.ensure_current(root, state)?;
-    let mut record = record.clone();
     record.apply_started = true;
     state.rule_plan.as_mut().unwrap().unified = Some(record.clone());
     if record.original != record.updated
-        && record.requires_api_confirmation()
+        && record.is_api_issue()
         && impact::affects_api(&record.original, &record.updated, &state.api)?
     {
         super::rule_replay::request(state);
