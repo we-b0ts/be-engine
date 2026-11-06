@@ -19,6 +19,7 @@ async fn original_interaction(fixture: &Fixture, protocol: Protocol, elapsed: u6
     input.actions.push(InputAction {
         sequence: 1,
         offset_ms: elapsed.saturating_sub(200),
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

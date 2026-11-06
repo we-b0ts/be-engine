@@ -75,6 +75,7 @@ async fn actual_reversed_acks_keep_payload_ownership_with_overlapping_inputs() {
         InputAction {
             sequence: 1,
             offset_ms: 0,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,
@@ -88,6 +89,7 @@ async fn actual_reversed_acks_keep_payload_ownership_with_overlapping_inputs() {
         program.actions.push(InputAction {
             sequence,
             offset_ms,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,

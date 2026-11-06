@@ -127,6 +127,7 @@ impl InputTranscript {
             seen.insert(0);
         }
         let mut offset = 0;
+        let mut precise_offset = None;
         for (index, action) in self.actions.iter().enumerate() {
             ensure!(
                 self.http_stream_mode != HttpStreamMode::Subscription || action.after.is_empty(),
@@ -148,6 +149,14 @@ impl InputTranscript {
                 action.offset_ms >= offset,
                 "interaction input offsets must not decrease"
             );
+            if let Some(us) = action.offset_us {
+                ensure!(
+                    us / 1_000 == action.offset_ms
+                        && precise_offset.is_none_or(|previous| us >= previous),
+                    "interaction input microsecond offsets must agree with milliseconds and not decrease"
+                );
+                precise_offset = Some(us);
+            }
             ensure!(
                 action.after.iter().all(|sequence| seen.contains(sequence)),
                 "interaction completion barriers must reference previous inputs"
@@ -216,6 +225,9 @@ pub struct HeartbeatResponse {
 pub struct InputAction {
     pub sequence: u64,
     pub offset_ms: u64,
+    /// Precise elapsed time on the same recording epoch as offset_ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_us: Option<u64>,
     /// Completed input sequences, selected from Source observations when recording.
     /// HTTP streams use implicit sequence 0 for their initial request.
     #[serde(default)]

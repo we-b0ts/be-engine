@@ -15,6 +15,7 @@ async fn clean_client_transport_end_keeps_its_original_native_input_window() {
         input.actions.push(InputAction {
             sequence: 2,
             offset_ms: 70,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,

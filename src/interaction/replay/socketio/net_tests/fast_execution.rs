@@ -161,6 +161,7 @@ async fn legacy_unproven_gaps_keep_offsets_and_actual_ack_rebinding() {
     input.actions.push(InputAction {
         sequence: 3,
         offset_ms: 160,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -281,6 +282,7 @@ async fn uncompressed_close_retains_missing_heartbeat_evidence() {
     input.actions.push(InputAction {
         sequence: 2,
         offset_ms: 40,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -292,6 +294,7 @@ async fn uncompressed_close_retains_missing_heartbeat_evidence() {
     input.actions.push(InputAction {
         sequence: 3,
         offset_ms: 80,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

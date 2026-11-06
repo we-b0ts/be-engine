@@ -240,6 +240,12 @@ request remains missing, the input is sent at its original offset. Existing
 recordings with sufficient request timestamps and native identities can be
 reused. Explicit `recorded` and `preserve_input_timing` retain original timing.
 
+New input actions record integer `offset_ms` and `offset_us` from the same
+elapsed-time sample. Ordered fast Socket.IO replay uses microseconds to decide
+whether a dependency request preceded an input. Legacy actions without
+`offset_us` still treat requests in the input's millisecond as ambiguous.
+Replay scheduling and output offsets use milliseconds.
+
 For a clean Source business-idle or completed client-close tail, Fast can
 shorten the remaining quiet once the actual output and dependency delivery
 requirements are met. Fast can also skip a direct WebSocket heartbeat tail

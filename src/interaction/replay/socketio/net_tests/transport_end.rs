@@ -20,6 +20,7 @@ fn ended_program(socket_io: bool, end: ClientTransportEnd) -> InputTranscript {
         input.actions.push(InputAction {
             sequence: 1,
             offset_ms: 0,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,
@@ -37,6 +38,7 @@ fn ended_program(socket_io: bool, end: ClientTransportEnd) -> InputTranscript {
     input.actions.push(InputAction {
         sequence: input.actions.len() as u64 + 1,
         offset_ms: 70,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

@@ -77,7 +77,6 @@ pub(super) type SessionRef = Arc<Session>;
 
 impl Session {
     fn observe_input(&self, message: crate::interaction::model::WireMessage) -> Result<()> {
-        let now = self.now();
         let dependency = self
             .state
             .inner
@@ -87,9 +86,10 @@ impl Session {
             .observation
             .lock()
             .expect("interaction observation poisoned");
+        let now = self.started.elapsed();
         if let Some((in_flight, last)) = dependency {
             let activity = if in_flight > 0 {
-                now
+                now.as_millis().try_into().unwrap_or(u64::MAX)
             } else {
                 last.saturating_duration_since(self.started)
                     .as_millis()

@@ -244,6 +244,7 @@ fn input_program() -> InputTranscript {
     .map(|(i, (message, ordinal))| InputAction {
         sequence: i as u64 + 1,
         offset_ms: i as u64 * 20,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

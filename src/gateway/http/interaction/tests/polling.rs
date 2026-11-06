@@ -230,6 +230,16 @@ async fn polling_and_upgrade_record_as_one_case_and_replay_with_a_new_sid() {
     ));
     let case = published(&state).await;
     assert!(!*state.inner.interactions.source_stop.borrow());
+    let request: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(case.join("request.json")).unwrap()).unwrap();
+    let input: crate::interaction::model::InputTranscript =
+        serde_json::from_value(request["interaction"].clone()).unwrap();
+    assert!(!input.actions.is_empty());
+    assert!(input.actions.iter().all(|action| {
+        action
+            .offset_us
+            .is_some_and(|us| us / 1_000 == action.offset_ms)
+    }));
     let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target_addr = target_listener.local_addr().unwrap();
     let (target_stop, target) = spawn_peer(target_listener, "different-live-target-sid");

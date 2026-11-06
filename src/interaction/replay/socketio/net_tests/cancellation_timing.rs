@@ -39,6 +39,7 @@ async fn recorded_cancel_preempts_blocked_later_input_and_preserves_incomplete_e
     input.actions.push(InputAction {
         sequence: 3,
         offset_ms: 80,
+        offset_us: None,
         after: vec![2],
         compressible_gap: true,
         gap_start_ms: Some(20),
@@ -50,6 +51,7 @@ async fn recorded_cancel_preempts_blocked_later_input_and_preserves_incomplete_e
     input.actions.push(InputAction {
         sequence: 4,
         offset_ms: 120,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

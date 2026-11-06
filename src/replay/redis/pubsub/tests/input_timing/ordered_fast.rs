@@ -68,6 +68,15 @@ async fn ordered_fast_replays_at_the_source_deadline_when_a_request_is_missing()
 
 #[tokio::test]
 async fn ordered_fast_preserves_close_gaps_after_input_at_original_deadline() {
+    replay_close_gaps(false).await;
+}
+
+#[tokio::test]
+async fn ordered_fast_compresses_when_its_own_get_follows_a_precise_input() {
+    replay_close_gaps(true).await;
+}
+
+async fn replay_close_gaps(precise: bool) {
     let temp = tempfile::tempdir().unwrap();
     let mut request = input(400);
     let actions = request["interaction"]["actions"].as_array_mut().unwrap();
@@ -77,6 +86,9 @@ async fn ordered_fast_preserves_close_gaps_after_input_at_original_deadline() {
         serde_json::to_value(action(5, 760, "41")).unwrap(),
         serde_json::to_value(action(6, 840, "1")).unwrap(),
     ]);
+    if precise {
+        actions[3]["offset_us"] = 700_123.into();
+    }
     std::fs::create_dir_all(temp.path().join("case")).unwrap();
     std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
     let mut get = recorded_exchange(
@@ -123,7 +135,17 @@ async fn ordered_fast_preserves_close_gaps_after_input_at_original_deadline() {
             .send(Message::Text(r#"432["ok"]"#.into()))
             .await
             .unwrap();
-        assert_eq!(text(&mut socket).await, r#"423["work"]"#);
+        let previous_ack_at = Instant::now();
+        let third = if precise {
+            tokio::time::timeout(Duration::from_millis(300), text(&mut socket))
+                .await
+                .expect("the later GET must not pin this input")
+        } else {
+            let third = text(&mut socket).await;
+            assert!(previous_ack_at.elapsed() >= Duration::from_millis(350));
+            third
+        };
+        assert_eq!(third, r#"423["work"]"#);
         let input_at = Instant::now();
         let (mut redis, redis_task) = connect(&runtime).await;
         assert_eq!(send(&mut redis, &[b"GET", b"heartbeat"]).await, b"+OK\r\n");

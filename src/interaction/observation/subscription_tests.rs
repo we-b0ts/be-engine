@@ -101,6 +101,7 @@ fn subscription_mode_rejects_response_completion_barriers_and_other_protocols() 
     input.actions.push(InputAction {
         sequence: 1,
         offset_ms: 1,
+        offset_us: None,
         after: vec![0],
         compressible_gap: false,
         gap_start_ms: Some(0),

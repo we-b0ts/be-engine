@@ -23,11 +23,7 @@ where
         // failed-case cleanup without converting it into a valid terminal input.
         return cleanup(session, upstream, error).await;
     };
-    let offset = at
-        .saturating_duration_since(session.started)
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
+    let offset = at.saturating_duration_since(session.started);
     session
         .observation
         .lock()

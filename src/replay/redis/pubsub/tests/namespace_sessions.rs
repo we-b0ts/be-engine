@@ -21,6 +21,7 @@ fn input(root: &Path) {
     input.actions.push(InputAction {
         sequence: 1,
         offset_ms: 0,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

@@ -7,6 +7,7 @@ fn program(root: &Path, close: bool) {
     let action = |sequence, offset_ms, action| InputAction {
         sequence,
         offset_ms,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

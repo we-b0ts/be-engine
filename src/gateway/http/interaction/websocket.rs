@@ -134,7 +134,11 @@ pub(super) async fn dispatch(
             .observation
             .lock()
             .expect("interaction observation poisoned")
-            .upgrade(parts.uri.to_string(), recorded_headers, session.now())?;
+            .upgrade(
+                parts.uri.to_string(),
+                recorded_headers,
+                session.started.elapsed(),
+            )?;
     } else {
         *session
             .response
@@ -342,7 +346,7 @@ fn observe(session: &SessionRef, message: &Message, input: bool) -> Result<()> {
                     .as_ref()
                     .map_or("", |frame| frame.reason.as_str())
                     .to_owned(),
-                session.now(),
+                session.started.elapsed(),
             )?;
     }
     let wire = match message {

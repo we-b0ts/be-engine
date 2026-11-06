@@ -24,8 +24,25 @@ pub(super) struct Source {
 #[derive(Debug)]
 struct Request {
     reference: RecordedReference,
-    started: u64,
+    started_us: u64,
     completed: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SourceOffset {
+    ms: u64,
+    us: Option<u64>,
+}
+
+impl SourceOffset {
+    fn earliest_us(self) -> u64 {
+        self.us.unwrap_or_else(|| self.ms.saturating_mul(1_000))
+    }
+
+    fn latest_us(self) -> u64 {
+        self.us
+            .unwrap_or_else(|| self.earliest_us().saturating_add(999))
+    }
 }
 
 #[derive(Debug)]
@@ -39,7 +56,7 @@ struct Tail {
 pub(super) struct Plan {
     source: Source,
     handles: Vec<ExchangeHandle>,
-    previous_input: BTreeMap<u64, u64>,
+    previous_input: BTreeMap<u64, SourceOffset>,
 }
 
 impl Source {
@@ -90,7 +107,13 @@ impl Source {
             self.covered = false;
             return Ok(());
         };
-        let Some(started) = offset(self.start, started) else {
+        if started < self.start {
+            return Ok(());
+        }
+        let Some(started_us) = (started - self.start)
+            .num_microseconds()
+            .and_then(|us| u64::try_from(us).ok())
+        else {
             return Ok(());
         };
         if self.requests.len() == MAX_REQUESTS {
@@ -100,7 +123,7 @@ impl Source {
         let completed = time(&event["timestamp"]).and_then(|value| offset(self.start, value));
         self.requests.push(Request {
             reference,
-            started,
+            started_us,
             completed,
         });
         Ok(())
@@ -117,7 +140,7 @@ impl Source {
             "ordered Socket.IO timing needs a complete native request inventory"
         );
         self.requests
-            .sort_unstable_by_key(|request| request.started);
+            .sort_unstable_by_key(|request| request.started_us);
         let refs = self
             .requests
             .iter()
@@ -129,7 +152,7 @@ impl Source {
                 && self
                     .requests
                     .last()
-                    .is_some_and(|request| request.started >= tail.cutoff)
+                    .is_some_and(|request| request.started_us / 1_000 >= tail.cutoff)
         }) {
             self.tail = None;
         }
@@ -137,12 +160,11 @@ impl Source {
             for request in self
                 .requests
                 .iter()
-                .take_while(|request| request.started < tail.cutoff)
+                .take_while(|request| request.started_us / 1_000 < tail.cutoff)
             {
-                let Some(completed) = request
-                    .completed
-                    .filter(|completed| *completed >= request.started && *completed < tail.cutoff)
-                else {
+                let Some(completed) = request.completed.filter(|completed| {
+                    *completed >= request.started_us / 1_000 && *completed < tail.cutoff
+                }) else {
                     // This recording closed while a known request was still in progress.
                     self.tail = None;
                     break;
@@ -161,14 +183,17 @@ impl Source {
                     .is_some_and(|tail| tail.policy.heartbeat_acks.is_some()),
             "ordered timing for an unanswered heartbeat requires an eligible heartbeat tail"
         );
-        let mut previous = 0;
+        let mut previous = SourceOffset::default();
         let mut previous_input = BTreeMap::new();
         for action in &input.actions {
             if delivery_prefix(action) {
                 previous_input.insert(action.sequence, previous);
             }
             if input_boundary(action) {
-                previous = action.offset_ms;
+                previous = SourceOffset {
+                    ms: action.offset_ms,
+                    us: action.offset_us,
+                };
             }
         }
         Ok(Plan {
@@ -184,17 +209,28 @@ impl Plan {
         self.source.tail.as_ref().map(|tail| tail.policy.clone())
     }
 
-    fn ready(&self, state: &ReplayState, case: &str, from: u64, to: u64, tail: bool) -> bool {
+    fn ready(
+        &self,
+        state: &ReplayState,
+        case: &str,
+        from: SourceOffset,
+        to: SourceOffset,
+        tail: bool,
+    ) -> bool {
+        let from_us = from.earliest_us();
+        let earliest_us = to.earliest_us();
+        let latest_us = to.latest_us();
         let first = self
             .source
             .requests
-            .partition_point(|entry| entry.started < from);
+            .partition_point(|entry| entry.started_us < from_us);
         self.source.requests[first..]
             .iter()
             .zip(&self.handles[first..])
-            .take_while(|(request, _)| request.started <= to)
+            .take_while(|(request, _)| request.started_us <= latest_us)
             .all(|(request, handle)| {
-                request.started < to
+                // An equal or ambiguous Source timestamp cannot prove a prefix.
+                request.started_us < earliest_us
                     && (match handle.delivery_state(state) {
                         Some(ReplayExchangeStatus::Consumed) => true,
                         Some(
@@ -222,7 +258,16 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
                     || handle.permits_unstarted_omission(state, false, true)
             })
         } else {
-            plan.ready(state, &live.case, 0, tail.cutoff, true)
+            plan.ready(
+                state,
+                &live.case,
+                SourceOffset::default(),
+                SourceOffset {
+                    ms: tail.cutoff,
+                    us: None,
+                },
+                true,
+            )
         };
         (
             tail.policy.close_sequence.unwrap_or(0),
@@ -247,13 +292,17 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
         let previous = plan.previous_input.get(&action.sequence).copied();
         let eligible =
             previous.is_some() && action.after.iter().all(|id| query.completed.contains(id));
-        let from = previous.unwrap_or(action.offset_ms);
+        let to = SourceOffset {
+            ms: action.offset_ms,
+            us: action.offset_us,
+        };
+        let from = previous.unwrap_or(to);
         (
             action.sequence,
-            from,
+            from.ms,
             action.offset_ms,
             eligible,
-            eligible && plan.ready(state, &live.case, from, action.offset_ms, false),
+            eligible && plan.ready(state, &live.case, from, to, false),
             false,
         )
     };

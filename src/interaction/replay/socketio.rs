@@ -812,6 +812,7 @@ mod tests {
         input.actions.push(InputAction {
             sequence: 1,
             offset_ms: 40_000,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,
@@ -838,6 +839,7 @@ mod tests {
         let action = InputAction {
             sequence: 2,
             offset_ms: 30_000,
+            offset_us: None,
             after: vec![1],
             compressible_gap: true,
             gap_start_ms: Some(2_000),
@@ -873,6 +875,7 @@ mod tests {
         let mut action = InputAction {
             sequence: 3,
             offset_ms: 57,
+            offset_us: None,
             after: vec![2],
             compressible_gap: false,
             gap_start_ms: Some(7),

@@ -13,6 +13,7 @@ fn close_program() -> InputTranscript {
     input.actions.push(InputAction {
         sequence: 3,
         offset_ms: 40,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

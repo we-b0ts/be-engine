@@ -27,6 +27,7 @@ fn action(sequence: u64, offset_ms: u64, data: &str) -> InputAction {
     InputAction {
         sequence,
         offset_ms,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

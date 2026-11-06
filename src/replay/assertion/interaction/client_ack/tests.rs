@@ -15,6 +15,7 @@ fn input() -> InputTranscript {
         .map(|(i, (id, offset_ms))| InputAction {
             sequence: i as u64 + 1,
             offset_ms,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,
