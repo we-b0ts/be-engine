@@ -17,6 +17,95 @@ impl InputTiming for Fast {
 }
 
 #[tokio::test]
+async fn fast_namespace_disconnect_waits_for_the_recorded_ack_prefix() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket.send(Message::Text(open().into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "40"
+        );
+        socket
+            .send(Message::Text(r#"40{"sid":"live"}"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            r#"421["ask",{"value":7}]"#
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), socket.next())
+                .await
+                .is_err()
+        );
+        socket
+            .send(Message::Text("431[true]".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "41"
+        );
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "1"
+        );
+    });
+    let mut input = program();
+    let mut close = input.actions[0].clone();
+    close.sequence = 3;
+    close.offset_ms = 20;
+    close.action = InputActionKind::Message {
+        message: WireMessage::text("41"),
+    };
+    input.actions.push(close.clone());
+    close.sequence = 4;
+    close.offset_ms = 25;
+    close.action = InputActionKind::Message {
+        message: WireMessage::text("1"),
+    };
+    input.actions.push(close);
+    let order = Order::new(vec![(
+        EventKey::Ack("/".into(), 1),
+        Checkpoint {
+            sequence: 3,
+            offset_ms: 10,
+        },
+    )]);
+    let origin = format!("http://{address}");
+    let request = Request::builder()
+        .uri(format!("{origin}/socket.io/?EIO=4&transport=websocket"))
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let client = Client::builder(TokioExecutor::new()).build_http();
+    let actual = tokio::time::timeout(
+        Duration::from_secs(2),
+        execute_with_feedback(
+            &client,
+            &origin,
+            request,
+            &input,
+            Duration::from_secs(1),
+            Feedback {
+                input_timing: Some(std::sync::Arc::new(Fast)),
+                event_order: Some(order),
+                ..Feedback::default()
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .observation;
+    assert_eq!(actual.end.reason, EndReason::ClientClose);
+    assert!(actual.end.clean);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn missing_event_ends_the_session_without_sending_the_blocked_input() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

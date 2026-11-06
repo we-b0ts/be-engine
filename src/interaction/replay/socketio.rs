@@ -153,11 +153,15 @@ pub(super) async fn execute_with_feedback(
         let action = transcript.actions.get(next);
         let ordered =
             action.is_some() && ordered_inputs.as_ref().is_some_and(|inputs| inputs[next]);
+        let namespace_close = ordered_fast
+            && action
+                .is_some_and(|a| namespace::disconnects(a, transcript.policy.max_message_bytes));
         let missing_event = event_order
             .as_ref()
-            .zip(action.filter(|_| ordered))
+            .zip(action.filter(|_| ordered || namespace_close))
             .and_then(|(order, action)| order.missing(action));
-        let dispatch_deadline = ordered.then_some(dispatch_anchor + dispatch::WAIT);
+        let dispatch_deadline = (ordered || namespace_close && missing_event.is_some())
+            .then_some(dispatch_anchor + dispatch::WAIT);
         let namespace_ready = transcript.protocol != Protocol::SocketIo
             || action.is_none_or(|action| {
                 namespaces.permits(action, transcript.policy.max_message_bytes)
@@ -166,12 +170,16 @@ pub(super) async fn execute_with_feedback(
             transcript.protocol != Protocol::SocketIo
                 || action.after.iter().all(|id| completed.contains_key(id))
         });
-        let admitted = prerequisites_ready.filter(|action| {
-            action.ack_ref.as_ref().is_none_or(|reference| {
-                server_acks
-                    .contains_key(&(reference.namespace.clone(), reference.server_event_ordinal))
-            })
-        });
+        let admitted = prerequisites_ready
+            .filter(|_| !namespace_close || missing_event.is_none())
+            .filter(|action| {
+                action.ack_ref.as_ref().is_none_or(|reference| {
+                    server_acks.contains_key(&(
+                        reference.namespace.clone(),
+                        reference.server_event_ordinal,
+                    ))
+                })
+            });
         let events_ready = missing_event.is_none() && admitted.is_some();
         if dispatch_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             let unadmitted = dispatch.as_ref().and_then(dispatch::Dispatch::unadmitted);
@@ -326,7 +334,7 @@ pub(super) async fn execute_with_feedback(
         // earlier input is waiting for an ACK, namespace or dependency delivery.
         let cancel = transcript.actions.iter().skip(next + 1).find(|action| {
             transport_cancellation(action)
-                && ((!ordered && transcript.protocol == Protocol::SocketIo)
+                && ((!(ordered || namespace_close) && transcript.protocol == Protocol::SocketIo)
                     || matches!(action.action, InputActionKind::TransportEnd { .. }))
         });
         let cancel_due = cancel.map(|action| {
