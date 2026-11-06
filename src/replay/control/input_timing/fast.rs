@@ -23,6 +23,7 @@ pub(super) struct Source {
     covered: bool,
     requests: Vec<Request>,
     tail: Option<Tail>,
+    clean_without_heartbeat: bool,
     passive: Option<heartbeat_tail::Passive>,
 }
 
@@ -77,12 +78,14 @@ impl Source {
         cap: u64,
         start: DateTime<Utc>,
     ) -> Self {
+        let (tail, clean_without_heartbeat) = Tail::load(path, input, cap).unwrap_or_default();
         Self {
             start,
             cap,
             covered: true,
             requests: Vec::new(),
-            tail: Tail::load(path, input, cap).ok().flatten(),
+            tail,
+            clean_without_heartbeat,
             passive: passive_proof(path, input).ok().flatten(),
         }
     }
@@ -218,6 +221,7 @@ impl Source {
                 .socket_io_heartbeat
                 .as_ref()
                 .is_none_or(|program| !program.responses.is_empty())
+                || self.clean_without_heartbeat
                 || self
                     .tail
                     .as_ref()
@@ -547,7 +551,7 @@ fn offset(start: DateTime<Utc>, at: DateTime<Utc>) -> Option<u64> {
 }
 
 impl Tail {
-    fn load(path: &Path, input: &InputTranscript, cap: u64) -> Result<Option<Self>> {
+    fn load(path: &Path, input: &InputTranscript, cap: u64) -> Result<(Option<Self>, bool)> {
         use std::io::{BufReader, Seek};
 
         #[derive(Deserialize)]
@@ -576,7 +580,7 @@ impl Tail {
             partial_message: Option<serde::de::IgnoredAny>,
         }
         let Ok(file) = std::fs::File::open(path.join("expected-response.json")) else {
-            return Ok(None);
+            return Ok((None, false));
         };
         // Ordinary tails need only clocks and counts. Decode protocol frames
         // only to classify a clean server EOF, without retaining their payloads.
@@ -588,8 +592,12 @@ impl Tail {
                 && completion.end.clean
                 && completion.end.partial_message.is_none()
         }) else {
-            return Ok(None);
+            return Ok((None, false));
         };
+        // An empty response program is also recorded when the client ends
+        // before the first heartbeat. A complete output transcript separates
+        // that case from a server ping that was never answered.
+        let clean_without_heartbeat = !completion.events.iter().any(|event| event.heartbeat);
         let heartbeat = if completion.end.reason == EndReason::ServerEof {
             #[derive(Deserialize)]
             struct WireResponse {
@@ -602,7 +610,7 @@ impl Tail {
             None
         };
         if heartbeat.is_none() && !completion.end.pending.is_empty() {
-            return Ok(None);
+            return Ok((None, clean_without_heartbeat));
         }
         let last_input = input.actions.last().map_or(0, |action| action.offset_ms);
         let (cutoff, close_sequence, last_input) = match completion.end.reason {
@@ -615,7 +623,7 @@ impl Tail {
                     .take_while(|action| cancellation(action))
                     .last()
                 else {
-                    return Ok(None);
+                    return Ok((None, clean_without_heartbeat));
                 };
                 let last = input
                     .actions
@@ -628,14 +636,14 @@ impl Tail {
             EndReason::ServerEof if let Some(evidence) = &heartbeat => {
                 (evidence.last_ping_ms, None, last_input)
             }
-            _ => return Ok(None),
+            _ => return Ok((None, clean_without_heartbeat)),
         };
         if completion
             .events
             .iter()
             .any(|event| !event.heartbeat && event.offset_ms == cutoff)
         {
-            return Ok(None);
+            return Ok((None, clean_without_heartbeat));
         }
         let outputs = completion
             .events
@@ -647,7 +655,7 @@ impl Tail {
             .max()
             .unwrap_or(0)
             .max(last_input);
-        Ok((quiet_from < cutoff).then(|| Self {
+        let tail = (quiet_from < cutoff).then(|| Self {
             policy: FastTail {
                 close_sequence,
                 output_count: outputs.count(),
@@ -657,7 +665,8 @@ impl Tail {
             },
             cutoff,
             quiet_from,
-        }))
+        });
+        Ok((tail, clean_without_heartbeat))
     }
 }
 

@@ -23,6 +23,44 @@ fn recorded_exchange(
 }
 
 #[tokio::test]
+async fn ordered_fast_distinguishes_no_recorded_heartbeat_from_an_unanswered_ping() {
+    for saw_ping in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("case");
+        let mut request = input(400);
+        let interaction = &mut request["interaction"];
+        interaction["socket_io_heartbeat"] = json!({"responses":[]});
+        interaction["actions"][3]["action"] = json!({"kind":"transport_end","end":"eof"});
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("request.json"), request.to_string()).unwrap();
+        std::fs::write(
+            directory.join("expected-response.json"),
+            json!({
+                "interaction": {
+                    "version": crate::interaction::model::TRANSCRIPT_VERSION,
+                    "protocol": "socket_io",
+                    "end": {"clean":true,"reason":"client_transport_end","offset_ms":445,"pending":[3]},
+                    "events": [
+                        {"offset_ms":1},
+                        {"offset_ms":420,"heartbeat":saw_ping}
+                    ]
+                }
+            }).to_string(),
+        )
+        .unwrap();
+        let runtime = runtime(temp.path(), &[], &[], true).await.unwrap();
+        enable(&runtime).await;
+        let (session, control) = serve_control(temp.path(), &runtime).await;
+        let observer = crate::replay::input_timing_observer(&session, "case", SocketIoTiming::Auto)
+            .await
+            .unwrap();
+        assert_eq!(observer.ordered_fast(), !saw_ping);
+        assert!(observer.fast_tail().is_none());
+        control.abort();
+    }
+}
+
+#[tokio::test]
 async fn ordered_fast_reports_missing_admission_past_the_source_deadline() {
     let temp = tempfile::tempdir().unwrap();
     let mut request = input(400);
