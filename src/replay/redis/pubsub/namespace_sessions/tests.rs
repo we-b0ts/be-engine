@@ -118,7 +118,7 @@ fn room_mapping_requires_live_observation_and_cannot_escape_case_namespace_or_ep
         .insert("case".into(), source_sessions(&input, &output));
     let epoch = Utc::now();
     let matches = |sessions: &NamespaceSessions, case, namespace, target| {
-        sessions.matches_room(
+        sessions.matches_sid(
             Some(case),
             &json!(namespace),
             &json!("source-sid"),
@@ -157,7 +157,7 @@ fn room_mapping_requires_live_observation_and_cannot_escape_case_namespace_or_ep
     assert!(!matches(&sessions, "other", "/chat", "target-sid"));
     assert!(!matches(&sessions, "case", "/other", "target-sid"));
     assert!(!matches(&sessions, "case", "/chat", "wrong-sid"));
-    assert!(!sessions.matches_room(
+    assert!(!sessions.matches_sid(
         Some("case"),
         &json!("/chat"),
         &json!("user:7"),

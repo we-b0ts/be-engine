@@ -135,7 +135,7 @@ impl NamespaceSessions {
         }
     }
 
-    pub(super) fn matches_room(
+    pub(super) fn matches_sid(
         &self,
         case: Option<&str>,
         namespace: &Value,
