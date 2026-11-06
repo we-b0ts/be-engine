@@ -47,6 +47,7 @@ pub(in crate::replay) struct Live {
     evidence: Vec<Evidence>,
     advanced: BTreeSet<u64>,
     fast: Option<fast::Plan>,
+    native_dispatch: Option<fast::NativeDispatch>,
 }
 
 impl Live {
@@ -54,6 +55,21 @@ impl Live {
         self.fast
             .as_ref()
             .is_some_and(|plan| plan.native_fast_setup_ready(state, &self.case))
+    }
+
+    pub(in crate::replay) fn native_dispatch_cap(
+        &self,
+        state: &ReplayState,
+        case: &str,
+        epoch: DateTime<Utc>,
+        offset: chrono::TimeDelta,
+    ) -> Option<Duration> {
+        if self.case != case || self.epoch != epoch {
+            return None;
+        }
+        self.fast
+            .as_ref()?
+            .native_dispatch_cap(state, case, self.native_dispatch?, offset)
     }
 
     /// None leaves unrelated or unsupported native scheduling unchanged.
@@ -168,6 +184,7 @@ pub(super) async fn accept(
                 evidence,
                 advanced: BTreeSet::new(),
                 fast,
+                native_dispatch: None,
             });
             return Ok(serde_json::json!({"ok":true,"epoch":epoch,"ordered_fast":ordered_fast,"fast_tail":fast_tail}));
         }

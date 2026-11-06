@@ -11,6 +11,7 @@ struct Job {
     sender: mpsc::Sender<Delivery>,
     permit: mpsc::OwnedPermit<Delivery>,
     source: Entry,
+    paced_dispatch: bool,
 }
 
 pub(in crate::replay) fn start(state: Arc<Mutex<ReplayState>>) {
@@ -30,13 +31,19 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 return;
             }
             let now = Instant::now();
+            let dispatch_due = dispatch_deadline(&replay, now);
             let retry = replay
                 .active_case_id
                 .as_deref()
                 .and_then(|case| replay.redis.pubsub.native_clock.fast_deadline(case))
+                .or(dispatch_due)
                 .filter(|due| *due > now)
                 .unwrap_or(now + Duration::from_millis(5));
-            (ready(&replay), replay.redis.lifecycle.subscribe(), retry)
+            (
+                ready(&replay, dispatch_due, now),
+                replay.redis.lifecycle.subscribe(),
+                retry,
+            )
         };
         let Some(job) = job else {
             drop(state);
@@ -103,12 +110,12 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             .pubsub
             .reserve_case_push(slot, &job.case, job.client);
         let native = &mut replay.redis.pubsub.native_clock;
-        if let Some(pace) = native
-            .live
-            .get_mut(&job.case)
-            .and_then(|live| live.fast.as_mut())
-        {
-            pace.queued(job.entry);
+        if let Some(live) = native.live.get_mut(&job.case) {
+            if let Some(pace) = &mut live.fast {
+                pace.queued(job.entry);
+            } else if job.paced_dispatch {
+                live.dispatch_pace.inflight = Some(job.entry);
+            }
         }
         native.retire(job.entry);
         job.permit.send(Delivery {
@@ -122,7 +129,27 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
     }
 }
 
-fn ready(replay: &ReplayState) -> Option<Job> {
+fn dispatch_deadline(replay: &ReplayState, now: Instant) -> Option<Instant> {
+    let case = replay.active_case_id.as_deref()?;
+    let native = &replay.redis.pubsub.native_clock;
+    let live = native.live.get(case)?;
+    if live.fast.is_some() || live.dispatch_pace.inflight.is_some() {
+        return None;
+    }
+    let entry = &native.entries[*native.pending.get(case)?.front()?];
+    let cap = replay.input_timing.as_ref()?.native_dispatch_cap(
+        replay,
+        case,
+        live.epoch,
+        entry.offset,
+    )?;
+    Some(
+        live.dispatch_pace
+            .deadline(entry, &native.entries, cap, now),
+    )
+}
+
+fn ready(replay: &ReplayState, dispatch_due: Option<Instant>, now: Instant) -> Option<Job> {
     let case = replay.active_case_id.as_deref()?;
     let native = &replay.redis.pubsub.native_clock;
     let live = native
@@ -132,15 +159,19 @@ fn ready(replay: &ReplayState) -> Option<Job> {
     let index = *native.pending.get(case)?.front()?;
     let entry = &native.entries[index];
     let recorded_due = || reached(replay, case, live.epoch, entry.offset);
-    let due = live.fast.as_ref().map_or_else(recorded_due, |pace| {
-        (index < pace.first
-            || replay
-                .input_timing
-                .as_ref()
-                .is_some_and(|timeline| timeline.native_fast_setup_ready(replay)))
-            && pace.ready(index, &native.entries, recorded_due)
-    });
+    let due = live.fast.as_ref().map_or_else(
+        || dispatch_due.is_some_and(|due| now >= due) || recorded_due(),
+        |pace| {
+            (index < pace.first
+                || replay
+                    .input_timing
+                    .as_ref()
+                    .is_some_and(|timeline| timeline.native_fast_setup_ready(replay)))
+                && pace.ready(index, &native.entries, recorded_due)
+        },
+    );
     if !due
+        || live.dispatch_pace.inflight.is_some()
         || expired(replay, case, live.epoch, entry.lifetime)
         || !live.namespaces.contains(&entry.namespace)
         || !entry
@@ -173,6 +204,7 @@ fn ready(replay: &ReplayState) -> Option<Job> {
         sender: sub.sender.clone(),
         permit,
         source: entry.clone(),
+        paced_dispatch: dispatch_due.is_some(),
     })
 }
 

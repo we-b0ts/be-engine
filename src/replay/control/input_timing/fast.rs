@@ -50,6 +50,12 @@ impl SourceOffset {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct NativeDispatch {
+    from: SourceOffset,
+    to: SourceOffset,
+}
+
 #[derive(Debug)]
 struct Tail {
     policy: FastTail,
@@ -250,6 +256,27 @@ impl Plan {
             .iter()
             .zip(&self.handles)
             .all(|(request, handle)| Self::request_ready(state, case, request, handle, true))
+    }
+
+    pub(super) fn native_dispatch_cap(
+        &self,
+        state: &ReplayState,
+        case: &str,
+        window: NativeDispatch,
+        offset: chrono::TimeDelta,
+    ) -> Option<Duration> {
+        let us = u64::try_from(offset.num_microseconds()?).ok()?;
+        if us <= window.from.latest_us() || us >= window.to.earliest_us() {
+            return None;
+        }
+        // A push can enable the very output that the next input awaits. Its
+        // own earlier requests must be admitted independently of that output.
+        let to = SourceOffset {
+            ms: us / 1_000,
+            us: Some(us),
+        };
+        let (compressible, unadmitted) = self.dispatch_prefix(state, case, window.from, to);
+        (compressible && unadmitted.is_none()).then(|| Duration::from_millis(self.source.cap))
     }
 
     fn ready(
@@ -479,6 +506,7 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
     let (compressible, unadmitted) = plan.dispatch_prefix(state, &live.case, from, to);
     let live = state.input_timing.as_mut().expect("validated timeline");
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    live.native_dispatch = Some(NativeDispatch { from, to });
     let gates_ready = events_ready && unadmitted.is_none();
     if gates_ready && compressible && live.advanced.insert(query.sequence) {
         let cap = live.fast.as_ref().expect("validated fast plan").source.cap;

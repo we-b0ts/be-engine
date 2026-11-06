@@ -416,8 +416,9 @@ pub(super) async fn execute_with_feedback(
                         note_completed(before, &observed, &mut completed);
                         if transcript.protocol == Protocol::SocketIo {
                             for packet in server_decoder.push(&message)? {
-                                if let (Some(order), EngineIoPacket::Message(packet)) = (&mut event_order, &packet) {
-                                    order.observe(packet);
+                                if let (Some(order), EngineIoPacket::Message(packet)) = (&mut event_order, &packet)
+                                    && order.observe(packet) && missing_event.is_some() {
+                                    dispatch_anchor = Instant::now();
                                 }
                                 match packet {
                                     EngineIoPacket::Open(open) => transport.set_sid(open.sid)?,

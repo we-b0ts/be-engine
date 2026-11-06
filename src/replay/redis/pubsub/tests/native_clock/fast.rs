@@ -177,3 +177,136 @@ async fn compressed_passive_prefix_observes_tail_without_sending_pong() {
         3
     );
 }
+
+#[tokio::test]
+async fn ordered_fast_push_arrives_before_the_input_that_awaits_its_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut globals, frame) = fixture(temp.path());
+    globals[1]["timestamp"] = "2020-01-01T00:10:20Z".into();
+    let policy = InteractionPolicy {
+        completion: ["join", "next"]
+            .into_iter()
+            .map(|event| crate::interaction::policy::EventCompletion {
+                namespace: "/chat".into(),
+                event: event.into(),
+                completion: crate::interaction::policy::CompletionRule::Ack,
+            })
+            .collect(),
+        ..InteractionPolicy::default()
+    };
+    let mut source = Observation::new(Protocol::SocketIo, policy).unwrap();
+    let (first, second) = (r#"42/chat,0["join"]"#, r#"42/chat,1["next"]"#);
+    let (ack, notice) = (
+        "43/chat,0[true]",
+        r#"42/chat,["example:notice",{"value":7}]"#,
+    );
+    source.output(WireMessage::text(OPEN), 0).unwrap();
+    source.input(WireMessage::text(CONNECT), 1).unwrap();
+    source.output(WireMessage::text(CONNECTED), 2).unwrap();
+    source.input(WireMessage::text(first), 10).unwrap();
+    source.output(WireMessage::text(ack), 20).unwrap();
+    source.output(WireMessage::text(notice), 20_001).unwrap();
+    source.input(WireMessage::text(second), 30_000).unwrap();
+    source
+        .output(WireMessage::text("43/chat,1[true]"), 30_001)
+        .unwrap();
+    let (input, expected) = source
+        .finish(EndReason::BusinessIdle, 31_000, true)
+        .unwrap();
+    assert!(expected.end.clean);
+    let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
+        "timestamp":START,"headers":{},"body":capture(b""),"interaction":input});
+    std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
+    std::fs::write(
+        temp.path().join("case/expected-response.json"),
+        json!({"status":101,"interaction":expected}).to_string(),
+    )
+    .unwrap();
+
+    let mut get = exchange(Uuid::new_v4(), 1, "GET", &[b"join"], b"+OK\r\n");
+    get["request_started_at"] = "2020-01-01T00:10:00.100Z".into();
+    get["timestamp"] = "2020-01-01T00:10:00.101Z".into();
+    get["response_kind"] = "simple_string".into();
+    let runtime = runtime(temp.path(), &[get], &globals, true).await.unwrap();
+    {
+        let mut state = runtime.state.lock().await;
+        assert!(state.redis.pubsub.native_clock.needs_observer(CASE));
+        state.stream_timing = Some(crate::replay::ReplayStreamTiming::Fast);
+        state.stream_interval_cap_ms = 5;
+    }
+    let socket_path = temp.path().join("control.sock");
+    let session = temp.path().join("session.json");
+    std::fs::write(&session, json!({"control_socket":socket_path}).to_string()).unwrap();
+    let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
+    let state = runtime.state.clone();
+    let control = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            crate::replay::control::handle_control_stream(stream, state.clone(), None, None)
+                .await
+                .unwrap();
+        }
+    });
+    assert_eq!(
+        guards::control(&runtime, json!({"command":"request_begin","case_id":CASE})).await["ok"],
+        true
+    );
+    let ws = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = ws.local_addr().unwrap();
+    let target = tokio::spawn(async move {
+        let (stream, _) = ws.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket.send(Message::Text(OPEN.into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            CONNECT
+        );
+        let (mut subscriber, subscription) = connect(&runtime).await;
+        assert_eq!(
+            send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
+            SUBSCRIBED
+        );
+        socket.send(Message::Text(CONNECTED.into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            first
+        );
+        guards::silent(&mut subscriber).await;
+        socket.send(Message::Text(ack.into())).await.unwrap();
+        guards::silent(&mut subscriber).await;
+        let (mut redis, requests) = connect(&runtime).await;
+        assert_eq!(send(&mut redis, &[b"GET", b"join"]).await, b"+OK\r\n");
+        assert_eq!(read(&mut subscriber).await, frame);
+        socket.send(Message::Text(notice.into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            second
+        );
+        socket
+            .send(Message::Text("43/chat,1[true]".into()))
+            .await
+            .unwrap();
+        socket.close(None).await.unwrap();
+        requests.abort();
+        subscription.abort();
+    });
+    let client = crate::recorded_request::RecordedHttpClient::new(
+        format!("http://{address}"),
+        Duration::from_secs(2),
+        1024 * 1024,
+    )
+    .with_input_registration(&session, CASE);
+    let output = timeout(
+        Duration::from_secs(2),
+        client.send(&temp.path().join("case/request.json")),
+    )
+    .await
+    .expect("the push must not wait for the input that requires its output")
+    .unwrap()
+    .interaction
+    .unwrap();
+    target.await.unwrap();
+    assert!(output.end.clean);
+    assert!(output.end.missing_predecessor.is_none());
+    control.abort();
+}

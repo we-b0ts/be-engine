@@ -66,19 +66,21 @@ impl Order {
         }
     }
 
-    pub(super) fn observe(&mut self, packet: &SocketIoPacket) {
+    pub(super) fn observe(&mut self, packet: &SocketIoPacket) -> bool {
         let Some(index) = EventKey::of(packet)
             .and_then(|key| self.occurrences.get_mut(&key))
             .and_then(VecDeque::pop_front)
         else {
-            return;
+            return false;
         };
         self.arrived[index] = true;
+        let before = self.prefix;
         // Reordered arrivals can satisfy their own slots while the prefix
         // waits for an earlier missing event.
         while self.arrived.get(self.prefix) == Some(&true) {
             self.prefix += 1;
         }
+        self.prefix > before
     }
 
     pub(super) fn missing(&self, action: &InputAction) -> Option<MissingPredecessor> {
@@ -140,7 +142,8 @@ mod tests {
         let EngineIoPacket::Message(ack) = decode_engine_io_text("437[true]", 128).unwrap() else {
             panic!("Socket.IO ACK");
         };
-        order.observe(&ack);
+        assert!(order.observe(&ack));
+        assert!(!order.observe(&ack));
         assert_eq!(order.missing(&action), None);
     }
 }

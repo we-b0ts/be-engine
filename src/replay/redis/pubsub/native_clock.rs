@@ -27,6 +27,7 @@ struct Live {
     namespaces: BTreeSet<String>,
     acknowledged: BTreeSet<u64>,
     fast: Option<fast::Pace>,
+    dispatch_pace: fast::DispatchPace,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +140,7 @@ impl NativeClock {
                 namespaces: BTreeSet::new(),
                 acknowledged: BTreeSet::new(),
                 fast: None,
+                dispatch_pace: Default::default(),
             },
         );
         Ok(())

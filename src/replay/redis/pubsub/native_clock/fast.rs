@@ -15,6 +15,28 @@ pub(in crate::replay) struct Pace {
     tail_at: Option<Instant>,
 }
 
+#[derive(Debug, Default)]
+pub(super) struct DispatchPace {
+    pub(super) inflight: Option<usize>,
+    written: Option<(usize, Instant)>,
+}
+
+impl DispatchPace {
+    pub(super) fn deadline(
+        &self,
+        entry: &Entry,
+        entries: &[Entry],
+        cap: Duration,
+        now: Instant,
+    ) -> Instant {
+        self.written.map_or(now, |(prior, at)| {
+            at + entry_offset(entry)
+                .saturating_sub(entry_offset(&entries[prior]))
+                .min(cap)
+        })
+    }
+}
+
 impl NativeClock {
     pub(in crate::replay) fn prepare_fast(
         &mut self,
@@ -95,14 +117,21 @@ impl NativeClock {
         slot: PushId,
         at: Instant,
     ) {
-        if let Some(live) = self.live.get_mut(case)
-            && live.epoch == epoch
-            && let Some(pace) = &mut live.fast
+        let Some(live) = self.live.get_mut(case).filter(|live| live.epoch == epoch) else {
+            return;
+        };
+        if let Some(pace) = &mut live.fast
             && let Some(index) = pace.inflight
             && self.entries[index].slot == slot
         {
             pace.inflight = None;
             pace.written = Some((index, at));
+        }
+        if let Some(index) = live.dispatch_pace.inflight
+            && self.entries[index].slot == slot
+        {
+            live.dispatch_pace.inflight = None;
+            live.dispatch_pace.written = Some((index, at));
         }
     }
 
