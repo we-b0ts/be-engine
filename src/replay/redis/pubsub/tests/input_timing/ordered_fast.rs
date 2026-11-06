@@ -77,7 +77,7 @@ async fn ordered_fast_reports_missing_admission_past_the_source_deadline() {
 }
 
 #[tokio::test]
-async fn ordered_fast_preserves_close_gaps_after_input_at_original_deadline() {
+async fn ordered_fast_compresses_legacy_millisecond_input_and_preserves_close_gaps() {
     replay_close_gaps(false).await;
 }
 
@@ -92,12 +92,12 @@ async fn replay_close_gaps(precise: bool) {
     let actions = request["interaction"]["actions"].as_array_mut().unwrap();
     actions.truncate(3);
     actions.extend([
-        serde_json::to_value(action(4, 700, r#"423["work"]"#)).unwrap(),
-        serde_json::to_value(action(5, 760, "41")).unwrap(),
-        serde_json::to_value(action(6, 840, "1")).unwrap(),
+        serde_json::to_value(action(4, 30_000, r#"423["work"]"#)).unwrap(),
+        serde_json::to_value(action(5, 30_060, "41")).unwrap(),
+        serde_json::to_value(action(6, 30_140, "1")).unwrap(),
     ]);
     if precise {
-        actions[3]["offset_us"] = 700_123.into();
+        actions[3]["offset_us"] = 30_000_123.into();
     }
     std::fs::create_dir_all(temp.path().join("case")).unwrap();
     std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
@@ -107,8 +107,8 @@ async fn replay_close_gaps(precise: bool) {
         "GET",
         &[b"heartbeat"],
         b"+OK\r\n",
-        "2020-01-01T00:00:00.700984Z",
-        "2020-01-01T00:00:00.702Z",
+        "2020-01-01T00:00:30.000984Z",
+        "2020-01-01T00:00:30.002Z",
     );
     get["response_kind"] = "simple_string".into();
     let runtime = runtime(temp.path(), &[get], &[], true).await.unwrap();
@@ -145,16 +145,9 @@ async fn replay_close_gaps(precise: bool) {
             .send(Message::Text(r#"432["ok"]"#.into()))
             .await
             .unwrap();
-        let previous_ack_at = Instant::now();
-        let third = if precise {
-            tokio::time::timeout(Duration::from_millis(300), text(&mut socket))
-                .await
-                .expect("the later GET must not pin this input")
-        } else {
-            let third = text(&mut socket).await;
-            assert!(previous_ack_at.elapsed() >= Duration::from_millis(350));
-            third
-        };
+        let third = tokio::time::timeout(Duration::from_millis(300), text(&mut socket))
+            .await
+            .expect("the later GET must not pin this input");
         assert_eq!(third, r#"423["work"]"#);
         let input_at = Instant::now();
         let (mut redis, redis_task) = connect(&runtime).await;

@@ -335,8 +335,12 @@ impl Plan {
         let mut compressible = true;
         for (request, handle) in self.requests_between(from, to) {
             if request.started_us >= to.earliest_us() {
-                // A request in B's ambiguous clock bucket could require B itself.
-                compressible = false;
+                // A dependency in a legacy input's millisecond bucket may
+                // be produced by that input. It cannot pin the input to its
+                // absolute recording time when the proven prefix is ready.
+                if to.us.is_some() {
+                    compressible = false;
+                }
             } else if !Self::request_ready(state, case, request, handle, false) {
                 if request.started_us <= from.latest_us() {
                     compressible = false;
