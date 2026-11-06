@@ -24,6 +24,8 @@ pub(super) fn pending(state: &RewriteState) -> bool {
 /// A pending plan is global scheduling work, even when another API just failed
 /// or a complete revalidation round is in progress. Actual recovery comes first.
 pub(super) fn required_action(root: &Path, state: &RewriteState) -> Option<RewriteAction> {
+    // Scheduling only checks the coordinator issue and policy baseline. Apply
+    // and recover verify the frozen evidence before any state or policy write.
     let mut recovery = None;
     for slice in std::iter::once(&state.active_slice).chain(state.parked_slices.values()) {
         let Some(plan) = &slice.rule_plan else {
@@ -32,16 +34,15 @@ pub(super) fn required_action(root: &Path, state: &RewriteState) -> Option<Rewri
         if super::regression_scope::is_skipped(state, &slice.api) {
             continue;
         }
-        let scoped = inventory::scoped(state, Some(&slice.api.parse().ok()?)).ok()?;
         let stale = (!plan
             .unified
             .as_ref()
             .is_some_and(|record| !record.is_api_issue())
-            && scoped.active_issue.as_ref().map(|i| i.id.as_str()) != Some(plan.issue_id.as_str()))
+            && slice.active_issue.as_ref().map(|i| i.id.as_str()) != Some(plan.issue_id.as_str()))
             || plan
                 .unified
                 .as_ref()
-                .is_none_or(|record| super::unified_rule::stale(root, &scoped, record));
+                .is_none_or(|record| record.ensure_policy_baseline(root).is_err());
         if stale {
             recovery.get_or_insert_with(|| RewriteAction::PlanApplyRequired {
                 summary: format!(

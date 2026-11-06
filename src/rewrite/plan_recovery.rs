@@ -79,7 +79,17 @@ pub(super) fn required_action(
         .as_ref()
         .map(|plan| &plan.id)
         .or_else(|| state.dependency_rule_plan.as_ref().map(|plan| &plan.id))?;
-    if !evidence_unusable(target_root, state).unwrap_or(false) {
+    let unusable = if let Some(plan) = &state.rule_plan
+        && let Some(record) = &plan.unified
+    {
+        (record.is_api_issue()
+            && state.active_issue.as_ref().map(|issue| issue.id.as_str())
+                != Some(plan.issue_id.as_str()))
+            || record.ensure_policy_baseline(target_root).is_err()
+    } else {
+        evidence_unusable(target_root, state).unwrap_or(false)
+    };
+    if !unusable {
         return None;
     }
     Some(super::model::RewriteAction::PlanApplyRequired {

@@ -393,12 +393,16 @@ impl UnifiedRulePlanRecord {
         Ok(())
     }
 
-    fn ensure_current(&self, root: &Path, state: &RewriteState) -> Result<()> {
+    pub(super) fn ensure_policy_baseline(&self, root: &Path) -> Result<()> {
         ensure!(
             fingerprint::policy_file(root)? == self.policy,
             "configured policy path changed after planning"
         );
-        self.ensure_policy_current()?;
+        self.ensure_policy_current()
+    }
+
+    fn ensure_current(&self, root: &Path, state: &RewriteState) -> Result<()> {
+        self.ensure_policy_baseline(root)?;
         ensure!(
             self.identity.revalidate(root, state)? == self.identity,
             "Target/Source/engine/attempt identity changed after planning"
@@ -542,7 +546,9 @@ pub(super) fn begin_apply(
     let mut record = super::rule::pending_plan_for_apply(state, plan_id)?
         .unified
         .context("pending unified rule plan unavailable")?;
-    record.ensure_current(root, state)?;
+    record.ensure_current(root, state).with_context(|| {
+        format!("rule plan {plan_id} failed revalidation; use `backend-rewrite rule recover {plan_id}` to retire stale evidence")
+    })?;
     record.apply_started = true;
     state.rule_plan.as_mut().unwrap().unified = Some(record.clone());
     if record.original != record.updated
