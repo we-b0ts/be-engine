@@ -98,6 +98,11 @@ impl NativeClock {
             .get(case)
             .is_some_and(|entries| !entries.is_empty())
     }
+    pub(in crate::replay) fn needs_input_acks(&self, case: &str) -> bool {
+        self.inputs
+            .get(case)
+            .is_some_and(|inputs| !inputs.is_empty())
+    }
     fn retire(&mut self, index: usize) {
         let entry = &self.entries[index];
         let pending = self

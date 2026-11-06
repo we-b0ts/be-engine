@@ -21,8 +21,12 @@ pub(super) struct LiveEvents {
 }
 
 impl super::super::super::RedisReplayState {
-    pub(in crate::replay) fn needs_native_events(&self, case: &str) -> bool {
+    pub(in crate::replay) fn needs_ingress_events(&self, case: &str) -> bool {
         self.pubsub.ingress.needs_native_events(case)
+    }
+
+    pub(in crate::replay) fn needs_native_events(&self, case: &str) -> bool {
+        self.needs_ingress_events(case)
             || self.pubsub.native_clock.needs_observer(case)
             || self.pubsub.namespace_sessions.needs_observer(case)
     }

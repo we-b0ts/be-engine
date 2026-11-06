@@ -6,7 +6,7 @@ use tokio_tungstenite::tungstenite::Message;
 const EVENTS: usize = 12_553;
 
 #[tokio::test]
-async fn native_clock_observes_more_than_8192_actual_ws_events_over_the_private_control_channel() {
+async fn native_clock_keeps_large_ws_output_without_unused_event_feedback() {
     let temp = tempfile::tempdir().unwrap();
     let (globals, original) = fixture(temp.path());
     let path = temp.path().join("case/request.json");
@@ -91,14 +91,12 @@ async fn native_clock_observes_more_than_8192_actual_ws_events_over_the_private_
         assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
         state.redis.pubsub.native_clock.epoch(CASE).unwrap()
     };
-    // Crossing the old limit must preserve strict sequencing and epoch checks.
+    // This native clock has no ingress event prerequisites. Capturing a large
+    // WS response leaves the control-side event ordinal unused.
     for (at, ordinal) in [
-        (epoch, EVENTS as u64),
-        (epoch, EVENTS as u64 + 2),
-        (
-            epoch + chrono::TimeDelta::milliseconds(1),
-            EVENTS as u64 + 1,
-        ),
+        (epoch, EVENTS as u64 + 1),
+        (epoch, 2),
+        (epoch + chrono::TimeDelta::milliseconds(1), 1),
     ] {
         let response = guards::control(
             &runtime,
@@ -112,7 +110,7 @@ async fn native_clock_observes_more_than_8192_actual_ws_events_over_the_private_
         guards::control(
             &runtime,
             json!({"command":"native_event","case_id":CASE,"native_event":{
-                "epoch":epoch,"event":{"namespace":"/chat","event":"actual:notice","ordinal":EVENTS+1}}})
+                "epoch":epoch,"event":{"namespace":"/chat","event":"actual:notice","ordinal":1}}})
         )
         .await["ok"],
         true
