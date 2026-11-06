@@ -78,6 +78,10 @@ fn runtime_inputs_fingerprint(target_root: &Path, mut hash: Fnv1a) -> Result<Str
     Ok(hash.finish())
 }
 
+pub(super) fn startup_inputs_fingerprint(target_root: &Path) -> Result<String> {
+    runtime_inputs_fingerprint(target_root, Fnv1a::default())
+}
+
 /// Portable delivery identity; private startup inputs belong to the canonical
 /// validation context, not the candidate worktree's local runtime directory.
 pub(super) fn code_fingerprint(target_root: &Path) -> Result<String> {

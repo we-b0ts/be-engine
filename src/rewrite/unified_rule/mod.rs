@@ -93,6 +93,8 @@ pub struct UnifiedRulePlanRecord {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     replace_sections: BTreeSet<String>,
     source_proofs: source_proof::SourceProofSnapshot,
+    #[serde(default)]
+    target_replay_drift_at_plan: bool,
 }
 
 pub fn plan_rewrite_unified_rule(
@@ -294,10 +296,14 @@ fn plan(
         }
     }
     let current = crate::validate_replay_policy(&config.replay_policy)?;
+    let allows_target_drift = !batch_scope
+        && !attribution_scope
+        && manifest::eligibility::allows_target_drift(&before, &compiled);
+    let target_replay_drift_at_plan = !batch_scope
+        && !attribution_scope
+        && state.replay_identity.as_ref() != Some(&fingerprint::replay_identity(root)?);
     ensure!(
-        batch_scope
-            || attribution_scope
-            || state.replay_identity.as_ref() == Some(&fingerprint::replay_identity(root)?),
+        !target_replay_drift_at_plan || allows_target_drift,
         "Target code, startup inputs or policy changed since genuine Replay; run fresh Replay before planning"
     );
     let identity = if attribution_scope {
@@ -305,7 +311,7 @@ fn plan(
     } else if batch_scope {
         manifest::ExecutionIdentity::batch_current(root, state)?
     } else {
-        manifest::ExecutionIdentity::current(root, state)?
+        manifest::ExecutionIdentity::current(root, state, allows_target_drift)?
     };
     let mut bundle = match &identity {
         manifest::ExecutionIdentity::Attribution(actual) => {
@@ -343,6 +349,7 @@ fn plan(
         replaced_rules,
         replace_sections: change.replace_sections,
         source_proofs,
+        target_replay_drift_at_plan,
     };
     let id = format!(
         "plan-{}",
@@ -396,6 +403,10 @@ impl UnifiedRulePlanRecord {
     }
 
     fn ensure_current(&self, root: &Path, state: &RewriteState) -> Result<()> {
+        ensure!(
+            fingerprint::policy_file(root)? == self.policy,
+            "configured policy path changed after planning"
+        );
         self.ensure_policy_current()?;
         ensure!(
             self.identity.revalidate(root, state)? == self.identity,
@@ -448,6 +459,7 @@ impl UnifiedRulePlanRecord {
             "replace_sections":self.replace_sections,
             "requires_fresh_replay":replay_required, "replay_scope":if self.is_batch(){json!({"kind":"complete_source_run"})}else if !self.requires_api_confirmation(){json!({"kind":"affected_owner_scopes"})}else{json!(self.identity.method_api())},
             "evidence_scope":self.identity,
+            "target_replay_drift_at_plan":self.target_replay_drift_at_plan,
             "requires_attribution_review":attribution_required,
             "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
             "policy":self.policy, "evidence_artifacts":self.artifacts.len(), "source_proofs":self.source_proofs,
@@ -479,7 +491,11 @@ pub(super) fn apply(
     record.ensure_current(root, state)?;
     let previous_execution = super::fingerprint::replay_identity(root)?;
     crate::config::edit::write_atomic(&record.policy, record.updated.as_bytes())?;
-    let report = record.report(true);
+    let mut report = record.report(true);
+    if record.requires_api_confirmation() {
+        report["target_replay_drift_at_apply"] =
+            json!(state.replay_identity.as_ref() != Some(&previous_execution));
+    }
     state.rule_plan = None;
     if record.original != record.updated {
         if record.is_batch() {

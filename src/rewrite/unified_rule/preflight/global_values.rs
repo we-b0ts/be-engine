@@ -40,6 +40,10 @@ pub(super) fn verify(
     if !active(policy, selected) {
         return Ok(());
     }
+    let previous_json =
+        super::super::manifest::eligibility::adds_only_json_identities(previous, policy)
+            .then_some(previous.global_json.as_ref())
+            .flatten();
     let manifest = bundle
         .replay
         .get("policy_witnesses")
@@ -126,7 +130,16 @@ pub(super) fn verify(
         }
         if json_active(policy, selected) {
             primary(
-                root, bundle, &case, &directory, &request, policy, selected, result, &inputs,
+                root,
+                bundle,
+                &case,
+                &directory,
+                &request,
+                policy,
+                selected,
+                result,
+                &inputs,
+                previous_json,
             )
             .with_context(|| {
                 format!("global format primary validation: case={case}, surface=api.response")
@@ -411,6 +424,39 @@ fn valid_count(comparison: &Comparison, selected: &BTreeSet<String>) -> Result<u
     Ok(comparison.evaluated.intersection(selected).count())
 }
 
+fn contains_only_baseline_differences(baseline: &Comparison, proposed: &Comparison) -> bool {
+    if baseline.passed() {
+        return false;
+    }
+    let mut counts = BTreeMap::new();
+    for difference in &baseline.differences {
+        *counts
+            .entry((&difference.pointer, &difference.reason))
+            .or_insert(0usize) += 1;
+    }
+    proposed.differences.iter().all(|difference| {
+        let present = counts
+            .get_mut(&(&difference.pointer, &difference.reason))
+            .is_some_and(|count| {
+                let present = *count > 0;
+                *count = count.saturating_sub(1);
+                present
+            });
+        // The strict JSON walk stops at the first failure. Repairing an
+        // earlier identity can reveal a later structural or unselected
+        // mismatch that the old walk never reached. Identity formats cannot
+        // introduce these mismatches in the same frozen values.
+        present
+            || matches!(
+                difference.reason.as_str(),
+                "unselected value or type changed"
+                    | "field presence changed"
+                    | "unexpected field"
+                    | "array cardinality changed"
+            )
+    })
+}
+
 fn record_source(
     comparison: &Comparison,
     selected: &BTreeSet<String>,
@@ -438,6 +484,7 @@ fn primary(
     selected: &BTreeSet<String>,
     result: &mut Preflight,
     inputs: &super::input_retiming::Inputs,
+    previous_json: Option<&crate::policy::CompiledJsonPolicy>,
 ) -> Result<()> {
     let plan = policy.global_json.as_ref().expect("selected global JSON");
     // Native owners compose into this comparison but their usage is recorded
@@ -489,7 +536,7 @@ fn primary(
             target: source_pair.times.source,
         },
     );
-    let compare_body = |source: &[u8], target: &[u8], clocks| {
+    let compare_body = |source: &[u8], target: &[u8], plan, clocks| {
         if context.is_empty() {
             compare_bytes(source, target, plan, clocks)
         } else if source == target {
@@ -498,7 +545,7 @@ fn primary(
             context.compare_encoded_global(source, target, &[], Some(plan), clocks)
         }
     };
-    let mut comparison = compare_body(&source_pair.source, &source_pair.source, clocks)?;
+    let mut comparison = compare_body(&source_pair.source, &source_pair.source, plan, clocks)?;
     comparison.merge_and_validate(crate::replay::compare_interaction_global(
         source_pair.source_interaction.as_ref(),
         source_pair.source_interaction.as_ref(),
@@ -523,12 +570,13 @@ fn primary(
         return Ok(());
     };
     let clocks = AnchorClocks::for_response(pair.request_times, pair.times);
-    let checked = (|| -> Result<usize> {
+    let compare_target = |plan| -> Result<Comparison> {
         let mut checked = compare_body(
             &pair.source,
             pair.target
                 .as_deref()
                 .context("global JSON Target body unavailable")?,
+            plan,
             clocks,
         )?;
         checked.merge_and_validate(crate::replay::compare_interaction_global(
@@ -539,7 +587,21 @@ fn primary(
             pair.request_times,
             pair.max_interaction_message_bytes,
         )?);
-        valid_count(&checked, &selected)
+        Ok(checked)
+    };
+    let checked = (|| -> Result<usize> {
+        let comparison = compare_target(plan)?;
+        if !comparison.passed()
+            && let Some(previous) = previous_json
+            && contains_only_baseline_differences(&compare_target(previous)?, &comparison)
+        {
+            result
+                .preexisting_primary_differences
+                .insert(case.into(), comparison.differences.len());
+            result.missing_target_witnesses += 1;
+            return Ok(0);
+        }
+        valid_count(&comparison, &selected)
             .context("phase=independent_target_validation, document=body_or_interaction")
     })();
     let checked = match checked {
@@ -554,7 +616,7 @@ fn primary(
         }
         other => other?,
     };
-    if relevant || checked > 0 {
+    if !result.preexisting_primary_differences.contains_key(case) && (relevant || checked > 0) {
         result.independent_target_validations += 1;
     }
     Ok(())

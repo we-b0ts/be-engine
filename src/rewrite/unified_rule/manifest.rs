@@ -108,6 +108,8 @@ pub(super) struct ApiExecutionIdentity {
     case_source: PathBuf,
     attempt: u64,
     target_inputs: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    allows_target_drift: bool,
     engine: String,
     #[serde(default)]
     recorded_replay: Option<String>,
@@ -146,7 +148,7 @@ impl ExecutionIdentity {
                 state,
             )?)),
             Self::Batch(_) => Self::batch_current(root, state),
-            Self::ApiIssue(_) => Self::current(root, state),
+            Self::ApiIssue(identity) => Self::current(root, state, identity.allows_target_drift),
         }
     }
     pub(super) fn batch_current(root: &Path, state: &RewriteState) -> Result<Self> {
@@ -156,7 +158,11 @@ impl ExecutionIdentity {
             evidence: super::batch::evidence(root, state)?,
         }))
     }
-    pub(super) fn current(root: &Path, state: &RewriteState) -> Result<Self> {
+    pub(super) fn current(
+        root: &Path,
+        state: &RewriteState,
+        allows_target_drift: bool,
+    ) -> Result<Self> {
         let context = crate::E2eRunContext {
             target_root: root.into(),
             case_source: state
@@ -193,7 +199,12 @@ impl ExecutionIdentity {
             case_inventory: summary.case_inventory_id,
             case_source: summary.case_source,
             attempt: summary.attempt,
-            target_inputs: fingerprint::review_fingerprint(root)?,
+            target_inputs: if allows_target_drift {
+                fingerprint::startup_inputs_fingerprint(root)?
+            } else {
+                fingerprint::review_fingerprint(root)?
+            },
+            allows_target_drift,
             engine: fingerprint::traffic_e2e_revision()?,
             recorded_replay: state.replay_identity.clone(),
             recorded_engine: state

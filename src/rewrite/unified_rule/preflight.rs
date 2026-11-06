@@ -41,6 +41,8 @@ pub struct Preflight {
     pub independent_target_validations: usize,
     pub derived_delivery_validations: usize,
     pub missing_target_witnesses: usize,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub preexisting_primary_differences: BTreeMap<String, usize>,
     #[serde(default)]
     pub unvalidated_target_witnesses: BTreeSet<response::UnvalidatedTargetWitness>,
     #[serde(default)]
