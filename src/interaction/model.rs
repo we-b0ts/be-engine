@@ -314,6 +314,9 @@ pub struct EndObservation {
     pub missing_predecessor: Option<MissingPredecessor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_timeout: Option<DispatchTimeout>,
+    /// Replay offset at which a proven Source heartbeat timeout reached its fast close boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_heartbeat_eof_ms: Option<u64>,
     /// Exact unfinished framed-message bytes observed at an explicit client close.
     /// This suffix is not a completed business message or a successful EOF.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -424,6 +427,7 @@ mod tests {
                 clean: true,
                 missing_predecessor: None,
                 dispatch_timeout: None,
+                fast_heartbeat_eof_ms: None,
                 partial_message: None,
                 close: None,
             };

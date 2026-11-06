@@ -40,6 +40,7 @@ async fn original_interaction(fixture: &Fixture, protocol: Protocol, elapsed: u6
             clean: true,
             missing_predecessor: None,
             dispatch_timeout: None,
+            fast_heartbeat_eof_ms: None,
             partial_message: None,
             close: None,
         },

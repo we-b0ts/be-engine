@@ -311,6 +311,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
     let ack_context = interaction::AckContext::prepare(request.interaction.as_ref())?;
     let source_heartbeat_tail = actual_interaction.is_some_and(|actual| {
         actual.end.reason == crate::interaction::model::EndReason::FastHeartbeatTailSkipped
+            || actual.end.fast_heartbeat_eof_ms.is_some()
     }) && request
         .interaction
         .as_ref()

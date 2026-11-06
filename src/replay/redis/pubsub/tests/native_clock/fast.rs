@@ -61,7 +61,7 @@ fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
 }
 
 #[tokio::test]
-async fn compressed_passive_prefix_keeps_late_push_and_captures_extra_output() {
+async fn compressed_passive_prefix_observes_tail_without_sending_pong() {
     let temp = tempfile::tempdir().unwrap();
     let (request, globals, frames) = recording(temp.path());
     let runtime = runtime(temp.path(), &[], &globals, true).await.unwrap();
@@ -118,10 +118,11 @@ async fn compressed_passive_prefix_keeps_late_push_and_captures_extra_output() {
                 .await
                 .unwrap();
         }
-        assert_eq!(
-            socket.next().await.unwrap().unwrap().into_text().unwrap(),
-            "3"
-        );
+        tokio::select! {
+            message = socket.next() => panic!("unexpected traffic during EOF grace: {message:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(300)) => {}
+        }
+        socket.send(Message::Text(packet(4).into())).await.unwrap();
         assert!(matches!(socket.next().await, None | Some(Err(_))));
         task.abort();
     });
@@ -133,11 +134,11 @@ async fn compressed_passive_prefix_keeps_late_push_and_captures_extra_output() {
     .with_input_registration(&session, CASE);
     let started = Instant::now();
     let output = timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(2),
         client.send_bytes(&serde_json::to_vec(&request).unwrap(), "fast-passive"),
     )
     .await
-    .expect("prefix must finish before the recorded first push would finish")
+    .expect("the replay must close without waiting for the recorded heartbeat timeout")
     .unwrap()
     .interaction
     .unwrap();
@@ -150,13 +151,17 @@ async fn compressed_passive_prefix_keeps_late_push_and_captures_extra_output() {
         .collect();
     assert_eq!(
         business.len(),
-        5,
-        "late extra output must be retained for the length assertion"
+        6,
+        "retain extra output on both sides of the inferred EOF"
     );
     assert_eq!(business[4].message, WireMessage::text(packet(3)));
+    assert_eq!(business[5].message, WireMessage::text(packet(4)));
     assert!(business[4].offset_ms >= business[3].offset_ms + 63);
-    assert!(output.end.offset_ms >= business[4].offset_ms + 25);
-    assert!(started.elapsed() < Duration::from_secs(1));
+    let eof = output.end.fast_heartbeat_eof_ms.unwrap();
+    assert!(eof >= business[4].offset_ms + 15);
+    assert!(business[5].offset_ms > eof);
+    assert!((1000..1250).contains(&(output.end.offset_ms - eof)));
+    assert!(started.elapsed() < Duration::from_secs(2));
     target.await.unwrap();
     control.abort();
     assert_eq!(

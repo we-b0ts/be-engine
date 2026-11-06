@@ -13,7 +13,8 @@ use tokio::time::{Duration, Instant, sleep_until};
 
 use super::event_order::attachment;
 use super::timing::{
-    Advance, cancellation, delivery_prefix, ordered_input, transport_cancellation,
+    Advance, HEARTBEAT_EOF_GRACE, cancellation, delivery_prefix, ordered_input,
+    transport_cancellation, websocket_action_due,
 };
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
@@ -137,10 +138,14 @@ pub(super) async fn execute_with_feedback(
             next += 1;
         }
         let now = elapsed_ms(started);
+        let heartbeat_eof_due = heartbeat_acks
+            .and(tail_ready_at)
+            .map(|at| at + HEARTBEAT_EOF_GRACE);
         match observed.decision(now) {
             LifecycleDecision::Close(EndReason::BusinessIdle)
-                if (transcript.protocol == Protocol::SocketIo || has_transport_end)
-                    && next < transcript.actions.len() => {}
+                if heartbeat_eof_due.is_some()
+                    || (transcript.protocol == Protocol::SocketIo || has_transport_end)
+                        && next < transcript.actions.len() => {}
             LifecycleDecision::Close(reason) => break (reason, true),
             LifecycleDecision::Fail(reason) => break (reason, false),
             _ => {}
@@ -223,12 +228,9 @@ pub(super) async fn execute_with_feedback(
         }
         let fast_idle_due = fast_tail
             .as_ref()
-            .filter(|tail| at_fast_tail && tail.close_sequence.is_none())
-            .filter(|tail| !tail.native_observation || heartbeats.complete(true))
+            .filter(|_| at_fast_tail)
             .zip(tail_ready_at)
-            .map(|(tail, ready)| {
-                ready.max(last_sent).max(last_output) + Duration::from_millis(tail.idle_ms)
-            });
+            .and_then(|(tail, ready)| tail.business_idle_due(ready, last_sent, last_output));
         if let (Some(action), Some(timing)) = (admitted, &input_timing)
             && (ordered || action.compressible_gap || delivery_prefix(action))
             && !cancellation(action)
@@ -312,7 +314,10 @@ pub(super) async fn execute_with_feedback(
             )
         });
         let due = due.into_iter().chain(ordered_close_due).max();
-        let lifecycle_deadline = session_deadline(transcript, &observed, next, started);
+        let lifecycle_deadline = heartbeat_eof_due.map_or_else(
+            || session_deadline(transcript, &observed, next, started),
+            |due| due.min(started + Duration::from_millis(transcript.policy.max_duration_ms)),
+        );
         // A recorded transport cancellation must remain available while an
         // earlier input is waiting for an ACK, namespace or dependency delivery.
         let cancel = transcript.actions.iter().skip(next + 1).find(|action| {
@@ -328,13 +333,21 @@ pub(super) async fn execute_with_feedback(
             .into_iter()
             .chain(fast_idle_due)
             .fold(lifecycle_deadline, Instant::min);
-        let heartbeat_due = heartbeats.next_due();
+        let heartbeat_due = heartbeats
+            .next_due()
+            .filter(|_| heartbeat_eof_due.is_none());
         let io_deadline =
             dispatch_deadline.map_or(lifecycle_deadline, |due| due.min(lifecycle_deadline));
         macro_rules! session_io {
             ($future:expr, $context:literal) => {
-                match tokio::time::timeout_at(io_deadline, $future).await {
+                session_io!(result tokio::time::timeout_at(io_deadline, $future).await, $context)
+            };
+            (result $result:expr, $context:literal) => {
+                match $result {
                     Err(_) if dispatch_deadline == Some(io_deadline) => continue 'session,
+                    Err(_) if heartbeat_eof_due == Some(io_deadline) => {
+                        break 'session (EndReason::FastHeartbeatTailSkipped, true);
+                    }
                     result => result.context($context)??,
                 }
             };
@@ -389,6 +402,9 @@ pub(super) async fn execute_with_feedback(
                 tail_ready_at = Some(Instant::now());
                 tail_wait = None;
             }
+            _ = sleep_until(heartbeat_eof_due.unwrap_or(lifecycle_deadline)), if heartbeat_eof_due.is_some() => {
+                break (EndReason::FastHeartbeatTailSkipped, true);
+            }
             incoming = transport.recv() => {
                 match incoming.context("Target session reader stopped")? {
                     ReaderEvent::Message(message) => {
@@ -412,14 +428,13 @@ pub(super) async fn execute_with_feedback(
                                                 biased;
                                                 _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
                                                 result = tokio::time::timeout_at(io_deadline, sink.connected(&packet.namespace, packet.data.as_ref().and_then(|data| data.get("sid")).and_then(serde_json::Value::as_str))) => {
-                                                    if result.is_err() && dispatch_deadline == Some(io_deadline) { continue 'session; }
-                                                    result.context("native namespace observation timed out")??;
+                                                    session_io!(result result, "native namespace observation timed out");
                                                 }
                                             }
                                         }
                                     }
                                     EngineIoPacket::Ping(payload) => {
-                                        if heartbeats.ping(payload.clone(), Instant::now())? {
+                                        if heartbeat_eof_due.is_none() && heartbeats.ping(payload.clone(), Instant::now())? {
                                             session_io!(transport.send(&WireMessage::text(format!("3{payload}"))), "Engine.IO heartbeat send timed out");
                                         }
                                     }
@@ -441,8 +456,7 @@ pub(super) async fn execute_with_feedback(
                                                 biased;
                                                 _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
                                                 result = tokio::time::timeout_at(io_deadline, sink.observe(event)) => {
-                                                    if result.is_err() && dispatch_deadline == Some(io_deadline) { continue 'session; }
-                                                    result.context("native event observation timed out")??;
+                                                    session_io!(result result, "native event observation timed out");
                                                 }
                                             }
                                         }
@@ -471,12 +485,7 @@ pub(super) async fn execute_with_feedback(
             }
             _ = sleep_until(wake) => {
                 if fast_idle_due.is_some_and(|due| Instant::now() >= due) {
-                    let reason = if heartbeat_acks.is_some() {
-                        EndReason::FastHeartbeatTailSkipped
-                    } else {
-                        EndReason::BusinessIdle
-                    };
-                    break (reason, true);
+                    break (EndReason::BusinessIdle, true);
                 }
                 let Some(action) = action.filter(|_| due.is_some_and(|due| Instant::now() >= due)) else { continue; };
                 match &action.action {
@@ -588,21 +597,29 @@ pub(super) async fn execute_with_feedback(
         )
         .await;
     }
+    let heartbeat_eof = heartbeat_acks.and(tail_ready_at).filter(|_| {
+        matches!(
+            reason,
+            EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped
+        )
+    });
     let (actual_input, mut observation) = observed.finish(
         reason,
         elapsed_ms(started),
         transport_clean
             && closed
             && next == transcript.actions.len()
-            && heartbeats.complete(
-                reason == EndReason::FastHeartbeatTailSkipped
-                    || removed_ms > 0
+            && (heartbeat_eof.is_some()
+                || heartbeats.complete(
+                    removed_ms > 0
                         && matches!(
                             reason,
                             EndReason::ClientClose | EndReason::ClientTransportEnd
                         ),
-            ),
+                )),
     )?;
+    observation.end.fast_heartbeat_eof_ms =
+        heartbeat_eof.map(|at| u64::try_from((at - started).as_millis()).unwrap_or(u64::MAX));
     observation.end.missing_predecessor = missing_predecessor;
     observation.end.dispatch_timeout = dispatch_timeout;
     if reason == EndReason::ClientTransportEnd && next == transcript.actions.len() {
@@ -820,37 +837,6 @@ fn session_deadline(
         observed.next_deadline_ms()
     };
     started + Duration::from_millis(millis)
-}
-
-fn websocket_action_due(
-    action: &InputAction,
-    completed: &BTreeMap<u64, Instant>,
-    last_offset: u64,
-    last_sent: Instant,
-    input_gap_ms: u64,
-) -> Option<Instant> {
-    let mut barrier = None;
-    for sequence in &action.after {
-        let at = *completed.get(sequence)?;
-        barrier = Some(barrier.map_or(at, |previous: Instant| previous.max(at)));
-    }
-    let closes = matches!(
-        action.action,
-        InputActionKind::Close { .. } | InputActionKind::TransportEnd { .. }
-    );
-    if closes && let Some(gap_start) = action.gap_start_ms {
-        let delay = action.offset_ms.checked_sub(gap_start)?;
-        // Keep the actual completion barrier even when client idle time is compressed.
-        return barrier?.checked_add(Duration::from_millis(delay));
-    }
-    if action.compressible_gap {
-        let gap_start = action.gap_start_ms?;
-        let delay = action.offset_ms.saturating_sub(gap_start).min(input_gap_ms);
-        Some(barrier? + Duration::from_millis(delay))
-    } else {
-        let due = last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset));
-        Some(barrier.map_or(due, |barrier| due.max(barrier)))
-    }
 }
 
 fn rebind_ack(

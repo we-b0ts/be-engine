@@ -1,6 +1,20 @@
 //! Socket.IO framing stays exact; each business argument is a global JSON carrier.
 use super::*;
-use crate::interaction::socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text};
+use crate::interaction::socketio::{
+    EngineIoPacket, SocketIoDecoder, SocketIoKind, decode_engine_io_text,
+};
+
+pub(super) fn business_event_suffix(events: &[WireMessage], max_message_bytes: usize) -> bool {
+    let mut decoder = SocketIoDecoder::new(max_message_bytes);
+    events.iter().all(|event| {
+        decoder.push(event).is_ok_and(|packets| {
+            packets.into_iter().all(|packet| {
+                matches!(packet, EngineIoPacket::Message(packet)
+                    if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent))
+            })
+        })
+    }) && decoder.finish().is_ok()
+}
 
 pub(super) fn compare_message(
     source: &WireMessage,

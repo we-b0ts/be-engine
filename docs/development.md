@@ -174,7 +174,12 @@ Fast replay aligns plain Socket.IO ACKs by namespace and original client event
 ID. ACKs can cross same-namespace text events when the request was already
 pending and the recorded input has no conflicting completion or transport
 boundary. Business events are compared in their original relative order.
-Packet counts, arguments and stream termination still use ordinary assertions.
+Packet counts, arguments and stream termination use ordinary assertions. When a
+Source heartbeat timeout qualifies for fast replay, the engine stops replying to
+Engine.IO PINGs at the replayed Source EOF boundary and observes the Target for
+up to one second. The Source business events must still match the Target prefix.
+Complete Target business events appended to that prefix are allowed for this
+observed fast close window.
 
 If actual execution cleanup fails after Replay readiness, the runner stops Target and asks
 Replay to publish an interrupted diagnostic snapshot before stopping its process.

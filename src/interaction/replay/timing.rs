@@ -6,7 +6,11 @@ use crate::interaction::{
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tokio::sync::watch;
+use tokio::time::{Duration, Instant};
+
+pub(super) const HEARTBEAT_EOF_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,11 +63,48 @@ pub(crate) struct FastTail {
 
 impl FastTail {
     pub(super) fn heartbeat_outputs_ready(&self, observed: usize, pongs_complete: bool) -> bool {
-        if self.native_observation {
-            observed >= self.output_count
-        } else {
-            observed == self.output_count && pongs_complete
-        }
+        observed >= self.output_count && (self.native_observation || pongs_complete)
+    }
+
+    pub(super) fn business_idle_due(
+        &self,
+        ready: Instant,
+        last_sent: Instant,
+        last_output: Instant,
+    ) -> Option<Instant> {
+        (self.close_sequence.is_none() && self.heartbeat_acks.is_none())
+            .then(|| ready.max(last_sent).max(last_output) + Duration::from_millis(self.idle_ms))
+    }
+}
+
+pub(super) fn websocket_action_due(
+    action: &InputAction,
+    completed: &BTreeMap<u64, Instant>,
+    last_offset: u64,
+    last_sent: Instant,
+    input_gap_ms: u64,
+) -> Option<Instant> {
+    let mut barrier = None;
+    for sequence in &action.after {
+        let at = *completed.get(sequence)?;
+        barrier = Some(barrier.map_or(at, |previous: Instant| previous.max(at)));
+    }
+    let closes = matches!(
+        action.action,
+        InputActionKind::Close { .. } | InputActionKind::TransportEnd { .. }
+    );
+    if closes && let Some(gap_start) = action.gap_start_ms {
+        let delay = action.offset_ms.checked_sub(gap_start)?;
+        // Keep the actual completion barrier even when client idle time is compressed.
+        return barrier?.checked_add(Duration::from_millis(delay));
+    }
+    if action.compressible_gap {
+        let gap_start = action.gap_start_ms?;
+        let delay = action.offset_ms.saturating_sub(gap_start).min(input_gap_ms);
+        Some(barrier? + Duration::from_millis(delay))
+    } else {
+        let due = last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset));
+        Some(barrier.map_or(due, |barrier| due.max(barrier)))
     }
 }
 
