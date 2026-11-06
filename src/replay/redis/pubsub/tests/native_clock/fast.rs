@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::time::{Instant, timeout};
 use tokio_tungstenite::tungstenite::Message;
 
-const OPEN: &str = r#"0{"sid":"engine","upgrades":[],"pingInterval":1400,"pingTimeout":100}"#;
+const OPEN: &str = r#"0{"sid":"engine","upgrades":[],"pingInterval":1000,"pingTimeout":500}"#;
 const CONNECT: &str = "40/chat,{}";
 const CONNECTED: &str = r#"40/chat,{"sid":"chat"}"#;
 
@@ -20,10 +20,12 @@ fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
     source.input(WireMessage::text(CONNECT), 1).unwrap();
     source.output(WireMessage::text(CONNECTED), 2).unwrap();
     source.output(WireMessage::text(packet(1)), 501).unwrap();
-    source.output(WireMessage::text("2"), 1400).unwrap();
-    source.output(WireMessage::text(packet(2)), 1501).unwrap();
+    source.output(WireMessage::text("2"), 1000).unwrap();
+    source.input(WireMessage::text("3"), 1250).unwrap();
+    source.output(WireMessage::text("2"), 2250).unwrap();
+    source.output(WireMessage::text(packet(2)), 2701).unwrap();
     source.server_close(Some(1000), String::new());
-    let (input, expected) = source.finish(EndReason::ServerEof, 1591, true).unwrap();
+    let (input, expected) = source.finish(EndReason::ServerEof, 2791, true).unwrap();
     let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
         "timestamp":START,"headers":{},"body":capture(b""),"interaction":input});
     std::fs::write(root.join("case/request.json"), request.to_string()).unwrap();
@@ -37,8 +39,8 @@ fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
     let mut frames = Vec::new();
     for (i, timestamp) in [
         "2020-01-01T00:10:00.500Z",
-        "2020-01-01T00:10:01.500Z",
-        "2020-01-01T00:10:01.565Z",
+        "2020-01-01T00:10:02.700Z",
+        "2020-01-01T00:10:02.765Z",
     ]
     .into_iter()
     .enumerate()
@@ -103,13 +105,23 @@ async fn compressed_passive_prefix_keeps_late_push_and_captures_extra_output() {
             SUBSCRIBED
         );
         socket.send(Message::Text(CONNECTED.into())).await.unwrap();
+        socket.send(Message::Text("2".into())).await.unwrap();
         for (i, frame) in frames.into_iter().enumerate() {
-            assert_eq!(read(&mut subscriber).await, frame);
+            assert_eq!(
+                timeout(Duration::from_millis(200), read(&mut subscriber))
+                    .await
+                    .expect("tail input must not wait for the scheduled PONG"),
+                frame
+            );
             socket
                 .send(Message::Text(packet(i as u64 + 1).into()))
                 .await
                 .unwrap();
         }
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "3"
+        );
         assert!(matches!(socket.next().await, None | Some(Err(_))));
         task.abort();
     });
@@ -131,14 +143,19 @@ async fn compressed_passive_prefix_keeps_late_push_and_captures_extra_output() {
     .unwrap();
     assert_eq!(output.end.reason, EndReason::FastHeartbeatTailSkipped);
     assert!(output.end.clean);
+    let business: Vec<_> = output
+        .events
+        .iter()
+        .filter(|event| !event.heartbeat)
+        .collect();
     assert_eq!(
-        output.events.len(),
+        business.len(),
         5,
         "late extra output must be retained for the length assertion"
     );
-    assert_eq!(output.events[4].message, WireMessage::text(packet(3)));
-    assert!(output.events[4].offset_ms >= output.events[3].offset_ms + 63);
-    assert!(output.end.offset_ms >= output.events[4].offset_ms + 25);
+    assert_eq!(business[4].message, WireMessage::text(packet(3)));
+    assert!(business[4].offset_ms >= business[3].offset_ms + 63);
+    assert!(output.end.offset_ms >= business[4].offset_ms + 25);
     assert!(started.elapsed() < Duration::from_secs(1));
     target.await.unwrap();
     control.abort();

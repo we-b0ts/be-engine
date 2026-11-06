@@ -57,6 +57,16 @@ pub(crate) struct FastTail {
     pub native_observation: bool,
 }
 
+impl FastTail {
+    pub(super) fn heartbeat_outputs_ready(&self, observed: usize, pongs_complete: bool) -> bool {
+        if self.native_observation {
+            observed >= self.output_count
+        } else {
+            observed == self.output_count && pongs_complete
+        }
+    }
+}
+
 /// Business inputs retain the Source dependency-delivery prefix even when no
 /// business-completion profile makes their preceding gap compressible. Native
 /// ACKs, heartbeat controls and cancellation must remain independently runnable.

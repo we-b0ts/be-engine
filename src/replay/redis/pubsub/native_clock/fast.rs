@@ -5,7 +5,7 @@ use tokio::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub(in crate::replay) struct Pace {
-    first: usize,
+    pub(super) first: usize,
     last: usize,
     last_output: Duration,
     end: Duration,
@@ -139,9 +139,14 @@ impl Pace {
             return None;
         }
         if index > self.last {
-            return self
-                .tail_at
-                .map(|at| at + entry_offset(&entries[index]).saturating_sub(self.last_output));
+            let offset = entry_offset(&entries[index]);
+            let due = self.tail_at? + offset.saturating_sub(self.last_output);
+            return Some(match self.written {
+                Some((prior, at)) if prior > self.last => {
+                    due.max(at + offset.saturating_sub(entry_offset(&entries[prior])))
+                }
+                _ => due,
+            });
         }
         if index == self.first {
             return Some(Instant::now());

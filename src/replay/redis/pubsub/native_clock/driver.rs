@@ -133,10 +133,11 @@ fn ready(replay: &ReplayState) -> Option<Job> {
     let entry = &native.entries[index];
     let recorded_due = || reached(replay, case, live.epoch, entry.offset);
     let due = live.fast.as_ref().map_or_else(recorded_due, |pace| {
-        replay
-            .input_timing
-            .as_ref()
-            .is_some_and(|timeline| timeline.native_fast_setup_ready(replay))
+        (index < pace.first
+            || replay
+                .input_timing
+                .as_ref()
+                .is_some_and(|timeline| timeline.native_fast_setup_ready(replay)))
             && pace.ready(index, &native.entries, recorded_due)
     });
     if !due

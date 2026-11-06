@@ -198,9 +198,7 @@ pub(super) async fn execute_with_feedback(
         let at_fast_tail = fast_tail.as_ref().is_some_and(|tail| {
             let ready = if let Some(required) = heartbeat_acks {
                 transport.is_websocket()
-                    && (output_count == tail.output_count
-                        || tail.native_observation && output_count > tail.output_count)
-                    && heartbeats.complete(true)
+                    && tail.heartbeat_outputs_ready(output_count, heartbeats.complete(true))
                     && required.is_subset(&native_receipts.acknowledged)
                     && observed
                         .pending()
@@ -226,6 +224,7 @@ pub(super) async fn execute_with_feedback(
         let fast_idle_due = fast_tail
             .as_ref()
             .filter(|tail| at_fast_tail && tail.close_sequence.is_none())
+            .filter(|tail| !tail.native_observation || heartbeats.complete(true))
             .zip(tail_ready_at)
             .map(|(tail, ready)| {
                 ready.max(last_sent).max(last_output) + Duration::from_millis(tail.idle_ms)
