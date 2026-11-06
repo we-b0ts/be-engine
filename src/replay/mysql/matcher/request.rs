@@ -282,11 +282,18 @@ impl ReplayState {
                             }
                             None => None,
                         };
-                        let normalized_exchange = dynamic.as_ref().map(|normalized| {
+                        let normalized_exchange = dynamic.as_ref().and_then(|normalized| {
+                            if normalized.source_sql.as_deref() == exchange.record.sql.as_deref()
+                                && normalized.source_params.as_deref()
+                                    == exchange.record.params.as_deref()
+                            {
+                                return None;
+                            }
                             let mut copy = exchange.clone();
-                            copy.record.sql = normalized.source_sql.clone();
-                            copy.record.params = normalized.source_params.clone();
-                            copy
+                            copy.record.sql = normalized.source_sql.as_deref().map(str::to_owned);
+                            copy.record.params =
+                                normalized.source_params.as_deref().map(<[_]>::to_vec);
+                            Some(copy)
                         });
                         let exchange = normalized_exchange.as_ref().unwrap_or(exchange);
                         let sql = dynamic
@@ -297,13 +304,15 @@ impl ReplayState {
                             .as_ref()
                             .and_then(|value| value.actual_params.as_deref())
                             .or(params);
-                        let dynamic_normalized_sql =
-                            dynamic.as_ref().and_then(|_| sql.map(normalize_sql));
+                        let target_changed = sql != observed_sql || params != observed_params;
+                        let dynamic_normalized_sql = (sql != observed_sql)
+                            .then(|| sql.map(normalize_sql))
+                            .flatten();
                         let normalized_sql = dynamic_normalized_sql
                             .as_deref()
                             .or(baseline_normalized_sql.as_deref());
                         let mut dynamic_semantic_target = None;
-                        let semantic_target = if dynamic.is_some() {
+                        let semantic_target = if target_changed {
                             &mut dynamic_semantic_target
                         } else {
                             &mut baseline_semantic_target
@@ -671,6 +680,7 @@ impl ReplayState {
                             }
                             policy_decision.value_contracts.push(captures);
                         }
+                        let dynamic_decision = dynamic.map(|normalized| normalized.decision);
                         let kind = if exchange.record.outcome.is_client_terminated()
                             && !exchange.record.lifecycle_cleanup
                         {
@@ -708,12 +718,12 @@ impl ReplayState {
                                 }
                                 return None;
                             }
-                            if let (Some(case_id), Some(normalized)) =
-                                (active_case_id.as_deref(), dynamic.as_ref())
+                            if let (Some(case_id), Some(decision)) =
+                                (active_case_id.as_deref(), dynamic_decision)
                             {
                                 policy
                                     .dynamic_values
-                                    .commit_after_identities(case_id, normalized.decision.clone());
+                                    .commit_after_identities(case_id, decision);
                             }
                         }
                         self.refresh_mysql_global_report(index);

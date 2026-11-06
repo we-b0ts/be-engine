@@ -69,7 +69,8 @@ fn large_mysql_parameters_normalize_embedded_identities_and_preserve_stable_payl
         value: Some(Value::String(text)),
         raw: None,
     };
-    let normalized = normalize_params(Some(&[parameter(actual)]), &pairs(), true)
+    let params = [parameter(actual)];
+    let normalized = normalize_params(Some(&params), &pairs(), true)
         .unwrap()
         .unwrap();
     assert!(normalized[0].value == Some(Value::String(source)));

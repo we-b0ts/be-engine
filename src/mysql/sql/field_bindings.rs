@@ -1,6 +1,6 @@
 //! Resolve direct SQL value occurrences to physical columns without changing SQL.
 //! Indexed parser placeholders retain our lexer's exact scalar and bind identity.
-use super::{Token, render};
+use super::{Token, render_with_slots};
 use sqlparser::{
     ast::{
         Assignment, AssignmentTarget, BinaryOperator, Expr, FromTable, ObjectName, SelectItem,
@@ -128,28 +128,18 @@ fn shape(tokens: &[Token]) -> Option<String> {
     if tokens.len() > super::bounds::MAX_TOKENS || tokens.iter().any(|t| t.is(";")) {
         return None;
     }
-    let parser_tokens = tokens
-        .iter()
-        .enumerate()
-        .map(|(index, token)| {
-            // NULL is a direct value except in the IS [NOT] NULL grammar.
-            // Replacing that predicate keyword would make otherwise supported
-            // statements unparsable and hide unrelated selected assignments.
-            let null_predicate = *token == Token::Null
-                && (index >= 1 && tokens[index - 1].is("is")
-                    || index >= 2 && tokens[index - 2].is("is") && tokens[index - 1].is("not"));
-            if matches!(
-                token,
-                Token::Number(_) | Token::Bytes(_) | Token::Placeholder
-            ) || *token == Token::Null && !null_predicate
-            {
-                Token::Symbol(format!("?{index}"))
-            } else {
-                token.clone()
-            }
-        })
-        .collect::<Vec<_>>();
-    Some(render(&parser_tokens))
+    Some(render_with_slots(tokens, |index, token| {
+        // NULL is a direct value except in the IS [NOT] NULL grammar.
+        // Replacing that predicate keyword would make otherwise supported
+        // statements unparsable and hide unrelated selected assignments.
+        let null_predicate = *token == Token::Null
+            && (index >= 1 && tokens[index - 1].is("is")
+                || index >= 2 && tokens[index - 2].is("is") && tokens[index - 1].is("not"));
+        matches!(
+            token,
+            Token::Number(_) | Token::Bytes(_) | Token::Placeholder
+        ) || *token == Token::Null && !null_predicate
+    }))
 }
 
 fn parse(shape: &str) -> Option<Statement> {

@@ -23,11 +23,11 @@ pub(crate) fn tokens(sql: &str) -> Option<Vec<Token>> {
     super::tokens(sql).filter(|tokens| tokens.len() <= MAX_TOKENS)
 }
 
-pub(crate) fn statement_with_spans(sql: &str) -> Option<(Vec<Token>, Vec<std::ops::Range<usize>>)> {
+pub(crate) fn statement_with_spans(sql: &str) -> Option<super::lexical_cache::Lexed> {
     if sql.len() > MAX_STATEMENT_BYTES {
         return None;
     }
-    super::tokens_with_spans(sql).filter(|(tokens, _)| valid(tokens))
+    super::tokens_with_spans_shared(sql).filter(|(tokens, _)| valid(tokens))
 }
 
 fn valid(tokens: &[Token]) -> bool {

@@ -1,7 +1,7 @@
 //! Derived comparison copies compose attested identities with ordinary SQL fields.
 use super::*;
 use crate::policy::{CompiledPolicy, Resource};
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 pub(crate) struct IdentityPreflight<'a> {
     pub policy: &'a CompiledPolicy,
@@ -80,10 +80,10 @@ pub(crate) fn normalize_identity_witnesses(
         return Ok(None);
     };
     let normalized = normalized?;
-    if normalized.source_sql == source.sql
-        && normalized.source_params == source.params
-        && normalized.actual_sql == target.sql
-        && normalized.actual_params == target.params
+    if normalized.source_sql.as_deref() == source.sql.as_deref()
+        && normalized.source_params.as_deref() == source.params.as_deref()
+        && normalized.actual_sql.as_deref() == target.sql.as_deref()
+        && normalized.actual_params.as_deref() == target.params.as_deref()
     {
         return Ok(None);
     }
@@ -91,10 +91,16 @@ pub(crate) fn normalize_identity_witnesses(
         context.clocks.dependency.source.is_some(),
         "SQL identity Source clock missing"
     );
-    source.sql = normalized.source_sql;
-    source.params = normalized.source_params;
-    target.sql = normalized.actual_sql;
-    target.params = normalized.actual_params;
+    let (source_sql, source_params, target_sql, target_params) = (
+        normalized.source_sql.map(Cow::into_owned),
+        normalized.source_params.map(Cow::into_owned),
+        normalized.actual_sql.map(Cow::into_owned),
+        normalized.actual_params.map(Cow::into_owned),
+    );
+    source.sql = source_sql;
+    source.params = source_params;
+    target.sql = target_sql;
+    target.params = target_params;
     Ok(Some(NormalizedIdentityWitnesses {
         source: serde_json::to_vec(&source)?,
         target: serde_json::to_vec(&target)?,

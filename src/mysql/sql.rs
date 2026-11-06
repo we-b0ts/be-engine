@@ -430,12 +430,22 @@ pub(crate) fn normalize(sql: &str) -> String {
 }
 
 pub(crate) fn render(tokens: &[Token]) -> String {
+    render_with_slots(tokens, |_, _| false)
+}
+
+fn render_with_slots(tokens: &[Token], slot: impl Fn(usize, &Token) -> bool) -> String {
+    use std::fmt::Write;
+
     let mut out = String::new();
     for (i, token) in tokens.iter().enumerate() {
         let tight_left = ["(", ")", ",", ".", "="].iter().any(|s| token.is(s));
         let tight_right = i > 0 && ["(", ".", "="].iter().any(|s| tokens[i - 1].is(s));
         if i > 0 && !tight_left && !tight_right {
             out.push(' ');
+        }
+        if slot(i, token) {
+            write!(out, "?{i}").unwrap();
+            continue;
         }
         match token {
             Token::Word(s) | Token::Number(s) | Token::Symbol(s) => out.push_str(s),
@@ -459,7 +469,6 @@ pub(crate) fn render(tokens: &[Token]) -> String {
                     }
                     out.push('\'');
                 } else {
-                    use std::fmt::Write;
                     out.push_str("X'");
                     for byte in value {
                         write!(out, "{byte:02x}").unwrap();
