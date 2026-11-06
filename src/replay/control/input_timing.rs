@@ -151,9 +151,7 @@ pub(super) async fn accept(
                 (false, Some(start)) => state.redis.timing_evidence(case, start)?,
                 (false, None) => (Vec::new(), false),
             };
-            // Keep immutable metadata ordered independently of the wire-success
-            // journal. Delivery hooks do not rescan this inventory per push.
-            evidence.sort_unstable_by_key(|entry| entry.reference);
+            evidence.sort_unstable_by_key(|entry| entry.completed_at);
             let plan = source::Plan {
                 covered: plan.covered && covered,
                 ..plan
@@ -192,7 +190,17 @@ pub(super) async fn accept(
             .input_timing
             .as_ref()
             .context("input timing metadata missing")?;
+        let waiting_for_state = MonoInstant::now();
         let mut state = shared.lock().await;
+        let state_wait = waiting_for_state.elapsed();
+        if state_wait >= Duration::from_millis(250) {
+            tracing::warn!(
+                case_id = case,
+                sequence = query.sequence,
+                state_wait_ms = state_wait.as_millis(),
+                "Socket.IO input feedback waited for Replay state"
+            );
+        }
         ensure_live(&state, case)?;
         let live = state
             .input_timing
@@ -207,13 +215,14 @@ pub(super) async fn accept(
         if live.fast.is_some() {
             return fast::advance(&mut state, request.command == "input_timing_tail", query);
         }
-        let action = live
+        let action_index = live
             .plan
             .input
             .actions
             .iter()
-            .find(|action| action.sequence == query.sequence)
+            .position(|action| action.sequence == query.sequence)
             .context("input timing sequence outside original program")?;
+        let action = &live.plan.input.actions[action_index];
         ensure!(
             query.completed.len() <= action.after.len()
                 && query.completed.iter().all(|id| action.after.contains(id)),
@@ -235,37 +244,22 @@ pub(super) async fn accept(
                     DeliveryReference::NativePush(_) => false,
                 }
         };
-        let ready = live
-            .evidence
-            .iter()
-            .filter(|e| cutoff.is_some_and(|cutoff| e.completed_at < cutoff))
-            .all(&delivered);
-        let prefix_ready = live
-            .evidence
-            .iter()
-            .filter(|e| e.individual && cutoff.is_some_and(|cutoff| e.completed_at < cutoff))
-            .all(delivered);
+        let prefix_end = cutoff.map_or(0, |cutoff| {
+            live.evidence
+                .partition_point(|e| e.completed_at < cutoff)
+        });
+        let prefix = &live.evidence[..prefix_end];
         // Input offsets are floor milliseconds. A completion in that same
         // millisecond cannot prove whether it precedes or follows this input.
         let boundary_clear = cutoff.is_some_and(|cutoff| {
-            live.evidence.iter().all(|e| {
-                e.completed_at < cutoff
-                    || e.completed_at >= cutoff + chrono::TimeDelta::milliseconds(1)
+            live.evidence.get(prefix_end).is_none_or(|e| {
+                e.completed_at >= cutoff + chrono::TimeDelta::milliseconds(1)
             })
         });
-        let live = state.input_timing.as_mut().expect("validated timeline");
-        let action = live
-            .plan
-            .input
-            .actions
-            .iter()
-            .find(|action| action.sequence == query.sequence)
-            .expect("validated sequence");
-        let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let eligible = live.mode == SocketIoTiming::Auto
+        let auto = live.mode == SocketIoTiming::Auto && !live.plan.input.policy.preserve_input_timing;
+        let eligible = auto
             && live.plan.covered
             && boundary_clear
-            && !live.plan.input.policy.preserve_input_timing
             && action.compressible_gap
             && !cancellation(action)
             && action.after.iter().all(|id| query.completed.contains(id))
@@ -275,6 +269,14 @@ pub(super) async fn accept(
                 .socket_io_heartbeat
                 .as_ref()
                 .is_some_and(|h| h.responses.is_empty());
+        let ready = eligible && prefix.iter().all(&delivered);
+        let prefix_pending = auto
+            && cutoff.is_some()
+            && delivery_prefix(action)
+            && !prefix.iter().filter(|e| e.individual).all(delivered);
+        let live = state.input_timing.as_mut().expect("validated timeline");
+        let action = &live.plan.input.actions[action_index];
+        let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if eligible && ready && live.advanced.insert(action.sequence) {
             let before = live.clock.removed_ms();
             live.clock.compress(
@@ -300,11 +302,6 @@ pub(super) async fn accept(
         // for compression, not for honoring these independently proven edges.
         // Only business events wait: native ACKs can complete an RPC in this
         // prefix, and protocol heartbeat/cancellation remain independent.
-        let prefix_pending = live.mode == SocketIoTiming::Auto
-            && !live.plan.input.policy.preserve_input_timing
-            && cutoff.is_some()
-            && delivery_prefix(action)
-            && !prefix_ready;
         let retry = if prefix_pending {
             10
         } else if eligible && !ready {
