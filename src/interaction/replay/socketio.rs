@@ -195,6 +195,13 @@ pub(super) async fn execute_with_feedback(
                 async move { timing.wait(sequence, completed).await },
             ));
         }
+        // An input released on its original deadline can be later than the
+        // compressed clock. Pace ordered closes from the preceding actual send.
+        let ordered_close_due = admitted
+            .filter(|action| ordered_fast && !tail_compressed && cancellation(action))
+            .map(|action| {
+                last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset))
+            });
         let due = admitted.and_then(|action| {
             if matches!(action.action, InputActionKind::TransportEnd { .. }) {
                 return Some(
@@ -243,6 +250,7 @@ pub(super) async fn execute_with_feedback(
                 transcript.policy.input_gap_ms,
             )
         });
+        let due = due.into_iter().chain(ordered_close_due).max();
         let lifecycle_deadline = session_deadline(transcript, &observed, next, started);
         // A recorded transport cancellation must remain available while an
         // earlier input is waiting for an ACK, namespace or dependency delivery.
@@ -269,7 +277,7 @@ pub(super) async fn execute_with_feedback(
                 if dependency_failure.as_ref().is_some_and(|failure|*failure.borrow()) {break (EndReason::DependencyFailure,false);}
                 dependency_failure=None;
             }
-            _ = sleep_until(cancel_due.unwrap_or(lifecycle_deadline)), if cancel_due.is_some_and(|cancel| due.is_none_or(|due| due > cancel)) => {
+            _ = sleep_until(cancel_due.unwrap_or(lifecycle_deadline)), if ordered_close_due.is_none() && cancel_due.is_some_and(|cancel| due.is_none_or(|due| due > cancel)) => {
                 let action = cancel.expect("cancellation deadline");
                 let deadline = Instant::now() + Duration::from_millis(transcript.policy.cleanup_timeout_ms);
                 match &action.action {

@@ -67,6 +67,104 @@ async fn ordered_fast_replays_at_the_source_deadline_when_a_request_is_missing()
 }
 
 #[tokio::test]
+async fn ordered_fast_preserves_close_gaps_after_input_at_original_deadline() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut request = input(400);
+    let actions = request["interaction"]["actions"].as_array_mut().unwrap();
+    actions.truncate(3);
+    actions.extend([
+        serde_json::to_value(action(4, 700, r#"423["work"]"#)).unwrap(),
+        serde_json::to_value(action(5, 760, "41")).unwrap(),
+        serde_json::to_value(action(6, 840, "1")).unwrap(),
+    ]);
+    std::fs::create_dir_all(temp.path().join("case")).unwrap();
+    std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
+    let mut get = recorded_exchange(
+        Uuid::new_v4(),
+        1,
+        "GET",
+        &[b"heartbeat"],
+        b"+OK\r\n",
+        "2020-01-01T00:00:00.700984Z",
+        "2020-01-01T00:00:00.702Z",
+    );
+    get["response_kind"] = "simple_string".into();
+    let runtime = runtime(temp.path(), &[get], &[], true).await.unwrap();
+    enable(&runtime).await;
+    let (session, control) = serve_control(temp.path(), &runtime).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let target = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket
+            .send(Message::Text(
+                r#"0{"sid":"live","pingInterval":10000,"pingTimeout":10000}"#.into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(text(&mut socket).await, "40");
+        socket
+            .send(Message::Text(r#"40{"sid":"ns"}"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(text(&mut socket).await, r#"421["work"]"#);
+        socket
+            .send(Message::Text(r#"431["ok"]"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(250), text(&mut socket))
+                .await
+                .unwrap(),
+            r#"422["work"]"#
+        );
+        socket
+            .send(Message::Text(r#"432["ok"]"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(text(&mut socket).await, r#"423["work"]"#);
+        let input_at = Instant::now();
+        let (mut redis, redis_task) = connect(&runtime).await;
+        assert_eq!(send(&mut redis, &[b"GET", b"heartbeat"]).await, b"+OK\r\n");
+        socket
+            .send(Message::Text(r#"433["ok"]"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(text(&mut socket).await, "41");
+        assert!(input_at.elapsed() >= Duration::from_millis(50));
+        let disconnect_at = Instant::now();
+        assert_eq!(text(&mut socket).await, "1");
+        assert!(disconnect_at.elapsed() >= Duration::from_millis(70));
+        socket.send(Message::Close(None)).await.unwrap();
+        redis_task.abort();
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        crate::recorded_request::RecordedHttpClient::new(
+            format!("http://{addr}"),
+            Duration::from_secs(3),
+            1024 * 1024,
+        )
+        .with_input_registration(&session, "case")
+        .send_bytes(&serde_json::to_vec(&request).unwrap(), "ordered-fast"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let observation = result.interaction.unwrap();
+    assert!(observation.end.clean);
+    assert!(
+        observation
+            .events
+            .iter()
+            .any(|event| event.message.data == r#"433["ok"]"#)
+    );
+    target.await.unwrap();
+    control.abort();
+}
+
+#[tokio::test]
 async fn ordered_fast_advances_on_request_admission_and_closes_after_tail_delivery() {
     let temp = tempfile::tempdir().unwrap();
     let mut request = input(30_000);
