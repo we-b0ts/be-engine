@@ -249,11 +249,13 @@ Replay scheduling and output offsets use milliseconds.
 For a clean Source business-idle or completed client-close tail, Fast can
 shorten the remaining quiet once the actual output and dependency delivery
 requirements are met. Fast can also skip a direct WebSocket heartbeat tail
-when the last Source Engine.IO PING was unanswered, the clean server close
-followed after the declared `pingTimeout`, and no input or dependency activity
-remained in the tail. Replay waits for the real Target output frames, matching
-native ACK receipts and required dependency deliveries before releasing the connection
-without sending a close frame. The actual response reports
+when the last Source Engine.IO PING was unanswered and the clean server close
+followed after the declared `pingTimeout`. Replay replies to live Target PINGs
+while it verifies the Source EOF prefix. It waits for the real Target output
+frames, matching native ACK receipts and required dependency deliveries before
+releasing the connection without sending a close frame. Recorded one-way inputs
+retain their pending identities and are checked through the output and dependency
+prefix. The actual response reports
 `fast_heartbeat_tail_skipped` and still undergoes business comparison and
 dependency audit. Use recorded timing to verify Target's own heartbeat timeout
 and server close. Other server closures, client cancellation with pending work

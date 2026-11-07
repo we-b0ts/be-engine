@@ -23,6 +23,7 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
                 output_count: 3,
                 idle_ms: 5,
                 heartbeat_acks: Some([2].into()),
+                heartbeat_pending_without_ack: Default::default(),
                 native_observation: false,
             })
         }
@@ -39,6 +40,7 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
     let address = listener.local_addr().unwrap();
     let (input_received, received) = oneshot::channel();
     let (send_ack, wait_ack) = oneshot::channel();
+    let (tail_pong, received_tail_pong) = oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -61,12 +63,23 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
                 .unwrap()
                 .starts_with("421")
         );
+        socket.send(Message::Text("2".into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "3"
+        );
         input_received.send(()).unwrap();
         wait_ack.await.unwrap();
         socket
             .send(Message::Text(r#"431["ok"]"#.into()))
             .await
             .unwrap();
+        socket.send(Message::Text("2".into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "3"
+        );
+        tail_pong.send(()).unwrap();
         assert!(
             matches!(socket.next().await, None | Some(Err(_))),
             "the engine should release TCP without sending a WebSocket or Engine.IO frame"
@@ -104,6 +117,7 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
         assert!(!replay.is_finished());
         send_ack.send(()).unwrap();
         timing.reached.notified().await;
+        received_tail_pong.await.unwrap();
         assert!(!replay.is_finished());
         timing.dependencies_delivered.notify_one();
         let actual = replay.await.unwrap().observation;

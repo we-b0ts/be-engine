@@ -62,6 +62,7 @@ struct Tail {
     policy: FastTail,
     cutoff: u64,
     quiet_from: u64,
+    heartbeat_dependency_cutoff_us: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -69,6 +70,7 @@ pub(super) struct Plan {
     source: Source,
     handles: Vec<ExchangeHandle>,
     dispatch_windows: BTreeMap<u64, NativeDispatch>,
+    heartbeat_request_count: Option<usize>,
 }
 
 impl Source {
@@ -83,7 +85,7 @@ impl Source {
             cap,
             covered: true,
             requests: Vec::new(),
-            tail: Tail::load(path, input, cap).unwrap_or_default(),
+            tail: Tail::load(path, input, cap, start).unwrap_or_default(),
             passive: passive_proof(path, input).ok().flatten(),
         }
     }
@@ -161,16 +163,9 @@ impl Source {
             .map(|request| request.reference)
             .collect::<Vec<_>>();
         let handles = resolve_case(state, case, &refs, |_, handle| handle)?;
-        if self.tail.as_ref().is_some_and(|tail| {
-            tail.policy.heartbeat_acks.is_some()
-                && self
-                    .requests
-                    .last()
-                    .is_some_and(|request| request.started_us / 1_000 >= tail.cutoff)
-        }) {
-            self.tail = None;
-        }
-        if let Some(tail) = &mut self.tail {
+        if let Some(tail) = &mut self.tail
+            && tail.heartbeat_dependency_cutoff_us.is_none()
+        {
             for request in self
                 .requests
                 .iter()
@@ -204,10 +199,12 @@ impl Source {
                     output_count: passive.output_count,
                     idle_ms: 0,
                     heartbeat_acks: Some(BTreeSet::new()),
+                    heartbeat_pending_without_ack: BTreeSet::new(),
                     native_observation: true,
                 },
                 cutoff: passive.end_ms,
                 quiet_from: passive.last_output_ms,
+                heartbeat_dependency_cutoff_us: None,
             });
             tracing::info!(
                 case_id = case,
@@ -238,10 +235,19 @@ impl Source {
                 previous = to;
             }
         }
+        let heartbeat_request_count = self
+            .tail
+            .as_ref()
+            .and_then(|tail| tail.heartbeat_dependency_cutoff_us)
+            .map(|cutoff| {
+                self.requests
+                    .partition_point(|request| request.started_us < cutoff)
+            });
         Ok(Plan {
             source: self,
             handles,
             dispatch_windows,
+            heartbeat_request_count,
         })
     }
 }
@@ -426,7 +432,10 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
         let ready = if tail.policy.heartbeat_acks.is_some() {
             // Native omission proof can settle an unstarted setup/cleanup
             // exchange. An ordinary dependency must finish on the wire.
-            plan.handles.iter().all(|handle| {
+            let count = plan
+                .heartbeat_request_count
+                .context("heartbeat EOF dependency prefix unavailable")?;
+            plan.handles[..count].iter().all(|handle| {
                 handle.delivery_state(state) == Some(ReplayExchangeStatus::Consumed)
                     || handle.permits_unstarted_omission(state, false, true)
             })
@@ -570,12 +579,19 @@ fn offset(start: DateTime<Utc>, at: DateTime<Utc>) -> Option<u64> {
 }
 
 impl Tail {
-    fn load(path: &Path, input: &InputTranscript, cap: u64) -> Result<Option<Self>> {
+    fn load(
+        path: &Path,
+        input: &InputTranscript,
+        cap: u64,
+        start: DateTime<Utc>,
+    ) -> Result<Option<Self>> {
         use std::io::{BufReader, Seek};
 
         #[derive(Deserialize)]
         struct Response {
             interaction: Option<Completion>,
+            timestamp: Option<Value>,
+            duration_ms: Option<Value>,
         }
         #[derive(Deserialize)]
         struct Completion {
@@ -670,16 +686,38 @@ impl Tail {
             .max()
             .unwrap_or(0)
             .max(last_input);
+        let heartbeat_dependency_cutoff_us = heartbeat.as_ref().map(|_| {
+            // Source event offsets are relative to the interaction, while
+            // dependency request times are relative to the API request clock.
+            response
+                .timestamp
+                .as_ref()
+                .and_then(time)
+                .zip(response.duration_ms.as_ref().and_then(Value::as_u64))
+                .and_then(|(published, duration)| {
+                    let publication_lag = i64::try_from(duration.checked_sub(cutoff)?).ok()?;
+                    let eof = published.checked_sub_signed(chrono::TimeDelta::try_milliseconds(
+                        publication_lag,
+                    )?)?;
+                    u64::try_from((eof - start).num_microseconds()?).ok()
+                })
+                .unwrap_or_else(|| cutoff.saturating_mul(1_000))
+        });
+        let (heartbeat_acks, heartbeat_pending_without_ack) = heartbeat
+            .map(|proof| (Some(proof.acknowledged), proof.pending_without_ack))
+            .unwrap_or_default();
         let tail = (quiet_from < cutoff).then(|| Self {
             policy: FastTail {
                 close_sequence,
                 output_count: outputs.count(),
                 idle_ms: cap.min(cutoff.saturating_sub(quiet_from)),
-                heartbeat_acks: heartbeat.map(|evidence| evidence.acknowledged),
+                heartbeat_acks,
+                heartbeat_pending_without_ack,
                 native_observation: false,
             },
             cutoff,
             quiet_from,
+            heartbeat_dependency_cutoff_us,
         });
         Ok(tail)
     }
@@ -701,4 +739,41 @@ fn passive_proof(path: &Path, input: &InputTranscript) -> Result<Option<heartbea
         input,
         &response.interaction,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interaction::{model::WireMessage, observation::Observation};
+
+    #[test]
+    fn heartbeat_dependency_boundary_uses_the_source_interaction_clock() {
+        let mut observed = Observation::new(Protocol::SocketIo, Default::default()).unwrap();
+        observed
+            .output(
+                WireMessage::text(r#"0{"sid":"s","pingInterval":25,"pingTimeout":20}"#),
+                0,
+            )
+            .unwrap();
+        observed.output(WireMessage::text("2"), 25).unwrap();
+        observed.server_close(Some(1000), String::new());
+        let (input, output) = observed.finish(EndReason::ServerEof, 71, true).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("expected-response.json"),
+            serde_json::json!({
+                "timestamp": "2026-11-07T00:00:00.201Z",
+                "duration_ms": 171,
+                "interaction": output,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let start = "2026-11-07T00:00:00Z".parse().unwrap();
+        let tail = Tail::load(directory.path(), &input, 5, start)
+            .unwrap()
+            .unwrap();
+        assert_eq!(tail.cutoff, 71);
+        assert_eq!(tail.heartbeat_dependency_cutoff_us, Some(101_000));
+    }
 }

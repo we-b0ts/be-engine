@@ -17,6 +17,7 @@ use crate::interaction::{
 pub(crate) struct Evidence {
     pub eof_ms: u64,
     pub acknowledged: BTreeSet<u64>,
+    pub pending_without_ack: BTreeSet<u64>,
 }
 
 pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Evidence> {
@@ -46,15 +47,35 @@ pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> 
         }
     }
     decoder.finish().ok()?;
-    output
-        .end
-        .pending
-        .iter()
-        .all(|id| receipts.acknowledged.contains(id))
-        .then_some(Evidence {
-            eof_ms,
-            acknowledged: receipts.acknowledged,
-        })
+    let mut pending_without_ack = BTreeSet::new();
+    for &id in &output.end.pending {
+        if receipts.acknowledged.contains(&id) {
+            continue;
+        }
+        // A recorded one-way event has no native receipt to wait for. Its
+        // observable work is instead checked by the full EOF dependency prefix.
+        let index = input
+            .actions
+            .binary_search_by_key(&id, |action| action.sequence)
+            .ok()?;
+        let InputActionKind::Message { message } = &input.actions[index].action else {
+            return None;
+        };
+        if message.kind != MessageKind::Text
+            || !matches!(decode_engine_io_text(&message.data, limit).ok()?,
+                EngineIoPacket::Message(packet)
+                    if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent)
+                        && packet.id.is_none())
+        {
+            return None;
+        }
+        pending_without_ack.insert(id);
+    }
+    Some(Evidence {
+        eof_ms,
+        acknowledged: receipts.acknowledged,
+        pending_without_ack,
+    })
 }
 
 fn is_ping(event: &crate::interaction::model::OutputEvent) -> bool {
@@ -190,13 +211,17 @@ mod tests {
         source
             .output(WireMessage::text(r#"437[true]"#), 31)
             .unwrap();
+        let one_way = source
+            .input(WireMessage::text(r#"42["one-way"]"#), 32)
+            .unwrap();
         source.server_close(Some(1000), String::new());
         let (input, output) = source.finish(EndReason::ServerEof, 51, true).unwrap();
         let proof = recognize(&input, &output).unwrap();
         assert_eq!(proof.eof_ms, 51);
         assert_eq!(proof.acknowledged, [work.sequence].into());
+        assert_eq!(proof.pending_without_ack, [one_way.sequence].into());
 
-        source.input(WireMessage::text("3"), 32).unwrap();
+        source.input(WireMessage::text("3"), 33).unwrap();
         let (ambiguous, output) = source.finish(EndReason::ServerEof, 51, true).unwrap();
         assert!(timeout(&ambiguous, &output).is_none());
     }

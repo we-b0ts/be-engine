@@ -57,13 +57,27 @@ pub(crate) struct FastTail {
     pub idle_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat_acks: Option<std::collections::BTreeSet<u64>>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub heartbeat_pending_without_ack: std::collections::BTreeSet<u64>,
     #[serde(default)]
     pub native_observation: bool,
 }
 
 impl FastTail {
-    pub(super) fn heartbeat_outputs_ready(&self, observed: usize, pongs_complete: bool) -> bool {
-        observed >= self.output_count && (self.native_observation || pongs_complete)
+    pub(super) fn heartbeat_outputs_ready(
+        &self,
+        observed: usize,
+        receipts: &std::collections::BTreeSet<u64>,
+        pending: &[u64],
+    ) -> bool {
+        observed >= self.output_count
+            && self
+                .heartbeat_acks
+                .as_ref()
+                .is_some_and(|required| required.is_subset(receipts))
+            && pending
+                .iter()
+                .all(|id| receipts.contains(id) || self.heartbeat_pending_without_ack.contains(id))
     }
 
     pub(super) fn business_idle_due(

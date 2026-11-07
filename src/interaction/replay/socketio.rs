@@ -91,7 +91,10 @@ pub(super) async fn execute_with_feedback(
     let mut tail_compressed = false;
     let mut output_count = 0;
     let mut last_output = started;
-    let mut heartbeats = heartbeat::Heartbeats::new(transcript);
+    let mut heartbeats = heartbeat::Heartbeats::new(
+        transcript,
+        heartbeat_acks.is_some() && transport.is_websocket(),
+    );
     let mut namespaces = namespace::Admission::default();
     let has_transport_end = transcript
         .actions
@@ -206,21 +209,20 @@ pub(super) async fn execute_with_feedback(
             dispatch.events_arrived();
         }
         let at_fast_tail = fast_tail.as_ref().is_some_and(|tail| {
-            let ready = if let Some(required) = heartbeat_acks {
-                transport.is_websocket()
-                    && tail.heartbeat_outputs_ready(output_count, heartbeats.complete(true))
-                    && required.is_subset(&native_receipts.acknowledged)
-                    && observed
-                        .pending()
-                        .iter()
-                        .all(|id| native_receipts.acknowledged.contains(id))
-            } else {
-                output_count >= tail.output_count && observed.pending().is_empty()
+            let at_boundary = match tail.close_sequence {
+                Some(sequence) => admitted.is_some_and(|action| action.sequence == sequence),
+                None => action.is_none(),
             };
-            ready
-                && match tail.close_sequence {
-                    Some(sequence) => admitted.is_some_and(|action| action.sequence == sequence),
-                    None => action.is_none(),
+            at_boundary
+                && if heartbeat_acks.is_some() {
+                    transport.is_websocket()
+                        && tail.heartbeat_outputs_ready(
+                            output_count,
+                            &native_receipts.acknowledged,
+                            &observed.pending(),
+                        )
+                } else {
+                    output_count >= tail.output_count && observed.pending().is_empty()
                 }
         });
         if at_fast_tail

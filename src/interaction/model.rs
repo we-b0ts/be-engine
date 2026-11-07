@@ -344,7 +344,10 @@ impl EndObservation {
         // still needs to be isolated from the next Case.
         self.observes_close_tail(protocol)
             || (protocol == Protocol::SocketIo
-                && self.reason == EndReason::ServerEof
+                && matches!(
+                    self.reason,
+                    EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped
+                )
                 && !self.pending.is_empty())
     }
 }
