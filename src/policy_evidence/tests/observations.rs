@@ -43,6 +43,71 @@ fn source_occurrence_lookup_keeps_slots_and_source_clocks_separate() {
 }
 
 #[test]
+fn prepared_request_source_requires_the_original_case_clock_and_target_domain() {
+    let (_temp, artifacts, store, mut source) = setup();
+    source.target_role = TargetRole::Unavailable;
+    source.clocks.case.source = DateTime::from_timestamp(100, 0);
+    assert!(
+        store
+            .record(source.clone(), &artifacts, b"source", None)
+            .unwrap()
+            .is_some()
+    );
+    let prepared = store.prepare_request_source(&source).unwrap().unwrap();
+    let mut different_clock = source.clone();
+    different_clock.clocks.case.source = DateTime::from_timestamp(101, 0);
+    assert!(
+        store
+            .prepare_request_source(&different_clock)
+            .unwrap()
+            .is_none()
+    );
+
+    let mut target = TargetMetadata::from_pair(&source);
+    target.role = TargetRole::IndependentTargetObservation;
+    store
+        .record_target("matching", target.clone(), &artifacts, b"target")
+        .unwrap();
+    target.case_id = "different-case".into();
+    store
+        .record_target("foreign", target, &artifacts, b"foreign")
+        .unwrap();
+    let matching = store.prepare_request_association("matching").unwrap();
+    let foreign = store.prepare_request_association("foreign").unwrap();
+    assert!(
+        !matching
+            .associate_prepared(&prepared, different_clock.clocks.case.source)
+            .unwrap()
+    );
+    assert!(
+        !foreign
+            .associate_prepared(&prepared, source.clocks.case.source)
+            .unwrap()
+    );
+    assert!(
+        matching
+            .associate_prepared(&prepared, source.clocks.case.source)
+            .unwrap()
+    );
+
+    let manifest = store.sealed_manifest().unwrap();
+    let graph = manifest.observations.as_ref().unwrap();
+    assert!(manifest.complete);
+    assert_eq!(graph.association_attempts, 1);
+    assert_eq!(graph.targets.len(), 2);
+    assert_eq!(graph.associations.len(), 1);
+    let witnesses = manifest.witnesses().unwrap();
+    let pair = witnesses
+        .iter()
+        .find(|witness| witness.target_observation_id.is_some())
+        .unwrap();
+    let path = verify(&artifacts.join("replay.json"), &manifest).unwrap();
+    let (recorded, actual) = read(&path, pair, &artifacts).unwrap();
+    assert_eq!(recorded, b"source");
+    assert_eq!(actual.unwrap(), b"target");
+}
+
+#[test]
 fn run_target_without_a_case_is_authenticated_and_cannot_borrow_a_primary_clock() {
     let (_temp, artifacts, _old, source) = setup();
     let session = uuid::Uuid::new_v4().to_string();

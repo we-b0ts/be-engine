@@ -140,7 +140,9 @@ impl ReplayState {
             Some("commit" | "rollback")
         );
         let mut baseline_semantic_target = None;
+        let mut baseline_projection = None;
         let mut projection_candidate = None;
+        let mut strict_groups = std::collections::HashMap::new();
         let mut transaction_rejection = None;
         let actual_autocommit = sql
             .and_then(crate::mysql::autocommit::assignment)
@@ -187,12 +189,32 @@ impl ReplayState {
             // projections, without allowing Global to outrank the active Case.
             // An authoritative socket witness admits exactly one end. Avoid
             // collecting the scope only to reject all of its other candidates.
+            let window = if source == ReplaySource::Case
+                && !legacy_sql_selector
+                && !allow_hypotheses
+                && transaction_end.is_none()
+            {
+                active_case_id
+                    .as_deref()
+                    .zip(select_hint.as_ref())
+                    .zip(self.input_timing.as_ref())
+                    .and_then(|((case, hint), timeline)| {
+                        self.mysql.candidates.select_window(
+                            case,
+                            identity,
+                            command,
+                            &hint.table,
+                            timeline,
+                        )
+                    })
+            } else {
+                None
+            };
             let candidates = if let Some((index, _)) = &hypothesis {
                 Some(std::sync::Arc::from(vec![*index]))
             } else {
-                transaction_end.is_none().then(|| {
-                    self.mysql.candidates.select(
-                        &self.mysql.exchanges,
+                (transaction_end.is_none() && window.is_none()).then(|| {
+                    self.mysql.candidates.lookup(
                         source,
                         active_case_id.as_deref(),
                         identity,
@@ -202,10 +224,14 @@ impl ReplayState {
             };
             for foreign in [false, true] {
                 for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                    for index in preferred_end
+                    let mut indices = preferred_end
                         .into_iter()
-                        .chain(candidates.as_deref().unwrap_or_default().iter().copied())
-                    {
+                        .chain(window.as_ref().into_iter().flat_map(|window| window.iter()))
+                        .chain(candidates.as_deref().unwrap_or_default().iter().copied());
+                    loop {
+                        let Some(index) = indices.next() else {
+                            break;
+                        };
                         if !self.mysql.candidates.permits_sql(index, sql_family) {
                             continue;
                         }
@@ -287,15 +313,14 @@ impl ReplayState {
                             && !std::mem::replace(&mut witnessed[index], true)
                             && let (Some(policy), Some(case)) =
                                 (&self.replay_policy, active_case_id.as_deref())
-                            && let Some(observation_id) = observation_id
                             && let Err(error) = contracts::record_request(
                                 &policy.request_contracts,
                                 case,
                                 identity,
                                 &exchange.record,
-                                observation_id,
-                                request_observed_at,
+                                observation,
                                 &mut candidate_witness,
+                                self.mysql.request_sources.get(index).and_then(Option::as_ref),
                             )
                         {
                             self.mysql
@@ -383,6 +408,9 @@ impl ReplayState {
                             .or(params);
                         let sql_changed = !same_input(sql, observed_sql);
                         let target_changed = sql_changed || !same_input(params, observed_params);
+                        let sql_group = (!target_changed && normalized_exchange.is_none())
+                            .then(|| self.mysql.candidates.sql_group(index))
+                            .flatten();
                         let dynamic_normalized_sql =
                             sql_changed.then(|| sql.map(normalize_sql)).flatten();
                         let normalized_sql = dynamic_normalized_sql
@@ -573,12 +601,17 @@ impl ReplayState {
                                 && !same_autocommit
                                 && !same_savepoint
                                 && !sql.is_some_and(|sql| {
-                                    sql_match::cross_protocol_matches(
-                                        &exchange.record,
-                                        command,
-                                        sql,
-                                        params,
-                                    )
+                                    let compare = || {
+                                        sql_match::cross_protocol_matches(
+                                            &exchange.record,
+                                            command,
+                                            sql,
+                                            params,
+                                        )
+                                    };
+                                    sql_group.map_or_else(compare, |group| {
+                                        *strict_groups.entry(group).or_insert_with(compare)
+                                    })
                                 })
                             {
                                 continue;
@@ -642,13 +675,21 @@ impl ReplayState {
                             // Reject parameter/policy mismatches before copying any rows.
                             let projected = if project_columns {
                                 let Some(response) = sql.and_then(|sql| {
-                                    projection::Candidate::compare(
-                                        &mut projection_candidate,
-                                        &exchange.record,
-                                        command,
-                                        sql,
-                                        params,
-                                    )
+                                    if target_changed {
+                                        return projection::Candidate::compare(
+                                            &mut projection_candidate,
+                                            &exchange.record,
+                                            command,
+                                            sql,
+                                            params,
+                                        );
+                                    }
+                                    baseline_projection
+                                        .get_or_insert_with(|| {
+                                            projection::Query::prepare(command, sql, params)
+                                        })
+                                        .as_mut()?
+                                        .grouped_response(&exchange.record, sql_group)
                                 }) else {
                                     continue;
                                 };
@@ -791,6 +832,8 @@ impl ReplayState {
                             &mut self.mysql.exchanges[index].status,
                             kind,
                         )?;
+                        drop(indices);
+                        self.mysql.candidates.claimed(index);
                         if let Some(policy) = &mut self.replay_policy {
                             if policy
                                 .commit(active_case_id.as_deref(), policy_decision)

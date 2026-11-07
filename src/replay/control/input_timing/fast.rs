@@ -253,6 +253,34 @@ impl Source {
 }
 
 impl Plan {
+    pub(super) fn mysql_candidate_cutoff(
+        &self,
+        live: &Live,
+        anchor: Option<DateTime<Utc>>,
+    ) -> Option<DateTime<Utc>> {
+        let anchor = anchor
+            .and_then(|at| u64::try_from((at - self.source.start).num_microseconds()?).ok())
+            .or_else(|| live.native_dispatch.map(|window| window.from.earliest_us()))
+            .unwrap_or_default();
+        let actions = &live.plan.input.actions;
+        let offset = |action: &InputAction| SourceOffset {
+            ms: action.offset_ms,
+            us: action.offset_us,
+        };
+        let start = actions.partition_point(|action| action.offset_ms <= anchor / 1_000);
+        let cutoff = actions[start..]
+            .iter()
+            .filter(|action| ordered_input(action))
+            .nth(2)
+            .map_or_else(
+                || anchor.saturating_add(1_000_000),
+                |action| offset(action).latest_us(),
+            );
+        self.source
+            .start
+            .checked_add_signed(chrono::TimeDelta::microseconds(i64::try_from(cutoff).ok()?))
+    }
+
     pub(super) fn tail(&self) -> Option<FastTail> {
         self.source.tail.as_ref().map(|tail| tail.policy.clone())
     }

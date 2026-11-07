@@ -1,7 +1,9 @@
 //! Complete SQL envelopes and explicit result-value delivery copies.
 use super::*;
 use crate::policy::{CompiledRule, Slot, Surface};
-use crate::policy_evidence::{AssociationOutcome, RequestAssociation, TargetRole, WitnessMetadata};
+use crate::policy_evidence::{
+    AssociationOutcome, PreparedRequestSource, RequestAssociation, TargetRole, WitnessMetadata,
+};
 use crate::value_contract::json::{AnchorClocks, Comparison};
 pub(in crate::replay) mod automatic;
 mod delivery;
@@ -230,14 +232,27 @@ pub(in crate::replay) fn record_request(
     case: &str,
     identity: &ReplaySessionIdentity,
     record: &RecordedMysqlExchange,
-    observation_id: Uuid,
-    observed: DateTime<Utc>,
+    observation: &crate::replay::admission::RequestAdmission,
     prepared: &mut Option<CandidateWitness>,
+    source: Option<&PreparedRequestSource>,
 ) -> Result<()> {
     if prepared.is_none() {
-        *prepared = Some(owner.prepare_mysql_candidate_witness(case, observation_id, observed)?);
+        let id = observation
+            .observation_id
+            .context("missing MySQL candidate observation identity")?;
+        let at = observation
+            .observed_at
+            .context("missing MySQL candidate observation clock")?;
+        *prepared = Some(owner.prepare_mysql_candidate_witness(case, id, at)?);
     }
     let prepared = prepared.as_ref().expect("MySQL candidate witness prepared");
+    if let Some(source) = source
+        && prepared
+            .target
+            .associate_prepared(source, prepared.clocks.case.source)?
+    {
+        return Ok(());
+    }
     let mut clocks = prepared.clocks;
     clocks.dependency.source = source_started(record);
     let metadata = owner.mysql_metadata(

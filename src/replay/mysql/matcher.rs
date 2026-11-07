@@ -20,6 +20,7 @@ pub(in crate::replay) struct MysqlReplayState {
     source_formats: source_formats::Cache,
     statement_metadata: statement_metadata::Cache,
     candidates: candidates::Candidates,
+    request_sources: Vec<Option<crate::policy_evidence::PreparedRequestSource>>,
     cleanup_selection: cleanup_selection::Index,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
     pub(in crate::replay) transaction_equivalence: transaction_equivalence::Registry,
@@ -66,11 +67,34 @@ impl MysqlReplayState {
         self.candidates.case_members(case)
     }
 
+    pub(in crate::replay) fn prepare_request_sources(
+        &mut self,
+        owner: &crate::replay::policy::request_contract::RequestContracts,
+        case: &str,
+        indices: &[usize],
+    ) -> Result<()> {
+        if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
+            return Ok(());
+        }
+        self.request_sources
+            .resize_with(self.exchanges.len(), || None);
+        let source_case_start = owner.request_times(case).source;
+        for &index in indices {
+            self.request_sources[index] = owner.prepare_mysql_request_source(
+                case,
+                &self.exchanges[index],
+                source_case_start,
+            )?;
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(in crate::replay) fn invalidate_scope_index(&mut self) {
         self.candidates = candidates::Candidates::default();
         self.cleanup_selection = cleanup_selection::Index::default();
         self.statement_metadata = statement_metadata::Cache::default();
+        self.request_sources.clear();
     }
     pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
         if exchange.source == ReplaySource::Case
@@ -350,6 +374,7 @@ impl ReplayState {
                 ) else {
                     continue;
                 };
+                self.mysql.candidates.claimed(index);
                 ticket.publish_wire();
                 if !self.mysql.lifecycle.complete(&ticket, &mut exchange.status) {
                     continue;

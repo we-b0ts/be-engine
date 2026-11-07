@@ -56,6 +56,7 @@ pub(super) struct Query {
     prepared: bool,
     params_present: bool,
     source_shapes: std::collections::HashMap<String, Option<DirectSelect>>,
+    source_groups: std::collections::HashMap<usize, Option<DirectSelect>>,
 }
 
 impl Query {
@@ -77,7 +78,32 @@ impl Query {
             prepared: command == "COM_STMT_EXECUTE",
             params_present: params.is_some(),
             source_shapes: Default::default(),
+            source_groups: Default::default(),
         })
+    }
+
+    pub(super) fn grouped_response(
+        &mut self,
+        record: &RecordedMysqlExchange,
+        group: Option<usize>,
+    ) -> Option<RecordedMysqlResponse> {
+        let Some(group) = group.filter(|_| !self.prepared || self.params_present) else {
+            return self.response(record);
+        };
+        if !complete_resultset(record) {
+            return None;
+        }
+        if !self.source_groups.contains_key(&group) {
+            if self.source_groups.len() >= 32 {
+                return self.response(record);
+            }
+            let source = self
+                .source_shape(record.sql.as_deref()?, None)
+                .filter(|shape| shape.body == self.actual.body);
+            self.source_groups.insert(group, source);
+        }
+        let source = self.source_groups.get(&group)?.as_ref()?;
+        project_response(record, column_mapping(record, source, &self.actual)?)
     }
 
     pub(super) fn response(

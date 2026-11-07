@@ -7,6 +7,8 @@ use crate::replay::native_index::{
 };
 use std::sync::Arc;
 mod family;
+mod groups;
+mod windows;
 pub(super) use family::classify as sql_family;
 pub(super) use family::select_hint;
 use family::{Family, SelectHint};
@@ -20,6 +22,8 @@ pub(super) struct Candidates {
     families: Vec<Option<Family>>,
     selects: Vec<Option<SelectHint>>,
     savepoints: Vec<Option<crate::mysql::savepoint::Command>>,
+    windows: windows::Windows,
+    groups: groups::Groups,
 }
 
 impl Default for Candidates {
@@ -32,6 +36,8 @@ impl Default for Candidates {
             families: Vec::new(),
             selects: Vec::new(),
             savepoints: Vec::new(),
+            windows: windows::Windows::default(),
+            groups: groups::Groups::default(),
         }
     }
 }
@@ -76,6 +82,8 @@ impl Candidates {
                     .as_deref()
                     .and_then(|tokens| SelectHint::from_tokens(tokens)),
             );
+            self.groups
+                .register(exchange, self.selects[index].is_some());
             self.savepoints.push(
                 exchange
                     .record
@@ -115,8 +123,17 @@ impl Candidates {
                 &identity,
                 Some(&exchange.record.command),
             ) {
+                self.windows.register(
+                    key.clone(),
+                    self.selects[index].as_ref().map(|hint| hint.table.as_str()),
+                    index,
+                    exchange,
+                );
                 self.index.register(NativeKey::Mysql(key), index);
             }
+        }
+        if self.count != exchanges.len() {
+            self.windows.seal();
         }
         self.count = exchanges.len();
         self.index.seal();
@@ -177,9 +194,41 @@ impl Candidates {
         // Direct test/repair appends keep their existing compatibility path.
         // Production registration can prepare each appended range before begin.
         self.register(exchanges);
+        self.lookup(source, case, identity, command)
+    }
+
+    pub(super) fn lookup(
+        &self,
+        source: ReplaySource,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: Option<&str>,
+    ) -> Arc<[usize]> {
         let Some(key) = key(source, case, identity, command) else {
             return Arc::from([]);
         };
         self.index.lookup(NativeQuery::Mysql(&key)).into_indices()
+    }
+
+    pub(super) fn select_window(
+        &self,
+        case: &str,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        table: &str,
+        timeline: &crate::replay::control::input_timing::Live,
+    ) -> Option<windows::Selection<'_>> {
+        let key = key(ReplaySource::Case, Some(case), identity, Some(command))?;
+        self.windows.select(&key, table, |anchor| {
+            timeline.mysql_candidate_cutoff(case, anchor)
+        })
+    }
+
+    pub(super) fn claimed(&mut self, index: usize) {
+        self.windows.claimed(index);
+    }
+
+    pub(super) fn sql_group(&self, index: usize) -> Option<usize> {
+        self.groups.get(index)
     }
 }

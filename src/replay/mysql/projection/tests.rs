@@ -28,6 +28,22 @@ fn projection_reuses_the_source_shape_but_checks_each_recorded_result() {
 }
 
 #[test]
+fn grouped_projection_reads_each_occurrences_response() {
+    let sql = "SELECT id AS old_id, uid AS old_uid FROM tasks WHERE id=7";
+    let first = record(sql, &["old_id", "old_uid"]);
+    let invalid = record(sql, &["invalid", "old_uid"]);
+    let mut later = first.clone();
+    later.response.rows[0][1] = mysql_json("integer", json!(73));
+    let mut query = Query::prepare("COM_QUERY", "SELECT uid FROM tasks WHERE id=7", None).unwrap();
+    let first = query.grouped_response(&first, Some(0)).unwrap();
+    assert_eq!(first.rows[0][0].value, Some(json!(11)));
+    assert!(query.grouped_response(&invalid, Some(0)).is_none());
+    let later = query.grouped_response(&later, Some(0)).unwrap();
+    assert_eq!(later.rows[0][0].value, Some(json!(73)));
+    assert_eq!(query.source_groups.len(), 1);
+}
+
+#[test]
 fn projection_candidate_rebuilds_when_a_policy_changes_bound_values() {
     let source = record("SELECT id, uid FROM tasks WHERE id=7", &["id", "uid"]);
     let sql = "SELECT uid FROM tasks WHERE id=?";

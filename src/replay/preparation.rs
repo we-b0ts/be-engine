@@ -28,6 +28,10 @@ impl ReplayState {
             redis: self.redis.prepared_case_members(case),
             mysql: self.mysql.prepared_case_members(case),
         };
+        if let Some(policy) = &self.replay_policy {
+            self.mysql
+                .prepare_request_sources(&policy.request_contracts, case, &native.mysql)?;
+        }
         let mut plan = CaseExecutionPlan::new(case.to_owned(), source, native);
         plan.rules = rules;
         self.case_execution_plans

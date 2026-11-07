@@ -99,6 +99,17 @@ pub(in crate::replay) struct Live {
 }
 
 impl Live {
+    pub(in crate::replay) fn mysql_candidate_cutoff(
+        &self,
+        case: &str,
+        anchor: Option<DateTime<Utc>>,
+    ) -> Option<DateTime<Utc>> {
+        if self.case != case {
+            return None;
+        }
+        self.fast.as_ref()?.mysql_candidate_cutoff(self, anchor)
+    }
+
     pub(in crate::replay) fn mysql_prefix_window(
         &self,
         case: &str,
