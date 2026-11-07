@@ -91,6 +91,14 @@ impl NativeEventSink for Observer {
 }
 
 pub(super) async fn send(socket: &Path, request: Value) -> Result<Value> {
+    send_with_response_limit(socket, request, 8192).await
+}
+
+pub(super) async fn send_with_response_limit(
+    socket: &Path,
+    request: Value,
+    response_limit: usize,
+) -> Result<Value> {
     let command = feedback_command(&request);
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut payload = serde_json::to_vec(&request)?;
@@ -104,11 +112,11 @@ pub(super) async fn send(socket: &Path, request: Value) -> Result<Value> {
         let mut line = String::new();
         use tokio::io::AsyncReadExt;
         BufReader::new(stream)
-            .take(8193)
+            .take((response_limit + 1) as u64)
             .read_line(&mut line)
             .await?;
         ensure!(
-            line.len() <= 8192,
+            line.len() <= response_limit,
             "native event control response exceeds bound"
         );
         let response: Value = serde_json::from_str(&line)?;
