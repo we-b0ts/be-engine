@@ -160,6 +160,23 @@ impl ReplayState {
                 baseline_normalized_sql.as_deref(),
             )
         });
+        let window = if transaction_end.is_none() {
+            active_case_id
+                .as_deref()
+                .zip(select_hint.as_ref())
+                .zip(self.input_timing.as_ref())
+                .and_then(|((case, hint), timeline)| {
+                    self.mysql.candidates.select_window(
+                        case,
+                        identity,
+                        command,
+                        (!legacy_sql_selector).then_some(hint.table.as_str()),
+                        timeline,
+                    )
+                })
+        } else {
+            None
+        };
         for (source, allow_hypotheses) in [
             (ReplaySource::Case, false),
             (ReplaySource::Startup, false),
@@ -167,6 +184,17 @@ impl ReplayState {
             (ReplaySource::Case, true),
         ] {
             let hypothesis = if allow_hypotheses {
+                // Explicit hypotheses may describe a different physical table.
+                // They still have to stay within the same Source time boundary.
+                let hypothesis_window = window.as_ref().and_then(|_| {
+                    self.mysql.candidates.select_window(
+                        active_case_id.as_deref()?,
+                        identity,
+                        command,
+                        None,
+                        self.input_timing.as_ref()?,
+                    )
+                });
                 let candidate = active_case_id.as_deref().and_then(|case| {
                     self.select_mysql_hypothesis(
                         case,
@@ -177,6 +205,7 @@ impl ReplayState {
                         transaction,
                         request_observed_at,
                         observation_id,
+                        hypothesis_window.as_deref(),
                         &mut transaction_rejection,
                     )
                 });
@@ -189,31 +218,13 @@ impl ReplayState {
             // projections, without allowing Global to outrank the active Case.
             // An authoritative socket witness admits exactly one end. Avoid
             // collecting the scope only to reject all of its other candidates.
-            let window = if source == ReplaySource::Case
-                && !legacy_sql_selector
-                && !allow_hypotheses
-                && transaction_end.is_none()
-            {
-                active_case_id
-                    .as_deref()
-                    .zip(select_hint.as_ref())
-                    .zip(self.input_timing.as_ref())
-                    .and_then(|((case, hint), timeline)| {
-                        self.mysql.candidates.select_window(
-                            case,
-                            identity,
-                            command,
-                            &hint.table,
-                            timeline,
-                        )
-                    })
-            } else {
-                None
-            };
+            let case_window = (source == ReplaySource::Case && !allow_hypotheses)
+                .then_some(window.as_deref())
+                .flatten();
             let candidates = if let Some((index, _)) = &hypothesis {
                 Some(std::sync::Arc::from(vec![*index]))
             } else {
-                (transaction_end.is_none() && window.is_none()).then(|| {
+                (transaction_end.is_none() && case_window.is_none()).then(|| {
                     self.mysql.candidates.lookup(
                         source,
                         active_case_id.as_deref(),
@@ -224,14 +235,11 @@ impl ReplayState {
             };
             for foreign in [false, true] {
                 for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                    let mut indices = preferred_end
+                    for index in preferred_end
                         .into_iter()
-                        .chain(window.as_ref().into_iter().flat_map(|window| window.iter()))
-                        .chain(candidates.as_deref().unwrap_or_default().iter().copied());
-                    loop {
-                        let Some(index) = indices.next() else {
-                            break;
-                        };
+                        .chain(case_window.unwrap_or_default().iter().copied())
+                        .chain(candidates.as_deref().unwrap_or_default().iter().copied())
+                    {
                         if !self.mysql.candidates.permits_sql(index, sql_family) {
                             continue;
                         }
@@ -832,7 +840,6 @@ impl ReplayState {
                             &mut self.mysql.exchanges[index].status,
                             kind,
                         )?;
-                        drop(indices);
                         self.mysql.candidates.claimed(index);
                         if let Some(policy) = &mut self.replay_policy {
                             if policy

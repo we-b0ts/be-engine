@@ -14,6 +14,7 @@ impl ReplayState {
         transaction: Option<TransactionMatch<'_>>,
         observed: DateTime<Utc>,
         observation_id: Option<uuid::Uuid>,
+        window: Option<&[usize]>,
         transaction_rejection: &mut Option<usize>,
     ) -> Option<(usize, crate::replay::DependencyRuleDecision)> {
         let owner = self.replay_policy.as_ref()?.request_contracts.clone();
@@ -22,13 +23,18 @@ impl ReplayState {
         }
         let projected =
             crate::replay::mysql::sql_match::materialize(sql?, params.unwrap_or_default())?;
-        let candidates = self.mysql.candidates.select(
-            &self.mysql.exchanges,
-            ReplaySource::Case,
-            Some(case),
-            identity,
-            Some(command),
-        );
+        let fallback;
+        let candidates = if let Some(window) = window {
+            window
+        } else {
+            fallback = self.mysql.candidates.lookup(
+                ReplaySource::Case,
+                Some(case),
+                identity,
+                Some(command),
+            );
+            &fallback
+        };
         let mut search = crate::replay::candidate_selection::UniqueCandidate::new(256);
         let sql_family = candidates::sql_family(sql);
         let normalized_sql = sql.map(normalize_sql);

@@ -132,9 +132,6 @@ impl Candidates {
                 self.index.register(NativeKey::Mysql(key), index);
             }
         }
-        if self.count != exchanges.len() {
-            self.windows.seal();
-        }
         self.count = exchanges.len();
         self.index.seal();
         self.members.seal();
@@ -215,9 +212,9 @@ impl Candidates {
         case: &str,
         identity: &ReplaySessionIdentity,
         command: &str,
-        table: &str,
+        table: Option<&str>,
         timeline: &crate::replay::control::input_timing::Live,
-    ) -> Option<windows::Selection<'_>> {
+    ) -> Option<Vec<usize>> {
         let key = key(ReplaySource::Case, Some(case), identity, Some(command))?;
         self.windows.select(&key, table, |anchor| {
             timeline.mysql_candidate_cutoff(case, anchor)

@@ -1,9 +1,8 @@
-//! Source-time fences and live MySQL postings for ordered fast replay.
+//! Source-time MySQL postings for ordered fast replay.
 use super::*;
 use std::collections::{BTreeSet, HashMap};
-use std::ops::Bound::{Excluded, Unbounded};
-
 type Clock = chrono::DateTime<chrono::Utc>;
+type Posting = BTreeSet<(Clock, usize)>;
 
 #[derive(Debug, Default)]
 pub(super) struct Windows {
@@ -13,51 +12,24 @@ pub(super) struct Windows {
 
 #[derive(Debug, Default)]
 struct Scope {
-    tables: HashMap<String, Bucket>,
-    unknown: Bucket,
+    tables: HashMap<String, Posting>,
+    unknown: Posting,
     last_matched: Option<Clock>,
-}
-
-#[derive(Debug, Default)]
-struct Bucket {
-    live: BTreeSet<usize>,
-    fences: Vec<(Clock, usize)>,
-    prefix_ranks: Vec<usize>,
 }
 
 #[derive(Debug)]
 struct Member {
     key: MysqlKey,
     table: Option<String>,
-    at: Option<Clock>,
+    at: Clock,
 }
 
 impl Scope {
-    fn bucket(&mut self, table: Option<&str>) -> &mut Bucket {
+    fn bucket(&mut self, table: Option<&str>) -> &mut Posting {
         match table {
             Some(table) => self.tables.entry(table.to_owned()).or_default(),
             None => &mut self.unknown,
         }
-    }
-}
-
-impl Bucket {
-    fn seal(&mut self) {
-        if self.prefix_ranks.len() == self.fences.len() {
-            return;
-        }
-        self.fences.sort_unstable();
-        self.prefix_ranks.clear();
-        let mut maximum = 0;
-        for (_, index) in &self.fences {
-            maximum = maximum.max(*index);
-            self.prefix_ranks.push(maximum);
-        }
-    }
-
-    fn last_rank_before(&self, cutoff: Clock) -> Option<usize> {
-        let end = self.fences.partition_point(|(at, _)| *at <= cutoff);
-        end.checked_sub(1).map(|index| self.prefix_ranks[index])
     }
 }
 
@@ -72,13 +44,13 @@ impl Windows {
         if exchange.source != ReplaySource::Case || key.command != MysqlCommand::Sql {
             return;
         }
-        let at = contracts::source_started(&exchange.record);
-        let bucket = self.scopes.entry(key.clone()).or_default().bucket(table);
+        let scope = self.scopes.entry(key.clone()).or_default();
+        let Some(at) = exchange.record.request_started_at else {
+            return;
+        };
+        let posting = scope.bucket(table);
         if exchange.status.is_available() {
-            bucket.live.insert(index);
-        }
-        if let Some(at) = at {
-            bucket.fences.push((at, index));
+            posting.insert((at, index));
         }
         self.members.insert(
             index,
@@ -88,15 +60,6 @@ impl Windows {
                 at,
             },
         );
-    }
-
-    pub(super) fn seal(&mut self) {
-        for scope in self.scopes.values_mut() {
-            scope.unknown.seal();
-            for bucket in scope.tables.values_mut() {
-                bucket.seal();
-            }
-        }
     }
 
     pub(super) fn claimed(&mut self, index: usize) {
@@ -111,70 +74,39 @@ impl Windows {
             Some(table) => scope.tables.get_mut(table).expect("indexed MySQL table"),
             None => &mut scope.unknown,
         };
-        bucket.live.remove(&index);
-        scope.last_matched = scope.last_matched.max(member.at);
+        bucket.remove(&(member.at, index));
+        scope.last_matched = scope.last_matched.max(Some(member.at));
     }
 
     pub(super) fn select(
         &self,
         key: &MysqlKey,
-        table: &str,
+        table: Option<&str>,
         cutoff: impl FnOnce(Option<Clock>) -> Option<Clock>,
-    ) -> Option<Selection<'_>> {
+    ) -> Option<Vec<usize>> {
         let scope = self.scopes.get(key)?;
         let cutoff = cutoff(scope.last_matched)?;
-        let known = scope.tables.get(table);
-        let unknown = &scope.unknown;
-        // Preserve original candidate order across overlapping Source requests.
-        // An earlier native rank stays in the prefix even if its clock is later.
-        let last_rank = known
-            .and_then(|bucket| bucket.last_rank_before(cutoff))
-            .max(unknown.last_rank_before(cutoff));
-        Some(Selection {
-            known: known.map(|bucket| &bucket.live),
-            unknown: &unknown.live,
-            last_rank,
-        })
+        let mut indices = Vec::new();
+        let mut append = |posting: &Posting| {
+            indices.extend(
+                posting
+                    .range(..=(cutoff, usize::MAX))
+                    .map(|&(_, index)| index),
+            );
+        };
+        match table {
+            Some(table) => {
+                if let Some(posting) = scope.tables.get(table) {
+                    append(posting);
+                }
+            }
+            None => scope.tables.values().for_each(&mut append),
+        }
+        append(&scope.unknown);
+        // Time controls membership. Native order still chooses among members.
+        indices.sort_unstable();
+        Some(indices)
     }
-}
-
-pub(in crate::replay::mysql) struct Selection<'a> {
-    known: Option<&'a BTreeSet<usize>>,
-    unknown: &'a BTreeSet<usize>,
-    last_rank: Option<usize>,
-}
-
-impl Selection<'_> {
-    pub(in crate::replay::mysql) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        let prefix = self.last_rank.into_iter().flat_map(|last| {
-            merge(
-                self.known
-                    .into_iter()
-                    .flat_map(move |set| set.range(..=last)),
-                self.unknown.range(..=last),
-            )
-        });
-        let after = self.last_rank.map_or(Unbounded, Excluded);
-        prefix.chain(merge(
-            self.known
-                .into_iter()
-                .flat_map(move |set| set.range((after, Unbounded))),
-            self.unknown.range((after, Unbounded)),
-        ))
-    }
-}
-
-fn merge<'a>(
-    left: impl Iterator<Item = &'a usize>,
-    right: impl Iterator<Item = &'a usize>,
-) -> impl Iterator<Item = usize> {
-    let mut left = left.copied().peekable();
-    let mut right = right.copied().peekable();
-    std::iter::from_fn(move || match (left.peek(), right.peek()) {
-        (Some(a), Some(b)) if a <= b => left.next(),
-        (_, Some(_)) => right.next(),
-        _ => left.next(),
-    })
 }
 
 #[cfg(test)]
@@ -185,18 +117,12 @@ mod tests {
         Clock::from_timestamp(offset, 0).unwrap()
     }
 
-    fn bucket(entries: &[(i64, usize)]) -> Bucket {
-        let mut bucket = Bucket {
-            live: entries.iter().map(|(_, index)| *index).collect(),
-            fences: entries.iter().map(|&(t, index)| (at(t), index)).collect(),
-            prefix_ranks: Vec::new(),
-        };
-        bucket.seal();
-        bucket
+    fn bucket(entries: &[(i64, usize)]) -> Posting {
+        entries.iter().map(|&(t, index)| (at(t), index)).collect()
     }
 
     #[test]
-    fn cutoff_keeps_older_unclaimed_slots_and_native_order_with_clock_inversions() {
+    fn cutoff_keeps_old_unclaimed_slots_and_excludes_newer_clock_inversions() {
         let key = MysqlKey {
             scope: ScopePartition::new(ReplaySource::Case, Some("case")),
             host: "mysql".into(),
@@ -210,11 +136,11 @@ mod tests {
             key.clone(),
             Scope {
                 tables: [
-                    ("orders".into(), bucket(&[(2, 1), (9, 2), (4, 5), (8, 7)])),
+                    ("orders".into(), bucket(&[(3, 1), (9, 2), (4, 5), (5, 7)])),
                     ("unrelated".into(), bucket(&[(3, 4)])),
                 ]
                 .into(),
-                unknown: bucket(&[(3, 3), (11, 6)]),
+                unknown: bucket(&[(2, 3), (11, 6)]),
                 last_matched: None,
             },
         );
@@ -223,19 +149,16 @@ mod tests {
             Member {
                 key: key.clone(),
                 table: Some("orders".into()),
-                at: Some(at(4)),
+                at: at(4),
             },
         );
         windows.claimed(5);
         let selection = windows
-            .select(&key, "orders", |anchor| {
+            .select(&key, Some("orders"), |anchor| {
                 assert_eq!(anchor, Some(at(4)));
                 Some(at(5))
             })
             .unwrap();
-        assert_eq!(selection.last_rank, Some(5));
-        // Both previous unclaimed requests and clock-ambiguous requests
-        // precede the suffix in the original native order.
-        assert_eq!(selection.iter().collect::<Vec<_>>(), [1, 2, 3, 6, 7]);
+        assert_eq!(selection, [1, 3, 7]);
     }
 }

@@ -260,22 +260,9 @@ impl Plan {
     ) -> Option<DateTime<Utc>> {
         let anchor = anchor
             .and_then(|at| u64::try_from((at - self.source.start).num_microseconds()?).ok())
-            .or_else(|| live.native_dispatch.map(|window| window.from.earliest_us()))
+            .max(live.native_dispatch.map(|window| window.from.earliest_us()))
             .unwrap_or_default();
-        let actions = &live.plan.input.actions;
-        let offset = |action: &InputAction| SourceOffset {
-            ms: action.offset_ms,
-            us: action.offset_us,
-        };
-        let start = actions.partition_point(|action| action.offset_ms <= anchor / 1_000);
-        let cutoff = actions[start..]
-            .iter()
-            .filter(|action| ordered_input(action))
-            .nth(2)
-            .map_or_else(
-                || anchor.saturating_add(1_000_000),
-                |action| offset(action).latest_us(),
-            );
+        let cutoff = mysql_candidate_cutoff_us(&live.plan.input.actions, anchor);
         self.source
             .start
             .checked_add_signed(chrono::TimeDelta::microseconds(i64::try_from(cutoff).ok()?))
@@ -590,6 +577,23 @@ fn input_action(live: &Live, sequence: u64) -> Result<&InputAction> {
     Ok(&actions[index])
 }
 
+fn mysql_candidate_cutoff_us(actions: &[InputAction], anchor: u64) -> u64 {
+    let start = actions.partition_point(|action| action.offset_ms <= anchor / 1_000);
+    let minimum = anchor.saturating_add(3_000_000);
+    actions[start..]
+        .iter()
+        .filter(|action| ordered_input(action))
+        .take(3)
+        .last()
+        .map_or(minimum, |action| {
+            let offset = SourceOffset {
+                ms: action.offset_ms,
+                us: action.offset_us,
+            };
+            minimum.max(offset.latest_us())
+        })
+}
+
 fn input_boundary(action: &InputAction) -> bool {
     use crate::interaction::model::{InputActionKind, MessageKind};
     !matches!(&action.action, InputActionKind::Message { message }
@@ -773,6 +777,40 @@ fn passive_proof(path: &Path, input: &InputTranscript) -> Result<Option<heartbea
 mod tests {
     use super::*;
     use crate::interaction::{model::WireMessage, observation::Observation};
+
+    #[test]
+    fn mysql_window_covers_three_source_events_and_at_least_three_seconds() {
+        let inputs = |offsets: [u64; 3]| {
+            offsets
+                .into_iter()
+                .enumerate()
+                .map(|(index, offset_ms)| {
+                    serde_json::from_value::<InputAction>(serde_json::json!({
+                        "sequence": index + 1,
+                        "offset_ms": offset_ms,
+                        "action": {"kind":"message","message":{"kind":"text","data":"42[\"event\"]"}}
+                    }))
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            mysql_candidate_cutoff_us(&inputs([527, 527, 527]), 451_412),
+            3_451_412
+        );
+        assert_eq!(
+            mysql_candidate_cutoff_us(&inputs([527, 4_000, 7_000]), 451_412),
+            7_000_999
+        );
+        assert_eq!(
+            mysql_candidate_cutoff_us(&inputs([527, 4_000, 7_000]), 527_000),
+            7_000_999
+        );
+        assert_eq!(
+            mysql_candidate_cutoff_us(&inputs([527, 527, 527]), 9_000_000),
+            12_000_000
+        );
+    }
 
     #[test]
     fn heartbeat_dependency_boundary_uses_the_source_interaction_clock() {
