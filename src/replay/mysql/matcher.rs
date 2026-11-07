@@ -4,6 +4,7 @@ mod hypothesis;
 mod observation;
 mod request;
 mod source_formats;
+mod statement_metadata;
 pub(super) use request::TransactionMatch;
 
 #[derive(Debug, Default)]
@@ -17,6 +18,7 @@ pub(in crate::replay) struct MysqlReplayState {
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
     source_formats: source_formats::Cache,
+    statement_metadata: statement_metadata::Cache,
     candidates: candidates::Candidates,
     cleanup_selection: cleanup_selection::Index,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
@@ -68,6 +70,7 @@ impl MysqlReplayState {
     pub(in crate::replay) fn invalidate_scope_index(&mut self) {
         self.candidates = candidates::Candidates::default();
         self.cleanup_selection = cleanup_selection::Index::default();
+        self.statement_metadata = statement_metadata::Cache::default();
     }
     pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
         if exchange.source == ReplaySource::Case
@@ -363,156 +366,6 @@ impl ReplayState {
             }
         }
         None
-    }
-
-    #[cfg(test)]
-    pub(in crate::replay) fn statement_metadata(
-        &mut self,
-        identity: &ReplaySessionIdentity,
-        sql: &str,
-    ) -> StatementMetadata {
-        let case = self.active_case_id.clone();
-        self.statement_metadata_in_case(case.as_deref(), identity, sql)
-    }
-
-    pub(super) fn statement_metadata_in_case(
-        &mut self,
-        case: Option<&str>,
-        identity: &ReplaySessionIdentity,
-        sql: &str,
-    ) -> StatementMetadata {
-        let normalized_sql = normalize_sql(sql);
-        let param_count = count_sql_placeholders(sql);
-        let select_hint = candidates::select_hint(sql);
-        let mut semantic_target = None;
-        let mut direct_projection = None;
-        for source in [ReplaySource::Case, ReplaySource::Startup] {
-            let candidates =
-                self.mysql
-                    .candidates
-                    .select(&self.mysql.exchanges, source, case, identity, None);
-            for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                for index in candidates.iter().copied() {
-                    let exchange = &self.mysql.exchanges[index];
-                    if !exchange.source.matches_scope(source)
-                        || !active_case_matches(case, exchange)
-                        || !identity_matches_exchange(identity, &exchange.identity)
-                        || !self.mysql.candidates.permits_select(
-                            index,
-                            select_hint.as_ref(),
-                            !project_columns && !semantic,
-                        )
-                    {
-                        continue;
-                    }
-                    if !project_columns
-                        && !semantic
-                        && matches!(
-                            exchange.record.command.as_str(),
-                            "COM_QUERY" | "COM_STMT_EXECUTE"
-                        )
-                        && self.replay_policy.as_ref().is_some_and(|policy| {
-                            policy.request_contracts.mysql_fields_metadata_matches(
-                                case,
-                                identity,
-                                &exchange.record,
-                                sql,
-                            ) || policy.mysql_sql_values_metadata_matches(&MysqlPolicyContext {
-                                request_times: crate::replay::assertion::RequestTimes {
-                                    source: contracts::source_started(&exchange.record),
-                                    target: None,
-                                },
-                                case_id: case,
-                                identity,
-                                command: "COM_STMT_EXECUTE",
-                                recorded_sql: exchange.record.sql.as_deref(),
-                                sql: Some(sql),
-                                recorded: exchange.record.params.as_deref(),
-                                actual: None,
-                            })
-                        })
-                    {
-                        return StatementMetadata {
-                            param_count,
-                            columns: exchange.record.response.columns.clone(),
-                        };
-                    }
-                    if semantic {
-                        let Some(actual) = semantic_target
-                            .get_or_insert_with(|| self.mysql.sql_cache.get(sql).metadata())
-                            .as_ref()
-                        else {
-                            continue;
-                        };
-                        let Some(recorded_sql) = exchange.record.sql.as_deref() else {
-                            continue;
-                        };
-                        let Some(recorded) = self
-                            .mysql
-                            .sql_cache
-                            .get(recorded_sql)
-                            .bind(&exchange.record.command, exchange.record.params.as_deref())
-                        else {
-                            continue;
-                        };
-                        if let Some(columns) =
-                            projection::semantic_columns(&exchange.record, &recorded, actual)
-                        {
-                            return StatementMetadata {
-                                param_count,
-                                columns,
-                            };
-                        }
-                        continue;
-                    }
-                    if project_columns {
-                        if let Some(columns) = direct_projection
-                            .get_or_insert_with(|| {
-                                projection::Query::prepare("COM_QUERY", sql, None)
-                            })
-                            .as_mut()
-                            .and_then(|projection| projection.statement_columns(&exchange.record))
-                        {
-                            return StatementMetadata {
-                                param_count,
-                                columns,
-                            };
-                        }
-                        continue;
-                    }
-                    let Some(recorded_sql) = exchange.record.sql.as_deref() else {
-                        continue;
-                    };
-                    let matches = match exchange.record.command.as_str() {
-                        "COM_STMT_EXECUTE" => {
-                            normalize_sql(recorded_sql) == normalized_sql
-                                || sql_match::prepared_metadata_matches(&exchange.record, sql)
-                        }
-                        "COM_QUERY" => sql_match::metadata_matches(sql, recorded_sql),
-                        _ => false,
-                    };
-                    if matches {
-                        return StatementMetadata {
-                            param_count,
-                            columns: direct_projection
-                                .get_or_insert_with(|| {
-                                    projection::Query::prepare("COM_QUERY", sql, None)
-                                })
-                                .as_mut()
-                                .and_then(|projection| {
-                                    projection.statement_columns(&exchange.record)
-                                })
-                                .unwrap_or_else(|| exchange.record.response.columns.clone()),
-                        };
-                    }
-                }
-            }
-        }
-        StatementMetadata {
-            param_count,
-            columns: builtin_response(sql, identity.database.as_deref())
-                .map_or_else(Vec::new, |r| r.columns),
-        }
     }
 
     pub(in crate::replay) fn unused_exchanges(

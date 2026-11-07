@@ -141,6 +141,10 @@ enum RecordedCaseKind {
 }
 
 impl ReplayPolicyRuntime {
+    pub(in crate::replay) fn fingerprint(&self) -> &str {
+        &self.loaded.fingerprint
+    }
+
     #[cfg(test)]
     pub(in crate::replay) fn load(
         path: &Path,
