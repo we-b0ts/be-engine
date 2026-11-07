@@ -336,21 +336,13 @@ fn collect_transactions(
             }
             if reason.is_none() {
                 reason = Some(error);
-                // An ownership gap on the later wire cannot invalidate a
-                // previously proved, inactive prefix. Bound the prefix by
-                // the preceding response, before any missing request.
-                if active.is_empty()
-                    && matches!(error, "source_status_discontinuous" | "source_sequence_gap")
-                    && let Some((previous, status)) = previous
-                    && status & 0x2009 == 0
-                    && let Some(finished) = previous.timestamp
-                    && records[position..].iter().all(|(_, later)| {
-                        later
-                            .request_started_at
-                            .is_some_and(|started| started >= finished)
-                    })
-                {
-                    dispatch_safe_before = Some(finished);
+                if matches!(error, "source_status_discontinuous" | "source_sequence_gap") {
+                    dispatch_safe_before = dispatch_cutoff(
+                        records,
+                        position,
+                        previous,
+                        active.first().map(|&(first, _, _)| first),
+                    );
                 }
             }
             let failed = Failure {
@@ -370,6 +362,36 @@ fn collect_transactions(
         reason.get_or_insert("source_transaction_unclosed");
     }
     (reason, dispatch_safe_before, failed_ends)
+}
+
+fn dispatch_cutoff(
+    records: &[(usize, &RecordedMysqlExchange)],
+    failure: usize,
+    previous: Option<(&RecordedMysqlExchange, u16)>,
+    open: Option<usize>,
+) -> Option<DateTime<Utc>> {
+    // An incomplete transaction cannot prove any part of its own lifetime.
+    // An inactive prefix can use the preceding response as its boundary.
+    let (cutoff, suffix) = if let Some(open) = open {
+        let first = records[..failure]
+            .iter()
+            .rposition(|&(index, _)| index == open)?;
+        (records[first].1.request_started_at?, &records[first..])
+    } else {
+        let (previous, status) = previous?;
+        if status & 0x2009 != 0 {
+            return None;
+        }
+        (previous.timestamp?, &records[failure..])
+    };
+    suffix
+        .iter()
+        .all(|(_, record)| {
+            record
+                .request_started_at
+                .is_some_and(|started| started >= cutoff)
+        })
+        .then_some(cutoff)
 }
 
 fn status_after(record: &RecordedMysqlExchange) -> Option<u16> {
