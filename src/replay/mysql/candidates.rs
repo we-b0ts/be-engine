@@ -7,9 +7,9 @@ use crate::replay::native_index::{
 };
 use std::sync::Arc;
 mod family;
-use family::Family;
 pub(super) use family::classify as sql_family;
-pub(super) use family::sql_table;
+pub(super) use family::select_hint;
+use family::{Family, SelectHint};
 
 #[derive(Debug)]
 pub(super) struct Candidates {
@@ -18,7 +18,7 @@ pub(super) struct Candidates {
     members: CaseMembership,
     lanes: LaneIndex,
     families: Vec<Option<Family>>,
-    select_tables: Vec<Option<String>>,
+    selects: Vec<Option<SelectHint>>,
 }
 
 impl Default for Candidates {
@@ -29,7 +29,7 @@ impl Default for Candidates {
             members: CaseMembership::default(),
             lanes: LaneIndex::default(),
             families: Vec::new(),
-            select_tables: Vec::new(),
+            selects: Vec::new(),
         }
     }
 }
@@ -69,11 +69,10 @@ impl Candidates {
                     .as_deref()
                     .and_then(|tokens| family::classify_tokens(tokens)),
             );
-            self.select_tables.push(
+            self.selects.push(
                 tokens
                     .as_deref()
-                    .and_then(|tokens| family::select_table(tokens))
-                    .map(str::to_owned),
+                    .and_then(|tokens| SelectHint::from_tokens(tokens)),
             );
             self.members
                 .register(exchange.source, exchange.case_id.as_deref(), index);
@@ -128,12 +127,20 @@ impl Candidates {
             .is_none_or(|(source, actual)| source == actual)
     }
 
-    pub(super) fn permits_table(&self, candidate: usize, actual: Option<&str>) -> bool {
-        self.select_tables
+    pub(super) fn permits_select(
+        &self,
+        candidate: usize,
+        actual: Option<&SelectHint>,
+        exact_shape: bool,
+    ) -> bool {
+        self.selects
             .get(candidate)
-            .and_then(|table| table.as_deref())
+            .and_then(Option::as_ref)
             .zip(actual)
-            .is_none_or(|(source, actual)| source == actual)
+            .is_none_or(|(source, actual)| {
+                source.table == actual.table
+                    && (!exact_shape || source.scalar_shape == actual.scalar_shape)
+            })
     }
 
     pub(super) fn lane_blocker(

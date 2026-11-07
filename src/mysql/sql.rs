@@ -9,7 +9,7 @@ mod lexical_cache;
 pub(crate) mod projection;
 pub(crate) mod table_template;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Token {
     Word(String),
     Identifier(String),

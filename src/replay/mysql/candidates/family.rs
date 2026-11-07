@@ -1,6 +1,33 @@
 //! Conservative SQL families exclude structurally impossible native candidates.
 //! Unknown syntax keeps the complete existing matcher and policy path.
 use crate::mysql::sql::{Token, projection::identifier, tokens_shared};
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+#[derive(Debug)]
+pub(in crate::replay::mysql) struct SelectHint {
+    pub table: String,
+    pub scalar_shape: u64,
+}
+
+impl SelectHint {
+    pub(super) fn from_tokens(tokens: &[Token]) -> Option<Self> {
+        let table = select_table(tokens)?.to_owned();
+        let mut shape = DefaultHasher::new();
+        tokens.len().hash(&mut shape);
+        for token in tokens {
+            if token.is_value() || *token == Token::Placeholder {
+                false.hash(&mut shape);
+            } else {
+                true.hash(&mut shape);
+                token.hash(&mut shape);
+            }
+        }
+        Some(Self {
+            table,
+            scalar_shape: shape.finish(),
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::replay::mysql) enum Family {
@@ -88,8 +115,8 @@ pub(super) fn select_table(tokens: &[Token]) -> Option<&str> {
     Some(table)
 }
 
-pub(in crate::replay::mysql) fn sql_table(sql: &str) -> Option<String> {
-    select_table(&bounded_tokens(sql)?).map(str::to_owned)
+pub(in crate::replay::mysql) fn select_hint(sql: &str) -> Option<SelectHint> {
+    SelectHint::from_tokens(&bounded_tokens(sql)?)
 }
 
 #[cfg(test)]
@@ -116,7 +143,9 @@ mod tests {
     #[test]
     fn table_hint_requires_one_unambiguous_physical_relation() {
         assert_eq!(
-            sql_table("SELECT t.id FROM app.`tasks` AS t WHERE t.id = ?").as_deref(),
+            select_hint("SELECT t.id FROM app.`tasks` AS t WHERE t.id = ?")
+                .as_ref()
+                .map(|hint| hint.table.as_str()),
             Some("tasks")
         );
         for sql in [
@@ -127,7 +156,22 @@ mod tests {
             "SELECT id FROM alpha UNION SELECT id FROM beta",
             "SELECT id FROM alpha; SELECT id FROM beta",
         ] {
-            assert_eq!(sql_table(sql), None, "{sql}");
+            assert!(select_hint(sql).is_none(), "{sql}");
         }
+    }
+
+    #[test]
+    fn exact_shape_preserves_predicates_and_ignores_scalar_value_spelling() {
+        let shape = |sql| select_hint(sql).unwrap().scalar_shape;
+        let actual = shape("SELECT id FROM tasks WHERE id=? AND name=?");
+        assert_eq!(
+            actual,
+            shape("select id from tasks where id=7 and name='source'")
+        );
+        assert_ne!(actual, shape("SELECT id FROM tasks WHERE id=? AND owner=?"));
+        assert_ne!(
+            actual,
+            shape("SELECT id FROM tasks WHERE id IN (?) AND name=?")
+        );
     }
 }

@@ -93,7 +93,7 @@ impl ReplayState {
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
         let sql_family = candidates::sql_family(sql);
-        let select_table = sql.and_then(candidates::sql_table);
+        let select_hint = sql.and_then(candidates::select_hint);
         let legacy_sql_selector = self.replay_policy.as_ref().is_some_and(|policy| {
             policy.mysql_legacy_sql_selector_applies(case, identity, command)
         });
@@ -252,10 +252,11 @@ impl ReplayState {
                         // requests. Native matching cannot cross physical tables.
                         if !legacy_sql_selector
                             && !allow_hypotheses
-                            && !self
-                                .mysql
-                                .candidates
-                                .permits_table(index, select_table.as_deref())
+                            && !self.mysql.candidates.permits_select(
+                                index,
+                                select_hint.as_ref(),
+                                !project_columns && !semantic,
+                            )
                         {
                             continue;
                         }

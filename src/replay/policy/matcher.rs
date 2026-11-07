@@ -518,6 +518,10 @@ impl ReplayPolicyRuntime {
         self.loaded.document.dependency_rules.iter().any(|rule| {
             rule.protocol == DependencyProtocol::Mysql
                 && rule_matches_case(rule, case)
+                && rule
+                    .mysql
+                    .as_ref()
+                    .is_some_and(|mysql| !mysql.params.is_empty())
                 && self.mysql_selectors.matches_scope(rule, identity, command)
         })
     }
