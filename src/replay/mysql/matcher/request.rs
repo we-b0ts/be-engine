@@ -1,6 +1,16 @@
 //! Live MySQL request selection; ownership and protocol consumption stay explicit.
 use super::*;
 
+// Dynamic normalization borrows unchanged values. Candidate scans must not
+// compare every byte of the same SQL or parameter buffer again.
+fn same_input<T: PartialEq + ?Sized>(left: Option<&T>, right: Option<&T>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => std::ptr::eq(left, right) || left == right,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::replay::mysql) struct TransactionMatch<'a> {
     pub(in crate::replay::mysql) savepoints: &'a super::super::savepoints::Bindings,
@@ -91,6 +101,13 @@ impl ReplayState {
         let observation_id = observation.observation_id;
         let observed_sql = sql;
         let observed_params = params;
+        let mut witnessed = (observation_id.is_some()
+            && case.is_some()
+            && self.replay_policy.as_ref().is_some_and(|policy| {
+                policy.request_contracts.retains_value_witnesses()
+                    && policy.request_contracts.compiled_rules().is_some()
+            }))
+        .then(|| vec![false; self.mysql.exchanges.len()]);
         if let Some(policy) = self
             .replay_policy
             .as_ref()
@@ -238,6 +255,11 @@ impl ReplayState {
                             continue;
                         }
                         if source == ReplaySource::Case
+                            && let Some(witnessed) = witnessed.as_mut()
+                            // Strict, projected, and semantic passes may visit
+                            // the same immutable Source occurrence. The request
+                            // and candidate evidence are identical each time.
+                            && !std::mem::replace(&mut witnessed[index], true)
                             && let (Some(policy), Some(case)) =
                                 (&self.replay_policy, active_case_id.as_deref())
                             && let Err(error) = contracts::record_request(
@@ -311,10 +333,13 @@ impl ReplayState {
                             None => None,
                         };
                         let normalized_exchange = dynamic.as_ref().and_then(|normalized| {
-                            if normalized.source_sql.as_deref() == exchange.record.sql.as_deref()
-                                && normalized.source_params.as_deref()
-                                    == exchange.record.params.as_deref()
-                            {
+                            if same_input(
+                                normalized.source_sql.as_deref(),
+                                exchange.record.sql.as_deref(),
+                            ) && same_input(
+                                normalized.source_params.as_deref(),
+                                exchange.record.params.as_deref(),
+                            ) {
                                 return None;
                             }
                             let mut copy = exchange.clone();
@@ -332,10 +357,10 @@ impl ReplayState {
                             .as_ref()
                             .and_then(|value| value.actual_params.as_deref())
                             .or(params);
-                        let target_changed = sql != observed_sql || params != observed_params;
-                        let dynamic_normalized_sql = (sql != observed_sql)
-                            .then(|| sql.map(normalize_sql))
-                            .flatten();
+                        let sql_changed = !same_input(sql, observed_sql);
+                        let target_changed = sql_changed || !same_input(params, observed_params);
+                        let dynamic_normalized_sql =
+                            sql_changed.then(|| sql.map(normalize_sql)).flatten();
                         let normalized_sql = dynamic_normalized_sql
                             .as_deref()
                             .or(baseline_normalized_sql.as_deref());
