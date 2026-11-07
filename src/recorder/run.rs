@@ -343,6 +343,7 @@ impl Recorder {
             );
         }
         if status == "completed" {
+            self.seal_case_dependency_indexes().await;
             let root = self.run_dir.clone();
             let catalog =
                 tokio::task::spawn_blocking(move || crate::dependency_index::evidence::seal(&root))

@@ -84,6 +84,7 @@ impl Builder {
                 version: VERSION,
                 stamp,
                 sha256: String::new(),
+                scope_membership_sha256: None,
                 events: 0,
                 endpoints: Vec::new(),
                 metadata: Vec::new(),

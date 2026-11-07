@@ -41,6 +41,7 @@ pub(crate) use report::source_owned_match;
 mod control;
 pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
 mod attribution;
+pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes};
 mod deferred;
 mod dependencies;
 mod loading;

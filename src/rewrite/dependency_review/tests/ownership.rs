@@ -382,6 +382,19 @@ async fn a_client_abort_proof_can_reassign_unused_occurrences_from_multiple_late
         .unwrap(),
     )
     .unwrap();
+    let cache = crate::dependency_index::store::cache_directory(
+        &recorder.run_dir.join("dependencies.jsonl"),
+    );
+    let cached_cases = || {
+        fs::read_dir(&cache)
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.ok()?.path().join("file.json");
+                path.is_file().then_some(path)
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let before = cached_cases();
     let result = apply_dependency_attribution(AttributionCommandOptions {
         target_root: target.path().into(),
         file: path,
@@ -390,6 +403,11 @@ async fn a_client_abort_proof_can_reassign_unused_occurrences_from_multiple_late
     assert_eq!(result["ownership_complete"], true);
     assert_eq!(result["accepted_apis"], json!([]));
     assert!(!result["pending_obligations"].as_array().unwrap().is_empty());
+    assert_eq!(
+        cached_cases().difference(&before).count(),
+        3,
+        "Apply prebuilds the destination and both former Case scopes"
+    );
     let (effective, _) = freeze_dependency_attribution(
         Some(target.path()),
         state.case_source.as_deref().unwrap(),

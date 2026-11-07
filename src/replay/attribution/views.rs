@@ -11,6 +11,8 @@ use std::{
 };
 use uuid::Uuid;
 
+pub(super) const GLOBAL_SCOPES: [&str; 4] = ["startup", "process", "shutdown", "unattributed"];
+
 #[cfg(test)]
 mod tests;
 
@@ -22,11 +24,30 @@ pub(super) fn freeze<'a>(
     decisions: &BTreeMap<Uuid, DependencyOwner>,
     digest: &str,
 ) -> Result<BTreeMap<String, PathBuf>> {
+    freeze_scopes(
+        root,
+        manifest,
+        output,
+        cases.map(String::as_str).chain(GLOBAL_SCOPES),
+        decisions,
+        digest,
+    )
+}
+
+pub(super) fn freeze_scopes<'a>(
+    root: &Path,
+    manifest: &RecordingManifest,
+    output: &Path,
+    keys: impl Iterator<Item = &'a str>,
+    decisions: &BTreeMap<Uuid, DependencyOwner>,
+    digest: &str,
+) -> Result<BTreeMap<String, PathBuf>> {
+    let keys = keys.collect::<BTreeSet<_>>();
     let mut scopes = Vec::new();
     for input in &manifest.inputs {
         scopes.push(root.join(&input.path).join(scoped::CASE_SCOPE));
     }
-    for kind in ["startup", "process", "shutdown", "unattributed"] {
+    for kind in GLOBAL_SCOPES {
         scopes.push(root.join(format!("indexes/{kind}-scope.json")));
     }
     let mut originals = BTreeMap::new();
@@ -61,15 +82,7 @@ pub(super) fn freeze<'a>(
         let captured_key = key(&captured);
         let scope = if let Some(owner) = decisions.get(&location.exchange_id) {
             seen.insert(location.exchange_id);
-            match owner {
-                DependencyOwner::Case { origin_case_id, .. } => ScopeKind::Case {
-                    case_id: *origin_case_id,
-                },
-                DependencyOwner::Startup { .. } => ScopeKind::Startup,
-                DependencyOwner::Process { .. } => ScopeKind::Process,
-                DependencyOwner::Shutdown { .. } => ScopeKind::Shutdown,
-                DependencyOwner::Unattributed { .. } => ScopeKind::Unattributed,
-            }
+            scope_for(owner)
         } else {
             captured
         };
@@ -77,6 +90,9 @@ pub(super) fn freeze<'a>(
         if effective_key != captured_key {
             changed.insert(captured_key);
             changed.insert(effective_key.clone());
+        }
+        if !keys.contains(effective_key.as_str()) {
+            continue;
         }
         result
             .entry(effective_key)
@@ -97,27 +113,21 @@ pub(super) fn freeze<'a>(
         .join("dependency-scopes")
         .join(digest.trim_start_matches("sha256:"));
     crate::dependency_index::store::private_directory(&destination)?;
-    let keys = cases.cloned().chain([
-        "startup".into(),
-        "process".into(),
-        "shutdown".into(),
-        "unattributed".into(),
-    ]);
     let mut paths = BTreeMap::new();
     for key in keys {
         // Membership is the complete scope contract. Rewriting an unchanged
         // scope would change its file stamp and invalidate native index caches
         // on every attempt, even when only unrelated Case tails were attributed.
-        if !changed.contains(&key)
-            && let Some(original) = originals.get(&key)
+        if !changed.contains(key)
+            && let Some(original) = originals.get(key)
         {
-            paths.insert(key, original.clone());
+            paths.insert(key.to_owned(), original.clone());
             continue;
         }
-        let scope = result.remove(&key).unwrap_or_else(|| ScopeIndex {
+        let scope = result.remove(key).unwrap_or_else(|| ScopeIndex {
             schema: SCOPE_SCHEMA.into(),
             run_relpath: run_relpath.clone(),
-            scope: match key.as_str() {
+            scope: match key {
                 "startup" => ScopeKind::Startup,
                 "process" => ScopeKind::Process,
                 "shutdown" => ScopeKind::Shutdown,
@@ -130,9 +140,25 @@ pub(super) fn freeze<'a>(
         });
         let path = destination.join(format!("{key}-scope.json"));
         std::fs::write(&path, serde_json::to_vec(&scope)?)?;
-        paths.insert(key, path);
+        paths.insert(key.to_owned(), path);
     }
     Ok(paths)
+}
+
+pub(crate) fn attribution_scope_key(owner: &DependencyOwner) -> String {
+    key(&scope_for(owner))
+}
+
+fn scope_for(owner: &DependencyOwner) -> ScopeKind {
+    match owner {
+        DependencyOwner::Case { origin_case_id, .. } => ScopeKind::Case {
+            case_id: *origin_case_id,
+        },
+        DependencyOwner::Startup { .. } => ScopeKind::Startup,
+        DependencyOwner::Process { .. } => ScopeKind::Process,
+        DependencyOwner::Shutdown { .. } => ScopeKind::Shutdown,
+        DependencyOwner::Unattributed { .. } => ScopeKind::Unattributed,
+    }
 }
 
 fn key(scope: &ScopeKind) -> String {

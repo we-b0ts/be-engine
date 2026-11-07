@@ -7,6 +7,25 @@ pub(super) struct GlobalPreparation {
     pub fingerprint: Option<String>,
 }
 impl Recorder {
+    pub(super) async fn seal_case_dependency_indexes(&self) {
+        let run = self.run_dir.clone();
+        let owner = self.artifact_owner;
+        let result = tokio::task::spawn_blocking(move || -> Result<()> {
+            if let Some(catalog) = crate::dependency_index::case_recording::seal(&run)?
+                && let Some(owner) = owner
+            {
+                owner.assign_path_to(&catalog)?;
+            }
+            Ok(())
+        })
+        .await
+        .context("recording Case index task failed")
+        .and_then(|result| result);
+        if let Err(error) = result {
+            tracing::warn!(%error, "Case index catalog could not be published; Replay will build missing indexes");
+        }
+    }
+
     pub(super) async fn seal_global_dependency_indexes(&self) {
         let run = self.run_dir.clone();
         let result = tokio::task::spawn_blocking(move || {

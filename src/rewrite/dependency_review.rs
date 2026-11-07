@@ -342,7 +342,7 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
         input.schema == SCHEMA,
         "unsupported attribution submission schema"
     );
-    let _lock = store.lock()?;
+    let lock = store.lock()?;
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
@@ -362,6 +362,7 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
         .context("attribution revision exhausted")?;
     let mut touched = BTreeSet::new();
     let mut moved_case_scopes = std::collections::BTreeMap::new();
+    let mut changed_scopes = BTreeSet::new();
     for original_proposal in &input.decisions {
         let mut proposal = original_proposal.clone();
         let rule_bindings = rules::bind(&root, &state, &original, &mut proposal)?;
@@ -377,7 +378,13 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
             &input.source_inventory_id,
             &proposal,
         ))?);
-        ownership_impact::observe(&state, &original, &proposal, &mut moved_case_scopes);
+        ownership_impact::observe(
+            &state,
+            &original,
+            &proposal,
+            &mut moved_case_scopes,
+            &mut changed_scopes,
+        );
         let group = std::sync::Arc::new(decisions::DecisionGroup {
             template: decisions::DecisionTemplate {
                 owner: proposal.owner.clone(),
@@ -497,6 +504,14 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
     state.bump();
     store.save(&state)?;
     let pending = required_action(&root, &state);
+    drop(lock);
+    drop(original);
+    if let Some(source) = state.case_source.as_deref()
+        && let Err(error) =
+            crate::replay::prewarm_attribution_indexes(&root, source, &changed_scopes)
+    {
+        tracing::warn!(%error, "attribution saved; Replay will build any missing dependency indexes");
+    }
     Ok(
         json!({"schema":SCHEMA,"revision":next_revision,"accepted_apis":accepted,
         "pending_obligations":state.dependency_review.obligations.values().filter(|o|o.pending()).collect::<Vec<_>>(),

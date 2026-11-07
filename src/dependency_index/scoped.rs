@@ -264,6 +264,27 @@ pub(crate) fn read_bytes(path: &Path) -> Result<Vec<u8>> {
 }
 
 impl Source {
+    pub(super) fn membership_sha256(&self) -> Result<Option<String>> {
+        // Staging and published scopes have different relative ledger paths.
+        // Their ordered, authenticated record references define membership.
+        let Some(locations) = &self.locations else {
+            return Ok(None);
+        };
+        self.validate()?;
+        Ok(Some(super::build::digest(&serde_json::to_vec(
+            locations.as_ref(),
+        )?)))
+    }
+
+    pub(super) fn scope_sha256(&self) -> Result<Option<String>> {
+        let Some((view, _)) = &self.view else {
+            return Ok(None);
+        };
+        let sha256 = super::build::digest(&fs::read(view)?);
+        self.validate()?;
+        Ok(Some(sha256))
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         if let Some((path, stamp)) = &self.view {
             ensure!(

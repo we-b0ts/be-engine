@@ -90,6 +90,8 @@ pub(crate) struct FileIndex {
     pub version: u32,
     pub stamp: FileStamp,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_membership_sha256: Option<String>,
     pub events: usize,
     pub endpoints: Vec<Endpoint>,
     pub metadata: Vec<(usize, serde_json::Value)>,
