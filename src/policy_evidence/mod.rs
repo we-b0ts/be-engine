@@ -21,7 +21,9 @@ mod storage;
 mod store;
 pub(crate) use source::SourceRecord;
 pub(crate) use store::target_key as target_observation_id;
-pub(crate) use store::{AssociationOutcome, ObservationRetention, WitnessStore};
+pub(crate) use store::{
+    AssociationOutcome, ObservationRetention, RequestAssociation, WitnessStore,
+};
 mod publication;
 pub(crate) use publication::stage;
 mod v2;

@@ -19,6 +19,7 @@ pub(super) struct Candidates {
     lanes: LaneIndex,
     families: Vec<Option<Family>>,
     selects: Vec<Option<SelectHint>>,
+    savepoints: Vec<Option<crate::mysql::savepoint::Command>>,
 }
 
 impl Default for Candidates {
@@ -30,6 +31,7 @@ impl Default for Candidates {
             lanes: LaneIndex::default(),
             families: Vec::new(),
             selects: Vec::new(),
+            savepoints: Vec::new(),
         }
     }
 }
@@ -73,6 +75,13 @@ impl Candidates {
                 tokens
                     .as_deref()
                     .and_then(|tokens| SelectHint::from_tokens(tokens)),
+            );
+            self.savepoints.push(
+                exchange
+                    .record
+                    .sql
+                    .as_deref()
+                    .and_then(crate::mysql::savepoint::parse),
             );
             self.members
                 .register(exchange.source, exchange.case_id.as_deref(), index);
@@ -151,6 +160,10 @@ impl Candidates {
         self.lanes.blocker(candidate, |prior| {
             !exchanges[prior].status.is_consumed() && exchanges[prior].optional_session.is_none()
         })
+    }
+
+    pub(super) fn savepoint(&self, index: usize) -> Option<&crate::mysql::savepoint::Command> {
+        self.savepoints[index].as_ref()
     }
 
     pub(super) fn select(

@@ -104,6 +104,10 @@ impl ReplayState {
         let observed_sql = sql;
         let observed_params = params;
         let observed_statement = OnceCell::new();
+        let target_savepoint = transaction
+            .and(sql)
+            .and_then(crate::mysql::savepoint::parse);
+        self.mysql.prepare_candidates();
         let mut witnessed = (observation_id.is_some()
             && case.is_some()
             && self.replay_policy.as_ref().is_some_and(|policy| {
@@ -111,6 +115,7 @@ impl ReplayState {
                     && policy.request_contracts.compiled_rules().is_some()
             }))
         .then(|| vec![false; self.mysql.exchanges.len()]);
+        let mut candidate_witness = None;
         if let Some(policy) = self
             .replay_policy
             .as_ref()
@@ -229,8 +234,13 @@ impl ReplayState {
                             continue;
                         }
                         let savepoint_match = transaction.and_then(|t| {
-                            sql.and_then(|sql| {
-                                t.savepoints.preview(&exchange.record, sql, t.status_flags)
+                            sql.and_then(|_| {
+                                t.savepoints.preview_parsed(
+                                    &exchange.record,
+                                    self.mysql.candidates.savepoint(index),
+                                    target_savepoint.as_ref(),
+                                    t.status_flags,
+                                )
                             })
                         });
                         if savepoint_match == Some(false) {
@@ -265,18 +275,15 @@ impl ReplayState {
                             && !std::mem::replace(&mut witnessed[index], true)
                             && let (Some(policy), Some(case)) =
                                 (&self.replay_policy, active_case_id.as_deref())
+                            && let Some(observation_id) = observation_id
                             && let Err(error) = contracts::record_request(
                                 &policy.request_contracts,
                                 case,
                                 identity,
                                 &exchange.record,
-                                contracts::ObservedRequest {
-                                    observation_id,
-                                    command,
-                                    sql: observed_sql,
-                                    params: observed_params,
-                                    started_at: request_observed_at,
-                                },
+                                observation_id,
+                                request_observed_at,
+                                &mut candidate_witness,
                             )
                         {
                             self.mysql

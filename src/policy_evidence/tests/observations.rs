@@ -751,6 +751,17 @@ fn mysql_text_prepared_domain_adapter_does_not_relax_other_commands() {
                 .unwrap(),
             expected
         );
+        let prepared = store.prepare_request_association(command).unwrap();
+        assert_eq!(
+            prepared.associate(&metadata, &artifacts, None).unwrap(),
+            expected
+        );
+        let mut foreign = metadata.clone();
+        foreign.source.case_id = "other-case".into();
+        assert_eq!(
+            prepared.associate(&foreign, &artifacts, None).unwrap(),
+            AssociationOutcome::Incompatible
+        );
     }
     let manifest = store.sealed_manifest().unwrap();
     assert!(manifest.complete);

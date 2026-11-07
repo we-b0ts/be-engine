@@ -8,6 +8,36 @@ use crate::policy_evidence::{
 use crate::replay::{RecordedMysqlExchange, RecordedMysqlValue, ReplaySessionIdentity};
 use crate::value_contract::json::AnchorClocks;
 impl RequestContracts {
+    pub(in crate::replay) fn prepare_mysql_candidate_witness(
+        &self,
+        case: &str,
+        observation_id: uuid::Uuid,
+        observed: DateTime<Utc>,
+    ) -> Result<crate::replay::mysql::contracts::CandidateWitness> {
+        use crate::value_contract::time::ClockPair;
+        let anchor = self.anchor(case)?;
+        let target = self
+            .witnesses
+            .as_ref()
+            .context("MySQL candidate witness store is missing")?
+            .prepare_request_association(&observation_id.to_string())?;
+        Ok(crate::replay::mysql::contracts::CandidateWitness {
+            target,
+            key_context: anchor.dir,
+            clocks: AnchorClocks::for_request(
+                ClockPair {
+                    source: anchor.recorded,
+                    target: anchor.actual,
+                },
+                ClockPair {
+                    source: None,
+                    target: Some(observed),
+                },
+                ClockPair::default(),
+            ),
+        })
+    }
+
     pub(in crate::replay) fn has_mysql_formats(
         &self,
         identity: &ReplaySessionIdentity,

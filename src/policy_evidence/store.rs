@@ -33,6 +33,30 @@ pub(crate) enum AssociationOutcome {
 pub(crate) struct WitnessStore {
     state: Arc<Mutex<State>>,
 }
+
+/// One independently retained dependency request, reused across its candidates.
+pub(crate) struct RequestAssociation {
+    store: WitnessStore,
+    target: usize,
+}
+
+impl RequestAssociation {
+    pub(crate) fn associate(
+        &self,
+        metadata: &WitnessMetadata,
+        key_context: &Path,
+        source: Option<&[u8]>,
+    ) -> Result<AssociationOutcome> {
+        self.store.associate_to(metadata, key_context, source, |_| {
+            ensure!(
+                metadata.surface == Surface::DependencyRequest
+                    && metadata.target_role == TargetRole::IndependentTargetObservation,
+                "candidate requires an independent dependency request"
+            );
+            Ok(self.target)
+        })
+    }
+}
 #[derive(Debug)]
 struct State {
     file: File,
@@ -318,6 +342,48 @@ impl WitnessStore {
         key_context: &Path,
         source: Option<&[u8]>,
     ) -> Result<AssociationOutcome> {
+        self.associate_to(metadata, key_context, source, |state| {
+            state.resolve_target(&target_key(
+                target_id,
+                metadata.surface,
+                metadata.target_role,
+            ))
+        })
+    }
+
+    pub(crate) fn prepare_request_association(
+        &self,
+        target_id: &str,
+    ) -> Result<RequestAssociation> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        ensure!(
+            !state.sealed,
+            "policy witness store has already been sealed"
+        );
+        let key = target_key(
+            target_id,
+            Surface::DependencyRequest,
+            TargetRole::IndependentTargetObservation,
+        );
+        let target = state
+            .resolve_target(&key)
+            .inspect_err(|_| state.omitted += 1)?;
+        Ok(RequestAssociation {
+            store: self.clone(),
+            target,
+        })
+    }
+
+    fn associate_to(
+        &self,
+        metadata: &WitnessMetadata,
+        key_context: &Path,
+        source: Option<&[u8]>,
+        resolve_target: impl FnOnce(&State) -> Result<usize>,
+    ) -> Result<AssociationOutcome> {
         let mut state = self
             .state
             .lock()
@@ -329,11 +395,7 @@ impl WitnessStore {
         let mut source_unavailable = false;
         let result = (|| -> Result<AssociationOutcome> {
             metadata.validate_roles(true)?;
-            let key = target_key(target_id, metadata.surface, metadata.target_role);
-            let target_index = *state
-                .targets
-                .get(&key)
-                .context("independent Target observation is missing")?;
+            let target_index = resolve_target(&state)?;
             if !v2::compatible(metadata, &state.graph.targets[target_index].metadata) {
                 return Ok(AssociationOutcome::Incompatible);
             }
@@ -621,6 +683,13 @@ impl State {
             .iter()
             .copied()
             .find(|&index| v2::same_source(&self.graph.sources[index].metadata, metadata))
+    }
+
+    fn resolve_target(&self, key: &str) -> Result<usize> {
+        self.targets
+            .get(key)
+            .copied()
+            .context("independent Target observation is missing")
     }
 
     fn mark_source_unavailable(&mut self, key: Option<String>) {

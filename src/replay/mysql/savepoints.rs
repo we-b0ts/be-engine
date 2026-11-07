@@ -1,6 +1,6 @@
 //! Connection-local Source/Target savepoint names, committed after delivery.
 use super::*;
-use crate::mysql::savepoint::{Kind, parse};
+use crate::mysql::savepoint::{Command, Kind, parse};
 
 #[derive(Debug)]
 struct Binding {
@@ -38,22 +38,20 @@ pub(super) fn complete(record: &RecordedMysqlExchange) -> bool {
 }
 
 impl Bindings {
-    pub(super) fn preview(
+    pub(super) fn preview_parsed(
         &self,
         record: &RecordedMysqlExchange,
-        sql: &str,
+        source: Option<&Command>,
+        target: Option<&Command>,
         status: u16,
     ) -> Option<bool> {
-        let source = record.sql.as_deref().and_then(parse);
-        let target = parse(sql);
         if source.is_none() && target.is_none() || !complete(record) {
             return None;
         }
         Some(
             (|| {
                 let (source, target) = (source?, target?);
-                if !complete(record)
-                    || status & 0x2009 != 1
+                if status & 0x2009 != 1
                     || source.kind != target.kind
                     || record.connection_id.is_none()
                     || record.query_sequence.is_none()
@@ -86,6 +84,16 @@ impl Bindings {
                 }
             })()
             .is_some(),
+        )
+    }
+
+    #[cfg(test)]
+    fn preview(&self, record: &RecordedMysqlExchange, sql: &str, status: u16) -> Option<bool> {
+        self.preview_parsed(
+            record,
+            record.sql.as_deref().and_then(parse).as_ref(),
+            parse(sql).as_ref(),
+            status,
         )
     }
 
