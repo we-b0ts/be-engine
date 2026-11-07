@@ -63,6 +63,76 @@ async fn recorded_setup_error_is_consumed_before_builtin_success() {
 }
 
 #[tokio::test]
+async fn ordinary_commit_only_associates_same_end_evidence() {
+    let mut rollback = exchange("ROLLBACK", json!({"status":"ok"}));
+    rollback["connection_id"] = json!(uuid::Uuid::new_v4());
+    rollback["query_sequence"] = json!(1);
+    let mut commit = exchange("COMMIT", json!({"status":"ok"}));
+    commit["connection_id"] = json!(uuid::Uuid::new_v4());
+    commit["query_sequence"] = json!(2);
+    let (temp, address, runtime, task) = fixture_with_policy(
+        &[rollback, commit],
+        Some("format: traffic-policy/v3\nrules: []\n"),
+    )
+    .await;
+    let ca = temp
+        .path()
+        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
+    let mut client = connect(address, &ca).await;
+    sqlx::raw_sql("COMMIT").execute(&mut client).await.unwrap();
+    client.close().await.unwrap();
+    let state = runtime.state.lock().await;
+    assert!(state.mysql.exchanges[0].status.is_available());
+    assert!(state.mysql.exchanges[1].status.is_consumed());
+    let owner = &state.replay_policy.as_ref().unwrap().request_contracts;
+    owner.seal_witnesses().unwrap();
+    let witnesses = owner.witness_manifest().unwrap().witnesses().unwrap();
+    let sequences = witnesses
+        .iter()
+        .filter_map(|witness| {
+            (witness.metadata.surface == crate::policy::Surface::DependencyRequest
+                && witness.target_sha256.is_some())
+            .then_some(witness.metadata.source.sequence)
+            .flatten()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sequences, [2]);
+    task.abort();
+}
+
+#[tokio::test]
+async fn recorded_prepare_failure_takes_precedence_over_cached_metadata() {
+    let sql = "SELECT id FROM tasks WHERE id=?";
+    let mut failure = exchange(
+        sql,
+        json!({"status":"error","error_code":1644,
+        "error_message":"recorded prepare failure"}),
+    );
+    failure["command"] = json!("COM_STMT_PREPARE");
+    let (temp, address, runtime, task) = fixture(&[failure], false).await;
+    let ca = temp
+        .path()
+        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
+    let mut client = connect(address, &ca).await;
+    let error = sqlx::query(sql)
+        .bind(1_i64)
+        .fetch_one(&mut client)
+        .await
+        .unwrap_err();
+    let database = error
+        .as_database_error()
+        .unwrap()
+        .downcast_ref::<sqlx::mysql::MySqlDatabaseError>();
+    assert_eq!(database.number(), 1644);
+    assert!(
+        runtime.state.lock().await.mysql.exchanges[0]
+            .status
+            .is_consumed()
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn first_pass_accepts_in_list_order_without_reordering_boolean_terms() {
     let records = [
         "SELECT id FROM tasks WHERE name IN ('A','B','C') AND (flag=1 OR flag=2)",

@@ -222,6 +222,21 @@ impl ReplayState {
                 Some(std::sync::Arc::from(vec![*index]))
             } else {
                 (transaction_end.is_none() && case_window.is_none()).then(|| {
+                    if source == ReplaySource::Case
+                        && plain_end
+                        && !self.replay_policy.as_ref().is_some_and(|policy| {
+                            policy.mysql_sql_difference_may_apply(case, identity, command, sql)
+                        })
+                        && let Some(ends) = self.mysql.cleanup_selection.candidates(
+                            &self.mysql.exchanges,
+                            case,
+                            identity,
+                            command,
+                            baseline_normalized_sql.as_deref(),
+                        )
+                    {
+                        return ends;
+                    }
                     self.mysql.candidates.lookup(
                         source,
                         active_case_id.as_deref(),

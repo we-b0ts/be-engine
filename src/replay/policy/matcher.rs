@@ -512,6 +512,23 @@ impl ReplayPolicyRuntime {
         })
     }
 
+    pub(in crate::replay) fn mysql_sql_difference_may_apply(
+        &self,
+        case_id: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+    ) -> bool {
+        let Some(case) = case_id.and_then(|id| self.cases.get(id)) else {
+            return false;
+        };
+        self.loaded.document.dependency_rules.iter().any(|rule| {
+            rule.protocol == DependencyProtocol::Mysql
+                && rule_matches_case(rule, case)
+                && self.mysql_selectors.matches(rule, identity, command, sql)
+        })
+    }
+
     pub(in crate::replay) fn mysql_legacy_sql_selector_applies(
         &self,
         case_id: Option<&str>,

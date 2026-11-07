@@ -191,6 +191,17 @@ pub(in crate::replay) struct ReplayBodyCapture {
 pub(in crate::replay) struct StatementMetadata {
     pub(in crate::replay) param_count: usize,
     pub(in crate::replay) columns: Vec<RecordedMysqlColumn>,
+    pub(super) prepare_wire: std::sync::OnceLock<Option<Arc<super::response::EncodedPrepare>>>,
+}
+
+impl StatementMetadata {
+    pub(in crate::replay) fn new(param_count: usize, columns: Vec<RecordedMysqlColumn>) -> Self {
+        Self {
+            param_count,
+            columns,
+            prepare_wire: std::sync::OnceLock::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

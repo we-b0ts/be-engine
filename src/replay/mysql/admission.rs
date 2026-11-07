@@ -57,6 +57,13 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
                 .match_mysql_control(self.case.as_deref(), &identity, self.command, self.sql)
                 .ok_or("no finite MySQL control candidate");
         }
+        if self.command == "COM_STMT_PREPARE"
+            && !state
+                .mysql
+                .has_finite_prepare(self.case.as_deref(), &identity)
+        {
+            return Err("no finite MySQL prepare candidate");
+        }
         let transaction = matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE").then(|| {
             matcher::TransactionMatch {
                 savepoints: &self.session.savepoints,

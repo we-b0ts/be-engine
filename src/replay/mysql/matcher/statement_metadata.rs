@@ -176,10 +176,10 @@ impl ReplayState {
                             })
                         })
                     {
-                        return StatementMetadata {
+                        return StatementMetadata::new(
                             param_count,
-                            columns: exchange.record.response.columns.clone(),
-                        };
+                            exchange.record.response.columns.clone(),
+                        );
                     }
                     if semantic {
                         let Some(actual) = semantic_target
@@ -202,10 +202,7 @@ impl ReplayState {
                         if let Some(columns) =
                             projection::semantic_columns(&exchange.record, &recorded, actual)
                         {
-                            return StatementMetadata {
-                                param_count,
-                                columns,
-                            };
+                            return StatementMetadata::new(param_count, columns);
                         }
                         continue;
                     }
@@ -217,10 +214,7 @@ impl ReplayState {
                             .as_mut()
                             .and_then(|projection| projection.statement_columns(&exchange.record))
                         {
-                            return StatementMetadata {
-                                param_count,
-                                columns,
-                            };
+                            return StatementMetadata::new(param_count, columns);
                         }
                         continue;
                     }
@@ -236,9 +230,9 @@ impl ReplayState {
                         _ => false,
                     };
                     if matches {
-                        return StatementMetadata {
+                        return StatementMetadata::new(
                             param_count,
-                            columns: direct_projection
+                            direct_projection
                                 .get_or_insert_with(|| {
                                     projection::Query::prepare("COM_QUERY", sql, None)
                                 })
@@ -247,15 +241,15 @@ impl ReplayState {
                                     projection.statement_columns(&exchange.record)
                                 })
                                 .unwrap_or_else(|| exchange.record.response.columns.clone()),
-                        };
+                        );
                     }
                 }
             }
         }
-        StatementMetadata {
+        StatementMetadata::new(
             param_count,
-            columns: builtin_response(sql, identity.database.as_deref())
+            builtin_response(sql, identity.database.as_deref())
                 .map_or_else(Vec::new, |r| r.columns),
-        }
+        )
     }
 }

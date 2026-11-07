@@ -65,6 +65,22 @@ impl MysqlReplayState {
         self.candidates.register(&self.exchanges);
     }
 
+    pub(super) fn has_finite_prepare(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+    ) -> bool {
+        self.prepare_candidates();
+        [ReplaySource::Case, ReplaySource::Startup]
+            .into_iter()
+            .any(|source| {
+                !self
+                    .candidates
+                    .lookup(source, case, identity, Some("COM_STMT_PREPARE"))
+                    .is_empty()
+            })
+    }
+
     pub(in crate::replay) fn prepared_case_members(&self, case: &str) -> Arc<[usize]> {
         self.candidates.case_members(case)
     }

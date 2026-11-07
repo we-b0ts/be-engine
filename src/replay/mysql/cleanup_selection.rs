@@ -12,6 +12,7 @@ pub(super) struct Index {
 #[derive(Debug, Default)]
 struct Scope {
     ends: [Vec<usize>; 2],
+    end_candidates: [std::sync::OnceLock<Arc<[usize]>>; 2],
     wires: HashMap<(Uuid, u64), Vec<usize>>,
 }
 
@@ -25,7 +26,7 @@ fn scope_key(case: Option<&str>, identity: &ReplaySessionIdentity) -> Option<Sco
 }
 
 fn end_kind(command: &str, normalized_sql: Option<&str>) -> Option<usize> {
-    if command != "COM_QUERY" {
+    if !matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE") {
         return None;
     }
     match normalized_sql? {
@@ -60,14 +61,39 @@ impl Index {
             {
                 scope.wires.entry(wire).or_default().push(index);
             }
-            if exchange.record.command == "COM_QUERY"
-                && let Some(sql) = exchange.record.sql.as_deref()
-                && let Some(kind) = end_kind("COM_QUERY", Some(&normalize_sql(sql)))
+            if matches!(
+                exchange.record.command.as_str(),
+                "COM_QUERY" | "COM_STMT_EXECUTE"
+            ) && let Some(sql) = exchange.record.sql.as_deref()
+                && let Some(kind) = end_kind(&exchange.record.command, Some(&normalize_sql(sql)))
             {
                 scope.ends[kind].push(index);
+                scope.end_candidates[kind].take();
             }
         }
         self.count = exchanges.len();
+    }
+
+    pub(super) fn candidates(
+        &mut self,
+        exchanges: &[ReplayExchange],
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        normalized_sql: Option<&str>,
+    ) -> Option<Arc<[usize]>> {
+        let kind = end_kind(command, normalized_sql)?;
+        let scope = scope_key(case, identity)?;
+        self.register(exchanges);
+        Some(self.scopes.get(&scope).map_or_else(
+            || Arc::from([]),
+            |scope| {
+                Arc::clone(
+                    scope.end_candidates[kind]
+                        .get_or_init(|| Arc::from(scope.ends[kind].as_slice())),
+                )
+            },
+        ))
     }
 
     pub(super) fn preferred_end(
@@ -78,19 +104,27 @@ impl Index {
         command: &str,
         normalized_sql: Option<&str>,
     ) -> Option<usize> {
+        if command != "COM_QUERY" {
+            return None;
+        }
         let kind = end_kind(command, normalized_sql)?;
         self.register(exchanges);
         let scope = self.scopes.get(&scope_key(active_case, identity)?)?;
         let ends = &scope.ends[kind];
         if !ends.iter().any(|index| {
             let exchange = &exchanges[*index];
-            exchange.optional_session.is_some() && exchange.status.is_available()
+            exchange.record.command == "COM_QUERY"
+                && exchange.optional_session.is_some()
+                && exchange.status.is_available()
         }) {
             return None;
         }
         ends.iter().copied().find(|index| {
             let exchange = &exchanges[*index];
-            if exchange.optional_session.is_some() || !exchange.status.is_available() {
+            if exchange.record.command != "COM_QUERY"
+                || exchange.optional_session.is_some()
+                || !exchange.status.is_available()
+            {
                 return false;
             }
             let record = &exchange.record;
