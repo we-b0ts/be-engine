@@ -214,11 +214,31 @@ impl Candidates {
         command: &str,
         table: Option<&str>,
         timeline: &crate::replay::control::input_timing::Live,
-    ) -> Option<Vec<usize>> {
+    ) -> Option<windows::Selection> {
         let key = key(ReplaySource::Case, Some(case), identity, Some(command))?;
+        if let Some(table) = table
+            && let Some(window) = self.windows.optimistic(&key, table, |anchor| {
+                timeline.mysql_candidate_anchor(case, anchor)
+            })
+        {
+            return Some(window);
+        }
         self.windows.select(&key, table, |anchor| {
             timeline.mysql_candidate_cutoff(case, anchor)
         })
+    }
+
+    pub(super) fn select_hypothesis_window(
+        &self,
+        case: &str,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        window: &windows::Selection,
+    ) -> Option<Vec<usize>> {
+        let key = key(ReplaySource::Case, Some(case), identity, Some(command))?;
+        self.windows
+            .select(&key, None, |_| Some(window.cutoff))
+            .map(|selection| selection.indices)
     }
 
     pub(super) fn claimed(&mut self, index: usize) {

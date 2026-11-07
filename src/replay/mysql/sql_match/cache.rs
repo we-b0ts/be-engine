@@ -34,6 +34,7 @@ pub(in crate::replay::mysql) struct CompiledSql {
     projection_predicate: Option<Template>,
     param_count: usize,
     constants: OnceLock<Option<Arc<BoundSql>>>,
+    in_list_constants: OnceLock<Option<Arc<InListKey>>>,
     metadata: OnceLock<Option<Arc<BoundSql>>>,
 }
 
@@ -43,6 +44,9 @@ pub(in crate::replay::mysql) struct BoundSql {
     pub(in crate::replay::mysql) projection: Option<DirectSelect>,
     projection_key: Option<Key>,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::replay::mysql) struct InListKey(Key);
 
 #[derive(Debug)]
 enum SemanticKey {
@@ -131,6 +135,7 @@ impl CompiledSql {
             projection,
             projection_predicate,
             constants: OnceLock::new(),
+            in_list_constants: OnceLock::new(),
             metadata: OnceLock::new(),
         }
     }
@@ -140,23 +145,48 @@ impl CompiledSql {
         command: &str,
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<Arc<BoundSql>> {
-        let values = match command {
-            "COM_QUERY" if self.param_count == 0 && params.is_none() => Vec::new(),
-            "COM_STMT_EXECUTE" => {
-                let params = params?;
-                if params.len() != self.param_count {
-                    return None;
-                }
-                params.iter().map(bound_value).collect::<Option<Vec<_>>>()?
-            }
-            _ => return None,
-        };
+        let values = self.parameter_values(command, params)?;
         if self.param_count == 0 {
             self.constants
                 .get_or_init(|| self.instantiate(&[]).map(Arc::new))
                 .clone()
         } else {
             self.instantiate(&values).map(Arc::new)
+        }
+    }
+
+    pub(in crate::replay::mysql) fn bind_in_lists(
+        &self,
+        command: &str,
+        params: Option<&[RecordedMysqlValue]>,
+    ) -> Option<Arc<InListKey>> {
+        let template = self.predicate.as_ref()?;
+        let values = self.parameter_values(command, params)?;
+        let bind = || {
+            template
+                .bind_in_lists(&bind_tokens(&self.tokens, &values)?)
+                .map(|key| Arc::new(InListKey(key)))
+        };
+        if self.param_count == 0 {
+            self.in_list_constants.get_or_init(bind).clone()
+        } else {
+            bind()
+        }
+    }
+
+    fn parameter_values(
+        &self,
+        command: &str,
+        params: Option<&[RecordedMysqlValue]>,
+    ) -> Option<Vec<Token>> {
+        match command {
+            "COM_QUERY" if self.param_count == 0 && params.is_none() => Some(Vec::new()),
+            "COM_STMT_EXECUTE" => {
+                let params = params?;
+                (params.len() == self.param_count)
+                    .then(|| params.iter().map(bound_value).collect())?
+            }
+            _ => None,
         }
     }
 
@@ -170,21 +200,7 @@ impl CompiledSql {
     }
 
     fn instantiate(&self, params: &[Token]) -> Option<BoundSql> {
-        fn bind(tokens: &[Token], values: &[Token]) -> Option<Vec<Token>> {
-            let mut params = values.iter();
-            let bound = tokens
-                .iter()
-                .map(|t| {
-                    if *t == Token::Placeholder {
-                        params.next().cloned()
-                    } else {
-                        Some(t.clone())
-                    }
-                })
-                .collect::<Option<Vec<_>>>()?;
-            params.next().is_none().then_some(bound)
-        }
-        let bound = bind(&self.tokens, params)?;
+        let bound = bind_tokens(&self.tokens, params)?;
         let key = if let Some(template) = &self.predicate {
             SemanticKey::Predicate(template.bind(&bound)?)
         } else {
@@ -192,7 +208,7 @@ impl CompiledSql {
         };
         let mut projection = self.projection.clone();
         let projection_key = if let Some(select) = &mut projection {
-            select.body = bind(&select.body, params)?;
+            select.body = bind_tokens(&select.body, params)?;
             self.projection_predicate
                 .as_ref()
                 .and_then(|template| template.bind(&select.body))
@@ -205,6 +221,21 @@ impl CompiledSql {
             projection_key,
         })
     }
+}
+
+fn bind_tokens(tokens: &[Token], values: &[Token]) -> Option<Vec<Token>> {
+    let mut params = values.iter();
+    let bound = tokens
+        .iter()
+        .map(|t| {
+            if *t == Token::Placeholder {
+                params.next().cloned()
+            } else {
+                Some(t.clone())
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
+    params.next().is_none().then_some(bound)
 }
 
 impl BoundSql {

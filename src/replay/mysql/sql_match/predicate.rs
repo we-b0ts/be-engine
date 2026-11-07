@@ -200,9 +200,19 @@ impl Template {
     }
 
     pub(super) fn bind(&self, tokens: &[Token]) -> Option<Key> {
+        self.bind_with_order(tokens, true)
+    }
+
+    pub(super) fn bind_in_lists(&self, tokens: &[Token]) -> Option<Key> {
+        self.predicate
+            .contains_in()
+            .then(|| self.bind_with_order(tokens, false))?
+    }
+
+    fn bind_with_order(&self, tokens: &[Token], sort_logical_terms: bool) -> Option<Key> {
         Some(Key {
             prefix: tokens.get(..self.start)?.to_vec(),
-            predicate: self.predicate.bind(tokens)?,
+            predicate: self.predicate.bind(tokens, sort_logical_terms)?,
             suffix: tokens.get(self.end..)?.to_vec(),
         })
     }
@@ -335,7 +345,15 @@ impl Operand {
 }
 
 impl Predicate {
-    fn bind(&self, tokens: &[Token]) -> Option<Self> {
+    fn contains_in(&self) -> bool {
+        match self {
+            Self::In(..) => true,
+            Self::And(terms) | Self::Or(terms) => terms.iter().any(Self::contains_in),
+            _ => false,
+        }
+    }
+
+    fn bind(&self, tokens: &[Token], sort_logical_terms: bool) -> Option<Self> {
         Some(match self {
             Self::Compare(a, op, b) => Self::Compare(a.bind(tokens)?, op.clone(), b.bind(tokens)?),
             Self::IsNull(a, not) => Self::IsNull(a.bind(tokens)?, *not),
@@ -349,9 +367,11 @@ impl Predicate {
             Self::And(terms) | Self::Or(terms) => {
                 let mut terms = terms
                     .iter()
-                    .map(|v| v.bind(tokens))
+                    .map(|v| v.bind(tokens, sort_logical_terms))
                     .collect::<Option<Vec<_>>>()?;
-                terms.sort();
+                if sort_logical_terms {
+                    terms.sort();
+                }
                 if matches!(self, Self::And(_)) {
                     Self::And(terms)
                 } else {

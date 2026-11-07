@@ -249,7 +249,7 @@ fn statement_mapping(
     column_mapping(record, recorded, actual)
 }
 
-fn complete_resultset(record: &RecordedMysqlExchange) -> bool {
+pub(super) fn complete_resultset(record: &RecordedMysqlExchange) -> bool {
     record.response.status == "resultset"
         && !record.response.rows_truncated
         && record.parse_warnings.is_empty()

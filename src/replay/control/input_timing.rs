@@ -99,6 +99,19 @@ pub(in crate::replay) struct Live {
 }
 
 impl Live {
+    pub(in crate::replay) fn mysql_candidate_anchor(
+        &self,
+        case: &str,
+        last_matched: Option<DateTime<Utc>>,
+    ) -> Option<DateTime<Utc>> {
+        if self.case != case {
+            return None;
+        }
+        self.fast
+            .as_ref()?
+            .mysql_candidate_anchor(self, last_matched)
+    }
+
     pub(in crate::replay) fn mysql_candidate_cutoff(
         &self,
         case: &str,

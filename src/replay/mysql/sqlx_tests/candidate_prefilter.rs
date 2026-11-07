@@ -63,6 +63,49 @@ async fn recorded_setup_error_is_consumed_before_builtin_success() {
 }
 
 #[tokio::test]
+async fn first_pass_accepts_in_list_order_without_reordering_boolean_terms() {
+    let records = [
+        "SELECT id FROM tasks WHERE name IN ('A','B','C') AND (flag=1 OR flag=2)",
+        "SELECT id FROM tasks WHERE (flag=2 OR flag=1) AND name IN ('C','B','A')",
+        "SELECT id FROM tasks WHERE (flag=2 OR flag=1) AND name IN ('A','B','C')",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, sql)| {
+        let mut record = exchange(
+            sql,
+            result(
+                json!([{"name":"id","family":"integer","sql_type":"INT"}]),
+                json!([[{"kind":"integer","value":index}]]),
+            ),
+        );
+        record["connection_id"] = json!(uuid::Uuid::new_v4());
+        record["query_sequence"] = json!(index + 1);
+        record
+    })
+    .collect::<Vec<_>>();
+    let (temp, address, runtime, task) = fixture(&records, false).await;
+    let ca = temp
+        .path()
+        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
+    let mut client = connect(address, &ca).await;
+    let row = sqlx::query("SELECT id FROM tasks WHERE (flag=2 OR flag=1) AND name IN (?,?,?)")
+        .bind("A")
+        .bind("B")
+        .bind("C")
+        .fetch_one(&mut client)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<i32, _>(0), 1);
+    client.close().await.unwrap();
+    let state = runtime.state.lock().await;
+    assert!(state.mysql.exchanges[0].status.is_available());
+    assert!(state.mysql.exchanges[1].status.is_consumed());
+    assert!(state.mysql.exchanges[2].status.is_available());
+    task.abort();
+}
+
+#[tokio::test]
 async fn proven_cross_table_select_is_filtered_before_request_evidence() {
     let records = [
         "SELECT id FROM different_table WHERE id=7",

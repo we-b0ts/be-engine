@@ -258,14 +258,30 @@ impl Plan {
         live: &Live,
         anchor: Option<DateTime<Utc>>,
     ) -> Option<DateTime<Utc>> {
-        let anchor = anchor
+        let anchor = self.mysql_anchor_us(live, anchor);
+        let cutoff = mysql_candidate_cutoff_us(&live.plan.input.actions, anchor);
+        self.mysql_source_time(cutoff)
+    }
+
+    pub(super) fn mysql_candidate_anchor(
+        &self,
+        live: &Live,
+        anchor: Option<DateTime<Utc>>,
+    ) -> Option<DateTime<Utc>> {
+        self.mysql_source_time(self.mysql_anchor_us(live, anchor))
+    }
+
+    fn mysql_anchor_us(&self, live: &Live, anchor: Option<DateTime<Utc>>) -> u64 {
+        anchor
             .and_then(|at| u64::try_from((at - self.source.start).num_microseconds()?).ok())
             .max(live.native_dispatch.map(|window| window.from.earliest_us()))
-            .unwrap_or_default();
-        let cutoff = mysql_candidate_cutoff_us(&live.plan.input.actions, anchor);
+            .unwrap_or_default()
+    }
+
+    fn mysql_source_time(&self, us: u64) -> Option<DateTime<Utc>> {
         self.source
             .start
-            .checked_add_signed(chrono::TimeDelta::microseconds(i64::try_from(cutoff).ok()?))
+            .checked_add_signed(chrono::TimeDelta::microseconds(i64::try_from(us).ok()?))
     }
 
     pub(super) fn tail(&self) -> Option<FastTail> {
