@@ -170,9 +170,9 @@ pub(super) struct MotanReplayEvents {
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
     pub(in crate::replay) matched_details: SuccessDetailBudget,
-    unmatched: Vec<CommandRequestReport>,
-    unsupported: Vec<CommandRequestReport>,
-    unsafe_events: Vec<CommandRequestReport>,
+    pub(super) unmatched: Vec<CommandRequestReport>,
+    pub(super) unsupported: Vec<CommandRequestReport>,
+    pub(super) unsafe_events: Vec<CommandRequestReport>,
 }
 
 impl Default for MotanReplayState {

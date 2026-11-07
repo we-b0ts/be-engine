@@ -526,8 +526,7 @@ impl RedisReplayState {
                 .unsafe_events
                 .iter()
                 .cloned()
-                .chain(self.initial_expiry_violations())
-                .chain(self.append_streams.unconfirmed_extensions())
+                .chain(self.derived_unsafe_events())
                 .collect(),
             unused_case: unused(&self.exchanges, ReplaySource::Case)
                 .into_iter()
@@ -543,6 +542,12 @@ impl RedisReplayState {
             snapshot_overlays: self.snapshot_overlays.clone(),
             warnings: self.snapshot_overlay_warnings.clone(),
         }
+    }
+
+    pub(super) fn derived_unsafe_events(&self) -> impl Iterator<Item = CommandRequestReport> {
+        self.initial_expiry_violations()
+            .into_iter()
+            .chain(self.append_streams.unconfirmed_extensions())
     }
 
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
