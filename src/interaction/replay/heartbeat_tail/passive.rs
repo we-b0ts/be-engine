@@ -39,7 +39,10 @@ impl Passive {
 
     pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Self> {
         let namespace = Self::input_namespace(input)?;
-        timeout(input, output)?;
+        let end_ms = timeout(input, output)?;
+        if !output.end.pending.is_empty() {
+            return None;
+        }
         let mut events = output.events.iter().filter(|event| !event.heartbeat);
         let mut decoder = SocketIoDecoder::new(input.policy.max_message_bytes);
         let mut packets = |event: &crate::interaction::model::OutputEvent| {
@@ -73,7 +76,6 @@ impl Passive {
             last_output_ms = event.offset_ms;
         }
         decoder.finish().ok()?;
-        let end_ms = output.end.offset_ms;
         (!outputs.is_empty() && last_output_ms < end_ms).then(|| Self {
             output_count: outputs.len() + 2,
             outputs,

@@ -14,6 +14,9 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
     };
     let earlier = envelope("/earlier");
     let later = envelope("/later");
+    let mut input = InputTranscript::new(Protocol::SocketIo, Default::default());
+    // Ordered business timing does not require proof that heartbeat wait can be skipped.
+    input.socket_io_heartbeat = Some(Default::default());
     let (_root, runtime) = super::super::tests::runtime_with_request(
         &[
             event(1, "PUBLISH", &[b"socketio", earlier.as_bytes()], b":11\r\n"),
@@ -22,7 +25,7 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
         ],
         json!({"format":"traffic-policy/v3","rules":[]}),
         json!({"method":"GET","uri":"/socket.io/","timestamp":"2020-01-01T00:00:00Z",
-            "interaction":InputTranscript::new(Protocol::SocketIo, Default::default())}),
+            "interaction":input}),
         ReplayLifecycleConfig {
             stream_timing: Some(ReplayStreamTiming::Fast),
             ..Default::default()
@@ -37,6 +40,8 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
     )
     .await;
     assert_eq!(begin["ok"], true, "{begin}");
+    assert_eq!(begin["ordered_fast"], true, "{begin}");
+    assert!(begin["fast_tail"].is_null(), "{begin}");
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let client = TcpStream::connect(listener.local_addr().unwrap())

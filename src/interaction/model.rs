@@ -338,6 +338,15 @@ impl EndObservation {
                 && !self.pending.is_empty()
                 && matches!(self.reason, EndReason::ClientClose | EndReason::ServerEof))
     }
+
+    pub(crate) fn observes_replay_close_tail(&self, protocol: Protocol) -> bool {
+        // An early Target EOF can fail the assertion while its admitted work
+        // still needs to be isolated from the next Case.
+        self.observes_close_tail(protocol)
+            || (protocol == Protocol::SocketIo
+                && self.reason == EndReason::ServerEof
+                && !self.pending.is_empty())
+    }
 }
 
 pub(crate) const CLIENT_ABORT_QUIET: std::time::Duration = std::time::Duration::from_secs(15);
@@ -438,6 +447,10 @@ mod tests {
             );
             end.clean = false;
             assert!(!end.observes_close_tail(Protocol::SocketIo));
+            assert_eq!(
+                end.observes_replay_close_tail(Protocol::SocketIo),
+                reason == EndReason::ServerEof
+            );
             end.clean = true;
             end.pending.clear();
             assert!(!end.observes_close_tail(Protocol::SocketIo));

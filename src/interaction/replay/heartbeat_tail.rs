@@ -15,21 +15,54 @@ use crate::interaction::{
 };
 
 pub(crate) struct Evidence {
-    pub last_ping_ms: u64,
+    pub eof_ms: u64,
     pub acknowledged: BTreeSet<u64>,
 }
 
 pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Evidence> {
-    let evidence = timeout(input, output)?;
-    let last = output.events.last()?;
-    (last.offset_ms == evidence.last_ping_ms && is_ping(last)).then_some(evidence)
+    let eof_ms = timeout(input, output)?;
+    let limit = input.policy.max_message_bytes;
+    let mut decoder = SocketIoDecoder::new(limit);
+    let mut actions = input.actions.iter().peekable();
+    let mut receipts = Receipts::default();
+    for event in &output.events {
+        while let Some(action) = actions.next_if(|action| action.offset_ms < event.offset_ms) {
+            let InputActionKind::Message { message } = &action.action else {
+                return None;
+            };
+            receipts.sent(action.sequence, message, limit).ok()?;
+        }
+        for packet in decoder.push(&event.message).ok()? {
+            match packet {
+                EngineIoPacket::Ping(payload) if payload.is_empty() => {}
+                EngineIoPacket::Ping(_) | EngineIoPacket::Close => return None,
+                EngineIoPacket::Message(packet)
+                    if matches!(packet.kind, SocketIoKind::Ack | SocketIoKind::BinaryAck) =>
+                {
+                    receipts.acknowledge(&packet)?;
+                }
+                _ => {}
+            }
+        }
+    }
+    decoder.finish().ok()?;
+    output
+        .end
+        .pending
+        .iter()
+        .all(|id| receipts.acknowledged.contains(id))
+        .then_some(Evidence {
+            eof_ms,
+            acknowledged: receipts.acknowledged,
+        })
 }
 
 fn is_ping(event: &crate::interaction::model::OutputEvent) -> bool {
     event.heartbeat && event.message.kind == MessageKind::Text && event.message.data == "2"
 }
 
-fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<Evidence> {
+/// Identify the terminal timeout independently from proof of completed business work.
+fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<u64> {
     if input.protocol != Protocol::SocketIo
         || input.policy.preserve_input_timing
         || output.protocol != Protocol::SocketIo
@@ -45,83 +78,46 @@ fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<Eviden
         return None;
     }
     let program = input.socket_io_heartbeat.as_ref()?;
-    let last = output.events.iter().rev().find(|event| is_ping(event))?;
+    let pings = output.events.iter().filter(|event| is_ping(event));
+    let ping_count = pings.clone().count() as u64;
+    let last = pings.last()?;
     let limit = input.policy.max_message_bytes;
     let first = output.events.first()?;
     let EngineIoPacket::Open(open) = decode_engine_io_text(&first.message.data, limit).ok()? else {
         return None;
     };
+    let eof_ms = output.end.offset_ms;
     if first.message.kind != MessageKind::Text
-        || output.end.offset_ms.checked_sub(last.offset_ms)? <= open.ping_timeout
+        || eof_ms.checked_sub(last.offset_ms)? <= open.ping_timeout
+        || program
+            .responses
+            .iter()
+            .any(|response| response.ping_ordinal >= ping_count)
     {
         return None;
     }
 
-    let bound_inputs: BTreeSet<_> = program
-        .responses
-        .iter()
-        .map(|response| response.input_sequence)
-        .collect();
     for action in &input.actions {
-        if action.offset_ms >= last.offset_ms || super::timing::cancellation(action) {
+        if action.offset_ms >= eof_ms || super::timing::cancellation(action) {
             return None;
         }
         let InputActionKind::Message { message } = &action.action else {
             return None;
         };
-        if message.kind == MessageKind::Text
+        // Earlier unmatched PONGs cannot answer the last PING. Same-tick
+        // ordering and a later PONG both leave that PING's outcome uncertain.
+        if action.offset_ms >= last.offset_ms
+            && message.kind == MessageKind::Text
             && matches!(
                 decode_engine_io_text(&message.data, limit).ok()?,
                 EngineIoPacket::Pong(_)
             )
-            && !bound_inputs.contains(&action.sequence)
         {
             return None;
         }
     }
 
-    let mut decoder = SocketIoDecoder::new(limit);
-    let mut actions = input.actions.iter().peekable();
-    let mut receipts = Receipts::default();
-    let mut ping_count = 0;
-    for event in &output.events {
-        while let Some(action) = actions.next_if(|action| action.offset_ms < event.offset_ms) {
-            let InputActionKind::Message { message } = &action.action else {
-                return None;
-            };
-            receipts.sent(action.sequence, message, limit).ok()?;
-        }
-        for packet in decoder.push(&event.message).ok()? {
-            match packet {
-                EngineIoPacket::Ping(payload) if payload.is_empty() => ping_count += 1,
-                EngineIoPacket::Ping(_) | EngineIoPacket::Close => return None,
-                EngineIoPacket::Message(packet)
-                    if matches!(packet.kind, SocketIoKind::Ack | SocketIoKind::BinaryAck) =>
-                {
-                    receipts.acknowledge(&packet)?;
-                }
-                _ => {}
-            }
-        }
-    }
-    decoder.finish().ok()?;
-    if program.responses.len() + 1 != ping_count
-        || program
-            .responses
-            .iter()
-            .any(|response| response.ping_ordinal >= ping_count as u64)
-        || !output
-            .end
-            .pending
-            .iter()
-            .all(|id| receipts.acknowledged.contains(id))
-    {
-        return None;
-    }
-    Some(Evidence {
-        last_ping_ms: last.offset_ms,
-        acknowledged: receipts.acknowledged,
-    })
+    Some(eof_ms)
 }
 
 #[cfg(test)]
@@ -155,7 +151,7 @@ mod tests {
         source.server_close(Some(1000), String::new());
         let (input, output) = source.finish(EndReason::ServerEof, 71, true).unwrap();
         let proof = recognize(&input, &output).unwrap();
-        assert_eq!(proof.last_ping_ms, 50);
+        assert_eq!(proof.eof_ms, 71);
         assert_eq!(proof.acknowledged, [request.sequence].into());
         assert_eq!(output.end.pending, vec![request.sequence]);
 
@@ -164,9 +160,44 @@ mod tests {
         assert!(recognize(&input, &at_timeout).is_none());
         let mut no_ack = output.clone();
         no_ack.events.remove(2);
+        assert_eq!(timeout(&input, &no_ack), Some(71));
         assert!(recognize(&input, &no_ack).is_none());
         source.input(WireMessage::text("3"), 51).unwrap();
         let (answered, output) = source.finish(EndReason::ServerEof, 71, true).unwrap();
         assert!(recognize(&answered, &output).is_none());
+    }
+
+    #[test]
+    fn uses_last_unanswered_ping_for_timeout_and_eof_for_the_business_boundary() {
+        let mut source =
+            Observation::new(Protocol::SocketIo, InteractionPolicy::default()).unwrap();
+        source
+            .output(
+                WireMessage::text(r#"0{"sid":"source","pingInterval":25,"pingTimeout":20}"#),
+                0,
+            )
+            .unwrap();
+        source.input(WireMessage::text("3"), 1).unwrap();
+        source.input(WireMessage::text("40"), 2).unwrap();
+        source
+            .output(WireMessage::text(r#"40{"sid":"namespace"}"#), 3)
+            .unwrap();
+        source.output(WireMessage::text("2"), 25).unwrap();
+        source.output(WireMessage::text("2"), 29).unwrap();
+        let work = source
+            .input(WireMessage::text(r#"427["work"]"#), 30)
+            .unwrap();
+        source
+            .output(WireMessage::text(r#"437[true]"#), 31)
+            .unwrap();
+        source.server_close(Some(1000), String::new());
+        let (input, output) = source.finish(EndReason::ServerEof, 51, true).unwrap();
+        let proof = recognize(&input, &output).unwrap();
+        assert_eq!(proof.eof_ms, 51);
+        assert_eq!(proof.acknowledged, [work.sequence].into());
+
+        source.input(WireMessage::text("3"), 32).unwrap();
+        let (ambiguous, output) = source.finish(EndReason::ServerEof, 51, true).unwrap();
+        assert!(timeout(&ambiguous, &output).is_none());
     }
 }

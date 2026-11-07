@@ -23,7 +23,6 @@ pub(super) struct Source {
     covered: bool,
     requests: Vec<Request>,
     tail: Option<Tail>,
-    clean_without_heartbeat: bool,
     passive: Option<heartbeat_tail::Passive>,
 }
 
@@ -79,14 +78,12 @@ impl Source {
         cap: u64,
         start: DateTime<Utc>,
     ) -> Self {
-        let (tail, clean_without_heartbeat) = Tail::load(path, input, cap).unwrap_or_default();
         Self {
             start,
             cap,
             covered: true,
             requests: Vec::new(),
-            tail,
-            clean_without_heartbeat,
+            tail: Tail::load(path, input, cap).unwrap_or_default(),
             passive: passive_proof(path, input).ok().flatten(),
         }
     }
@@ -217,18 +214,6 @@ impl Source {
                 "enabled ordered fast passive Pub/Sub timing"
             );
         }
-        ensure!(
-            input
-                .socket_io_heartbeat
-                .as_ref()
-                .is_none_or(|program| !program.responses.is_empty())
-                || self.clean_without_heartbeat
-                || self
-                    .tail
-                    .as_ref()
-                    .is_some_and(|tail| tail.policy.heartbeat_acks.is_some()),
-            "ordered timing for an unanswered heartbeat requires an eligible heartbeat tail"
-        );
         let mut previous = SourceOffset::default();
         let mut dispatch_windows = BTreeMap::new();
         for action in &input.actions {
@@ -585,7 +570,7 @@ fn offset(start: DateTime<Utc>, at: DateTime<Utc>) -> Option<u64> {
 }
 
 impl Tail {
-    fn load(path: &Path, input: &InputTranscript, cap: u64) -> Result<(Option<Self>, bool)> {
+    fn load(path: &Path, input: &InputTranscript, cap: u64) -> Result<Option<Self>> {
         use std::io::{BufReader, Seek};
 
         #[derive(Deserialize)]
@@ -614,7 +599,7 @@ impl Tail {
             partial_message: Option<serde::de::IgnoredAny>,
         }
         let Ok(file) = std::fs::File::open(path.join("expected-response.json")) else {
-            return Ok((None, false));
+            return Ok(None);
         };
         // Ordinary tails need only clocks and counts. Decode protocol frames
         // only to classify a clean server EOF, without retaining their payloads.
@@ -626,12 +611,8 @@ impl Tail {
                 && completion.end.clean
                 && completion.end.partial_message.is_none()
         }) else {
-            return Ok((None, false));
+            return Ok(None);
         };
-        // An empty response program is also recorded when the client ends
-        // before the first heartbeat. A complete output transcript separates
-        // that case from a server ping that was never answered.
-        let clean_without_heartbeat = !completion.events.iter().any(|event| event.heartbeat);
         let heartbeat = if completion.end.reason == EndReason::ServerEof {
             #[derive(Deserialize)]
             struct WireResponse {
@@ -644,7 +625,7 @@ impl Tail {
             None
         };
         if heartbeat.is_none() && !completion.end.pending.is_empty() {
-            return Ok((None, clean_without_heartbeat));
+            return Ok(None);
         }
         let last_input = input.actions.last().map_or(0, |action| action.offset_ms);
         let (cutoff, close_sequence, last_input) = match completion.end.reason {
@@ -657,7 +638,7 @@ impl Tail {
                     .take_while(|action| cancellation(action))
                     .last()
                 else {
-                    return Ok((None, clean_without_heartbeat));
+                    return Ok(None);
                 };
                 let last = input
                     .actions
@@ -668,16 +649,16 @@ impl Tail {
                 (close.offset_ms, Some(close.sequence), last)
             }
             EndReason::ServerEof if let Some(evidence) = &heartbeat => {
-                (evidence.last_ping_ms, None, last_input)
+                (evidence.eof_ms, None, last_input)
             }
-            _ => return Ok((None, clean_without_heartbeat)),
+            _ => return Ok(None),
         };
         if completion
             .events
             .iter()
             .any(|event| !event.heartbeat && event.offset_ms == cutoff)
         {
-            return Ok((None, clean_without_heartbeat));
+            return Ok(None);
         }
         let outputs = completion
             .events
@@ -700,7 +681,7 @@ impl Tail {
             cutoff,
             quiet_from,
         });
-        Ok((tail, clean_without_heartbeat))
+        Ok(tail)
     }
 }
 

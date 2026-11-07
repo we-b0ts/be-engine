@@ -692,7 +692,7 @@ pub(super) async fn execute_case(
         });
     if interaction_end
         .as_ref()
-        .is_some_and(|(protocol, end)| end.observes_close_tail(*protocol))
+        .is_some_and(|(protocol, end)| end.observes_replay_close_tail(*protocol))
     {
         control(state, "case_close_tail", Some(case_id), false, false).await?;
     }
