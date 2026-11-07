@@ -47,23 +47,17 @@ pub(super) fn pending_predecessor(
         && !state.exchanges[blocker].satisfies_lane_order()
 }
 
-fn ordinary_slot(
+pub(super) fn ordinary_slot(
     state: &RedisReplayState,
     case: &str,
     reference: &CommandExchangeRefReport,
 ) -> Option<usize> {
-    let members = state.candidates.case_members(case);
-    let mut matches = members.iter().copied().filter(|&index| {
-        let exchange = &state.exchanges[index];
-        exchange.source == ReplaySource::Case
-            && exchange.case_id.as_deref() == Some(case)
-            && exchange.record.connection_id == reference.connection_id
-            && exchange.record.sequence == reference.sequence
-    });
-    let index = matches.next()?;
+    let index =
+        state
+            .candidates
+            .case_lane_slot(case, reference.connection_id, reference.sequence)?;
     let exchange = &state.exchanges[index];
-    (matches.next().is_none()
-        && exchange.record.command == reference.command
+    (exchange.record.command == reference.command
         && exchange.record.replay_safe
         && exchange.record.parse_warnings.is_empty()
         && exchange.record.outcome == crate::DependencyExchangeOutcome::Response

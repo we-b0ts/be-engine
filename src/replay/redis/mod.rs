@@ -73,6 +73,7 @@ mod delivery;
 mod evidence;
 mod input_timing;
 mod lifecycle;
+mod pipeline;
 use super::admission::{
     Barrier, Claim, ClaimKind, ClaimTicket, Finish, Lifecycle, NativeClaimKind,
 };
@@ -596,12 +597,19 @@ async fn serve_connection(
     let mut username: Option<String> = None;
     let mut connection_binding = CaseConnectionBinding::default();
     let (push_tx, mut push_rx) = tokio::sync::mpsc::channel::<pubsub::Delivery>(256);
+    let mut queued = None;
     loop {
-        let read = tokio::select! {
-            frame = read_redis_frame(&mut reader) => frame,
-            Some(delivery) = push_rx.recv() => {
-                pubsub::deliver_input(&mut reader.inner, &state, client_id, delivery).await?;
-                continue;
+        let (read, request_started) = match queued.take() {
+            Some(queued) => queued,
+            None => {
+                let read = tokio::select! {
+                    frame = read_redis_frame(&mut reader) => frame,
+                    Some(delivery) = push_rx.recv() => {
+                        pubsub::deliver_input(&mut reader.inner, &state, client_id, delivery).await?;
+                        continue;
+                    }
+                };
+                (read, tokio::time::Instant::now())
             }
         };
         let frame = match read {
@@ -619,7 +627,6 @@ async fn serve_connection(
                 return Err(error);
             }
         };
-        let request_started = tokio::time::Instant::now();
         let command = match redis_command(&frame.raw) {
             Ok(command) => command,
             Err(error) => {
@@ -723,55 +730,27 @@ async fn serve_connection(
             }
             continue;
         }
-        let response = admission::match_command(
-            &state,
-            &target_key,
+        let request = pipeline::Request {
+            state: &state,
+            target: &target_key,
             client_id,
-            &mut connection_binding,
             resp_version,
             database,
-            username.as_deref(),
-            &command,
-        )
-        .await;
-        match response {
-            Ok(matched) => {
-                if let Err(error) =
-                    crate::replay::policy::request_contract::hypotheses::await_durable(&state).await
-                {
-                    state
-                        .lock()
-                        .await
-                        .redis
-                        .fail_exchange(&matched, "hypothesis evidence persistence failed".into());
-                    return Err(error);
-                }
-                let deliveries = state.lock().await.redis.pubsub.subscription(
-                    client_id,
-                    &target_key,
-                    database,
-                    username.as_deref(),
-                    &command,
-                    &matched,
-                    push_tx.clone(),
-                )?;
-                if deliver_redis_exchange(
-                    &mut reader,
-                    &state,
-                    &matched,
-                    &control,
-                    request_started,
-                    client_id,
-                )
-                .await?
-                {
-                    break;
-                }
-                if let Some(deliveries) = deliveries {
-                    pubsub::schedule_notifications(state.clone(), deliveries);
-                }
-            }
-            Err(_) => break,
+            username: username.as_deref(),
+            command: &command,
+            started: request_started,
+        };
+        if request
+            .serve(
+                &mut reader,
+                &control,
+                &mut connection_binding,
+                &push_tx,
+                &mut queued,
+            )
+            .await?
+        {
+            break;
         }
     }
     Ok(())

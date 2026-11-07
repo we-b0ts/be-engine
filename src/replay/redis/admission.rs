@@ -7,6 +7,7 @@ use crate::replay::admission::{
 use crate::replay::report::command::CommandMatchDiagnostic;
 use std::time::Duration;
 mod lane;
+pub(super) mod pipeline;
 
 #[cfg(test)]
 mod activity_tests;
@@ -28,6 +29,7 @@ struct RedisRequest<'a> {
     command: &'a RedisCommand,
     connection: Option<TargetConnection>,
     started: tokio::time::Instant,
+    lane_hint: Option<&'a tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
 }
 
 impl DependencyRequestAdapter for RedisRequest<'_> {
@@ -94,10 +96,14 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         if lane::enabled(state)
             && lane::pending_predecessor(&state.redis, observation.case.as_deref(), error)
         {
-            return Some(
-                WaitDependency::changed(&state.redis.lifecycle)
-                    .until(self.started + POOLED_LANE_WAIT),
-            );
+            let deadline = self.started + POOLED_LANE_WAIT;
+            if let Some(sender) = self.lane_hint
+                && let Ok(permit) = sender.try_reserve()
+                && let Some(pair) = pipeline::AdjacentPublish::from_blocker(state, error, deadline)
+            {
+                permit.send(pair);
+            }
+            return Some(WaitDependency::changed(&state.redis.lifecycle).until(deadline));
         }
         (pending_delivery(
             &state.redis,
@@ -180,6 +186,7 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn match_command(
     shared: &Arc<Mutex<ReplayState>>,
@@ -190,6 +197,32 @@ pub(super) async fn match_command(
     database: i64,
     username: Option<&str>,
     command: &RedisCommand,
+) -> std::result::Result<MatchedRedisExchange, &'static str> {
+    match_command_with_hint(
+        shared,
+        target,
+        client_id,
+        binding,
+        resp_version,
+        database,
+        username,
+        command,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn match_command_with_hint(
+    shared: &Arc<Mutex<ReplayState>>,
+    target: &TargetKey,
+    client_id: Uuid,
+    binding: &mut CaseConnectionBinding,
+    resp_version: u8,
+    database: i64,
+    username: Option<&str>,
+    command: &RedisCommand,
+    lane_hint: Option<&tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
 ) -> std::result::Result<MatchedRedisExchange, &'static str> {
     let started = tokio::time::Instant::now();
     request::execute(
@@ -204,6 +237,7 @@ pub(super) async fn match_command(
             command,
             connection: None,
             started,
+            lane_hint,
         },
         started + REFRESH_WAIT,
     )

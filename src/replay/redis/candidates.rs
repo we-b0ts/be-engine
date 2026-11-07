@@ -73,6 +73,22 @@ impl Candidates {
         self.members.for_case(case)
     }
 
+    pub(super) fn case_lane_slot(
+        &self,
+        case: &str,
+        connection: Uuid,
+        sequence: u64,
+    ) -> Option<usize> {
+        self.lanes.unique_slot(
+            &LaneKey {
+                owner: LaneOwner::Case,
+                case: Some(case.to_owned()),
+                connection,
+            },
+            sequence,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn select(
         &self,

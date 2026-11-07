@@ -64,4 +64,14 @@ impl LaneIndex {
             (*prior < *sequence && prevents_progress(*index)).then_some(*index)
         })
     }
+
+    pub(in crate::replay) fn unique_slot(&self, key: &LaneKey, sequence: u64) -> Option<usize> {
+        let mut slots = self
+            .lanes
+            .get(key)?
+            .iter()
+            .filter(|(_, prior)| *prior == Some(sequence));
+        let (index, _) = slots.next()?;
+        slots.next().is_none().then_some(*index)
+    }
 }

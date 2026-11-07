@@ -40,7 +40,7 @@ impl Request<'_> {
 
 impl RedisReplayState {
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn match_strict_redis(
+    pub(in crate::replay::redis) fn match_strict_redis(
         &self,
         case: Option<&str>,
         target: &TargetKey,

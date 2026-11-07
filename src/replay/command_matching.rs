@@ -39,7 +39,7 @@ pub(super) enum PreferredMatch {
     NotFound,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct CaseConnectionBinding {
     active_case_id: Option<String>,
     connection_id: Option<Uuid>,

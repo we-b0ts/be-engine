@@ -7,7 +7,8 @@ mod wire;
 pub(crate) use client_info::is_client_library_info;
 
 pub(crate) use wire::{
-    BufferedReader, RedisCommand, RedisFrameKind, RedisPubSubPush, RedisSubscriptionKind,
-    encode_array, frame_kind, is_pubsub_command, parse_pubsub_push, read_frame, redis_command,
-    translate_subscription_confirmation, validate_subscription_confirmation,
+    BufferedReader, RedisCommand, RedisFrame, RedisFrameKind, RedisPubSubPush,
+    RedisSubscriptionKind, encode_array, frame_kind, is_pubsub_command, parse_pubsub_push,
+    read_frame, redis_command, translate_subscription_confirmation,
+    validate_subscription_confirmation,
 };
