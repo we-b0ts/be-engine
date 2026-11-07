@@ -1,5 +1,7 @@
 //! Live MySQL request selection; ownership and protocol consumption stay explicit.
 use super::*;
+use crate::mysql::sql::bounds::statement_shared;
+use std::cell::OnceCell;
 
 // Dynamic normalization borrows unchanged values. Candidate scans must not
 // compare every byte of the same SQL or parameter buffer again.
@@ -101,6 +103,7 @@ impl ReplayState {
         let observation_id = observation.observation_id;
         let observed_sql = sql;
         let observed_params = params;
+        let observed_statement = OnceCell::new();
         let mut witnessed = (observation_id.is_some()
             && case.is_some()
             && self.replay_policy.as_ref().is_some_and(|policy| {
@@ -456,6 +459,17 @@ impl ReplayState {
                                             formats.map(|cached| &mut cached.any)
                                         } else {
                                             None
+                                        },
+                                        || {
+                                            if global || !sql_changed {
+                                                observed_statement
+                                                    .get_or_init(|| {
+                                                        observed_sql.and_then(statement_shared)
+                                                    })
+                                                    .clone()
+                                            } else {
+                                                selected_sql.and_then(statement_shared)
+                                            }
                                         },
                                     )
                                     .or_else(|| {

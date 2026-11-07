@@ -1,5 +1,6 @@
 //! Source-scoped SQL value rules, complete witnesses and atomic accounting.
 use super::*;
+use crate::mysql::sql::{Token, bounds::statement_shared};
 use crate::policy::{CompiledRule, Protocol, Slot, Surface};
 use crate::policy_evidence::{
     ClockPair, SourceIdentity, SourceRole, TargetRole, WitnessClocks, WitnessMetadata,
@@ -118,7 +119,16 @@ impl RequestContracts {
         runtime: &super::super::matcher::ReplayPolicyRuntime,
     ) -> Option<Result<super::super::matcher::DependencyRuleDecision, String>> {
         self.preview_mysql_values_with_format_cache(
-            case, identity, record, command, sql, params, observed, runtime, None,
+            case,
+            identity,
+            record,
+            command,
+            sql,
+            params,
+            observed,
+            runtime,
+            None,
+            || sql.and_then(statement_shared),
         )
     }
 
@@ -134,19 +144,24 @@ impl RequestContracts {
         observed: DateTime<Utc>,
         runtime: &super::super::matcher::ReplayPolicyRuntime,
         source_formats: Option<&mut Option<bool>>,
+        target_tokens: impl FnOnce() -> Option<std::sync::Arc<Vec<Token>>>,
     ) -> Option<Result<super::super::matcher::DependencyRuleDecision, String>> {
+        let native = self.mysql_native_value_rules(case, identity, record);
+        let automatic = self
+            .compiled_rules()
+            .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some());
+        if native.is_empty()
+            && (automatic.is_none() || source_formats.as_deref() == Some(&Some(false)))
+        {
+            return None;
+        }
         // Most candidates differ in statement/table shape. Reject those before
         // selecting field contracts or touching the AST analysis cache.
         let token_pair = (
-            record
-                .sql
-                .as_deref()
-                .and_then(crate::mysql::sql::bounds::statement_shared),
-            sql.and_then(crate::mysql::sql::bounds::statement_shared),
+            record.sql.as_deref().and_then(statement_shared),
+            target_tokens(),
         );
-        let scalar = |token: &crate::mysql::sql::Token| {
-            token.is_value() || *token == crate::mysql::sql::Token::Placeholder
-        };
+        let scalar = |token: &Token| token.is_value() || *token == Token::Placeholder;
         let related = match &token_pair {
             (Some(source), Some(actual)) => {
                 source.len() == actual.len()
@@ -161,10 +176,7 @@ impl RequestContracts {
             // Retain their failed preview rather than disguising a wrong-table
             // Target request as an inapplicable rule. Generic field candidates
             // still skip AST work on unrelated statement shapes.
-            if self
-                .mysql_native_value_rules(case, identity, record)
-                .is_empty()
-            {
+            if native.is_empty() {
                 return None;
             }
             return Some(Err(
@@ -172,18 +184,12 @@ impl RequestContracts {
             ));
         }
         let rules = Vec::<&CompiledRule>::new();
-        let native = self.mysql_native_value_rules(case, identity, record);
-        let automatic = self
-            .compiled_rules()
-            .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some());
         // A global format map is not a positional SQL contract. If it selects
         // no Source value, retain ordinary predicate/projection compatibility
         // instead of rejecting an otherwise equivalent IN-list permutation.
-        if rules.is_empty() && native.is_empty() {
+        if native.is_empty() {
             let detect = || self.has_mysql_formats(identity, record);
-            if automatic.is_none()
-                || !source_formats.map_or_else(detect, |cached| *cached.get_or_insert_with(detect))
-            {
+            if !source_formats.map_or_else(detect, |cached| *cached.get_or_insert_with(detect)) {
                 return None;
             }
         }
