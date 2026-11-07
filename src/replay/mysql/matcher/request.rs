@@ -1,5 +1,4 @@
 //! Live MySQL request selection; ownership and protocol consumption stay explicit.
-use super::super::transaction_equivalence::prefix;
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -9,8 +8,6 @@ pub(in crate::replay::mysql) struct TransactionMatch<'a> {
     pub(in crate::replay::mysql) status_flags: u16,
     pub(in crate::replay::mysql) connection: Uuid,
     pub(in crate::replay::mysql) has_active_transaction: bool,
-    pub(in crate::replay::mysql) can_defer_first: bool,
-    pub(in crate::replay::mysql) deferred_prefix: Option<prefix::Reservation>,
 }
 
 impl TransactionMatch<'_> {
@@ -127,7 +124,6 @@ impl ReplayState {
                     && params.is_none_or(<[_]>::is_empty)
             });
         let active_case_id = case.map(ToOwned::to_owned);
-        let deferred_prefix = transaction.and_then(|transaction| transaction.deferred_prefix);
         let preferred_end = transaction_end.or_else(|| {
             self.mysql.cleanup_selection.preferred_end(
                 &self.mysql.exchanges,
@@ -192,29 +188,6 @@ impl ReplayState {
                             continue;
                         }
                         if transaction_end.is_some_and(|expected| expected != index) {
-                            continue;
-                        }
-                        if let Some(reservation) = deferred_prefix
-                            && (foreign
-                                || allow_hypotheses
-                                || self
-                                    .mysql
-                                    .transaction_equivalence
-                                    .prefixes
-                                    .resolve(
-                                        reservation,
-                                        index,
-                                        &self.mysql.exchanges,
-                                        |first, second| {
-                                            prefix::window(
-                                                self.input_timing.as_ref(),
-                                                first,
-                                                second,
-                                            )
-                                        },
-                                    )
-                                    .is_none())
-                        {
                             continue;
                         }
                         let exchange = &self.mysql.exchanges[index];
@@ -753,47 +726,12 @@ impl ReplayState {
                         } else {
                             crate::replay::admission::ClaimKind::Response
                         };
-                        let reservation =
-                            if self.mysql.transaction_equivalence.prefixes.is_first(index) {
-                                let input_timing = self.input_timing.as_ref();
-                                let can_defer = transaction.is_some_and(|context| {
-                                    context.can_defer_first
-                                        && context.deferred_prefix.is_none()
-                                        && (context.has_active_transaction
-                                            || context.status_flags & 0x200b == 0)
-                                }) && !foreign
-                                    && !allow_hypotheses
-                                    && time_copy_delivery.is_none()
-                                    && value_delivery.is_none()
-                                    && dynamic_decision.is_none()
-                                    && policy_decision.is_empty();
-                                match self.mysql.transaction_equivalence.prefixes.reserve(
-                                    index,
-                                    &exchange.record.response,
-                                    &self.mysql.exchanges,
-                                    |first, second| prefix::window(input_timing, first, second),
-                                    can_defer,
-                                ) {
-                                    Ok(reservation) => reservation,
-                                    Err(()) => continue,
-                                }
-                            } else {
-                                None
-                            };
-                        let (deferred_prefix, claim) = match reservation {
-                            Some((reservation, claim)) => (Some(reservation), claim),
-                            None => (
-                                None,
-                                self.mysql.lifecycle.claim(
-                                    index,
-                                    &mut self.mysql.exchanges[index].status,
-                                    kind,
-                                )?,
-                            ),
-                        };
-                        if deferred_prefix.is_none()
-                            && let Some(policy) = &mut self.replay_policy
-                        {
+                        let claim = self.mysql.lifecycle.claim(
+                            index,
+                            &mut self.mysql.exchanges[index].status,
+                            kind,
+                        )?;
+                        if let Some(policy) = &mut self.replay_policy {
                             if policy
                                 .commit(active_case_id.as_deref(), policy_decision)
                                 .is_err()
@@ -826,9 +764,7 @@ impl ReplayState {
                                     .commit_after_identities(case_id, decision);
                             }
                         }
-                        if deferred_prefix.is_none() {
-                            self.refresh_mysql_global_report(index);
-                        }
+                        self.refresh_mysql_global_report(index);
                         let owned_global = self.mysql.foreign.contains_key(&index)
                             || (exchange.source.is_run_owned()
                                 && exchange
@@ -858,7 +794,7 @@ impl ReplayState {
                             target_event_index: observation.event_index,
                         };
                         return Some(MatchedExchange {
-                            deferred_prefix,
+                            request_observed_at: Some(request_observed_at),
                             target_observation_id: observation.observation_id.filter(|_|observation.observation_retained).map(|id|crate::policy_evidence::target_observation_id(&id.to_string(),crate::policy::Surface::DependencyRequest,crate::policy_evidence::TargetRole::IndependentTargetObservation)),
                             claim,
                             hypothesis_owner: self

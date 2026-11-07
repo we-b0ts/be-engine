@@ -45,7 +45,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct MatchedExchange {
-    pub(super) deferred_prefix: Option<transaction_equivalence::prefix::Reservation>,
+    pub(super) request_observed_at: Option<DateTime<Utc>>,
     pub(super) target_observation_id: Option<String>,
     pub(in crate::replay) claim: crate::replay::admission::ClaimTicket,
     pub(in crate::replay) hypothesis_owner:

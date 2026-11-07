@@ -16,7 +16,7 @@ pub(super) struct RequestSelection {
 }
 
 struct NativeRequest<'a> {
-    session: &'a mut ReplaySession,
+    session: &'a ReplaySession,
     command: &'a str,
     sql: Option<&'a str>,
     params: Option<&'a [RecordedMysqlValue]>,
@@ -69,12 +69,6 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
                 status_flags: self.session.status_flags,
                 connection: self.session.transaction_witness.connection(),
                 has_active_transaction: self.session.transaction_witness.has_active_transaction(),
-                can_defer_first: self.session.transaction_witness.can_defer_first(),
-                deferred_prefix: self
-                    .session
-                    .deferred_prefix
-                    .as_ref()
-                    .and_then(|first| first.matched.deferred_prefix),
             }
         });
         let unmatched_before = state.mysql.events.unmatched_queries.len();
@@ -93,21 +87,6 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
             .unmatched_queries
             .get(unmatched_before)
             .map(|query| query.reason.clone());
-        if selected.is_none()
-            && self.recorded_rejection.is_none()
-            && transaction.is_some_and(|context| context.deferred_prefix.is_some())
-        {
-            let reason = "MySQL next statement did not identify the reserved transaction prefix";
-            state.record_unmatched_in_case(
-                self.case.as_deref(),
-                &identity,
-                self.command,
-                self.sql,
-                self.params,
-                reason,
-            );
-            self.recorded_rejection = Some(reason.into());
-        }
         selected.ok_or("no finite MySQL semantic candidate")
     }
 
@@ -118,20 +97,11 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
 
     fn on_selected(
         &mut self,
-        state: &mut ReplayState,
+        _state: &mut ReplayState,
         observation: &RequestAdmission,
         matched: &mut MatchedExchange,
     ) -> std::result::Result<(), &'static str> {
         matched.report.target_event_index = observation.event_index;
-        if matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE")
-            && let Some(first) = self.session.deferred_prefix.take()
-            && let Err(error) = state.bind_mysql_prefix(*first, matched.index, self.session)
-        {
-            let reason = error.to_string();
-            state.fail_exchange(matched, &self.session.identity(), &reason);
-            self.recorded_rejection = Some(reason);
-            return Err("MySQL transaction prefix confirmation failed");
-        }
         Ok(())
     }
     // No wait_dependency override: MySQL keeps its existing native constraints,
@@ -142,7 +112,7 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
 
 pub(super) async fn match_request(
     shared: &Arc<Mutex<ReplayState>>,
-    session: &mut ReplaySession,
+    session: &ReplaySession,
     command: &str,
     sql: Option<&str>,
     params: Option<&[RecordedMysqlValue]>,

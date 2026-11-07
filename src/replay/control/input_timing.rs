@@ -48,30 +48,27 @@ pub(in crate::replay) struct Live {
     advanced: BTreeSet<u64>,
     fast: Option<fast::Plan>,
     native_dispatch: Option<fast::NativeDispatch>,
+    native_push_times: Option<Vec<DateTime<Utc>>>,
 }
 
 impl Live {
     pub(in crate::replay) fn mysql_prefix_window(
         &self,
         case: &str,
-        first: DateTime<Utc>,
-        second: DateTime<Utc>,
-    ) -> Option<u64> {
-        if self.case != case || self.fast.is_none() || second < first {
+        request_at: DateTime<Utc>,
+    ) -> Option<(usize, usize)> {
+        if self.case != case || self.fast.is_none() {
             return None;
         }
-        let start = self.plan.source_start?;
-        let first = u64::try_from((first - start).num_microseconds()?).ok()?;
-        let second = u64::try_from((second - start).num_microseconds()?).ok()?;
+        let pushes = self.native_push_times.as_ref()?;
+        let us = u64::try_from((request_at - self.plan.source_start?).num_microseconds()?).ok()?;
         let actions = &self.plan.input.actions;
-        // A legacy offset can occur anywhere in its millisecond bucket.
-        let boundary = actions.partition_point(|action| action.offset_ms <= second / 1000);
-        let Some(index) = boundary.checked_sub(1) else {
-            return Some(0);
-        };
-        let previous = &actions[index];
-        let latest = previous.offset_ms.saturating_mul(1000).saturating_add(999);
-        (latest < first).then_some(previous.sequence)
+        let boundary = actions.partition_point(|action| action.offset_ms <= us / 1000);
+        // Leave the legacy millisecond boundary ambiguous, as dispatch does.
+        let push_boundary = pushes.partition_point(|&push| push < request_at);
+        (pushes.get(push_boundary) != Some(&request_at)
+            && (boundary == 0 || actions[boundary - 1].offset_ms < us / 1000))
+            .then_some((boundary, push_boundary))
     }
 
     pub(in crate::replay) fn native_fast_setup_ready(&self, state: &ReplayState) -> bool {
@@ -169,6 +166,14 @@ pub(super) async fn accept(
                 .and_then(|source| source.resolve(&mut state, case, &plan.input).ok());
             let fast_tail = fast.as_ref().and_then(fast::Plan::tail);
             let ordered_fast = fast.is_some();
+            let native_push_times = plan.source_start.filter(|_| ordered_fast).and_then(|start| {
+                let (pushes, covered) = state.redis.pubsub.timing_evidence(case, start);
+                covered.then(|| {
+                    let mut times: Vec<_> = pushes.into_iter().map(|push| push.completed_at).collect();
+                    times.sort_unstable();
+                    times
+                })
+            });
             let (mut evidence, covered) = match (fast.is_some(), plan.source_start) {
                 (true, _) => (Vec::new(), false),
                 (false, Some(start)) => state.redis.timing_evidence(case, start)?,
@@ -206,6 +211,7 @@ pub(super) async fn accept(
                 advanced: BTreeSet::new(),
                 fast,
                 native_dispatch: None,
+                native_push_times,
             });
             return Ok(serde_json::json!({"ok":true,"epoch":epoch,"ordered_fast":ordered_fast,"fast_tail":fast_tail}));
         }
