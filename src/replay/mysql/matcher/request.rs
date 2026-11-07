@@ -209,6 +209,18 @@ impl ReplayState {
                         if !self.mysql.candidates.permits_sql(index, sql_family) {
                             continue;
                         }
+                        // A proven different table cannot reach ordinary SQL
+                        // matching. Exclude it before recording candidate evidence.
+                        if !legacy_sql_selector
+                            && !allow_hypotheses
+                            && !self.mysql.candidates.permits_select(
+                                index,
+                                select_hint.as_ref(),
+                                false,
+                            )
+                        {
+                            continue;
+                        }
                         if allow_hypotheses && (foreign || project_columns || semantic) {
                             continue;
                         }
@@ -292,14 +304,16 @@ impl ReplayState {
                                 .push(format!("SQL request witness unavailable: {error:#}"));
                             return None;
                         }
-                        // The witness above still records independently observed
-                        // requests. Native matching cannot cross physical tables.
+                        // Keep evidence for alternate same-table shapes before
+                        // applying the strict comparison's shape constraint.
                         if !legacy_sql_selector
                             && !allow_hypotheses
+                            && !project_columns
+                            && !semantic
                             && !self.mysql.candidates.permits_select(
                                 index,
                                 select_hint.as_ref(),
-                                !project_columns && !semantic,
+                                true,
                             )
                         {
                             continue;
