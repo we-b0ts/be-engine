@@ -184,7 +184,10 @@ pub(super) async fn deliver_matched(
         }
     }
 
-    matched.timing.delay_response().await;
+    matched
+        .timing
+        .delay_response_from_request(session.request_started)
+        .await;
     let rendered_at = Utc::now();
     let mut delivered_identities = None;
     if let Some(prepared) = &matched.value_delivery {
