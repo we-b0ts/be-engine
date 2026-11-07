@@ -298,10 +298,10 @@ Global/bootstrap connection records never authorize this behavior. If neither
 an exchange nor a matching Case-local zero-byte record exists, preserve the
 ordinary immediate HTTP 502 and unmatched evidence.
 
-For ordinary MySQL, Redis, Memcached, and Kafka Produce/Fetch responses, delay
-delivery by the recorded semantic exchange `duration_ms`; do not collapse
-dependency latency to an immediate response because callers may enforce
-aggregate deadlines, retry budgets, or races above the protocol client. For a recorded
+For ordinary MySQL, Redis, Memcached, and Kafka Produce/Fetch responses, preserve
+the recorded semantic exchange `duration_ms` because callers may enforce
+aggregate deadlines, retry budgets, or races above the protocol client. In Fast
+mode, MySQL and Redis skip recorded response delays below 10 ms. For a recorded
 `client_terminated` outcome, send zero response bytes and wait for EOF, FIN, or
 RST on that same connection. Consume the exchange only after the client
 termination arrives in the recorded timing window. Replay must not proactively

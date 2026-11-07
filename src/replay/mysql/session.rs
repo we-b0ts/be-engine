@@ -185,12 +185,10 @@ pub(super) async fn deliver_matched(
         }
     }
 
-    if !session.fast_response_timing || matched.record.duration_ms >= 10 {
-        matched
-            .timing
-            .delay_response_from_request(session.request_started)
-            .await;
-    }
+    matched
+        .timing
+        .delay_response_from_request(session.request_started, session.fast_response_timing)
+        .await;
     let rendered_at = Utc::now();
     let mut delivered_identities = None;
     if let Some(prepared) = &matched.value_delivery {

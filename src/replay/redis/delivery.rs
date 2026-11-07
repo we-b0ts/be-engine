@@ -1,5 +1,6 @@
 //! Redis response delivery and transport termination verification.
 use super::*;
+use crate::ReplayStreamTiming;
 use crate::dependency::termination::ConnectionControl;
 use crate::replay::admission::DeliveryGuard;
 use chrono::{DateTime, Utc};
@@ -17,13 +18,14 @@ pub(super) async fn deliver_redis_exchange(
         Claim::Finite(ticket) => Some(ticket.guard()),
         Claim::Native(_) => None,
     };
-    let (lifecycle, timing_scope) = {
+    let (lifecycle, timing_scope, fast) = {
         let state = state.lock().await;
         (
             state.redis.exchanges[matched.index]
                 .record
                 .lifecycle_cleanup,
             super::input_timing::scope(&state),
+            state.stream_timing == Some(ReplayStreamTiming::Fast),
         )
     };
     if lifecycle {
@@ -132,7 +134,7 @@ pub(super) async fn deliver_redis_exchange(
         return Ok(true);
     }
 
-    let written = write_response(reader, state, matched, started).await?;
+    let written = write_response(reader, state, matched, started, fast).await?;
     finish_response(state, matched, timing_scope.as_ref(), written, claim_guard).await?;
     Ok(false)
 }
@@ -152,10 +154,16 @@ pub(super) async fn deliver_publish_pair(
     };
     let earlier_guard = guard(earlier.0);
     let later_guard = guard(later.0);
-    let timing_scope = super::input_timing::scope(&*state.lock().await);
+    let (timing_scope, fast) = {
+        let state = state.lock().await;
+        (
+            super::input_timing::scope(&state),
+            state.stream_timing == Some(ReplayStreamTiming::Fast),
+        )
+    };
     let result = async {
-        let later_written = write_response(reader, state, later.0, later.1).await?;
-        let earlier_written = write_response(reader, state, earlier.0, earlier.1).await?;
+        let later_written = write_response(reader, state, later.0, later.1, fast).await?;
+        let earlier_written = write_response(reader, state, earlier.0, earlier.1, fast).await?;
         finish_response(
             state,
             earlier.0,
@@ -195,8 +203,12 @@ async fn write_response(
     state: &Arc<Mutex<ReplayState>>,
     matched: &MatchedRedisExchange,
     started: tokio::time::Instant,
+    fast: bool,
 ) -> Result<WrittenResponse> {
-    matched.timing.delay_response_from_request(started).await;
+    matched
+        .timing
+        .delay_response_from_request(started, fast)
+        .await;
     let unified_rendered_at = chrono::Utc::now();
     let unified_rendered = matched
         .unified_delivery

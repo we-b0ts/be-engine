@@ -12,6 +12,7 @@ use crate::dependency::{TerminationKind, TerminationScope};
 
 const CLIENT_TERMINATION_EARLY_TOLERANCE: Duration = Duration::from_millis(50);
 const CLIENT_TERMINATION_LATE_TOLERANCE: Duration = Duration::from_secs(1);
+const FAST_RESPONSE_MIN_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum ReplayExchangeStatus {
@@ -99,7 +100,10 @@ impl ReplayExchangeTiming {
         }
     }
 
-    pub(super) async fn delay_response_from_request(self, started: Instant) {
+    pub(super) async fn delay_response_from_request(self, started: Instant, fast: bool) {
+        if fast && self.duration < FAST_RESPONSE_MIN_DELAY {
+            return;
+        }
         let deadline = self.response_deadline(started);
         if Instant::now() < deadline {
             tokio::time::sleep_until(deadline).await;
@@ -322,13 +326,28 @@ mod tests {
         let timing = ReplayExchangeTiming::from_recorded(20, DependencyExchangeOutcome::Response);
         let started = Instant::now();
         tokio::time::advance(Duration::from_millis(15)).await;
-        timing.delay_response_from_request(started).await;
+        timing.delay_response_from_request(started, false).await;
         assert!(started.elapsed() >= Duration::from_millis(20));
         assert!(started.elapsed() < Duration::from_millis(35));
 
         let now = Instant::now();
-        timing.delay_response_from_request(started).await;
+        timing.delay_response_from_request(started, false).await;
         assert_eq!(Instant::now(), now);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fast_response_skips_only_delays_under_ten_milliseconds() {
+        for (duration_ms, fast, expected_ms) in [(9, true, 0), (10, true, 10), (9, false, 9)] {
+            let timing = ReplayExchangeTiming::from_recorded(
+                duration_ms,
+                DependencyExchangeOutcome::Response,
+            );
+            let started = Instant::now();
+            timing.delay_response_from_request(started, fast).await;
+            let elapsed = started.elapsed();
+            assert_eq!(elapsed.is_zero(), expected_ms == 0);
+            assert!(elapsed >= Duration::from_millis(expected_ms));
+        }
     }
 
     #[tokio::test]
