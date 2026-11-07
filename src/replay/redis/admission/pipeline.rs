@@ -1,7 +1,6 @@
 //! Proof for reading one adjacent Socket.IO publish from a blocked Redis stream.
 use super::*;
 use crate::redis::socketio_rpc;
-use crate::replay::command_matching::PreferredMatch;
 use tokio::time::Instant;
 #[cfg(test)]
 mod tests;
@@ -13,6 +12,7 @@ pub(in crate::replay::redis) struct AdjacentPublish {
     case: String,
     earlier: usize,
     later: usize,
+    route: AdapterRoute,
 }
 
 impl AdjacentPublish {
@@ -39,17 +39,17 @@ impl AdjacentPublish {
         let later = lane::ordinary_slot(&state.redis, case, candidate)?;
         let first = &state.redis.exchanges[earlier];
         let second = &state.redis.exchanges[later];
-        let first_namespace = namespace(first)?;
-        let second_namespace = namespace(second)?;
-        (first.args.first() == second.args.first() && first_namespace != second_namespace).then(
-            || Self {
+        let route = recorded_route(first)?;
+        let later_route = recorded_route(second)?;
+        (first.args.first() == second.args.first() && route.namespace != later_route.namespace)
+            .then(|| Self {
                 epoch: state.admission_epoch,
                 deadline,
                 case: case.to_owned(),
                 earlier,
                 later,
-            },
-        )
+                route,
+            })
     }
 
     pub(in crate::replay::redis) fn later(&self) -> usize {
@@ -68,7 +68,7 @@ impl AdjacentPublish {
         username: Option<&str>,
         command: &RedisCommand,
     ) -> Option<std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic>> {
-        if command.name != "PUBLISH" {
+        if AdapterRoute::from_args(&command.name, &command.args)? != self.route {
             return None;
         }
         let mut state = shared.lock().await;
@@ -81,21 +81,8 @@ impl AdjacentPublish {
         {
             return None;
         }
-        let connection = TargetConnection {
-            id: client_id,
-            bound: binding.connection(Some(&self.case)),
-        };
-        let preview = state.redis.match_strict_redis(
-            Some(&self.case),
-            target,
-            connection,
-            resp_version,
-            database,
-            username,
-            &command.name,
-            &command.args,
-        );
-        if !matches!(preview, PreferredMatch::Matched(index) if index == self.earlier) {
+        let earlier = state.redis.exchanges.get(self.earlier)?;
+        if !earlier.status.is_available() || earlier.args.first() != command.args.first() {
             return None;
         }
         let mut request = RedisRequest {
@@ -109,17 +96,12 @@ impl AdjacentPublish {
             connection: None,
             started: tokio::time::Instant::now(),
             lane_hint: None,
+            expected_index: Some(self.earlier),
         };
         let observation = request.observe_once(&mut state);
         let result = request
             .try_select(&mut state, &observation)
             .and_then(|mut matched| {
-                if matched.index != self.earlier {
-                    state
-                        .redis
-                        .fail_exchange(&matched, "pipelined Redis predecessor changed".into());
-                    return Err(request.interrupted("pipelined Redis predecessor changed"));
-                }
                 request.on_selected(&mut state, &observation, &mut matched)?;
                 Ok(matched)
             });
@@ -130,17 +112,34 @@ impl AdjacentPublish {
     }
 }
 
-fn namespace(exchange: &ReplayExchange) -> Option<String> {
+fn recorded_route(exchange: &ReplayExchange) -> Option<AdapterRoute> {
     if exchange.record.response_kind != "integer" || exchange.record.lifecycle_cleanup {
         return None;
     }
-    if let Ok(Some(request)) = socketio_rpc::request(&exchange.record.command, &exchange.args) {
-        return Some(request.identity.namespace);
+    AdapterRoute::from_args(&exchange.record.command, &exchange.args)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AdapterRoute {
+    namespace: String,
+    event: String,
+    rpc: bool,
+}
+
+impl AdapterRoute {
+    fn from_args(command: &str, args: &[Vec<u8>]) -> Option<Self> {
+        if let Ok(Some(request)) = socketio_rpc::request(command, args) {
+            return Some(Self {
+                namespace: request.identity.namespace,
+                event: request.value["event"].as_str()?.into(),
+                rpc: true,
+            });
+        }
+        let broadcast = socketio_rpc::broadcast(command, args).ok().flatten()?;
+        Some(Self {
+            namespace: broadcast.value["namespace"].as_str()?.into(),
+            event: broadcast.value["event"].as_str()?.into(),
+            rpc: false,
+        })
     }
-    socketio_rpc::broadcast(&exchange.record.command, &exchange.args)
-        .ok()
-        .flatten()?
-        .value["namespace"]
-        .as_str()
-        .map(str::to_owned)
 }

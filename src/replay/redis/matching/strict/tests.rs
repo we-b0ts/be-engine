@@ -111,8 +111,9 @@ fn compare(
         |exchange| request.matches(state, exchange),
         |exchange| request.priority(state, exchange),
     );
-    let indexed =
-        state.match_strict_redis(case, &target, connection, 2, 0, None, command, &arguments);
+    let indexed = state.match_strict_redis(
+        case, &target, connection, 2, 0, None, command, &arguments, None,
+    );
     assert_eq!(indexed, scanned);
     indexed
 }

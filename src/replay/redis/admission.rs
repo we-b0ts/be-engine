@@ -30,6 +30,7 @@ struct RedisRequest<'a> {
     connection: Option<TargetConnection>,
     started: tokio::time::Instant,
     lane_hint: Option<&'a tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
+    expected_index: Option<usize>,
 }
 
 impl DependencyRequestAdapter for RedisRequest<'_> {
@@ -80,6 +81,7 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
                 self.username,
                 &self.command.name,
                 &self.command.args,
+                self.expected_index,
             )
             .map(|mut matched| {
                 matched.report.target_event_index = observation.event_index;
@@ -238,6 +240,7 @@ pub(super) async fn match_command_with_hint(
             connection: None,
             started,
             lane_hint,
+            expected_index: None,
         },
         started + REFRESH_WAIT,
     )

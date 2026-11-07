@@ -40,7 +40,7 @@ impl Request<'_> {
 
 impl RedisReplayState {
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::replay::redis) fn match_strict_redis(
+    pub(super) fn match_strict_redis(
         &self,
         case: Option<&str>,
         target: &TargetKey,
@@ -50,6 +50,7 @@ impl RedisReplayState {
         username: Option<&str>,
         command: &str,
         args: &[Vec<u8>],
+        expected_index: Option<usize>,
     ) -> PreferredMatch {
         let request = Request {
             case,
@@ -61,6 +62,15 @@ impl RedisReplayState {
             command,
             args,
         };
+        if let Some(candidate) = expected_index {
+            return if !request.matches(self, &self.exchanges[candidate]) {
+                PreferredMatch::NotFound
+            } else if let Some(blocker) = self.candidates.lane_blocker(&self.exchanges, candidate) {
+                PreferredMatch::LaneBlocked { candidate, blocker }
+            } else {
+                PreferredMatch::Matched(candidate)
+            };
+        }
         let case_candidates = self.candidates.select(
             ReplaySource::Case,
             case,

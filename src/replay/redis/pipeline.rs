@@ -130,14 +130,23 @@ impl Request<'_> {
             return (first.await, None);
         };
         blocked.close();
+        tracing::info!("waiting for one possible adjacent Socket.IO publish on this Redis stream");
         let read = tokio::select! {
             biased;
             response = &mut first => return (response, None),
             read = read_redis_frame(reader) => read,
         };
         let started = Instant::now();
-        if let Ok(Some(frame)) = &read
-            && let Ok(command) = redis_command(&frame.raw)
+        let command = read
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .and_then(|frame| redis_command(&frame.raw).ok());
+        tracing::info!(
+            target_command = command.as_ref().map(|command| command.name.as_str()),
+            "read ahead while awaiting an adjacent Socket.IO publish"
+        );
+        if let Some(command) = command
             && let Some(predecessor) = pair
                 .admit_predecessor(
                     self.state,

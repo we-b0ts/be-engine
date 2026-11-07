@@ -182,6 +182,7 @@ impl RedisReplayState {
             username,
             command,
             args,
+            None,
         )
         .map(|mut matched| {
             matched.report.target_event_index = self.request_event_index;
@@ -275,6 +276,7 @@ impl RedisReplayState {
         username: Option<&str>,
         command: &str,
         args: &[Vec<u8>],
+        expected_index: Option<usize>,
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.candidates.register(&self.exchanges);
         if let Some(case) = active_case_id {
@@ -349,7 +351,8 @@ impl RedisReplayState {
             .map(PreferredMatch::Matched)
             .unwrap_or(PreferredMatch::NotFound);
         for allow_pre_match in [false, true] {
-            if !matches!(matched, PreferredMatch::NotFound) || allow_pre_match && !pre_match_enabled
+            if !matches!(matched, PreferredMatch::NotFound)
+                || allow_pre_match && (!pre_match_enabled || expected_index.is_some())
             {
                 break;
             }
@@ -377,6 +380,7 @@ impl RedisReplayState {
                 username,
                 command,
                 args,
+                expected_index,
             );
         }
         self.request_contracts
@@ -387,6 +391,23 @@ impl RedisReplayState {
                 return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
             }
             PreferredMatch::NotFound => {
+                if let Some(expected) = expected_index {
+                    let exchange = &self.exchanges[expected];
+                    let fields = redis_mismatch_fields(
+                        exchange,
+                        target,
+                        self.connection_scopes
+                            .matches(exchange, active_case_id, connection),
+                        resp_version,
+                        database,
+                        username,
+                        command,
+                        self.arguments_match(exchange, args),
+                    );
+                    return Err(CommandMatchDiagnostic::Mismatch {
+                        fields: fields.into_iter().map(str::to_owned).collect(),
+                    });
+                }
                 for exchange in self.exchanges.iter().filter(|exchange| {
                     exchange.source == ReplaySource::Case
                         && exchange.shared_rule_id.is_none()
@@ -483,6 +504,11 @@ impl RedisReplayState {
                 ));
             }
         };
+        if expected_index.is_some_and(|expected| expected != index) {
+            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: "pipelined Redis predecessor selected a different Source occurrence".into(),
+            });
+        }
         self.check_observation_mutation(index)?;
         self.check_activity_mutation(index)?;
         self.check_append_barrier(index, args)
