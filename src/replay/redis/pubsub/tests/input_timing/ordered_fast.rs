@@ -25,7 +25,7 @@ fn recorded_exchange(
 }
 
 #[tokio::test]
-async fn ordered_fast_distinguishes_no_recorded_heartbeat_from_an_unanswered_ping() {
+async fn unanswered_ping_does_not_disable_ordered_fast_or_authorize_early_close() {
     for saw_ping in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("case");
@@ -55,7 +55,7 @@ async fn ordered_fast_distinguishes_no_recorded_heartbeat_from_an_unanswered_pin
         let observer = crate::replay::input_timing_observer(&session, "case", SocketIoTiming::Auto)
             .await
             .unwrap();
-        assert_eq!(observer.ordered_fast(), !saw_ping);
+        assert!(observer.ordered_fast());
         assert!(observer.fast_tail().is_none());
         control.abort();
     }
