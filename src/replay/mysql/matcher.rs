@@ -305,9 +305,20 @@ impl ReplayState {
         sql: Option<&str>,
     ) -> Option<(ReplaySource, usize)> {
         let normalized_sql = sql.map(normalize_sql);
-        let active_case_id = case.map(ToOwned::to_owned);
+        let family = candidates::sql_family(sql);
         for source in [ReplaySource::Case, ReplaySource::Startup] {
-            for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
+            let candidates = self.mysql.candidates.select(
+                &self.mysql.exchanges,
+                source,
+                case,
+                identity,
+                Some(command),
+            );
+            for &index in candidates.iter() {
+                if !self.mysql.candidates.permits_sql(index, family) {
+                    continue;
+                }
+                let exchange = &mut self.mysql.exchanges[index];
                 if !exchange.source.matches_scope(source)
                     || !exchange.status.is_available()
                     || exchange.record.command != command
@@ -319,7 +330,7 @@ impl ReplayState {
                 {
                     continue;
                 }
-                if !active_case_matches(active_case_id.as_deref(), exchange) {
+                if !active_case_matches(case, exchange) {
                     continue;
                 }
                 if !identity_matches_exchange(identity, &exchange.identity) {
