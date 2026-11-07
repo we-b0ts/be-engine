@@ -309,7 +309,9 @@ fn install(
         .http_ingress
         .register(&state.http_exchanges[http_start..]);
     if let Some(policy) = &mut state.replay_policy {
-        policy.request_contracts.observe_source(case_id, raw)?;
+        policy
+            .request_contracts
+            .observe_source(case_id, raw, Some(&inventory.index))?;
         if policy.dynamic_values.enabled() {
             policy.dynamic_values.observe_source(case_id, raw)?;
         }

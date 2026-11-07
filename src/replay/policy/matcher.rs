@@ -260,7 +260,9 @@ impl ReplayPolicyRuntime {
             for case in cases.values() {
                 let bytes = crate::dependency_index::scoped::read_bytes(&case.dependencies_path)?;
                 runtime.dynamic_values.observe_source(&case.id, &bytes)?;
-                runtime.request_contracts.observe_source(&case.id, &bytes)?;
+                runtime
+                    .request_contracts
+                    .observe_source(&case.id, &bytes, None)?;
             }
         }
         Ok(runtime)

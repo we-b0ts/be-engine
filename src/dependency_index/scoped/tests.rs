@@ -4,7 +4,13 @@ use uuid::Uuid;
 
 fn fixture() -> (tempfile::TempDir, PathBuf, Vec<ScopeRecordLocation>) {
     let temp = tempfile::tempdir().unwrap();
-    fs::write(temp.path().join("recording-run.json"), "{}").unwrap();
+    let (scope, locations) = write_fixture(temp.path());
+    (temp, scope, locations)
+}
+
+fn write_fixture(root: &Path) -> (PathBuf, Vec<ScopeRecordLocation>) {
+    fs::create_dir_all(root).unwrap();
+    fs::write(root.join("recording-run.json"), "{}").unwrap();
     let mut bytes = Vec::new();
     let mut locations = Vec::new();
     for number in 0..4 {
@@ -19,11 +25,8 @@ fn fixture() -> (tempfile::TempDir, PathBuf, Vec<ScopeRecordLocation>) {
         });
         bytes.extend(raw);
     }
-    fs::write(temp.path().join("dependencies.jsonl"), bytes).unwrap();
-    let directory = temp
-        .path()
-        .join("apis/group")
-        .join(Uuid::new_v4().to_string());
+    fs::write(root.join("dependencies.jsonl"), bytes).unwrap();
+    let directory = root.join("apis/group").join(Uuid::new_v4().to_string());
     fs::create_dir_all(&directory).unwrap();
     let scope = directory.join(CASE_SCOPE);
     let index = ScopeIndex {
@@ -41,7 +44,35 @@ fn fixture() -> (tempfile::TempDir, PathBuf, Vec<ScopeRecordLocation>) {
         locations: vec![locations[1].clone(), locations[3].clone()],
     };
     fs::write(&scope, serde_json::to_vec(&index).unwrap()).unwrap();
-    (temp, scope, locations)
+    (scope, locations)
+}
+
+#[test]
+fn file_index_reuses_identical_attempt_scopes_but_rejects_stale_selections() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".traffic-e2e/recording");
+    let (scope, locations) = write_fixture(&root);
+    let duplicate = scope.with_file_name("attempt-scope.json");
+    fs::copy(&scope, &duplicate).unwrap();
+    let ledger = root.join("dependencies.jsonl");
+    let cache = super::super::store::cache_directory(&ledger);
+    let first = super::super::load_file(&scope).unwrap();
+    let repeated = super::super::load_file(&duplicate).unwrap();
+    assert_eq!(first.sha256, repeated.sha256);
+    assert_eq!(fs::read_dir(&cache).unwrap().count(), 1);
+
+    let mut changed: ScopeIndex = serde_json::from_slice(&fs::read(&duplicate).unwrap()).unwrap();
+    changed.locations = vec![locations[2].clone()];
+    fs::write(&duplicate, serde_json::to_vec(&changed).unwrap()).unwrap();
+    let selected = super::super::load_file(&duplicate).unwrap();
+    assert_ne!(first.sha256, selected.sha256);
+    assert_eq!(selected.events, 1);
+    assert_eq!(fs::read_dir(&cache).unwrap().count(), 2);
+
+    let mut raw = fs::read(&ledger).unwrap();
+    raw[locations[2].offset as usize] = b'[';
+    fs::write(&ledger, raw).unwrap();
+    assert!(super::super::load_file(&duplicate).is_err());
 }
 
 #[test]

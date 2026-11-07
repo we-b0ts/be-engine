@@ -120,7 +120,7 @@ impl RequestContracts {
         for (id, path) in cases {
             if crate::dependency_index::scoped::exists(&path) {
                 let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
-                self.register_source_records(&id, &bytes)?;
+                self.register_source_records(&id, &bytes, None)?;
                 for line in bytes
                     .split(|byte| *byte == b'\n')
                     .filter(|line| !line.is_empty())

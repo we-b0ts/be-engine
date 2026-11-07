@@ -101,24 +101,36 @@ pub(crate) fn load_file(path: &Path) -> Result<FileIndex> {
     load_file_cancellable(path, &std::sync::atomic::AtomicBool::new(false))
 }
 
+fn file_cache_directory(path: &Path, source: &super::scoped::Source) -> Result<PathBuf> {
+    let Some((view, _)) = &source.view else {
+        return Ok(cache_directory(path));
+    };
+    // Each attempt publishes its own immutable view. Identical views over the
+    // same ledger select the same records even when their paths and inodes differ.
+    let scope = digest(&fs::read(view)?);
+    source.validate()?;
+    Ok(cache_directory(&source.path).join(format!("scope-file-v1-{scope}")))
+}
+
 fn load_file_cancellable(
     path: &Path,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<FileIndex> {
     check_cancelled(cancelled)?;
-    let stamp = FileStamp::read(path)?;
+    let source = super::scoped::resolve(path)?;
+    let stamp = FileStamp::read_native(&source.path)?;
     let fragment = path
         .parent()
         .context("dependency file has no parent")?
         .join(FRAGMENT);
-    if super::scoped::view_path(path).is_none()
+    if source.view.is_none()
         && let Ok(index) = read_json::<FileIndex>(&fragment)
         && index.version == VERSION
         && index.stamp == stamp
     {
         return Ok(index);
     }
-    let cache = cache_directory(path);
+    let cache = file_cache_directory(path, &source)?;
     private_directory(&cache)?;
     let _lock = Lock::acquire(&cache.join("build.lock"), cancelled)?;
     let output = cache.join("file.json");
@@ -126,9 +138,17 @@ fn load_file_cancellable(
         && index.version == VERSION
         && index.stamp == stamp
     {
+        if source.view.is_some() {
+            source.validate()?;
+            ensure!(
+                FileStamp::read_native(&source.path)? == stamp,
+                "dependency ledger changed while loading its scope index"
+            );
+        }
         return Ok(index);
     }
     let index = build_file(path, cancelled)?;
+    source.validate()?;
     check_cancelled(cancelled)?;
     write_json(&output, &index)?;
     Ok(index)

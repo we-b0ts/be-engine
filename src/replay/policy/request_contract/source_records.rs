@@ -1,7 +1,7 @@
 //! Bind native witness observations to their original semantic JSONL locations.
 use super::*;
 use crate::{
-    dependency_index::{FileStamp, RecordLocation},
+    dependency_index::{FileIndex, FileStamp, RecordLocation},
     policy_evidence::{SourceIdentity, SourceRecord},
 };
 
@@ -71,7 +71,12 @@ impl RequestContracts {
         Ok(())
     }
 
-    pub(super) fn register_source_records(&self, case: &str, bytes: &[u8]) -> Result<()> {
+    pub(super) fn register_source_records(
+        &self,
+        case: &str,
+        bytes: &[u8],
+        prepared_index: Option<&FileIndex>,
+    ) -> Result<()> {
         let Some(store) = &self.witnesses else {
             return Ok(());
         };
@@ -111,14 +116,23 @@ impl RequestContracts {
             }
             Ok(())
         };
-        let index = crate::dependency_index::load_file(&path)?;
+        let loaded;
+        let index = if let Some(index) = prepared_index {
+            index
+        } else {
+            loaded = crate::dependency_index::load_file(&path)?;
+            &loaded
+        };
         ensure!(
             index.stamp == stamp,
             "Source dependency file changed during reference preparation"
         );
-        if let Some(records) = index.proof_records {
+        if let Some(records) = &index.proof_records {
             for record in records {
-                register(serde_json::from_value(record.selector)?, record.location)?;
+                register(
+                    serde::Deserialize::deserialize(&record.selector)?,
+                    record.location.clone(),
+                )?;
             }
             return Ok(());
         }
