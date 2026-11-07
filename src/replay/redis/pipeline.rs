@@ -146,9 +146,16 @@ impl Request<'_> {
             target_command = command.as_ref().map(|command| command.name.as_str()),
             "read ahead while awaiting an adjacent Socket.IO publish"
         );
-        if let Some(command) = command
-            && let Some(predecessor) = pair
-                .admit_predecessor(
+        let predecessor = if let Some(command) = &command {
+            // Both admissions may be queued on ReplayState. Poll the first
+            // while the second waits so a reserved mutex permit can advance.
+            tokio::select! {
+                biased;
+                response = &mut first => {
+                    *queued = Some((read, started));
+                    return (response, None);
+                }
+                predecessor = pair.admit_predecessor(
                     self.state,
                     self.target,
                     self.client_id,
@@ -156,10 +163,13 @@ impl Request<'_> {
                     self.resp_version,
                     self.database,
                     self.username,
-                    &command,
-                )
-                .await
-        {
+                    command,
+                ) => predecessor,
+            }
+        } else {
+            None
+        };
+        if let Some(predecessor) = predecessor {
             let Ok(predecessor) = predecessor else {
                 return (Err("pipelined Redis predecessor was rejected"), None);
             };

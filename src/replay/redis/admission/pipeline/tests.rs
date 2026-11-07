@@ -60,14 +60,38 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
         runtime.state.clone(),
     ));
     let mut client = RedisBufferedReader::new(client, 4096);
-    let mut bytes = crate::redis::encode_array(&[b"PUBLISH", b"socketio", later.as_bytes()]);
-    bytes.extend(crate::redis::encode_array(&[
-        b"PUBLISH",
-        b"socketio",
-        earlier.as_bytes(),
-    ]));
+    let later_frame = crate::redis::encode_array(&[b"PUBLISH", b"socketio", later.as_bytes()]);
+    client.inner.write_all(&later_frame).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if runtime
+                .state
+                .lock()
+                .await
+                .redis
+                .events
+                .request_order
+                .latest(Some("case"))
+                == Some(0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Queue the first admission's retry on ReplayState before the lookahead
+    // frame arrives. Both admissions must be polled once the lock is released.
+    let contention = runtime.state.lock().await;
+    tokio::time::advance(Duration::from_millis(150)).await;
+    tokio::task::yield_now().await;
+    let mut bytes = crate::redis::encode_array(&[b"PUBLISH", b"socketio", earlier.as_bytes()]);
     bytes.extend(crate::redis::encode_array(&[b"GET", b"next"]));
     client.inner.write_all(&bytes).await.unwrap();
+    tokio::task::yield_now().await;
+    drop(contention);
     for expected in [b":22\r\n".as_slice(), b":11\r\n", b"$1\r\nx\r\n"] {
         let frame = tokio::time::timeout(Duration::from_secs(1), read_redis_frame(&mut client))
             .await
