@@ -18,6 +18,7 @@ mod recording;
 mod routing;
 mod scale;
 mod transport_end;
+mod unanswered_rpc;
 mod wire;
 
 const CASE: &str = "00000000-0000-0000-0000-000000000123";

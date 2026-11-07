@@ -108,6 +108,7 @@ impl Delivery {
                         .pubsub
                         .native_clock
                         .epoch(case)
+                        .or_else(|| replay.redis.pubsub.namespace_sessions.epoch(case))
                         .or_else(|| replay.redis.request_contracts.request_times(case).target)
                         == Some(epoch)
                 })

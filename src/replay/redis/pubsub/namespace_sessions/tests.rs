@@ -91,7 +91,7 @@ fn protected_source_namespace_metadata_is_authenticated_without_changing_recordi
     )]);
     let mut sessions = NamespaceSessions::default();
     sessions.prepare(&cases).unwrap();
-    assert_eq!(sessions.source["case"]["/chat"], "source-sid");
+    assert_eq!(sessions.source["case"].sids["/chat"], "source-sid");
     assert_eq!(std::fs::read(&request_path).unwrap(), request_bytes);
     assert_eq!(std::fs::read(&output_path).unwrap(), output_bytes);
     let encrypted = output["interaction"]["events"][0]["message"]["data"]
@@ -113,9 +113,13 @@ fn protected_source_namespace_metadata_is_authenticated_without_changing_recordi
 fn room_mapping_requires_live_observation_and_cannot_escape_case_namespace_or_epoch() {
     let (input, output) = fixture();
     let mut sessions = NamespaceSessions::default();
-    sessions
-        .source
-        .insert("case".into(), source_sessions(&input, &output));
+    sessions.source.insert(
+        "case".into(),
+        Source {
+            sids: source_sessions(&input, &output),
+            window: None,
+        },
+    );
     let epoch = Utc::now();
     let matches = |sessions: &NamespaceSessions, case, namespace, target| {
         sessions.matches_sid(

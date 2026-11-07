@@ -1,4 +1,4 @@
-//! Finite remote Socket.IO calls proven by a Global request and a Case reply.
+//! Finite remote Socket.IO calls proven by original Redis and Case evidence.
 use super::*;
 use crate::dependency_index::RecordRef;
 use crate::replay::ReplayCase;
@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 mod causal;
 mod driver;
 mod preparation;
+mod unanswered;
 pub(in crate::replay) use driver::start;
 
 type Wire = (Uuid, u64);
@@ -40,6 +41,7 @@ impl Frame {
 struct Entry {
     case: String,
     source: rpc::Identity,
+    reply: Option<Wire>,
     target_sid: Option<String>,
     endpoint: TargetKey,
     channel: Vec<u8>,
@@ -140,7 +142,8 @@ impl PubSubState {
             return false;
         };
         self.ingress.entries.iter().any(|entry| {
-            entry.reserved
+            entry.reply.is_some()
+                && entry.reserved
                 && entry.delivered_at.is_none()
                 && !entry.failed
                 && Some(entry.case.as_str()) == case

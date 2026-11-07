@@ -1,6 +1,9 @@
 //! Prove the original ingress slot without changing Global ownership or payloads.
 use super::*;
 
+const MAX_ENTRIES: usize = 4096;
+const MAX_PREREQUISITES: usize = 65536;
+
 struct Callback {
     case: String,
     wire: Wire,
@@ -15,6 +18,67 @@ struct Candidate {
     frame: Frame,
     timestamp: Option<DateTime<Utc>>,
     ordinal: usize,
+}
+
+impl Candidate {
+    fn validate(&self, key: &Key) -> Result<rpc::Request> {
+        let raw = if let Some(reference) = &self.frame.reference {
+            let original: RecordedPush = reference.load()?;
+            ensure!(
+                original.timestamp == self.timestamp
+                    && (original.connection_id, original.subscription_sequence) == self.anchor
+                    && endpoint(&original) == key.0,
+                "remote Socket.IO request metadata differs from original evidence"
+            );
+            original.response.decode()?
+        } else {
+            self.frame.inline.clone()
+        };
+        let frame =
+            parse_pubsub_push(&raw)?.context("remote Socket.IO request is not a notification")?;
+        ensure!(
+            frame.channel == key.1,
+            "remote Socket.IO request channel differs from its original bytes"
+        );
+        let request = rpc::request("PUBLISH", &[frame.channel, frame.payload])?
+            .context("invalid original remote Socket.IO request")?;
+        ensure!(
+            request.identity == key.2,
+            "remote Socket.IO request identity differs from its original bytes"
+        );
+        Ok(request)
+    }
+
+    fn entry(
+        &self,
+        key: Key,
+        case: String,
+        started: DateTime<Utc>,
+        reply: Option<Wire>,
+        exchanges: &[ReplayExchange],
+    ) -> Result<Entry> {
+        let at = self
+            .timestamp
+            .context("remote Socket.IO request clock missing")?;
+        let prerequisites = causal::prerequisites(exchanges, &case, &key, started, at)?;
+        Ok(Entry {
+            case,
+            source: key.2,
+            reply,
+            target_sid: None,
+            endpoint: key.0,
+            channel: key.1,
+            slot: self.slot,
+            anchor: self.anchor,
+            frame: self.frame.clone(),
+            offset: at - started,
+            ordinal: self.ordinal,
+            reserved: false,
+            delivered_at: None,
+            failed: false,
+            prerequisites,
+        })
+    }
 }
 
 impl super::super::super::RedisReplayState {
@@ -33,7 +97,8 @@ impl PubSubState {
         cases: &BTreeMap<String, ReplayCase>,
     ) -> Result<()> {
         let callbacks = callbacks(exchanges, cases)?;
-        if callbacks.is_empty() {
+        let rooms = unanswered::Rooms::prepare(exchanges, &self.namespace_sessions);
+        if callbacks.is_empty() && rooms.is_empty() {
             return Ok(());
         }
         let wanted = callbacks
@@ -53,7 +118,14 @@ impl PubSubState {
                 continue;
             };
             let key = (endpoint(&push.record), frame.channel, identity);
-            if wanted.contains(&key) {
+            if wanted.contains(&key)
+                || (rooms
+                    .find(&key, push.record.timestamp, push.source)
+                    .is_some()
+                    && !self
+                        .echoes
+                        .controls(&push.record, rpc::echo_digest(&key.1, &frame.payload)))
+            {
                 candidates.entry(key).or_default().push(Candidate {
                     slot: PushId::Inline(index),
                     anchor: (push.record.connection_id, push.record.subscription_sequence),
@@ -80,7 +152,12 @@ impl PubSubState {
                         continue;
                     };
                     let key = (endpoint(&lane.record), channel, identity);
-                    if wanted.contains(&key) {
+                    if wanted.contains(&key)
+                        || (rooms
+                            .find(&key, entry.timestamp, lane.source_kind)
+                            .is_some()
+                            && !self.echoes.controls(&lane.record, entry.adapter_echo))
+                    {
                         let ordinal = entry.location.line;
                         candidates.entry(key).or_default().push(Candidate {
                             slot: PushId::Indexed {
@@ -99,6 +176,7 @@ impl PubSubState {
                 }
             }
         }
+        let mut prerequisite_count = 0;
         for callback in callbacks {
             let candidates = candidates.get(&callback.key).context(
                 "remote Socket.IO callback has no original inbound request; refresh recording",
@@ -108,16 +186,6 @@ impl PubSubState {
                 "ambiguous original remote Socket.IO request"
             );
             let candidate = &candidates[0];
-            if let Some(reference) = &candidate.frame.reference {
-                let original: RecordedPush = reference.load()?;
-                ensure!(
-                    original.timestamp == candidate.timestamp
-                        && (original.connection_id, original.subscription_sequence)
-                            == candidate.anchor
-                        && endpoint(&original) == callback.key.0,
-                    "remote Socket.IO request metadata differs from original evidence"
-                );
-            }
             let timestamp = candidate
                 .timestamp
                 .context("remote Socket.IO request clock missing")?;
@@ -125,60 +193,69 @@ impl PubSubState {
                 timestamp >= callback.case_started && timestamp <= callback.started,
                 "remote Socket.IO request is outside its replying Case interval"
             );
-            let raw = candidate.frame.bytes()?;
-            let frame = parse_pubsub_push(&raw)?
-                .context("remote Socket.IO request is not a notification")?;
-            let identity = rpc::notification_request(&frame.channel, &frame.payload)
-                .context("invalid original remote Socket.IO request")?;
+            candidate.validate(&callback.key)?;
+            let entry = candidate.entry(
+                callback.key,
+                callback.case,
+                callback.case_started,
+                Some(callback.wire),
+                exchanges,
+            )?;
+            self.ingress.register(entry, &mut prerequisite_count)?;
+        }
+        let replies = self.ingress.entries.len();
+        for (key, candidates) in candidates {
+            if wanted.contains(&key) {
+                continue;
+            }
+            let [candidate] = candidates.as_slice() else {
+                continue;
+            };
+            // Only original Process records without an echo or reply entered this inventory.
+            let Some(room) = rooms.find(&key, candidate.timestamp, ReplaySource::Process) else {
+                continue;
+            };
+            if !candidate.validate(&key)?.value["skip_sid"].is_null() {
+                continue;
+            }
+            let entry = candidate.entry(
+                key,
+                room.case.to_owned(),
+                room.window.start,
+                None,
+                exchanges,
+            )?;
+            if !entry.prerequisites.is_empty() {
+                self.ingress.register(entry, &mut prerequisite_count)?;
+            }
+        }
+        tracing::info!(
+            replies,
+            unanswered = self.ingress.entries.len() - replies,
+            "prepared finite Socket.IO Redis ingress"
+        );
+        Ok(())
+    }
+}
+
+impl Ingress {
+    fn register(&mut self, entry: Entry, prerequisite_count: &mut usize) -> Result<()> {
+        *prerequisite_count += entry.prerequisites.len();
+        ensure!(
+            *prerequisite_count <= MAX_PREREQUISITES && self.entries.len() < MAX_ENTRIES,
+            "remote Socket.IO ingress inventory exceeds bound"
+        );
+        ensure!(
+            self.slots.insert(entry.slot),
+            "one remote Socket.IO request cannot authorize multiple deliveries"
+        );
+        if let Some(wire) = entry.reply {
             ensure!(
-                frame.channel == callback.key.1 && identity == callback.key.2,
-                "remote Socket.IO request metadata differs from its original bytes"
-            );
-            ensure!(
-                self.ingress.slots.insert(candidate.slot),
-                "one remote Socket.IO request cannot authorize multiple Case replies"
-            );
-            ensure!(
-                self.ingress
-                    .callbacks
-                    .insert(callback.wire, self.ingress.entries.len())
-                    .is_none(),
+                self.callbacks.insert(wire, self.entries.len()).is_none(),
                 "duplicate remote Socket.IO reply wire identity"
             );
-            let prerequisites = causal::prerequisites(
-                exchanges,
-                &callback.case,
-                &callback.key,
-                callback.case_started,
-                timestamp,
-            )?;
-            ensure!(
-                self.ingress
-                    .entries
-                    .iter()
-                    .map(|entry| entry.prerequisites.len())
-                    .sum::<usize>()
-                    + prerequisites.len()
-                    <= 65536,
-                "remote Socket.IO causal inventory exceeds bound"
-            );
-            self.ingress.entries.push(Entry {
-                prerequisites,
-                case: callback.case,
-                source: identity,
-                target_sid: None,
-                endpoint: callback.key.0,
-                channel: frame.channel,
-                slot: candidate.slot,
-                anchor: candidate.anchor,
-                frame: candidate.frame.clone(),
-                offset: timestamp - callback.case_started,
-                ordinal: candidate.ordinal,
-                reserved: false,
-                delivered_at: None,
-                failed: false,
-            });
         }
+        self.entries.push(entry);
         Ok(())
     }
 }
@@ -235,7 +312,7 @@ fn callbacks(
             continue;
         };
         ensure!(
-            result.len() < 4096,
+            result.len() < MAX_ENTRIES,
             "remote Socket.IO request inventory exceeds bound"
         );
         ensure!(

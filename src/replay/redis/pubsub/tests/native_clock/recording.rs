@@ -224,7 +224,7 @@ fn native_event(value: &Value) -> RecorderEvent {
             args: value["args"].as_array().unwrap().iter().map(body).collect(),
             response_kind: value["response_kind"].as_str().unwrap().into(),
             response: body(&value["response"]),
-            rpc_callback_capture: None,
+            rpc_callback_capture: value["rpc_callback_capture"].as_str().map(str::to_owned),
             cache_snapshot_rule: None,
             cache_snapshot_hit: false,
             session_setup: false,

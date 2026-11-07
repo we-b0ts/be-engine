@@ -48,19 +48,18 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
         let frame = job.frame.clone();
         let bytes = tokio::task::spawn_blocking(move || frame.bytes()).await;
         let mut replay = state.lock().await;
+        let entry = &replay.redis.pubsub.ingress.entries[job.index];
         if replay.finalized_at.is_some()
             || replay.target_session_stopped
             || replay.active_case_id.as_deref() != Some(&job.case)
-            || replay
-                .redis
-                .request_contracts
-                .request_times(&job.case)
-                .target
-                != Some(job.started)
-            || !replay.redis.pubsub.is_subscribed(
-                job.client,
-                replay.redis.pubsub.ingress.entries[job.index].slot,
-            )
+            || epoch(&replay, &job.case) != Some(job.started)
+            || entry.reply.is_none()
+                && replay.redis.pubsub.namespace_sessions.target_sid(
+                    &job.case,
+                    job.started,
+                    &entry.source.namespace,
+                ) != Some(job.sid.as_str())
+            || !replay.redis.pubsub.is_subscribed(job.client, entry.slot)
         {
             continue;
         }
@@ -120,7 +119,7 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         return Ok(None);
     };
     let contracts = &replay.redis.request_contracts;
-    let Some(started) = contracts.request_times(case).target else {
+    let Some(started) = epoch(replay, case) else {
         return Ok(None);
     };
     if let Some((index, entry)) = replay
@@ -150,10 +149,19 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         {
             return Ok(None);
         }
-        let Some(sid) = contracts
-            .observed_identity_string(case, &entry.source.sid)
-            .map_err(|_| index)?
-        else {
+        let sid = if entry.reply.is_some() {
+            contracts
+                .observed_identity_string(case, &entry.source.sid)
+                .map_err(|_| index)?
+        } else {
+            replay
+                .redis
+                .pubsub
+                .namespace_sessions
+                .target_sid(case, started, &entry.source.namespace)
+                .map(str::to_owned)
+        };
+        let Some(sid) = sid else {
             return Ok(None);
         };
         let mut subscriptions = replay.redis.pubsub.subscriptions.iter().filter(|sub| {
@@ -179,6 +187,15 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         }));
     }
     Ok(None)
+}
+
+fn epoch(replay: &ReplayState, case: &str) -> Option<DateTime<Utc>> {
+    replay
+        .redis
+        .request_contracts
+        .request_times(case)
+        .target
+        .or_else(|| replay.redis.pubsub.namespace_sessions.epoch(case))
 }
 
 fn fast_dispatch_reached(
