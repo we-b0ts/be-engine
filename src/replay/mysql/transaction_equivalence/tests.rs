@@ -105,6 +105,42 @@ fn fast_dispatch_defers_only_coverage_for_future_transactions() {
 }
 
 #[test]
+fn fast_dispatch_uses_the_proven_prefix_before_a_later_source_status_gap() {
+    let at = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
+    let mut values = records();
+    // After the first committed transaction and its idle rollback, the
+    // selected scope skips a read on the same physical connection.
+    values[5]["query_sequence"] = 11.into();
+    values[5]["server_status_before"] = 1.into();
+    values[6]["query_sequence"] = 12.into();
+    values[7]["query_sequence"] = 13.into();
+    for value in &mut values {
+        let sequence = value["query_sequence"].as_i64().unwrap();
+        value["request_started_at"] = json!(at(sequence));
+        value["timestamp"] = json!(at(sequence));
+    }
+    let (mut registry, exchanges) = registry_with_exchanges(&values);
+    assert_eq!(
+        registry.diagnostic(0).unwrap()["reason"],
+        "source_status_discontinuous"
+    );
+    assert!(!registry.can_defer_setup(0, at(7), &exchanges));
+    assert!(segment(&mut registry, &mut Witness::default(), &[1, 2, 3], "COMMIT").is_empty());
+    assert!(registry.can_defer_setup(0, at(7), &exchanges));
+    assert!(!registry.can_defer_setup(0, at(8), &exchanges));
+    assert_eq!(
+        registry.diagnostic(0).unwrap()["reason"],
+        "source_status_discontinuous",
+        "dispatch cannot certify final omission"
+    );
+
+    values[6]["request_started_at"] = json!(at(6));
+    let (mut reversed, exchanges) = registry_with_exchanges(&values);
+    assert!(segment(&mut reversed, &mut Witness::default(), &[1, 2, 3], "COMMIT").is_empty());
+    assert!(!reversed.can_defer_setup(0, at(7), &exchanges));
+}
+
+#[test]
 fn all_implicit_transactions_need_distinct_complete_target_transactions() {
     let mut r = registry(&records());
     let mut first = Witness::default();

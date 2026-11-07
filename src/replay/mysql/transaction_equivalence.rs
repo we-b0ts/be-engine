@@ -28,6 +28,7 @@ struct Requirement {
     reason: &'static str,
     blocked: bool,
     source_reason: Option<&'static str>,
+    dispatch_safe_before: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug)]
@@ -163,7 +164,10 @@ impl Registry {
         self.setups.get(&setup).is_some_and(|&index| {
             let requirement = &self.requirements[index];
             !requirement.blocked
-                && requirement.source_reason.is_none()
+                && (requirement.source_reason.is_none()
+                    || requirement
+                        .dispatch_safe_before
+                        .is_some_and(|end| input_at < end))
                 && requirement.transactions.iter().all(|transaction| {
                     transaction.witness.is_some()
                         || exchanges[transaction.members[0]]
@@ -295,6 +299,7 @@ impl Registry {
                     .unwrap_or("target_transaction_coverage_required"),
                 blocked: false,
                 source_reason: plan.reason,
+                dispatch_safe_before: plan.dispatch_safe_before,
             };
             for group in plan.transactions {
                 let Some(all) = group
@@ -316,6 +321,10 @@ impl Registry {
                         .source_reason
                         .get_or_insert("source_statement_effects_unsupported");
                     requirement.reason = requirement.source_reason.unwrap();
+                    requirement.dispatch_safe_before = requirement
+                        .dispatch_safe_before
+                        .zip(exchanges[all[0]].record.request_started_at)
+                        .map(|(before, started)| before.min(started));
                 }
                 let first_write = if group.strict || group.explicit && group.write_count != 0 {
                     0
