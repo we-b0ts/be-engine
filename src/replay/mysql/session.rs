@@ -1,6 +1,7 @@
 pub(in crate::replay) struct ReplaySession {
     pub(in crate::replay) control: crate::dependency::termination::ConnectionControl,
     pub(in crate::replay) request_started: tokio::time::Instant,
+    pub(super) fast_response_timing: bool,
     pub(in crate::replay) target: Option<TargetKey>,
     pub(in crate::replay) database: Option<String>,
     pub(in crate::replay) username: Option<String>,
@@ -184,10 +185,12 @@ pub(super) async fn deliver_matched(
         }
     }
 
-    matched
-        .timing
-        .delay_response_from_request(session.request_started)
-        .await;
+    if !session.fast_response_timing || matched.record.duration_ms >= 10 {
+        matched
+            .timing
+            .delay_response_from_request(session.request_started)
+            .await;
+    }
     let rendered_at = Utc::now();
     let mut delivered_identities = None;
     if let Some(prepared) = &matched.value_delivery {

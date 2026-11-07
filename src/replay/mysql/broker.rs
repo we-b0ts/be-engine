@@ -48,7 +48,7 @@ async fn handle_connection_inner(
         (Box::new(tcp_stream), first_login_packet)
     };
     let login = parse_handshake_response(&login_packet);
-    {
+    let fast_response_timing = {
         let mut state = state.lock().await;
         state.record_connection(
             peer_addr,
@@ -56,7 +56,8 @@ async fn handle_connection_inner(
             login.database.clone(),
             login.username.clone(),
         );
-    }
+        state.stream_timing == Some(ReplayStreamTiming::Fast)
+    };
     super::wire_diagnostics::response_kind("login_ok", Some(SERVER_STATUS_AUTOCOMMIT));
     write_packet_and_flush(
         &mut stream,
@@ -69,6 +70,7 @@ async fn handle_connection_inner(
     let mut session = ReplaySession {
         control,
         request_started: tokio::time::Instant::now(),
+        fast_response_timing,
         target,
         database: login.database,
         username: login.username,
