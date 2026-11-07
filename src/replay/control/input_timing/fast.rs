@@ -55,6 +55,7 @@ impl SourceOffset {
 pub(super) struct NativeDispatch {
     from: SourceOffset,
     to: SourceOffset,
+    first_request: usize,
 }
 
 #[derive(Debug)]
@@ -68,7 +69,7 @@ struct Tail {
 pub(super) struct Plan {
     source: Source,
     handles: Vec<ExchangeHandle>,
-    previous_input: BTreeMap<u64, SourceOffset>,
+    dispatch_windows: BTreeMap<u64, NativeDispatch>,
 }
 
 impl Source {
@@ -229,22 +230,33 @@ impl Source {
             "ordered timing for an unanswered heartbeat requires an eligible heartbeat tail"
         );
         let mut previous = SourceOffset::default();
-        let mut previous_input = BTreeMap::new();
+        let mut dispatch_windows = BTreeMap::new();
         for action in &input.actions {
+            let to = SourceOffset {
+                ms: action.offset_ms,
+                us: action.offset_us,
+            };
             if ordered_input(action) {
-                previous_input.insert(action.sequence, previous);
+                let first_request = self
+                    .requests
+                    .partition_point(|request| request.started_us < previous.earliest_us());
+                dispatch_windows.insert(
+                    action.sequence,
+                    NativeDispatch {
+                        from: previous,
+                        to,
+                        first_request,
+                    },
+                );
             }
             if input_boundary(action) {
-                previous = SourceOffset {
-                    ms: action.offset_ms,
-                    us: action.offset_us,
-                };
+                previous = to;
             }
         }
         Ok(Plan {
             source: self,
             handles,
-            previous_input,
+            dispatch_windows,
         })
     }
 }
@@ -279,7 +291,8 @@ impl Plan {
             ms: us / 1_000,
             us: Some(us),
         };
-        let (compressible, unadmitted) = self.dispatch_prefix(state, case, window.from, to);
+        let (compressible, unadmitted) =
+            self.dispatch_prefix(state, case, NativeDispatch { to, ..window });
         (compressible && unadmitted.is_none()).then(|| Duration::from_millis(self.source.cap))
     }
 
@@ -333,16 +346,24 @@ impl Plan {
         &self,
         state: &ReplayState,
         case: &str,
-        from: SourceOffset,
-        to: SourceOffset,
+        window: NativeDispatch,
     ) -> (bool, Option<DispatchDependency>) {
+        let NativeDispatch {
+            from,
+            to,
+            first_request,
+        } = window;
         let input_at = i64::try_from(to.earliest_us()).ok().and_then(|us| {
             self.source
                 .start
                 .checked_add_signed(chrono::Duration::microseconds(us))
         });
         let mut compressible = true;
-        for (request, handle) in self.requests_between(from, to) {
+        for (request, handle) in self.source.requests[first_request..]
+            .iter()
+            .zip(&self.handles[first_request..])
+            .take_while(|(request, _)| request.started_us <= to.latest_us())
+        {
             if request.started_us >= to.earliest_us() {
                 // A dependency in a legacy input's millisecond bucket may
                 // be produced by that input. It cannot pin the input to its
@@ -445,18 +466,15 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
             tail.policy.close_sequence.is_none(),
         )
     } else {
-        let action = live
-            .plan
-            .input
-            .actions
-            .iter()
-            .find(|action| action.sequence == query.sequence)
-            .context("input timing sequence outside original program")?;
+        let action = input_action(live, query.sequence)?;
         ensure!(
             query.completed.iter().all(|id| action.after.contains(id)),
             "input completion outside original prerequisites"
         );
-        let previous = plan.previous_input.get(&action.sequence).copied();
+        let previous = plan
+            .dispatch_windows
+            .get(&action.sequence)
+            .map(|window| window.from);
         let eligible =
             previous.is_some() && action.after.iter().all(|id| query.completed.contains(id));
         let to = SourceOffset {
@@ -502,30 +520,21 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
 fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) -> Result<Value> {
     let live = state.input_timing.as_ref().expect("validated timeline");
     let plan = live.fast.as_ref().expect("validated fast plan");
-    let action = live
-        .plan
-        .input
-        .actions
-        .iter()
-        .find(|action| action.sequence == query.sequence)
-        .context("input timing sequence outside original program")?;
+    let action = input_action(live, query.sequence)?;
     ensure!(
         query.completed.iter().all(|id| action.after.contains(id))
             && action.after.iter().all(|id| query.completed.contains(id)),
         "dispatch requires all recorded completion identities"
     );
-    let from = *plan
-        .previous_input
+    let window = *plan
+        .dispatch_windows
         .get(&action.sequence)
         .context("input outside ordered fast plan")?;
-    let to = SourceOffset {
-        ms: action.offset_ms,
-        us: action.offset_us,
-    };
-    let (compressible, unadmitted) = plan.dispatch_prefix(state, &live.case, from, to);
+    let (compressible, unadmitted) = plan.dispatch_prefix(state, &live.case, window);
+    let NativeDispatch { from, to, .. } = window;
     let live = state.input_timing.as_mut().expect("validated timeline");
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    live.native_dispatch = Some(NativeDispatch { from, to });
+    live.native_dispatch = Some(window);
     let gates_ready = events_ready && unadmitted.is_none();
     if gates_ready && compressible && live.advanced.insert(query.sequence) {
         let cap = live.fast.as_ref().expect("validated fast plan").source.cap;
@@ -546,6 +555,17 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
         "unadmitted_request": unadmitted,
         "advance": Advance {removed_ms:live.clock.removed_ms()}
     }))
+}
+
+fn input_action(live: &Live, sequence: u64) -> Result<&InputAction> {
+    // InputTranscript::validate proves strictly increasing sequence numbers,
+    // including transcripts with gaps. Avoid a linear scan under Replay state.
+    let actions = &live.plan.input.actions;
+    let index = actions
+        .binary_search_by_key(&sequence, |action| action.sequence)
+        .ok()
+        .context("input timing sequence outside original program")?;
+    Ok(&actions[index])
 }
 
 fn input_boundary(action: &InputAction) -> bool {
