@@ -201,12 +201,9 @@ pub(in crate::replay) fn confirm_eof_recovery(
         return Ok(serde_json::json!({"ok":true,"wait_ms":POLL_MS}));
     }
     let plan = live.fast.as_ref().expect("EOF recovery requires fast plan");
-    let RecordedReference::Redis { connection_id, .. } = probe.blocker else {
-        unreachable!("EOF recovery requires a Redis blocker");
-    };
     for &handle in plan.eof_recovery_suffix(probe.prefix_end) {
         if let ExchangeHandle::Native(DependencyAdapter::Redis(index)) = handle {
-            state.redis.open_socketio_eof_suffix(index, connection_id);
+            state.redis.open_socketio_eof_suffix(index);
         }
     }
     state.redis.notify_socketio_eof_suffix();

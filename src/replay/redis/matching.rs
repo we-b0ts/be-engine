@@ -870,7 +870,7 @@ impl CommandExchangeScope for ReplayExchange {
         // reach the client but before delivery bookkeeping reacquires the mutex.
         // Unclaimed, failed and client-termination exchanges remain blockers.
         self.is_consumed()
-            || self.status == ReplayExchangeStatus::SocketIoEofPublish
+            || self.status == ReplayExchangeStatus::SocketIoEofSuffix
             || if let Some(ticket) = &self.claim {
                 self.source == ReplaySource::Case && ticket.satisfies(Barrier::Admitted)
             } else {

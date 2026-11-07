@@ -82,9 +82,11 @@ async fn eof_recovery_requires_a_delivered_prefix_and_the_exact_post_close_get()
             event(1, "GET", &[b"prefix"], b"$1\r\np\r\n"),
             event(3, "GET", &[b"blocker"], b"$1\r\nx\r\n"),
             event(4, "PUBLISH", &[b"live", b"update"], b":1\r\n"),
-            event(5, "GET", &[b"cleanup"], b"$1\r\ny\r\n"),
-            event(6, "PUBLISH", &[b"live", b"more"], b":1\r\n"),
-            event(8, "PUBLISH", &[b"live", b"shutdown"], b":1\r\n"),
+            event(5, "GET", &[b"unrelated"], b"$1\r\nz\r\n"),
+            event(6, "GET", &[b"cleanup"], b"$1\r\ny\r\n"),
+            event(7, "PUBLISH", &[b"other", b"unsent"], b":1\r\n"),
+            event(8, "PUBLISH", &[b"other", b"actual"], b":1\r\n"),
+            event(9, "PUBLISH", &[b"live", b"shutdown"], b":1\r\n"),
         ];
         if matches!(outcome, Outcome::BeforeHeartbeatTimeout) {
             events[1]["request_started_at"] = json!("2020-01-01T00:00:01.500Z");
@@ -92,6 +94,10 @@ async fn eof_recovery_requires_a_delivered_prefix_and_the_exact_post_close_get()
         // An unmatched request in the required prefix must not itself block
         // selection of the PUBLISH's own lane predecessor.
         events[0]["connection_id"] = json!(Uuid::from_u128(42));
+        events[5]["connection_id"] = json!(Uuid::from_u128(43));
+        events[5]["request_started_at"] = json!("2020-01-01T00:00:04.500Z");
+        events[6]["connection_id"] = json!(Uuid::from_u128(43));
+        events[6]["request_started_at"] = json!("2020-01-01T00:00:04.600Z");
         let (_root, runtime) = tests::runtime_with_response(
             &events,
             json!({"format":"traffic-policy/v3","rules":[]}),
@@ -155,16 +161,21 @@ async fn eof_recovery_requires_a_delivered_prefix_and_the_exact_post_close_get()
                     true
                 );
                 let cleanup = command(&runtime, &[b"GET", b"cleanup"]).await.unwrap();
-                assert_eq!(cleanup.report.sequence, 5);
+                assert_eq!(cleanup.report.sequence, 6);
                 deliver(&runtime, &cleanup).await;
+                let published = command(&runtime, &[b"PUBLISH", b"other", b"actual"])
+                    .await
+                    .unwrap();
+                assert_eq!(published.report.sequence, 8);
+                deliver(&runtime, &published).await;
                 let mut state = runtime.state.lock().await;
                 crate::replay::control::input_timing::finish_eof_recovery(&mut state, "case");
                 let snapshot = state.redis.snapshot();
                 assert!(snapshot.unmatched.is_empty());
                 assert!(snapshot.unused_case.is_empty());
-                assert_eq!(snapshot.matched_count, 3);
+                assert_eq!(snapshot.matched_count, 4);
                 let audit = state.dependency_tails.eof_recovery("case").unwrap();
-                assert_eq!(audit["omitted_unstarted_suffix"], 3);
+                assert_eq!(audit["omitted_unstarted_suffix"], 4);
                 assert_eq!(audit["omitted_after_source_eof"], 1);
                 assert_eq!(audit["blocker"]["sequence"], 3);
                 continue;

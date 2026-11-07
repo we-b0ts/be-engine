@@ -43,15 +43,18 @@ impl RedisReplayState {
 }
 
 impl RedisReplayState {
-    pub(in crate::replay) fn open_socketio_eof_suffix(&mut self, index: usize, connection: Uuid) {
+    pub(in crate::replay) fn open_socketio_eof_suffix(&mut self, index: usize) {
         let exchange = &mut self.exchanges[index];
         if exchange.status == ReplayExchangeStatus::Available
-            && exchange.record.connection_id == connection
-            && exchange.record.command == "PUBLISH"
+            && exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none()
+            && !exchange.reusable_snapshot
+            && !exchange.subscription_alias
+            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
             && exchange.record.replay_safe
             && exchange.record.parse_warnings.is_empty()
         {
-            exchange.status = ReplayExchangeStatus::SocketIoEofPublish;
+            exchange.status = ReplayExchangeStatus::SocketIoEofSuffix;
         }
     }
 
@@ -65,7 +68,7 @@ impl RedisReplayState {
         omit: bool,
     ) -> bool {
         let exchange = &mut self.exchanges[index];
-        if exchange.status == ReplayExchangeStatus::SocketIoEofPublish {
+        if exchange.status == ReplayExchangeStatus::SocketIoEofSuffix {
             exchange.status = ReplayExchangeStatus::Available;
         }
         if omit && exchange.status == ReplayExchangeStatus::Available && !exchange.reusable_snapshot

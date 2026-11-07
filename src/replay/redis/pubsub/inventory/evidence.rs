@@ -98,7 +98,7 @@ impl IndexedNotifications {
                     ReplayExchangeStatus::Available | ReplayExchangeStatus::StartupBlocked => {}
                     ReplayExchangeStatus::AwaitingClientTermination
                     | ReplayExchangeStatus::Cancelled
-                    | ReplayExchangeStatus::SocketIoEofPublish
+                    | ReplayExchangeStatus::SocketIoEofSuffix
                     | ReplayExchangeStatus::OmittedAfterSocketIoEof => {
                         anyhow::bail!("invalid notification delivery status")
                     }
