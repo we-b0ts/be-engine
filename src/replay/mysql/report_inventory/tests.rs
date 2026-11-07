@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
+mod prefix;
 
 fn control(connection: Uuid, sequence: u64, sql: &str, before: u16, after: u16) -> Value {
     json!({"event_type":"mysql_exchange", "connection_id":connection,
@@ -110,10 +111,11 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
         transaction_scope: Default::default(),
         savepoints: Default::default(),
         transaction_witness: Default::default(),
+        deferred_prefix: None,
     };
     let first = super::super::admission::match_request(
         &runtime.state,
-        &session,
+        &mut session,
         "COM_QUERY",
         Some("SELECT id FROM rollback_read"),
         None,
@@ -121,7 +123,7 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
     .await;
     let second = super::super::admission::match_request(
         &runtime.state,
-        &session,
+        &mut session,
         "COM_QUERY",
         Some("SELECT id FROM required_read"),
         None,
@@ -162,7 +164,7 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
     }
     let rejected = super::super::admission::match_request(
         &runtime.state,
-        &session,
+        &mut session,
         "COM_QUERY",
         Some("SELECT missing FROM not_recorded"),
         None,

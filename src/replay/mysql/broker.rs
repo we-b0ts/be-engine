@@ -78,7 +78,27 @@ async fn handle_connection_inner(
         transaction_scope: Default::default(),
         savepoints: Default::default(),
         transaction_witness: Default::default(),
+        deferred_prefix: None,
     };
+    let result = drive_connection(stream, state.clone(), &mut session).await;
+    if let Some(first) = session.deferred_prefix.take() {
+        let mut replay = state.lock().await;
+        if replay.finalized_at.is_none() {
+            replay.fail_exchange(
+                &first.matched,
+                &session.identity(),
+                "MySQL connection ended before its reserved first read was assigned",
+            );
+        }
+    }
+    result
+}
+
+async fn drive_connection(
+    mut stream: BoxedMysqlReplayIo,
+    state: Arc<Mutex<ReplayState>>,
+    session: &mut ReplaySession,
+) -> Result<()> {
     loop {
         let Some(packet) = read_packet(&mut stream).await? else {
             super::wire_diagnostics::client_eof();
@@ -114,7 +134,7 @@ async fn handle_connection_inner(
                     ..
                 } = super::admission::match_request(
                     &state,
-                    &session,
+                    session,
                     &command.command_name,
                     command.query.as_deref(),
                     None,
@@ -130,7 +150,7 @@ async fn handle_connection_inner(
                     let directive = deliver_matched(
                         &mut stream,
                         state.clone(),
-                        &mut session,
+                        session,
                         matched,
                         ResultRowEncoding::Text,
                     )
@@ -171,7 +191,7 @@ async fn handle_connection_inner(
             }
             "COM_QUERY" => {
                 let sql = command.query.as_deref().unwrap_or_default();
-                if handle_query(&mut stream, state.clone(), &mut session, sql).await?
+                if handle_query(&mut stream, state.clone(), session, sql).await?
                     == SessionDirective::Close
                 {
                     break;
@@ -179,14 +199,14 @@ async fn handle_connection_inner(
             }
             "COM_STMT_PREPARE" => {
                 let sql = command.query.as_deref().unwrap_or_default();
-                if handle_stmt_prepare(&mut stream, state.clone(), &mut session, sql).await?
+                if handle_stmt_prepare(&mut stream, state.clone(), session, sql).await?
                     == SessionDirective::Close
                 {
                     break;
                 }
             }
             "COM_STMT_EXECUTE" => {
-                if handle_stmt_execute(&mut stream, state.clone(), &mut session, &packet).await?
+                if handle_stmt_execute(&mut stream, state.clone(), session, &packet).await?
                     == SessionDirective::Close
                 {
                     break;

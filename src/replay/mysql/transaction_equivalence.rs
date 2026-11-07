@@ -3,6 +3,7 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod member_comparison;
+pub(super) mod prefix;
 mod source;
 mod source_evidence;
 #[cfg(test)]
@@ -15,6 +16,7 @@ pub(in crate::replay) struct Registry {
     members: BTreeMap<usize, (usize, usize)>,
     ends: BTreeMap<usize, (usize, usize)>,
     free_reads: BTreeSet<usize>,
+    pub(super) prefixes: prefix::Index,
     global_reads: source_evidence::GlobalReads,
     rejected_ends: BTreeMap<usize, source::RejectedEnd>,
 }
@@ -113,6 +115,12 @@ impl Witness {
     pub(super) fn has_active_transaction(&self) -> bool {
         self.active.is_some()
     }
+
+    pub(super) fn can_defer_first(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_none_or(|trace| trace.valid && trace.members.is_empty() && !trace.skipped_free_read)
+    }
 }
 
 #[derive(Debug)]
@@ -120,6 +128,7 @@ struct Trace {
     id: Uuid,
     members: Vec<usize>,
     valid: bool,
+    skipped_free_read: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -239,6 +248,7 @@ impl Registry {
         mapping: &BTreeMap<usize, usize>,
         exchanges: &[ReplayExchange],
     ) -> Vec<(usize, OptionalSessionExchange)> {
+        self.prefixes.register(&plans, mapping, exchanges);
         let mut omissions = Vec::new();
         for plan in plans {
             for rejected in plan.failed_ends {
@@ -451,6 +461,7 @@ impl Registry {
                     .into_iter()
                     .collect(),
                 valid,
+                skipped_free_read: false,
             });
             return violation.unwrap_or_default();
         }
@@ -470,6 +481,7 @@ impl Registry {
                 id: Uuid::new_v4(),
                 members: Vec::new(),
                 valid: true,
+                skipped_free_read: false,
             });
         }
         if let Some(loc @ (r, t)) = location {
@@ -508,6 +520,7 @@ impl Registry {
             });
         };
         if trace.members.is_empty() && index.is_some_and(|i| self.free_reads.contains(&i)) {
+            trace.skipped_free_read = true;
             return Observation::default();
         }
         if trace.members.is_empty()

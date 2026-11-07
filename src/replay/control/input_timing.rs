@@ -51,6 +51,29 @@ pub(in crate::replay) struct Live {
 }
 
 impl Live {
+    pub(in crate::replay) fn mysql_prefix_window(
+        &self,
+        case: &str,
+        first: DateTime<Utc>,
+        second: DateTime<Utc>,
+    ) -> Option<u64> {
+        if self.case != case || self.fast.is_none() || second < first {
+            return None;
+        }
+        let start = self.plan.source_start?;
+        let first = u64::try_from((first - start).num_microseconds()?).ok()?;
+        let second = u64::try_from((second - start).num_microseconds()?).ok()?;
+        let actions = &self.plan.input.actions;
+        // A legacy offset can occur anywhere in its millisecond bucket.
+        let boundary = actions.partition_point(|action| action.offset_ms <= second / 1000);
+        let Some(index) = boundary.checked_sub(1) else {
+            return Some(0);
+        };
+        let previous = &actions[index];
+        let latest = previous.offset_ms.saturating_mul(1000).saturating_add(999);
+        (latest < first).then_some(previous.sequence)
+    }
+
     pub(in crate::replay) fn native_fast_setup_ready(&self, state: &ReplayState) -> bool {
         self.fast
             .as_ref()

@@ -3,6 +3,7 @@ use serde_json::json;
 mod error_rollback;
 mod implicit_native;
 mod member_comparison;
+mod prefix;
 
 pub(crate) fn records() -> Vec<Value> {
     let control = |seq, sql, before, after| {

@@ -3,7 +3,7 @@ use super::*;
 use crate::replay::dependencies::DependencyRecord;
 
 mod error_rollback;
-mod locking_read;
+pub(super) mod locking_read;
 
 pub(in crate::replay) struct Plan {
     pub setups: Vec<usize>,

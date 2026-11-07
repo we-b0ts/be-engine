@@ -52,6 +52,12 @@ pub(in crate::replay) struct DependencyRuleDecision {
 }
 
 impl DependencyRuleDecision {
+    pub(in crate::replay) fn is_empty(&self) -> bool {
+        self.usage.is_empty()
+            && self.automatic_identities.is_none()
+            && self.dynamic_query_params.is_empty()
+            && self.value_contracts.is_empty()
+    }
     pub(in crate::replay) fn identity_proposals(
         &self,
     ) -> impl Iterator<Item = &crate::value_contract::identities::IdentityDecision> {

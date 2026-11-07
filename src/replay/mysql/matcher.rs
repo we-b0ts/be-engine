@@ -667,17 +667,28 @@ impl ReplayState {
         identity: &ReplaySessionIdentity,
         reason: &str,
     ) {
-        let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) else {
-            return;
-        };
-        if !self
-            .mysql
-            .lifecycle
-            .fail(&matched.claim, &mut exchange.status)
-        {
-            return;
+        if matched.deferred_prefix.is_some() {
+            if !self
+                .mysql
+                .transaction_equivalence
+                .prefixes
+                .fail(&matched.claim)
+            {
+                return;
+            }
+        } else {
+            let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) else {
+                return;
+            };
+            if !self
+                .mysql
+                .lifecycle
+                .fail(&matched.claim, &mut exchange.status)
+            {
+                return;
+            }
+            self.refresh_mysql_global_report(matched.index);
         }
-        self.refresh_mysql_global_report(matched.index);
         self.record_unmatched_in_case(
             matched.report.case_id.as_deref(),
             identity,

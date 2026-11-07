@@ -37,6 +37,7 @@ impl ReplayState {
                 .lifecycle
                 .claim(index, &mut exchange.status, kind)?;
             let matched = MatchedExchange {
+                deferred_prefix: None,
                 target_observation_id: self.mysql.request_observation_id.clone(),
                 claim,
                 hypothesis_owner: self

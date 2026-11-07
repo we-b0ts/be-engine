@@ -10,6 +10,13 @@ pub(in crate::replay) struct ReplaySession {
     pub(super) transaction_scope: super::transaction_scope::Scope,
     pub(super) savepoints: super::savepoints::Bindings,
     pub(super) transaction_witness: super::transaction_equivalence::Witness,
+    pub(super) deferred_prefix: Option<Box<DeferredPrefix>>,
+}
+
+pub(super) struct DeferredPrefix {
+    pub(super) matched: MatchedExchange,
+    before: u16,
+    after: u16,
 }
 
 impl ReplaySession {
@@ -97,7 +104,7 @@ pub(super) async fn deliver_matched(
     mut matched: MatchedExchange,
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
-    let _delivery = matched.claim.guard();
+    let delivery = matched.claim.guard();
     if let Some(owner) = &matched.hypothesis_owner
         && let Err(error) = owner.await_hypotheses_durable().await
     {
@@ -238,6 +245,15 @@ pub(super) async fn deliver_matched(
         return Err(error);
     }
     matched.claim.publish_wire();
+    if matched.deferred_prefix.is_some() {
+        session.deferred_prefix = Some(Box::new(DeferredPrefix {
+            matched,
+            before: target_status_before,
+            after: session.status_flags,
+        }));
+        delivery.handoff();
+        return Ok(SessionDirective::Continue);
+    }
     // These are facts about bytes already flushed to the native client. Another
     // connection may immediately copy them while the async report mutex is held.
     // Their success/error still enters the shared terminal transaction below.
@@ -294,6 +310,88 @@ pub(super) async fn deliver_matched(
         &identity,
     );
     Ok(SessionDirective::Continue)
+}
+
+impl ReplayState {
+    pub(super) fn bind_mysql_prefix(
+        &mut self,
+        first: DeferredPrefix,
+        second: usize,
+        session: &mut ReplaySession,
+    ) -> Result<()> {
+        let DeferredPrefix {
+            mut matched,
+            before,
+            after,
+        } = first;
+        let reservation = matched
+            .deferred_prefix
+            .take()
+            .context("missing MySQL prefix reservation")?;
+        let index = self
+            .mysql
+            .transaction_equivalence
+            .prefixes
+            .resolve(
+                reservation,
+                second,
+                &self.mysql.exchanges,
+                |first, second| {
+                    super::transaction_equivalence::prefix::window(
+                        self.input_timing.as_ref(),
+                        first,
+                        second,
+                    )
+                },
+            )
+            .context("MySQL prefix could not be assigned to the confirmed transaction")?;
+        ensure!(
+            self.finalized_at.is_none() && self.active_case_id == matched.report.case_id,
+            "MySQL prefix case stopped before transaction confirmation"
+        );
+        ensure!(
+            self.mysql
+                .transaction_equivalence
+                .prefixes
+                .confirm(reservation, &matched.claim),
+            "MySQL prefix wire receipt was cancelled before confirmation"
+        );
+        let exchange = &mut self.mysql.exchanges[index];
+        matched.claim = self
+            .mysql
+            .lifecycle
+            .claim(
+                index,
+                &mut exchange.status,
+                crate::replay::admission::ClaimKind::Response,
+            )
+            .context("MySQL prefix occurrence already claimed")?;
+        matched.index = index;
+        matched.report.index = index;
+        matched.report.source_connection_id = exchange.record.connection_id;
+        matched.report.source_query_sequence = exchange.record.query_sequence;
+        matched.claim.publish_wire();
+        ensure!(
+            self.complete_exchange(&matched),
+            "MySQL confirmed prefix could not be committed"
+        );
+        let identity = session.identity();
+        self.observe_mysql_transaction(
+            &mut session.transaction_witness,
+            super::transaction_equivalence::Delivery {
+                command: &matched.report.command,
+                params: matched.report.params.as_deref(),
+                sql: matched.report.sql.as_deref().unwrap_or_default(),
+                index: Some(index),
+                successful: true,
+                before,
+                after,
+            },
+            matched.report.case_id.as_deref(),
+            &identity,
+        );
+        Ok(())
+    }
 }
 
 pub(in crate::replay) async fn handle_query(
