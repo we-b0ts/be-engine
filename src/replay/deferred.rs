@@ -333,6 +333,7 @@ fn install(
         http::observe_recorded_policy_exchanges(policy, &state.http_exchanges[http_start..]);
         memcached::observe_recorded_policy_exchanges(policy, &state.memcached);
     }
+    state.prepare_native_candidates();
     state.install_case_execution_plan(
         case_id,
         execution_plan::SourceScopeIdentity {

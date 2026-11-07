@@ -3,6 +3,12 @@ use super::*;
 use execution_plan::{CaseExecutionPlan, NativeCaseRefs, SourceScopeIdentity};
 
 impl ReplayState {
+    pub(super) fn prepare_native_candidates(&mut self) {
+        self.http_candidates.register(&self.http_exchanges);
+        self.mysql.prepare_candidates();
+        self.redis.prepare_candidates();
+    }
+
     pub(super) fn install_case_execution_plan(
         &mut self,
         case: &str,
@@ -14,9 +20,6 @@ impl ReplayState {
             .map(|policy| policy.request_contracts.prepare_case_rules(case))
             .transpose()?
             .unwrap_or_default();
-        self.http_candidates.register(&self.http_exchanges);
-        self.mysql.prepare_candidates();
-        self.redis.prepare_candidates();
         // Optional loop observations need their immutable Source proof even
         // when Target executes zero iterations and sends no Redis command.
         self.redis.prepare_optional_observations(case)?;

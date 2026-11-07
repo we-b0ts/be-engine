@@ -524,6 +524,9 @@ impl ReplayRuntime {
             unrecorded_targets: Vec::new(),
             unrecorded_case_ids: BTreeSet::new(),
         };
+        // Lazy loading has no Case plans here, but already has run-owned
+        // dependencies and the Redis lanes needed during Target startup.
+        state.prepare_native_candidates();
         for (case, source) in prepared_scopes {
             state.install_case_execution_plan(&case, source)?;
         }
