@@ -68,7 +68,7 @@ pub(in crate::replay) struct MysqlDependencyIdentity {
     pub(in crate::replay) username: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::replay) struct ReplaySessionIdentity {
     pub(in crate::replay) target: Option<TargetKey>,
     pub(in crate::replay) database: Option<String>,

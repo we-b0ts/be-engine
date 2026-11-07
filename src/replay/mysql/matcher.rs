@@ -3,6 +3,7 @@ mod control;
 mod hypothesis;
 mod observation;
 mod request;
+mod source_formats;
 pub(super) use request::TransactionMatch;
 
 #[derive(Debug, Default)]
@@ -15,6 +16,7 @@ pub(in crate::replay) struct MysqlReplayState {
     case_exchange_index: CaseExchangeIndex,
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
+    source_formats: source_formats::Cache,
     candidates: candidates::Candidates,
     cleanup_selection: cleanup_selection::Index,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,

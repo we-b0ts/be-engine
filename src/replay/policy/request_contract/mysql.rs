@@ -117,6 +117,24 @@ impl RequestContracts {
         observed: DateTime<Utc>,
         runtime: &super::super::matcher::ReplayPolicyRuntime,
     ) -> Option<Result<super::super::matcher::DependencyRuleDecision, String>> {
+        self.preview_mysql_values_with_format_cache(
+            case, identity, record, command, sql, params, observed, runtime, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::replay) fn preview_mysql_values_with_format_cache(
+        &self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        record: &RecordedMysqlExchange,
+        command: &str,
+        sql: Option<&str>,
+        params: Option<&[RecordedMysqlValue]>,
+        observed: DateTime<Utc>,
+        runtime: &super::super::matcher::ReplayPolicyRuntime,
+        source_formats: Option<&mut Option<bool>>,
+    ) -> Option<Result<super::super::matcher::DependencyRuleDecision, String>> {
         // Most candidates differ in statement/table shape. Reject those before
         // selecting field contracts or touching the AST analysis cache.
         let token_pair = (
@@ -161,11 +179,13 @@ impl RequestContracts {
         // A global format map is not a positional SQL contract. If it selects
         // no Source value, retain ordinary predicate/projection compatibility
         // instead of rejecting an otherwise equivalent IN-list permutation.
-        if rules.is_empty()
-            && native.is_empty()
-            && (automatic.is_none() || !self.has_mysql_formats(identity, record))
-        {
-            return None;
+        if rules.is_empty() && native.is_empty() {
+            let detect = || self.has_mysql_formats(identity, record);
+            if automatic.is_none()
+                || !source_formats.map_or_else(detect, |cached| *cached.get_or_insert_with(detect))
+            {
+                return None;
+            }
         }
         Some(
             (|| {

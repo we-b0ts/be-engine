@@ -91,6 +91,18 @@ impl ReplayState {
         let observation_id = observation.observation_id;
         let observed_sql = sql;
         let observed_params = params;
+        if let Some(policy) = self
+            .replay_policy
+            .as_ref()
+            .and_then(|policy| policy.request_contracts.compiled_rules())
+        {
+            self.mysql.source_formats.prepare(
+                self.admission_epoch,
+                self.mysql.exchanges.len(),
+                identity,
+                policy,
+            );
+        }
         let baseline_normalized_sql = sql.map(normalize_sql);
         let sql_family = candidates::sql_family(sql);
         let select_hint = sql.and_then(candidates::select_hint);
@@ -373,35 +385,40 @@ impl ReplayState {
                             Some(Ok(decision.clone()))
                         } else {
                             self.replay_policy.as_ref().and_then(|policy| {
-                                let global = policy.request_contracts.compiled_rules().is_some_and(
-                                    |compiled| {
-                                        (compiled.global_json.is_some() || compiled.mysql.is_some())
-                                            && (dynamic.is_none()
-                                                || policy
-                                                    .request_contracts
-                                                    .has_authored_mysql_formats(
-                                                        identity,
-                                                        &self.mysql.exchanges[index].record,
-                                                    ))
-                                    },
-                                );
+                                let automatic = policy
+                                    .request_contracts
+                                    .compiled_rules()
+                                    .is_some_and(|compiled| {
+                                        compiled.global_json.is_some() || compiled.mysql.is_some()
+                                    });
+                                let mut formats = automatic
+                                    .then(|| self.mysql.source_formats.entry(index))
+                                    .flatten();
+                                let original = &self.mysql.exchanges[index].record;
+                                let global = automatic
+                                    && (dynamic.is_none() || {
+                                        let authored = || {
+                                            policy
+                                                .request_contracts
+                                                .has_authored_mysql_formats(identity, original)
+                                        };
+                                        formats.as_mut().map_or_else(authored, |cached| {
+                                            *cached.authored.get_or_insert_with(authored)
+                                        })
+                                    });
                                 // Authored global owners compare original values.
                                 // Implicit textual-time recognition keeps the native
                                 // identity projection already authenticated above.
                                 // Original wire evidence was recorded before either
                                 // comparison view was constructed.
                                 let (record, selected_sql, selected_params) = if global {
-                                    (
-                                        &self.mysql.exchanges[index].record,
-                                        observed_sql,
-                                        observed_params,
-                                    )
+                                    (original, observed_sql, observed_params)
                                 } else {
                                     (&exchange.record, sql, params)
                                 };
                                 policy
                                     .request_contracts
-                                    .preview_mysql_values(
+                                    .preview_mysql_values_with_format_cache(
                                         active_case_id.as_deref(),
                                         identity,
                                         record,
@@ -410,6 +427,11 @@ impl ReplayState {
                                         selected_params,
                                         request_observed_at,
                                         policy,
+                                        if global || normalized_exchange.is_none() {
+                                            formats.map(|cached| &mut cached.any)
+                                        } else {
+                                            None
+                                        },
                                     )
                                     .or_else(|| {
                                         policy.preview_mysql_sql_values(&MysqlPolicyContext {
