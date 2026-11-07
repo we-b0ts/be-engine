@@ -222,6 +222,20 @@ pub(super) fn source_metadata(metadata: &WitnessMetadata) -> WitnessMetadata {
     }
     metadata
 }
+
+/// Compare against metadata already normalized by `source_metadata`.
+pub(super) fn same_source(stored: &WitnessMetadata, actual: &WitnessMetadata) -> bool {
+    stored.source == actual.source
+        && stored.surface == actual.surface
+        && stored.source_role == actual.source_role
+        && stored.operation == actual.operation
+        && stored.slot == actual.slot
+        && same_resource(stored.resource.as_ref(), actual.resource.as_ref())
+        && stored.clocks.case.source == actual.clocks.case.source
+        && stored.clocks.dependency.source == actual.clocks.dependency.source
+        && (actual.surface == Surface::DependencyRequest
+            || stored.clocks.delivery.source == actual.clocks.delivery.source)
+}
 pub(super) fn source_key(metadata: &WitnessMetadata) -> Result<Option<String>> {
     let identified = metadata.surface == Surface::ApiResponse
         || metadata
@@ -242,7 +256,25 @@ pub(super) fn compatible(source: &WitnessMetadata, target: &TargetMetadata) -> b
     {
         return false;
     }
-    let resource = match (&source.resource, &target.resource) {
+    same_resource(source.resource.as_ref(), target.resource.as_ref())
+        && (source.operation.eq_ignore_ascii_case(&target.operation)
+            || source
+                .resource
+                .as_ref()
+                .is_some_and(|resource| resource.protocol == crate::policy::Protocol::Mysql)
+                && [source.operation.as_str(), target.operation.as_str()]
+                    .into_iter()
+                    .all(|operation| {
+                        operation.eq_ignore_ascii_case("COM_QUERY")
+                            || operation.eq_ignore_ascii_case("COM_STMT_EXECUTE")
+                    }))
+}
+
+fn same_resource(
+    left: Option<&crate::policy::Resource>,
+    right: Option<&crate::policy::Resource>,
+) -> bool {
+    match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => {
             left.protocol == right.protocol
@@ -255,19 +287,7 @@ pub(super) fn compatible(source: &WitnessMetadata, target: &TargetMetadata) -> b
                 && left.username == right.username
         }
         _ => false,
-    };
-    resource
-        && (source.operation.eq_ignore_ascii_case(&target.operation)
-            || source
-                .resource
-                .as_ref()
-                .is_some_and(|resource| resource.protocol == crate::policy::Protocol::Mysql)
-                && [source.operation.as_str(), target.operation.as_str()]
-                    .into_iter()
-                    .all(|operation| {
-                        operation.eq_ignore_ascii_case("COM_QUERY")
-                            || operation.eq_ignore_ascii_case("COM_STMT_EXECUTE")
-                    }))
+    }
 }
 
 impl ObservationGraph {

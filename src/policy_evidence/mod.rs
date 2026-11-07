@@ -57,7 +57,7 @@ impl WitnessClocks {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct SourceIdentity {
     pub case_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

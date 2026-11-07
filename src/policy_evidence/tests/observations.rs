@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn source_occurrence_lookup_keeps_slots_and_source_clocks_separate() {
+    let (_temp, artifacts, store, source) = setup();
+    let target = "request-1";
+    store
+        .record_target(
+            target,
+            TargetMetadata::from_pair(&source),
+            &artifacts,
+            b"target",
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .associate(&source, target, &artifacts, Some(b"source"))
+            .unwrap(),
+        AssociationOutcome::Retained,
+    );
+
+    let mut different_target_clock = source.clone();
+    different_target_clock.clocks.dependency.target = Some(chrono::Utc::now());
+    assert_eq!(
+        store
+            .associate(&different_target_clock, target, &artifacts, None)
+            .unwrap(),
+        AssociationOutcome::Retained,
+    );
+
+    let mut different_source_clock = source.clone();
+    different_source_clock.clocks.dependency.source = Some(chrono::Utc::now());
+    let mut different_slot = source;
+    different_slot.slot = Slot::SqlValue(1);
+    for distinct in [different_source_clock, different_slot] {
+        assert_eq!(
+            store
+                .associate(&distinct, target, &artifacts, None)
+                .unwrap(),
+            AssociationOutcome::SourceRequired,
+        );
+    }
+}
+
+#[test]
 fn run_target_without_a_case_is_authenticated_and_cannot_borrow_a_primary_clock() {
     let (_temp, artifacts, _old, source) = setup();
     let session = uuid::Uuid::new_v4().to_string();

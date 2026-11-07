@@ -6,7 +6,7 @@ use super::v2::{
 use super::*;
 use anyhow::{Context, Result, ensure};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs::{File, OpenOptions},
     io::Write,
     path::Path,
@@ -45,11 +45,12 @@ struct State {
     graph: ObservationGraph,
     key: Vec<u8>,
     sources: BTreeMap<String, usize>,
+    sources_by_occurrence: HashMap<SourceIdentity, Vec<usize>>,
     source_records: BTreeMap<String, SourceRecord>,
     unavailable_sources: BTreeSet<String>,
     source_tracking_exhausted: bool,
     targets: BTreeMap<String, usize>,
-    associations: BTreeMap<(usize, usize), usize>,
+    associations: HashMap<(usize, usize), usize>,
     blobs: BTreeMap<String, usize>,
     sealed_manifest: Option<WitnessManifest>,
     compact: bool,
@@ -188,6 +189,7 @@ impl WitnessStore {
                 },
                 key,
                 sources: Default::default(),
+                sources_by_occurrence: Default::default(),
                 source_records: Default::default(),
                 unavailable_sources: Default::default(),
                 source_tracking_exhausted: false,
@@ -334,6 +336,13 @@ impl WitnessStore {
                 .context("independent Target observation is missing")?;
             if !v2::compatible(metadata, &state.graph.targets[target_index].metadata) {
                 return Ok(AssociationOutcome::Incompatible);
+            }
+            if let Some(source_index) = state.retained_source(metadata) {
+                return Ok(if state.associate(source_index, target_index)?.is_some() {
+                    AssociationOutcome::Retained
+                } else {
+                    AssociationOutcome::Unavailable
+                });
             }
             let source_key = v2::source_key(metadata)?;
             let source_index = source_key
@@ -598,8 +607,20 @@ impl State {
         });
         if let Some(key) = key {
             self.sources.insert(key, index);
+            self.sources_by_occurrence
+                .entry(self.graph.sources[index].metadata.source.clone())
+                .or_default()
+                .push(index);
         }
         Ok(Some(index))
+    }
+
+    fn retained_source(&self, metadata: &WitnessMetadata) -> Option<usize> {
+        self.sources_by_occurrence
+            .get(&metadata.source)?
+            .iter()
+            .copied()
+            .find(|&index| v2::same_source(&self.graph.sources[index].metadata, metadata))
     }
 
     fn mark_source_unavailable(&mut self, key: Option<String>) {
