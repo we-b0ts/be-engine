@@ -217,9 +217,12 @@ impl Candidates {
     ) -> Option<windows::Selection> {
         let key = key(ReplaySource::Case, Some(case), identity, Some(command))?;
         if let Some(table) = table
-            && let Some(window) = self.windows.optimistic(&key, table, |anchor| {
-                timeline.mysql_candidate_anchor(case, anchor)
-            })
+            && let Some(window) = self.windows.optimistic(
+                &key,
+                table,
+                timeline.mysql_dispatch_prefix(case),
+                |anchor| timeline.mysql_candidate_anchor(case, anchor),
+            )
         {
             return Some(window);
         }

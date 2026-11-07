@@ -271,6 +271,17 @@ impl Plan {
         self.mysql_source_time(self.mysql_anchor_us(live, anchor))
     }
 
+    pub(super) fn mysql_dispatch_prefix(
+        &self,
+        live: &Live,
+    ) -> Option<std::ops::Range<DateTime<Utc>>> {
+        let window = live.native_dispatch?;
+        Some(
+            self.mysql_source_time(window.from.latest_us().saturating_add(1))?
+                ..self.mysql_source_time(window.to.earliest_us())?,
+        )
+    }
+
     fn mysql_anchor_us(&self, live: &Live, anchor: Option<DateTime<Utc>>) -> u64 {
         anchor
             .and_then(|at| u64::try_from((at - self.source.start).num_microseconds()?).ok())

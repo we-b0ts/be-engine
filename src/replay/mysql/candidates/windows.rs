@@ -122,6 +122,7 @@ impl Windows {
         &self,
         key: &MysqlKey,
         table: &str,
+        dispatch_prefix: Option<std::ops::Range<Clock>>,
         anchor: impl FnOnce(Option<Clock>) -> Option<Clock>,
     ) -> Option<Selection> {
         let scope = self.scopes.get(key)?;
@@ -132,28 +133,31 @@ impl Windows {
             Some(t1) => t1.checked_add_signed(chrono::TimeDelta::seconds(3))?,
             None => anchor,
         };
-        let postings = [known, &scope.unknown];
+        let mut due = Vec::new();
         let mut forward = Vec::new();
-        if let Some(t1) = next {
-            for posting in postings {
-                forward.extend(posting.range((t1, 0)..=(cutoff, usize::MAX)).copied());
-            }
-            forward.sort_unstable();
-        }
         let mut earlier = Vec::new();
-        for posting in postings {
-            earlier.extend(
-                posting
-                    .range(..=(next.unwrap_or(anchor), usize::MAX))
-                    .take_while(|(at, _)| next.is_none_or(|t1| *at < t1))
-                    .map(|&(_, index)| index),
-            );
+        for posting in [known, &scope.unknown] {
+            for &(at, index) in posting.range(..=(cutoff, usize::MAX)) {
+                if dispatch_prefix
+                    .as_ref()
+                    .is_some_and(|prefix| prefix.contains(&at))
+                {
+                    // Later identical SQL cannot replace an exchange that the next input awaits.
+                    due.push(index);
+                } else if next.is_some_and(|t1| at >= t1) {
+                    forward.push((at, index));
+                } else {
+                    earlier.push(index);
+                }
+            }
         }
+        due.sort_unstable();
+        forward.sort_unstable();
         earlier.sort_unstable();
         Some(Selection {
-            indices: forward
+            indices: due
                 .into_iter()
-                .map(|(_, index)| index)
+                .chain(forward.into_iter().map(|(_, index)| index))
                 .chain(earlier)
                 .collect(),
             candidate_first: true,
@@ -241,9 +245,15 @@ mod tests {
                 last_matched: Some(at(9)),
             },
         );
-        let selection = windows.optimistic(&key, "orders", |anchor| anchor).unwrap();
+        let selection = windows
+            .optimistic(&key, "orders", None, |anchor| anchor)
+            .unwrap();
         assert!(selection.candidate_first);
         assert_eq!(selection.cutoff, at(15));
         assert_eq!(selection.indices, [7, 6, 2, 1, 5]);
+        let due = windows
+            .optimistic(&key, "orders", Some(at(2)..at(10)), |anchor| anchor)
+            .unwrap();
+        assert_eq!(due.indices, [1, 5, 7, 6, 2]);
     }
 }

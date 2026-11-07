@@ -99,6 +99,16 @@ pub(in crate::replay) struct Live {
 }
 
 impl Live {
+    pub(in crate::replay) fn mysql_dispatch_prefix(
+        &self,
+        case: &str,
+    ) -> Option<std::ops::Range<DateTime<Utc>>> {
+        if self.case != case {
+            return None;
+        }
+        self.fast.as_ref()?.mysql_dispatch_prefix(self)
+    }
+
     pub(in crate::replay) fn mysql_candidate_anchor(
         &self,
         case: &str,
