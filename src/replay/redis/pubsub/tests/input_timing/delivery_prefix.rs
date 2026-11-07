@@ -55,8 +55,9 @@ async fn fast_business_input_waits_for_recorded_events_and_redis_admission() {
     get["timestamp"] = "2020-01-01T00:00:00.055Z".into();
     get["request_started_at"] = "2020-01-01T00:00:00.045Z".into();
     get["duration_ms"] = 25.into();
-    let runtime = runtime(temp.path(), &[set, get], &[], false).await.unwrap();
-    super::ordered_fast::enable(&runtime).await;
+    let runtime = super::ordered_fast::fast_runtime(temp.path(), &[set, get], false)
+        .await
+        .unwrap();
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

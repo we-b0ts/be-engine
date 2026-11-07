@@ -75,15 +75,33 @@ async fn runtime(
     globals: &[Value],
     lazy: bool,
 ) -> Result<Arc<ReplayRuntime>> {
+    runtime_with_timing(root, cases, globals, lazy, None).await
+}
+
+async fn runtime_with_timing(
+    root: &Path,
+    cases: &[Value],
+    globals: &[Value],
+    lazy: bool,
+    stream_timing: Option<crate::ReplayStreamTiming>,
+) -> Result<Arc<ReplayRuntime>> {
     let case = root.join("case");
     tokio::fs::create_dir_all(&case).await?;
     let jsonl = |records: &[Value]| records.iter().map(|v| format!("{v}\n")).collect::<String>();
     tokio::fs::write(case.join("dependencies.jsonl"), jsonl(cases)).await?;
     tokio::fs::write(root.join("global-dependencies.jsonl"), jsonl(globals)).await?;
-    load_runtime(root, lazy).await
+    load_runtime_with_timing(root, lazy, stream_timing).await
 }
 
 async fn load_runtime(root: &Path, lazy: bool) -> Result<Arc<ReplayRuntime>> {
+    load_runtime_with_timing(root, lazy, None).await
+}
+
+async fn load_runtime_with_timing(
+    root: &Path,
+    lazy: bool,
+    stream_timing: Option<crate::ReplayStreamTiming>,
+) -> Result<Arc<ReplayRuntime>> {
     let case = root.join("case");
     crate::replay::write_test_recording_network_manifest(root);
     let addr = "127.0.0.1:0".parse().unwrap();
@@ -111,6 +129,7 @@ async fn load_runtime(root: &Path, lazy: bool) -> Result<Arc<ReplayRuntime>> {
             addr,
             addr,
             ReplayLifecycleConfig {
+                stream_timing,
                 dependency_loading: ReplayDependencyLoading {
                     lazy_cases: lazy,
                     ..Default::default()

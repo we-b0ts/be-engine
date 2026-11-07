@@ -241,7 +241,7 @@ impl ReplayRuntime {
                 deferred_files.insert(
                     case.id.clone(),
                     deferred::CaseInventory {
-                        index: file_index,
+                        index: Arc::new(file_index),
                         source_bytes,
                         skip,
                         cleanup,
@@ -460,6 +460,7 @@ impl ReplayRuntime {
             batch_scope: attribution.batch_scope,
             startup_phase: Default::default(),
             dependency_attribution_snapshot: attribution.snapshot,
+            prepared_socketio_input: None,
             input_timing: None,
             http_input_timing: None,
             stream_timing: lifecycle.stream_timing,
@@ -567,6 +568,7 @@ impl ReplayRuntime {
         if let Some(case_id) = initial_case {
             deferred::prepare_case(runtime.state.clone(), &case_id).await?;
             control::dependency_tail::prepare(&runtime.state, &case_id).await?;
+            control::input_timing::prepare_source(&runtime.state, &case_id).await?;
             let mut state = runtime.state.lock().await;
             control::dependency_tail::activate(&mut state, &case_id)?;
         }

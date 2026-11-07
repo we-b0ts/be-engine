@@ -454,6 +454,7 @@ struct ReplayState {
     batch_scope: Option<reconciliation::BatchScope>,
     startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,
+    prepared_socketio_input: Option<control::input_timing::PreparedSource>,
     input_timing: Option<control::input_timing::Live>,
     http_input_timing: Option<Arc<control::http_input_timing::Timeline>>,
     stream_timing: Option<ReplayStreamTiming>,

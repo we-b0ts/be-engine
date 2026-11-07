@@ -1,10 +1,12 @@
 use super::*;
 use crate::replay::ReplayStreamTiming;
 
-pub(super) async fn enable(runtime: &Arc<ReplayRuntime>) {
-    let mut state = runtime.state.lock().await;
-    state.stream_timing = Some(ReplayStreamTiming::Fast);
-    state.stream_interval_cap_ms = 5;
+pub(super) async fn fast_runtime(
+    root: &Path,
+    cases: &[Value],
+    lazy: bool,
+) -> Result<Arc<ReplayRuntime>> {
+    runtime_with_timing(root, cases, &[], lazy, Some(ReplayStreamTiming::Fast)).await
 }
 
 fn recorded_exchange(
@@ -48,8 +50,7 @@ async fn ordered_fast_distinguishes_no_recorded_heartbeat_from_an_unanswered_pin
             }).to_string(),
         )
         .unwrap();
-        let runtime = runtime(temp.path(), &[], &[], true).await.unwrap();
-        enable(&runtime).await;
+        let runtime = fast_runtime(temp.path(), &[], true).await.unwrap();
         let (session, control) = serve_control(temp.path(), &runtime).await;
         let observer = crate::replay::input_timing_observer(&session, "case", SocketIoTiming::Auto)
             .await
@@ -85,8 +86,7 @@ async fn ordered_fast_reports_missing_admission_past_the_source_deadline() {
             "columns":[{"name":"1","family":"integer","sql_type":"INT"}],
             "rows":[[{"kind":"integer","value":1}]]}
     });
-    let runtime = runtime(temp.path(), &[missing], &[], true).await.unwrap();
-    enable(&runtime).await;
+    let runtime = fast_runtime(temp.path(), &[missing], true).await.unwrap();
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let started = Instant::now();
     let observer = crate::replay::input_timing_observer(&session, "case", SocketIoTiming::Auto)
@@ -136,8 +136,7 @@ async fn ordered_fast_rechecks_a_request_in_the_previous_input_bucket() {
         "2020-01-01T00:00:00.402Z",
     );
     get["response_kind"] = "simple_string".into();
-    let runtime = runtime(temp.path(), &[get], &[], true).await.unwrap();
-    enable(&runtime).await;
+    let runtime = fast_runtime(temp.path(), &[get], true).await.unwrap();
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let observer = crate::replay::input_timing_observer(&session, "case", SocketIoTiming::Auto)
         .await
@@ -200,8 +199,7 @@ async fn replay_close_gaps(precise: bool) {
         "2020-01-01T00:00:30.002Z",
     );
     get["response_kind"] = "simple_string".into();
-    let runtime = runtime(temp.path(), &[get], &[], true).await.unwrap();
-    enable(&runtime).await;
+    let runtime = fast_runtime(temp.path(), &[get], true).await.unwrap();
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -314,10 +312,9 @@ async fn ordered_fast_advances_on_request_admission_and_closes_after_tail_delive
     );
     get["duration_ms"] = 250.into();
     get["response_kind"] = "simple_string".into();
-    let runtime = runtime(temp.path(), &[publish, get], &[], true)
+    let runtime = fast_runtime(temp.path(), &[publish, get], true)
         .await
         .unwrap();
-    enable(&runtime).await;
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -428,8 +425,7 @@ async fn ordered_fast_reports_unadmitted_http_in_the_case_dispatch_timeout() {
         "response_headers": {},
         "response_body": capture(b"ok")
     });
-    let runtime = runtime(temp.path(), &[http], &[], true).await.unwrap();
-    enable(&runtime).await;
+    let runtime = fast_runtime(temp.path(), &[http], true).await.unwrap();
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

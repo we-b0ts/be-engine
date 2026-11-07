@@ -11,7 +11,23 @@ pub(super) async fn runtime(
     globals: &[Value],
     lazy: bool,
 ) -> Result<Arc<ReplayRuntime>> {
-    capture_and_load(root, cases, globals, lazy, false).await
+    capture_and_load(root, cases, globals, lazy, false, None).await
+}
+
+pub(super) async fn fast_runtime(
+    root: &Path,
+    cases: &[Value],
+    globals: &[Value],
+) -> Result<Arc<ReplayRuntime>> {
+    capture_and_load(
+        root,
+        cases,
+        globals,
+        true,
+        false,
+        Some(crate::ReplayStreamTiming::Fast),
+    )
+    .await
 }
 
 pub(super) async fn ambient_runtime(
@@ -20,7 +36,7 @@ pub(super) async fn ambient_runtime(
     globals: &[Value],
     lazy: bool,
 ) -> Result<Arc<ReplayRuntime>> {
-    capture_and_load(root, cases, globals, lazy, true).await
+    capture_and_load(root, cases, globals, lazy, true, None).await
 }
 
 async fn capture_and_load(
@@ -29,6 +45,7 @@ async fn capture_and_load(
     globals: &[Value],
     lazy: bool,
     ambient: bool,
+    stream_timing: Option<crate::ReplayStreamTiming>,
 ) -> Result<Arc<ReplayRuntime>> {
     let mut config = crate::AppConfig::default();
     config.process_dependency_tasks.insert(
@@ -111,6 +128,7 @@ async fn capture_and_load(
             addr,
             addr,
             ReplayLifecycleConfig {
+                stream_timing,
                 dependency_loading: ReplayDependencyLoading {
                     lazy_cases: lazy,
                     ..Default::default()

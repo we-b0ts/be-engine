@@ -11,6 +11,53 @@ mod source;
 pub(crate) use client::connect;
 
 #[derive(Debug)]
+pub(in crate::replay) struct PreparedSource {
+    case: String,
+    plan: Result<source::Plan>,
+}
+
+impl PreparedSource {
+    pub(in crate::replay) fn load(
+        recording: &ReplayCase,
+        fast_cap: Option<u64>,
+        dependencies: Option<&[u8]>,
+    ) -> Self {
+        Self {
+            case: recording.id.clone(),
+            plan: source::load(recording, fast_cap, dependencies),
+        }
+    }
+}
+
+pub(in crate::replay) async fn prepare_source(
+    shared: &Arc<Mutex<ReplayState>>,
+    case: &str,
+) -> Result<()> {
+    let (recording, fast_cap) = {
+        let state = shared.lock().await;
+        if state
+            .prepared_socketio_input
+            .as_ref()
+            .is_some_and(|prepared| prepared.case == case)
+        {
+            return Ok(());
+        }
+        let recording = state.cases.get(case).context("input timing case missing")?;
+        (recording.clone(), source_fast_cap(&state))
+    };
+    let prepared =
+        tokio::task::spawn_blocking(move || PreparedSource::load(&recording, fast_cap, None))
+            .await
+            .context(SourcePlanUnavailable)?;
+    shared.lock().await.prepared_socketio_input = Some(prepared);
+    Ok(())
+}
+
+pub(in crate::replay) fn source_fast_cap(state: &ReplayState) -> Option<u64> {
+    (state.stream_timing == Some(ReplayStreamTiming::Fast)).then_some(state.stream_interval_cap_ms)
+}
+
+#[derive(Debug)]
 struct SourcePlanUnavailable;
 
 impl std::fmt::Display for SourcePlanUnavailable {
@@ -130,29 +177,19 @@ pub(super) async fn accept(
             .context("input timing requires case_id")?;
         if request.command == "input_timing_begin" {
             let mode = request.socketio_timing.unwrap_or_default();
-            let (recording, fast_cap) = {
-                let state = shared.lock().await;
-                ensure_live(&state, case)?;
-                let recording = state
-                    .cases
-                    .get(case)
-                    .context("input timing case missing")?
-                    .clone();
-                let fast_cap = (mode == SocketIoTiming::Auto
-                    && state.stream_timing == Some(ReplayStreamTiming::Fast))
-                .then_some(state.stream_interval_cap_ms);
-                (recording, fast_cap)
-            };
-            let mut plan = tokio::task::spawn_blocking(move || source::load(&recording, fast_cap))
-                .await
-                .context(SourcePlanUnavailable)?
-                .context(SourcePlanUnavailable)?;
             let mut state = shared.lock().await;
             ensure_live(&state, case)?;
             ensure!(
                 state.input_timing.is_none(),
                 "input timing already admitted"
             );
+            let mut plan = state
+                .prepared_socketio_input
+                .take()
+                .filter(|prepared| prepared.case == case)
+                .context(SourcePlanUnavailable)?
+                .plan
+                .context(SourcePlanUnavailable)?;
             let epoch = state
                 .redis
                 .pubsub
@@ -163,6 +200,7 @@ pub(super) async fn accept(
             let fast = plan
                 .fast
                 .take()
+                .filter(|_| mode == SocketIoTiming::Auto)
                 .and_then(|source| source.resolve(&mut state, case, &plan.input).ok());
             let fast_tail = fast.as_ref().and_then(fast::Plan::tail);
             let ordered_fast = fast.is_some();

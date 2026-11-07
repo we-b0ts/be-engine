@@ -542,6 +542,9 @@ pub(super) async fn begin_case(
     if let Err(error) = dependency_tail::prepare(&state, case_id).await {
         return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency preparation failed: {error:#}")});
     }
+    if let Err(error) = input_timing::prepare_source(&state, case_id).await {
+        return serde_json::json!({"ok": false, "error": format!("input timing preparation failed: {error:#}")});
+    }
     let counter_start = match counter_reader {
         Some(reader) => Some(reader.sample().await),
         None => None,

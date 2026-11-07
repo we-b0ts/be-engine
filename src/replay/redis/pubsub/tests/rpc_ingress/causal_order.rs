@@ -298,7 +298,15 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
         let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
             "timestamp":START,"headers":{},"body":capture(b""),"interaction":input});
         std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
-        let runtime = runtime(temp.path(), &cases, &globals, lazy).await.unwrap();
+        let runtime = runtime_with_timing(
+            temp.path(),
+            &cases,
+            &globals,
+            lazy,
+            fast.then_some(crate::ReplayStreamTiming::Fast),
+        )
+        .await
+        .unwrap();
         // This is the same private control path used by RecordedHttpClient.
         let socket_path = temp.path().join("control.sock");
         let session = temp.path().join("session.json");
@@ -314,11 +322,7 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
             }
         });
         {
-            let mut state = runtime.state.lock().await;
-            if fast {
-                state.stream_timing = Some(crate::replay::ReplayStreamTiming::Fast);
-                state.stream_interval_cap_ms = 5;
-            }
+            let state = runtime.state.lock().await;
             state.redis.request_contracts.request_begin("case").unwrap();
         }
         let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -64,12 +64,9 @@ fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
 async fn compressed_passive_prefix_observes_tail_without_sending_pong() {
     let temp = tempfile::tempdir().unwrap();
     let (request, globals, frames) = recording(temp.path());
-    let runtime = runtime(temp.path(), &[], &globals, true).await.unwrap();
-    {
-        let mut state = runtime.state.lock().await;
-        state.stream_timing = Some(crate::replay::ReplayStreamTiming::Fast);
-        state.stream_interval_cap_ms = 5;
-    }
+    let runtime = super::recording::fast_runtime(temp.path(), &[], &globals)
+        .await
+        .unwrap();
     let socket_path = temp.path().join("control.sock");
     let session = temp.path().join("session.json");
     std::fs::write(&session, json!({"control_socket":socket_path}).to_string()).unwrap();
@@ -227,13 +224,19 @@ async fn ordered_fast_push_arrives_before_the_input_that_awaits_its_output() {
     get["request_started_at"] = "2020-01-01T00:10:00.100Z".into();
     get["timestamp"] = "2020-01-01T00:10:00.101Z".into();
     get["response_kind"] = "simple_string".into();
-    let runtime = runtime(temp.path(), &[get], &globals, true).await.unwrap();
-    {
-        let mut state = runtime.state.lock().await;
-        assert!(state.redis.pubsub.native_clock.needs_observer(CASE));
-        state.stream_timing = Some(crate::replay::ReplayStreamTiming::Fast);
-        state.stream_interval_cap_ms = 5;
-    }
+    let runtime = super::recording::fast_runtime(temp.path(), &[get], &globals)
+        .await
+        .unwrap();
+    assert!(
+        runtime
+            .state
+            .lock()
+            .await
+            .redis
+            .pubsub
+            .native_clock
+            .needs_observer(CASE)
+    );
     let socket_path = temp.path().join("control.sock");
     let session = temp.path().join("session.json");
     std::fs::write(&session, json!({"control_socket":socket_path}).to_string()).unwrap();

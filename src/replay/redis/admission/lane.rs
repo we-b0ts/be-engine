@@ -78,29 +78,23 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn earlier_pooled_publish_waits_for_the_exact_case_lane_slot() {
         for send_predecessor in [true, false] {
-            let (_root, runtime) = super::super::tests::runtime_with_source(
+            let (_root, runtime) = super::super::tests::runtime_with_request(
                 &[
                     event(1, "GET", &[b"device"], b"$1\r\nx\r\n"),
                     event(2, "PUBLISH", &[b"live", b"update"], b":1\r\n"),
                 ],
                 json!({"format":"traffic-policy/v3","rules":[]}),
-            )
-            .await;
-            let request_path = {
-                let mut state = runtime.state.lock().await;
-                state.stream_timing = Some(ReplayStreamTiming::Fast);
-                state.cases["case"].dir.join("request.json")
-            };
-            std::fs::write(
-                request_path,
                 json!({
                     "method":"GET","uri":"/socket.io/",
                     "timestamp":"2020-01-01T00:00:00Z",
                     "interaction":InputTranscript::new(Protocol::SocketIo, Default::default())
-                })
-                .to_string(),
+                }),
+                crate::replay::ReplayLifecycleConfig {
+                    stream_timing: Some(ReplayStreamTiming::Fast),
+                    ..Default::default()
+                },
             )
-            .unwrap();
+            .await;
             let (begin, _) = crate::replay::control::handle_control_request(
                 serde_json::from_value(json!({"command":"input_timing_begin","case_id":"case"}))
                     .unwrap(),

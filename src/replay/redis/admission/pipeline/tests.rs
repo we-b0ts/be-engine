@@ -1,6 +1,6 @@
 use super::*;
 use crate::interaction::model::{InputTranscript, Protocol};
-use crate::replay::{ReplayStreamTiming, redis::append::tests::event};
+use crate::replay::{ReplayLifecycleConfig, ReplayStreamTiming, redis::append::tests::event};
 use serde_json::json;
 use tokio::{net::TcpListener, time::Duration};
 
@@ -14,27 +14,21 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
     };
     let earlier = envelope("/earlier");
     let later = envelope("/later");
-    let (_root, runtime) = super::super::tests::runtime_with_source(
+    let (_root, runtime) = super::super::tests::runtime_with_request(
         &[
             event(1, "PUBLISH", &[b"socketio", earlier.as_bytes()], b":11\r\n"),
             event(2, "PUBLISH", &[b"socketio", later.as_bytes()], b":22\r\n"),
             event(3, "GET", &[b"next"], b"$1\r\nx\r\n"),
         ],
         json!({"format":"traffic-policy/v3","rules":[]}),
+        json!({"method":"GET","uri":"/socket.io/","timestamp":"2020-01-01T00:00:00Z",
+            "interaction":InputTranscript::new(Protocol::SocketIo, Default::default())}),
+        ReplayLifecycleConfig {
+            stream_timing: Some(ReplayStreamTiming::Fast),
+            ..Default::default()
+        },
     )
     .await;
-    let request_path = {
-        let mut state = runtime.state.lock().await;
-        state.stream_timing = Some(ReplayStreamTiming::Fast);
-        state.cases["case"].dir.join("request.json")
-    };
-    std::fs::write(
-        request_path,
-        json!({"method":"GET","uri":"/socket.io/","timestamp":"2020-01-01T00:00:00Z",
-            "interaction":InputTranscript::new(Protocol::SocketIo, Default::default())})
-        .to_string(),
-    )
-    .unwrap();
     let (begin, _) = crate::replay::control::handle_control_request(
         serde_json::from_value(json!({"command":"input_timing_begin","case_id":"case"})).unwrap(),
         runtime.state.clone(),
