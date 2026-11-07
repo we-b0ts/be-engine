@@ -51,8 +51,11 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
         state: &mut ReplayState,
         observation: &RequestAdmission,
     ) -> std::result::Result<MatchedExchange, &'static str> {
+        if self.command == "COM_PING" {
+            return Err("MySQL ping is handled by the replay server");
+        }
         let identity = self.session.identity();
-        if matches!(self.command, "COM_PING" | "COM_INIT_DB") {
+        if self.command == "COM_INIT_DB" {
             return state
                 .match_mysql_control(self.case.as_deref(), &identity, self.command, self.sql)
                 .ok_or("no finite MySQL control candidate");

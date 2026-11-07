@@ -367,7 +367,8 @@ inconsistent or active boundary status still keep setup required. Global
 evidence retains its stricter post-read sequence continuity.
 Recorder retains semantic COM_PING
 exchanges as continuity evidence, although they are not required business
-dependencies. A complete successful, zero-effect PING with unchanged transaction
+dependencies. Replay answers COM_PING with a built-in OK response. A complete
+successful, zero-effect PING with unchanged transaction
 status preserves that proof, including inside an active read transaction.
 Unknown gaps inside active transactions remain strict.
 This read-only setup check is scoped to one immutable dependency file and does

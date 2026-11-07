@@ -593,7 +593,7 @@ impl State {
                 .segmented
                 .as_mut()
                 .unwrap()
-                .write(context, payload, &headers)?;
+                .write(context, payload, &id, &headers)?;
             let index = self.graph.blobs.len();
             self.graph.payload_bytes += payload.len();
             self.graph.blobs.push(blob);

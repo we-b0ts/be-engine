@@ -336,7 +336,9 @@ pub(super) fn register_dependency_records(
                 )
             })?;
         register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
-        if mysql::is_nonsemantic_session_setup(&exchange) {
+        // Failed PING can still identify a recorded endpoint, but all PINGs
+        // are answered by the replay server without a finite Source claim.
+        if exchange.command == "COM_PING" || mysql::is_nonsemantic_session_setup(&exchange) {
             continue;
         }
         let timing = ReplayExchangeTiming::from_recorded(exchange.duration_ms, exchange.outcome);
