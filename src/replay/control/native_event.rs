@@ -144,11 +144,7 @@ pub(super) async fn accept(
         }
         let epoch = state
             .redis
-            .pubsub
-            .native_clock
-            .epoch(case)
-            .or_else(|| state.redis.pubsub.namespace_sessions.epoch(case))
-            .or_else(|| state.redis.request_contracts.request_times(case).target)
+            .native_request_epoch(case)
             .context("native event feedback requires request admission")?;
         if request.command == "native_event_begin" {
             let enabled = state.redis.native_events_begin(case, epoch);

@@ -192,10 +192,7 @@ pub(super) async fn accept(
                 .context(SourcePlanUnavailable)?;
             let epoch = state
                 .redis
-                .pubsub
-                .native_clock
-                .epoch(case)
-                .or_else(|| state.redis.request_contracts.request_times(case).target)
+                .native_request_epoch(case)
                 .unwrap_or_else(Utc::now);
             let fast = plan
                 .fast

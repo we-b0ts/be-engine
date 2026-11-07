@@ -22,6 +22,17 @@ pub(super) struct LiveEvents {
 }
 
 impl super::super::super::RedisReplayState {
+    pub(in crate::replay) fn native_request_epoch(&self, case: &str) -> Option<DateTime<Utc>> {
+        // Derived input admission can re-anchor request policy time to the
+        // signed send time. The native feedback and Redis delivery still
+        // belong to the session opened by request_begin.
+        self.pubsub
+            .native_clock
+            .epoch(case)
+            .or_else(|| self.pubsub.namespace_sessions.epoch(case))
+            .or_else(|| self.request_contracts.request_times(case).target)
+    }
+
     pub(in crate::replay) fn needs_ingress_events(&self, case: &str) -> bool {
         self.pubsub.ingress.needs_native_events(case)
     }

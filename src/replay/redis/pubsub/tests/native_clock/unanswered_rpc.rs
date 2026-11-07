@@ -6,9 +6,14 @@ fn notification(payload: &Value) -> Vec<u8> {
 
 #[tokio::test]
 async fn process_rpc_without_reply_replays_once_after_the_live_local_event() {
-    for lazy in [false, true] {
+    for (lazy, reanchored) in [(false, false), (false, true), (true, false), (true, true)] {
         let temp = tempfile::tempdir().unwrap();
         let (mut globals, _) = fixture(temp.path());
+        if reanchored {
+            let policy = temp.path().join(".traffic-e2e/policy.yaml");
+            std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+            std::fs::write(policy, "format: traffic-policy/v3\n").unwrap();
+        }
         globals.truncate(1);
         let sub = Uuid::parse_str(globals[0]["connection_id"].as_str().unwrap()).unwrap();
         let path = temp.path().join("case/expected-response.json");
@@ -60,6 +65,25 @@ async fn process_rpc_without_reply_replays_once_after_the_live_local_event() {
             SUBSCRIBED
         );
         let epoch = guards::begin(&runtime).await;
+        if reanchored {
+            let native: chrono::DateTime<chrono::Utc> =
+                serde_json::from_value(epoch.clone()).unwrap();
+            // A signed derived request has a later validation clock without
+            // changing the live native session opened by request_begin.
+            runtime
+                .state
+                .lock()
+                .await
+                .redis
+                .request_contracts
+                .restore_request_clock_for_test(CASE, native + chrono::TimeDelta::seconds(1));
+        }
+        let timing = guards::control(
+            &runtime,
+            json!({"command":"input_timing_begin","case_id":CASE}),
+        )
+        .await;
+        assert_eq!(timing["epoch"], epoch, "{timing}");
         let received_connect = json!({"command":"native_connected","case_id":CASE,
             "native_event":{"epoch":epoch,"namespace":"/chat","sid":"target-sid"}});
         assert_eq!(

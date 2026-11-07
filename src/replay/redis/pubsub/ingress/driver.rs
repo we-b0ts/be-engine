@@ -52,7 +52,7 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
         if replay.finalized_at.is_some()
             || replay.target_session_stopped
             || replay.active_case_id.as_deref() != Some(&job.case)
-            || epoch(&replay, &job.case) != Some(job.started)
+            || replay.redis.native_request_epoch(&job.case) != Some(job.started)
             || entry.reply.is_none()
                 && replay.redis.pubsub.namespace_sessions.target_sid(
                     &job.case,
@@ -119,7 +119,7 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         return Ok(None);
     };
     let contracts = &replay.redis.request_contracts;
-    let Some(started) = epoch(replay, case) else {
+    let Some(started) = replay.redis.native_request_epoch(case) else {
         return Ok(None);
     };
     if let Some((index, entry)) = replay
@@ -187,15 +187,6 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         }));
     }
     Ok(None)
-}
-
-fn epoch(replay: &ReplayState, case: &str) -> Option<DateTime<Utc>> {
-    replay
-        .redis
-        .request_contracts
-        .request_times(case)
-        .target
-        .or_else(|| replay.redis.pubsub.namespace_sessions.epoch(case))
 }
 
 fn fast_dispatch_reached(
