@@ -10,7 +10,7 @@ pub(in crate::replay) struct OmissionAudit {
 
 impl ReplayExchange {
     pub(in crate::replay::redis) fn requires_delivery(&self) -> bool {
-        !self.status.is_consumed()
+        !self.status.is_covered()
             && !(self.optional_observation_rule.is_some() && self.status.is_available())
     }
 }
@@ -39,5 +39,47 @@ impl RedisReplayState {
                 },
             })
             .collect()
+    }
+}
+
+impl RedisReplayState {
+    pub(in crate::replay) fn open_socketio_eof_suffix(&mut self, index: usize, connection: Uuid) {
+        let exchange = &mut self.exchanges[index];
+        if exchange.status == ReplayExchangeStatus::Available
+            && exchange.record.connection_id == connection
+            && exchange.record.command == "PUBLISH"
+            && exchange.record.replay_safe
+            && exchange.record.parse_warnings.is_empty()
+        {
+            exchange.status = ReplayExchangeStatus::SocketIoEofPublish;
+        }
+    }
+
+    pub(in crate::replay) fn notify_socketio_eof_suffix(&self) {
+        self.lifecycle.notify_waiters();
+    }
+
+    pub(in crate::replay) fn settle_socketio_eof_suffix(
+        &mut self,
+        index: usize,
+        omit: bool,
+    ) -> bool {
+        let exchange = &mut self.exchanges[index];
+        if exchange.status == ReplayExchangeStatus::SocketIoEofPublish {
+            exchange.status = ReplayExchangeStatus::Available;
+        }
+        if omit && exchange.status == ReplayExchangeStatus::Available && !exchange.reusable_snapshot
+        {
+            exchange.status = ReplayExchangeStatus::OmittedAfterSocketIoEof;
+            return true;
+        }
+        false
+    }
+
+    pub(in crate::replay) fn record_unmatched_request(&mut self, report: CommandRequestReport) {
+        if let Some(case) = &report.case_id {
+            self.events.dirty_case_ids.insert(case.clone());
+        }
+        self.events.unmatched.push(report);
     }
 }

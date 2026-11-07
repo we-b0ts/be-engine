@@ -25,12 +25,21 @@ pub(super) enum ReplayExchangeStatus {
     Consumed,
     /// A separately audited primary cancellation; recorded EOF was not delivered.
     Cancelled,
+    /// After verified Socket.IO EOF, a suffix PUBLISH remains matchable
+    /// while disconnect cleanup can advance past it.
+    SocketIoEofPublish,
+    /// Unstarted Source suffix outside the verified Socket.IO prefix.
+    OmittedAfterSocketIoEof,
     Failed,
 }
 
 impl ReplayExchangeStatus {
     pub(super) fn is_available(self) -> bool {
-        self == Self::Available
+        matches!(self, Self::Available | Self::SocketIoEofPublish)
+    }
+
+    pub(super) fn is_covered(self) -> bool {
+        matches!(self, Self::Consumed | Self::OmittedAfterSocketIoEof)
     }
 
     pub(super) fn is_consumed(self) -> bool {

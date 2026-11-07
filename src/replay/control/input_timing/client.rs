@@ -124,6 +124,32 @@ impl InputTiming for Observer {
         self.fast_tail.clone()
     }
 
+    fn confirm_fast_eof(&self, closed_at: Option<DateTime<Utc>>) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async move {
+            let query = Query {
+                epoch: self.epoch,
+                sequence: 0,
+                completed: Vec::new(),
+                events_ready: None,
+                closed_at,
+            };
+            loop {
+                let response = super::super::native_event::send(
+                    &self.socket,
+                    serde_json::json!({"command":"input_timing_eof_recovery","case_id":self.case,"input_timing":query}),
+                )
+                .await?;
+                if let Some(recovered) = response["recovered"].as_bool() {
+                    return Ok(recovered);
+                }
+                let wait = response["wait_ms"]
+                    .as_u64()
+                    .context("EOF recovery wait missing")?;
+                tokio::time::sleep(Duration::from_millis(wait.max(1))).await;
+            }
+        })
+    }
+
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
         Box::pin(self.wait_for("input_timing_tail", 0, Vec::new(), None))
     }

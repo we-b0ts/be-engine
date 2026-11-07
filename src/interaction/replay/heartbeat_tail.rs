@@ -16,12 +16,13 @@ use crate::interaction::{
 
 pub(crate) struct Evidence {
     pub eof_ms: u64,
+    pub timeout_ms: u64,
     pub acknowledged: BTreeSet<u64>,
     pub pending_without_ack: BTreeSet<u64>,
 }
 
 pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Evidence> {
-    let eof_ms = timeout(input, output)?;
+    let (eof_ms, timeout_ms) = timeout(input, output)?;
     let limit = input.policy.max_message_bytes;
     let mut decoder = SocketIoDecoder::new(limit);
     let mut actions = input.actions.iter().peekable();
@@ -73,6 +74,7 @@ pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> 
     }
     Some(Evidence {
         eof_ms,
+        timeout_ms,
         acknowledged: receipts.acknowledged,
         pending_without_ack,
     })
@@ -83,7 +85,7 @@ fn is_ping(event: &crate::interaction::model::OutputEvent) -> bool {
 }
 
 /// Identify the terminal timeout independently from proof of completed business work.
-fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<u64> {
+fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<(u64, u64)> {
     if input.protocol != Protocol::SocketIo
         || input.policy.preserve_input_timing
         || output.protocol != Protocol::SocketIo
@@ -138,7 +140,7 @@ fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<u64> {
         }
     }
 
-    Some(eof_ms)
+    Some((eof_ms, last.offset_ms.checked_add(open.ping_timeout)?))
 }
 
 #[cfg(test)]
@@ -181,7 +183,7 @@ mod tests {
         assert!(recognize(&input, &at_timeout).is_none());
         let mut no_ack = output.clone();
         no_ack.events.remove(2);
-        assert_eq!(timeout(&input, &no_ack), Some(71));
+        assert_eq!(timeout(&input, &no_ack), Some((71, 70)));
         assert!(recognize(&input, &no_ack).is_none());
         source.input(WireMessage::text("3"), 51).unwrap();
         let (answered, output) = source.finish(EndReason::ServerEof, 71, true).unwrap();
@@ -218,6 +220,7 @@ mod tests {
         let (input, output) = source.finish(EndReason::ServerEof, 51, true).unwrap();
         let proof = recognize(&input, &output).unwrap();
         assert_eq!(proof.eof_ms, 51);
+        assert_eq!(proof.timeout_ms, 49);
         assert_eq!(proof.acknowledged, [work.sequence].into());
         assert_eq!(proof.pending_without_ack, [one_way.sequence].into());
 

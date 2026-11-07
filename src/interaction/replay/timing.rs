@@ -45,6 +45,12 @@ pub(crate) trait InputTiming: Send + Sync {
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
         Box::pin(async { Ok(Advance::default()) })
     }
+    fn confirm_fast_eof(
+        &self,
+        _closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async { Ok(false) })
+    }
     fn closed(&self, _started_at: chrono::DateTime<chrono::Utc>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async { Ok(()) })
     }
@@ -141,6 +147,8 @@ pub(crate) fn ordered_input(action: &InputAction) -> bool {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub(crate) struct Advance {
     pub removed_ms: u64,
+    #[serde(default)]
+    pub probe_eof: bool,
 }
 
 /// A monotonic, piecewise mapping from Source offsets to replay offsets. A cut

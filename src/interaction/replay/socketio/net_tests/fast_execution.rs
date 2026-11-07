@@ -3,6 +3,15 @@ use super::*;
 
 #[tokio::test]
 async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_frame() {
+    assert_heartbeat_tail_closes_without_frames(false).await;
+}
+
+#[tokio::test]
+async fn fast_heartbeat_eof_probe_terminates_the_real_websocket_without_frames() {
+    assert_heartbeat_tail_closes_without_frames(true).await;
+}
+
+async fn assert_heartbeat_tail_closes_without_frames(probe_eof: bool) {
     use crate::interaction::replay::timing::{FastTail, InputTiming};
     use futures_util::future::BoxFuture;
     use std::sync::Arc;
@@ -12,6 +21,7 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
     struct Timing {
         reached: Notify,
         dependencies_delivered: Notify,
+        probe_eof: bool,
     }
     impl InputTiming for Timing {
         fn wait(&self, _: u64, _: Vec<u64>) -> BoxFuture<'_, Result<Advance>> {
@@ -31,7 +41,19 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
             Box::pin(async {
                 self.reached.notify_one();
                 self.dependencies_delivered.notified().await;
-                Ok(Advance::default())
+                Ok(Advance {
+                    probe_eof: self.probe_eof,
+                    ..Advance::default()
+                })
+            })
+        }
+        fn confirm_fast_eof(
+            &self,
+            closed_at: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> BoxFuture<'_, Result<bool>> {
+            Box::pin(async move {
+                assert!(self.probe_eof && closed_at.is_some());
+                Ok(true)
             })
         }
     }
@@ -89,7 +111,10 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
     let mut input = program();
     input.policy.completion.clear();
     input.socket_io_heartbeat = Some(Default::default());
-    let timing = Arc::new(Timing::default());
+    let timing = Arc::new(Timing {
+        probe_eof,
+        ..Default::default()
+    });
     let origin = format!("http://{address}");
     let request = Request::builder()
         .uri(format!("{origin}/socket.io/?EIO=4&transport=websocket"))

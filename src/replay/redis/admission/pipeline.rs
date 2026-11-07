@@ -95,6 +95,7 @@ impl AdjacentPublish {
             command,
             connection: None,
             started: tokio::time::Instant::now(),
+            received_at: chrono::Utc::now(),
             lane_hint: None,
             expected_index: Some(self.earlier),
         };

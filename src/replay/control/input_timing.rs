@@ -7,6 +7,7 @@ use crate::replay::control::dependency_tail::RecordedReference;
 use tokio::time::Instant as MonoInstant;
 mod client;
 mod fast;
+pub(in crate::replay) use fast::{finish_eof_recovery, observe_eof_blocker, propose_eof_recovery};
 mod source;
 pub(crate) use client::connect;
 
@@ -96,6 +97,7 @@ pub(in crate::replay) struct Live {
     fast: Option<fast::Plan>,
     native_dispatch: Option<fast::NativeDispatch>,
     native_push_times: Option<Vec<DateTime<Utc>>>,
+    eof_recovery: fast::EofRecovery,
 }
 
 impl Live {
@@ -281,6 +283,7 @@ pub(super) async fn accept(
                 fast,
                 native_dispatch: None,
                 native_push_times,
+                eof_recovery: Default::default(),
             });
             return Ok(serde_json::json!({"ok":true,"epoch":epoch,"ordered_fast":ordered_fast,"fast_tail":fast_tail}));
         }
@@ -310,6 +313,9 @@ pub(super) async fn accept(
                 && live.admission_epoch == state.admission_epoch,
             "input timing request epoch changed"
         );
+        if request.command == "input_timing_eof_recovery" {
+            return fast::confirm_eof_recovery(&mut state, case, query.closed_at);
+        }
         if live.fast.is_some() {
             return fast::advance(&mut state, request.command == "input_timing_tail", query);
         }
@@ -409,7 +415,7 @@ pub(super) async fn accept(
         };
         Ok::<_, anyhow::Error>(
             serde_json::json!({"ok":true,"wait_ms":retry,"ready":remaining==0 && !prefix_pending,
-            "advance":Advance {removed_ms:live.clock.removed_ms()}}),
+            "advance":Advance {removed_ms:live.clock.removed_ms(), ..Advance::default()}}),
         )
     }
     .await;

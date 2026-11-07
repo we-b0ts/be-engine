@@ -39,7 +39,7 @@ impl Passive {
 
     pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Self> {
         let namespace = Self::input_namespace(input)?;
-        let end_ms = timeout(input, output)?;
+        let (end_ms, _) = timeout(input, output)?;
         if !output.end.pending.is_empty() {
             return None;
         }

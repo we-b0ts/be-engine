@@ -1,5 +1,6 @@
 //! Resolve finite tail obligations using immutable HTTP exchange identities.
 use super::*;
+use crate::replay::ReplayExchangeStatus;
 use anyhow::ensure;
 use uuid::Uuid;
 
@@ -51,6 +52,19 @@ impl ReplayState {
                         && uri_path_only(&exchange.record.uri) == end.path
                 })
         })
+    }
+
+    pub(in crate::replay) fn settle_socketio_eof_http(&mut self, index: usize, omit: bool) -> bool {
+        let exchange = &mut self.http_exchanges[index];
+        if omit
+            && exchange.source == ReplaySource::Case
+            && exchange.status == ReplayExchangeStatus::Available
+            && exchange.shared_origin.is_none()
+        {
+            exchange.status = ReplayExchangeStatus::OmittedAfterSocketIoEof;
+            return true;
+        }
+        false
     }
 
     pub(in crate::replay) fn http_exchange_status(

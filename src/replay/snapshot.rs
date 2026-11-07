@@ -147,6 +147,7 @@ impl ReplayState {
                 case_dir: case.dir.display().to_string(),
                 dependencies_path: case.dependencies_path.display().to_string(),
                 status: case.status,
+                socketio_eof_recovery: self.dependency_tails.eof_recovery(&case.id).cloned(),
                 source_request_started_at: self
                     .replay_policy
                     .as_ref()

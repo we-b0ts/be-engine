@@ -109,6 +109,30 @@ pub(in crate::replay) enum ExchangeHandle {
 }
 
 impl ExchangeHandle {
+    pub(in crate::replay) fn settle_socketio_eof_suffix(
+        self,
+        state: &mut ReplayState,
+        omit: bool,
+    ) -> bool {
+        let status = match self {
+            Self::Native(DependencyAdapter::Redis(index)) => {
+                return state.redis.settle_socketio_eof_suffix(index, omit);
+            }
+            Self::Native(DependencyAdapter::Mysql(index)) => {
+                &mut state.mysql.exchanges[index].status
+            }
+            Self::Native(DependencyAdapter::Http(index)) => {
+                return state.settle_socketio_eof_http(index, omit);
+            }
+            _ => return false,
+        };
+        if omit && *status == ReplayExchangeStatus::Available {
+            *status = ReplayExchangeStatus::OmittedAfterSocketIoEof;
+            return true;
+        }
+        false
+    }
+
     pub(in crate::replay) fn permits_cancelled_omission(self, state: &ReplayState) -> bool {
         match self {
             Self::Native(adapter) => adapter.permits_cancelled_omission(state),

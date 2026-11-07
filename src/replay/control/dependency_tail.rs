@@ -27,6 +27,7 @@ pub(in crate::replay) struct CaseTails {
     no_progress_timeout: Duration,
     waits: BTreeMap<String, serde_json::Value>,
     failures: BTreeMap<String, serde_json::Value>,
+    eof_recoveries: BTreeMap<String, serde_json::Value>,
     source_business_incomplete: BTreeSet<String>,
 }
 
@@ -41,6 +42,7 @@ impl Default for CaseTails {
             ),
             waits: BTreeMap::new(),
             failures: BTreeMap::new(),
+            eof_recoveries: BTreeMap::new(),
             source_business_incomplete: BTreeSet::new(),
         }
     }
@@ -65,6 +67,33 @@ impl CaseTails {
     pub(in crate::replay) fn with_no_progress_timeout(mut self, timeout: Duration) -> Self {
         self.no_progress_timeout = timeout;
         self
+    }
+
+    pub(super) fn permits_eof_recovery(&self, state: &ReplayState, case: &str) -> bool {
+        !self.source_business_incomplete.contains(case)
+            && self
+                .cases
+                .get(case)
+                .and_then(Option::as_ref)
+                .is_none_or(|tail| {
+                    !tail.source_stop_required
+                        && tail
+                            .selected
+                            .iter()
+                            .filter(|selected| selected.strict_reference)
+                            .all(|selected| {
+                                selected.exchange.delivery_state(state)
+                                    == Some(ReplayExchangeStatus::Consumed)
+                            })
+                })
+    }
+
+    pub(in crate::replay) fn record_eof_recovery(&mut self, case: &str, proof: serde_json::Value) {
+        self.eof_recoveries.insert(case.into(), proof);
+    }
+
+    pub(in crate::replay) fn eof_recovery(&self, case: &str) -> Option<&serde_json::Value> {
+        self.eof_recoveries.get(case)
     }
 
     pub(in crate::replay) fn failure(&self, case: &str) -> Option<&serde_json::Value> {

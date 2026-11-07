@@ -154,9 +154,7 @@ impl MysqlReplayState {
                                 OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
                             ) && status == ReplayExchangeStatus::Responding
                     });
-                    !status.is_consumed()
-                        && optional.is_none()
-                        && !self.foreign.contains_key(&index)
+                    !status.is_covered() && optional.is_none() && !self.foreign.contains_key(&index)
                 })
             })
     }
@@ -493,7 +491,7 @@ impl ReplayState {
                     OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
                 ) && status == ReplayExchangeStatus::Responding
         });
-        exchange.source.matches_scope(source) && !status.is_consumed() && optional == allowed
+        exchange.source.matches_scope(source) && !status.is_covered() && optional == allowed
     }
 
     pub(super) fn mysql_summary(&self, index: usize) -> RecordedExchangeSummary {

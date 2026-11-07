@@ -23,6 +23,16 @@ pub(super) async fn runtime_with_request(
     request: Value,
     lifecycle: crate::replay::ReplayLifecycleConfig,
 ) -> (tempfile::TempDir, ReplayRuntime) {
+    runtime_with_response(events, document, request, json!({}), lifecycle).await
+}
+
+pub(super) async fn runtime_with_response(
+    events: &[Value],
+    document: Value,
+    request: Value,
+    response: Value,
+    lifecycle: crate::replay::ReplayLifecycleConfig,
+) -> (tempfile::TempDir, ReplayRuntime) {
     let root = tempfile::tempdir().unwrap();
     let case = root
         .path()
@@ -30,7 +40,7 @@ pub(super) async fn runtime_with_request(
     std::fs::create_dir_all(&case).unwrap();
     crate::platform::encryption_key::load_or_create(root.path()).unwrap();
     std::fs::write(case.join("request.json"), request.to_string()).unwrap();
-    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    std::fs::write(case.join("expected-response.json"), response.to_string()).unwrap();
     std::fs::write(
         case.join("dependencies.jsonl"),
         events.iter().map(|e| format!("{e}\n")).collect::<String>(),

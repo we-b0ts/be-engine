@@ -1,4 +1,5 @@
 //! Ordered fast inputs use exact Case request admission and actual tail delivery.
+mod eof_recovery;
 use super::*;
 use crate::interaction::{
     model::{
@@ -12,6 +13,10 @@ use crate::interaction::{
     socketio::{EngineIoPacket, decode_engine_io_text},
 };
 use crate::replay::adapters::{DependencyAdapter, ExchangeHandle, resolve_case};
+pub(super) use eof_recovery::{EofRecovery, confirm_eof_recovery};
+pub(in crate::replay) use eof_recovery::{
+    finish_eof_recovery, observe_eof_blocker, propose_eof_recovery,
+};
 
 const MAX_REQUESTS: usize = 100_000;
 const POLL_MS: u64 = 5;
@@ -63,6 +68,7 @@ struct Tail {
     cutoff: u64,
     quiet_from: u64,
     heartbeat_dependency_cutoff_us: Option<u64>,
+    heartbeat_timeout_us: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -205,6 +211,7 @@ impl Source {
                 cutoff: passive.end_ms,
                 quiet_from: passive.last_output_ms,
                 heartbeat_dependency_cutoff_us: None,
+                heartbeat_timeout_us: None,
             });
             tracing::info!(
                 case_id = case,
@@ -443,6 +450,9 @@ impl Plan {
 }
 
 pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Result<Value> {
+    if tail && let Some(close) = eof_recovery::offer(state) {
+        return Ok(close);
+    }
     if let Some(events_ready) = query.events_ready {
         ensure!(!tail, "event readiness is only valid for input dispatch");
         return advance_dispatch(state, query, events_ready);
@@ -549,7 +559,7 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
     };
     Ok(
         serde_json::json!({"ok":true,"ready":ready,"wait_ms":wait_ms,
-        "advance": Advance {removed_ms:live.clock.removed_ms()}}),
+        "advance": Advance {removed_ms:live.clock.removed_ms(), ..Advance::default()}}),
     )
 }
 
@@ -589,7 +599,7 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
         // can become admissible without appearing as a hard dependency.
         "wait_ms":if compressible { wait_ms } else { wait_ms.min(POLL_MS) },
         "unadmitted_request": unadmitted,
-        "advance": Advance {removed_ms:live.clock.removed_ms()}
+        "advance": Advance {removed_ms:live.clock.removed_ms(), ..Advance::default()}
     }))
 }
 
@@ -745,7 +755,7 @@ impl Tail {
             .max()
             .unwrap_or(0)
             .max(last_input);
-        let heartbeat_dependency_cutoff_us = heartbeat.as_ref().map(|_| {
+        let aligned_eof_us = heartbeat.as_ref().and_then(|_| {
             // Source event offsets are relative to the interaction, while
             // dependency request times are relative to the API request clock.
             response
@@ -760,8 +770,20 @@ impl Tail {
                     )?)?;
                     u64::try_from((eof - start).num_microseconds()?).ok()
                 })
-                .unwrap_or_else(|| cutoff.saturating_mul(1_000))
         });
+        let heartbeat_dependency_cutoff_us = heartbeat
+            .as_ref()
+            .map(|_| aligned_eof_us.unwrap_or_else(|| cutoff.saturating_mul(1_000)));
+        let heartbeat_timeout_us =
+            aligned_eof_us
+                .zip(heartbeat.as_ref())
+                .and_then(|(eof, proof)| {
+                    // Legacy wire offsets are floored. The last ping could be almost
+                    // one millisecond later than its recorded offset.
+                    let timeout_region =
+                        proof.eof_ms.checked_sub(proof.timeout_ms)?.checked_sub(1)?;
+                    eof.checked_sub(timeout_region.checked_mul(1_000)?)
+                });
         let (heartbeat_acks, heartbeat_pending_without_ack) = heartbeat
             .map(|proof| (Some(proof.acknowledged), proof.pending_without_ack))
             .unwrap_or_default();
@@ -777,6 +799,7 @@ impl Tail {
             cutoff,
             quiet_from,
             heartbeat_dependency_cutoff_us,
+            heartbeat_timeout_us,
         });
         Ok(tail)
     }
