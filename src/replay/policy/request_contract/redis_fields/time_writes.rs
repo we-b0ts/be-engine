@@ -110,11 +110,12 @@ impl RequestContracts {
                 context.database,
                 target,
             );
+            let mut stored_payload = None;
             for leaf in time_copies::global_leaves(&before, global, clocks)? {
                 let observed = after
                     .pointer(&leaf.pointer)
                     .context("Redis temporal write Target field is absent")?;
-                records.push(TimeCopyRecord::new_time(
+                let mut record = TimeCopyRecord::new_time(
                     &leaf.time,
                     source_position,
                     target_position,
@@ -122,7 +123,13 @@ impl RequestContracts {
                     &leaf.pattern,
                     &leaf.value,
                     observed,
-                )?);
+                )?;
+                if context.command == "SET" {
+                    let digest =
+                        stored_payload.get_or_insert_with(|| Sha256::digest(source_payload).into());
+                    record = record.with_redis_set(*digest);
+                }
+                records.push(record);
                 ensure!(
                     records.len() <= 4096,
                     "Redis pending write time leaves exceed their bound"

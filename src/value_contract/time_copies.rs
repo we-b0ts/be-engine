@@ -120,11 +120,23 @@ pub(crate) struct TimeCopyRecord {
     key: CopyKey,
     target: [u8; 32],
     scalar: Option<Value>,
-    redis_get: Option<[u8; 32]>,
+    origin: CopyOrigin,
 }
 impl TimeCopyRecord {
-    pub(crate) fn with_redis_get(mut self, payload: Option<[u8; 32]>) -> Self {
-        self.redis_get = payload;
+    pub(crate) fn with_redis_get(
+        mut self,
+        payload: [u8; 32],
+        source_started: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Self {
+        self.origin = CopyOrigin::RedisGet {
+            payload,
+            source_started,
+        };
+        self
+    }
+
+    pub(crate) fn with_redis_set(mut self, payload: [u8; 32]) -> Self {
+        self.origin = CopyOrigin::RedisSet(payload);
         self
     }
 
@@ -194,7 +206,7 @@ impl TimeCopyRecord {
             ),
             target,
             scalar: None,
-            redis_get: None,
+            origin: CopyOrigin::Other,
         })
     }
 }
@@ -317,14 +329,47 @@ struct CopyValue {
 #[derive(Clone, Copy)]
 struct CopyDelivery {
     clocks: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
-    redis_get: Option<[u8; 32]>,
+    origin: CopyOrigin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CopyOrigin {
+    Other,
+    RedisGet {
+        payload: [u8; 32],
+        source_started: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    RedisSet([u8; 32]),
 }
 
 impl CopyDelivery {
     fn dominates(self, other: Self) -> bool {
-        self.redis_get == other.redis_get
-            && self.clocks.0 <= other.clocks.0
-            && self.clocks.1 <= other.clocks.1
+        if self.clocks.0 > other.clocks.0 || self.clocks.1 > other.clocks.1 {
+            return false;
+        }
+        match (self.origin, other.origin) {
+            (
+                CopyOrigin::RedisGet {
+                    payload,
+                    source_started: Some(start),
+                },
+                CopyOrigin::RedisGet {
+                    payload: other_payload,
+                    source_started: Some(other_start),
+                },
+            ) => payload == other_payload && start <= other_start,
+            (left, right) => left == right,
+        }
+    }
+
+    fn supersedes_early_redis_read(self, read: Self) -> bool {
+        matches!(
+            (self.origin, read.origin),
+            (
+                CopyOrigin::RedisSet(written),
+                CopyOrigin::RedisGet { payload, source_started: Some(start) }
+            ) if written == payload && self.clocks.0 <= start && read.clocks.1 < self.clocks.1
+        )
     }
 }
 impl CopyValue {
@@ -333,6 +378,29 @@ impl CopyValue {
     }
     fn observe(&mut self, target: [u8; 32], scalar: Option<Value>, delivery: CopyDelivery) {
         if self.target != Some(target) {
+            if !self.deliveries.is_empty() {
+                // An early replayed GET of this exact Source value supplied a
+                // derived timestamp. Once its real SET completes, use the
+                // timestamp that Target wrote for subsequent reads.
+                if self
+                    .deliveries
+                    .iter()
+                    .all(|read| delivery.supersedes_early_redis_read(*read))
+                {
+                    self.target = Some(target);
+                    self.scalar = scalar;
+                    self.deliveries.clear();
+                    self.deliveries.push(delivery);
+                    return;
+                }
+                if self
+                    .deliveries
+                    .iter()
+                    .all(|write| write.supersedes_early_redis_read(delivery))
+                {
+                    return;
+                }
+            }
             self.target = None;
             self.scalar = None;
             self.deliveries.clear();
@@ -494,7 +562,7 @@ impl TimeCopyStore {
                     record.scalar,
                     CopyDelivery {
                         clocks: delivery,
-                        redis_get: record.redis_get,
+                        origin: record.origin,
                     },
                 );
         }
@@ -590,7 +658,8 @@ impl TimeCopyStore {
                     // Overlapping reads can observe the same stored value.
                     // Only an identical completed GET supplies this proof.
                     || lookup.redis_get.as_ref().is_some_and(|read| {
-                        delivery.redis_get == Some(read.payload) && source <= read.completed
+                        matches!(delivery.origin, CopyOrigin::RedisGet { payload, .. } if payload == read.payload)
+                            && source <= read.completed
                     }))
         }) {
             return None;

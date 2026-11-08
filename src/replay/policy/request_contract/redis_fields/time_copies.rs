@@ -52,6 +52,7 @@ pub(in crate::replay) struct PreparedRedisTimeRead {
     case: String,
     target: TargetKey,
     database: i64,
+    source_started: Option<DateTime<Utc>>,
     source_completed: Option<DateTime<Utc>>,
     command: String,
     target_args: Vec<Vec<u8>>,
@@ -88,18 +89,19 @@ impl PreparedRedisTimeRead {
                   source,
                   target,
                   time| {
-                records.push(
-                    TimeCopyRecord::new_time(
-                        time,
-                        source_position,
-                        target_position,
-                        source_pattern,
-                        target_pattern,
-                        source,
-                        target,
-                    )?
-                    .with_redis_get(redis_get),
-                );
+                let mut record = TimeCopyRecord::new_time(
+                    time,
+                    source_position,
+                    target_position,
+                    source_pattern,
+                    target_pattern,
+                    source,
+                    target,
+                )?;
+                if let Some(payload) = redis_get {
+                    record = record.with_redis_get(payload, self.source_started);
+                }
+                records.push(record);
                 Ok(())
             },
         )?;
@@ -551,6 +553,7 @@ impl RequestContracts {
             case: context.case.into(),
             target: context.target.clone(),
             database: context.database,
+            source_started: context.recorded_at,
             source_completed: completed,
             command: context.command.into(),
             target_args: target_args.to_vec(),

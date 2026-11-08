@@ -377,3 +377,74 @@ fn conflicting_stored_time_targets_do_not_guess_which_write_a_read_observed() {
             .is_err()
     );
 }
+
+#[test]
+fn redis_set_supersedes_a_replayed_read_that_arrived_before_the_write() {
+    let host = TargetKey {
+        host: "cache.test".into(),
+        port: 6379,
+    };
+    let source = r#"{"at":1003,"stable":true}"#;
+    let stored = r#"{"at":2008,"stable":true}"#;
+    for (first_read, source_write_completed, expected) in [
+        (source, 999, Some(bulk(stored))),
+        (r#"{"at":1003,"stable":false}"#, 999, None),
+        (source, 1001, None),
+    ] {
+        let owner = runtime();
+        prepare(
+            &owner,
+            "GET",
+            &["key"],
+            &bulk(first_read),
+            DateTime::from_timestamp(1002, 0),
+        )
+        .publish(
+            &bulk(&first_read.replace("1003", "2003")),
+            DateTime::from_timestamp(2002, 0).unwrap(),
+        )
+        .unwrap();
+
+        let mut write = RedisRequestContext::without_exchange("case", &host, 0, "SET");
+        write.recorded_at = DateTime::from_timestamp(998, 0);
+        write.actual_at = DateTime::from_timestamp(2003, 0);
+        owner
+            .prepare_redis_time_write(
+                &write,
+                &args(&["key", source]),
+                &args(&["key", stored]),
+                b"+OK\r\n",
+                DateTime::from_timestamp(source_write_completed, 0),
+            )
+            .unwrap()
+            .unwrap()
+            .publish(DateTime::from_timestamp(2004, 0).unwrap())
+            .unwrap();
+
+        let keys = args(&["key"]);
+        let actual = owner
+            .prepare_redis_delivery(
+                "case",
+                "case",
+                &host,
+                0,
+                None,
+                "GET",
+                &keys,
+                &keys,
+                &bulk(source),
+                DateTime::from_timestamp(1101, 0),
+                DateTime::from_timestamp(2300, 0),
+                DateTime::from_timestamp(1100, 0),
+                uuid::Uuid::new_v4(),
+                3,
+            )
+            .unwrap()
+            .and_then(|response| response.render(DateTime::from_timestamp(2301, 0).unwrap()));
+        assert_eq!(
+            actual.ok(),
+            expected,
+            "{first_read} at {source_write_completed}"
+        );
+    }
+}
