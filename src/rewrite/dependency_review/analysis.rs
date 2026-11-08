@@ -118,13 +118,6 @@ fn unresolved(
     Ok(unresolved)
 }
 
-fn ownerless(root: &Path, state: &RewriteState) -> Result<u64> {
-    if state.case_source.is_none() {
-        return Ok(0);
-    }
-    Ok(review_inventory(root, state)?.1.len() as u64)
-}
-
 /// The same sealed admission inventory serves status and read-only context.
 /// It does not establish rule coverage or authorize an ownership decision.
 pub(super) fn review_inventory<'a>(
@@ -156,8 +149,11 @@ pub(in crate::rewrite) fn required_action(
     root: &Path,
     state: &RewriteState,
 ) -> Option<RewriteAction> {
-    let unowned = match ownerless(root, state) {
-        Ok(count) => count,
+    // A batch switch can retain claims for the selected recording before its
+    // Source is adopted. Context and apply need that Source to resolve them.
+    state.case_source.as_ref()?;
+    let unowned = match review_inventory(root, state) {
+        Ok((_, occurrences)) => occurrences.len(),
         Err(error) => {
             return Some(RewriteAction::InputRequired {
                 reason: RewriteInputRequiredReason::RecordingEvidenceRequired,
@@ -183,10 +179,45 @@ pub(in crate::rewrite) fn required_action(
         assignment_id: super::assignment_id(state).expect("serializable attribution assignment"),
         dispatch_generation: state.dependency_review.revision,
         claim_kinds: BTreeMap::from([
-            ("unattributed_source".into(), usize::try_from(unowned).unwrap_or(usize::MAX)),
+            ("unattributed_source".into(), unowned),
             ("foreign_unused".into(), disputed),
         ]),
         context: crate::rewrite::action::command(root, vec!["dependency-attribution".into(), "context".into()], vec![]),
         apply: crate::rewrite::action::command(root, vec!["dependency-attribution".into(), "apply".into(), "--file".into(), "<attribution.json>".into()], vec![]),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::model::ForeignUnusedClaim;
+    use super::*;
+
+    #[test]
+    fn retained_claim_waits_for_the_selected_recording_to_be_adopted() {
+        let mut state = crate::rewrite::test_state();
+        state.phase = crate::rewrite::model::RewritePhase::RecordingRequired;
+        state.case_source = None;
+        let id = "retained-claim".to_owned();
+        state.dependency_review.claims.insert(
+            id.clone(),
+            ForeignUnusedClaim {
+                id,
+                api: "/api".into(),
+                method_api: "GET /api".into(),
+                recording_run_id: state.recording_run_id.clone(),
+                source_revision: "old-revision".into(),
+                source_inventory_id: "old-inventory".into(),
+                attempt: 27,
+                execution_identity: "old-execution".into(),
+                report_sha256: "old-report".into(),
+                source_exchange_ids: BTreeSet::from([Uuid::new_v4()]),
+                exclusion: None,
+                reason: "still needs ownership review".into(),
+                status: ClaimStatus::Pending,
+                rejection: None,
+            },
+        );
+
+        assert!(required_action(Path::new("."), &state).is_none());
+    }
 }
