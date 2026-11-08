@@ -279,7 +279,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
         expected_index: Option<usize>,
-        serial_predecessors: Option<Arc<[usize]>>,
+        serial: Option<super::admission::pipeline::SerialPublish>,
         fast_socketio: bool,
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.candidates.register(&self.exchanges);
@@ -385,7 +385,7 @@ impl RedisReplayState {
                 command,
                 args,
                 expected_index,
-                serial_predecessors.as_deref(),
+                serial.as_ref().map(|serial| serial.first_blocker),
                 fast_socketio,
             );
         }
@@ -785,7 +785,13 @@ impl RedisReplayState {
             exchange.claim = Some(ticket.observer());
             Claim::Finite(ticket)
         };
-        exchange.serial_predecessors = serial_predecessors;
+        if let Some(serial) = serial {
+            exchange.serial_predecessors = Some(serial.predecessors);
+            exchange.serial_broadcast = serial.broadcast;
+        } else {
+            exchange.serial_predecessors = None;
+            exchange.serial_broadcast = None;
+        }
         if exchange.record.command.eq_ignore_ascii_case("PUBLISH") {
             // A notification may depend on this accepted request's identity,
             // before either its response or a related RPC callback completes.

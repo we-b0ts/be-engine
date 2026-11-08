@@ -18,7 +18,7 @@ pub(super) async fn deliver_redis_exchange(
         Claim::Finite(ticket) => Some(ticket.guard()),
         Claim::Native(_) => None,
     };
-    let (lifecycle, timing_scope, fast, serial_predecessors) = {
+    let (lifecycle, timing_scope, fast, serial_predecessors, serial_deadline) = {
         let state = state.lock().await;
         let exchange = &state.redis.exchanges[matched.index];
         (
@@ -26,6 +26,10 @@ pub(super) async fn deliver_redis_exchange(
             super::input_timing::scope(&state),
             state.stream_timing == Some(ReplayStreamTiming::Fast),
             exchange.serial_predecessors.clone(),
+            exchange
+                .serial_broadcast
+                .as_ref()
+                .map(|window| window.deadline),
         )
     };
     if lifecycle {
@@ -136,12 +140,12 @@ pub(super) async fn deliver_redis_exchange(
 
     let written = write_response(reader, state, matched, started, fast).await?;
     if let Some(predecessors) = serial_predecessors {
-        // RESP still replies in Target order. The finite call's effects are
+        // RESP still replies in Target order. The publish effects are
         // released only after every independently observed Source predecessor.
         let state = state.clone();
         let matched = matched.clone();
         tokio::spawn(async move {
-            let deadline = started + super::admission::POOLED_LANE_WAIT;
+            let deadline = serial_deadline.unwrap_or(started + super::admission::POOLED_LANE_WAIT);
             if wait_serial_publishes(&state, timing_scope.as_ref(), &predecessors, deadline).await {
                 if let Err(error) = finish_response(
                     &state,

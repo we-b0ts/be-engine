@@ -75,6 +75,19 @@ impl LaneIndex {
         slots.next().is_none().then_some(*index)
     }
 
+    pub(in crate::replay) fn previous_slot(&self, index: usize) -> Option<usize> {
+        let (key, Some(sequence)) = self.references.get(&index)? else {
+            return None;
+        };
+        let previous = self
+            .lanes
+            .get(key)?
+            .iter()
+            .filter_map(|(_, prior)| prior.filter(|prior| prior < sequence))
+            .max()?;
+        self.unique_slot(key, previous)
+    }
+
     /// Effective lane members from `first` up to, but excluding, `candidate`.
     pub(in crate::replay) fn bounded_prefix(
         &self,

@@ -122,20 +122,20 @@ impl Candidates {
         exchanges: &[ReplayExchange],
         candidate: usize,
     ) -> Option<usize> {
-        self.lane_blocker_excluding(exchanges, candidate, &[])
+        self.lane_blocker_excluding(exchanges, candidate, |_| false)
     }
 
     pub(super) fn lane_blocker_excluding(
         &self,
         exchanges: &[ReplayExchange],
         candidate: usize,
-        excluded: &[usize],
+        mut excluded: impl FnMut(usize) -> bool,
     ) -> Option<usize> {
         if !exchanges[candidate].preserves_connection_order() {
             return None;
         }
         self.lanes.blocker(candidate, |prior| {
-            !excluded.contains(&prior)
+            !excluded(prior)
                 && exchanges[prior].preserves_connection_order()
                 && !exchanges[prior].satisfies_lane_order()
         })
@@ -148,6 +148,10 @@ impl Candidates {
         limit: usize,
     ) -> Option<Vec<usize>> {
         self.lanes.bounded_prefix(first, candidate, limit)
+    }
+
+    pub(super) fn previous_lane_slot(&self, index: usize) -> Option<usize> {
+        self.lanes.previous_slot(index)
     }
 }
 

@@ -51,7 +51,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
         expected_index: Option<usize>,
-        serial_predecessors: Option<&[usize]>,
+        first_serial_blocker: Option<usize>,
         fast_socketio: bool,
     ) -> PreferredMatch {
         let request = Request {
@@ -65,9 +65,14 @@ impl RedisReplayState {
             args,
         };
         if let Some(candidate) = expected_index {
-            let blocker = if let Some(prefix) = serial_predecessors {
+            let blocker = if let Some(first) = first_serial_blocker {
+                // The admission proof verified every effective lane member
+                // from this blocker up to the exact candidate under this lock.
+                let first_sequence = self.exchanges[first].record.sequence;
                 self.candidates
-                    .lane_blocker_excluding(&self.exchanges, candidate, prefix)
+                    .lane_blocker_excluding(&self.exchanges, candidate, |prior| {
+                        self.exchanges[prior].record.sequence >= first_sequence
+                    })
             } else {
                 self.strict_lane_blocker(candidate, fast_socketio)
             };
@@ -134,7 +139,7 @@ impl RedisReplayState {
         {
             return self
                 .candidates
-                .lane_blocker_excluding(&self.exchanges, candidate, &[blocker]);
+                .lane_blocker_excluding(&self.exchanges, candidate, |prior| prior == blocker);
         }
         Some(blocker)
     }

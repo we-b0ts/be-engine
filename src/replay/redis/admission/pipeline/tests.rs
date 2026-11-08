@@ -5,6 +5,144 @@ use serde_json::json;
 use tokio::{net::TcpListener, time::Duration};
 
 #[tokio::test(start_paused = true)]
+async fn heartbeat_tail_broadcast_replies_do_not_block_their_room_predecessors() {
+    heartbeat_tail_broadcasts(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn heartbeat_tail_broadcasts_stay_dirty_if_a_room_predecessor_is_missing() {
+    heartbeat_tail_broadcasts(false).await;
+}
+
+async fn heartbeat_tail_broadcasts(complete: bool) {
+    use crate::interaction::{
+        model::{EndReason, WireMessage},
+        observation::Observation,
+        policy::InteractionPolicy,
+    };
+    let mut source = Observation::new(Protocol::SocketIo, InteractionPolicy::default()).unwrap();
+    source
+        .output(
+            WireMessage::text(r#"0{"sid":"source","pingInterval":1000,"pingTimeout":500}"#),
+            0,
+        )
+        .unwrap();
+    source.output(WireMessage::text("2"), 1_000).unwrap();
+    source.server_close(Some(1000), String::new());
+    let (input, output) = source.finish(EndReason::ServerEof, 2_500, true).unwrap();
+    let broadcast = |namespace, room, value| {
+        json!({
+            "method":"emit","event":"update","data":[value],"binary":false,
+            "namespace":namespace,"room":room,"skip_sid":null,"callback":null,
+            "host_id":"550e8400e29b41d4a716446655440000"
+        })
+        .to_string()
+    };
+    let frames = [
+        broadcast("/chat", "user:1", 0),
+        broadcast("/chat", "other:1", 0),
+        broadcast("/runtime", "stream:1", 1),
+        broadcast("/runtime", "stream:1", 2),
+    ];
+    let source = frames
+        .iter()
+        .enumerate()
+        .map(|(i, payload)| {
+            let reply = format!(":{}\r\n", 173 + i);
+            event(
+                i as u64 + 1,
+                "PUBLISH",
+                &[b"socketio", payload.as_bytes()],
+                reply.as_bytes(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let (_root, runtime) = super::super::tests::runtime_with_response(
+        &source,
+        json!({"format":"traffic-policy/v3","rules":[]}),
+        json!({"method":"GET","uri":"/socket.io/","timestamp":"2020-01-01T00:00:00Z","interaction":input}),
+        json!({"status":101,"interaction":output}),
+        ReplayLifecycleConfig { stream_timing: Some(ReplayStreamTiming::Fast), ..Default::default() },
+    ).await;
+    let (begin, _) = crate::replay::control::handle_control_request(
+        serde_json::from_value(json!({"command":"input_timing_begin","case_id":"case"})).unwrap(),
+        runtime.state.clone(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(begin["fast_tail"]["heartbeat_timeout"], true, "{begin}");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (server, _) = listener.accept().await.unwrap();
+    let task = tokio::spawn(handle_connection(
+        server,
+        ReplayTarget {
+            host: "redis.test".into(),
+            port: 6379,
+            fake_ip: "198.18.0.1".parse().unwrap(),
+            protocol: ReplayProtocol::Redis,
+        },
+        runtime.state.clone(),
+    ));
+    let mut client = RedisBufferedReader::new(client, 4096);
+    for i in [2, 3, 0, 1].into_iter().take(if complete { 4 } else { 3 }) {
+        let request = crate::redis::encode_array(&[b"PUBLISH", b"socketio", frames[i].as_bytes()]);
+        client.inner.write_all(&request).await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(1), read_redis_frame(&mut client))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response.raw.as_ref(),
+            format!(":{}\r\n", 173 + i).as_bytes()
+        );
+        if i == 3 {
+            tokio::time::advance(Duration::from_secs(7)).await;
+            assert_eq!(runtime.state.lock().await.redis.snapshot().matched_count, 0);
+        }
+    }
+    drop(client);
+    task.await.unwrap().unwrap();
+    if !complete {
+        tokio::time::advance(crate::replay::FAST_CASE_TIMEOUT).await;
+        tokio::task::yield_now().await;
+        let state = runtime.state.lock().await;
+        let report = state.redis.snapshot();
+        assert!(report.is_dirty());
+        assert!(state.redis.case_has_runtime_failure("case"));
+        assert_eq!(report.matched_count, 1);
+        return;
+    }
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let state = runtime.state.lock().await;
+            let report = state.redis.snapshot();
+            if report.matched_count == 4 {
+                assert!(!report.is_dirty());
+                assert_eq!(
+                    report
+                        .matched
+                        .iter()
+                        .map(|row| row.sequence)
+                        .collect::<Vec<_>>(),
+                    [1, 2, 3, 4]
+                );
+                break;
+            }
+            drop(state);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_order() {
     let envelope = |namespace: &str| {
         json!({"method":"emit","event":"update","data":[1],"binary":false,

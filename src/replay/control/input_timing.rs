@@ -99,6 +99,19 @@ pub(in crate::replay) struct Live {
 }
 
 impl Live {
+    pub(in crate::replay) fn heartbeat_close_window(
+        &self,
+        case: &str,
+    ) -> Option<(DateTime<Utc>, MonoInstant)> {
+        if self.case != case {
+            return None;
+        }
+        Some((
+            self.fast.as_ref()?.heartbeat_close_at()?,
+            self.started + crate::replay::FAST_CASE_TIMEOUT,
+        ))
+    }
+
     pub(in crate::replay) fn mysql_dispatch_prefix(
         &self,
         case: &str,

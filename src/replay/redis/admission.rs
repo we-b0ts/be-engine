@@ -98,11 +98,7 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
                 else {
                     return Err(error);
                 };
-                select(
-                    &mut state.redis,
-                    Some(serial.index),
-                    Some(serial.predecessors),
-                )
+                select(&mut state.redis, Some(serial.index), Some(serial))
             })
             .map(|mut matched| {
                 matched.report.target_event_index = observation.event_index;

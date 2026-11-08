@@ -2,6 +2,8 @@
 use super::*;
 use crate::redis::socketio_rpc;
 use tokio::time::Instant;
+mod close_tail;
+pub(in crate::replay::redis) use close_tail::BroadcastWindow;
 #[cfg(test)]
 mod tests;
 
@@ -11,6 +13,8 @@ mod tests;
 pub(in crate::replay::redis) struct SerialPublish {
     pub(in crate::replay::redis) index: usize,
     pub(in crate::replay::redis) predecessors: Arc<[usize]>,
+    pub(in crate::replay::redis) first_blocker: usize,
+    pub(in crate::replay::redis) broadcast: Option<BroadcastWindow>,
 }
 
 impl SerialPublish {
@@ -34,6 +38,9 @@ impl SerialPublish {
         }
         let index = lane::ordinary_slot(&state.redis, case, candidate)?;
         let first = lane::ordinary_slot(&state.redis, case, blocked_by)?;
+        if let Some(broadcast) = close_tail::prove(state, case, first, index) {
+            return Some(broadcast);
+        }
         // An attribution overlay can move other cases' traffic away from the
         // physical connection without renumbering the remaining Source slots.
         let predecessors = state.redis.candidates.lane_prefix(first, index, 4)?;
@@ -64,15 +71,17 @@ impl SerialPublish {
                 &state.redis.exchanges[pair[1]],
             )
         });
-        let first = pairs.next()??;
-        if first.2["namespace"] == call.identity.namespace
-            || pairs.any(|pair| pair.as_ref() != Some(&first))
+        let first_pair = pairs.next()??;
+        if first_pair.2["namespace"] == call.identity.namespace
+            || pairs.any(|pair| pair.as_ref() != Some(&first_pair))
         {
             return None;
         }
         Some(Self {
             index,
             predecessors: predecessors.into(),
+            first_blocker: first,
+            broadcast: None,
         })
     }
 }

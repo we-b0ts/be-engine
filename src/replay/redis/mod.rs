@@ -161,6 +161,7 @@ struct RecordedCapture {
 struct ReplayExchange {
     claim: Option<ClaimTicket>,
     serial_predecessors: Option<Arc<[usize]>>,
+    serial_broadcast: Option<admission::pipeline::BroadcastWindow>,
     observation_rule: Option<String>,
     optional_observation_rule: Option<String>,
     read_commutation_rule: Option<String>,
@@ -481,6 +482,7 @@ impl RedisReplayState {
         self.exchanges.push(ReplayExchange {
             claim: None,
             serial_predecessors: None,
+            serial_broadcast: None,
             observation_rule: None,
             optional_observation_rule: None,
             read_commutation_rule: None,

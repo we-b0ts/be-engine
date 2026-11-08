@@ -292,6 +292,18 @@ impl Plan {
         self.source.tail.as_ref().map(|tail| tail.policy.clone())
     }
 
+    pub(super) fn heartbeat_close_at(&self) -> Option<DateTime<Utc>> {
+        let tail = self.source.tail.as_ref()?;
+        if !tail.policy.heartbeat_timeout {
+            return None;
+        }
+        self.source
+            .start
+            .checked_add_signed(chrono::TimeDelta::try_milliseconds(
+                i64::try_from(tail.cutoff).ok()?,
+            )?)
+    }
+
     pub(super) fn native_fast_setup_ready(&self, state: &ReplayState, case: &str) -> bool {
         self.source
             .requests
