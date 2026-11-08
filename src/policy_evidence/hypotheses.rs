@@ -12,6 +12,8 @@ use tokio::sync::{mpsc, watch};
 mod publication;
 pub(in crate::policy_evidence) use publication::stage;
 
+const JOURNAL_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 struct Progress {
     durable: u64,
@@ -51,7 +53,7 @@ struct Message {
 #[derive(Debug, Clone)]
 pub(crate) struct Journal {
     path: PathBuf,
-    sender: mpsc::Sender<Message>,
+    sender: mpsc::UnboundedSender<Message>,
     progress: watch::Receiver<Progress>,
     sequence: Arc<Mutex<(u64, Option<String>, u64)>>,
     key: Arc<Vec<u8>>,
@@ -69,7 +71,10 @@ impl Journal {
         if let Some(parent) = path.parent() {
             std::fs::File::open(parent)?.sync_all()?;
         }
-        let (sender, mut receiver) = mpsc::channel::<Message>(512);
+        // Replay can append a burst while it holds its state lock. Bound the
+        // queue by the journal's byte budget so producers can keep ordering
+        // their records without waiting for filesystem writes under that lock.
+        let (sender, mut receiver) = mpsc::unbounded_channel::<Message>();
         let (progress_sender, progress) = watch::channel(Progress::default());
         let handle =
             tokio::runtime::Handle::try_current().context("hypothesis journal requires Tokio")?;
@@ -172,17 +177,21 @@ impl Journal {
             &serde_json::json!({"sequence":next,"payload":payload,"sha256":super::digest(&signed),"authentication":authentication}),
         )?;
         line.push(b'\n');
-        if sequence.2 + line.len() as u64 > 64 * 1024 * 1024 {
+        if sequence.2 + line.len() as u64 > JOURNAL_BYTE_LIMIT {
             sequence.1 = Some("hypothesis journal exceeds 64 MiB".into());
             anyhow::bail!("hypothesis journal metadata budget exhausted");
         }
         let bytes = line.len() as u64;
-        if let Err(error) = self.sender.try_send(Message {
-            line,
-            protected_files,
-        }) {
-            sequence.1 = Some(error.to_string());
-            anyhow::bail!("hypothesis journal queue unavailable");
+        if self
+            .sender
+            .send(Message {
+                line,
+                protected_files,
+            })
+            .is_err()
+        {
+            sequence.1 = Some("hypothesis journal writer stopped".into());
+            anyhow::bail!("hypothesis journal writer stopped");
         }
         sequence.0 = next;
         sequence.2 += bytes;
