@@ -310,6 +310,14 @@ pub(super) async fn accept(
                 && live.admission_epoch == state.admission_epoch,
             "input timing request epoch changed"
         );
+        if request.command == "input_timing_native_prefix" {
+            let active = state.redis.pubsub.native_clock.fast_prefix_active(
+                case,
+                live.epoch,
+                MonoInstant::now(),
+            );
+            return Ok(serde_json::json!({"ok":true,"active":active}));
+        }
         if live.fast.is_some() {
             return fast::advance(&mut state, request.command == "input_timing_tail", query);
         }

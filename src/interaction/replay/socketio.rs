@@ -427,7 +427,7 @@ pub(super) async fn execute_with_feedback(
                                     && matches!(&packet, EngineIoPacket::Message(packet)
                                         if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent
                                             | SocketIoKind::Ack | SocketIoKind::BinaryAck))
-                                    && let Some(pong) = terminal.business_output(Instant::now())
+                                    && let Some(pong) = terminal.observed_progress(Instant::now())
                                 {
                                     session_io!(transport.send(&pong), "deferred Engine.IO heartbeat send timed out");
                                 }
@@ -452,6 +452,13 @@ pub(super) async fn execute_with_feedback(
                                         let now = Instant::now();
                                         if awaiting_terminal_ping {
                                             terminal.defer_pong(payload, now);
+                                            if fast_tail.as_ref().is_some_and(|tail| tail.native_observation)
+                                                && let Some(timing) = &input_timing
+                                                && session_io!(timing.native_prefix_active(), "native heartbeat progress query timed out")
+                                                && let Some(pong) = terminal.observed_progress(Instant::now())
+                                            {
+                                                session_io!(transport.send(&pong), "native Engine.IO heartbeat send timed out");
+                                            }
                                         } else if heartbeats.ping(payload.clone(), now)? {
                                             session_io!(transport.send(&WireMessage::text(format!("3{payload}"))), "Engine.IO heartbeat send timed out");
                                         }

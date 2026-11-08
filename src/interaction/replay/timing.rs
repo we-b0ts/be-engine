@@ -45,6 +45,9 @@ pub(crate) trait InputTiming: Send + Sync {
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
         Box::pin(async { Ok(Advance::default()) })
     }
+    fn native_prefix_active(&self) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async { Ok(false) })
+    }
     fn closed(&self, _started_at: chrono::DateTime<chrono::Utc>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async { Ok(()) })
     }

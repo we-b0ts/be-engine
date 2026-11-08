@@ -64,7 +64,7 @@ impl NativeClock {
             .dispatch_pace
             .written
             .map(|(index, _)| entry_offset(&self.entries[index]));
-        live.dispatch_pace.skip_gaps = dispatch_wait_exhausted(pending, written, cap);
+        live.dispatch_pace.skip_gaps = gap_budget_exhausted(pending, written, cap);
     }
 
     pub(in crate::replay) fn prepare_fast(
@@ -96,12 +96,24 @@ impl NativeClock {
         if entry_offset(&self.entries[first]) <= setup_finished {
             return None;
         }
+        let cap = Duration::from_millis(cap_ms);
+        let offsets = pending
+            .iter()
+            .copied()
+            .skip_while(|&index| index < first)
+            .take_while(|&index| index <= last)
+            .map(|index| entry_offset(&self.entries[index]));
+        let cap = if gap_budget_exhausted(offsets, None, cap) {
+            Duration::ZERO
+        } else {
+            cap
+        };
         self.live.get_mut(case)?.fast = Some(Pace {
             first,
             last,
             last_output,
             end,
-            cap: Duration::from_millis(cap_ms),
+            cap,
             inflight: None,
             written: None,
             tail_at: None,
@@ -121,6 +133,32 @@ impl NativeClock {
                 index <= pace.last
                     || now >= at + pace.end.saturating_sub(entry_offset(&self.entries[index]))
             })
+    }
+
+    pub(in crate::replay) fn fast_prefix_active(
+        &self,
+        case: &str,
+        epoch: DateTime<Utc>,
+        now: Instant,
+    ) -> bool {
+        let Some(pace) = self
+            .live
+            .get(case)
+            .filter(|live| live.epoch == epoch && live.observer && !live.closed)
+            .and_then(|live| live.fast.as_ref())
+        else {
+            return false;
+        };
+        let next = pace
+            .inflight
+            .or_else(|| self.pending.get(case)?.front().copied());
+        // A busy subscription can keep delivering before the next event for
+        // this room reaches the socket. Only recent wire delivery inside the
+        // finite prefix proves progress. The quiet tail keeps its own clock.
+        next.is_some_and(|index| index <= pace.last)
+            && pace
+                .written
+                .is_some_and(|(_, at)| now - at < SOCKET_IO_DISPATCH_WAIT)
     }
 
     pub(in crate::replay) fn fast_written(
@@ -224,7 +262,7 @@ fn entry_offset(entry: &Entry) -> Duration {
     entry.offset.to_std().expect("validated native push offset")
 }
 
-fn dispatch_wait_exhausted(
+fn gap_budget_exhausted(
     offsets: impl Iterator<Item = Duration>,
     mut previous: Option<Duration>,
     cap: Duration,
@@ -232,8 +270,8 @@ fn dispatch_wait_exhausted(
     if cap.is_zero() {
         return false;
     }
-    // If artificial gaps alone consume the input deadline, keep physical
-    // ordering and backpressure but let this finite prefix drain without sleep.
+    // When artificial gaps alone consume the Fast wait budget, keep physical
+    // ordering and backpressure while draining this finite prefix without sleep.
     let mut wait = Duration::ZERO;
     for offset in offsets {
         if let Some(prior) = previous.replace(offset) {
@@ -254,10 +292,10 @@ mod tests {
     fn skip_gaps_only_when_the_capped_window_cannot_meet_dispatch_deadline() {
         let offsets = || (0..=5602).map(|i| Duration::from_millis(i * 4));
         let cap = Duration::from_millis(3);
-        assert!(dispatch_wait_exhausted(offsets(), None, cap));
-        assert!(!dispatch_wait_exhausted(offsets().take(100), None, cap));
-        assert!(!dispatch_wait_exhausted(offsets(), None, Duration::ZERO));
-        assert!(!dispatch_wait_exhausted(
+        assert!(gap_budget_exhausted(offsets(), None, cap));
+        assert!(!gap_budget_exhausted(offsets().take(100), None, cap));
+        assert!(!gap_budget_exhausted(offsets(), None, Duration::ZERO));
+        assert!(!gap_budget_exhausted(
             (0..=5602).map(Duration::from_micros),
             None,
             cap,

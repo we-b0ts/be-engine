@@ -69,6 +69,24 @@ impl InputTiming for Observer {
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
         Box::pin(self.wait_for("input_timing_tail", 0, Vec::new(), None))
     }
+
+    fn native_prefix_active(&self) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async {
+            let query = Query {
+                epoch: self.epoch,
+                sequence: 0,
+                completed: Vec::new(),
+                closed_at: None,
+                events_ready: None,
+            };
+            let response = super::super::native_event::send(
+                &self.socket,
+                serde_json::json!({"command":"input_timing_native_prefix","case_id":self.case,"input_timing":query}),
+            )
+            .await?;
+            Ok(response["active"] == true)
+        })
+    }
 }
 
 type DispatchFeedback = (

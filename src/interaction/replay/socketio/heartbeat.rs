@@ -25,7 +25,7 @@ impl Terminal {
         self.unanswered.get_or_insert((received, payload));
     }
 
-    pub(super) fn business_output(&mut self, now: Instant) -> Option<WireMessage> {
+    pub(super) fn observed_progress(&mut self, now: Instant) -> Option<WireMessage> {
         if self
             .unanswered
             .as_ref()

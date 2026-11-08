@@ -177,7 +177,9 @@ boundary. Business events are compared in their original relative order.
 When a Source heartbeat timeout qualifies for fast replay, the engine enters
 the terminal heartbeat phase after dispatching the recorded inputs. It defers
 each Engine.IO Pong until a later business frame arrives within the Target's
-advertised timeout. If there is no later frame, Target closes the actual
+advertised timeout. For a proven passive Pub/Sub prefix, recent delivery to
+the real subscription also keeps the connection open while earlier native
+slots are still draining. If there is no later frame, Target closes the actual
 connection and runs its own disconnect handler. Case ownership remains active
 while disconnect traffic is observed. Earlier assertion and dependency
 differences remain in the report.

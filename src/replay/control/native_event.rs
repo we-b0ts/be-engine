@@ -245,6 +245,7 @@ fn feedback_command(request: &Value) -> &str {
                     | "input_timing_begin"
                     | "input_timing"
                     | "input_timing_tail"
+                    | "input_timing_native_prefix"
                     | "http_input_timing_begin"
                     | "http_input_timing_wait"
                     | "http_input_timing_closed"

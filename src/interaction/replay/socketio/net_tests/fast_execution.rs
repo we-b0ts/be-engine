@@ -3,22 +3,33 @@ use super::*;
 
 #[tokio::test]
 async fn terminal_ping_gets_a_pong_only_after_a_new_business_frame() {
-    assert_target_times_out_after_terminal_ping(true).await;
+    assert_target_times_out_after_terminal_ping(true, false).await;
 }
 
 #[tokio::test]
 async fn terminal_ping_allows_target_timeout_despite_missing_output_and_dependency_failure() {
-    assert_target_times_out_after_terminal_ping(false).await;
+    assert_target_times_out_after_terminal_ping(false, false).await;
 }
 
-async fn assert_target_times_out_after_terminal_ping(business_output: bool) {
+#[tokio::test]
+async fn terminal_ping_keeps_an_active_native_prefix_alive_without_a_business_frame() {
+    assert_target_times_out_after_terminal_ping(false, true).await;
+}
+
+async fn assert_target_times_out_after_terminal_ping(business_output: bool, native_prefix: bool) {
     use crate::interaction::replay::timing::{FastTail, InputTiming};
     use futures_util::future::BoxFuture;
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     use tokio::time::timeout;
     use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
-    struct Timing;
+    struct Timing {
+        native_prefix: bool,
+        active: AtomicBool,
+    }
     impl InputTiming for Timing {
         fn wait(&self, _: u64, _: Vec<u64>) -> BoxFuture<'_, Result<Advance>> {
             Box::pin(async { Ok(Advance::default()) })
@@ -29,8 +40,11 @@ async fn assert_target_times_out_after_terminal_ping(business_output: bool) {
                 output_count: 3,
                 idle_ms: 5,
                 heartbeat_timeout: true,
-                native_observation: false,
+                native_observation: self.native_prefix,
             })
+        }
+        fn native_prefix_active(&self) -> BoxFuture<'_, Result<bool>> {
+            Box::pin(async { Ok(self.active.swap(false, Ordering::Relaxed)) })
         }
     }
 
@@ -72,6 +86,13 @@ async fn assert_target_times_out_after_terminal_ping(business_output: bool) {
                 .starts_with("421")
         );
 
+        if native_prefix {
+            socket.send(Message::Text("2".into())).await.unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                "3"
+            );
+        }
         if business_output {
             socket.send(Message::Text("2".into())).await.unwrap();
             assert!(
@@ -125,7 +146,10 @@ async fn assert_target_times_out_after_terminal_ping(business_output: bool) {
             &input,
             Duration::from_secs(2),
             Feedback {
-                input_timing: Some(Arc::new(Timing)),
+                input_timing: Some(Arc::new(Timing {
+                    native_prefix,
+                    active: AtomicBool::new(native_prefix),
+                })),
                 dependency_failure: Some(failure),
                 ..Feedback::default()
             },
