@@ -340,15 +340,23 @@ impl EndObservation {
     }
 
     pub(crate) fn observes_replay_close_tail(&self, protocol: Protocol) -> bool {
-        // An early Target EOF can fail the assertion while its admitted work
-        // still needs to be isolated from the next Case.
-        self.observes_close_tail(protocol)
-            || (protocol == Protocol::SocketIo
-                && matches!(
-                    self.reason,
-                    EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped
-                )
-                && (!self.pending.is_empty() || self.fast_heartbeat_eof_ms.is_some()))
+        if self.observes_close_tail(protocol) {
+            return true;
+        }
+        if protocol != Protocol::SocketIo {
+            return false;
+        }
+        match self.reason {
+            // Replay closes or drops the connection on these failures. The
+            // Target's disconnect work can start after that transport ends.
+            EndReason::DependencyFailure
+            | EndReason::MissingPredecessor
+            | EndReason::DispatchTimeout => true,
+            EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped => {
+                !self.pending.is_empty() || self.fast_heartbeat_eof_ms.is_some()
+            }
+            _ => false,
+        }
     }
 }
 
@@ -456,6 +464,30 @@ mod tests {
             );
             end.clean = true;
             end.pending.clear();
+            assert!(!end.observes_close_tail(Protocol::SocketIo));
+        }
+    }
+
+    #[test]
+    fn failed_socketio_dispatch_retains_replay_ownership_for_disconnect_work() {
+        for reason in [
+            EndReason::DependencyFailure,
+            EndReason::MissingPredecessor,
+            EndReason::DispatchTimeout,
+        ] {
+            let end = EndObservation {
+                reason,
+                offset_ms: 0,
+                pending: vec![],
+                clean: false,
+                missing_predecessor: None,
+                dispatch_timeout: None,
+                fast_heartbeat_eof_ms: None,
+                partial_message: None,
+                close: None,
+            };
+            assert!(end.observes_replay_close_tail(Protocol::SocketIo));
+            assert!(!end.observes_replay_close_tail(Protocol::WebSocket));
             assert!(!end.observes_close_tail(Protocol::SocketIo));
         }
     }
