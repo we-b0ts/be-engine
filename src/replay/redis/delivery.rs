@@ -2,7 +2,7 @@
 use super::*;
 use crate::ReplayStreamTiming;
 use crate::dependency::termination::ConnectionControl;
-use crate::replay::admission::DeliveryGuard;
+use crate::replay::admission::{DeliveryGuard, WaitOutcome};
 use chrono::{DateTime, Utc};
 use tokio::io::AsyncReadExt;
 
@@ -18,14 +18,14 @@ pub(super) async fn deliver_redis_exchange(
         Claim::Finite(ticket) => Some(ticket.guard()),
         Claim::Native(_) => None,
     };
-    let (lifecycle, timing_scope, fast) = {
+    let (lifecycle, timing_scope, fast, serial_predecessors) = {
         let state = state.lock().await;
+        let exchange = &state.redis.exchanges[matched.index];
         (
-            state.redis.exchanges[matched.index]
-                .record
-                .lifecycle_cleanup,
+            exchange.record.lifecycle_cleanup,
             super::input_timing::scope(&state),
             state.stream_timing == Some(ReplayStreamTiming::Fast),
+            exchange.serial_predecessors,
         )
     };
     if lifecycle {
@@ -135,8 +135,75 @@ pub(super) async fn deliver_redis_exchange(
     }
 
     let written = write_response(reader, state, matched, started, fast).await?;
-    finish_response(state, matched, timing_scope.as_ref(), written, claim_guard).await?;
+    if let Some(predecessors) = serial_predecessors {
+        // RESP still replies in Target order. The finite call's effects are
+        // released only after both independently observed Source predecessors.
+        let state = state.clone();
+        let matched = matched.clone();
+        tokio::spawn(async move {
+            let deadline = started + super::admission::POOLED_LANE_WAIT;
+            if wait_serial_publishes(&state, timing_scope.as_ref(), predecessors, deadline).await {
+                if let Err(error) = finish_response(
+                    &state,
+                    &matched,
+                    timing_scope.as_ref(),
+                    written,
+                    claim_guard,
+                )
+                .await
+                {
+                    tracing::debug!(%error, "deferred Redis call delivery failed");
+                }
+            } else {
+                state.lock().await.redis.fail_exchange(
+                    &matched,
+                    "deferred Redis call did not observe both predecessor broadcasts".into(),
+                );
+            }
+        });
+    } else {
+        finish_response(state, matched, timing_scope.as_ref(), written, claim_guard).await?;
+    }
     Ok(false)
+}
+
+async fn wait_serial_publishes(
+    state: &Arc<Mutex<ReplayState>>,
+    scope: Option<&super::input_timing::DeliveryScope>,
+    predecessors: [usize; 2],
+    deadline: tokio::time::Instant,
+) -> bool {
+    loop {
+        let state = state.lock().await;
+        if tokio::time::Instant::now() >= deadline || !serial_scope_current(&state, scope) {
+            return false;
+        }
+        let statuses = predecessors.map(|index| state.redis.exchange_status(index));
+        if statuses
+            .iter()
+            .all(|status| *status == Some(ReplayExchangeStatus::Consumed))
+        {
+            return true;
+        }
+        if statuses
+            .iter()
+            .any(|status| matches!(status, None | Some(ReplayExchangeStatus::Failed)))
+        {
+            return false;
+        }
+        let wait = state.redis.lifecycle.subscribe();
+        drop(state);
+        if wait.wait(deadline).await == WaitOutcome::Deadline {
+            return false;
+        }
+    }
+}
+
+pub(super) fn serial_scope_current(
+    state: &ReplayState,
+    scope: Option<&super::input_timing::DeliveryScope>,
+) -> bool {
+    scope.is_some() && super::input_timing::scope(state).as_ref() == scope
 }
 
 /// These two commands were independently observed and admitted in Source order.
@@ -285,6 +352,9 @@ async fn finish_response(
         // Actual wire progress is visible before waiting for ReplayState's
         // mutex; the common transaction owns every subsequent commit/failure.
         let mut replay = state.lock().await;
+        if !serial_delivery_current(&mut replay, matched, timing_scope) {
+            return Ok(());
+        }
         replay.redis.finish_delivery(
             matched,
             response,
@@ -305,6 +375,12 @@ async fn finish_response(
     }
     let state_ref = state;
     let mut state = state_ref.lock().await;
+    if !serial_delivery_current(&mut state, matched, timing_scope) {
+        return Ok(());
+    }
+    let serial_scope = state.redis.exchanges[matched.index]
+        .serial_predecessors
+        .and(timing_scope);
     if let Some(delivery) = &matched.read_back
         && let Err(error) = state
             .redis
@@ -343,7 +419,7 @@ async fn finish_response(
         super::input_timing::response_delivered(&mut state, matched, timing_scope);
     }
     drop(state);
-    if let Err(error) = pubsub::echo::deliver(state_ref, matched).await {
+    if let Err(error) = pubsub::echo::deliver(state_ref, matched, serial_scope).await {
         state_ref
             .lock()
             .await
@@ -352,11 +428,18 @@ async fn finish_response(
         return Err(error);
     }
     let mut state = state_ref.lock().await;
+    if !serial_delivery_current(&mut state, matched, timing_scope) {
+        return Ok(());
+    }
     if let Some(push) = matched.rpc_push {
         let detached = state.redis.pubsub.rpc_is_detached(matched);
         let delivery = state.redis.pubsub.rpc_delivery(matched);
         match delivery {
-            Ok((delay, delivery)) => {
+            Ok((delay, mut delivery)) => {
+                if let Some(case) = serial_scope.and(matched.report.case_id.as_deref()) {
+                    delivery.case_id = Some(case.into());
+                    delivery.request_epoch = state.redis.native_request_epoch(case);
+                }
                 if detached {
                     state.redis.complete_exchange(matched);
                 }
@@ -381,6 +464,25 @@ fn ordinary_finite_response(matched: &MatchedRedisExchange) -> bool {
     matches!(matched.claim, Claim::Finite(_))
         && matched.rpc_push.is_none()
         && matched.adapter_echo.is_none()
+}
+
+fn serial_delivery_current(
+    state: &mut ReplayState,
+    matched: &MatchedRedisExchange,
+    timing_scope: Option<&super::input_timing::DeliveryScope>,
+) -> bool {
+    if state.redis.exchanges[matched.index]
+        .serial_predecessors
+        .is_none()
+        || serial_scope_current(state, timing_scope)
+    {
+        return true;
+    }
+    state.redis.fail_exchange(
+        matched,
+        "deferred Redis call lost its Case before delivery".into(),
+    );
+    false
 }
 
 async fn await_server_end(

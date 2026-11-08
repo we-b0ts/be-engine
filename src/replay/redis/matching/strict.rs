@@ -51,6 +51,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
         expected_index: Option<usize>,
+        serial_predecessors: Option<[usize; 2]>,
     ) -> PreferredMatch {
         let request = Request {
             case,
@@ -65,7 +66,9 @@ impl RedisReplayState {
         if let Some(candidate) = expected_index {
             return if !request.matches(self, &self.exchanges[candidate]) {
                 PreferredMatch::NotFound
-            } else if let Some(blocker) = self.candidates.lane_blocker(&self.exchanges, candidate) {
+            } else if let Some(blocker) = self.candidates.lane_blocker(&self.exchanges, candidate)
+                && !serial_predecessors.is_some_and(|prefix| prefix.contains(&blocker))
+            {
                 PreferredMatch::LaneBlocked { candidate, blocker }
             } else {
                 PreferredMatch::Matched(candidate)

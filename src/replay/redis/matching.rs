@@ -183,6 +183,7 @@ impl RedisReplayState {
             command,
             args,
             None,
+            None,
         )
         .map(|mut matched| {
             matched.report.target_event_index = self.request_event_index;
@@ -277,6 +278,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
         expected_index: Option<usize>,
+        serial_predecessors: Option<[usize; 2]>,
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.candidates.register(&self.exchanges);
         if let Some(case) = active_case_id {
@@ -381,6 +383,7 @@ impl RedisReplayState {
                 command,
                 args,
                 expected_index,
+                serial_predecessors,
             );
         }
         self.request_contracts
@@ -779,6 +782,7 @@ impl RedisReplayState {
             exchange.claim = Some(ticket.observer());
             Claim::Finite(ticket)
         };
+        exchange.serial_predecessors = serial_predecessors;
         if exchange.record.command.eq_ignore_ascii_case("PUBLISH") {
             // A notification may depend on this accepted request's identity,
             // before either its response or a related RPC callback completes.
@@ -870,11 +874,12 @@ impl CommandExchangeScope for ReplayExchange {
         // reach the client but before delivery bookkeeping reacquires the mutex.
         // Unclaimed, failed and client-termination exchanges remain blockers.
         self.is_consumed()
-            || if let Some(ticket) = &self.claim {
-                self.source == ReplaySource::Case && ticket.satisfies(Barrier::Admitted)
-            } else {
-                Lifecycle::satisfies(self.status, self.source, Barrier::Admitted)
-            }
+            || self.serial_predecessors.is_none()
+                && if let Some(ticket) = &self.claim {
+                    self.source == ReplaySource::Case && ticket.satisfies(Barrier::Admitted)
+                } else {
+                    Lifecycle::satisfies(self.status, self.source, Barrier::Admitted)
+                }
     }
 
     fn preserves_connection_order(&self) -> bool {

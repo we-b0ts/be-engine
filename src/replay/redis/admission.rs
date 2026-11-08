@@ -17,7 +17,7 @@ mod engine_tests;
 mod tests;
 
 const REFRESH_WAIT: Duration = Duration::from_secs(30);
-const POOLED_LANE_WAIT: Duration = Duration::from_secs(5);
+pub(super) const POOLED_LANE_WAIT: Duration = Duration::from_secs(5);
 
 struct RedisRequest<'a> {
     target: &'a TargetKey,
@@ -69,9 +69,8 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         state.redis.request_observed_at = observation.observed_at;
         state.redis.request_observation_id = observation.observation_id;
         state.redis.request_observation_retained = observation.observation_retained;
-        state
-            .redis
-            .select_redis(
+        let select = |redis: &mut RedisReplayState, expected_index, predecessors| {
+            redis.select_redis(
                 observation.case.as_deref(),
                 self.target,
                 self.connection
@@ -81,8 +80,28 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
                 self.username,
                 &self.command.name,
                 &self.command.args,
-                self.expected_index,
+                expected_index,
+                predecessors,
             )
+        };
+        select(&mut state.redis, self.expected_index, None)
+            .or_else(|error| {
+                if self.lane_hint.is_none() || !lane::enabled(state) {
+                    return Err(error);
+                }
+                let Some(serial) = observation
+                    .case
+                    .as_deref()
+                    .and_then(|case| pipeline::SerialPublish::from_blocker(state, case, &error))
+                else {
+                    return Err(error);
+                };
+                select(
+                    &mut state.redis,
+                    Some(serial.index),
+                    Some(serial.predecessors),
+                )
+            })
             .map(|mut matched| {
                 matched.report.target_event_index = observation.event_index;
                 matched

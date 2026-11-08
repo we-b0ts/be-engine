@@ -160,6 +160,7 @@ struct RecordedCapture {
 #[derive(Debug, Clone)]
 struct ReplayExchange {
     claim: Option<ClaimTicket>,
+    serial_predecessors: Option<[usize; 2]>,
     observation_rule: Option<String>,
     optional_observation_rule: Option<String>,
     read_commutation_rule: Option<String>,
@@ -479,6 +480,7 @@ impl RedisReplayState {
         let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
             claim: None,
+            serial_predecessors: None,
             observation_rule: None,
             optional_observation_rule: None,
             read_commutation_rule: None,

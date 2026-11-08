@@ -1,9 +1,83 @@
-//! Proof for reading one adjacent Socket.IO publish from a blocked Redis stream.
+//! Admission proofs for reordered Socket.IO publishes on one Redis stream.
 use super::*;
 use crate::redis::socketio_rpc;
+use crate::replay::report::command::CommandExchangeRefReport;
 use tokio::time::Instant;
 #[cfg(test)]
 mod tests;
+
+/// Two sequential room broadcasts can share a RESP stream with an independent
+/// call. The second broadcast cannot arrive until the first has its reply.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::replay::redis) struct SerialPublish {
+    pub(in crate::replay::redis) index: usize,
+    pub(in crate::replay::redis) predecessors: [usize; 2],
+}
+
+impl SerialPublish {
+    pub(super) fn from_blocker(
+        state: &ReplayState,
+        case: &str,
+        error: &CommandMatchDiagnostic,
+    ) -> Option<Self> {
+        let CommandMatchDiagnostic::LaneBlocked {
+            candidate,
+            blocked_by,
+        } = error
+        else {
+            return None;
+        };
+        if candidate.command != "PUBLISH"
+            || blocked_by.command != "PUBLISH"
+            || candidate.connection_id != blocked_by.connection_id
+            || blocked_by.sequence.checked_add(2) != Some(candidate.sequence)
+        {
+            return None;
+        }
+        let index = lane::ordinary_slot(&state.redis, case, candidate)?;
+        let first = lane::ordinary_slot(&state.redis, case, blocked_by)?;
+        let middle = CommandExchangeRefReport {
+            sequence: blocked_by.sequence + 1,
+            ..blocked_by.as_ref().clone()
+        };
+        let second = lane::ordinary_slot(&state.redis, case, &middle)?;
+        let [first_exchange, second_exchange, later] =
+            [first, second, index].map(|i| &state.redis.exchanges[i]);
+        if [first_exchange, second_exchange, later]
+            .iter()
+            .any(|exchange| {
+                state.redis.connection_scopes.is_stateful(exchange)
+                    || !exchange.status.is_available()
+                    || exchange.record.response_kind != "integer"
+                    || exchange.record.lifecycle_cleanup
+                    || exchange.args.first() != later.args.first()
+            })
+        {
+            return None;
+        }
+        let mut first_message = socketio_rpc::broadcast("PUBLISH", &first_exchange.args)
+            .ok()??
+            .value;
+        let mut second_message = socketio_rpc::broadcast("PUBLISH", &second_exchange.args)
+            .ok()??
+            .value;
+        let call = socketio_rpc::request("PUBLISH", &later.args).ok()??;
+        let first_room = first_message.as_object_mut()?.remove("room")?;
+        let second_room = second_message.as_object_mut()?.remove("room")?;
+        if first_room.as_str()?.is_empty()
+            || second_room.as_str()?.is_empty()
+            || first_room == second_room
+            || first_message != second_message
+            || first_message["namespace"] == call.identity.namespace
+        {
+            return None;
+        }
+        Some(Self {
+            index,
+            predecessors: [first, second],
+        })
+    }
+}
 
 #[derive(Debug)]
 pub(in crate::replay::redis) struct AdjacentPublish {
