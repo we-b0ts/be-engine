@@ -41,15 +41,21 @@ impl AdjacentPublish {
         let second = &state.redis.exchanges[later];
         let route = recorded_route(first)?;
         let later_route = recorded_route(second)?;
-        (first.args.first() == second.args.first() && route.namespace != later_route.namespace)
-            .then(|| Self {
+        if matches!(route, AdapterRoute::Callback(_))
+            && !state.redis.pubsub.is_adapter_source(first)
+        {
+            return None;
+        }
+        (first.args.first() == second.args.first() && route.can_precede(&later_route)).then(|| {
+            Self {
                 epoch: state.admission_epoch,
                 deadline,
                 case: case.to_owned(),
                 earlier,
                 later,
                 route,
-            })
+            }
+        })
     }
 
     pub(in crate::replay::redis) fn later(&self) -> usize {
@@ -68,7 +74,10 @@ impl AdjacentPublish {
         username: Option<&str>,
         command: &RedisCommand,
     ) -> Option<std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic>> {
-        if AdapterRoute::from_args(&command.name, &command.args)? != self.route {
+        if !self
+            .route
+            .accepts(&AdapterRoute::from_args(&command.name, &command.args)?)
+        {
             return None;
         }
         let mut state = shared.lock().await;
@@ -120,27 +129,92 @@ fn recorded_route(exchange: &ReplayExchange) -> Option<AdapterRoute> {
     AdapterRoute::from_args(&exchange.record.command, &exchange.args)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct AdapterRoute {
-    namespace: String,
-    event: String,
-    rpc: bool,
+#[derive(Debug)]
+enum AdapterRoute {
+    Emit {
+        namespace: String,
+        event: String,
+        rpc: Option<socketio_rpc::Identity>,
+    },
+    Callback(socketio_rpc::Identity),
 }
 
 impl AdapterRoute {
     fn from_args(command: &str, args: &[Vec<u8>]) -> Option<Self> {
         if let Ok(Some(request)) = socketio_rpc::request(command, args) {
-            return Some(Self {
-                namespace: request.identity.namespace,
+            return Some(Self::Emit {
+                namespace: request.identity.namespace.clone(),
                 event: request.value["event"].as_str()?.into(),
-                rpc: true,
+                rpc: Some(request.identity),
             });
         }
-        let broadcast = socketio_rpc::broadcast(command, args).ok().flatten()?;
-        Some(Self {
-            namespace: broadcast.value["namespace"].as_str()?.into(),
-            event: broadcast.value["event"].as_str()?.into(),
-            rpc: false,
-        })
+        if let Ok(Some(broadcast)) = socketio_rpc::broadcast(command, args) {
+            return Some(Self::Emit {
+                namespace: broadcast.value["namespace"].as_str()?.into(),
+                event: broadcast.value["event"].as_str()?.into(),
+                rpc: None,
+            });
+        }
+        let [_, payload] = args else {
+            return None;
+        };
+        if command != "PUBLISH" {
+            return None;
+        }
+        let (identity, _) = socketio_rpc::callback(payload).ok().flatten()?;
+        Some(Self::Callback(identity))
+    }
+
+    fn can_precede(&self, later: &Self) -> bool {
+        match (self, later) {
+            (
+                Self::Emit { namespace, .. },
+                Self::Emit {
+                    namespace: later_namespace,
+                    ..
+                },
+            ) => namespace != later_namespace,
+            (
+                Self::Callback(earlier),
+                Self::Emit {
+                    rpc: Some(later), ..
+                },
+            ) => {
+                // The remote callback and local call address the same live
+                // namespace session, with different originating managers.
+                earlier.namespace == later.namespace
+                    && earlier.sid == later.sid
+                    && earlier.host != later.host
+            }
+            _ => false,
+        }
+    }
+
+    fn accepts(&self, actual: &Self) -> bool {
+        match (self, actual) {
+            (
+                Self::Emit {
+                    namespace,
+                    event,
+                    rpc,
+                },
+                Self::Emit {
+                    namespace: actual_namespace,
+                    event: actual_event,
+                    rpc: actual_rpc,
+                },
+            ) => {
+                namespace == actual_namespace
+                    && event == actual_event
+                    && rpc.is_some() == actual_rpc.is_some()
+            }
+            (Self::Callback(source), Self::Callback(actual)) => {
+                // The normal exact-slot matcher validates the mapped SID and payload.
+                source.host == actual.host
+                    && source.namespace == actual.namespace
+                    && source.id == actual.id
+            }
+            _ => false,
+        }
     }
 }
