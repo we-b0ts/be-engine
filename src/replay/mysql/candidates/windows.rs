@@ -18,8 +18,14 @@ pub(super) struct Windows {
 
 #[derive(Debug, Default)]
 struct Scope {
-    tables: HashMap<String, Posting>,
+    tables: HashMap<String, TablePosting>,
     unknown: Posting,
+    last_matched: Option<Clock>,
+}
+
+#[derive(Debug, Default)]
+struct TablePosting {
+    available: Posting,
     last_matched: Option<Clock>,
 }
 
@@ -33,7 +39,7 @@ struct Member {
 impl Scope {
     fn bucket(&mut self, table: Option<&str>) -> &mut Posting {
         match table {
-            Some(table) => self.tables.entry(table.to_owned()).or_default(),
+            Some(table) => &mut self.tables.entry(table.to_owned()).or_default().available,
             None => &mut self.unknown,
         }
     }
@@ -77,7 +83,11 @@ impl Windows {
             .get_mut(&member.key)
             .expect("indexed MySQL scope");
         let bucket = match member.table.as_deref() {
-            Some(table) => scope.tables.get_mut(table).expect("indexed MySQL table"),
+            Some(table) => {
+                let table = scope.tables.get_mut(table).expect("indexed MySQL table");
+                table.last_matched = table.last_matched.max(Some(member.at));
+                &mut table.available
+            }
             None => &mut scope.unknown,
         };
         bucket.remove(&(member.at, index));
@@ -102,11 +112,14 @@ impl Windows {
         };
         match table {
             Some(table) => {
-                if let Some(posting) = scope.tables.get(table) {
-                    append(posting);
+                if let Some(table) = scope.tables.get(table) {
+                    append(&table.available);
                 }
             }
-            None => scope.tables.values().for_each(&mut append),
+            None => scope
+                .tables
+                .values()
+                .for_each(|table| append(&table.available)),
         }
         append(&scope.unknown);
         // Time controls membership. Native order still chooses among members.
@@ -123,15 +136,20 @@ impl Windows {
         key: &MysqlKey,
         table: &str,
         dispatch_prefix: Option<std::ops::Range<Clock>>,
-        anchor: impl FnOnce(Option<Clock>) -> Option<Clock>,
+        anchor: impl Fn(Option<Clock>) -> Option<Clock>,
     ) -> Option<Selection> {
         let scope = self.scopes.get(key)?;
-        let known = scope.tables.get(table)?;
-        let anchor = anchor(scope.last_matched)?;
-        let next = known.range((anchor, 0)..).next().map(|&(time, _)| time);
+        let table = scope.tables.get(table)?;
+        let known = &table.available;
+        // Traffic on another table can run ahead of this table's first read.
+        let table_anchor = anchor(table.last_matched)?;
+        let next = known
+            .range((table_anchor, 0)..)
+            .next()
+            .map(|&(time, _)| time);
         let cutoff = match next {
             Some(t1) => t1.checked_add_signed(chrono::TimeDelta::seconds(3))?,
-            None => anchor,
+            None => anchor(scope.last_matched)?,
         };
         let mut due = Vec::new();
         let mut forward = Vec::new();
@@ -178,6 +196,13 @@ mod tests {
         entries.iter().map(|&(t, index)| (at(t), index)).collect()
     }
 
+    fn table(entries: &[(i64, usize)], last_matched: Option<Clock>) -> TablePosting {
+        TablePosting {
+            available: bucket(entries),
+            last_matched,
+        }
+    }
+
     #[test]
     fn cutoff_keeps_old_unclaimed_slots_and_excludes_newer_clock_inversions() {
         let key = MysqlKey {
@@ -193,8 +218,11 @@ mod tests {
             key.clone(),
             Scope {
                 tables: [
-                    ("orders".into(), bucket(&[(3, 1), (9, 2), (4, 5), (5, 7)])),
-                    ("unrelated".into(), bucket(&[(3, 4)])),
+                    (
+                        "orders".into(),
+                        table(&[(3, 1), (9, 2), (4, 5), (5, 7)], None),
+                    ),
+                    ("unrelated".into(), table(&[(3, 4)], None)),
                 ]
                 .into(),
                 unknown: bucket(&[(2, 3), (11, 6)]),
@@ -236,15 +264,24 @@ mod tests {
                 tables: [
                     (
                         "orders".into(),
-                        bucket(&[(3, 1), (12, 7), (15, 2), (16, 3)]),
+                        table(&[(3, 1), (12, 7), (15, 2), (16, 3)], Some(at(9))),
                     ),
-                    ("unrelated".into(), bucket(&[(9, 4)])),
+                    ("unrelated".into(), table(&[(14, 4)], None)),
                 ]
                 .into(),
                 unknown: bucket(&[(8, 5), (14, 6), (18, 8)]),
                 last_matched: Some(at(9)),
             },
         );
+        windows.members.insert(
+            4,
+            Member {
+                key: key.clone(),
+                table: Some("unrelated".into()),
+                at: at(14),
+            },
+        );
+        windows.claimed(4);
         let selection = windows
             .optimistic(&key, "orders", None, |anchor| anchor)
             .unwrap();
