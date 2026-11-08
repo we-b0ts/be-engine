@@ -253,10 +253,19 @@ fn tracked_inputs(input: &InputTranscript) -> Option<TrackedInputs> {
                 // Socket.IO ACK and must not disable unrelated native inputs.
                 continue;
             }
+            EngineIoPacket::Message(event)
+                if event.kind == SocketIoKind::Disconnect
+                    && event.namespace == connect.namespace
+                    && close_ms.is_none() =>
+            {
+                close_ms = Some(action.offset_ms);
+                continue;
+            }
             EngineIoPacket::Message(event) => event,
             _ => return None,
         };
-        if event.kind != SocketIoKind::Event
+        if close_ms.is_some()
+            || event.kind != SocketIoKind::Event
             || event.attachments != 0
             || event.namespace != connect.namespace
             || matches!(
