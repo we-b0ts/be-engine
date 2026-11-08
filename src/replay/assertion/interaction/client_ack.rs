@@ -169,7 +169,22 @@ impl Context {
                 end += 1;
             }
             if end - start > 1 && end <= target.len() {
-                self.align_ack_run(&source, &target, start..end, &mut alignment);
+                // A reused request ID still compares at its original position.
+                // It fences the surrounding unique replies without preventing
+                // each side from proving an independent reordering.
+                let fences = (start..end).filter(|&index| {
+                    source[index].ack().is_some_and(|key| {
+                        self.requests.get(key).is_some_and(Option::is_none)
+                            && target[index].ack() == Some(key)
+                    })
+                });
+                let mut run_start = start;
+                for fence in fences.chain(Some(end)) {
+                    if fence - run_start > 1 {
+                        self.align_ack_run(&source, &target, run_start..fence, &mut alignment);
+                    }
+                    run_start = fence + 1;
+                }
             }
             start = end;
         }

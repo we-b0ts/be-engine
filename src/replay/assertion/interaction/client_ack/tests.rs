@@ -180,6 +180,29 @@ fn ack_alignment_requires_unique_original_requests_and_fast_input_policy() {
 }
 
 #[test]
+fn repeated_ack_ids_only_fence_their_own_positions_in_an_ack_run() {
+    const FIRST: &str = r#"43/n,215[{"tag":"first"}]"#;
+    const SECOND: &str = r#"43/n,215[{"tag":"second"}]"#;
+    let mut input = input();
+    let mut repeated = input.actions[0].clone();
+    repeated.action = InputActionKind::Message {
+        message: WireMessage::text(r#"42/n,215["poll",{}]"#),
+    };
+    for action in &mut input.actions {
+        action.sequence += 2;
+    }
+    for sequence in [2, 1] {
+        repeated.sequence = sequence;
+        repeated.offset_ms = sequence * 1_000;
+        input.actions.insert(0, repeated.clone());
+    }
+    let source = &[FIRST, SECOND, A, B];
+    assert!(checked(Some(&input), source, &[FIRST, SECOND, B, A]).passed());
+    assert!(!checked(Some(&input), source, &[SECOND, FIRST, B, A]).passed());
+    assert!(!checked(Some(&input), source, &[FIRST, B, SECOND, A]).passed());
+}
+
+#[test]
 fn direct_and_transitive_completion_edges_prevent_ack_reordering() {
     let mut direct = input();
     direct.actions[1].after = vec![1];
