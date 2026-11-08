@@ -1,6 +1,8 @@
 //! Compress a proven passive stream prefix and preserve its recorded final observation window.
 use super::*;
 use crate::interaction::replay::heartbeat_tail::Passive;
+use crate::interaction::replay::timing::SOCKET_IO_DISPATCH_WAIT;
+use std::ops::Range;
 use tokio::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -19,6 +21,7 @@ pub(in crate::replay) struct Pace {
 pub(super) struct DispatchPace {
     pub(super) inflight: Option<usize>,
     written: Option<(usize, Instant)>,
+    skip_gaps: bool,
 }
 
 impl DispatchPace {
@@ -29,6 +32,7 @@ impl DispatchPace {
         cap: Duration,
         now: Instant,
     ) -> Instant {
+        let cap = if self.skip_gaps { Duration::ZERO } else { cap };
         self.written.map_or(now, |(prior, at)| {
             at + entry_offset(entry)
                 .saturating_sub(entry_offset(&entries[prior]))
@@ -38,6 +42,31 @@ impl DispatchPace {
 }
 
 impl NativeClock {
+    pub(in crate::replay) fn plan_dispatch_pace(
+        &mut self,
+        case: &str,
+        epoch: DateTime<Utc>,
+        window: Range<Duration>,
+        cap: Duration,
+    ) {
+        let Some(live) = self.live.get_mut(case).filter(|live| live.epoch == epoch) else {
+            return;
+        };
+        let pending = self
+            .pending
+            .get(case)
+            .into_iter()
+            .flatten()
+            .map(|&index| entry_offset(&self.entries[index]))
+            .skip_while(|&offset| offset <= window.start)
+            .take_while(|&offset| offset < window.end);
+        let written = live
+            .dispatch_pace
+            .written
+            .map(|(index, _)| entry_offset(&self.entries[index]));
+        live.dispatch_pace.skip_gaps = dispatch_wait_exhausted(pending, written, cap);
+    }
+
     pub(in crate::replay) fn prepare_fast(
         &mut self,
         case: &str,
@@ -193,4 +222,45 @@ impl Pace {
 
 fn entry_offset(entry: &Entry) -> Duration {
     entry.offset.to_std().expect("validated native push offset")
+}
+
+fn dispatch_wait_exhausted(
+    offsets: impl Iterator<Item = Duration>,
+    mut previous: Option<Duration>,
+    cap: Duration,
+) -> bool {
+    if cap.is_zero() {
+        return false;
+    }
+    // If artificial gaps alone consume the input deadline, keep physical
+    // ordering and backpressure but let this finite prefix drain without sleep.
+    let mut wait = Duration::ZERO;
+    for offset in offsets {
+        if let Some(prior) = previous.replace(offset) {
+            wait += offset.saturating_sub(prior).min(cap);
+            if wait >= SOCKET_IO_DISPATCH_WAIT {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skip_gaps_only_when_the_capped_window_cannot_meet_dispatch_deadline() {
+        let offsets = || (0..=5602).map(|i| Duration::from_millis(i * 4));
+        let cap = Duration::from_millis(3);
+        assert!(dispatch_wait_exhausted(offsets(), None, cap));
+        assert!(!dispatch_wait_exhausted(offsets().take(100), None, cap));
+        assert!(!dispatch_wait_exhausted(offsets(), None, Duration::ZERO));
+        assert!(!dispatch_wait_exhausted(
+            (0..=5602).map(Duration::from_micros),
+            None,
+            cap,
+        ));
+    }
 }

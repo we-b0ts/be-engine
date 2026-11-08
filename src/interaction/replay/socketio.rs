@@ -13,8 +13,8 @@ use tokio::time::{Duration, Instant, sleep_until};
 
 use super::event_order::attachment;
 use super::timing::{
-    Advance, cancellation, delivery_prefix, ordered_input, transport_cancellation,
-    websocket_action_due,
+    Advance, SOCKET_IO_DISPATCH_WAIT, cancellation, delivery_prefix, ordered_input,
+    transport_cancellation, websocket_action_due,
 };
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
@@ -167,7 +167,7 @@ pub(super) async fn execute_with_feedback(
             .zip(action.filter(|_| ordered || namespace_close))
             .and_then(|(order, action)| order.missing(action));
         let dispatch_deadline = (ordered || namespace_close && missing_event.is_some())
-            .then_some(dispatch_anchor + dispatch::WAIT);
+            .then_some(dispatch_anchor + SOCKET_IO_DISPATCH_WAIT);
         let namespace_ready = transcript.protocol != Protocol::SocketIo
             || action.is_none_or(|action| {
                 namespaces.permits(action, transcript.policy.max_message_bytes)

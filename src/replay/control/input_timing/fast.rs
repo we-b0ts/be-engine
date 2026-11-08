@@ -33,7 +33,7 @@ struct Request {
     completed: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct SourceOffset {
     ms: u64,
     us: Option<u64>,
@@ -50,7 +50,7 @@ impl SourceOffset {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct NativeDispatch {
     from: SourceOffset,
     to: SourceOffset,
@@ -549,12 +549,20 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
         .context("input outside ordered fast plan")?;
     let (compressible, unadmitted) = plan.dispatch_prefix(state, &live.case, window);
     let NativeDispatch { from, to, .. } = window;
+    let cap = plan.source.cap;
+    if live.native_dispatch != Some(window) {
+        state.redis.pubsub.native_clock.plan_dispatch_pace(
+            &live.case,
+            live.epoch,
+            Duration::from_micros(from.latest_us())..Duration::from_micros(to.earliest_us()),
+            Duration::from_millis(cap),
+        );
+    }
     let live = state.input_timing.as_mut().expect("validated timeline");
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
     live.native_dispatch = Some(window);
     let gates_ready = events_ready && unadmitted.is_none();
     if gates_ready && compressible && live.advanced.insert(query.sequence) {
-        let cap = live.fast.as_ref().expect("validated fast plan").source.cap;
         live.clock.compress(from.ms, to.ms, elapsed, cap);
     }
     let due = if compressible {

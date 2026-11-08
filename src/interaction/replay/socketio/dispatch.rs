@@ -4,14 +4,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures_util::future::BoxFuture;
-use tokio::{sync::watch, time::Duration};
+use tokio::sync::watch;
 
 use crate::interaction::{
     model::{DispatchDependency, InputAction},
     replay::timing::{Advance, InputTiming},
 };
-
-pub(super) const WAIT: Duration = Duration::from_secs(5);
 
 pub(super) struct Dispatch {
     events_ready: watch::Sender<bool>,

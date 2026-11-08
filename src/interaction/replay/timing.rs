@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
 
+pub(crate) const SOCKET_IO_DISPATCH_WAIT: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SocketIoTiming {
