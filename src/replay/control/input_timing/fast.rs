@@ -1,5 +1,4 @@
 //! Ordered fast inputs use exact Case request admission and actual tail delivery.
-mod eof_recovery;
 use super::*;
 use crate::interaction::{
     model::{
@@ -13,10 +12,6 @@ use crate::interaction::{
     socketio::{EngineIoPacket, decode_engine_io_text},
 };
 use crate::replay::adapters::{DependencyAdapter, ExchangeHandle, resolve_case};
-pub(super) use eof_recovery::{EofRecovery, confirm_eof_recovery};
-pub(in crate::replay) use eof_recovery::{
-    finish_eof_recovery, observe_eof_blocker, propose_eof_recovery,
-};
 
 const MAX_REQUESTS: usize = 100_000;
 const POLL_MS: u64 = 5;
@@ -67,8 +62,6 @@ struct Tail {
     policy: FastTail,
     cutoff: u64,
     quiet_from: u64,
-    heartbeat_dependency_cutoff_us: Option<u64>,
-    heartbeat_timeout_us: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -76,7 +69,6 @@ pub(super) struct Plan {
     source: Source,
     handles: Vec<ExchangeHandle>,
     dispatch_windows: BTreeMap<u64, NativeDispatch>,
-    heartbeat_request_count: Option<usize>,
 }
 
 impl Source {
@@ -91,7 +83,7 @@ impl Source {
             cap,
             covered: true,
             requests: Vec::new(),
-            tail: Tail::load(path, input, cap, start).unwrap_or_default(),
+            tail: Tail::load(path, input, cap).unwrap_or_default(),
             passive: passive_proof(path, input).ok().flatten(),
         }
     }
@@ -108,7 +100,12 @@ impl Source {
             Some("mysql_exchange" | "redis_exchange" | "http_exchange") => {}
             Some("mysql_connection" | "redis_connection") => return Ok(()),
             Some("redis_pub_sub_push") => {
-                self.tail = None;
+                // Native pushes own their delivery clock. Only ordinary
+                // compressed close timing requires a dependency-only tail.
+                self.tail = self
+                    .tail
+                    .take()
+                    .filter(|tail| tail.policy.heartbeat_timeout);
                 self.passive = None;
                 return Ok(());
             }
@@ -170,7 +167,7 @@ impl Source {
             .collect::<Vec<_>>();
         let handles = resolve_case(state, case, &refs, |_, handle| handle)?;
         if let Some(tail) = &mut self.tail
-            && tail.heartbeat_dependency_cutoff_us.is_none()
+            && !tail.policy.heartbeat_timeout
         {
             for request in self
                 .requests
@@ -204,14 +201,11 @@ impl Source {
                     close_sequence: None,
                     output_count: passive.output_count,
                     idle_ms: 0,
-                    heartbeat_acks: Some(BTreeSet::new()),
-                    heartbeat_pending_without_ack: BTreeSet::new(),
+                    heartbeat_timeout: true,
                     native_observation: true,
                 },
                 cutoff: passive.end_ms,
                 quiet_from: passive.last_output_ms,
-                heartbeat_dependency_cutoff_us: None,
-                heartbeat_timeout_us: None,
             });
             tracing::info!(
                 case_id = case,
@@ -242,19 +236,10 @@ impl Source {
                 previous = to;
             }
         }
-        let heartbeat_request_count = self
-            .tail
-            .as_ref()
-            .and_then(|tail| tail.heartbeat_dependency_cutoff_us)
-            .map(|cutoff| {
-                self.requests
-                    .partition_point(|request| request.started_us < cutoff)
-            });
         Ok(Plan {
             source: self,
             handles,
             dispatch_windows,
-            heartbeat_request_count,
         })
     }
 }
@@ -450,18 +435,6 @@ impl Plan {
 }
 
 pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Result<Value> {
-    let heartbeat_blocker = if tail {
-        state
-            .input_timing
-            .as_ref()
-            .and_then(|live| live.fast.as_ref())
-            .and_then(|plan| eof_recovery::first_heartbeat_blocker(state, plan))
-    } else {
-        None
-    };
-    if tail && let Some(close) = eof_recovery::offer(state, heartbeat_blocker) {
-        return Ok(close);
-    }
     if let Some(events_ready) = query.events_ready {
         ensure!(!tail, "event readiness is only valid for input dispatch");
         return advance_dispatch(state, query, events_ready);
@@ -490,24 +463,16 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
     }
     let (sequence, from, to, eligible, ready, idle_tail) = if tail {
         let tail = plan.source.tail.as_ref().context("fast tail unavailable")?;
-        let ready = if tail.policy.heartbeat_acks.is_some() {
-            // Native omission proof can settle an unstarted setup/cleanup
-            // exchange. An ordinary dependency must finish on the wire.
-            plan.heartbeat_request_count
-                .context("heartbeat EOF dependency prefix unavailable")?;
-            heartbeat_blocker.is_none()
-        } else {
-            plan.ready(
-                state,
-                &live.case,
-                SourceOffset::default(),
-                SourceOffset {
-                    ms: tail.cutoff,
-                    us: None,
-                },
-                true,
-            )
-        };
+        let ready = plan.ready(
+            state,
+            &live.case,
+            SourceOffset::default(),
+            SourceOffset {
+                ms: tail.cutoff,
+                us: None,
+            },
+            true,
+        );
         (
             tail.policy.close_sequence.unwrap_or(0),
             tail.quiet_from,
@@ -653,19 +618,12 @@ fn offset(start: DateTime<Utc>, at: DateTime<Utc>) -> Option<u64> {
 }
 
 impl Tail {
-    fn load(
-        path: &Path,
-        input: &InputTranscript,
-        cap: u64,
-        start: DateTime<Utc>,
-    ) -> Result<Option<Self>> {
+    fn load(path: &Path, input: &InputTranscript, cap: u64) -> Result<Option<Self>> {
         use std::io::{BufReader, Seek};
 
         #[derive(Deserialize)]
         struct Response {
             interaction: Option<Completion>,
-            timestamp: Option<Value>,
-            duration_ms: Option<Value>,
         }
         #[derive(Deserialize)]
         struct Completion {
@@ -710,7 +668,7 @@ impl Tail {
             }
             reader.rewind()?;
             let response: WireResponse = serde_json::from_reader(reader)?;
-            heartbeat_tail::recognize(input, &response.interaction)
+            heartbeat_tail::timeout(input, &response.interaction)
         } else {
             None
         };
@@ -738,15 +696,14 @@ impl Tail {
                     .map_or(0, |action| action.offset_ms);
                 (close.offset_ms, Some(close.sequence), last)
             }
-            EndReason::ServerEof if let Some(evidence) = &heartbeat => {
-                (evidence.eof_ms, None, last_input)
-            }
+            EndReason::ServerEof if let Some((eof, _)) = heartbeat => (eof, None, last_input),
             _ => return Ok(None),
         };
-        if completion
-            .events
-            .iter()
-            .any(|event| !event.heartbeat && event.offset_ms == cutoff)
+        if heartbeat.is_none()
+            && completion
+                .events
+                .iter()
+                .any(|event| !event.heartbeat && event.offset_ms == cutoff)
         {
             return Ok(None);
         }
@@ -760,51 +717,16 @@ impl Tail {
             .max()
             .unwrap_or(0)
             .max(last_input);
-        let aligned_eof_us = heartbeat.as_ref().and_then(|_| {
-            // Source event offsets are relative to the interaction, while
-            // dependency request times are relative to the API request clock.
-            response
-                .timestamp
-                .as_ref()
-                .and_then(time)
-                .zip(response.duration_ms.as_ref().and_then(Value::as_u64))
-                .and_then(|(published, duration)| {
-                    let publication_lag = i64::try_from(duration.checked_sub(cutoff)?).ok()?;
-                    let eof = published.checked_sub_signed(chrono::TimeDelta::try_milliseconds(
-                        publication_lag,
-                    )?)?;
-                    u64::try_from((eof - start).num_microseconds()?).ok()
-                })
-        });
-        let heartbeat_dependency_cutoff_us = heartbeat
-            .as_ref()
-            .map(|_| aligned_eof_us.unwrap_or_else(|| cutoff.saturating_mul(1_000)));
-        let heartbeat_timeout_us =
-            aligned_eof_us
-                .zip(heartbeat.as_ref())
-                .and_then(|(eof, proof)| {
-                    // Legacy wire offsets are floored. The last ping could be almost
-                    // one millisecond later than its recorded offset.
-                    let timeout_region =
-                        proof.eof_ms.checked_sub(proof.timeout_ms)?.checked_sub(1)?;
-                    eof.checked_sub(timeout_region.checked_mul(1_000)?)
-                });
-        let (heartbeat_acks, heartbeat_pending_without_ack) = heartbeat
-            .map(|proof| (Some(proof.acknowledged), proof.pending_without_ack))
-            .unwrap_or_default();
-        let tail = (quiet_from < cutoff).then(|| Self {
+        let tail = (heartbeat.is_some() || quiet_from < cutoff).then(|| Self {
             policy: FastTail {
                 close_sequence,
                 output_count: outputs.count(),
                 idle_ms: cap.min(cutoff.saturating_sub(quiet_from)),
-                heartbeat_acks,
-                heartbeat_pending_without_ack,
+                heartbeat_timeout: heartbeat.is_some(),
                 native_observation: false,
             },
             cutoff,
             quiet_from,
-            heartbeat_dependency_cutoff_us,
-            heartbeat_timeout_us,
         });
         Ok(tail)
     }
@@ -868,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_dependency_boundary_uses_the_source_interaction_clock() {
+    fn clean_source_heartbeat_timeout_enables_the_terminal_phase() {
         let mut observed = Observation::new(Protocol::SocketIo, Default::default()).unwrap();
         observed
             .output(
@@ -890,11 +812,8 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let start = "2026-11-07T00:00:00Z".parse().unwrap();
-        let tail = Tail::load(directory.path(), &input, 5, start)
-            .unwrap()
-            .unwrap();
+        let tail = Tail::load(directory.path(), &input, 5).unwrap().unwrap();
         assert_eq!(tail.cutoff, 71);
-        assert_eq!(tail.heartbeat_dependency_cutoff_us, Some(101_000));
+        assert!(tail.policy.heartbeat_timeout);
     }
 }

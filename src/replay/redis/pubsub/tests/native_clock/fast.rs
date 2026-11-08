@@ -61,7 +61,9 @@ fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
 }
 
 #[tokio::test]
-async fn compressed_passive_prefix_observes_tail_without_sending_pong() {
+async fn compressed_passive_prefix_answers_pings_only_when_output_continues() {
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+
     let temp = tempfile::tempdir().unwrap();
     let (request, globals, frames) = recording(temp.path());
     let runtime = super::recording::fast_runtime(temp.path(), &[], &globals)
@@ -107,20 +109,44 @@ async fn compressed_passive_prefix_observes_tail_without_sending_pong() {
             assert_eq!(
                 timeout(Duration::from_millis(200), read(&mut subscriber))
                     .await
-                    .expect("tail input must not wait for the scheduled PONG"),
+                    .expect("native output must continue during heartbeat observation"),
                 frame
             );
             socket
                 .send(Message::Text(packet(i as u64 + 1).into()))
                 .await
                 .unwrap();
+            if i == 0 {
+                assert_eq!(
+                    socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                    "3"
+                );
+            }
         }
-        tokio::select! {
-            message = socket.next() => panic!("unexpected traffic during EOF grace: {message:?}"),
-            _ = tokio::time::sleep(Duration::from_millis(300)) => {}
-        }
+        socket.send(Message::Text("2".into())).await.unwrap();
+        assert!(
+            timeout(Duration::from_millis(30), socket.next())
+                .await
+                .is_err()
+        );
         socket.send(Message::Text(packet(4).into())).await.unwrap();
-        assert!(matches!(socket.next().await, None | Some(Err(_))));
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "3"
+        );
+        socket.send(Message::Text("2".into())).await.unwrap();
+        assert!(
+            timeout(Duration::from_millis(500), socket.next())
+                .await
+                .is_err()
+        );
+        socket
+            .send(Message::Close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            })))
+            .await
+            .unwrap();
         task.abort();
     });
     let client = crate::recorded_request::RecordedHttpClient::new(
@@ -135,11 +161,11 @@ async fn compressed_passive_prefix_observes_tail_without_sending_pong() {
         client.send_bytes(&serde_json::to_vec(&request).unwrap(), "fast-passive"),
     )
     .await
-    .expect("the replay must close without waiting for the recorded heartbeat timeout")
+    .expect("the replay must observe the actual Target heartbeat timeout")
     .unwrap()
     .interaction
     .unwrap();
-    assert_eq!(output.end.reason, EndReason::FastHeartbeatTailSkipped);
+    assert_eq!(output.end.reason, EndReason::ServerEof);
     assert!(output.end.clean);
     let business: Vec<_> = output
         .events
@@ -149,15 +175,14 @@ async fn compressed_passive_prefix_observes_tail_without_sending_pong() {
     assert_eq!(
         business.len(),
         6,
-        "retain extra output on both sides of the inferred EOF"
+        "retain extra output before the actual EOF"
     );
     assert_eq!(business[4].message, WireMessage::text(packet(3)));
     assert_eq!(business[5].message, WireMessage::text(packet(4)));
     assert!(business[4].offset_ms >= business[3].offset_ms + 63);
     let eof = output.end.fast_heartbeat_eof_ms.unwrap();
-    assert!(eof >= business[4].offset_ms + 15);
-    assert!(business[5].offset_ms > eof);
-    assert!((1000..1250).contains(&(output.end.offset_ms - eof)));
+    assert!(eof >= business[5].offset_ms + 490);
+    assert!(output.end.offset_ms.saturating_sub(eof) <= 1);
     assert!(started.elapsed() < Duration::from_secs(2));
     target.await.unwrap();
     control.abort();

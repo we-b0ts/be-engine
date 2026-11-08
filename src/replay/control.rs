@@ -308,10 +308,9 @@ pub(super) async fn handle_control_request(
         "native_event_begin" | "native_event" | "native_connected" | "native_input_ack" => {
             native_event::accept(&request, &state).await
         }
-        "input_timing_begin"
-        | "input_timing"
-        | "input_timing_tail"
-        | "input_timing_eof_recovery" => input_timing::accept(&request, &state).await,
+        "input_timing_begin" | "input_timing" | "input_timing_tail" => {
+            input_timing::accept(&request, &state).await
+        }
         "http_input_timing_begin" | "http_input_timing_wait" | "http_input_timing_closed" => {
             http_input_timing::accept(&request, &state).await
         }
@@ -610,7 +609,6 @@ pub(super) async fn begin_case(
             case_dir: case.dir.display().to_string(),
             dependencies_path: case.dependencies_path.display().to_string(),
             status: case.status,
-            socketio_eof_recovery: None,
             source_request_started_at: state.replay_policy.as_ref()
                 .and_then(|policy| policy.request_contracts.request_times(case_id).source),
             target_request_started_at: state.replay_policy.as_ref()
@@ -731,7 +729,6 @@ pub(super) async fn end_case(
             .egress_counter_starts
             .remove(case_id)
             .zip(state.egress_counter_reader.clone());
-        input_timing::finish_eof_recovery(&mut state, case_id);
         state.set_active_case(None);
         state.target_stop_prepared.remove(case_id);
         dependency_tail::end(&mut state, case_id);

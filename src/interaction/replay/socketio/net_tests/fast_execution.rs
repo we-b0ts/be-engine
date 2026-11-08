@@ -2,27 +2,23 @@
 use super::*;
 
 #[tokio::test]
-async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_frame() {
-    assert_heartbeat_tail_closes_without_frames(false).await;
+async fn terminal_ping_gets_a_pong_only_after_a_new_business_frame() {
+    assert_target_times_out_after_terminal_ping(true).await;
 }
 
 #[tokio::test]
-async fn fast_heartbeat_eof_probe_terminates_the_real_websocket_without_frames() {
-    assert_heartbeat_tail_closes_without_frames(true).await;
+async fn terminal_ping_allows_target_timeout_despite_missing_output_and_dependency_failure() {
+    assert_target_times_out_after_terminal_ping(false).await;
 }
 
-async fn assert_heartbeat_tail_closes_without_frames(probe_eof: bool) {
+async fn assert_target_times_out_after_terminal_ping(business_output: bool) {
     use crate::interaction::replay::timing::{FastTail, InputTiming};
     use futures_util::future::BoxFuture;
     use std::sync::Arc;
-    use tokio::sync::{Notify, oneshot};
+    use tokio::time::timeout;
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
-    #[derive(Default)]
-    struct Timing {
-        reached: Notify,
-        dependencies_delivered: Notify,
-        probe_eof: bool,
-    }
+    struct Timing;
     impl InputTiming for Timing {
         fn wait(&self, _: u64, _: Vec<u64>) -> BoxFuture<'_, Result<Advance>> {
             Box::pin(async { Ok(Advance::default()) })
@@ -32,44 +28,34 @@ async fn assert_heartbeat_tail_closes_without_frames(probe_eof: bool) {
                 close_sequence: None,
                 output_count: 3,
                 idle_ms: 5,
-                heartbeat_acks: Some([2].into()),
-                heartbeat_pending_without_ack: Default::default(),
+                heartbeat_timeout: true,
                 native_observation: false,
-            })
-        }
-        fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
-            Box::pin(async {
-                self.reached.notify_one();
-                self.dependencies_delivered.notified().await;
-                Ok(Advance {
-                    probe_eof: self.probe_eof,
-                    ..Advance::default()
-                })
-            })
-        }
-        fn confirm_fast_eof(
-            &self,
-            closed_at: Option<chrono::DateTime<chrono::Utc>>,
-        ) -> BoxFuture<'_, Result<bool>> {
-            Box::pin(async move {
-                assert!(self.probe_eof && closed_at.is_some());
-                Ok(true)
             })
         }
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let (input_received, received) = oneshot::channel();
-    let (send_ack, wait_ack) = oneshot::channel();
-    let (tail_pong, received_tail_pong) = oneshot::channel();
+    let (failed, failure) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+        stream.set_nodelay(true).unwrap();
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-        socket.send(Message::Text(open().into())).await.unwrap();
+        socket
+            .send(Message::Text(
+                r#"0{"sid":"target","pingInterval":1000,"pingTimeout":100}"#.into(),
+            ))
+            .await
+            .unwrap();
         assert_eq!(
             socket.next().await.unwrap().unwrap().into_text().unwrap(),
             "40"
+        );
+        // The final input has not been sent. Ordinary pings still get a pong.
+        socket.send(Message::Text("2".into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "3"
         );
         socket
             .send(Message::Text(r#"40{"sid":"live"}"#.into()))
@@ -85,44 +71,53 @@ async fn assert_heartbeat_tail_closes_without_frames(probe_eof: bool) {
                 .unwrap()
                 .starts_with("421")
         );
+
+        if business_output {
+            socket.send(Message::Text("2".into())).await.unwrap();
+            assert!(
+                timeout(Duration::from_millis(15), socket.next())
+                    .await
+                    .is_err()
+            );
+            socket
+                .send(Message::Text(r#"431["ok"]"#.into()))
+                .await
+                .unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                "3"
+            );
+        } else {
+            // Deliberately leave the final ACK missing and signal a dependency failure.
+            let _ = failed.send(true);
+        }
         socket.send(Message::Text("2".into())).await.unwrap();
-        assert_eq!(
-            socket.next().await.unwrap().unwrap().into_text().unwrap(),
-            "3"
+        assert!(
+            timeout(Duration::from_millis(100), socket.next())
+                .await
+                .is_err()
         );
-        input_received.send(()).unwrap();
-        wait_ack.await.unwrap();
         socket
-            .send(Message::Text(r#"431["ok"]"#.into()))
+            .send(Message::Close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            })))
             .await
             .unwrap();
-        socket.send(Message::Text("2".into())).await.unwrap();
-        assert_eq!(
-            socket.next().await.unwrap().unwrap().into_text().unwrap(),
-            "3"
-        );
-        tail_pong.send(()).unwrap();
-        assert!(
-            matches!(socket.next().await, None | Some(Err(_))),
-            "the engine should release TCP without sending a WebSocket or Engine.IO frame"
-        );
     });
 
     let mut input = program();
-    input.policy.completion.clear();
+    input.policy.business_idle_ms = 30;
+    input.policy.request_timeout_ms = 50;
     input.socket_io_heartbeat = Some(Default::default());
-    let timing = Arc::new(Timing {
-        probe_eof,
-        ..Default::default()
-    });
     let origin = format!("http://{address}");
     let request = Request::builder()
         .uri(format!("{origin}/socket.io/?EIO=4&transport=websocket"))
         .body(Full::new(Bytes::new()))
         .unwrap();
     let client = Client::builder(TokioExecutor::new()).build_http();
-    let timing_client = timing.clone();
-    let replay = tokio::spawn(async move {
+    let actual = timeout(
+        Duration::from_secs(2),
         execute_with_feedback(
             &client,
             &origin,
@@ -130,30 +125,25 @@ async fn assert_heartbeat_tail_closes_without_frames(probe_eof: bool) {
             &input,
             Duration::from_secs(2),
             Feedback {
-                input_timing: Some(timing_client),
+                input_timing: Some(Arc::new(Timing)),
+                dependency_failure: Some(failure),
                 ..Feedback::default()
             },
-        )
-        .await
-        .unwrap()
-    });
-    tokio::time::timeout(Duration::from_secs(2), async {
-        received.await.unwrap();
-        assert!(!replay.is_finished());
-        send_ack.send(()).unwrap();
-        timing.reached.notified().await;
-        received_tail_pong.await.unwrap();
-        assert!(!replay.is_finished());
-        timing.dependencies_delivered.notify_one();
-        let actual = replay.await.unwrap().observation;
-        assert_eq!(actual.end.reason, EndReason::FastHeartbeatTailSkipped);
-        assert!(actual.end.clean);
-        assert!(actual.end.close.is_none());
-        assert_eq!(actual.end.pending, vec![2]);
-        server.await.unwrap();
-    })
+        ),
+    )
     .await
-    .unwrap();
+    .unwrap()
+    .unwrap()
+    .observation;
+    assert_eq!(actual.end.reason, EndReason::ServerEof);
+    assert_eq!(actual.end.close.unwrap().code, Some(1000));
+    assert!(actual.end.clean);
+    assert!(actual.end.fast_heartbeat_eof_ms.is_some());
+    assert_eq!(
+        actual.end.pending,
+        if business_output { vec![] } else { vec![2] }
+    );
+    server.await.unwrap();
 }
 
 #[tokio::test]

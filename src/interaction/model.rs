@@ -348,7 +348,7 @@ impl EndObservation {
                     self.reason,
                     EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped
                 )
-                && !self.pending.is_empty())
+                && (!self.pending.is_empty() || self.fast_heartbeat_eof_ms.is_some()))
     }
 }
 

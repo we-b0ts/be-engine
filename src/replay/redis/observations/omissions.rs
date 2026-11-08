@@ -43,55 +43,6 @@ impl RedisReplayState {
 }
 
 impl RedisReplayState {
-    pub(in crate::replay) fn pending_socketio_eof_read(&self, index: usize, case: &str) -> bool {
-        let exchange = &self.exchanges[index];
-        exchange.status == ReplayExchangeStatus::Available
-            && exchange.source == ReplaySource::Case
-            && exchange.case_id.as_deref() == Some(case)
-            && exchange.record.command == "GET"
-            && exchange.shared_rule_id.is_none()
-            && !exchange.reusable_snapshot
-            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
-            && exchange.record.replay_safe
-            && exchange.record.parse_warnings.is_empty()
-    }
-
-    pub(in crate::replay) fn open_socketio_eof_suffix(&mut self, index: usize) {
-        let exchange = &mut self.exchanges[index];
-        if exchange.status == ReplayExchangeStatus::Available
-            && exchange.source == ReplaySource::Case
-            && exchange.shared_rule_id.is_none()
-            && !exchange.reusable_snapshot
-            && !exchange.subscription_alias
-            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
-            && exchange.record.replay_safe
-            && exchange.record.parse_warnings.is_empty()
-        {
-            exchange.status = ReplayExchangeStatus::SocketIoEofSuffix;
-        }
-    }
-
-    pub(in crate::replay) fn notify_socketio_eof_suffix(&self) {
-        self.lifecycle.notify_waiters();
-    }
-
-    pub(in crate::replay) fn settle_socketio_eof_suffix(
-        &mut self,
-        index: usize,
-        omit: bool,
-    ) -> bool {
-        let exchange = &mut self.exchanges[index];
-        if exchange.status == ReplayExchangeStatus::SocketIoEofSuffix {
-            exchange.status = ReplayExchangeStatus::Available;
-        }
-        if omit && exchange.status == ReplayExchangeStatus::Available && !exchange.reusable_snapshot
-        {
-            exchange.status = ReplayExchangeStatus::OmittedAfterSocketIoEof;
-            return true;
-        }
-        false
-    }
-
     pub(in crate::replay) fn record_unmatched_request(&mut self, report: CommandRequestReport) {
         if let Some(case) = &report.case_id {
             self.events.dirty_case_ids.insert(case.clone());

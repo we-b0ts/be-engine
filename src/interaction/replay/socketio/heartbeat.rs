@@ -10,6 +10,43 @@ use crate::interaction::{
     socketio::{EngineIoPacket, decode_engine_io_text},
 };
 
+#[derive(Default)]
+pub(super) struct Terminal {
+    timeout: Duration,
+    unanswered: Option<(Instant, String)>,
+}
+
+impl Terminal {
+    pub(super) fn configure(&mut self, timeout_ms: u64) {
+        self.timeout = Duration::from_millis(timeout_ms);
+    }
+
+    pub(super) fn defer_pong(&mut self, payload: String, received: Instant) {
+        self.unanswered.get_or_insert((received, payload));
+    }
+
+    pub(super) fn business_output(&mut self, now: Instant) -> Option<WireMessage> {
+        if self
+            .unanswered
+            .as_ref()
+            .is_some_and(|(received, _)| now.duration_since(*received) < self.timeout)
+        {
+            let (_, payload) = self.unanswered.take().expect("pending terminal ping");
+            return Some(WireMessage::text(format!("3{payload}")));
+        }
+        None
+    }
+
+    pub(super) fn expired(&self, now: Instant) -> bool {
+        !self.timeout.is_zero()
+            && self.unanswered.as_ref().is_some_and(|(received, _)| {
+                // The server starts its deadline before the ping reaches our reader.
+                let tolerance = Duration::from_millis(10).min(self.timeout / 10);
+                now.duration_since(*received) >= self.timeout - tolerance
+            })
+    }
+}
+
 pub(super) struct Heartbeats {
     recorded: bool,
     bound_inputs: BTreeSet<u64>,

@@ -10,8 +10,6 @@ use std::collections::BTreeMap;
 use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
 
-pub(super) const HEARTBEAT_EOF_GRACE: Duration = Duration::from_secs(1);
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SocketIoTiming {
@@ -45,12 +43,6 @@ pub(crate) trait InputTiming: Send + Sync {
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
         Box::pin(async { Ok(Advance::default()) })
     }
-    fn confirm_fast_eof(
-        &self,
-        _closed_at: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> BoxFuture<'_, Result<bool>> {
-        Box::pin(async { Ok(false) })
-    }
     fn closed(&self, _started_at: chrono::DateTime<chrono::Utc>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async { Ok(()) })
     }
@@ -61,38 +53,20 @@ pub(crate) struct FastTail {
     pub close_sequence: Option<u64>,
     pub output_count: usize,
     pub idle_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub heartbeat_acks: Option<std::collections::BTreeSet<u64>>,
-    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
-    pub heartbeat_pending_without_ack: std::collections::BTreeSet<u64>,
+    #[serde(default)]
+    pub heartbeat_timeout: bool,
     #[serde(default)]
     pub native_observation: bool,
 }
 
 impl FastTail {
-    pub(super) fn heartbeat_outputs_ready(
-        &self,
-        observed: usize,
-        receipts: &std::collections::BTreeSet<u64>,
-        pending: &[u64],
-    ) -> bool {
-        observed >= self.output_count
-            && self
-                .heartbeat_acks
-                .as_ref()
-                .is_some_and(|required| required.is_subset(receipts))
-            && pending
-                .iter()
-                .all(|id| receipts.contains(id) || self.heartbeat_pending_without_ack.contains(id))
-    }
-
     pub(super) fn business_idle_due(
         &self,
         ready: Instant,
         last_sent: Instant,
         last_output: Instant,
     ) -> Option<Instant> {
-        (self.close_sequence.is_none() && self.heartbeat_acks.is_none())
+        (self.close_sequence.is_none() && !self.heartbeat_timeout)
             .then(|| ready.max(last_sent).max(last_output) + Duration::from_millis(self.idle_ms))
     }
 }
@@ -147,8 +121,6 @@ pub(crate) fn ordered_input(action: &InputAction) -> bool {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub(crate) struct Advance {
     pub removed_ms: u64,
-    #[serde(default)]
-    pub probe_eof: bool,
 }
 
 /// A monotonic, piecewise mapping from Source offsets to replay offsets. A cut

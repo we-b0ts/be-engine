@@ -7,7 +7,6 @@ use crate::replay::control::dependency_tail::RecordedReference;
 use tokio::time::Instant as MonoInstant;
 mod client;
 mod fast;
-pub(in crate::replay) use fast::{finish_eof_recovery, observe_eof_blocker, propose_eof_recovery};
 mod source;
 pub(crate) use client::connect;
 
@@ -97,7 +96,6 @@ pub(in crate::replay) struct Live {
     fast: Option<fast::Plan>,
     native_dispatch: Option<fast::NativeDispatch>,
     native_push_times: Option<Vec<DateTime<Utc>>>,
-    eof_recovery: fast::EofRecovery,
 }
 
 impl Live {
@@ -267,7 +265,7 @@ pub(super) async fn accept(
                 candidates,
                 dependency_timing_covered = plan.covered,
                 ordered_fast,
-                heartbeat_tail_eligible = fast_tail.as_ref().is_some_and(|tail| tail.heartbeat_acks.is_some()),
+                heartbeat_tail_eligible = fast_tail.as_ref().is_some_and(|tail| tail.heartbeat_timeout),
                 "prepared Socket.IO input timeline"
             );
             state.input_timing = Some(Live {
@@ -283,7 +281,6 @@ pub(super) async fn accept(
                 fast,
                 native_dispatch: None,
                 native_push_times,
-                eof_recovery: Default::default(),
             });
             return Ok(serde_json::json!({"ok":true,"epoch":epoch,"ordered_fast":ordered_fast,"fast_tail":fast_tail}));
         }
@@ -313,9 +310,6 @@ pub(super) async fn accept(
                 && live.admission_epoch == state.admission_epoch,
             "input timing request epoch changed"
         );
-        if request.command == "input_timing_eof_recovery" {
-            return fast::confirm_eof_recovery(&mut state, case, query.closed_at);
-        }
         if live.fast.is_some() {
             return fast::advance(&mut state, request.command == "input_timing_tail", query);
         }

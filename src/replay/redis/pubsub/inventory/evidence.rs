@@ -97,9 +97,7 @@ impl IndexedNotifications {
                     ReplayExchangeStatus::Responding => delta.responding.push(position),
                     ReplayExchangeStatus::Available | ReplayExchangeStatus::StartupBlocked => {}
                     ReplayExchangeStatus::AwaitingClientTermination
-                    | ReplayExchangeStatus::Cancelled
-                    | ReplayExchangeStatus::SocketIoEofSuffix
-                    | ReplayExchangeStatus::OmittedAfterSocketIoEof => {
+                    | ReplayExchangeStatus::Cancelled => {
                         anyhow::bail!("invalid notification delivery status")
                     }
                 }

@@ -14,8 +14,6 @@ mod activity_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
-mod eof_recovery_tests;
-#[cfg(test)]
 mod tests;
 
 const REFRESH_WAIT: Duration = Duration::from_secs(30);
@@ -31,7 +29,6 @@ struct RedisRequest<'a> {
     command: &'a RedisCommand,
     connection: Option<TargetConnection>,
     started: tokio::time::Instant,
-    received_at: chrono::DateTime<chrono::Utc>,
     lane_hint: Option<&'a tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
     expected_index: Option<usize>,
 }
@@ -137,12 +134,6 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         observation: &RequestAdmission,
         matched: &mut Self::Matched,
     ) -> Result<(), Self::Error> {
-        crate::replay::control::input_timing::observe_eof_blocker(
-            state,
-            observation,
-            matched.index,
-            self.received_at,
-        );
         if let Some(policy) = &mut state.replay_policy {
             policy.commit_redis_rule_usage(observation.case.as_deref(), &matched.rule_ids);
         }
@@ -191,17 +182,6 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
                 .into(),
             diagnostic: Some(error.clone()),
         };
-        if self.started.elapsed() >= POOLED_LANE_WAIT
-            && lane::enabled(state)
-            && lane::pending_predecessor(&state.redis, observation.case.as_deref(), error)
-            && crate::replay::control::input_timing::propose_eof_recovery(
-                state,
-                observation,
-                &report,
-            )
-        {
-            return;
-        }
         state.redis.record_unmatched_request(report);
     }
 }
@@ -257,7 +237,6 @@ pub(super) async fn match_command_with_hint(
             command,
             connection: None,
             started,
-            received_at: chrono::Utc::now(),
             lane_hint,
             expected_index: None,
         },

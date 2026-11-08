@@ -1,6 +1,4 @@
 //! Recognize a recorded Engine.IO heartbeat timeout candidate from wire evidence.
-use std::collections::BTreeSet;
-
 mod passive;
 pub(crate) use passive::{Passive, event_fingerprint};
 
@@ -14,15 +12,8 @@ use crate::interaction::{
     },
 };
 
-pub(crate) struct Evidence {
-    pub eof_ms: u64,
-    pub timeout_ms: u64,
-    pub acknowledged: BTreeSet<u64>,
-    pub pending_without_ack: BTreeSet<u64>,
-}
-
-pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Evidence> {
-    let (eof_ms, timeout_ms) = timeout(input, output)?;
+pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<()> {
+    timeout(input, output)?;
     let limit = input.policy.max_message_bytes;
     let mut decoder = SocketIoDecoder::new(limit);
     let mut actions = input.actions.iter().peekable();
@@ -48,7 +39,6 @@ pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> 
         }
     }
     decoder.finish().ok()?;
-    let mut pending_without_ack = BTreeSet::new();
     for &id in &output.end.pending {
         if receipts.acknowledged.contains(&id) {
             continue;
@@ -70,14 +60,8 @@ pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> 
         {
             return None;
         }
-        pending_without_ack.insert(id);
     }
-    Some(Evidence {
-        eof_ms,
-        timeout_ms,
-        acknowledged: receipts.acknowledged,
-        pending_without_ack,
-    })
+    Some(())
 }
 
 fn is_ping(event: &crate::interaction::model::OutputEvent) -> bool {
@@ -85,7 +69,7 @@ fn is_ping(event: &crate::interaction::model::OutputEvent) -> bool {
 }
 
 /// Identify the terminal timeout independently from proof of completed business work.
-fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<(u64, u64)> {
+pub(crate) fn timeout(input: &InputTranscript, output: &OutputObservation) -> Option<(u64, u64)> {
     if input.protocol != Protocol::SocketIo
         || input.policy.preserve_input_timing
         || output.protocol != Protocol::SocketIo
@@ -173,9 +157,8 @@ mod tests {
         source.output(WireMessage::text("2"), 50).unwrap();
         source.server_close(Some(1000), String::new());
         let (input, output) = source.finish(EndReason::ServerEof, 71, true).unwrap();
-        let proof = recognize(&input, &output).unwrap();
-        assert_eq!(proof.eof_ms, 71);
-        assert_eq!(proof.acknowledged, [request.sequence].into());
+        assert!(recognize(&input, &output).is_some());
+        assert_eq!(timeout(&input, &output), Some((71, 70)));
         assert_eq!(output.end.pending, vec![request.sequence]);
 
         let mut at_timeout = output.clone();
@@ -218,11 +201,9 @@ mod tests {
             .unwrap();
         source.server_close(Some(1000), String::new());
         let (input, output) = source.finish(EndReason::ServerEof, 51, true).unwrap();
-        let proof = recognize(&input, &output).unwrap();
-        assert_eq!(proof.eof_ms, 51);
-        assert_eq!(proof.timeout_ms, 49);
-        assert_eq!(proof.acknowledged, [work.sequence].into());
-        assert_eq!(proof.pending_without_ack, [one_way.sequence].into());
+        assert!(recognize(&input, &output).is_some());
+        assert_eq!(timeout(&input, &output), Some((51, 49)));
+        assert_eq!(output.end.pending, vec![work.sequence, one_way.sequence]);
 
         source.input(WireMessage::text("3"), 33).unwrap();
         let (ambiguous, output) = source.finish(EndReason::ServerEof, 51, true).unwrap();
