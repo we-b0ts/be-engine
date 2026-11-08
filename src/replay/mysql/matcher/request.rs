@@ -75,6 +75,15 @@ impl ReplayState {
             .observed_at
             .expect("MySQL request observation captures native request time");
         let observation_id = observation.observation_id;
+        let target_observation_id = observation_id
+            .filter(|_| observation.observation_retained)
+            .map(|id| {
+                crate::policy_evidence::target_observation_id(
+                    &id.to_string(),
+                    crate::policy::Surface::DependencyRequest,
+                    crate::policy_evidence::TargetRole::IndependentTargetObservation,
+                )
+            });
         let observed_sql = sql;
         let observed_params = params;
         let observed_statement = OnceCell::new();
@@ -855,8 +864,7 @@ impl ReplayState {
                             );
                             if let Some(report) = self.mysql.events.unmatched_queries.last_mut() {
                                 report.target_event_index = observation.event_index;
-                                report.target_observation_id =
-                                    self.mysql.request_observation_id.clone();
+                                report.target_observation_id = target_observation_id.clone();
                             }
                             return None;
                         }
@@ -899,35 +907,35 @@ impl ReplayState {
                         target_event_index: observation.event_index,
                     };
                     return Some(MatchedExchange {
-                            request_observed_at: Some(request_observed_at),
-                            target_observation_id: observation.observation_id.filter(|_|observation.observation_retained).map(|id|crate::policy_evidence::target_observation_id(&id.to_string(),crate::policy::Surface::DependencyRequest,crate::policy_evidence::TargetRole::IndependentTargetObservation)),
-                            claim,
-                            hypothesis_owner: self
-                                .replay_policy
-                                .as_ref()
-                                .map(|p| p.request_contracts.clone()),
-                            transaction_owner: if baseline_normalized_sql
-                                .as_deref()
-                                .is_some_and(super::super::transaction_scope::is_business)
-                            {
-                                if owned_global {
-                                    Some(None)
-                                } else if exchange.source == ReplaySource::Case {
-                                    Some(exchange.case_id.clone())
-                                } else {
-                                    None
-                                }
+                        request_observed_at: Some(request_observed_at),
+                        target_observation_id,
+                        claim,
+                        hypothesis_owner: self
+                            .replay_policy
+                            .as_ref()
+                            .map(|p| p.request_contracts.clone()),
+                        transaction_owner: if baseline_normalized_sql
+                            .as_deref()
+                            .is_some_and(super::super::transaction_scope::is_business)
+                        {
+                            if owned_global {
+                                Some(None)
+                            } else if exchange.source == ReplaySource::Case {
+                                Some(exchange.case_id.clone())
                             } else {
                                 None
-                            },
-                            value_delivery,
-                            time_copy_delivery,
-                            source: exchange.source,
-                            index,
-                            record: exchange.record,
-                            timing: exchange.timing,
-                            report: matched,
-                        });
+                            }
+                        } else {
+                            None
+                        },
+                        value_delivery,
+                        time_copy_delivery,
+                        source: exchange.source,
+                        index,
+                        record: exchange.record,
+                        timing: exchange.timing,
+                        report: matched,
+                    });
                 }
             }
         }
@@ -951,7 +959,7 @@ impl ReplayState {
                 report.recorded_index = Some(index);
                 report.diagnostic = diagnostic;
                 report.target_event_index = observation.event_index;
-                report.target_observation_id = self.mysql.request_observation_id.clone();
+                report.target_observation_id = target_observation_id;
             }
         }
         None

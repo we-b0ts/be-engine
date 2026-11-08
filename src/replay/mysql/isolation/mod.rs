@@ -132,7 +132,10 @@ impl Registry {
             return false;
         }
         self.prior_restored(p, exchanges)
-            && (profile.target.is_none() || !self.setup_candidates(index, exchanges).is_empty())
+            && (profile.target.is_none()
+                || !self
+                    .setup_candidates(index, connection, exchanges)
+                    .is_empty())
     }
 
     pub(in crate::replay::mysql) fn claim_next(&mut self, setup: usize) {
@@ -152,7 +155,12 @@ impl Registry {
                 )
     }
 
-    fn setup_candidates(&self, index: usize, exchanges: &[ReplayExchange]) -> BTreeSet<usize> {
+    fn setup_candidates(
+        &self,
+        index: usize,
+        connection: Uuid,
+        exchanges: &[ReplayExchange],
+    ) -> BTreeSet<usize> {
         let plan = &self.profiles[&index].plan;
         self.profiles
             .iter()
@@ -163,7 +171,8 @@ impl Registry {
                     && other.plan.baseline == plan.baseline
                     && other.plan.level == plan.level
                     && Self::permits_setup_slot(other, exchanges)
-                    && self.prior_restored(&other.plan, exchanges)
+                    && (self.prior_restored(&other.plan, exchanges)
+                        || self.prior_in_flight(&other.plan, connection, exchanges))
                     && exchanges[setup].record.response == exchanges[index].record.response)
                     .then_some(setup)
             })
@@ -171,6 +180,14 @@ impl Registry {
     }
 
     fn prior_restored(&self, plan: &source::Plan, exchanges: &[ReplayExchange]) -> bool {
+        self.unrestored_priors(plan, exchanges).next().is_none()
+    }
+
+    fn unrestored_priors<'a>(
+        &'a self,
+        plan: &'a source::Plan,
+        exchanges: &'a [ReplayExchange],
+    ) -> impl Iterator<Item = &'a Profile> {
         self.profiles
             .values()
             .filter(|prior| {
@@ -178,11 +195,48 @@ impl Registry {
                     && prior.plan.source_connection == plan.source_connection
                     && prior.plan.sequence < plan.sequence
             })
-            .all(|prior| {
+            .filter(|prior| {
                 let reset = &exchanges[prior.plan.reset];
-                reset.status.is_consumed()
-                    || reset.optional_session == Some(OptionalSessionExchange::TransactionIsolation)
+                !reset.status.is_consumed()
+                    && reset.optional_session != Some(OptionalSessionExchange::TransactionIsolation)
             })
+    }
+
+    fn prior_in_flight(
+        &self,
+        plan: &source::Plan,
+        connection: Uuid,
+        exchanges: &[ReplayExchange],
+    ) -> bool {
+        let mut priors = self.unrestored_priors(plan, exchanges).peekable();
+        priors.peek().is_some()
+            && priors.all(|prior| {
+                prior
+                    .target
+                    .filter(|target| *target != connection)
+                    .is_some_and(|target| {
+                        self.bindings.get(&target).is_some_and(|binding| {
+                            binding.setup == prior.plan.setup && binding.begun && binding.valid
+                        })
+                    })
+            })
+    }
+
+    pub(in crate::replay::mysql) fn waiting_for_prior(
+        &self,
+        connection: Uuid,
+        exchanges: &[ReplayExchange],
+    ) -> bool {
+        self.bindings.get(&connection).is_some_and(|binding| {
+            binding.begun
+                && binding.valid
+                && binding.candidates.iter().any(|setup| {
+                    let profile = &self.profiles[setup];
+                    profile.target.is_none()
+                        && Self::permits_setup_slot(profile, exchanges)
+                        && self.prior_in_flight(&profile.plan, connection, exchanges)
+                })
+        })
     }
 
     pub(in crate::replay::mysql) fn permits(
@@ -270,7 +324,7 @@ impl Registry {
                 // The observed NEXT setting proves a level and a socket. When
                 // two original scopes can supply the same reply, the first
                 // business operation, not the control, assigns the scope.
-                let candidates = self.setup_candidates(index, exchanges);
+                let candidates = self.setup_candidates(index, connection, exchanges);
                 self.defaults
                     .entry(connection)
                     .or_insert(Some(plan.baseline));

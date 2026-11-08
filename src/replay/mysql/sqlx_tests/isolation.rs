@@ -117,6 +117,79 @@ async fn concurrent_next_isolation_uses_the_first_business_request_to_select_its
 }
 
 #[tokio::test]
+async fn first_isolation_request_waits_for_the_active_source_predecessor() {
+    const NEXT: &str = "SET TRANSACTION ISOLATION LEVEL READ COMMITTED";
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut other = records();
+        other[2]["sql"] = json!("SELECT id FROM items WHERE id=2");
+        other[2]["response"]["rows"][0][0]["value"] = json!(2);
+        let mut prior = records();
+        let mut next = records();
+        next[2]["sql"] = json!("SELECT id FROM items WHERE id=3");
+        next[2]["response"]["rows"][0][0]["value"] = json!(3);
+        for row in &mut next {
+            row["query_sequence"] = json!(row["query_sequence"].as_u64().unwrap() + 10);
+        }
+        for row in prior.iter_mut().chain(&mut next) {
+            row["connection_id"] = json!(Uuid::from_u128(92));
+            row["timestamp"] = json!("2020-01-01T00:00:01Z");
+        }
+        other.extend(prior);
+        other.extend(next);
+
+        let (temp, address, runtime, task) = fixture_with_global(&other, &[baseline()], None).await;
+        let mut previous = open(address, &temp).await;
+        previous.execute(NEXT).await.unwrap();
+        let mut previous = previous.begin().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i32>("SELECT id FROM items WHERE id=1")
+                .fetch_one(&mut *previous)
+                .await
+                .unwrap(),
+            1
+        );
+        previous
+            .execute("UPDATE items SET value=2 WHERE id=1")
+            .await
+            .unwrap();
+
+        let mut successor = open(address, &temp).await;
+        successor.execute(NEXT).await.unwrap();
+        let mut successor = successor.begin().await.unwrap();
+        {
+            let read = sqlx::query_scalar::<_, i32>("SELECT id FROM items WHERE id=3")
+                .fetch_one(&mut *successor);
+            tokio::pin!(read);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), &mut read)
+                    .await
+                    .is_err()
+            );
+            previous.commit().await.unwrap();
+            assert_eq!(read.await.unwrap(), 3);
+        }
+        successor
+            .execute("UPDATE items SET value=2 WHERE id=1")
+            .await
+            .unwrap();
+        successor.commit().await.unwrap();
+
+        let state = runtime.state.lock().await;
+        assert!(state.mysql.events.unmatched_queries.is_empty());
+        let audit = state.mysql.isolation.audit();
+        assert_eq!(audit.len(), 2);
+        assert!(audit.iter().all(|profile| profile["phase"] == "covered"));
+        assert_ne!(
+            audit[0]["target_connection_id"],
+            audit[1]["target_connection_id"]
+        );
+        task.abort();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn read_committed_default_can_be_omitted_without_a_transaction_reset() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut source = connection_default_records();
