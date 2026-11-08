@@ -868,6 +868,9 @@ impl ReplayState {
                                 .commit_after_identities(case_id, decision);
                         }
                     }
+                    if same_isolation {
+                        self.mysql.isolation.claim_next(index);
+                    }
                     self.refresh_mysql_global_report(index);
                     let owned_global = self.mysql.foreign.contains_key(&index)
                         || (exchange.source.is_run_owned()

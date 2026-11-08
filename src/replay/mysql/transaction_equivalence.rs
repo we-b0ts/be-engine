@@ -884,6 +884,7 @@ impl ReplayState {
             case,
             delivery,
             &mysql.transaction_equivalence,
+            &mysql.exchanges,
         ) {
             for index in indices {
                 if self.mysql.exchanges[index].status.is_available() {

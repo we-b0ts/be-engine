@@ -33,6 +33,90 @@ async fn body(client: &mut MySqlConnection) {
 }
 
 #[tokio::test]
+async fn concurrent_next_isolation_uses_the_first_business_request_to_select_its_scope() {
+    const NEXT: &str = "SET TRANSACTION ISOLATION LEVEL READ COMMITTED";
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for first_read_before_second_setup in [false, true] {
+            let mut first = records();
+            let mut second = first.clone();
+            // Scope A begins with a different read, but can also answer both
+            // of Scope B's initial reads byte for byte later in its body.
+            let mut initial = first[2].clone();
+            initial["sql"] = json!("SELECT id FROM items WHERE id=2");
+            initial["response"]["rows"][0][0]["value"] = json!(2);
+            first.insert(2, initial);
+            first.insert(4, first[3].clone());
+            for (offset, row) in first.iter_mut().enumerate() {
+                row["query_sequence"] = json!(8 + offset);
+            }
+            for row in &mut first[3..5] {
+                row["server_status_before"] = json!(1);
+            }
+            second.insert(3, second[2].clone());
+            second[3]["server_status_before"] = json!(1);
+            second[4]["sql"] = json!("UPDATE items SET value=3 WHERE id=1");
+            for (offset, row) in second.iter_mut().enumerate() {
+                row["query_sequence"] = json!(8 + offset);
+                row["connection_id"] = json!(Uuid::from_u128(92));
+                row["timestamp"] = json!("2020-01-01T00:00:01Z");
+            }
+            first.extend(second);
+            let (temp, address, runtime, task) =
+                fixture_with_global(&first, &[baseline()], None).await;
+            let mut b = open(address, &temp).await;
+            let mut a = open(address, &temp).await;
+
+            b.execute(NEXT).await.unwrap();
+            if !first_read_before_second_setup {
+                a.execute(NEXT).await.unwrap();
+            }
+            let mut b_tx = b.begin().await.unwrap();
+            for _ in 0..2 {
+                let id: i32 = sqlx::query_scalar("SELECT id FROM items WHERE id=1")
+                    .fetch_one(&mut *b_tx)
+                    .await
+                    .unwrap();
+                assert_eq!(id, 1);
+            }
+            if first_read_before_second_setup {
+                a.execute(NEXT).await.unwrap();
+            }
+            b_tx.execute("UPDATE items SET value=3 WHERE id=1")
+                .await
+                .unwrap();
+            b_tx.commit().await.unwrap();
+            let mut a_tx = a.begin().await.unwrap();
+            for expected in [2, 1, 1] {
+                let id: i32 = sqlx::query_scalar("SELECT id FROM items WHERE id=?")
+                    .bind(expected)
+                    .fetch_one(&mut *a_tx)
+                    .await
+                    .unwrap();
+                assert_eq!(id, expected);
+            }
+            a_tx.execute("UPDATE items SET value=2 WHERE id=1")
+                .await
+                .unwrap();
+            a_tx.commit().await.unwrap();
+
+            let state = runtime.state.lock().await;
+            assert!(state.mysql.events.unmatched_queries.is_empty());
+            assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+            let audit = state.mysql.isolation.audit();
+            assert_eq!(audit.len(), 2);
+            assert!(audit.iter().all(|profile| profile["phase"] == "covered"));
+            assert_ne!(
+                audit[0]["target_connection_id"],
+                audit[1]["target_connection_id"]
+            );
+            task.abort();
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn read_committed_default_can_be_omitted_without_a_transaction_reset() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut source = connection_default_records();
