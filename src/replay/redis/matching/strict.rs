@@ -65,11 +65,15 @@ impl RedisReplayState {
             args,
         };
         if let Some(candidate) = expected_index {
+            let blocker = if let Some(prefix) = serial_predecessors {
+                self.candidates
+                    .lane_blocker_excluding(&self.exchanges, candidate, prefix)
+            } else {
+                self.strict_lane_blocker(candidate, fast_socketio)
+            };
             return if !request.matches(self, &self.exchanges[candidate]) {
                 PreferredMatch::NotFound
-            } else if let Some(blocker) = self.strict_lane_blocker(candidate, fast_socketio)
-                && !serial_predecessors.is_some_and(|prefix| prefix.contains(&blocker))
-            {
+            } else if let Some(blocker) = blocker {
                 PreferredMatch::LaneBlocked { candidate, blocker }
             } else {
                 PreferredMatch::Matched(candidate)
@@ -128,11 +132,9 @@ impl RedisReplayState {
             && deletion.status.is_available()
             && self.is_observed_state_mutation(blocker)
         {
-            return self.candidates.lane_blocker_excluding(
-                &self.exchanges,
-                candidate,
-                Some(blocker),
-            );
+            return self
+                .candidates
+                .lane_blocker_excluding(&self.exchanges, candidate, &[blocker]);
         }
         Some(blocker)
     }

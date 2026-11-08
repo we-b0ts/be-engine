@@ -57,15 +57,17 @@ pub(super) fn ordinary_slot(
             .candidates
             .case_lane_slot(case, reference.connection_id, reference.sequence)?;
     let exchange = &state.exchanges[index];
-    (exchange.record.command == reference.command
-        && exchange.record.replay_safe
+    (exchange.record.command == reference.command && is_ordinary(exchange)).then_some(index)
+}
+
+pub(super) fn is_ordinary(exchange: &ReplayExchange) -> bool {
+    exchange.record.replay_safe
         && exchange.record.parse_warnings.is_empty()
         && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
         && exchange.preserves_connection_order()
         && exchange.shared_rule_id.is_none()
         && !exchange.reusable_snapshot
-        && !exchange.subscription_alias)
-        .then_some(index)
+        && !exchange.subscription_alias
 }
 
 #[cfg(test)]

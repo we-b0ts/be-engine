@@ -118,20 +118,25 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
 
 #[tokio::test(start_paused = true)]
 async fn socketio_call_and_two_sequential_room_broadcasts_share_one_redis_stream() {
-    serial_room_broadcasts(1, true).await;
+    serial_room_broadcasts(1, true, false).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn socketio_call_waits_for_two_pairs_of_room_broadcasts() {
-    serial_room_broadcasts(2, true).await;
+    serial_room_broadcasts(2, true, false).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn socketio_call_uses_the_effective_case_lane_after_attribution() {
+    serial_room_broadcasts(1, true, true).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn deferred_socketio_call_stays_failed_if_a_room_broadcast_never_arrives() {
-    serial_room_broadcasts(2, false).await;
+    serial_room_broadcasts(2, false, false).await;
 }
 
-async fn serial_room_broadcasts(pairs: u64, send_last: bool) {
+async fn serial_room_broadcasts(pairs: u64, send_last: bool, foreign_gap: bool) {
     let broadcast = |room, value| {
         json!({"method":"emit","event":"slot_update","data":[value],"binary":false,
             "namespace":"/chat","room":room,"skip_sid":null,"callback":null,
@@ -147,7 +152,7 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool) {
         })
         .collect::<Vec<_>>();
     let last_broadcast = 2 * pairs;
-    let call_sequence = last_broadcast + 1;
+    let call_sequence = last_broadcast + if foreign_gap { 3 } else { 1 };
     let call = json!({"method":"emit","event":"sync","data":[2],"binary":false,
         "namespace":"/executor","room":"executor-sid","skip_sid":null,
         "callback":["executor-sid","/executor",1],
@@ -185,6 +190,29 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool) {
         },
     )
     .await;
+    if foreign_gap {
+        let mut state = runtime.state.lock().await;
+        let mut targets = BTreeMap::new();
+        for sequence in last_broadcast + 1..call_sequence {
+            let record = serde_json::from_value(event(
+                sequence,
+                "PUBLISH",
+                &[b"socketio", b"foreign case event"],
+                b":0\r\n",
+            ))
+            .unwrap();
+            state
+                .redis
+                .register_exchange(
+                    record,
+                    ReplaySource::Case,
+                    Some("other-case"),
+                    &mut targets,
+                    &[],
+                )
+                .unwrap();
+        }
+    }
     let (begin, _) = crate::replay::control::handle_control_request(
         serde_json::from_value(json!({"command":"input_timing_begin","case_id":"case"})).unwrap(),
         runtime.state.clone(),
@@ -270,7 +298,9 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool) {
     task.await.unwrap().unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if runtime.state.lock().await.redis.snapshot().matched_count == call_sequence as usize {
+            if runtime.state.lock().await.redis.snapshot().matched_count
+                == (last_broadcast + 1) as usize
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
@@ -281,8 +311,8 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool) {
 
     let state = runtime.state.lock().await;
     let report = state.redis.snapshot();
-    assert!(!report.is_dirty());
-    assert!(report.unused_case.is_empty());
+    assert!(!state.redis.case_is_dirty("case"));
+    assert_eq!(report.unused_case.len(), if foreign_gap { 2 } else { 0 });
     assert_eq!(
         report
             .matched

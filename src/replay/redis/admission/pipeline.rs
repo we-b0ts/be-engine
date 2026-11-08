@@ -1,7 +1,6 @@
 //! Admission proofs for reordered Socket.IO publishes on one Redis stream.
 use super::*;
 use crate::redis::socketio_rpc;
-use crate::replay::report::command::CommandExchangeRefReport;
 use tokio::time::Instant;
 #[cfg(test)]
 mod tests;
@@ -30,33 +29,26 @@ impl SerialPublish {
         if candidate.command != "PUBLISH"
             || blocked_by.command != "PUBLISH"
             || candidate.connection_id != blocked_by.connection_id
-            || !matches!(
-                candidate.sequence.checked_sub(blocked_by.sequence),
-                Some(2 | 4)
-            )
         {
             return None;
         }
         let index = lane::ordinary_slot(&state.redis, case, candidate)?;
-        let predecessors = (blocked_by.sequence..candidate.sequence)
-            .map(|sequence| {
-                lane::ordinary_slot(
-                    &state.redis,
-                    case,
-                    &CommandExchangeRefReport {
-                        sequence,
-                        ..blocked_by.as_ref().clone()
-                    },
-                )
-            })
-            .collect::<Option<Vec<_>>>()?;
+        let first = lane::ordinary_slot(&state.redis, case, blocked_by)?;
+        // An attribution overlay can move other cases' traffic away from the
+        // physical connection without renumbering the remaining Source slots.
+        let predecessors = state.redis.candidates.lane_prefix(first, index, 4)?;
+        if !matches!(predecessors.len(), 2 | 4) {
+            return None;
+        }
         let later = &state.redis.exchanges[index];
         if predecessors
             .iter()
             .chain(std::iter::once(&index))
             .map(|&index| &state.redis.exchanges[index])
             .any(|exchange| {
-                state.redis.connection_scopes.is_stateful(exchange)
+                exchange.record.command != "PUBLISH"
+                    || !lane::is_ordinary(exchange)
+                    || state.redis.connection_scopes.is_stateful(exchange)
                     || !exchange.status.is_available()
                     || exchange.record.response_kind != "integer"
                     || exchange.record.lifecycle_cleanup
