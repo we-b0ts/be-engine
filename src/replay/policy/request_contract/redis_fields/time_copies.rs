@@ -52,6 +52,7 @@ pub(in crate::replay) struct PreparedRedisTimeRead {
     case: String,
     target: TargetKey,
     database: i64,
+    source_connection: Option<uuid::Uuid>,
     source_started: Option<DateTime<Utc>>,
     source_completed: Option<DateTime<Utc>>,
     target_started: Option<DateTime<Utc>>,
@@ -100,8 +101,12 @@ impl PreparedRedisTimeRead {
                     target,
                 )?;
                 if let Some(payload) = redis_get {
-                    record =
-                        record.with_redis_get(payload, self.source_started, self.target_started);
+                    record = record.with_redis_get(
+                        payload,
+                        self.source_connection,
+                        self.source_started,
+                        self.target_started,
+                    );
                 }
                 records.push(record);
                 Ok(())
@@ -555,6 +560,7 @@ impl RequestContracts {
             case: context.case.into(),
             target: context.target.clone(),
             database: context.database,
+            source_connection: context.connection_id,
             source_started: context.recorded_at,
             source_completed: completed,
             target_started: context.actual_at,

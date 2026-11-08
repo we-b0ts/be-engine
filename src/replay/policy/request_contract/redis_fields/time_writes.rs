@@ -127,7 +127,8 @@ impl RequestContracts {
                 if context.command == "SET" {
                     let digest =
                         stored_payload.get_or_insert_with(|| Sha256::digest(source_payload).into());
-                    record = record.with_redis_set(*digest);
+                    record =
+                        record.with_redis_set(*digest, context.connection_id, context.recorded_at);
                 }
                 records.push(record);
                 ensure!(
@@ -199,7 +200,9 @@ impl RequestContracts {
                 continue;
             };
             let lookup = match redis_get {
-                Some((payload, completed)) => lookup.with_redis_get(payload, completed),
+                Some((payload, completed)) => {
+                    lookup.with_redis_get(payload, context.connection_id, completed)
+                }
                 None => lookup,
             };
             for (value, proof) in
