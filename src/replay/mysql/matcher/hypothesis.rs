@@ -37,6 +37,10 @@ impl ReplayState {
         let mut search = crate::replay::candidate_selection::UniqueCandidate::new(256);
         let sql_family = candidates::sql_family(sql);
         let normalized_sql = sql.map(normalize_sql);
+        let mut blocked = self
+            .mysql
+            .candidates
+            .blocked_candidates(&self.mysql.exchanges);
         for index in candidates.iter().copied() {
             let exchange = &self.mysql.exchanges[index];
             if !self.mysql.candidates.permits_sql(index, sql_family)
@@ -49,12 +53,7 @@ impl ReplayState {
             {
                 continue;
             }
-            if self
-                .mysql
-                .candidates
-                .lane_blocker(&self.mysql.exchanges, index)
-                .is_some()
-            {
+            if blocked(index) {
                 continue;
             }
             if search.inspect().is_err() {

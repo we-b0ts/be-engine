@@ -65,6 +65,33 @@ impl LaneIndex {
         })
     }
 
+    /// Build a blocker-existence lookup for one selection with stable status.
+    /// Only the lowest blocking sequence matters when no blocker identity is
+    /// needed. Keep this cache local to the selection because status is live.
+    pub(in crate::replay) fn blocked_candidates(
+        &self,
+        mut prevents_progress: impl FnMut(usize) -> bool,
+    ) -> impl FnMut(usize) -> bool {
+        let mut first_blocking = HashMap::new();
+        move |candidate| {
+            let Some((key, sequence)) = self.references.get(&candidate) else {
+                return false;
+            };
+            first_blocking
+                .entry(key)
+                .or_insert_with(|| {
+                    self.lanes
+                        .get(key)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(index, _)| prevents_progress(*index))
+                        .map(|(_, sequence)| *sequence)
+                        .min()
+                })
+                .is_some_and(|first| first < *sequence)
+        }
+    }
+
     pub(in crate::replay) fn unique_slot(&self, key: &LaneKey, sequence: u64) -> Option<usize> {
         let mut slots = self
             .lanes

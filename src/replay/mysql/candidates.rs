@@ -166,12 +166,11 @@ impl Candidates {
             })
     }
 
-    pub(super) fn lane_blocker(
-        &self,
-        exchanges: &[ReplayExchange],
-        candidate: usize,
-    ) -> Option<usize> {
-        self.lanes.blocker(candidate, |prior| {
+    pub(super) fn blocked_candidates<'a>(
+        &'a self,
+        exchanges: &'a [ReplayExchange],
+    ) -> impl FnMut(usize) -> bool + 'a {
+        self.lanes.blocked_candidates(move |prior| {
             !exchanges[prior].status.is_consumed() && exchanges[prior].optional_session.is_none()
         })
     }
