@@ -180,9 +180,10 @@ fn ack_alignment_requires_unique_original_requests_and_fast_input_policy() {
 }
 
 #[test]
-fn repeated_ack_ids_only_fence_their_own_positions_in_an_ack_run() {
+fn repeated_ack_ids_only_fence_their_own_positions() {
     const FIRST: &str = r#"43/n,215[{"tag":"first"}]"#;
     const SECOND: &str = r#"43/n,215[{"tag":"second"}]"#;
+    const PUSH: &str = r#"42/n,17["notice",{}]"#;
     let mut input = input();
     let mut repeated = input.actions[0].clone();
     repeated.action = InputActionKind::Message {
@@ -200,6 +201,11 @@ fn repeated_ack_ids_only_fence_their_own_positions_in_an_ack_run() {
     assert!(checked(Some(&input), source, &[FIRST, SECOND, B, A]).passed());
     assert!(!checked(Some(&input), source, &[SECOND, FIRST, B, A]).passed());
     assert!(!checked(Some(&input), source, &[FIRST, B, SECOND, A]).passed());
+
+    let source = &[FIRST, PUSH, A, SECOND, B];
+    assert!(checked(Some(&input), source, &[FIRST, A, PUSH, SECOND, B]).passed());
+    assert!(!checked(Some(&input), source, &[FIRST, A, SECOND, PUSH, B]).passed());
+    assert!(!checked(Some(&input), source, &[SECOND, A, PUSH, FIRST, B]).passed());
 }
 
 #[test]

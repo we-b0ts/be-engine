@@ -150,8 +150,18 @@ impl Context {
         if source == target {
             return alignment;
         }
-        let source = source.iter().map(Frame::parse).collect::<Vec<_>>();
-        let target = target.iter().map(Frame::parse).collect::<Vec<_>>();
+        let mut source = source.iter().map(Frame::parse).collect::<Vec<_>>();
+        let mut target = target.iter().map(Frame::parse).collect::<Vec<_>>();
+        // Compare a reused request ID at its original position, while letting
+        // each side prove its own ACK-only or mixed reordering independently.
+        for (source, target) in source.iter_mut().zip(&mut target) {
+            if source.ack().is_some_and(|key| {
+                self.requests.get(key).is_some_and(Option::is_none) && target.ack() == Some(key)
+            }) {
+                *source = Frame::Fence;
+                *target = Frame::Fence;
+            }
+        }
         let mixed_runs = self.align_mixed_runs(&source, &target, source_offsets, &mut alignment);
         let mut mixed_runs = mixed_runs.into_iter().peekable();
         let mut start = 0;
@@ -169,22 +179,7 @@ impl Context {
                 end += 1;
             }
             if end - start > 1 && end <= target.len() {
-                // A reused request ID still compares at its original position.
-                // It fences the surrounding unique replies without preventing
-                // each side from proving an independent reordering.
-                let fences = (start..end).filter(|&index| {
-                    source[index].ack().is_some_and(|key| {
-                        self.requests.get(key).is_some_and(Option::is_none)
-                            && target[index].ack() == Some(key)
-                    })
-                });
-                let mut run_start = start;
-                for fence in fences.chain(Some(end)) {
-                    if fence - run_start > 1 {
-                        self.align_ack_run(&source, &target, run_start..fence, &mut alignment);
-                    }
-                    run_start = fence + 1;
-                }
+                self.align_ack_run(&source, &target, start..end, &mut alignment);
             }
             start = end;
         }
