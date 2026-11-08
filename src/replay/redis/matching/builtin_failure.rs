@@ -37,7 +37,7 @@ impl RedisReplayState {
             active_case_id,
             case_candidates,
             run_candidates,
-            |exchange| {
+            |exchange, _| {
                 exchange.status.is_available()
                     && (exchange.record.lifecycle_cleanup
                         || exchange.record.response_kind == "error"

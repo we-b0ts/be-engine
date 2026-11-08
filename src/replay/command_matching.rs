@@ -149,7 +149,7 @@ where
         0..exchanges.len(),
         source,
         case_id,
-        matches,
+        &|exchange, _| matches(exchange),
         priority,
         &|index| lane_blocker(exchanges, index),
     )

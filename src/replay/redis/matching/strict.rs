@@ -36,6 +36,22 @@ impl Request<'_> {
         !matches!(self.command, "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE")
             || state.pubsub.is_callback_subscription(exchange)
     }
+
+    fn blocked_by_publish(&self, exchange: &ReplayExchange, blocker: &ReplayExchange) -> bool {
+        // PUBLISH has no lower-priority candidates. Once this lane supplied
+        // the first blocked match, later ordered slots cannot improve it.
+        // An unclaimed blocker cannot advance independently of this selection.
+        // The Fast zero-subscriber exception can only bypass a DEL.
+        self.command == "PUBLISH"
+            && blocker.record.command == "PUBLISH"
+            && blocker.status.is_available()
+            && blocker.claim.is_none()
+            && exchange.preserves_connection_order()
+            && exchange.source == blocker.source
+            && exchange.case_id == blocker.case_id
+            && exchange.record.connection_id == blocker.record.connection_id
+            && exchange.record.sequence > blocker.record.sequence
+    }
 }
 
 impl RedisReplayState {
@@ -107,7 +123,10 @@ impl RedisReplayState {
             case,
             case_candidates,
             run_candidates,
-            |exchange| request.matches(self, exchange),
+            |exchange, blocker| {
+                !blocker.is_some_and(|blocker| request.blocked_by_publish(exchange, blocker))
+                    && request.matches(self, exchange)
+            },
             |exchange| request.priority(self, exchange),
             |index| self.strict_lane_blocker(index, fast_socketio),
         )
