@@ -131,9 +131,10 @@ independent probe must have completed strictly before the new scope starts;
 sequence numbers from different connections are never compared. Same-connection
 proof retains its original wire order. Every intervening scope wire sequence,
 physical identity, successful response and transaction-status transition must
-be present. The supported Source scope has one implicit transaction; gaps,
-failures, savepoints, lifecycle cleanup, another transaction or an ambiguous
-baseline retain ordinary strict matching. Preparation is bounded to 128 scopes
+be present. The supported Source scope has one implicit transaction. Proven
+savepoint controls stay required members of that transaction. Gaps, failures,
+lifecycle cleanup, another transaction or an ambiguous baseline retain ordinary
+strict matching. Preparation is bounded to 128 scopes
 per Case, 260 exchanges per scope and 4096 installed scopes and baseline connections.
 
 Target can instead send `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` as

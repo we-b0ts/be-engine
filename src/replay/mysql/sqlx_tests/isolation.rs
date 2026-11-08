@@ -166,6 +166,52 @@ async fn next_isolation_uses_real_transaction_delivery_and_omits_only_the_source
 }
 
 #[tokio::test]
+async fn next_isolation_matches_the_earlier_transaction_with_a_savepoint() {
+    let mut source = records();
+    source.insert(3, record(11, "SAVEPOINT sa_savepoint_1", 1, 1));
+    source.insert(5, record(13, "RELEASE SAVEPOINT sa_savepoint_1", 1, 1));
+    for (offset, row) in source.iter_mut().enumerate() {
+        row["query_sequence"] = json!(8 + offset);
+    }
+    let mut later = records();
+    later[2]["sql"] = json!("SELECT id FROM items WHERE id=2");
+    for (offset, row) in later.iter_mut().enumerate() {
+        row["query_sequence"] = json!(17 + offset);
+    }
+    source.extend(later);
+    let (temp, address, runtime, task) = fixture_with_global(&source, &[baseline()], None).await;
+    let mut client = open(address, &temp).await;
+    client
+        .execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .await
+        .unwrap();
+    let mut transaction = client.begin().await.unwrap();
+    let id: i32 = sqlx::query_scalar("SELECT id FROM items WHERE id=?")
+        .bind(1_i32)
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+    assert_eq!(id, 1);
+    let mut nested = sqlx::Acquire::begin(&mut transaction).await.unwrap();
+    sqlx::query("UPDATE items SET value=? WHERE id=?")
+        .bind(2_i32)
+        .bind(1_i32)
+        .execute(&mut *nested)
+        .await
+        .unwrap();
+    nested.commit().await.unwrap();
+    transaction.commit().await.unwrap();
+    let state = runtime.state.lock().await;
+    assert!(state.mysql.events.unmatched_queries.is_empty());
+    let audit = state.mysql.isolation.audit();
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0]["source_setup_sequence"], 8);
+    assert_eq!(audit[0]["phase"], "covered");
+    assert_eq!(audit[0]["required_members"], 5);
+    task.abort();
+}
+
+#[tokio::test]
 async fn isolation_rejects_unproven_modes_active_settings_cross_socket_and_missing_begin() {
     tokio::time::timeout(Duration::from_secs(40), async {
         for scenario in [
