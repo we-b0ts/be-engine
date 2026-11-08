@@ -15,6 +15,7 @@ pub(in crate::replay) struct Registry {
     setups: BTreeMap<usize, usize>,
     members: BTreeMap<usize, (usize, usize)>,
     ends: BTreeMap<usize, (usize, usize)>,
+    savepoint_predecessors: BTreeMap<usize, usize>,
     free_reads: BTreeSet<usize>,
     prefixes: prefix::Index,
     global_reads: source_evidence::GlobalReads,
@@ -204,6 +205,19 @@ impl Registry {
             && self.members.get(&index).is_some_and(|&(r, t)| {
                 let group = &self.requirements[r].transactions[t];
                 group.witness.is_none() && !group.can_cover_with_autocommit(index)
+            })
+    }
+
+    /// A later Source member can only follow a savepoint control delivered
+    /// in this very Target transaction. Matching SQL text cannot supply it.
+    pub(super) fn permits_savepoint_member(&self, index: usize, witness: &Witness) -> bool {
+        self.savepoint_predecessors
+            .get(&index)
+            .is_none_or(|previous| {
+                witness
+                    .active
+                    .as_ref()
+                    .is_some_and(|trace| trace.members.contains(previous))
             })
     }
 
@@ -415,8 +429,22 @@ impl Registry {
             }
             for (transaction, group) in requirement.transactions.iter().enumerate() {
                 if group.write_count != 0 || group.strict || group.savepoints {
+                    let mut previous_savepoint = None;
                     for &index in &group.members {
                         self.members.insert(index, (id, transaction));
+                        if let Some(previous) = previous_savepoint {
+                            self.savepoint_predecessors.insert(index, previous);
+                        }
+                        if group.savepoints
+                            && exchanges[index]
+                                .record
+                                .sql
+                                .as_deref()
+                                .and_then(crate::mysql::savepoint::parse)
+                                .is_some()
+                        {
+                            previous_savepoint = Some(index);
+                        }
                     }
                 }
             }

@@ -78,7 +78,7 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
                 }),
                 status_flags: self.session.status_flags,
                 connection: self.session.transaction_witness.connection(),
-                has_active_transaction: self.session.transaction_witness.has_active_transaction(),
+                witness: &self.session.transaction_witness,
             }
         });
         let unmatched_before = state.mysql.events.unmatched_queries.len();

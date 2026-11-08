@@ -7,7 +7,8 @@ mod observation;
 mod request;
 mod source_formats;
 mod statement_metadata;
-pub(super) use request::TransactionMatch;
+mod transaction;
+pub(super) use transaction::TransactionMatch;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {

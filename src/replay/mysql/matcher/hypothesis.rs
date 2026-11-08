@@ -1,5 +1,4 @@
 //! Bounded fallback selection; no Source slot or identity is committed here.
-use super::request::TransactionMatch;
 use super::*;
 
 impl ReplayState {
@@ -46,12 +45,7 @@ impl ReplayState {
                 || exchange.record.response.rows_truncated
                 || exchange.optional_session.is_some()
                 || self.mysql.foreign.contains_key(&index)
-                || transaction.is_some_and(|context| {
-                    !self
-                        .mysql
-                        .isolation
-                        .permits(context.connection, index, &self.mysql.exchanges)
-                })
+                || transaction.is_some_and(|context| !context.permits(&self.mysql, index))
             {
                 continue;
             }

@@ -13,32 +13,6 @@ fn same_input<T: PartialEq + ?Sized>(left: Option<&T>, right: Option<&T>) -> boo
     }
 }
 
-#[derive(Clone, Copy)]
-pub(in crate::replay::mysql) struct TransactionMatch<'a> {
-    pub(in crate::replay::mysql) savepoints: &'a super::super::savepoints::Bindings,
-    pub(in crate::replay::mysql) preferred_end: Option<usize>,
-    pub(in crate::replay::mysql) status_flags: u16,
-    pub(in crate::replay::mysql) connection: Uuid,
-    pub(in crate::replay::mysql) has_active_transaction: bool,
-}
-
-impl TransactionMatch<'_> {
-    pub(super) fn missing_for_member(
-        self,
-        registry: &super::super::transaction_equivalence::Registry,
-        index: usize,
-        exchange: &ReplayExchange,
-        normalized_sql: Option<&str>,
-    ) -> bool {
-        self.status_flags & 3 == super::super::SERVER_STATUS_AUTOCOMMIT
-            && !self.has_active_transaction
-            && !matches!(normalized_sql, Some("begin" | "start transaction"))
-            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
-            && !exchange.record.lifecycle_cleanup
-            && registry.requires_active_member(index)
-    }
-}
-
 impl ReplayState {
     #[cfg(test)]
     pub(in crate::replay) fn match_exchange(
@@ -279,13 +253,7 @@ impl ReplayState {
                         continue;
                     }
                     let exchange = &self.mysql.exchanges[index];
-                    if transaction.is_some_and(|context| {
-                        !self.mysql.isolation.permits(
-                            context.connection,
-                            index,
-                            &self.mysql.exchanges,
-                        )
-                    }) {
+                    if transaction.is_some_and(|context| !context.permits(&self.mysql, index)) {
                         continue;
                     }
                     if self.mysql.foreign.contains_key(&index) != foreign

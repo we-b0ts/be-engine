@@ -129,3 +129,60 @@ async fn a_savepoint_reference_on_another_socket_or_after_release_is_rejected() 
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn identical_select_cannot_claim_a_member_past_another_sockets_savepoint() {
+    let captured = source();
+    let mut values = captured[..5].to_vec();
+    let mut inside = captured[1].clone();
+    inside["server_status_before"] = json!(1);
+    values.insert(3, inside);
+    values.push(captured.last().unwrap().clone());
+    for (index, entry) in values.iter_mut().enumerate() {
+        entry["query_sequence"] = json!(index + 1);
+    }
+    let mut standalone = captured[1].clone();
+    standalone["connection_id"] = json!(Uuid::from_u128(902));
+    standalone["query_sequence"] = json!(1);
+    standalone["server_status_before"] = json!(2);
+    standalone["response"]["server_status"] = json!(2);
+    standalone["response"]["rows"][0][0]["value"] = json!(9);
+    values.push(standalone);
+    let (temp, addr, runtime, task) = fixture(&values, false).await;
+    let ca = temp
+        .path()
+        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
+    let read = "SELECT id FROM users WHERE id=?";
+    let mut writer = connect(addr, &ca).await;
+    sqlx::query(read)
+        .bind(1_i32)
+        .fetch_one(&mut writer)
+        .await
+        .unwrap();
+    let mut outer = writer.begin().await.unwrap();
+    let mut nested = outer.begin().await.unwrap();
+
+    let mut reader = connect(addr, &ca).await;
+    let mut short = reader.begin().await.unwrap();
+    let row = sqlx::query(read)
+        .bind(1_i32)
+        .fetch_one(&mut *short)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<i32, _>(0), 9);
+    short.commit().await.unwrap();
+
+    let row = sqlx::query(read)
+        .bind(1_i32)
+        .fetch_one(&mut *nested)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<i32, _>(0), 1);
+    write(&mut nested, 1).await;
+    nested.commit().await.unwrap();
+    outer.commit().await.unwrap();
+    let state = runtime.state.lock().await;
+    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+    task.abort();
+}
