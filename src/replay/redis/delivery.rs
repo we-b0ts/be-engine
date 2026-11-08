@@ -25,7 +25,7 @@ pub(super) async fn deliver_redis_exchange(
             exchange.record.lifecycle_cleanup,
             super::input_timing::scope(&state),
             state.stream_timing == Some(ReplayStreamTiming::Fast),
-            exchange.serial_predecessors,
+            exchange.serial_predecessors.clone(),
         )
     };
     if lifecycle {
@@ -137,12 +137,12 @@ pub(super) async fn deliver_redis_exchange(
     let written = write_response(reader, state, matched, started, fast).await?;
     if let Some(predecessors) = serial_predecessors {
         // RESP still replies in Target order. The finite call's effects are
-        // released only after both independently observed Source predecessors.
+        // released only after every independently observed Source predecessor.
         let state = state.clone();
         let matched = matched.clone();
         tokio::spawn(async move {
             let deadline = started + super::admission::POOLED_LANE_WAIT;
-            if wait_serial_publishes(&state, timing_scope.as_ref(), predecessors, deadline).await {
+            if wait_serial_publishes(&state, timing_scope.as_ref(), &predecessors, deadline).await {
                 if let Err(error) = finish_response(
                     &state,
                     &matched,
@@ -157,7 +157,7 @@ pub(super) async fn deliver_redis_exchange(
             } else {
                 state.lock().await.redis.fail_exchange(
                     &matched,
-                    "deferred Redis call did not observe both predecessor broadcasts".into(),
+                    "deferred Redis call did not observe every predecessor broadcast".into(),
                 );
             }
         });
@@ -170,7 +170,7 @@ pub(super) async fn deliver_redis_exchange(
 async fn wait_serial_publishes(
     state: &Arc<Mutex<ReplayState>>,
     scope: Option<&super::input_timing::DeliveryScope>,
-    predecessors: [usize; 2],
+    predecessors: &[usize],
     deadline: tokio::time::Instant,
 ) -> bool {
     loop {
@@ -178,17 +178,16 @@ async fn wait_serial_publishes(
         if tokio::time::Instant::now() >= deadline || !serial_scope_current(&state, scope) {
             return false;
         }
-        let statuses = predecessors.map(|index| state.redis.exchange_status(index));
-        if statuses
+        let mut statuses = predecessors
             .iter()
-            .all(|status| *status == Some(ReplayExchangeStatus::Consumed))
+            .map(|&index| state.redis.exchange_status(index));
+        if statuses
+            .clone()
+            .all(|status| status == Some(ReplayExchangeStatus::Consumed))
         {
             return true;
         }
-        if statuses
-            .iter()
-            .any(|status| matches!(status, None | Some(ReplayExchangeStatus::Failed)))
-        {
+        if statuses.any(|status| matches!(status, None | Some(ReplayExchangeStatus::Failed))) {
             return false;
         }
         let wait = state.redis.lifecycle.subscribe();
@@ -380,6 +379,7 @@ async fn finish_response(
     }
     let serial_scope = state.redis.exchanges[matched.index]
         .serial_predecessors
+        .as_ref()
         .and(timing_scope);
     if let Some(delivery) = &matched.read_back
         && let Err(error) = state

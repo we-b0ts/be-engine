@@ -160,7 +160,7 @@ struct RecordedCapture {
 #[derive(Debug, Clone)]
 struct ReplayExchange {
     claim: Option<ClaimTicket>,
-    serial_predecessors: Option<[usize; 2]>,
+    serial_predecessors: Option<Arc<[usize]>>,
     observation_rule: Option<String>,
     optional_observation_rule: Option<String>,
     read_commutation_rule: Option<String>,

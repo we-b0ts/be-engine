@@ -51,7 +51,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
         expected_index: Option<usize>,
-        serial_predecessors: Option<[usize; 2]>,
+        serial_predecessors: Option<&[usize]>,
     ) -> PreferredMatch {
         let request = Request {
             case,

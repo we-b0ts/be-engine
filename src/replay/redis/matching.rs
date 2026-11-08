@@ -278,7 +278,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
         expected_index: Option<usize>,
-        serial_predecessors: Option<[usize; 2]>,
+        serial_predecessors: Option<Arc<[usize]>>,
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.candidates.register(&self.exchanges);
         if let Some(case) = active_case_id {
@@ -383,7 +383,7 @@ impl RedisReplayState {
                 command,
                 args,
                 expected_index,
-                serial_predecessors,
+                serial_predecessors.as_deref(),
             );
         }
         self.request_contracts

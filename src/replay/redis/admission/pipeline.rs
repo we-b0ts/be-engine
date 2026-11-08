@@ -6,12 +6,12 @@ use tokio::time::Instant;
 #[cfg(test)]
 mod tests;
 
-/// Two sequential room broadcasts can share a RESP stream with an independent
-/// call. The second broadcast cannot arrive until the first has its reply.
-#[derive(Debug, Clone, Copy)]
+/// Sequential pairs of room broadcasts can share a RESP stream with an
+/// independent call. Each pair's second publish awaits the first reply.
+#[derive(Debug)]
 pub(in crate::replay::redis) struct SerialPublish {
     pub(in crate::replay::redis) index: usize,
-    pub(in crate::replay::redis) predecessors: [usize; 2],
+    pub(in crate::replay::redis) predecessors: Arc<[usize]>,
 }
 
 impl SerialPublish {
@@ -30,21 +30,31 @@ impl SerialPublish {
         if candidate.command != "PUBLISH"
             || blocked_by.command != "PUBLISH"
             || candidate.connection_id != blocked_by.connection_id
-            || blocked_by.sequence.checked_add(2) != Some(candidate.sequence)
+            || !matches!(
+                candidate.sequence.checked_sub(blocked_by.sequence),
+                Some(2 | 4)
+            )
         {
             return None;
         }
         let index = lane::ordinary_slot(&state.redis, case, candidate)?;
-        let first = lane::ordinary_slot(&state.redis, case, blocked_by)?;
-        let middle = CommandExchangeRefReport {
-            sequence: blocked_by.sequence + 1,
-            ..blocked_by.as_ref().clone()
-        };
-        let second = lane::ordinary_slot(&state.redis, case, &middle)?;
-        let [first_exchange, second_exchange, later] =
-            [first, second, index].map(|i| &state.redis.exchanges[i]);
-        if [first_exchange, second_exchange, later]
+        let predecessors = (blocked_by.sequence..candidate.sequence)
+            .map(|sequence| {
+                lane::ordinary_slot(
+                    &state.redis,
+                    case,
+                    &CommandExchangeRefReport {
+                        sequence,
+                        ..blocked_by.as_ref().clone()
+                    },
+                )
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let later = &state.redis.exchanges[index];
+        if predecessors
             .iter()
+            .chain(std::iter::once(&index))
+            .map(|&index| &state.redis.exchanges[index])
             .any(|exchange| {
                 state.redis.connection_scopes.is_stateful(exchange)
                     || !exchange.status.is_available()
@@ -55,28 +65,49 @@ impl SerialPublish {
         {
             return None;
         }
-        let mut first_message = socketio_rpc::broadcast("PUBLISH", &first_exchange.args)
-            .ok()??
-            .value;
-        let mut second_message = socketio_rpc::broadcast("PUBLISH", &second_exchange.args)
-            .ok()??
-            .value;
         let call = socketio_rpc::request("PUBLISH", &later.args).ok()??;
-        let first_room = first_message.as_object_mut()?.remove("room")?;
-        let second_room = second_message.as_object_mut()?.remove("room")?;
-        if first_room.as_str()?.is_empty()
-            || second_room.as_str()?.is_empty()
-            || first_room == second_room
-            || first_message != second_message
-            || first_message["namespace"] == call.identity.namespace
+        let mut pairs = predecessors.chunks_exact(2).map(|pair| {
+            room_broadcast_pair(
+                &state.redis.exchanges[pair[0]],
+                &state.redis.exchanges[pair[1]],
+            )
+        });
+        let first = pairs.next()??;
+        if first.2["namespace"] == call.identity.namespace
+            || pairs.any(|pair| pair.as_ref() != Some(&first))
         {
             return None;
         }
         Some(Self {
             index,
-            predecessors: [first, second],
+            predecessors: predecessors.into(),
         })
     }
+}
+
+fn room_broadcast_pair(
+    first: &ReplayExchange,
+    second: &ReplayExchange,
+) -> Option<(String, String, serde_json::Value)> {
+    let mut first_message = socketio_rpc::broadcast("PUBLISH", &first.args).ok()??.value;
+    let mut second_message = socketio_rpc::broadcast("PUBLISH", &second.args)
+        .ok()??
+        .value;
+    let first_room = first_message.as_object_mut()?.remove("room")?;
+    let second_room = second_message.as_object_mut()?.remove("room")?;
+    let first_room = first_room.as_str()?;
+    let second_room = second_room.as_str()?;
+    if first_room.is_empty()
+        || second_room.is_empty()
+        || first_room == second_room
+        || first_message != second_message
+    {
+        return None;
+    }
+    // Within each pair the payload must be identical. Repeated broadcasts to
+    // the same two rooms may report a different value on the next occurrence.
+    first_message.as_object_mut()?.remove("data")?;
+    Some((first_room.into(), second_room.into(), first_message))
 }
 
 #[derive(Debug)]
