@@ -139,9 +139,9 @@ is unclear.
   actual sent inputs and received ACK metadata independently of business
   completion and fast timing; the native clock retains Source windows, original
   subscription ownership and the current request epoch. An input without an ACK
-  or an explicit close ends the notification prefix, rather than invalidating
-  preceding notifications. That boundary also limits delivery lifetime; later
-  actual ACK identities remain admissible without extending the prefix. Native
+  ends the current delivery interval. A later unambiguous Source ACK reopens
+  delivery after its recorded timestamp, gated on the same live ACK. Explicit
+  close still ends delivery. Native
   plan cardinality is bounded by the original finite notification inventory;
   long recordings retain paged payload references and bounded delivery queues.
   RESP delivery retains wire consumption and Case cancellation checks; the

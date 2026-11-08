@@ -23,13 +23,14 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
     loop {
         let Some(state) = weak.upgrade() else { return };
         let (job, progress, retry) = {
-            let replay = state.lock().await;
+            let mut replay = state.lock().await;
             if replay.finalized_at.is_some()
                 || replay.target_session_stopped
                 || replay.redis.pubsub.native_clock.entries.is_empty()
             {
                 return;
             }
+            retire_expired_prefix(&mut replay);
             let now = Instant::now();
             let dispatch_due = dispatch_deadline(&replay, now);
             let retry = replay
@@ -126,6 +127,39 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             request_epoch: Some(job.epoch),
             value: None,
         });
+    }
+}
+
+fn retire_expired_prefix(replay: &mut ReplayState) {
+    let Some(case) = replay.active_case_id.as_deref() else {
+        return;
+    };
+    let native = &replay.redis.pubsub.native_clock;
+    let Some(live) = native
+        .live
+        .get(case)
+        .filter(|live| live.observer && !live.closed)
+    else {
+        return;
+    };
+    let Some(pending) = native.pending.get(case) else {
+        return;
+    };
+    let expired_count = pending
+        .iter()
+        .take_while(|&&index| expired(replay, case, live.epoch, native.entries[index].lifetime))
+        .count();
+    if expired_count != 0 {
+        // Expired slots stay unused in the Source inventory. They cannot hold
+        // the queue head after a later, independently proven input interval.
+        replay
+            .redis
+            .pubsub
+            .native_clock
+            .pending
+            .get_mut(case)
+            .unwrap()
+            .drain(..expired_count);
     }
 }
 
