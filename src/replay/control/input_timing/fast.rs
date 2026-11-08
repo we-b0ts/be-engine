@@ -196,6 +196,7 @@ impl Source {
                 .prepare_fast(case, &passive, self.cap, setup_finished)
                 .is_some()
         {
+            let last_output_ms = passive.outputs.last().expect("proven passive output").0;
             self.tail = Some(Tail {
                 policy: FastTail {
                     close_sequence: None,
@@ -205,7 +206,7 @@ impl Source {
                     native_observation: true,
                 },
                 cutoff: passive.end_ms,
-                quiet_from: passive.last_output_ms,
+                quiet_from: last_output_ms,
             });
             tracing::info!(
                 case_id = case,

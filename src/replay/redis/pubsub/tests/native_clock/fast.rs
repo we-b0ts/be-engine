@@ -8,22 +8,33 @@ use tokio_tungstenite::tungstenite::Message;
 const OPEN: &str = r#"0{"sid":"engine","upgrades":[],"pingInterval":1000,"pingTimeout":500}"#;
 const CONNECT: &str = "40/chat,{}";
 const CONNECTED: &str = r#"40/chat,{"sid":"chat"}"#;
+const JOIN: &str = r#"42/chat,0["join"]"#;
+const JOINED: &str = "43/chat,0[true]";
 
 fn packet(n: u64) -> String {
     format!("42/chat,{}", json!(["notice", n]))
 }
 
-fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
+type Deliveries = Vec<(Vec<u8>, Option<u64>)>;
+
+fn recording(root: &Path, setup: bool) -> (Value, Vec<Value>, Deliveries) {
     std::fs::create_dir_all(root.join("case")).unwrap();
     let mut source = Observation::new(Protocol::SocketIo, InteractionPolicy::default()).unwrap();
     source.output(WireMessage::text(OPEN), 0).unwrap();
     source.input(WireMessage::text(CONNECT), 1).unwrap();
     source.output(WireMessage::text(CONNECTED), 2).unwrap();
+    if setup {
+        source.input(WireMessage::text(JOIN), 10).unwrap();
+        source.output(WireMessage::text(JOINED), 20).unwrap();
+    }
+    let second = if setup { 1 } else { 2 };
     source.output(WireMessage::text(packet(1)), 501).unwrap();
     source.output(WireMessage::text("2"), 1000).unwrap();
     source.input(WireMessage::text("3"), 1250).unwrap();
     source.output(WireMessage::text("2"), 2250).unwrap();
-    source.output(WireMessage::text(packet(2)), 2701).unwrap();
+    source
+        .output(WireMessage::text(packet(second)), 2701)
+        .unwrap();
     source.server_close(Some(1000), String::new());
     let (input, expected) = source.finish(EndReason::ServerEof, 2791, true).unwrap();
     let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
@@ -37,16 +48,18 @@ fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
     let subscriber = Uuid::new_v4();
     let mut dependencies = vec![exchange(subscriber, 1, "SUBSCRIBE", &[b"jobs"], SUBSCRIBED)];
     let mut frames = Vec::new();
-    for (i, timestamp) in [
-        "2020-01-01T00:10:00.500Z",
-        "2020-01-01T00:10:02.700Z",
-        "2020-01-01T00:10:02.765Z",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let value = json!({"method":"emit","event":"notice","data":[i+1],"binary":false,
-            "namespace":"/chat","room":"user:7","skip_sid":null,"callback":null,"host_id":SOURCE});
+    let mut deliveries = vec![
+        ("2020-01-01T00:10:00.500Z", 1, "user:7", Some(1)),
+        ("2020-01-01T00:10:02.700Z", second, "user:7", Some(second)),
+        ("2020-01-01T00:10:02.765Z", 3, "user:7", Some(3)),
+    ];
+    if setup {
+        deliveries.insert(1, ("2020-01-01T00:10:00.504Z", 1, "mirror:7", None));
+        deliveries.insert(3, ("2020-01-01T00:10:02.704Z", 1, "mirror:7", None));
+    }
+    for (timestamp, value, room, output) in deliveries {
+        let value = json!({"method":"emit","event":"notice","data":[value],"binary":false,
+            "namespace":"/chat","room":room,"skip_sid":null,"callback":null,"host_id":SOURCE});
         let raw = crate::redis::encode_array(&[
             b"message",
             b"jobs",
@@ -55,17 +68,27 @@ fn recording(root: &Path) -> (Value, Vec<Value>, Vec<Vec<u8>>) {
         let mut incoming = push(subscriber, None, &raw, 600_000);
         incoming["timestamp"] = timestamp.into();
         dependencies.push(incoming);
-        frames.push(raw);
+        frames.push((raw, output));
     }
     (request, dependencies, frames)
 }
 
 #[tokio::test]
 async fn compressed_passive_prefix_answers_pings_only_when_output_continues() {
+    replay_passive_prefix(false).await;
+}
+
+#[tokio::test]
+async fn compressed_passive_prefix_preserves_identical_pushes_after_live_join_ack() {
+    replay_passive_prefix(true).await;
+}
+
+async fn replay_passive_prefix(setup: bool) {
     use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
     let temp = tempfile::tempdir().unwrap();
-    let (request, globals, frames) = recording(temp.path());
+    let (request, globals, frames) = recording(temp.path(), setup);
+    let delivery_count = frames.len();
     let runtime = super::recording::fast_runtime(temp.path(), &[], &globals)
         .await
         .unwrap();
@@ -104,18 +127,28 @@ async fn compressed_passive_prefix_answers_pings_only_when_output_continues() {
             SUBSCRIBED
         );
         socket.send(Message::Text(CONNECTED.into())).await.unwrap();
+        if setup {
+            assert_eq!(
+                socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                JOIN
+            );
+            guards::silent(&mut subscriber).await;
+            socket.send(Message::Text(JOINED.into())).await.unwrap();
+        }
         socket.send(Message::Text("2".into())).await.unwrap();
-        for (i, frame) in frames.into_iter().enumerate() {
+        for (i, (frame, output)) in frames.into_iter().enumerate() {
             assert_eq!(
                 timeout(Duration::from_millis(200), read(&mut subscriber))
                     .await
                     .expect("native output must continue during heartbeat observation"),
                 frame
             );
-            socket
-                .send(Message::Text(packet(i as u64 + 1).into()))
-                .await
-                .unwrap();
+            if let Some(value) = output {
+                socket
+                    .send(Message::Text(packet(value).into()))
+                    .await
+                    .unwrap();
+            }
             if i == 0 {
                 assert_eq!(
                     socket.next().await.unwrap().unwrap().into_text().unwrap(),
@@ -172,16 +205,25 @@ async fn compressed_passive_prefix_answers_pings_only_when_output_continues() {
         .iter()
         .filter(|event| !event.heartbeat)
         .collect();
+    let extra_index = if setup { 5 } else { 4 };
     assert_eq!(
         business.len(),
-        6,
+        extra_index + 2,
         "retain extra output before the actual EOF"
     );
-    assert_eq!(business[4].message, WireMessage::text(packet(3)));
-    assert_eq!(business[5].message, WireMessage::text(packet(4)));
-    assert!(business[4].offset_ms >= business[3].offset_ms + 63);
+    if setup {
+        assert_eq!(business[2].message, WireMessage::text(JOINED));
+        assert_eq!(business[3].message, WireMessage::text(packet(1)));
+        assert_eq!(business[4].message, WireMessage::text(packet(1)));
+    }
+    assert_eq!(business[extra_index].message, WireMessage::text(packet(3)));
+    assert_eq!(
+        business[extra_index + 1].message,
+        WireMessage::text(packet(4))
+    );
+    assert!(business[extra_index].offset_ms >= business[extra_index - 1].offset_ms + 63);
     let eof = output.end.fast_heartbeat_eof_ms.unwrap();
-    assert!(eof >= business[5].offset_ms + 490);
+    assert!(eof >= business[extra_index + 1].offset_ms + 490);
     assert!(output.end.offset_ms.saturating_sub(eof) <= 1);
     assert!(started.elapsed() < Duration::from_secs(2));
     target.await.unwrap();
@@ -196,7 +238,7 @@ async fn compressed_passive_prefix_answers_pings_only_when_output_continues() {
             .report()
             .unwrap()
             .delivered_pushes,
-        3
+        delivery_count
     );
 }
 

@@ -47,40 +47,24 @@ impl NativeClock {
     ) -> Option<()> {
         let pending = self.pending.get(case)?;
         let anchor = self.entries[*pending.front()?].anchor;
-        let mut positions = BTreeMap::new();
+        let (last_output_ms, _) = proof.outputs.last()?;
+        let last_output = Duration::from_millis(*last_output_ms);
+        let end = Duration::from_millis(proof.end_ms);
+        let mut last = None;
         for &index in pending {
             let entry = &self.entries[index];
-            if entry.anchor != anchor {
+            let offset = entry.offset.to_std().ok()?;
+            if entry.anchor != anchor || offset >= end {
                 return None;
             }
-            positions
-                .entry(entry.fingerprint)
-                .and_modify(|value| *value = None)
-                .or_insert(Some(index));
-        }
-        let mut positions = proof
-            .outputs
-            .iter()
-            .map(|key| positions.get(key).copied().flatten());
-        let first = positions.next()??;
-        let mut last = first;
-        for index in positions {
-            let index = index?;
-            if index <= last {
-                return None;
+            if offset < last_output + Duration::from_millis(1) {
+                last = Some(index);
             }
-            last = index;
         }
-        let last_output = Duration::from_millis(proof.last_output_ms);
-        let end = Duration::from_millis(proof.end_ms);
-        if self.entries[first].offset.to_std().ok()? <= Duration::from_millis(setup_finished_ms)
-            || pending.iter().any(|&index| {
-                let Some(offset) = self.entries[index].offset.to_std().ok() else {
-                    return true;
-                };
-                offset >= end || index > last && offset < last_output + Duration::from_millis(1)
-            })
-        {
+        let last = last?;
+        let first = first_observed_slot(pending, &self.entries, &proof.outputs)?;
+        let setup_finished = Duration::from_millis(setup_finished_ms.max(proof.setup_finished_ms));
+        if entry_offset(&self.entries[first]) <= setup_finished {
             return None;
         }
         self.live.get_mut(case)?.fast = Some(Pace {
@@ -140,6 +124,27 @@ impl NativeClock {
         let index = *self.pending.get(case)?.front()?;
         pace.deadline(index, &self.entries)
     }
+}
+
+fn first_observed_slot(
+    pending: &VecDeque<usize>,
+    entries: &[Entry],
+    outputs: &[(u64, [u8; 32])],
+) -> Option<usize> {
+    // Pair backwards so an identical earlier notification (including a
+    // different room on the same subscription) cannot move the end of the
+    // compressed prefix earlier than the last Source observation. Pairing
+    // only sets a timing boundary: every native slot is still delivered.
+    let mut candidates = pending.iter().rev().copied();
+    let mut first = None;
+    for &(observed_ms, fingerprint) in outputs.iter().rev() {
+        let ceiling = Duration::from_millis(observed_ms) + Duration::from_millis(1);
+        first = Some(candidates.find(|&index| {
+            let entry = &entries[index];
+            entry.fingerprint == fingerprint && entry_offset(entry) < ceiling
+        })?);
+    }
+    first
 }
 
 impl Pace {

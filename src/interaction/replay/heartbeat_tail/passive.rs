@@ -3,13 +3,19 @@ use super::*;
 use crate::interaction::socketio::SocketIoPacket;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug)]
 pub(crate) struct Passive {
-    pub(crate) outputs: Vec<[u8; 32]>,
+    pub(crate) outputs: Vec<(u64, [u8; 32])>,
     pub(crate) output_count: usize,
-    pub(crate) last_output_ms: u64,
+    pub(crate) setup_finished_ms: u64,
     pub(crate) end_ms: u64,
+}
+
+struct Setup {
+    namespace: String,
+    events: BTreeMap<u64, (u64, u64)>,
 }
 
 pub(crate) fn event_fingerprint(namespace: &str, name: &str, args: &[Value]) -> [u8; 32] {
@@ -18,6 +24,10 @@ pub(crate) fn event_fingerprint(namespace: &str, name: &str, args: &[Value]) -> 
 
 impl Passive {
     pub(crate) fn input_namespace(input: &InputTranscript) -> Option<String> {
+        Some(Self::setup(input)?.namespace)
+    }
+
+    fn setup(input: &InputTranscript) -> Option<Setup> {
         let packet = |action: &crate::interaction::model::InputAction| {
             let InputActionKind::Message { message } = &action.action else {
                 return None;
@@ -30,56 +40,119 @@ impl Passive {
         let EngineIoPacket::Message(connect) = packet(first)? else {
             return None;
         };
-        (connect.kind == SocketIoKind::Connect
-            && rest
-                .iter()
-                .all(|action| matches!(packet(action), Some(EngineIoPacket::Pong(_)))))
-        .then_some(connect.namespace)
+        if connect.kind != SocketIoKind::Connect {
+            return None;
+        }
+        let mut events = BTreeMap::new();
+        for action in rest {
+            match packet(action)? {
+                EngineIoPacket::Pong(_) => {}
+                EngineIoPacket::Message(event)
+                    if event.kind == SocketIoKind::Event
+                        && event.namespace == connect.namespace
+                        && event.attachments == 0
+                        && action.ack_ref.is_none()
+                        && !matches!(
+                            event.event_name().and_then(|name| {
+                                input.policy.completion_for(&event.namespace, name)
+                            }),
+                            Some(crate::interaction::policy::CompletionRule::TerminalEvent { .. })
+                        ) =>
+                {
+                    if events
+                        .insert(event.id?, (action.sequence, action.offset_ms))
+                        .is_some()
+                    {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+        Some(Setup {
+            namespace: connect.namespace,
+            events,
+        })
     }
 
     pub(crate) fn recognize(input: &InputTranscript, output: &OutputObservation) -> Option<Self> {
-        let namespace = Self::input_namespace(input)?;
+        let Setup {
+            namespace,
+            events: mut setup,
+        } = Self::setup(input)?;
         let (end_ms, _) = timeout(input, output)?;
-        if !output.end.pending.is_empty() {
-            return None;
-        }
+        let output_count = output
+            .events
+            .iter()
+            .filter(|event| !event.heartbeat)
+            .count();
         let mut events = output.events.iter().filter(|event| !event.heartbeat);
         let mut decoder = SocketIoDecoder::new(input.policy.max_message_bytes);
         let mut packets = |event: &crate::interaction::model::OutputEvent| {
             let [packet] = decoder.push(&event.message).ok()?.try_into().ok()?;
             Some(packet)
         };
-        if !matches!(packets(events.next()?)?, EngineIoPacket::Open(_))
-            || !matches!(packets(events.next()?)?, EngineIoPacket::Message(packet)
+        if !matches!(packets(events.next()?)?, EngineIoPacket::Open(_)) {
+            return None;
+        }
+        let connected = events.next()?;
+        if !matches!(packets(connected)?, EngineIoPacket::Message(packet)
                 if packet.kind == SocketIoKind::Connect && packet.namespace == namespace)
         {
             return None;
         }
+        let mut acknowledged = BTreeSet::new();
+        let mut setup_finished_ms = connected.offset_ms;
         let mut outputs = Vec::new();
-        let mut last_output_ms = 0;
         for event in events {
-            let EngineIoPacket::Message(SocketIoPacket {
-                kind: SocketIoKind::Event,
-                namespace: actual,
-                data: Some(Value::Array(data)),
-                id: None,
-                ..
-            }) = packets(event)?
-            else {
+            let EngineIoPacket::Message(packet) = packets(event)? else {
                 return None;
             };
-            let (name, args) = data.split_first()?;
-            if actual != namespace {
+            if packet.namespace != namespace {
                 return None;
             }
-            outputs.push(event_fingerprint(&namespace, name.as_str()?, args));
-            last_output_ms = event.offset_ms;
+            match packet {
+                SocketIoPacket {
+                    kind: SocketIoKind::Ack,
+                    id: Some(id),
+                    ..
+                } if outputs.is_empty() => {
+                    let (sequence, sent_at) = setup.remove(&id)?;
+                    if sent_at <= connected.offset_ms || sent_at >= event.offset_ms {
+                        return None;
+                    }
+                    acknowledged.insert(sequence);
+                    setup_finished_ms = event.offset_ms;
+                }
+                SocketIoPacket {
+                    kind: SocketIoKind::Event,
+                    data: Some(Value::Array(data)),
+                    id: None,
+                    ..
+                } if setup.is_empty() => {
+                    let (name, args) = data.split_first()?;
+                    outputs.push((
+                        event.offset_ms,
+                        event_fingerprint(&namespace, name.as_str()?, args),
+                    ));
+                }
+                _ => return None,
+            }
         }
         decoder.finish().ok()?;
-        (!outputs.is_empty() && last_output_ms < end_ms).then(|| Self {
-            output_count: outputs.len() + 2,
+        let (first_output_ms, _) = outputs.first()?;
+        let (last_output_ms, _) = outputs.last()?;
+        (*first_output_ms > setup_finished_ms
+            && *last_output_ms < end_ms
+            && output
+                .end
+                .pending
+                .iter()
+                .all(|id| acknowledged.contains(id)))
+        .then_some(Self {
+            output_count,
             outputs,
-            last_output_ms,
+            setup_finished_ms,
             end_ms,
         })
     }
