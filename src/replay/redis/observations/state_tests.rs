@@ -182,6 +182,66 @@ fn overlapping_nil_cleanup() -> Vec<Value> {
     events
 }
 
+fn overlapping_owned_reads() -> Vec<Value> {
+    let mut events = vec![
+        event(1, "SET", &[b"poll:1", b"old"], b"+OK\r\n"),
+        event(2, "GET", &[b"poll:1"], b"$3\r\nold\r\n"),
+        event(3, "GET", &[b"poll:1"], b"$3\r\nold\r\n"),
+        event(4, "GET", &[b"poll:1"], b"$3\r\nold\r\n"),
+        event(6, "SET", &[b"poll:1", b"new"], b"+OK\r\n"),
+        event(7, "GET", &[b"poll:1"], b"$3\r\nnew\r\n"),
+        event(8, "DEL", &[b"poll:1"], b":1\r\n"),
+    ];
+    events[1]["timestamp"] = json!("2020-01-01T00:00:05Z");
+    for (lane, exchange) in events.iter_mut().enumerate() {
+        exchange["connection_id"] = json!(Uuid::from_u128(lane as u128));
+    }
+    events
+}
+
+#[test]
+fn owned_state_coalesces_overlapping_identical_reads_and_keeps_writes_finite() {
+    let (_root, mut s) = state_with_policy(&overlapping_owned_reads(), policy(false));
+    s.prepare_observations("case").unwrap();
+    perform(&mut s, "SET", &[b"poll:1", b"old"]);
+    for _ in 0..4 {
+        assert_eq!(perform(&mut s, "GET", &[b"poll:1"]), b"$3\r\nold\r\n");
+    }
+    assert!(s.case_is_dirty("case"));
+    perform(&mut s, "SET", &[b"poll:1", b"new"]);
+    assert_eq!(perform(&mut s, "GET", &[b"poll:1"]), b"$3\r\nnew\r\n");
+    perform(&mut s, "DEL", &[b"poll:1"]);
+    assert!(!s.case_is_dirty("case"));
+    assert!(s.snapshot().unused_case.is_empty());
+}
+
+#[test]
+fn owned_state_rejects_a_read_crossing_either_mutation_or_returning_another_value() {
+    for change in [
+        "first_write",
+        "next_write",
+        "delete",
+        "different_value",
+        "missing_clock",
+    ] {
+        let mut events = overlapping_owned_reads();
+        match change {
+            "first_write" => events[0]["timestamp"] = json!("2020-01-01T00:00:03Z"),
+            "next_write" => events[1]["timestamp"] = json!("2020-01-01T00:00:07Z"),
+            "delete" => events[5]["timestamp"] = json!("2020-01-01T00:00:09Z"),
+            "different_value" => {
+                events[2]["response"] =
+                    event(3, "GET", &[b"poll:1"], b"$3\r\nnew\r\n")["response"].clone();
+            }
+            "missing_clock" => events[2]["timestamp"] = Value::Null,
+            _ => unreachable!(),
+        }
+        let (_root, mut s) = state_with_policy(&events, policy(false));
+        assert!(s.prepare_observations("case").is_err(), "{change}");
+        assert!(s.observations.profiles.is_empty());
+    }
+}
+
 #[test]
 fn nil_state_allows_overlapping_noop_cleanup_but_keeps_every_finite_deletion() {
     for transient in [false, true] {
