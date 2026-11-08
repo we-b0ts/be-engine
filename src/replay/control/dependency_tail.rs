@@ -92,6 +92,22 @@ impl CaseTails {
         self.eof_recoveries.insert(case.into(), proof);
     }
 
+    pub(super) fn record_eof_probe_failure(
+        &mut self,
+        case: &str,
+        blocker: RecordedReference,
+        reason: &'static str,
+    ) {
+        self.failures.entry(case.into()).or_insert_with(|| {
+            serde_json::json!({
+                "kind": "socketio_eof_probe_unconfirmed",
+                "case_id": case,
+                "blocker": blocker,
+                "reason": reason,
+            })
+        });
+    }
+
     pub(in crate::replay) fn eof_recovery(&self, case: &str) -> Option<&serde_json::Value> {
         self.eof_recoveries.get(case)
     }

@@ -43,6 +43,19 @@ impl RedisReplayState {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn pending_socketio_eof_read(&self, index: usize, case: &str) -> bool {
+        let exchange = &self.exchanges[index];
+        exchange.status == ReplayExchangeStatus::Available
+            && exchange.source == ReplaySource::Case
+            && exchange.case_id.as_deref() == Some(case)
+            && exchange.record.command == "GET"
+            && exchange.shared_rule_id.is_none()
+            && !exchange.reusable_snapshot
+            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
+            && exchange.record.replay_safe
+            && exchange.record.parse_warnings.is_empty()
+    }
+
     pub(in crate::replay) fn open_socketio_eof_suffix(&mut self, index: usize) {
         let exchange = &mut self.exchanges[index];
         if exchange.status == ReplayExchangeStatus::Available

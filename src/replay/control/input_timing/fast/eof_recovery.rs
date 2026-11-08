@@ -1,4 +1,4 @@
-//! A terminal Redis lane wait may be released by Target's real disconnect callback.
+//! Confirm that a missing terminal dependency follows Target's real disconnect.
 use super::*;
 use crate::replay::{
     admission::RequestAdmission,
@@ -6,10 +6,12 @@ use crate::replay::{
 };
 
 const PROOF_BUDGET: Duration = Duration::from_secs(5);
+const QUIET_BEFORE_PROBE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct EofRecovery {
     observing: bool,
+    waiting: Option<(usize, MonoInstant)>,
     probe: Option<Probe>,
 }
 
@@ -18,7 +20,7 @@ struct Probe {
     prefix_end: usize,
     blocker_index: usize,
     blocker: RecordedReference,
-    rejection: CommandRequestReport,
+    rejection: Option<CommandRequestReport>,
     offered_at: Option<(MonoInstant, DateTime<Utc>)>,
     observed_at: Option<DateTime<Utc>>,
     verified_close_at: Option<DateTime<Utc>>,
@@ -27,6 +29,13 @@ struct Probe {
 fn delivered(state: &ReplayState, handle: ExchangeHandle) -> bool {
     handle.delivery_state(state) == Some(ReplayExchangeStatus::Consumed)
         || handle.permits_unstarted_omission(state, false, true)
+}
+
+pub(super) fn first_heartbeat_blocker(state: &ReplayState, plan: &Plan) -> Option<usize> {
+    let count = plan.heartbeat_request_count?;
+    plan.handles[..count]
+        .iter()
+        .position(|&handle| !delivered(state, handle))
 }
 
 pub(in crate::replay) fn propose_eof_recovery(
@@ -46,21 +55,29 @@ pub(in crate::replay) fn propose_eof_recovery(
     true
 }
 
+fn eligible_timeline(state: &ReplayState) -> Option<&Live> {
+    let live = state.input_timing.as_ref()?;
+    if !live.eof_recovery.observing
+        || live.eof_recovery.probe.is_some()
+        || live.admission_epoch != state.admission_epoch
+        || crate::replay::control::case_execution::failed(state, &live.case)
+        || !state
+            .dependency_tails
+            .permits_eof_recovery(state, &live.case)
+    {
+        return None;
+    }
+    Some(live)
+}
+
 fn candidate(
     state: &ReplayState,
     observation: &RequestAdmission,
     rejection: &CommandRequestReport,
 ) -> Option<Probe> {
-    let live = state.input_timing.as_ref()?;
-    if !live.eof_recovery.observing
-        || live.eof_recovery.probe.is_some()
-        || observation.cancel_reason(state).is_some()
-        || live.admission_epoch != state.admission_epoch
+    let live = eligible_timeline(state)?;
+    if observation.cancel_reason(state).is_some()
         || observation.case.as_deref() != Some(live.case.as_str())
-        || crate::replay::control::case_execution::failed(state, &live.case)
-        || !state
-            .dependency_tails
-            .permits_eof_recovery(state, &live.case)
     {
         return None;
     }
@@ -75,8 +92,6 @@ fn candidate(
         return None;
     }
     let plan = live.fast.as_ref()?;
-    let tail = plan.source.tail.as_ref()?;
-    let region = tail.heartbeat_timeout_us?..tail.heartbeat_dependency_cutoff_us?;
     let count = plan.heartbeat_request_count?;
     let source_ref =
         |r: &crate::replay::report::command::CommandExchangeRefReport| RecordedReference::Redis {
@@ -90,15 +105,27 @@ fn candidate(
         .iter()
         .position(|request| request.reference == blocker)?;
     let held = requests.iter().find(|request| request.reference == held)?;
-    let start = requests[prefix_end].started_us;
+    if held.started_us <= requests[prefix_end].started_us
+        || first_heartbeat_blocker(state, plan) != Some(prefix_end)
+    {
+        return None;
+    }
+    let mut probe = probe_for(plan, prefix_end)?;
+    probe.rejection = Some(rejection.clone());
+    Some(probe)
+}
+
+fn probe_for(plan: &Plan, prefix_end: usize) -> Option<Probe> {
+    let tail = plan.source.tail.as_ref()?;
+    let region = tail.heartbeat_timeout_us?..tail.heartbeat_dependency_cutoff_us?;
+    let requests = &plan.source.requests[..plan.heartbeat_request_count?];
+    let request = requests.get(prefix_end)?;
+    let start = request.started_us;
     if !region.contains(&start)
-        || held.started_us <= start
         || requests
             .get(prefix_end + 1)
             .is_some_and(|next| next.started_us == start)
-        || !plan.handles[..prefix_end]
-            .iter()
-            .all(|&handle| delivered(state, handle))
+        || prefix_end > 0 && requests[prefix_end - 1].started_us == start
     {
         return None;
     }
@@ -109,24 +136,60 @@ fn candidate(
     Some(Probe {
         prefix_end,
         blocker_index,
-        blocker,
-        rejection: rejection.clone(),
+        blocker: request.reference,
+        rejection: None,
         offered_at: None,
         observed_at: None,
         verified_close_at: None,
     })
 }
 
-pub(super) fn offer(state: &mut ReplayState) -> Option<Value> {
+fn quiet_candidate(state: &ReplayState, index: usize) -> Option<Probe> {
+    let live = eligible_timeline(state)?;
+    let plan = live.fast.as_ref()?;
+    let probe = probe_for(plan, index)?;
+    let tail = plan.source.tail.as_ref()?;
+    // Offsets in legacy wire evidence are floored to milliseconds. Compare
+    // to the end of the last business tick on the aligned dependency clock.
+    let remaining_ms = tail.cutoff.checked_sub(tail.quiet_from)?;
+    let business_end = tail
+        .heartbeat_dependency_cutoff_us?
+        .checked_sub(remaining_ms.checked_mul(1_000)?)?
+        .checked_add(1_000)?;
+    (plan.source.requests[index].started_us >= business_end
+        && state
+            .redis
+            .pending_socketio_eof_read(probe.blocker_index, &live.case))
+    .then_some(probe)
+}
+
+pub(super) fn offer(state: &mut ReplayState, blocker: Option<usize>) -> Option<Value> {
     let live = state.input_timing.as_mut()?;
     live.eof_recovery.observing = true;
+    let now = MonoInstant::now();
+    let waited = blocker.filter(|index| {
+        let waiting = live.eof_recovery.waiting.get_or_insert((*index, now));
+        if waiting.0 != *index {
+            *waiting = (*index, now);
+        }
+        now - waiting.1 >= QUIET_BEFORE_PROBE
+    });
+    if blocker.is_none() {
+        live.eof_recovery.waiting = None;
+    }
+    // No Target request need be stalled on this dependency. The first missing
+    // Source read may itself only start once the transport ends.
+    if let Some(probe) = waited.and_then(|index| quiet_candidate(state, index)) {
+        state.input_timing.as_mut()?.eof_recovery.probe = Some(probe);
+    }
+    let live = state.input_timing.as_mut()?;
     let probe = live.eof_recovery.probe.as_mut()?;
     if probe.offered_at.is_some() {
         return None;
     }
-    probe.offered_at = Some((MonoInstant::now(), Utc::now()));
+    probe.offered_at = Some((now, Utc::now()));
     tracing::info!(case_id = live.case, blocker = ?probe.blocker,
-        "offering Socket.IO EOF recovery for a timed-out Redis lane");
+        "offering Socket.IO EOF recovery for a terminal Redis dependency");
     Some(
         serde_json::json!({"ok":true,"ready":true,"advance":Advance {
         removed_ms:live.clock.removed_ms(),probe_eof:true}}),
@@ -181,14 +244,26 @@ pub(in crate::replay) fn confirm_eof_recovery(
         .probe
         .as_ref()
         .expect("validated EOF offer");
+    let timed_out = offered.elapsed() >= PROOF_BUDGET;
+    let had_failure = crate::replay::control::case_execution::failed(state, case);
     let failed = closed_at.is_none_or(|closed| closed < offered_at || closed > Utc::now())
-        || offered.elapsed() >= PROOF_BUDGET
+        || timed_out
         || probe
             .observed_at
             .zip(closed_at)
             .is_some_and(|(observed, closed)| observed <= closed)
-        || crate::replay::control::case_execution::failed(state, case);
+        || had_failure;
     if failed {
+        if !had_failure && probe.rejection.is_none() {
+            let reason = if timed_out {
+                "post_close_delivery_timeout"
+            } else {
+                "dependency_not_proven_after_close"
+            };
+            state
+                .dependency_tails
+                .record_eof_probe_failure(case, probe.blocker, reason);
+        }
         reject(state);
         return Ok(serde_json::json!({"ok":true,"recovered":false}));
     }
@@ -234,8 +309,9 @@ fn reject(state: &mut ReplayState) {
         .input_timing
         .as_mut()
         .and_then(|live| live.eof_recovery.probe.take())
+        && let Some(rejection) = probe.rejection
     {
-        state.redis.record_unmatched_request(probe.rejection);
+        state.redis.record_unmatched_request(rejection);
     }
 }
 
@@ -247,7 +323,9 @@ pub(in crate::replay) fn finish_eof_recovery(state: &mut ReplayState, case: &str
         return;
     };
     let Some(close_at) = probe.verified_close_at else {
-        state.redis.record_unmatched_request(probe.rejection);
+        if let Some(rejection) = probe.rejection {
+            state.redis.record_unmatched_request(rejection);
+        }
         return;
     };
     let plan = live.fast.as_ref().expect("EOF recovery requires fast plan");

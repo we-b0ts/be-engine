@@ -61,13 +61,17 @@ async fn control(runtime: &ReplayRuntime, value: Value) -> Value {
 #[tokio::test(start_paused = true)]
 async fn eof_recovery_requires_a_delivered_prefix_and_the_exact_post_close_get() {
     use super::super::append::tests::event;
-    for outcome in [
+    let outcomes = [
         Outcome::Recovered,
         Outcome::Missing,
         Outcome::BeforeClose,
         Outcome::PrefixUnmatched,
         Outcome::BeforeHeartbeatTimeout,
-    ] {
+    ];
+    for (lane_blocked, outcome) in [true, false]
+        .into_iter()
+        .flat_map(|lane_blocked| outcomes.map(move |outcome| (lane_blocked, outcome)))
+    {
         let mut source = Observation::new(Protocol::SocketIo, Default::default()).unwrap();
         source
             .output(
@@ -124,11 +128,18 @@ async fn eof_recovery_requires_a_delivered_prefix_and_the_exact_post_close_get()
             )
             .await;
         }
-        assert!(
-            command(&runtime, &[b"PUBLISH", b"live", b"update"])
-                .await
-                .is_err()
-        );
+        if lane_blocked {
+            assert!(
+                command(&runtime, &[b"PUBLISH", b"live", b"update"])
+                    .await
+                    .is_err()
+            );
+        } else {
+            assert_eq!(control(&runtime, tail()).await["ready"], false);
+            tokio::time::advance(Duration::from_millis(4999)).await;
+            assert_eq!(control(&runtime, tail()).await["ready"], false);
+            tokio::time::advance(Duration::from_millis(1)).await;
+        }
         if matches!(
             outcome,
             Outcome::PrefixUnmatched | Outcome::BeforeHeartbeatTimeout
@@ -178,6 +189,7 @@ async fn eof_recovery_requires_a_delivered_prefix_and_the_exact_post_close_get()
                 assert_eq!(audit["omitted_unstarted_suffix"], 4);
                 assert_eq!(audit["omitted_after_source_eof"], 1);
                 assert_eq!(audit["blocker"]["sequence"], 3);
+                assert_eq!(audit["interrupted_request"].is_object(), lane_blocked);
                 continue;
             }
             if matches!(outcome, Outcome::Missing) {
@@ -190,8 +202,17 @@ async fn eof_recovery_requires_a_delivered_prefix_and_the_exact_post_close_get()
             );
         }
         let state = runtime.state.lock().await;
-        assert!(matches!(&state.redis.events.unmatched[0].diagnostic,
-            Some(CommandMatchDiagnostic::LaneBlocked { blocked_by, .. }) if blocked_by.sequence == 3));
+        if lane_blocked {
+            assert!(matches!(&state.redis.events.unmatched[0].diagnostic,
+                Some(CommandMatchDiagnostic::LaneBlocked { blocked_by, .. }) if blocked_by.sequence == 3));
+        } else {
+            assert!(state.redis.events.unmatched.is_empty());
+            if matches!(outcome, Outcome::Missing) {
+                let failure = state.dependency_tails.failure("case").unwrap();
+                assert_eq!(failure["kind"], "socketio_eof_probe_unconfirmed");
+                assert_eq!(failure["reason"], "post_close_delivery_timeout");
+            }
+        }
         assert!(state.dependency_tails.eof_recovery("case").is_none());
     }
 }

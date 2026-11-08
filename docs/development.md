@@ -181,6 +181,13 @@ up to one second. The Source business events must still match the Target prefix.
 Complete Target business events appended to that prefix are allowed for this
 observed fast close window.
 
+If the business prefix is complete and the first missing dependency is a
+Case-owned Redis GET from the Source heartbeat timeout interval, fast replay
+can close the actual WebSocket after five seconds waiting on that GET. The
+recovery requires the exact GET to arrive and receive its response within five
+seconds of the close. Case ownership remains active while disconnect traffic
+is observed.
+
 If actual execution cleanup fails after Replay readiness, the runner stops Target and asks
 Replay to publish an interrupted diagnostic snapshot before stopping its process.
 `replay/control/interruption` seals captured payload observations and writes the

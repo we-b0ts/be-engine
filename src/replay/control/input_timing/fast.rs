@@ -450,7 +450,16 @@ impl Plan {
 }
 
 pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Result<Value> {
-    if tail && let Some(close) = eof_recovery::offer(state) {
+    let heartbeat_blocker = if tail {
+        state
+            .input_timing
+            .as_ref()
+            .and_then(|live| live.fast.as_ref())
+            .and_then(|plan| eof_recovery::first_heartbeat_blocker(state, plan))
+    } else {
+        None
+    };
+    if tail && let Some(close) = eof_recovery::offer(state, heartbeat_blocker) {
         return Ok(close);
     }
     if let Some(events_ready) = query.events_ready {
@@ -484,13 +493,9 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
         let ready = if tail.policy.heartbeat_acks.is_some() {
             // Native omission proof can settle an unstarted setup/cleanup
             // exchange. An ordinary dependency must finish on the wire.
-            let count = plan
-                .heartbeat_request_count
+            plan.heartbeat_request_count
                 .context("heartbeat EOF dependency prefix unavailable")?;
-            plan.handles[..count].iter().all(|handle| {
-                handle.delivery_state(state) == Some(ReplayExchangeStatus::Consumed)
-                    || handle.permits_unstarted_omission(state, false, true)
-            })
+            heartbeat_blocker.is_none()
         } else {
             plan.ready(
                 state,
