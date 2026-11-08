@@ -127,10 +127,12 @@ impl TimeCopyRecord {
         mut self,
         payload: [u8; 32],
         source_started: Option<chrono::DateTime<chrono::Utc>>,
+        target_started: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
         self.origin = CopyOrigin::RedisGet {
             payload,
             source_started,
+            target_started,
         };
         self
     }
@@ -324,6 +326,9 @@ struct CopyValue {
     target: Option<[u8; 32]>,
     scalar: Option<Value>,
     deliveries: Vec<CopyDelivery>,
+    // Proof lookup can drop redundant deliveries, but supersession must
+    // account for every GET that observed the current counterpart.
+    latest_redis_read_start: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Copy)]
@@ -338,6 +343,7 @@ enum CopyOrigin {
     RedisGet {
         payload: [u8; 32],
         source_started: Option<chrono::DateTime<chrono::Utc>>,
+        target_started: Option<chrono::DateTime<chrono::Utc>>,
     },
     RedisSet([u8; 32]),
 }
@@ -351,24 +357,41 @@ impl CopyDelivery {
             (
                 CopyOrigin::RedisGet {
                     payload,
-                    source_started: Some(start),
+                    source_started,
+                    ..
                 },
                 CopyOrigin::RedisGet {
                     payload: other_payload,
-                    source_started: Some(other_start),
+                    source_started: other_source_started,
+                    ..
                 },
-            ) => payload == other_payload && start <= other_start,
+            ) => {
+                payload == other_payload
+                    && (source_started == other_source_started
+                        || source_started
+                            .zip(other_source_started)
+                            .is_some_and(|(start, other_start)| start <= other_start))
+            }
             (left, right) => left == right,
         }
     }
 
-    fn supersedes_early_redis_read(self, read: Self) -> bool {
+    fn redis_read_start(self) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self.origin {
+            CopyOrigin::RedisGet { target_started, .. } => {
+                Some(target_started.unwrap_or(self.clocks.1))
+            }
+            _ => None,
+        }
+    }
+
+    fn redis_set_precedes_read_on_source(self, read: Self) -> bool {
         matches!(
             (self.origin, read.origin),
             (
                 CopyOrigin::RedisSet(written),
-                CopyOrigin::RedisGet { payload, source_started: Some(start) }
-            ) if written == payload && self.clocks.0 <= start && read.clocks.1 < self.clocks.1
+                CopyOrigin::RedisGet { payload, source_started: Some(start), .. }
+            ) if written == payload && self.clocks.0 <= start
         )
     }
 }
@@ -383,20 +406,24 @@ impl CopyValue {
                 // derived timestamp. Once its real SET completes, use the
                 // timestamp that Target wrote for subsequent reads.
                 if self
-                    .deliveries
-                    .iter()
-                    .all(|read| delivery.supersedes_early_redis_read(*read))
+                    .latest_redis_read_start
+                    .is_some_and(|start| start < delivery.clocks.1)
+                    && self
+                        .deliveries
+                        .iter()
+                        .all(|read| delivery.redis_set_precedes_read_on_source(*read))
                 {
                     self.target = Some(target);
                     self.scalar = scalar;
                     self.deliveries.clear();
                     self.deliveries.push(delivery);
+                    self.latest_redis_read_start = None;
                     return;
                 }
-                if self
-                    .deliveries
-                    .iter()
-                    .all(|write| write.supersedes_early_redis_read(delivery))
+                if let Some(start) = delivery.redis_read_start()
+                    && self.deliveries.iter().all(|write| {
+                        start < write.clocks.1 && write.redis_set_precedes_read_on_source(delivery)
+                    })
                 {
                     return;
                 }
@@ -404,11 +431,15 @@ impl CopyValue {
             self.target = None;
             self.scalar = None;
             self.deliveries.clear();
+            self.latest_redis_read_start = None;
             return;
         }
         if self.scalar.is_none() {
             self.scalar = scalar;
         }
+        self.latest_redis_read_start = self
+            .latest_redis_read_start
+            .max(delivery.redis_read_start());
         // Keep real paired observations; independent minima can invent a read
         // that preceded the write in both executions when none actually did.
         if self
@@ -555,6 +586,7 @@ impl TimeCopyStore {
                             target: Some(record.target),
                             scalar: record.scalar.clone(),
                             deliveries: vec![],
+                            latest_redis_read_start: None,
                         })
                 })
                 .observe(

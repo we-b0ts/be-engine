@@ -448,3 +448,81 @@ fn redis_set_supersedes_a_replayed_read_that_arrived_before_the_write() {
         );
     }
 }
+
+#[test]
+fn redis_set_supersedes_a_get_that_started_early_but_replied_after_the_write() {
+    let host = TargetKey {
+        host: "cache.test".into(),
+        port: 6379,
+    };
+    let time = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
+    let source = r#"{"last_heartbeat":"1970-01-01T00:16:40Z"}"#;
+    let stored = r#"{"last_heartbeat":"1970-01-01T00:33:23Z"}"#;
+    let keys = args(&["key"]);
+    let response = bulk(source);
+    for (set_publishes_first, later_conflicting_get) in
+        [(false, false), (true, false), (false, true)]
+    {
+        let owner = runtime();
+        let mut write = RedisRequestContext::without_exchange("case", &host, 0, "SET");
+        write.recorded_at = Some(time(999));
+        write.actual_at = Some(time(2001));
+        let write = owner
+            .prepare_redis_time_write(
+                &write,
+                &args(&["key", source, "EX", "60"]),
+                &args(&["key", stored, "EX", "60"]),
+                b"+OK\r\n",
+                Some(time(1000)),
+            )
+            .unwrap()
+            .unwrap();
+        let mut read = RedisRequestContext::without_exchange("case", &host, 0, "GET");
+        read.recorded_at = Some(time(1002));
+        read.actual_at = Some(time(2002));
+        let early = owner
+            .prepare_redis_time_read(&read, &keys, &keys, &response, Some(time(1003)))
+            .unwrap()
+            .unwrap();
+        if set_publishes_first {
+            write.publish(time(2004)).unwrap();
+        }
+        early.publish(&response, time(2006)).unwrap();
+        if later_conflicting_get {
+            read.recorded_at = Some(time(1004));
+            read.actual_at = Some(time(2005));
+            owner
+                .prepare_redis_time_read(&read, &keys, &keys, &response, Some(time(1005)))
+                .unwrap()
+                .unwrap()
+                .publish(&response, time(2007))
+                .unwrap();
+        }
+        if !set_publishes_first {
+            write.publish(time(2004)).unwrap();
+        }
+        let later = owner
+            .prepare_redis_delivery(
+                "case",
+                "case",
+                &host,
+                0,
+                None,
+                "GET",
+                &keys,
+                &keys,
+                &response,
+                Some(time(1011)),
+                Some(time(2010)),
+                Some(time(1010)),
+                uuid::Uuid::new_v4(),
+                5,
+            )
+            .unwrap();
+        if later_conflicting_get {
+            assert!(later.is_err());
+        } else {
+            assert_eq!(later.unwrap().render(time(2011)).unwrap(), bulk(stored));
+        }
+    }
+}
