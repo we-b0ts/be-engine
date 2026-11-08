@@ -263,7 +263,7 @@ pub fn claim_foreign_unused(options: AttributionCommandOptions) -> Result<Value>
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
-    let api = super::inventory::api_for_rule_evidence_id(&root, &state, &input.evidence_id)?;
+    let api = super::inventory::api_for_ownership_evidence_id(&root, &state, &input.evidence_id)?;
     ensure!(
         super::api_selector::public_api(&api) == input.api,
         "claim evidence belongs to another canonical API"

@@ -219,10 +219,23 @@ pub(crate) fn verify_case_clock(witness: &WitnessRef, report: &serde_json::Value
         .map(str::parse::<DateTime<Utc>>)
         .transpose()?;
     ensure!(
-        clock == witness.metadata.clocks.case.target,
+        target_case_clock_matches(witness.metadata.surface, &witness.metadata.clocks, clock),
         "protected Target Case clock differs from the current Replay report"
     );
     Ok(())
+}
+
+fn target_case_clock_matches(
+    surface: Surface,
+    clocks: &WitnessClocks,
+    started: Option<DateTime<Utc>>,
+) -> bool {
+    clocks.case.target == started
+        // Case admission can precede request_begin. The independently observed
+        // dependency clock proves why the primary clock was absent at capture.
+        || surface == Surface::DependencyRequest
+            && clocks.case.target.is_none()
+            && clocks.dependency.target.zip(started).is_some_and(|(observed, start)| observed < start)
 }
 
 #[derive(Serialize, Deserialize)]

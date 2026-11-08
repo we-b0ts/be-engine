@@ -835,7 +835,8 @@ fn mysql_text_prepared_domain_adapter_does_not_relax_other_commands() {
 
 #[test]
 fn replay_session_policy_and_case_clock_cannot_be_replaced_with_an_old_valid_graph() {
-    let (_temp, artifacts, _standalone, metadata) = setup();
+    let (_temp, artifacts, _standalone, mut metadata) = setup();
+    metadata.clocks.dependency.target = Some("2026-10-16T00:00:00Z".parse().unwrap());
     let store = WitnessStore::new_bound(&artifacts, "session-a", "policy-a").unwrap();
     store
         .record_observation(
@@ -869,8 +870,16 @@ fn replay_session_policy_and_case_clock_cannot_be_replaced_with_an_old_valid_gra
     assert!(verify(&path, &manifest).is_err());
     let mut witness = manifest.witnesses().unwrap().remove(0);
     assert!(verify_case_clock(&witness, &changed).is_err());
-    write(&original);
+    // An authenticated request observed before the primary clock was set is
+    // still evidence of its actual arrival, without a primary time anchor.
+    changed["cases"][0]["target_request_started_at"] = "2026-10-16T00:00:00.002Z".into();
+    write(&changed);
+    verify(&path, &manifest).unwrap();
+    verify_case_clock(&witness, &changed).unwrap();
+    assert!(witness.metadata.clocks.case.target.is_none());
     witness.metadata.clocks.case.target = DateTime::from_timestamp(1, 0);
+    assert!(verify_case_clock(&witness, &changed).is_err());
+    write(&original);
     assert!(verify_case_clock(&witness, &original).is_err());
 }
 

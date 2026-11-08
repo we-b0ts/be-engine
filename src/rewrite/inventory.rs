@@ -213,6 +213,20 @@ pub(super) fn api_for_rule_evidence_id(
         .context("rule evidence is stale or belongs to no concurrent API work item")
 }
 
+pub(super) fn api_for_ownership_evidence_id(
+    target_root: &std::path::Path,
+    state: &RewriteState,
+    evidence_id: &str,
+) -> Result<String> {
+    // An ownership return uses the overview to select the API. The claim
+    // separately checks the exact unused IDs against finalized Replay.
+    slices(state)
+        .find(|slice| super::evidence::current_overview_matches(target_root, slice, evidence_id))
+        .map(|slice| slice.api.clone())
+        .or_else(|| api_for_evidence_id(target_root, state, evidence_id))
+        .context("ownership evidence is stale or belongs to no concurrent API work item")
+}
+
 pub(super) fn api_for_rule_plan(state: &RewriteState, plan_id: &str) -> Option<String> {
     slices(state).find_map(|slice| {
         slice
