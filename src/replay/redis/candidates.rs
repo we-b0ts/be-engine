@@ -122,11 +122,21 @@ impl Candidates {
         exchanges: &[ReplayExchange],
         candidate: usize,
     ) -> Option<usize> {
+        self.lane_blocker_excluding(exchanges, candidate, None)
+    }
+
+    pub(super) fn lane_blocker_excluding(
+        &self,
+        exchanges: &[ReplayExchange],
+        candidate: usize,
+        excluded: Option<usize>,
+    ) -> Option<usize> {
         if !exchanges[candidate].preserves_connection_order() {
             return None;
         }
         self.lanes.blocker(candidate, |prior| {
-            exchanges[prior].preserves_connection_order()
+            Some(prior) != excluded
+                && exchanges[prior].preserves_connection_order()
                 && !exchanges[prior].satisfies_lane_order()
         })
     }

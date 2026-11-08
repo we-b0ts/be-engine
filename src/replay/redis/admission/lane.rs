@@ -75,6 +75,125 @@ mod tests {
     use crate::replay::redis::append::tests::event;
     use serde_json::json;
 
+    #[tokio::test]
+    async fn only_a_zero_subscriber_publish_can_pass_a_proven_state_deletion_in_fast_replay() {
+        for (fast, count, observe) in [
+            (true, 0, true),
+            (false, 0, true),
+            (true, 1, true),
+            (true, 0, false),
+        ] {
+            let publish_reply = format!(":{count}\r\n");
+            let policy = if observe {
+                json!({"format":"traffic-policy/v3","redis":{"keys":{"device:online":{"state":{"get":"observe"}}}}})
+            } else {
+                json!({"format":"traffic-policy/v3","rules":[]})
+            };
+            let (_root, runtime) = super::super::tests::runtime_with_request(
+                &[
+                    event(1, "SET", &[b"device:online", b"up"], b"+OK\r\n"),
+                    event(2, "GET", &[b"device:online"], b"$2\r\nup\r\n"),
+                    event(3, "DEL", &[b"device:online"], b":1\r\n"),
+                    event(4, "PUBLISH", &[b"live", b"event"], publish_reply.as_bytes()),
+                ],
+                policy,
+                json!({"method":"GET","uri":"/socket.io/","timestamp":"2020-01-01T00:00:00Z",
+                    "interaction":InputTranscript::new(Protocol::SocketIo, Default::default())}),
+                crate::replay::ReplayLifecycleConfig {
+                    stream_timing: fast.then_some(ReplayStreamTiming::Fast),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let (begin, _) = crate::replay::control::handle_control_request(
+                serde_json::from_value(json!({"command":"input_timing_begin","case_id":"case"}))
+                    .unwrap(),
+                runtime.state.clone(),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(begin["ok"], true, "{begin}");
+            let target = TargetKey {
+                host: "redis.test".into(),
+                port: 6379,
+            };
+            let client = Uuid::new_v4();
+            let mut binding = CaseConnectionBinding::default();
+            let set = RedisCommand {
+                name: "SET".into(),
+                args: vec![b"device:online".to_vec(), b"up".to_vec()],
+            };
+            let get = RedisCommand {
+                name: "GET".into(),
+                args: vec![b"device:online".to_vec()],
+            };
+            let publish = RedisCommand {
+                name: "PUBLISH".into(),
+                args: vec![b"live".to_vec(), b"event".to_vec()],
+            };
+            let delete = RedisCommand {
+                name: "DEL".into(),
+                args: vec![b"device:online".to_vec()],
+            };
+            for request in [&set, &get] {
+                let matched = match_command(
+                    &runtime.state,
+                    &target,
+                    client,
+                    &mut binding,
+                    2,
+                    0,
+                    None,
+                    request,
+                )
+                .await
+                .unwrap();
+                runtime.state.lock().await.redis.complete_exchange(&matched);
+            }
+            let early = match_command(
+                &runtime.state,
+                &target,
+                client,
+                &mut binding,
+                2,
+                0,
+                None,
+                &publish,
+            )
+            .await;
+            if fast && count == 0 && observe {
+                let published = early.unwrap();
+                assert_eq!(published.report.sequence, 4);
+                {
+                    let mut state = runtime.state.lock().await;
+                    state.redis.complete_exchange(&published);
+                    assert_eq!(state.redis.snapshot().unused_case[0].command, "DEL");
+                }
+                let removed = match_command(
+                    &runtime.state,
+                    &target,
+                    client,
+                    &mut binding,
+                    2,
+                    0,
+                    None,
+                    &delete,
+                )
+                .await
+                .unwrap();
+                let mut state = runtime.state.lock().await;
+                state.redis.complete_exchange(&removed);
+                assert!(!state.redis.snapshot().is_dirty());
+            } else {
+                assert!(early.is_err());
+                let state = runtime.state.lock().await;
+                assert!(matches!(state.redis.events.unmatched[0].diagnostic,
+                    Some(CommandMatchDiagnostic::LaneBlocked { ref blocked_by, .. }) if blocked_by.sequence == 3));
+            }
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn earlier_pooled_publish_waits_for_the_exact_case_lane_slot() {
         for send_predecessor in [true, false] {

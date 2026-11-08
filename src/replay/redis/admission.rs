@@ -69,6 +69,7 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         state.redis.request_observed_at = observation.observed_at;
         state.redis.request_observation_id = observation.observation_id;
         state.redis.request_observation_retained = observation.observation_retained;
+        let fast_socketio = lane::enabled(state);
         let select = |redis: &mut RedisReplayState, expected_index, predecessors| {
             redis.select_redis(
                 observation.case.as_deref(),
@@ -82,11 +83,12 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
                 &self.command.args,
                 expected_index,
                 predecessors,
+                fast_socketio,
             )
         };
         select(&mut state.redis, self.expected_index, None)
             .or_else(|error| {
-                if self.lane_hint.is_none() || !lane::enabled(state) {
+                if self.lane_hint.is_none() || !fast_socketio {
                     return Err(error);
                 }
                 let Some(serial) = observation

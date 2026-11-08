@@ -184,6 +184,7 @@ impl RedisReplayState {
             args,
             None,
             None,
+            false,
         )
         .map(|mut matched| {
             matched.report.target_event_index = self.request_event_index;
@@ -279,6 +280,7 @@ impl RedisReplayState {
         args: &[Vec<u8>],
         expected_index: Option<usize>,
         serial_predecessors: Option<Arc<[usize]>>,
+        fast_socketio: bool,
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.candidates.register(&self.exchanges);
         if let Some(case) = active_case_id {
@@ -384,6 +386,7 @@ impl RedisReplayState {
                 args,
                 expected_index,
                 serial_predecessors.as_deref(),
+                fast_socketio,
             );
         }
         self.request_contracts

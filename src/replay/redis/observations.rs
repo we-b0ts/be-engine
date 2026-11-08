@@ -177,6 +177,17 @@ fn selected(effect: &NativeEffect) -> bool {
 }
 
 impl RedisReplayState {
+    pub(super) fn is_observed_state_mutation(&self, index: usize) -> bool {
+        self.observations.profiles.iter().any(|profile| {
+            profile.kind == Kind::StateRead
+                && !profile.failed
+                && profile
+                    .epochs
+                    .iter()
+                    .any(|epoch| epoch.mutation == Some(index))
+        })
+    }
+
     pub(in crate::replay) fn prepare_optional_observations(&mut self, case: &str) -> Result<()> {
         if self.request_contracts.compiled_rules().is_some_and(|compiled| compiled.native.iter().any(|rule| matches!(&rule.rule.effect, NativeEffect::RedisReadObservation(effect) if effect.transient_nil))) {
             self.prepare_observations(case)?;

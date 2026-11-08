@@ -52,6 +52,7 @@ impl RedisReplayState {
         args: &[Vec<u8>],
         expected_index: Option<usize>,
         serial_predecessors: Option<&[usize]>,
+        fast_socketio: bool,
     ) -> PreferredMatch {
         let request = Request {
             case,
@@ -66,7 +67,7 @@ impl RedisReplayState {
         if let Some(candidate) = expected_index {
             return if !request.matches(self, &self.exchanges[candidate]) {
                 PreferredMatch::NotFound
-            } else if let Some(blocker) = self.candidates.lane_blocker(&self.exchanges, candidate)
+            } else if let Some(blocker) = self.strict_lane_blocker(candidate, fast_socketio)
                 && !serial_predecessors.is_some_and(|prefix| prefix.contains(&blocker))
             {
                 PreferredMatch::LaneBlocked { candidate, blocker }
@@ -99,8 +100,41 @@ impl RedisReplayState {
             run_candidates,
             |exchange| request.matches(self, exchange),
             |exchange| request.priority(self, exchange),
-            |index| self.candidates.lane_blocker(&self.exchanges, index),
+            |index| self.strict_lane_blocker(index, fast_socketio),
         )
+    }
+
+    fn strict_lane_blocker(&self, candidate: usize, fast_socketio: bool) -> Option<usize> {
+        let blocker = self.candidates.lane_blocker(&self.exchanges, candidate)?;
+        let publish = &self.exchanges[candidate];
+        let deletion = &self.exchanges[blocker];
+        // A zero-subscriber publish had no receiver in Source. Fast replay can
+        // preserve the independent delivery of the exact publish and a proven
+        // state deletion when they arrive in the opposite order on the pool.
+        if fast_socketio
+            && publish.source == ReplaySource::Case
+            && deletion.source == ReplaySource::Case
+            && publish.record.command == "PUBLISH"
+            && publish.args.len() == 2
+            && publish.response == b":0\r\n"
+            && publish.record.replay_safe
+            && publish.record.parse_warnings.is_empty()
+            && publish.record.outcome == crate::DependencyExchangeOutcome::Response
+            && !publish.record.lifecycle_cleanup
+            && !self.connection_scopes.is_stateful(publish)
+            && !self.pubsub.is_adapter_source(publish)
+            && deletion.record.command == "DEL"
+            && deletion.args.len() == 1
+            && deletion.status.is_available()
+            && self.is_observed_state_mutation(blocker)
+        {
+            return self.candidates.lane_blocker_excluding(
+                &self.exchanges,
+                candidate,
+                Some(blocker),
+            );
+        }
+        Some(blocker)
     }
 }
 
