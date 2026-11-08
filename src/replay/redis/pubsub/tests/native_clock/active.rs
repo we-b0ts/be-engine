@@ -40,13 +40,25 @@ fn action(sequence: u64, offset_ms: u64, data: &str) -> InputAction {
 
 #[tokio::test]
 async fn completion_feedback_keeps_original_scope_and_request_epoch() {
-    for (lazy, disconnect) in [(false, false), (true, false), (false, true), (true, true)] {
+    for (lazy, disconnect, offset_us) in [
+        (false, false, None),
+        (true, false, None),
+        (false, true, None),
+        (true, true, None),
+        (true, false, Some(40_100)),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let (mut globals, original) = fixture(temp.path());
         let path = temp.path().join("case/request.json");
         let mut request: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let actions = request["interaction"]["actions"].as_array_mut().unwrap();
-        actions.push(serde_json::to_value(action(2, 10, "42/chat,0[\"join\",{}]")).unwrap());
+        let mut join = action(2, 10, "42/chat,0[\"join\",{}]");
+        if let Some(us) = offset_us {
+            join.offset_ms = us / 1_000;
+            join.offset_us = Some(us);
+            globals[1]["timestamp"] = "2020-01-01T00:10:00.040750Z".into();
+        }
+        actions.push(serde_json::to_value(join).unwrap());
         if disconnect {
             actions.push(serde_json::to_value(action(3, 500, "41/chat,")).unwrap());
             actions

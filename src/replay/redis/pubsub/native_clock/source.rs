@@ -17,16 +17,22 @@ pub(super) struct Window {
     pub end: Option<DateTime<Utc>>,
     pub namespaces: BTreeSet<String>,
     pub projectable: bool,
-    pub inputs: Vec<(u64, u64)>,
+    pub inputs: Vec<InputClock>,
     fences: Vec<Fence>,
     pub selected: bool,
 }
 
 struct TrackedInputs {
-    acknowledgements: Vec<(u64, u64)>,
+    acknowledgements: Vec<InputClock>,
     ack_ids: BTreeMap<u64, (u64, u64)>,
     unacknowledged: Vec<(u64, u64)>,
     close_ms: Option<u64>,
+}
+
+pub(super) struct InputClock {
+    pub sequence: u64,
+    pub offset_ms: u64,
+    pub offset_us: Option<u64>,
 }
 
 struct Fence {
@@ -287,7 +293,11 @@ fn tracked_inputs(input: &InputTranscript) -> Option<TrackedInputs> {
         {
             return None;
         }
-        inputs.push((action.sequence, action.offset_ms));
+        inputs.push(InputClock {
+            sequence: action.sequence,
+            offset_ms: action.offset_ms,
+            offset_us: action.offset_us,
+        });
     }
     Some(TrackedInputs {
         acknowledgements: inputs,

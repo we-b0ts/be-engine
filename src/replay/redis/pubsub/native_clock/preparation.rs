@@ -127,11 +127,7 @@ impl PubSubState {
             .map(|window| {
                 (
                     window.case.clone(),
-                    window
-                        .inputs
-                        .iter()
-                        .map(|(sequence, _)| *sequence)
-                        .collect(),
+                    window.inputs.iter().map(|input| input.sequence).collect(),
                 )
             })
             .collect();
@@ -212,20 +208,26 @@ fn select(
     }
     let start = window.start.context("native notification start missing")?;
     let offset = at - start;
-    // Floor-millisecond input offsets cannot order a notification in that same millisecond.
-    if window
-        .inputs
-        .iter()
-        .any(|(_, input)| offset.num_milliseconds() == i64::try_from(*input).unwrap_or(i64::MAX))
-    {
+    let Some(offset_us) = offset
+        .num_microseconds()
+        .and_then(|us| u64::try_from(us).ok())
+    else {
         return Ok(None);
+    };
+    let mut inputs_before = Vec::new();
+    for input in &window.inputs {
+        // Compare in the precision of the original input. A shared clock tick
+        // still cannot prove whether the notification preceded the input.
+        let order = input.offset_us.map_or_else(
+            || input.offset_ms.cmp(&(offset_us / 1_000)),
+            |input_us| input_us.cmp(&offset_us),
+        );
+        match order {
+            std::cmp::Ordering::Equal => return Ok(None),
+            std::cmp::Ordering::Less => inputs_before.push(input.sequence),
+            std::cmp::Ordering::Greater => {}
+        }
     }
-    let inputs_before = window
-        .inputs
-        .iter()
-        .filter(|(_, input)| offset.num_milliseconds() > i64::try_from(*input).unwrap_or(i64::MAX))
-        .map(|(sequence, _)| *sequence)
-        .collect();
     let Some(lifetime) = window.delivery_cutoff(offset) else {
         return Ok(None);
     };
