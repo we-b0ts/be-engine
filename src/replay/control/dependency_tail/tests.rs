@@ -255,6 +255,30 @@ async fn preparing_a_case_that_is_not_yet_admitted_does_not_start_its_budget() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn fast_case_tail_respects_the_earlier_of_two_minutes_and_the_source_budget() {
+    use crate::replay::ReplayStreamTiming;
+
+    for (mode, source_ms, expected_seconds) in [
+        (ReplayStreamTiming::Fast, 900_000, 120),
+        (ReplayStreamTiming::Fast, 90_000, 90),
+        (ReplayStreamTiming::Recorded, 900_000, 900),
+    ] {
+        let fixture = fixture(Some(source_ms), 1).await;
+        let state = fixture.runtime.state.clone();
+        state.lock().await.stream_timing = Some(mode);
+        assert_eq!(
+            begin_case(&command("begin"), state.clone()).await["ok"],
+            true
+        );
+        let deadline = deadline(&state, "case-a").await.unwrap();
+        assert_eq!(
+            deadline - Instant::now(),
+            Duration::from_secs(expected_seconds)
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_absolute_budget_also_bounds_the_preceding_fixed_cleanup_window() {
     let fixture = fixture(Some(100), 1).await;
     let state = fixture.runtime.state.clone();

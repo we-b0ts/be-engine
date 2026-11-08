@@ -1940,6 +1940,8 @@ retain their existing lifecycle timing.
 
 The same fast setting and interval cap accelerate supported
 [Socket.IO input gaps and completed quiet tails](interaction-recording.md#completion-profiles).
+Managed fast replay caps each Case's execution and dependency wait at 120
+seconds from Case activation. Cleanup retains its own budget after a failure.
 
 `replay_timing: recorded` preserves Source stream timing; omitting it has the same
 behavior. The low-level equivalents are

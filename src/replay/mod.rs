@@ -169,6 +169,8 @@ pub enum ReplayStreamTiming {
     Recorded,
 }
 
+pub(crate) const FAST_CASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayLifecycleConfig {
     pub pre_match: bool,

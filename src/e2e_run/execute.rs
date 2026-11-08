@@ -646,6 +646,9 @@ pub(super) async fn execute_case(
         let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
         return Ok(());
     }
+    let fast_case_deadline = (config.replay_stream_timing
+        == Some(crate::replay::ReplayStreamTiming::Fast))
+    .then(|| tokio::time::Instant::now() + crate::replay::FAST_CASE_TIMEOUT);
 
     if config.replay_loading.lazy_cases
         && let Some(next) = state.cases.get(position + 1)
@@ -669,6 +672,7 @@ pub(super) async fn execute_case(
                     &actual_response,
                     runtime.request_rules.clone(),
                     (&state.replay_session, case_id),
+                    fast_case_deadline,
                 )
                 .await
             }
