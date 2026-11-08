@@ -5,6 +5,7 @@ use crate::value_contract::{
     json::AnchorClocks,
     time_copies::{self, TimeCopyLookup, TimeCopyRecord},
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug)]
 pub(in crate::replay) struct PreparedRedisTimeWrite {
@@ -150,6 +151,11 @@ impl RequestContracts {
         let Some(payload) = source.payload else {
             return Ok(Vec::new());
         };
+        let redis_get = clocks
+            .delivery
+            .source
+            .filter(|_| context.command == "GET")
+            .map(|completed| (Sha256::digest(payload).into(), completed));
         let logical = if let Some(logical) = crate::json_value::parse(payload) {
             logical
         } else if let Some(scalar) =
@@ -184,6 +190,10 @@ impl RequestContracts {
             )
             .map(|lookup| lookup.at(&leaf.pointer, &leaf.pointer)) else {
                 continue;
+            };
+            let lookup = match redis_get {
+                Some((payload, completed)) => lookup.with_redis_get(payload, completed),
+                None => lookup,
             };
             for (value, proof) in
                 self.time_copy_deliveries(context.case, vec![lookup], clocks.dependency)?

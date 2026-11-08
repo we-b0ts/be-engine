@@ -120,8 +120,14 @@ pub(crate) struct TimeCopyRecord {
     key: CopyKey,
     target: [u8; 32],
     scalar: Option<Value>,
+    redis_get: Option<[u8; 32]>,
 }
 impl TimeCopyRecord {
+    pub(crate) fn with_redis_get(mut self, payload: Option<[u8; 32]>) -> Self {
+        self.redis_get = payload;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn new(
         source_position: TimeCopyPosition<'_>,
@@ -188,6 +194,7 @@ impl TimeCopyRecord {
             ),
             target,
             scalar: None,
+            redis_get: None,
         })
     }
 }
@@ -234,6 +241,12 @@ pub(crate) struct TimeCopyLookup {
     source_pointer: String,
     target_pattern: String,
     typed: bool,
+    redis_get: Option<RedisGetRead>,
+}
+
+struct RedisGetRead {
+    payload: [u8; 32],
+    completed: chrono::DateTime<chrono::Utc>,
 }
 
 impl TimeCopyLookup {
@@ -262,11 +275,21 @@ impl TimeCopyLookup {
             source_pointer: source_pattern.into(),
             target_pattern: target_pattern.into(),
             typed: true,
+            redis_get: None,
         })
     }
     pub(crate) fn at(mut self, source_pointer: &str, target_pattern: &str) -> Self {
         self.source_pointer = source_pointer.into();
         self.target_pattern = target_pattern.into();
+        self
+    }
+
+    pub(crate) fn with_redis_get(
+        mut self,
+        payload: [u8; 32],
+        completed: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        self.redis_get = Some(RedisGetRead { payload, completed });
         self
     }
 }
@@ -288,18 +311,27 @@ struct CaseCopies {
 struct CopyValue {
     target: Option<[u8; 32]>,
     scalar: Option<Value>,
-    deliveries: Vec<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
+    deliveries: Vec<CopyDelivery>,
+}
+
+#[derive(Clone, Copy)]
+struct CopyDelivery {
+    clocks: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+    redis_get: Option<[u8; 32]>,
+}
+
+impl CopyDelivery {
+    fn dominates(self, other: Self) -> bool {
+        self.redis_get == other.redis_get
+            && self.clocks.0 <= other.clocks.0
+            && self.clocks.1 <= other.clocks.1
+    }
 }
 impl CopyValue {
     fn cost(&self) -> usize {
         self.deliveries.len().max(1)
     }
-    fn observe(
-        &mut self,
-        target: [u8; 32],
-        scalar: Option<Value>,
-        delivery: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
-    ) {
+    fn observe(&mut self, target: [u8; 32], scalar: Option<Value>, delivery: CopyDelivery) {
         if self.target != Some(target) {
             self.target = None;
             self.scalar = None;
@@ -314,12 +346,12 @@ impl CopyValue {
         if self
             .deliveries
             .iter()
-            .any(|&(source, target)| source <= delivery.0 && target <= delivery.1)
+            .any(|existing| existing.dominates(delivery))
         {
             return;
         }
         self.deliveries
-            .retain(|&(source, target)| delivery.0 > source || delivery.1 > target);
+            .retain(|existing| !delivery.dominates(*existing));
         self.deliveries.push(delivery);
     }
 }
@@ -457,7 +489,14 @@ impl TimeCopyStore {
                             deliveries: vec![],
                         })
                 })
-                .observe(record.target, record.scalar, delivery);
+                .observe(
+                    record.target,
+                    record.scalar,
+                    CopyDelivery {
+                        clocks: delivery,
+                        redis_get: record.redis_get,
+                    },
+                );
         }
         let removed = staged
             .keys()
@@ -507,6 +546,7 @@ impl TimeCopyStore {
                 source_pointer: source_pattern.into(),
                 target_pattern: target_pattern.into(),
                 typed: false,
+                redis_get: None,
             },
         )
     }
@@ -543,11 +583,16 @@ impl TimeCopyStore {
     ) -> Option<VerifiedTimeCopy> {
         let cutoff = self.lookup_clocks.require().ok()?;
         let value = self.cases.get(case)?.entries.get(&lookup.key)?;
-        if !value
-            .deliveries
-            .iter()
-            .any(|&(source, target)| source <= cutoff.0 && target <= cutoff.1)
-        {
+        if !value.deliveries.iter().any(|delivery| {
+            let (source, target) = delivery.clocks;
+            target <= cutoff.1
+                && (source <= cutoff.0
+                    // Overlapping reads can observe the same stored value.
+                    // Only an identical completed GET supplies this proof.
+                    || lookup.redis_get.as_ref().is_some_and(|read| {
+                        delivery.redis_get == Some(read.payload) && source <= read.completed
+                    }))
+        }) {
             return None;
         }
         let target = value.target?;

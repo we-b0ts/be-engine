@@ -69,6 +69,11 @@ impl PreparedRedisTimeRead {
         completed: DateTime<Utc>,
     ) -> Result<()> {
         let mut records = Vec::new();
+        let redis_get = self
+            .values
+            .first()
+            .filter(|_| self.command == "GET")
+            .map(|value| value.payload_digest);
         record_values(
             &self.target,
             self.database,
@@ -83,15 +88,18 @@ impl PreparedRedisTimeRead {
                   source,
                   target,
                   time| {
-                records.push(TimeCopyRecord::new_time(
-                    time,
-                    source_position,
-                    target_position,
-                    source_pattern,
-                    target_pattern,
-                    source,
-                    target,
-                )?);
+                records.push(
+                    TimeCopyRecord::new_time(
+                        time,
+                        source_position,
+                        target_position,
+                        source_pattern,
+                        target_pattern,
+                        source,
+                        target,
+                    )?
+                    .with_redis_get(redis_get),
+                );
                 Ok(())
             },
         )?;

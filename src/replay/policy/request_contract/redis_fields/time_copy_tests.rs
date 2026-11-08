@@ -280,6 +280,56 @@ fn redis_automatic_stored_times_keep_the_write_counterpart_across_repeated_reads
 }
 
 #[test]
+fn overlapping_source_gets_copy_only_the_same_value_after_real_target_delivery() {
+    let owner = runtime();
+    let host = TargetKey {
+        host: "cache.test".into(),
+        port: 6379,
+    };
+    let source = r#"{"at":1005,"stable":true}"#;
+    let delivered = r#"{"at":2005,"stable":true}"#;
+    prepare(
+        &owner,
+        "GET",
+        &["key"],
+        &bulk(source),
+        DateTime::from_timestamp(1002, 0),
+    )
+    .publish(&bulk(delivered), DateTime::from_timestamp(2002, 0).unwrap())
+    .unwrap();
+
+    let keys = args(&["key"]);
+    let read = |payload, source_completed, target_started| {
+        owner
+            .prepare_redis_delivery(
+                "case",
+                "case",
+                &host,
+                0,
+                None,
+                "GET",
+                &keys,
+                &keys,
+                &bulk(payload),
+                DateTime::from_timestamp(source_completed, 0),
+                DateTime::from_timestamp(target_started, 0),
+                DateTime::from_timestamp(1001, 0),
+                uuid::Uuid::new_v4(),
+                2,
+            )
+            .unwrap()
+    };
+    let response = read(source, 1003, 2300)
+        .unwrap()
+        .render(DateTime::from_timestamp(2301, 0).unwrap())
+        .unwrap();
+    assert_eq!(response, bulk(delivered));
+    assert!(read(r#"{"at":1005,"stable":false}"#, 1003, 2300).is_err());
+    assert!(read(source, 1001, 2300).is_err());
+    assert!(read(source, 1003, 2001).is_err());
+}
+
+#[test]
 fn conflicting_stored_time_targets_do_not_guess_which_write_a_read_observed() {
     let owner = runtime();
     let host = TargetKey {
