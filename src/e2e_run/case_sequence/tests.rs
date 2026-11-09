@@ -99,7 +99,7 @@ async fn rejected_session(protocol: Protocol, case_count: usize, failure_limit: 
                     active = case.map(str::to_owned);
                     json!({"ok":true})
                 }
-                "request_begin" | "case_failed" => {
+                "request_begin" | "case_failed" | "case_close_tail" => {
                     assert_eq!(active.as_deref(), case);
                     json!({"ok":true})
                 }
