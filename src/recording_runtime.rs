@@ -304,6 +304,10 @@ mod tests {
                 "source_isolation_required",
             ),
             (
+                RecordingCompletionReason::SocketioCloseTailLimit,
+                "socketio_close_tail_limit",
+            ),
+            (
                 RecordingCompletionReason::PerApiCaseLimitReached,
                 "per_api_case_limit_reached",
             ),
@@ -318,7 +322,8 @@ mod tests {
                         .run_until(None, std::future::ready(Ok(())))
                         .await
                 }
-                RecordingCompletionReason::SourceIsolationRequired => {
+                RecordingCompletionReason::SourceIsolationRequired
+                | RecordingCompletionReason::SocketioCloseTailLimit => {
                     state
                         .clone()
                         .run_until_completion(None, std::future::ready(Ok(reason)))
