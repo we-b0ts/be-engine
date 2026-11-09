@@ -10,6 +10,69 @@ fn payload(micros: i64, members: Value) -> String {
 }
 
 #[tokio::test]
+async fn prepared_midnight_datetime_matches_text_insert_with_dynamic_update_time() {
+    let source_at = chrono::DateTime::parse_from_rfc3339("2020-01-01T08:00:00.234567Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut write = exchange(
+        "INSERT INTO installations (id, last_sync_at, updated_at) VALUES (7, '1970-01-01 00:00:00', '2020-01-01 08:00:00.234567')",
+        json!({"status":"ok","affected_rows":1}),
+    );
+    write["timestamp"] = json!(source_at);
+    write["request_started_at"] = json!(source_at);
+    let read_sql = "SELECT last_sync_at, updated_at FROM installations";
+    let read = exchange(
+        read_sql,
+        result(
+            json!([
+                {"name":"last_sync_at","table":"installations","column":"last_sync_at","family":"datetime","sql_type":"DATETIME"},
+                {"name":"updated_at","table":"installations","column":"updated_at","family":"datetime","sql_type":"DATETIME"}
+            ]),
+            json!([]),
+        ),
+    );
+    let (temp, addr, runtime, task) = fixture_with_policy(
+        &[read, write],
+        Some("format: traffic-policy/v3\njson: {fields: {}}\nmysql: {}\n"),
+    )
+    .await;
+    let observed = Utc::now();
+    runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
+    let ca = temp
+        .path()
+        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
+    let mut client = connect(addr, &ca).await;
+    (&mut client).fetch_all(read_sql).await.unwrap();
+    let midnight = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let sql = "INSERT INTO installations (id, last_sync_at, updated_at) VALUES (?, ?, ?)";
+    let wrong = sqlx::query(sql)
+        .bind(7_i64)
+        .bind(midnight + chrono::Duration::days(1))
+        .bind(observed.naive_utc())
+        .execute(&mut client)
+        .await;
+    assert!(wrong.is_err(), "a different date must remain unmatched");
+    let mut client = connect(addr, &ca).await;
+    let result = sqlx::query(sql)
+        .bind(7_i64)
+        .bind(midnight)
+        .bind(observed.naive_utc())
+        .execute(&mut client)
+        .await
+        .expect("the same midnight DATETIME must match");
+    assert_eq!(result.rows_affected(), 1);
+    client.close().await.unwrap();
+    assert_eq!(
+        runtime.state.lock().await.mysql.events.matched_query_count,
+        2
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn sql_json_contract_preserves_statement_and_finite_consumption_over_tls() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let sql = "UPDATE widgets SET payload=? WHERE id=?";
