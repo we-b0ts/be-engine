@@ -188,7 +188,18 @@ pub(crate) fn broadcast(command: &str, args: &[Vec<u8>]) -> Result<Option<Broadc
     let Some(value) = document(&args[1]) else {
         return Ok(None);
     };
-    if value["method"] != "emit" || value.get("callback") != Some(&Value::Null) {
+    if value["method"] != "emit" {
+        return Ok(None);
+    }
+    // Direct publishers omit the manager's binary, skip_sid and callback
+    // fields. Admit only the complete compact envelope in that case.
+    let compact = value.as_object().is_some_and(|fields| {
+        fields.len() == 6
+            && ["method", "event", "data", "namespace", "room", "host_id"]
+                .iter()
+                .all(|name| fields.contains_key(*name))
+    });
+    if !compact && value.get("callback") != Some(&Value::Null) {
         return Ok(None);
     }
     ensure!(
@@ -196,7 +207,7 @@ pub(crate) fn broadcast(command: &str, args: &[Vec<u8>]) -> Result<Option<Broadc
         "invalid adapter channel"
     );
     ensure!(
-        value["binary"] == false && value["data"].is_array(),
+        (compact || value["binary"] == false) && value["data"].is_array(),
         "adapter requires non-binary JSON arguments"
     );
     text(&value["event"])?;
