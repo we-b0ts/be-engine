@@ -370,6 +370,16 @@ mod tests {
             test_support::managed_test_recorder(),
             None,
         );
+        fs::write(
+            target.join(".traffic-e2e/Dockerfile.target"),
+            "FROM scratch\n",
+        )
+        .unwrap();
+        fs::write(
+            target.join(".traffic-e2e/verification.yaml"),
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        )
+        .unwrap();
         git(target, &["init", "-q", "-b", "master"]);
         git(target, &["config", "user.name", "Test"]);
         git(target, &["config", "user.email", "test@example.com"]);

@@ -473,6 +473,10 @@ async fn namespace_disconnect_opens_fast_window_for_earlier_native_push() {
             socket.next().await.unwrap().unwrap().into_text().unwrap(),
             "41/chat,"
         );
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "1"
+        );
         assert!(matches!(
             socket.next().await.unwrap().unwrap(),
             Message::Close(_)
