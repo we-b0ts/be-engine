@@ -165,7 +165,8 @@ pub use case_dependencies::{
     query_exchange as query_rewrite_case_dependency_exchange,
 };
 pub use case_group_rebuild::{
-    RewriteCaseGroupRebuildOptions, RewriteCaseGroupRebuildReport, rebuild_rewrite_case_groups,
+    RewriteCaseGroupRebuildOptions, RewriteCaseGroupRebuildReport,
+    archive_unmanaged_rewrite_case_groups, rebuild_rewrite_case_groups,
 };
 pub use case_patterns::{RewriteCasePatternApplyOptions, apply as apply_rewrite_case_patterns};
 pub use dependency_rule::{

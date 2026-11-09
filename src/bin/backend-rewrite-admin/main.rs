@@ -7,10 +7,10 @@ use clap::{Args, Parser, Subcommand};
 use traffic_e2e::{
     KubernetesSourceOptions, RewriteCaseGroupRebuildOptions, RewriteContext,
     RewriteRepairCancelOptions, RewriteReplayRetryOptions, SourceUpgradeOptions,
-    StartupSnapshotRecaptureOptions, cancel_misrouted_rewrite_repair,
-    compact_rewrite_decision_history, rebuild_rewrite_case_groups, recapture_startup_snapshot,
-    retry_rewrite_replay_after_out_of_band_run, upgrade_source_snapshot,
-    verify_rewrite_decision_history,
+    StartupSnapshotRecaptureOptions, archive_unmanaged_rewrite_case_groups,
+    cancel_misrouted_rewrite_repair, compact_rewrite_decision_history, rebuild_rewrite_case_groups,
+    recapture_startup_snapshot, retry_rewrite_replay_after_out_of_band_run,
+    upgrade_source_snapshot, verify_rewrite_decision_history,
 };
 
 #[derive(Debug, Parser)]
@@ -110,6 +110,14 @@ enum RepairCommand {
     RetryReplay(RepairRetryReplayArgs),
     /// Rebuild or relocate a historical run's derived indexes from the canonical API inventory.
     RebuildCaseGroups(RepairRebuildCaseGroupsArgs),
+    /// Archive a failed standalone grouping index before managed replay.
+    ArchiveUnmanagedCaseGroups {
+        /// Exact standard recording run.
+        recording_run_id: String,
+        /// Confirm the exact conflicting standalone source revision.
+        #[arg(long)]
+        confirm_standalone_revision: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -289,6 +297,18 @@ fn run(cli: Cli) -> Result<()> {
                     serde_json::to_writer(std::io::stdout(), &result)?;
                 }
                 println!();
+                Ok(())
+            }
+            RepairCommand::ArchiveUnmanagedCaseGroups {
+                recording_run_id,
+                confirm_standalone_revision,
+            } => {
+                let backup = archive_unmanaged_rewrite_case_groups(
+                    &cli.target_root,
+                    &recording_run_id,
+                    &confirm_standalone_revision,
+                )?;
+                println!("{}", serde_json::json!({ "backup": backup }));
                 Ok(())
             }
         },
