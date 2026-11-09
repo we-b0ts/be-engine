@@ -542,7 +542,7 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
     };
     Ok(
         serde_json::json!({"ok":true,"ready":ready,"wait_ms":wait_ms,
-        "advance": Advance {removed_ms:live.clock.removed_ms(), ..Advance::default()}}),
+        "advance": Advance {removed_ms:live.clock.removed_ms()}}),
     )
 }
 
@@ -590,7 +590,7 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
         // can become admissible without appearing as a hard dependency.
         "wait_ms":if compressible { wait_ms } else { wait_ms.min(POLL_MS) },
         "unadmitted_request": unadmitted,
-        "advance": Advance {removed_ms:live.clock.removed_ms(), ..Advance::default()}
+        "advance": Advance {removed_ms:live.clock.removed_ms()}
     }))
 }
 

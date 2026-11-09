@@ -430,7 +430,7 @@ pub(super) async fn accept(
         };
         Ok::<_, anyhow::Error>(
             serde_json::json!({"ok":true,"wait_ms":retry,"ready":remaining==0 && !prefix_pending,
-            "advance":Advance {removed_ms:live.clock.removed_ms(), ..Advance::default()}}),
+            "advance":Advance {removed_ms:live.clock.removed_ms()}}),
         )
     }
     .await;

@@ -18,7 +18,7 @@ impl Groups {
             && exchange.source == ReplaySource::Case
             && exchange.record.command == "COM_QUERY"
             && exchange.record.params.is_none())
-        .then(|| exchange.record.sql.as_deref())
+        .then_some(exchange.record.sql.as_deref())
         .flatten()
         .filter(|sql| sql.len() <= MAX_SQL_BYTES)
         .and_then(|sql| {

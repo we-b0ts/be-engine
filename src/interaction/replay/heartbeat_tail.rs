@@ -85,9 +85,9 @@ pub(crate) fn timeout(input: &InputTranscript, output: &OutputObservation) -> Op
         return None;
     }
     let program = input.socket_io_heartbeat.as_ref()?;
-    let pings = output.events.iter().filter(|event| is_ping(event));
+    let mut pings = output.events.iter().filter(|event| is_ping(event));
     let ping_count = pings.clone().count() as u64;
-    let last = pings.last()?;
+    let last = pings.next_back()?;
     let limit = input.policy.max_message_bytes;
     let first = output.events.first()?;
     let EngineIoPacket::Open(open) = decode_engine_io_text(&first.message.data, limit).ok()? else {

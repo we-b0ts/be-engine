@@ -65,7 +65,7 @@ impl SerialPublish {
             return None;
         }
         let call = socketio_rpc::request("PUBLISH", &later.args).ok()??;
-        let mut pairs = predecessors.chunks_exact(2).map(|pair| {
+        let mut pairs = predecessors.as_chunks::<2>().0.iter().map(|pair| {
             room_broadcast_pair(
                 &state.redis.exchanges[pair[0]],
                 &state.redis.exchanges[pair[1]],
