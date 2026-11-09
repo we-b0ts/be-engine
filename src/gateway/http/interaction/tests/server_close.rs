@@ -176,7 +176,7 @@ async fn record_replay_and_next(reply_first: bool) {
         !state
             .inner
             .active_cases
-            .wait_for_no_active_case(Duration::from_secs(1))
+            .wait_for_no_active_case(Duration::from_millis(75))
             .await,
         "a Socket.IO server close with pending work must keep dependency admission open"
     );

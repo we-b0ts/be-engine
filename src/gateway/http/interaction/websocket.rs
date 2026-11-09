@@ -222,6 +222,9 @@ pub(super) async fn dispatch(
                         phase = "source_observe";
                         observe(&session, &message, false)?;
                         let close = matches!(message, Message::Close(_));
+                        if close {
+                            session.close_requested_at.get_or_init(std::time::Instant::now);
+                        }
                         if !close {
                             source_close.capture_live(&session).await;
                         }

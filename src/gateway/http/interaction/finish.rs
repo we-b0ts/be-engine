@@ -157,6 +157,7 @@ async fn run(
         }
     };
     session.request_close(reason);
+    let closed = *session.close_requested_at.get().expect("close requested");
     super::diagnostics::phase(session.case.id, protocol, "transport_cleanup_started");
     let (protocol, policy) = {
         let observation = session
@@ -165,7 +166,12 @@ async fn run(
             .expect("interaction observation poisoned");
         (observation.protocol(), observation.policy().clone())
     };
-    let cleanup_deadline = Instant::now() + Duration::from_millis(policy.cleanup_timeout_ms);
+    let mut cleanup_deadline = Instant::now() + Duration::from_millis(policy.cleanup_timeout_ms);
+    if protocol == Protocol::SocketIo {
+        cleanup_deadline = cleanup_deadline.min(Instant::from_std(
+            closed + crate::active_case::SOCKETIO_CLOSE_LIMIT,
+        ));
+    }
     let transport = async {
         if protocol == Protocol::SocketIo
             && !session.upgraded.load(Ordering::SeqCst)
@@ -252,18 +258,26 @@ async fn run(
                 session.started + Duration::from_millis(offset_ms)
             })
         });
-    let drain = if let Some(closed) = close_tail {
+    let socketio_closed = protocol == Protocol::SocketIo
+        && finished_observation
+            .as_ref()
+            .is_ok_and(|(_, output)| output.end.clean);
+    if socketio_closed {
+        session
+            .state
+            .inner
+            .active_cases
+            .observe_socketio_close_tail(session.case.id, closed)
+            .await;
+    } else if let Some(closed) = close_tail {
         session
             .state
             .inner
             .active_cases
             .observe_close_tail(session.case.id, closed)
             .await;
-        session
-            .state
-            .drain_active_case_dependencies(session.case.id)
-            .await
-    } else if observation_deadline.is_some() {
+    }
+    let drain = if socketio_closed || close_tail.is_some() || observation_deadline.is_some() {
         // This operation owns both its absolute observation limit and the
         // bounded drain measured from actual admission closure. An outer timer
         // must not cancel its close/report/publication handoff between phases.

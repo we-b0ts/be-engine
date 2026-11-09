@@ -29,6 +29,7 @@ where
         .lock()
         .expect("interaction observation poisoned")
         .client_transport_end(end, offset)?;
+    session.close_requested_at.get_or_init(|| at);
     session.request_close(EndReason::ClientTransportEnd);
     let completion = closing::ApplicationClose::prepare(session)
         .await?

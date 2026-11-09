@@ -10,6 +10,7 @@ pub(crate) enum RecordingCompletionReason {
     PerApiCaseLimitReached,
     ShutdownSignal,
     SourceIsolationRequired,
+    SocketioCloseTailLimit,
 }
 
 impl RecordingCompletionReason {
@@ -18,6 +19,7 @@ impl RecordingCompletionReason {
             Self::PerApiCaseLimitReached => "per_api_case_limit_reached",
             Self::ShutdownSignal => "shutdown_signal",
             Self::SourceIsolationRequired => "source_isolation_required",
+            Self::SocketioCloseTailLimit => "socketio_close_tail_limit",
         }
     }
 }

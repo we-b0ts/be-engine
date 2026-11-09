@@ -484,6 +484,8 @@ is unclear.
   Its `client_abort` child waits for bounded Case-local inactivity after a
   premature transport end and uses the same atomic release barrier. Source's
   `active_case/client_abort` observes the same lifecycle at capture time.
+  Source Socket.IO closure uses `active_case/socketio_close` for its own
+  dependency admission, rolling silence and supervised stop boundary.
   A failed primary status ends normal async business waiting while
   retaining unused/dirty evidence; protocol owners expose delivery state, and
   runner response assertions retain the primary failure independently of cleanup.
