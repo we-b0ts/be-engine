@@ -13,8 +13,8 @@ use tokio::time::{Duration, Instant, sleep_until};
 
 use super::event_order::attachment;
 use super::timing::{
-    Advance, SOCKET_IO_DISPATCH_WAIT, cancellation, delivery_prefix, ordered_input,
-    transport_cancellation, websocket_action_due,
+    Advance, SOCKET_IO_DISPATCH_WAIT, cancellation, delivery_prefix, namespace_disconnect,
+    ordered_input, transport_cancellation, websocket_action_due,
 };
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
@@ -157,17 +157,19 @@ pub(super) async fn execute_with_feedback(
             _ => {}
         }
         let action = transcript.actions.get(next);
-        let ordered =
+        let business_input =
             action.is_some() && ordered_inputs.as_ref().is_some_and(|inputs| inputs[next]);
         let namespace_close = ordered_fast
-            && action
-                .is_some_and(|a| namespace::disconnects(a, transcript.policy.max_message_bytes));
+            && action.is_some_and(|a| namespace_disconnect(a, transcript.policy.max_message_bytes));
         let missing_event = event_order
             .as_ref()
-            .zip(action.filter(|_| ordered || namespace_close))
+            .zip(action.filter(|_| business_input || namespace_close))
             .and_then(|(order, action)| order.missing(action));
-        let dispatch_deadline = (ordered || namespace_close && missing_event.is_some())
-            .then_some(dispatch_anchor + SOCKET_IO_DISPATCH_WAIT);
+        // Open a timing window while a namespace disconnect awaits output.
+        // Keep the window until dispatch so native delivery can unblock it.
+        let ordered_close = namespace_close && (missing_event.is_some() || dispatch.is_some());
+        let ordered = business_input || ordered_close;
+        let dispatch_deadline = ordered.then_some(dispatch_anchor + SOCKET_IO_DISPATCH_WAIT);
         let namespace_ready = transcript.protocol != Protocol::SocketIo
             || action.is_none_or(|action| {
                 namespaces.permits(action, transcript.policy.max_message_bytes)
@@ -211,16 +213,17 @@ pub(super) async fn execute_with_feedback(
         {
             dispatch.events_arrived();
         }
-        let at_fast_tail = fast_tail.as_ref().is_some_and(|tail| {
-            let at_boundary = match tail.close_sequence {
-                Some(sequence) => admitted.is_some_and(|action| action.sequence == sequence),
-                None => action.is_none(),
-            };
-            at_boundary
-                && output_count >= tail.output_count
-                && (tail.native_observation
-                    || !tail.heartbeat_timeout && observed.pending().is_empty())
-        });
+        let at_fast_tail = !ordered_close
+            && fast_tail.as_ref().is_some_and(|tail| {
+                let at_boundary = match tail.close_sequence {
+                    Some(sequence) => admitted.is_some_and(|action| action.sequence == sequence),
+                    None => action.is_none(),
+                };
+                at_boundary
+                    && output_count >= tail.output_count
+                    && (tail.native_observation
+                        || !tail.heartbeat_timeout && observed.pending().is_empty())
+            });
         if at_fast_tail
             && tail_wait.is_none()
             && tail_ready_at.is_none()
@@ -243,8 +246,8 @@ pub(super) async fn execute_with_feedback(
             admitted
         };
         if let (Some(action), Some(timing)) = (timing_action, &input_timing)
-            && (ordered || action.compressible_gap || delivery_prefix(action))
-            && !cancellation(action)
+            && (ordered
+                || (action.compressible_gap || delivery_prefix(action)) && !cancellation(action))
             && timing_sequence != Some(action.sequence)
         {
             let timing = timing.clone();
@@ -261,7 +264,9 @@ pub(super) async fn execute_with_feedback(
         // An input released on its original deadline can be later than the
         // compressed clock. Pace ordered closes from the preceding actual send.
         let ordered_close_due = admitted
-            .filter(|action| ordered_fast && !tail_compressed && cancellation(action))
+            .filter(|action| {
+                ordered_fast && !ordered_close && !tail_compressed && cancellation(action)
+            })
             .map(|action| {
                 last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset))
             });
