@@ -111,6 +111,7 @@ pub(super) async fn capture_case(
     actual_response_path: &Path,
     request_rules: Arc<RequestRuleRuntime>,
     input_registration: (&Path, &str),
+    fast_case_deadline: Option<tokio::time::Instant>,
 ) -> Result<Vec<u8>> {
     let input = PrimaryProtocol::from_recorded(request_bytes)?;
     let monitor =
@@ -143,7 +144,13 @@ pub(super) async fn capture_case(
         },
         deadline: tokio::time::Instant::now() + request_timeout,
     };
-    let output = input.execute(&context).await?;
+    let execution = input.execute(&context);
+    let output = match fast_case_deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, execution)
+            .await
+            .context("fast replay case exceeded its 120-second execution budget")??,
+        None => execution.await?,
+    };
     active_artifact::write_json(actual_response_path, &output.artifact()?)
 }
 
@@ -314,5 +321,78 @@ mod tests {
             response_unavailable_reason(&error),
             E2eResponseUnavailableReason::TargetConnectionClosed
         );
+    }
+
+    #[tokio::test]
+    async fn fast_case_deadline_cancels_an_open_websocket() {
+        use crate::interaction::{
+            model::{InputTranscript, Protocol},
+            policy::{InteractionPolicy, StreamTerminal},
+        };
+        use futures_util::StreamExt;
+        use serde_json::json;
+        use tokio::time::{Instant, advance, pause};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().to_path_buf();
+        let mut config = super::super::test_session::config(&root);
+        std::fs::write(
+            &config.replay_policy,
+            "format: traffic-policy/v3\nrules: []\n",
+        )
+        .unwrap();
+        let request_rules =
+            Arc::new(RequestRuleRuntime::load(&root, &config.replay_policy).unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        config.target_http_origin = format!("http://{}", listener.local_addr().unwrap());
+        config.target_request_timeout = Duration::from_secs(900);
+        let request = json!({
+            "method": "GET", "uri": "/socket", "headers": {},
+            "body": {"encoding": "utf8", "data": "", "truncated": false},
+            "interaction": InputTranscript::new(Protocol::WebSocket, InteractionPolicy {
+                business_idle_ms: 600_000,
+                stream_terminal: Some(StreamTerminal::Text { value: "done".into() }),
+                ..InteractionPolicy::default()
+            })
+        })
+        .to_string();
+        let (connected, handshake) = tokio::sync::oneshot::channel();
+        let target = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            connected.send(()).unwrap();
+            // There is no application response or server close.
+            assert!(socket.next().await.is_none_or(|frame| frame.is_err()));
+        });
+        let deadline = Instant::now() + crate::replay::FAST_CASE_TIMEOUT;
+        let mut replay = tokio::spawn(async move {
+            capture_case(
+                &config,
+                &root.join("request.json"),
+                request.as_bytes(),
+                &root.join("actual-response.json"),
+                request_rules,
+                (&root.join("session.json"), "case"),
+                Some(deadline),
+            )
+            .await
+        });
+        tokio::select! {
+            result = &mut replay => panic!("replay ended before the WebSocket opened: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(3), handshake) => {
+                result.unwrap().unwrap();
+            }
+        }
+        pause();
+        advance(deadline - Instant::now() - Duration::from_millis(10)).await;
+        assert!(!replay.is_finished());
+        advance(Duration::from_millis(10)).await;
+        let error = replay.await.unwrap().unwrap_err();
+        assert_eq!(
+            response_unavailable_reason(&error),
+            E2eResponseUnavailableReason::TargetRequestTimedOut
+        );
+        assert!(error.to_string().contains("120-second execution budget"));
+        target.await.unwrap();
     }
 }

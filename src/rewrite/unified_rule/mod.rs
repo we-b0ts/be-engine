@@ -3,6 +3,7 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -13,7 +14,6 @@ use super::{
     RewriteContext, action, evidence, fingerprint, inventory,
     model::{RewriteIssueKind, RewriteRulePlanRecord, RewriteRuleReport, RewriteState},
     store::RewriteStore,
-    worker,
 };
 use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 
@@ -93,6 +93,10 @@ pub struct UnifiedRulePlanRecord {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     replace_sections: BTreeSet<String>,
     source_proofs: source_proof::SourceProofSnapshot,
+    #[serde(default)]
+    target_replay_drift_at_plan: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence_validation_started: Option<SystemTime>,
 }
 
 pub fn plan_rewrite_unified_rule(
@@ -116,7 +120,6 @@ pub fn plan_rewrite_unified_rule(
     // Planning publishes an independent event, never a replacement of the
     // coordinator's in-flight snapshot. Other APIs may keep replaying.
     let expected = inventory::scoped(&state, Some(&api.parse()?))?;
-    worker::ensure_api_confirmed(&state, &api, "planning a unified traffic rule")?;
     let report =
         inventory::with_slice_mut(&mut state, &api, |state| plan(&root, state, options, false))?;
     let record = inventory::scoped(&state, Some(&api.parse()?))?
@@ -133,6 +136,7 @@ fn plan(
     options: RewriteUnifiedRulePlanOptions,
     batch_scope: bool,
 ) -> Result<RewriteRuleReport> {
+    let evidence_validation_started = SystemTime::now();
     let attribution_scope = attribution::matches(&options.evidence_id);
     let issue_id = if batch_scope || attribution_scope {
         options.evidence_id.clone()
@@ -294,18 +298,15 @@ fn plan(
         }
     }
     let current = crate::validate_replay_policy(&config.replay_policy)?;
-    ensure!(
-        batch_scope
-            || attribution_scope
-            || state.replay_identity.as_ref() == Some(&fingerprint::replay_identity(root)?),
-        "Target code, startup inputs or policy changed since genuine Replay; run fresh Replay before planning"
-    );
+    let allows_target_drift = !batch_scope && !attribution_scope;
+    let target_replay_drift_at_plan = allows_target_drift
+        && state.replay_identity.as_ref() != Some(&fingerprint::replay_identity(root)?);
     let identity = if attribution_scope {
         manifest::ExecutionIdentity::Attribution(attribution::Identity::current(state)?)
     } else if batch_scope {
         manifest::ExecutionIdentity::batch_current(root, state)?
     } else {
-        manifest::ExecutionIdentity::current(root, state)?
+        manifest::ExecutionIdentity::current(root, state, allows_target_drift)?
     };
     let mut bundle = match &identity {
         manifest::ExecutionIdentity::Attribution(actual) => {
@@ -331,7 +332,7 @@ fn plan(
     } else {
         original.clone()
     };
-    let record = UnifiedRulePlanRecord {
+    let mut record = UnifiedRulePlanRecord {
         apply_started: false,
         policy: config.replay_policy,
         original,
@@ -343,6 +344,8 @@ fn plan(
         replaced_rules,
         replace_sections: change.replace_sections,
         source_proofs,
+        target_replay_drift_at_plan,
+        evidence_validation_started: None,
     };
     let id = format!(
         "plan-{}",
@@ -354,6 +357,7 @@ fn plan(
         ])
         .trim_start_matches("fnv1a64:")
     );
+    record.evidence_validation_started = Some(evidence_validation_started);
     let traffic_e2e_report = record.report(false);
     let outer: RewriteRulePlanRecord = serde_json::from_value(json!({
         "id":id, "issue_id":issue_id, "kind":"unified", "json_pointer":"",
@@ -375,7 +379,7 @@ impl UnifiedRulePlanRecord {
     pub(in crate::rewrite) fn is_batch(&self) -> bool {
         self.identity.is_batch()
     }
-    pub(in crate::rewrite) fn requires_api_confirmation(&self) -> bool {
+    pub(in crate::rewrite) fn is_api_issue(&self) -> bool {
         self.identity.method_api().is_some()
     }
     pub(super) fn applying(&self) -> bool {
@@ -395,20 +399,29 @@ impl UnifiedRulePlanRecord {
         Ok(())
     }
 
-    fn ensure_current(&self, root: &Path, state: &RewriteState) -> Result<()> {
-        self.ensure_policy_current()?;
+    pub(super) fn ensure_policy_baseline(&self, root: &Path) -> Result<()> {
         ensure!(
-            self.identity.revalidate(root, state)? == self.identity,
-            "Target/Source/engine/attempt identity changed after planning"
+            fingerprint::policy_file(root)? == self.policy,
+            "configured policy path changed after planning"
         );
+        self.ensure_policy_current()
+    }
+
+    fn ensure_current(&self, root: &Path, state: &RewriteState) -> Result<()> {
+        self.ensure_policy_baseline(root)?;
         for artifact in &self.artifacts {
             if artifact.path != self.policy {
                 artifact.verify()?;
             }
         }
+        ensure!(
+            self.identity.revalidate(root, state)? == self.identity,
+            "Target/Source/engine/attempt identity changed after planning"
+        );
         let compiled = compile_policy(&parse_policy(&self.updated)?)?;
         self.source_proofs.verify(&compiled)?;
-        self.preflight.ensure_current(root, &compiled)?;
+        self.preflight
+            .ensure_current(root, &compiled, self.evidence_validation_started)?;
         Ok(())
     }
 
@@ -446,8 +459,9 @@ impl UnifiedRulePlanRecord {
             "applied":applied, "changed":self.original != self.updated,
             "rule_ids":self.rule_ids, "replaced_rules":self.replaced_rules, "preflight":self.preflight,
             "replace_sections":self.replace_sections,
-            "requires_fresh_replay":replay_required, "replay_scope":if self.is_batch(){json!({"kind":"complete_source_run"})}else if !self.requires_api_confirmation(){json!({"kind":"affected_owner_scopes"})}else{json!(self.identity.method_api())},
+            "requires_fresh_replay":replay_required, "replay_scope":if self.is_batch(){json!({"kind":"complete_source_run"})}else if !self.is_api_issue(){json!({"kind":"affected_owner_scopes"})}else{json!(self.identity.method_api())},
             "evidence_scope":self.identity,
+            "target_replay_drift_at_plan":self.target_replay_drift_at_plan,
             "requires_attribution_review":attribution_required,
             "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
             "policy":self.policy, "evidence_artifacts":self.artifacts.len(), "source_proofs":self.source_proofs,
@@ -469,17 +483,19 @@ pub(super) fn apply(
         .unified
         .as_ref()
         .context("pending plan has no unified contract")?;
-    if record.requires_api_confirmation() {
-        worker::ensure_api_confirmed(state, &state.api, "applying a unified traffic rule")?;
-    }
     ensure!(
         record.apply_started,
         "unified apply requires the durable coordinator intent"
     );
-    record.ensure_current(root, state)?;
+    // begin_apply authenticated this plan under the same coordinator locks.
     let previous_execution = super::fingerprint::replay_identity(root)?;
+    record.ensure_policy_baseline(root)?;
     crate::config::edit::write_atomic(&record.policy, record.updated.as_bytes())?;
-    let report = record.report(true);
+    let mut report = record.report(true);
+    if record.is_api_issue() {
+        report["target_replay_drift_at_apply"] =
+            json!(state.replay_identity.as_ref() != Some(&previous_execution));
+    }
     state.rule_plan = None;
     if record.original != record.updated {
         if record.is_batch() {
@@ -495,7 +511,7 @@ pub(super) fn apply(
             state.dependency_review.recording_run_id = None;
             state.dependency_review.revision += 1;
         }
-        if record.requires_api_confirmation()
+        if record.is_api_issue()
             && impact::affects_api(&record.original, &record.updated, &state.api)?
         {
             super::rule_replay::request(state);
@@ -530,18 +546,21 @@ pub(super) fn apply(
 
 /// Persist this marker with RewriteStore before changing the policy. A crash
 /// after the write can recognize the exact authorized updated bytes on retry.
-pub(super) fn begin_apply(root: &Path, state: &mut RewriteState) -> Result<UnifiedRulePlanRecord> {
-    let record = state
-        .rule_plan
-        .as_ref()
-        .and_then(|p| p.unified.as_ref())
+pub(super) fn begin_apply(
+    root: &Path,
+    state: &mut RewriteState,
+    plan_id: &str,
+) -> Result<UnifiedRulePlanRecord> {
+    let mut record = super::rule::pending_plan_for_apply(state, plan_id)?
+        .unified
         .context("pending unified rule plan unavailable")?;
-    record.ensure_current(root, state)?;
-    let mut record = record.clone();
+    record.ensure_current(root, state).with_context(|| {
+        format!("rule plan {plan_id} failed revalidation; use `backend-rewrite rule recover {plan_id}` to retire stale evidence")
+    })?;
     record.apply_started = true;
     state.rule_plan.as_mut().unwrap().unified = Some(record.clone());
     if record.original != record.updated
-        && record.requires_api_confirmation()
+        && record.is_api_issue()
         && impact::affects_api(&record.original, &record.updated, &state.api)?
     {
         super::rule_replay::request(state);

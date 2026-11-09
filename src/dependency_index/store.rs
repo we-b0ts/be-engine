@@ -101,24 +101,38 @@ pub(crate) fn load_file(path: &Path) -> Result<FileIndex> {
     load_file_cancellable(path, &std::sync::atomic::AtomicBool::new(false))
 }
 
+pub(super) fn file_cache_directory(path: &Path, source: &super::scoped::Source) -> Result<PathBuf> {
+    let Some(scope) = source.scope_sha256()? else {
+        return Ok(cache_directory(path));
+    };
+    // Each attempt publishes its own immutable view. Identical views over the
+    // same ledger select the same records even when their paths and inodes differ.
+    Ok(cache_directory(&source.path).join(format!("scope-file-v1-{scope}")))
+}
+
 fn load_file_cancellable(
     path: &Path,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<FileIndex> {
     check_cancelled(cancelled)?;
-    let stamp = FileStamp::read(path)?;
+    let source = super::scoped::resolve(path)?;
+    let stamp = FileStamp::read_native(&source.path)?;
+    if let Some(index) = super::case_recording::load(&source, &stamp) {
+        check_cancelled(cancelled)?;
+        return Ok(index);
+    }
     let fragment = path
         .parent()
         .context("dependency file has no parent")?
         .join(FRAGMENT);
-    if super::scoped::view_path(path).is_none()
+    if source.view.is_none()
         && let Ok(index) = read_json::<FileIndex>(&fragment)
         && index.version == VERSION
         && index.stamp == stamp
     {
         return Ok(index);
     }
-    let cache = cache_directory(path);
+    let cache = file_cache_directory(path, &source)?;
     private_directory(&cache)?;
     let _lock = Lock::acquire(&cache.join("build.lock"), cancelled)?;
     let output = cache.join("file.json");
@@ -126,9 +140,17 @@ fn load_file_cancellable(
         && index.version == VERSION
         && index.stamp == stamp
     {
+        if source.view.is_some() {
+            source.validate()?;
+            ensure!(
+                FileStamp::read_native(&source.path)? == stamp,
+                "dependency ledger changed while loading its scope index"
+            );
+        }
         return Ok(index);
     }
     let index = build_file(path, cancelled)?;
+    source.validate()?;
     check_cancelled(cancelled)?;
     write_json(&output, &index)?;
     Ok(index)
@@ -283,6 +305,11 @@ pub(crate) fn private_directory(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    FileStamp::read(path)?;
+    decode_json(&fs::read(path)?).map(|(value, _)| value)
+}
+
+pub(super) fn decode_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<(T, String)> {
     #[derive(serde::Deserialize)]
     struct Document<'a> {
         #[serde(default)]
@@ -291,9 +318,7 @@ pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T
         #[serde(borrow)]
         payload: &'a serde_json::value::RawValue,
     }
-    FileStamp::read(path)?;
-    let bytes = fs::read(path)?;
-    let document: Document<'_> = serde_json::from_slice(&bytes)?;
+    let document: Document<'_> = serde_json::from_slice(bytes)?;
     let actual = match document.format {
         Some("dependency-index/v2") => digest(document.payload.get().as_bytes()),
         None => {
@@ -306,7 +331,7 @@ pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T
         document.sha256 == actual,
         "dependency index checksum mismatch"
     );
-    Ok(serde_json::from_str(document.payload.get())?)
+    Ok((serde_json::from_str(document.payload.get())?, actual))
 }
 
 pub(crate) fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {

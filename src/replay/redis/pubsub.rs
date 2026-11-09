@@ -102,15 +102,9 @@ impl Delivery {
                 .as_deref()
                 .is_none_or(|case| !stopped && Some(case) == active)
             && self.request_epoch.is_none_or(|epoch| {
-                self.case_id.as_deref().is_some_and(|case| {
-                    replay
-                        .redis
-                        .pubsub
-                        .native_clock
-                        .epoch(case)
-                        .or_else(|| replay.redis.request_contracts.request_times(case).target)
-                        == Some(epoch)
-                })
+                self.case_id
+                    .as_deref()
+                    .is_some_and(|case| replay.redis.native_request_epoch(case) == Some(epoch))
             })
     }
 }

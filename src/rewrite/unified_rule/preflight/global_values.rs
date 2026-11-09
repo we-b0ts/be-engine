@@ -249,7 +249,13 @@ pub(super) fn verify(
                         {
                             candidates.observe(witness, checked)?
                         } else {
-                            checked?
+                            match checked {
+                                Ok(count) => count,
+                                Err(_) => {
+                                    result.defer_target_comparison(&case, surface, Some(&witness.id));
+                                    0
+                                }
+                            }
                         };
                         if count > 0 {
                             found = true;
@@ -289,7 +295,8 @@ pub(super) fn verify(
             Ok(())
         }).with_context(|| format!("global format dependency validation: case={case}"))?;
     }
-    candidates.finish()
+    candidates.finish(result);
+    Ok(())
 }
 
 pub(super) fn global_trace(
@@ -489,7 +496,7 @@ fn primary(
             target: source_pair.times.source,
         },
     );
-    let compare_body = |source: &[u8], target: &[u8], clocks| {
+    let compare_body = |source: &[u8], target: &[u8], plan, clocks| {
         if context.is_empty() {
             compare_bytes(source, target, plan, clocks)
         } else if source == target {
@@ -498,7 +505,7 @@ fn primary(
             context.compare_encoded_global(source, target, &[], Some(plan), clocks)
         }
     };
-    let mut comparison = compare_body(&source_pair.source, &source_pair.source, clocks)?;
+    let mut comparison = compare_body(&source_pair.source, &source_pair.source, plan, clocks)?;
     comparison.merge_and_validate(crate::replay::compare_interaction_global(
         source_pair.source_interaction.as_ref(),
         source_pair.source_interaction.as_ref(),
@@ -508,6 +515,7 @@ fn primary(
             target: source_pair.interaction_times.source,
         },
         clocks.case,
+        source_pair.max_interaction_message_bytes,
     )?);
     let relevant = record_source(&comparison, &selected, result)
         .context("phase=source_self_validation, document=body_or_interaction")?;
@@ -522,38 +530,29 @@ fn primary(
         return Ok(());
     };
     let clocks = AnchorClocks::for_response(pair.request_times, pair.times);
+    let target_body = pair
+        .target
+        .as_deref()
+        .context("global JSON Target body unavailable")?;
     let checked = (|| -> Result<usize> {
-        let mut checked = compare_body(
-            &pair.source,
-            pair.target
-                .as_deref()
-                .context("global JSON Target body unavailable")?,
-            clocks,
-        )?;
-        checked.merge_and_validate(crate::replay::compare_interaction_global(
+        let mut comparison = compare_body(&pair.source, target_body, plan, clocks)?;
+        comparison.merge_and_validate(crate::replay::compare_interaction_global(
             pair.source_interaction.as_ref(),
             pair.target_interaction.as_ref(),
             Some(plan),
             pair.interaction_times,
             pair.request_times,
+            pair.max_interaction_message_bytes,
         )?);
-        valid_count(&checked, &selected)
-            .context("phase=independent_target_validation, document=body_or_interaction")
+        valid_count(&comparison, &selected)
     })();
-    let checked = match checked {
-        Err(_)
-            if inputs.precedes_response(ClockPair {
-                source: pair.times.source,
-                target: pair.times.target,
-            }) =>
-        {
+    match checked {
+        Ok(checked) if relevant || checked > 0 => result.independent_target_validations += 1,
+        Ok(_) => {}
+        Err(_) if inputs.precedes_response(pair.times) => {
             super::input_retiming::Inputs::defer(case, Surface::ApiResponse, None, result);
-            return Ok(());
         }
-        other => other?,
-    };
-    if relevant || checked > 0 {
-        result.independent_target_validations += 1;
+        Err(_) => result.defer_target_comparison(case, Surface::ApiResponse, None),
     }
     Ok(())
 }

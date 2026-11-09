@@ -29,68 +29,84 @@ pub struct Artifact {
     pub path: PathBuf,
     pub sha256: String,
     pub length: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    inputs: BTreeMap<PathBuf, crate::dependency_index::FileStamp>,
 }
 
 impl Artifact {
     pub(super) fn capture(path: &Path) -> Result<Self> {
+        use crate::dependency_index::{FileStamp, scoped};
+
         #[cfg(test)]
         capture_stats::note_capture(path);
         ensure!(
             !path.components().any(|c| c.as_os_str() == ".active"),
             "rule evidence must be finalized and published"
         );
-        if let Some(view) = crate::dependency_index::scoped::view_path(path) {
-            let metadata = fs::symlink_metadata(&view)?;
-            ensure!(
-                metadata.is_file() && !metadata.file_type().is_symlink(),
-                "rule scope evidence requires a regular immutable view"
-            );
-            let bytes = crate::dependency_index::scoped::read_bytes(path)?;
-            #[cfg(test)]
-            capture_stats::note_captured_bytes(path, bytes.len() as u64);
-            return Ok(Self {
-                path: path.into(),
-                sha256: crate::policy_evidence::digest(&bytes),
-                length: bytes.len() as u64,
-            });
-        }
-        let metadata = fs::symlink_metadata(path)?;
-        ensure!(
-            metadata.is_file() && !metadata.file_type().is_symlink(),
-            "rule evidence requires regular artifacts"
-        );
-        ensure!(
-            !path.components().any(|c| c.as_os_str() == ".active"),
-            "rule evidence must be finalized and published"
-        );
-        let mut file = fs::File::open(path)?;
-        let mut hash = Sha256::new();
-        let mut buffer = [0; 64 * 1024];
-        let mut length = 0;
-        loop {
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                break;
+        let validation = std::time::SystemTime::now();
+        let source = scoped::resolve(path)?;
+        let stamp = FileStamp::read_native(&source.path)?;
+        let mut inputs = BTreeMap::from([(source.path.clone(), stamp.clone())]);
+        let (sha256, length) = if let Some((view, view_stamp)) = source.view {
+            inputs.insert(view, view_stamp);
+            let bytes = scoped::read_bytes(path)?;
+            (crate::policy_evidence::digest(&bytes), bytes.len() as u64)
+        } else {
+            let mut file = fs::File::open(path)?;
+            let mut hash = Sha256::new();
+            let mut buffer = [0; 64 * 1024];
+            let mut length = 0;
+            loop {
+                let count = file.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+                length += u64::try_from(count)?;
             }
-            hash.update(&buffer[..count]);
-            length += u64::try_from(count)?;
-        }
-        ensure!(
-            length == metadata.len(),
-            "rule evidence changed during hashing"
-        );
+            ensure!(length == stamp.size, "rule evidence changed during hashing");
+            (format!("sha256:{:x}", hash.finalize()), length)
+        };
         #[cfg(test)]
         capture_stats::note_captured_bytes(path, length);
-        Ok(Self {
+        let mut artifact = Self {
             path: path.into(),
-            sha256: format!("sha256:{:x}", hash.finalize()),
+            sha256,
             length,
-        })
+            inputs,
+        };
+        artifact.verify()?;
+        if !artifact
+            .inputs
+            .values()
+            .all(|stamp| stamp.stable_before(validation))
+        {
+            // Fresh files can share a ctime tick with a same-length edit.
+            // Retain their digest and rehash them at apply.
+            artifact.inputs.clear();
+        }
+        Ok(artifact)
     }
 
     pub(super) fn verify(&self) -> Result<()> {
+        use crate::dependency_index::{FileStamp, scoped};
+
+        // Older plans have hashes without filesystem identities.
+        if self.inputs.is_empty() {
+            let captured = Self::capture(&self.path)?;
+            ensure!(
+                captured.sha256 == self.sha256 && captured.length == self.length,
+                "rule evidence changed after planning; recover and run fresh Replay"
+            );
+            return Ok(());
+        }
+        let same_view =
+            scoped::view_path(&self.path).is_none_or(|view| self.inputs.contains_key(&view));
         ensure!(
-            Self::capture(&self.path)? == *self,
+            same_view
+                && self.inputs.iter().all(|(path, expected)| {
+                    FileStamp::read_native(path).is_ok_and(|actual| actual == *expected)
+                }),
             "rule evidence changed after planning; recover and run fresh Replay"
         );
         Ok(())
@@ -108,6 +124,8 @@ pub(super) struct ApiExecutionIdentity {
     case_source: PathBuf,
     attempt: u64,
     target_inputs: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    allows_target_drift: bool,
     engine: String,
     #[serde(default)]
     recorded_replay: Option<String>,
@@ -146,7 +164,16 @@ impl ExecutionIdentity {
                 state,
             )?)),
             Self::Batch(_) => Self::batch_current(root, state),
-            Self::ApiIssue(_) => Self::current(root, state),
+            Self::ApiIssue(identity) => {
+                // A compatible planner upgrade can recheck the same frozen
+                // attempt. Its original Replay engine is still bound below.
+                let engine = if identity.allows_target_drift {
+                    identity.engine.clone()
+                } else {
+                    fingerprint::traffic_e2e_revision()?
+                };
+                Self::api_current(root, state, identity.allows_target_drift, engine)
+            }
         }
     }
     pub(super) fn batch_current(root: &Path, state: &RewriteState) -> Result<Self> {
@@ -156,7 +183,25 @@ impl ExecutionIdentity {
             evidence: super::batch::evidence(root, state)?,
         }))
     }
-    pub(super) fn current(root: &Path, state: &RewriteState) -> Result<Self> {
+    pub(super) fn current(
+        root: &Path,
+        state: &RewriteState,
+        allows_target_drift: bool,
+    ) -> Result<Self> {
+        Self::api_current(
+            root,
+            state,
+            allows_target_drift,
+            fingerprint::traffic_e2e_revision()?,
+        )
+    }
+
+    fn api_current(
+        root: &Path,
+        state: &RewriteState,
+        allows_target_drift: bool,
+        engine: String,
+    ) -> Result<Self> {
         let context = crate::E2eRunContext {
             target_root: root.into(),
             case_source: state
@@ -193,8 +238,13 @@ impl ExecutionIdentity {
             case_inventory: summary.case_inventory_id,
             case_source: summary.case_source,
             attempt: summary.attempt,
-            target_inputs: fingerprint::review_fingerprint(root)?,
-            engine: fingerprint::traffic_e2e_revision()?,
+            target_inputs: if allows_target_drift {
+                fingerprint::startup_inputs_fingerprint(root)?
+            } else {
+                fingerprint::review_fingerprint(root)?
+            },
+            allows_target_drift,
+            engine,
             recorded_replay: state.replay_identity.clone(),
             recorded_engine: state
                 .attempts

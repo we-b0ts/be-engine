@@ -343,8 +343,9 @@ fn sse_value_contracts_keep_identity_time_remainder_and_lifecycle_strict() {
 }
 
 #[test]
-fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evidence() {
+fn sse_value_contract_preflight_rejects_invalid_source_and_stale_evidence_and_defers_target() {
     for scenario in [
+        "unusable-source",
         "source-time",
         "source-field",
         "source-field-second",
@@ -360,8 +361,9 @@ fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evid
         let mut source = stream(false);
         let mut target = stream(true);
         match scenario {
+            "unusable-source" => source["interaction"]["end"]["clean"] = json!(false),
             "source-time" => change_data(&mut source, 0, |v| {
-                v["response"]["created_at"] = json!(START - 100)
+                v["response"]["created_at"] = json!({"invalid":"time"})
             }),
             "source-field" => change_data(&mut source, 0, |v| {
                 v["response"].as_object_mut().unwrap().remove("created_at");
@@ -405,14 +407,25 @@ fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evid
                 fs::write(options(&fixture).actual_response, b"{}").unwrap();
             }
             assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
-        } else {
+        } else if matches!(scenario, "unusable-source" | "source-time") {
             let error = format!("{:#}", fixture.plan().unwrap_err());
-            assert!(
-                error.contains("contract failed") || error.contains("identity"),
-                "{scenario}: {error}"
-            );
+            assert!(error.contains("contract failed"), "{scenario}: {error}");
             assert!(!error.contains(PRIVATE));
             assert!(fixture.state().rule_plan.is_none());
+        } else {
+            let plan = fixture
+                .plan()
+                .unwrap_or_else(|error| panic!("{scenario}: {error:#}"));
+            let report = &plan.traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay", "{scenario}");
+            assert_eq!(report["preflight"]["independent_target_validations"], 0);
+            assert!(!report.to_string().contains(PRIVATE));
+            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+            let actual = crate::assert_recorded_response(options(&fixture));
+            assert!(
+                actual.is_err() || actual.is_ok_and(|report| !report.passed),
+                "{scenario}"
+            );
         }
     }
 }

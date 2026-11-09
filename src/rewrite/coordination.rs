@@ -38,8 +38,8 @@ pub(super) fn status_details_with_execution(
     Ok(status_projection_with_execution(target_root, state, execution)?.0)
 }
 
-/// Counts and the pending-plan action share one complete evidence validation.
-/// The returned action is only a read projection; Apply validates again.
+/// Counts and the pending-plan action share one read-only projection.
+/// Apply revalidates the frozen evidence before publication.
 pub(super) fn status_projection_with_execution(
     target_root: &Path,
     state: &RewriteState,
@@ -75,7 +75,7 @@ pub(super) fn status_projection_with_execution(
         .or_else(|| execution.cloned())
         .unwrap_or_else(|| base.clone())
     } else if plan.is_some() {
-        // This exact idle action was already validated by status_base_projection.
+        // Reuse the pending action projected at the idle gate.
         base.clone()
     } else {
         super::action::select_action(target_root, state, base.clone())

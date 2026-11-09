@@ -1,4 +1,4 @@
-//! Recorded client responses are anchored only to actual Target PING packets.
+//! Engine.IO replies are anchored only to actual Target PING packets.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,6 +10,43 @@ use crate::interaction::{
     socketio::{EngineIoPacket, decode_engine_io_text},
 };
 
+#[derive(Default)]
+pub(super) struct Terminal {
+    timeout: Duration,
+    unanswered: Option<(Instant, String)>,
+}
+
+impl Terminal {
+    pub(super) fn configure(&mut self, timeout_ms: u64) {
+        self.timeout = Duration::from_millis(timeout_ms);
+    }
+
+    pub(super) fn defer_pong(&mut self, payload: String, received: Instant) {
+        self.unanswered.get_or_insert((received, payload));
+    }
+
+    pub(super) fn observed_progress(&mut self, now: Instant) -> Option<WireMessage> {
+        if self
+            .unanswered
+            .as_ref()
+            .is_some_and(|(received, _)| now.duration_since(*received) < self.timeout)
+        {
+            let (_, payload) = self.unanswered.take().expect("pending terminal ping");
+            return Some(WireMessage::text(format!("3{payload}")));
+        }
+        None
+    }
+
+    pub(super) fn expired(&self, now: Instant) -> bool {
+        !self.timeout.is_zero()
+            && self.unanswered.as_ref().is_some_and(|(received, _)| {
+                // The server starts its deadline before the ping reaches our reader.
+                let tolerance = Duration::from_millis(10).min(self.timeout / 10);
+                now.duration_since(*received) >= self.timeout - tolerance
+            })
+    }
+}
+
 pub(super) struct Heartbeats {
     recorded: bool,
     bound_inputs: BTreeSet<u64>,
@@ -19,18 +56,17 @@ pub(super) struct Heartbeats {
 }
 
 impl Heartbeats {
-    pub(super) fn new(input: &InputTranscript) -> Self {
+    pub(super) fn new(input: &InputTranscript, keep_alive: bool) -> Self {
+        let recorded = input.socket_io_heartbeat.as_ref().filter(|_| !keep_alive);
         Self {
-            recorded: input.socket_io_heartbeat.is_some(),
-            bound_inputs: input
-                .socket_io_heartbeat
-                .iter()
+            recorded: recorded.is_some(),
+            bound_inputs: recorded
+                .into_iter()
                 .flat_map(|program| &program.responses)
                 .map(|response| response.input_sequence)
                 .collect(),
-            responses: input
-                .socket_io_heartbeat
-                .iter()
+            responses: recorded
+                .into_iter()
                 .flat_map(|program| &program.responses)
                 .map(|response| {
                     (
@@ -62,7 +98,7 @@ impl Heartbeats {
         Ok(self.recorded_pong(message, limit)? && !self.bound_inputs.contains(&action.sequence))
     }
 
-    /// Returns true only for historical programs that authorize automatic PONG.
+    /// Returns true when the replay client must send an immediate PONG.
     pub(super) fn ping(&mut self, payload: String, now: Instant) -> Result<bool> {
         self.next_ping += 1;
         if let Some((sequence, delay)) = self.responses.remove(&self.next_ping) {

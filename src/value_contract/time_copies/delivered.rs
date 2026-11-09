@@ -27,7 +27,11 @@ impl TimeCopyStore {
                 Some(ResponseTimeCopy {
                     source: key.source,
                     target: value.target?,
-                    deliveries: value.deliveries.clone(),
+                    deliveries: value
+                        .deliveries
+                        .iter()
+                        .map(|delivery| delivery.clocks)
+                        .collect(),
                 })
             })
             .collect();

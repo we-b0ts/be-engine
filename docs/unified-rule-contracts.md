@@ -89,17 +89,18 @@ field ownership. Planning uses protected immutable artifacts and independent
 Target observations; it never rewrites recordings. See
 [SSE value contracts](sse-value-contracts.md).
 
-Rule planning and application do not require primary response status acceptance.
-Preflight always validates the selected Source values. When an available Target
-response has a different status, it is retained in
-`preflight.unvalidated_target_witnesses` with its Case, surface, reason and both
-statuses; it counts as neither a missing witness nor a validated Target pair.
-The plan returns `planned_needs_replay` and can be applied immediately, returning
-`applied_pending_replay`. This applies to JSON, HTTP header and native API
-response rules without classifying the cause of the status difference. Equal
-statuses retain strict Target value checks, including error statuses. Artifact
-authentication, decoding and stale checks remain mandatory. Applying the rule
-still requires fresh genuine Replay, whose status assertions remain strict.
+Rule planning validates the proposal, the selected Source values and the
+integrity of the evidence. Preflight reports a different Target response status
+in `preflight.unvalidated_target_witnesses` with its Case, surface and both
+statuses. Failed comparisons against independent Target observations appear in
+`preflight.target_comparison_failures` with their Case, surface and any protected
+witness ID. Those observations carry no positive validation count. In both
+cases the plan can return `planned_needs_replay`. Apply checks the policy
+baseline and the identities of the frozen evidence before publishing the change.
+Finalized artifacts with stable filesystem stamps do not need a second content
+scan. Older plans and recently modified artifacts retain digest verification.
+Status projects the next action from the policy baseline and current issue.
+Fresh genuine Replay then runs the response and dependency assertions.
 
 Inbound request JWT translation, Source capture admission, Source response
 rewrite, process ownership, API-origin attribution, finite sharing and snapshot

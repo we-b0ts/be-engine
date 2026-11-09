@@ -15,6 +15,7 @@ fn input() -> InputTranscript {
         .map(|(i, (id, offset_ms))| InputAction {
             sequence: i as u64 + 1,
             offset_ms,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,
@@ -46,6 +47,9 @@ fn output(messages: &[&str]) -> OutputObservation {
             offset_ms: 42_000 + messages.len() as u64 * 1_000,
             pending: vec![],
             clean: true,
+            missing_predecessor: None,
+            dispatch_timeout: None,
+            fast_heartbeat_eof_ms: None,
             partial_message: None,
             close: None,
         },
@@ -66,6 +70,7 @@ fn checked(input: Option<&InputTranscript>, source: &[&str], target: &[&str]) ->
         &Default::default(),
         context.as_ref(),
         false,
+        8 * 1024 * 1024,
     )
     .unwrap()
 }
@@ -175,6 +180,35 @@ fn ack_alignment_requires_unique_original_requests_and_fast_input_policy() {
 }
 
 #[test]
+fn repeated_ack_ids_only_fence_their_own_positions() {
+    const FIRST: &str = r#"43/n,215[{"tag":"first"}]"#;
+    const SECOND: &str = r#"43/n,215[{"tag":"second"}]"#;
+    const PUSH: &str = r#"42/n,17["notice",{}]"#;
+    let mut input = input();
+    let mut repeated = input.actions[0].clone();
+    repeated.action = InputActionKind::Message {
+        message: WireMessage::text(r#"42/n,215["poll",{}]"#),
+    };
+    for action in &mut input.actions {
+        action.sequence += 2;
+    }
+    for sequence in [2, 1] {
+        repeated.sequence = sequence;
+        repeated.offset_ms = sequence * 1_000;
+        input.actions.insert(0, repeated.clone());
+    }
+    let source = &[FIRST, SECOND, A, B];
+    assert!(checked(Some(&input), source, &[FIRST, SECOND, B, A]).passed());
+    assert!(!checked(Some(&input), source, &[SECOND, FIRST, B, A]).passed());
+    assert!(!checked(Some(&input), source, &[FIRST, B, SECOND, A]).passed());
+
+    let source = &[FIRST, PUSH, A, SECOND, B];
+    assert!(checked(Some(&input), source, &[FIRST, A, PUSH, SECOND, B]).passed());
+    assert!(!checked(Some(&input), source, &[FIRST, A, SECOND, PUSH, B]).passed());
+    assert!(!checked(Some(&input), source, &[SECOND, A, PUSH, FIRST, B]).passed());
+}
+
+#[test]
 fn direct_and_transitive_completion_edges_prevent_ack_reordering() {
     let mut direct = input();
     direct.actions[1].after = vec![1];
@@ -273,6 +307,7 @@ fn paired_ack_arguments_still_evaluate_global_field_contracts() {
             &Default::default(),
             Some(&context),
             false,
+            8 * 1024 * 1024,
         )
         .unwrap()
     };

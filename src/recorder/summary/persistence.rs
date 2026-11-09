@@ -31,6 +31,11 @@ pub(super) async fn write_dependency_summary(
         let mut input = input;
         let stamp = input.stamp.clone();
         let mut case_index = case_dependencies.then(|| Builder::new(stamp.clone()));
+        let scope_membership_sha256 = if case_dependencies {
+            input.scope_membership_sha256()?
+        } else {
+            None
+        };
         let scoped = crate::dependency_index::scoped::view_path(&path).is_some();
         if scoped && let Some(index) = &mut case_index {
             index.set_scoped();
@@ -62,7 +67,9 @@ pub(super) async fn write_dependency_summary(
         }
         crate::dependency_index::scoped::validate_stamp(&path, &stamp)?;
         if let Some(index) = case_index {
-            crate::dependency_index::store::write_json(&dir.join(FRAGMENT), &index.finish()?)?;
+            let mut index = index.finish()?;
+            index.scope_membership_sha256 = scope_membership_sha256;
+            crate::dependency_index::store::write_json(&dir.join(FRAGMENT), &index)?;
         }
         if let Some(index) = global_index {
             crate::dependency_index::store::write_json(

@@ -34,6 +34,10 @@ impl RecordStream {
         })
     }
 
+    pub(crate) fn scope_membership_sha256(&self) -> Result<Option<String>> {
+        self.source.membership_sha256()
+    }
+
     pub(crate) fn next(&mut self) -> Result<Option<(RecordLocation, &[u8])>> {
         self.buffer.clear();
         if let Some(locations) = &self.source.locations {

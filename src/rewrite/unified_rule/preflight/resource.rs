@@ -56,27 +56,19 @@ fn context(root: &Path, source: &Path) -> crate::E2eRunContext {
     }
 }
 
-fn execution(
+fn execution_paths(
     root: &Path,
     source: &Path,
     api: &str,
-) -> Result<(Option<Vec<Artifact>>, Option<Artifact>)> {
+) -> Result<(Option<[PathBuf; 4]>, Option<PathBuf>)> {
     crate::rewrite::rule_plans::events::ensure_not_replaying(root, api)?;
     use crate::e2e_run::OptionalResponseRuleEvidence;
     match crate::e2e_run::optional_response_rule_evidence(context(root, source), api)? {
         OptionalResponseRuleEvidence::Absent => Ok((None, None)),
-        OptionalResponseRuleEvidence::Unavailable(state) => {
-            Ok((None, Some(Artifact::capture(&state)?)))
+        OptionalResponseRuleEvidence::Unavailable(state) => Ok((None, Some(state))),
+        OptionalResponseRuleEvidence::Available(e, state) => {
+            Ok((Some([e.replay, e.assertions, e.aggregate, state]), None))
         }
-        OptionalResponseRuleEvidence::Available(e, state) => Ok((
-            Some(
-                [e.replay, e.assertions, e.aggregate, state]
-                    .iter()
-                    .map(|path| Artifact::capture(path))
-                    .collect::<Result<Vec<_>>>()?,
-            ),
-            None,
-        )),
     }
 }
 
@@ -100,11 +92,26 @@ fn groups(index: Option<&Path>, source: &Path) -> Result<BTreeMap<String, String
 }
 
 impl ResourceRecord {
-    pub(super) fn ensure_current(&self, root: &Path) -> Result<()> {
-        ensure!(
-            crate::dependency_index::evidence::prepare(&self.case_source)? == self.snapshot,
-            "complete resource Source inventory changed after planning; recover and replan"
-        );
+    pub(super) fn ensure_current(
+        &self,
+        root: &Path,
+        validation: Option<std::time::SystemTime>,
+    ) -> Result<()> {
+        if let Some(validation) = validation {
+            crate::dependency_index::evidence::verify_frozen(
+                &self.case_source,
+                &self.snapshot,
+                validation,
+            )
+            .context(
+                "complete resource Source inventory changed after planning; recover and replan",
+            )?;
+        } else {
+            ensure!(
+                crate::dependency_index::evidence::prepare(&self.case_source)? == self.snapshot,
+                "complete resource Source inventory changed after planning; recover and replan"
+            );
+        }
         let current = groups(self.inventory_path.as_deref(), &self.case_source)?;
         for (case, group) in &self.case_groups {
             ensure!(
@@ -113,10 +120,21 @@ impl ResourceRecord {
             );
         }
         for (api, evidence) in &self.executions {
-            let (current, unavailable) = execution(root, &self.case_source, api)?;
+            let (current, unavailable) = execution_paths(root, &self.case_source, api)?;
+            let same_paths = match (&current, evidence) {
+                (None, None) => true,
+                (Some(paths), Some(evidence)) => paths
+                    .iter()
+                    .eq(evidence.iter().map(|artifact| &artifact.path)),
+                _ => false,
+            };
             ensure!(
-                current == *evidence
-                    && unavailable.as_ref() == self.unavailable_executions.get(api),
+                same_paths
+                    && unavailable.as_ref()
+                        == self
+                            .unavailable_executions
+                            .get(api)
+                            .map(|artifact| &artifact.path),
                 "resource Target execution changed after planning; obtain fresh evidence"
             );
         }
@@ -312,7 +330,16 @@ pub(super) fn prepare(
     }
     let mut output = Vec::new();
     for (api, cases) in foreign {
-        let (evidence, unavailable) = execution(root, case_source, &api)?;
+        let (evidence, unavailable) = execution_paths(root, case_source, &api)?;
+        let evidence = evidence
+            .map(|paths| {
+                paths
+                    .iter()
+                    .map(|path| Artifact::capture(path))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+        let unavailable = unavailable.as_deref().map(Artifact::capture).transpose()?;
         let mut other = Bundle {
             inventory_path: bundle.inventory_path.clone(),
             replay_path: bundle.replay_path.clone(),
@@ -322,18 +349,22 @@ pub(super) fn prepare(
             artifacts: BTreeMap::new(),
         };
         if let Some(unavailable) = unavailable {
-            other.freeze(&unavailable.path)?;
-            ensure!(
-                other.artifacts[&unavailable.path] == unavailable,
-                "unfinished foreign Replay changed while planning"
-            );
+            unavailable
+                .verify()
+                .context("unfinished foreign Replay changed while planning")?;
+            other
+                .artifacts
+                .insert(unavailable.path.clone(), unavailable.clone());
             record
                 .unavailable_executions
                 .insert(api.clone(), unavailable);
         }
         if let Some(artifacts) = &evidence {
             for artifact in artifacts {
-                other.freeze(&artifact.path)?;
+                artifact.verify()?;
+                other
+                    .artifacts
+                    .insert(artifact.path.clone(), artifact.clone());
             }
             let replay = other.json(&artifacts[0].path)?;
             // Old-policy executions are explicitly unavailable for this plan;

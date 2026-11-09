@@ -65,9 +65,9 @@ separate HMAC over their original metadata and bytes. Removing encryption does
 not allow modified payloads, clocks or candidate ownership to authorize a plan.
 
 The observation and candidate-count bounds still protect session memory.
-One session retains at most 262,144 Source and Target observations combined,
+One session retains at most 393,216 Source and Target observations combined,
 and 1,048,576 candidate associations. Its authenticated private directory has
-a 512 MiB metadata budget shared by publication and readers. These limits
+a 768 MiB metadata budget shared by publication and readers. These limits
 cover ordinary 70-100 Case API batches, including late unmatched requests;
 they do not change header encryption, identity or completeness validation.
 The observation budget covers every Case

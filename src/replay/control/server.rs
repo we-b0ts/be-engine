@@ -141,6 +141,7 @@ async fn serve(
     };
 
     let command = request.command.clone();
+    let queued_at = Instant::now();
     let _mutation = if matches!(
         command.as_str(),
         "status" | "wait_ready" | "cases" | "case_execution_status" | "response_time_copies"
@@ -149,6 +150,8 @@ async fn serve(
     } else {
         Some(mutation.lock().await)
     };
+    let started = Instant::now();
+    let sequence = request.input_timing.as_ref().map(|query| query.sequence);
     let (response, should_stop) = handle_control_request(
         request,
         state.clone(),
@@ -156,6 +159,14 @@ async fn serve(
         control_socket_path.clone(),
     )
     .await;
+    if command == "input_timing" && queued_at.elapsed() >= Duration::from_millis(250) {
+        warn!(
+            ?sequence,
+            control_queue_ms = started.duration_since(queued_at).as_millis(),
+            handler_ms = started.elapsed().as_millis(),
+            "slow Socket.IO input control feedback"
+        );
+    }
     // Commit the command independently of whether its observer still reads.
     let _ = tokio::time::timeout(
         FRAME_TIMEOUT,

@@ -9,6 +9,7 @@ mod active;
 mod ambient;
 mod delivery;
 mod encryption;
+mod fast;
 mod guards;
 mod heartbeats;
 mod observations;
@@ -17,6 +18,7 @@ mod recording;
 mod routing;
 mod scale;
 mod transport_end;
+mod unanswered_rpc;
 mod wire;
 
 const CASE: &str = "00000000-0000-0000-0000-000000000123";
@@ -29,6 +31,7 @@ fn fixture(root: &Path) -> (Vec<Value>, Vec<u8>) {
     input.actions.push(InputAction {
         sequence: 1,
         offset_ms: 0,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

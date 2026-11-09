@@ -268,19 +268,18 @@ fn resource_scope_validates_independent_foreign_target_observations() {
         let fixture = fixture();
         foreign_execution(&fixture, &event("2026-10-16"), date);
         fixture.confirm();
-        let plan = fixture.plan();
+        let report = fixture.plan().unwrap().traffic_e2e_report;
+        let preflight = &report["preflight"];
         if date.ends_with("18") {
-            assert!(plan.is_err());
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(preflight["independent_target_validations"], 2);
+            assert_eq!(
+                preflight["target_comparison_failures"][0]["surface"],
+                "dependency.request"
+            );
         } else {
-            let plan = plan.unwrap();
-            assert_eq!(
-                plan.traffic_e2e_report["preflight"]["independent_target_validations"],
-                3
-            );
-            assert_eq!(
-                plan.traffic_e2e_report["preflight"]["missing_target_witnesses"],
-                0
-            );
+            assert_eq!(preflight["independent_target_validations"], 3);
+            assert_eq!(preflight["missing_target_witnesses"], 0);
         }
     }
 }

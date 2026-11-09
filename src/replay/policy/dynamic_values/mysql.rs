@@ -6,20 +6,21 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::borrow::Cow;
 
-pub(in crate::replay) struct MysqlNormalization {
-    pub source_sql: Option<String>,
-    pub source_params: Option<Vec<RecordedMysqlValue>>,
-    pub actual_sql: Option<String>,
-    pub actual_params: Option<Vec<RecordedMysqlValue>>,
+pub(in crate::replay) struct MysqlNormalization<'a> {
+    pub source_sql: Option<Cow<'a, str>>,
+    pub source_params: Option<Cow<'a, [RecordedMysqlValue]>>,
+    pub actual_sql: Option<Cow<'a, str>>,
+    pub actual_params: Option<Cow<'a, [RecordedMysqlValue]>>,
     pub decision: DynamicDecision,
 }
 
 impl DynamicValues {
-    pub(in crate::replay) fn mysql(
+    pub(in crate::replay) fn mysql<'a>(
         &self,
-        context: &MysqlPolicyContext<'_>,
-    ) -> Option<Result<MysqlNormalization>> {
+        context: &MysqlPolicyContext<'a>,
+    ) -> Option<Result<MysqlNormalization<'a>>> {
         let case_id = context.case_id?;
         if !matches!(context.command, "COM_QUERY" | "COM_STMT_EXECUTE") {
             return None;
@@ -97,16 +98,16 @@ pub(super) fn capture(token: &Token, pointer: Option<&str>) -> Result<String> {
     strings::capture_with_limit(bytes, pointer, bounds::MAX_STATEMENT_BYTES)
 }
 
-fn normalize_sql(
-    sql: Option<&str>,
+fn normalize_sql<'a>(
+    sql: Option<&'a str>,
     pairs: &[IdentityPair],
     actual: bool,
-) -> Result<Option<String>> {
+) -> Result<Option<Cow<'a, str>>> {
     let Some(sql) = sql else {
         return Ok(None);
     };
     if pairs.is_empty() {
-        return Ok(Some(sql.into()));
+        return Ok(Some(Cow::Borrowed(sql)));
     }
     let (tokens, spans) = bounds::statement_with_spans(sql).with_context(|| {
         format!(
@@ -117,13 +118,13 @@ fn normalize_sql(
     })?;
     let mut out = String::new();
     let mut offset = 0;
-    for (token, span) in tokens.into_iter().zip(spans) {
+    for (token, span) in tokens.iter().zip(spans.iter()) {
         let Token::Bytes(bytes) = token else {
             continue;
         };
         let normalized =
-            strings::normalize_with_limit(&bytes, pairs, actual, bounds::MAX_STATEMENT_BYTES)?;
-        if normalized == bytes {
+            strings::normalize_with_limit(bytes, pairs, actual, bounds::MAX_STATEMENT_BYTES)?;
+        if normalized == *bytes {
             continue;
         }
         out.push_str(&sql[offset..span.start]);
@@ -141,34 +142,40 @@ fn normalize_sql(
         out.push('\'');
         offset = span.end;
     }
-    out.push_str(&sql[offset..]);
-    Ok(Some(out))
+    if offset == 0 {
+        Ok(Some(Cow::Borrowed(sql)))
+    } else {
+        out.push_str(&sql[offset..]);
+        Ok(Some(Cow::Owned(out)))
+    }
 }
 
-fn normalize_params(
-    params: Option<&[RecordedMysqlValue]>,
+fn normalize_params<'a>(
+    params: Option<&'a [RecordedMysqlValue]>,
     pairs: &[IdentityPair],
     actual: bool,
-) -> Result<Option<Vec<RecordedMysqlValue>>> {
-    params
-        .map(|params| {
-            params
-                .iter()
-                .map(|parameter| {
-                    let mut parameter = parameter.clone();
-                    if let Some(Value::String(text)) = &mut parameter.value {
-                        *text = String::from_utf8(strings::normalize_with_limit(
-                            text.as_bytes(),
-                            pairs,
-                            actual,
-                            bounds::MAX_STATEMENT_BYTES,
-                        )?)?;
-                    }
-                    Ok(parameter)
-                })
-                .collect()
-        })
-        .transpose()
+) -> Result<Option<Cow<'a, [RecordedMysqlValue]>>> {
+    let Some(params) = params else {
+        return Ok(None);
+    };
+    let mut result = Cow::Borrowed(params);
+    if !pairs.is_empty() {
+        for (index, parameter) in params.iter().enumerate() {
+            let Some(Value::String(text)) = &parameter.value else {
+                continue;
+            };
+            let normalized = strings::normalize_with_limit(
+                text.as_bytes(),
+                pairs,
+                actual,
+                bounds::MAX_STATEMENT_BYTES,
+            )?;
+            if normalized != text.as_bytes() {
+                result.to_mut()[index].value = Some(Value::String(String::from_utf8(normalized)?));
+            }
+        }
+    }
+    Ok(Some(result))
 }
 
 #[cfg(test)]

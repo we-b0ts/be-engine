@@ -31,6 +31,29 @@ mod socketio;
 mod sse;
 
 #[test]
+fn socketio_close_limit_keeps_only_successfully_sealed_prior_cases_usable() {
+    use crate::active_case::SOCKETIO_CLOSE_TAIL_TIMEOUT;
+    let case = uuid::Uuid::new_v4();
+    let mut report = serde_json::json!({
+        "status": "completed",
+        "published_cases": 2,
+        "failed_cases": 1,
+        "errors": [{"case_id": case, "reason": SOCKETIO_CLOSE_TAIL_TIMEOUT}]
+    });
+    assert!(super::usable_recording(&report, Some(case)));
+    assert!(!super::usable_recording(&report, None));
+    assert!(!super::usable_recording(
+        &report,
+        Some(uuid::Uuid::new_v4())
+    ));
+    report["published_cases"] = 0.into();
+    assert!(!super::usable_recording(&report, Some(case)));
+    report["published_cases"] = 2.into();
+    report["status"] = "failed".into();
+    assert!(!super::usable_recording(&report, Some(case)));
+}
+
+#[test]
 fn bounded_sse_finalizes_through_relay_and_releases_admission() {
     runtime().block_on(sse::recording_policy_through_relay(true));
 }

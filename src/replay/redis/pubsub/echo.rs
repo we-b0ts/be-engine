@@ -307,6 +307,7 @@ fn render(raw: &[u8], prepared: &Prepared) -> Result<Vec<u8>> {
 pub(in crate::replay::redis) async fn deliver(
     state: &Arc<Mutex<ReplayState>>,
     matched: &MatchedRedisExchange,
+    serial_scope: Option<&super::super::input_timing::DeliveryScope>,
 ) -> Result<()> {
     let Some(prepared) = &matched.adapter_echo else {
         return Ok(());
@@ -328,6 +329,13 @@ pub(in crate::replay::redis) async fn deliver(
             replay.finalized_at.is_none(),
             "Replay finalized during adapter self-echo delivery"
         );
+        ensure!(
+            serial_scope.is_none()
+                || super::super::delivery::serial_scope_current(&replay, serial_scope),
+            "deferred adapter self-echo lost its Case"
+        );
+        let case_id = serial_scope.and(matched.report.case_id.as_deref());
+        let request_epoch = case_id.and_then(|case| replay.redis.native_request_epoch(case));
         for (id, bytes) in candidates {
             ensure!(
                 replay.redis.pubsub.is_subscribed(client, id),
@@ -350,11 +358,11 @@ pub(in crate::replay::redis) async fn deliver(
             }
             if sender
                 .try_send(Delivery {
-                    case_id: None,
+                    case_id: case_id.map(str::to_owned),
                     push: id,
                     bytes,
                     matched: None,
-                    request_epoch: None,
+                    request_epoch,
                     value: None,
                 })
                 .is_err()

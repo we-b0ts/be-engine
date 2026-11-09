@@ -16,6 +16,49 @@ fn project(record: &RecordedMysqlExchange, sql: &str) -> Option<RecordedMysqlRes
 }
 
 #[test]
+fn projection_reuses_the_source_shape_but_checks_each_recorded_result() {
+    let sql = "SELECT id AS old_id, uid AS old_uid FROM tasks WHERE id=7";
+    let source = record(sql, &["old_id", "old_uid"]);
+    let invalid = record(sql, &["invalid", "old_uid"]);
+    let mut query = Query::prepare("COM_QUERY", "SELECT uid FROM tasks WHERE id=7", None).unwrap();
+    assert!(query.response(&source).is_some());
+    assert!(query.response(&invalid).is_none());
+    assert_eq!(query.source_shapes.len(), 1);
+    assert!(query.response(&source).is_some());
+}
+
+#[test]
+fn grouped_projection_reads_each_occurrences_response() {
+    let sql = "SELECT id AS old_id, uid AS old_uid FROM tasks WHERE id=7";
+    let first = record(sql, &["old_id", "old_uid"]);
+    let invalid = record(sql, &["invalid", "old_uid"]);
+    let mut later = first.clone();
+    later.response.rows[0][1] = mysql_json("integer", json!(73));
+    let mut query = Query::prepare("COM_QUERY", "SELECT uid FROM tasks WHERE id=7", None).unwrap();
+    let first = query.grouped_response(&first, Some(0)).unwrap();
+    assert_eq!(first.rows[0][0].value, Some(json!(11)));
+    assert!(query.grouped_response(&invalid, Some(0)).is_none());
+    let later = query.grouped_response(&later, Some(0)).unwrap();
+    assert_eq!(later.rows[0][0].value, Some(json!(73)));
+    assert_eq!(query.source_groups.len(), 1);
+}
+
+#[test]
+fn projection_candidate_rebuilds_when_a_policy_changes_bound_values() {
+    let source = record("SELECT id, uid FROM tasks WHERE id=7", &["id", "uid"]);
+    let sql = "SELECT uid FROM tasks WHERE id=?";
+    let mut cache = None;
+    for (value, expected) in [(7, true), (8, false), (8, false), (7, true)] {
+        let params = [mysql_json("integer", json!(value))];
+        assert_eq!(
+            Candidate::compare(&mut cache, &source, "COM_STMT_EXECUTE", sql, Some(&params))
+                .is_some(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn distinct_requires_the_same_complete_projection_in_all_matching_paths() {
     for filter in ["", " WHERE tenant=7 AND status='approved'"] {
         let source_sql =

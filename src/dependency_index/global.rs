@@ -355,7 +355,8 @@ pub(crate) fn load_global_index_cancellable(
     cancelled: &AtomicBool,
 ) -> Result<(GlobalIndex, PathBuf)> {
     store::check_cancelled(cancelled)?;
-    let stamp = FileStamp::read(path)?;
+    let source = super::scoped::resolve(path)?;
+    let stamp = FileStamp::read_native(&source.path)?;
     let parent = path
         .parent()
         .context("Global dependency file has no parent")?;
@@ -368,7 +369,7 @@ pub(crate) fn load_global_index_cancellable(
     {
         return Ok((index, parent.to_owned()));
     }
-    let root = store::cache_directory(path).join("global-v3");
+    let root = store::file_cache_directory(path, &source)?.join("global-v3");
     store::private_directory(&root)?;
     let _lock = store::Lock::acquire(&root.join("build.lock"), cancelled)?;
     let fragment = root.join("index.json");
@@ -376,9 +377,15 @@ pub(crate) fn load_global_index_cancellable(
         && index.version == VERSION
         && index.stamp == stamp
     {
+        source.validate()?;
+        ensure!(
+            FileStamp::read_native(&source.path)? == stamp,
+            "Global evidence changed while loading its scope index"
+        );
         return Ok((index, root));
     }
     let index = build_index(path, &root, &stamp, validate, cancelled)?;
+    source.validate()?;
     store::write_json(&fragment, &index)?;
     Ok((index, root))
 }

@@ -644,7 +644,7 @@ fn a_persisted_apply_intent_rolls_back_on_save_failure_and_retries_after_crash()
 }
 
 #[test]
-fn planning_and_current_issue_recovery_require_dispatch_but_superseded_retirement_does_not() {
+fn qualified_evidence_allows_planning_before_worker_dispatch() {
     let fixture = Fixture::new();
     let state = fixture.state();
     let query = evidence::commands(fixture.root(), &state)
@@ -654,22 +654,16 @@ fn planning_and_current_issue_recovery_require_dispatch_but_superseded_retiremen
     let evidence_id = evidence::query(fixture.root(), &state, &query.query_id)
         .unwrap()
         .evidence_id;
-    let error = plan_rewrite_unified_rule(
+    let plan = plan_rewrite_unified_rule(
         fixture.context(),
         RewriteUnifiedRulePlanOptions {
             file: fixture.proposal.clone(),
             evidence_id,
         },
     )
-    .unwrap_err();
-    assert!(error.to_string().contains("confirmed dedicated subagent"));
-    fixture.confirm();
-    let plan = fixture.plan().unwrap();
-    let mut state = fixture.state();
-    state.worker_bindings.clear();
-    fixture.store().save(&state).unwrap();
+    .unwrap();
     let error = recover_rewrite_rule_plan(fixture.context(), &plan.plan_id).unwrap_err();
-    assert!(error.to_string().contains("confirmed dedicated subagent"));
+    assert!(error.to_string().contains("rule evidence remains usable"));
     assert!(fixture.state().rule_plan.is_some());
     let mut state = fixture.state();
     state.active_issue.as_mut().unwrap().id = "new-dispatch".into();
@@ -685,7 +679,41 @@ fn planning_and_current_issue_recovery_require_dispatch_but_superseded_retiremen
 }
 
 #[test]
-fn changed_target_cannot_authorize_a_plan_using_an_old_attempt() {
+fn qualified_plan_applies_without_dispatch_after_a_compatible_engine_upgrade() {
+    let fixture = Fixture::new();
+    let state = fixture.state();
+    let query = evidence::commands(fixture.root(), &state)
+        .into_iter()
+        .find(|q| q.query_id.ends_with("unified-rule-candidates"))
+        .unwrap();
+    let evidence_id = evidence::query(fixture.root(), &state, &query.query_id)
+        .unwrap()
+        .evidence_id;
+    let plan = plan_rewrite_unified_rule(
+        fixture.context(),
+        RewriteUnifiedRulePlanOptions {
+            file: fixture.proposal.clone(),
+            evidence_id,
+        },
+    )
+    .unwrap();
+    let mut state = fixture.state();
+    let record = state.rule_plan.as_mut().unwrap().unified.as_mut().unwrap();
+    let mut identity = serde_json::to_value(&record.identity).unwrap();
+    identity["identity"]["engine"] = json!("prior-planner-engine");
+    record.identity = serde_json::from_value(identity).unwrap();
+    fixture.store().save(&state).unwrap();
+
+    let result = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+    assert_eq!(
+        result.traffic_e2e_report["status"],
+        "applied_pending_replay"
+    );
+    assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+}
+
+#[test]
+fn changed_target_does_not_invalidate_qualified_plan_evidence() {
     let fixture = Fixture::new();
     fixture.confirm();
     fs::write(
@@ -693,10 +721,7 @@ fn changed_target_cannot_authorize_a_plan_using_an_old_attempt() {
         "pub fn value() -> u8 { 2 }\n",
     )
     .unwrap();
-    let error = fixture.plan().unwrap_err();
-    assert!(
-        error.to_string().contains("changed since genuine Replay"),
-        "{error:#}"
-    );
-    assert!(fixture.state().rule_plan.is_none());
+    let report = fixture.plan().unwrap().traffic_e2e_report;
+    assert_eq!(report["target_replay_drift_at_plan"], true);
+    assert_eq!(report["verified"], false);
 }

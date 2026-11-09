@@ -1,6 +1,7 @@
 //! Disposable locations into immutable semantic dependency evidence.
 //! This module never authorizes matching, sharing, consumption or responses.
 mod build;
+pub(crate) mod case_recording;
 pub(crate) mod evidence;
 pub(crate) mod global;
 #[cfg(test)]

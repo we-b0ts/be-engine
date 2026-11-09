@@ -182,6 +182,9 @@ impl RedisReplayState {
             username,
             command,
             args,
+            None,
+            None,
+            false,
         )
         .map(|mut matched| {
             matched.report.target_event_index = self.request_event_index;
@@ -275,6 +278,9 @@ impl RedisReplayState {
         username: Option<&str>,
         command: &str,
         args: &[Vec<u8>],
+        expected_index: Option<usize>,
+        serial: Option<super::admission::pipeline::SerialPublish>,
+        fast_socketio: bool,
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.candidates.register(&self.exchanges);
         if let Some(case) = active_case_id {
@@ -349,7 +355,8 @@ impl RedisReplayState {
             .map(PreferredMatch::Matched)
             .unwrap_or(PreferredMatch::NotFound);
         for allow_pre_match in [false, true] {
-            if !matches!(matched, PreferredMatch::NotFound) || allow_pre_match && !pre_match_enabled
+            if !matches!(matched, PreferredMatch::NotFound)
+                || allow_pre_match && (!pre_match_enabled || expected_index.is_some())
             {
                 break;
             }
@@ -377,6 +384,9 @@ impl RedisReplayState {
                 username,
                 command,
                 args,
+                expected_index,
+                serial.as_ref().map(|serial| serial.first_blocker),
+                fast_socketio,
             );
         }
         self.request_contracts
@@ -387,6 +397,23 @@ impl RedisReplayState {
                 return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
             }
             PreferredMatch::NotFound => {
+                if let Some(expected) = expected_index {
+                    let exchange = &self.exchanges[expected];
+                    let fields = redis_mismatch_fields(
+                        exchange,
+                        target,
+                        self.connection_scopes
+                            .matches(exchange, active_case_id, connection),
+                        resp_version,
+                        database,
+                        username,
+                        command,
+                        self.arguments_match(exchange, args),
+                    );
+                    return Err(CommandMatchDiagnostic::Mismatch {
+                        fields: fields.into_iter().map(str::to_owned).collect(),
+                    });
+                }
                 for exchange in self.exchanges.iter().filter(|exchange| {
                     exchange.source == ReplaySource::Case
                         && exchange.shared_rule_id.is_none()
@@ -483,6 +510,11 @@ impl RedisReplayState {
                 ));
             }
         };
+        if expected_index.is_some_and(|expected| expected != index) {
+            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: "pipelined Redis predecessor selected a different Source occurrence".into(),
+            });
+        }
         self.check_observation_mutation(index)?;
         self.check_activity_mutation(index)?;
         self.check_append_barrier(index, args)
@@ -753,6 +785,13 @@ impl RedisReplayState {
             exchange.claim = Some(ticket.observer());
             Claim::Finite(ticket)
         };
+        if let Some(serial) = serial {
+            exchange.serial_predecessors = Some(serial.predecessors);
+            exchange.serial_broadcast = serial.broadcast;
+        } else {
+            exchange.serial_predecessors = None;
+            exchange.serial_broadcast = None;
+        }
         if exchange.record.command.eq_ignore_ascii_case("PUBLISH") {
             // A notification may depend on this accepted request's identity,
             // before either its response or a related RPC callback completes.
@@ -844,11 +883,12 @@ impl CommandExchangeScope for ReplayExchange {
         // reach the client but before delivery bookkeeping reacquires the mutex.
         // Unclaimed, failed and client-termination exchanges remain blockers.
         self.is_consumed()
-            || if let Some(ticket) = &self.claim {
-                self.source == ReplaySource::Case && ticket.satisfies(Barrier::Admitted)
-            } else {
-                Lifecycle::satisfies(self.status, self.source, Barrier::Admitted)
-            }
+            || self.serial_predecessors.is_none()
+                && if let Some(ticket) = &self.claim {
+                    self.source == ReplaySource::Case && ticket.satisfies(Barrier::Admitted)
+                } else {
+                    Lifecycle::satisfies(self.status, self.source, Barrier::Admitted)
+                }
     }
 
     fn preserves_connection_order(&self) -> bool {

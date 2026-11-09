@@ -57,6 +57,10 @@ pub(super) fn response_kind(kind: &'static str, status_flags: Option<u16>) {
     });
 }
 
+pub(super) fn active() -> bool {
+    CONNECTION.try_with(|_| ()).is_ok()
+}
+
 pub(super) fn response(packet: &MysqlPacket, next_sequence: Option<u8>) {
     let _ = CONNECTION.try_with(|connection| {
         let connection = connection.borrow();
@@ -158,13 +162,13 @@ mod tests {
         async fn encoded_responses() -> Vec<u8> {
             use tokio::io::AsyncReadExt;
             let (mut writer, mut reader) = tokio::io::duplex(65536);
-            let metadata = super::super::StatementMetadata {
-                param_count: 2,
-                columns: serde_json::from_value(serde_json::json!([
+            let metadata = super::super::StatementMetadata::new(
+                2,
+                serde_json::from_value(serde_json::json!([
                     {"name":"private-column", "family":"integer", "sql_type":"INT"}
                 ]))
                 .unwrap(),
-            };
+            );
             let response = serde_json::from_value(serde_json::json!({
                 "status":"ok", "affected_rows":0, "last_insert_id":0
             }))

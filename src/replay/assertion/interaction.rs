@@ -65,6 +65,7 @@ pub(super) fn compare(
     report: &mut ResponseAssertionCaseReport,
     ack_context: Option<&AckContext>,
     source_heartbeat_tail: bool,
+    max_message_bytes: usize,
 ) -> Result<()> {
     report.fast_heartbeat_tail_skipped = actual.is_some_and(|actual| {
         actual.protocol == Protocol::SocketIo
@@ -79,6 +80,7 @@ pub(super) fn compare(
         copies,
         ack_context,
         source_heartbeat_tail,
+        max_message_bytes,
     )?;
     report.identity_pairs.extend(checked.identity_pairs());
     report.applied_body_rule_ids.extend(checked.evaluated);
@@ -98,6 +100,7 @@ pub(crate) fn compare_outputs_global(
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
     request_times: super::RequestTimes,
+    max_message_bytes: usize,
 ) -> Result<Comparison> {
     compare_outputs_global_with_time_copies(
         expected,
@@ -108,6 +111,7 @@ pub(crate) fn compare_outputs_global(
         &Default::default(),
         None,
         false,
+        max_message_bytes,
     )
 }
 
@@ -121,6 +125,7 @@ fn compare_outputs_global_with_time_copies(
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     ack_context: Option<&AckContext>,
     source_heartbeat_tail: bool,
+    max_message_bytes: usize,
 ) -> Result<Comparison> {
     let mut report = Comparison::default();
     let (expected, actual) = match (expected, actual) {
@@ -142,6 +147,16 @@ fn compare_outputs_global_with_time_copies(
     if !expected.end.clean || !actual.end.clean {
         mismatch(&mut report, "$interaction/end/clean");
     }
+    let heartbeat_grace = actual.protocol == Protocol::SocketIo
+        && source_heartbeat_tail
+        && actual
+            .end
+            .fast_heartbeat_eof_ms
+            .is_some_and(|at| at <= actual.end.offset_ms)
+        && matches!(
+            actual.end.reason,
+            EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped
+        );
     let heartbeat_tail_skipped = actual.protocol == Protocol::SocketIo
         && actual.end.reason == EndReason::FastHeartbeatTailSkipped
         && actual.end.close.is_none()
@@ -152,7 +167,7 @@ fn compare_outputs_global_with_time_copies(
     if expected.end.pending != actual.end.pending {
         mismatch(&mut report, "$interaction/end/pending");
     }
-    if expected.end.close != actual.end.close && !heartbeat_tail_skipped {
+    if expected.end.close != actual.end.close && !(heartbeat_tail_skipped || heartbeat_grace) {
         mismatch(&mut report, "$interaction/end/close");
     }
     if partial_message(expected)? != partial_message(actual)? {
@@ -168,17 +183,26 @@ fn compare_outputs_global_with_time_copies(
         .filter(|event| !event.heartbeat)
         .map(|event| event.offset_ms)
         .collect::<Vec<_>>();
+    let allowed_suffix = heartbeat_grace
+        && actual_events
+            .get(expected_events.len()..)
+            .is_some_and(|suffix| socketio::business_event_suffix(suffix, max_message_bytes));
+    let aligned_events = if allowed_suffix {
+        &actual_events[..expected_events.len()]
+    } else {
+        &actual_events
+    };
     let alignment = ack_context
         .filter(|_| socketio)
-        .map(|context| context.alignment(&expected_events, &actual_events, &source_offsets))
-        .unwrap_or_else(|| (0..actual_events.len()).collect());
+        .map(|context| context.alignment(&expected_events, aligned_events, &source_offsets))
+        .unwrap_or_else(|| (0..aligned_events.len()).collect());
     let target_offsets = actual
         .events
         .iter()
         .filter(|event| !event.heartbeat)
         .map(|event| event.offset_ms)
         .collect::<Vec<_>>();
-    if expected_events.len() != actual_events.len() {
+    if expected_events.len() != actual_events.len() && !allowed_suffix {
         mismatch(&mut report, "$interaction/events/length");
     }
     for (index, expected) in expected_events.iter().take(actual_events.len()).enumerate() {
@@ -212,7 +236,14 @@ fn compare_outputs_global_with_time_copies(
                 mismatch(&mut report, &pointer);
             }
             let adapted = if socketio {
-                socketio::compare_message(expected, actual, global, clocks, &pointer)?
+                socketio::compare_message(
+                    expected,
+                    actual,
+                    global,
+                    clocks,
+                    &pointer,
+                    max_message_bytes,
+                )?
             } else {
                 None
             };
@@ -369,6 +400,9 @@ mod tests {
                 offset_ms: 100,
                 pending: Vec::new(),
                 clean: true,
+                missing_predecessor: None,
+                dispatch_timeout: None,
+                fast_heartbeat_eof_ms: None,
                 partial_message: None,
                 close: None,
             },
@@ -397,6 +431,48 @@ mod tests {
             normalize_transport_identity(&WireMessage::text("42[\"event\",{\"sid\":\"target\"}]"))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn heartbeat_eof_accepts_only_an_extra_business_suffix_after_an_exact_prefix() {
+        let event = |message| OutputEvent {
+            sequence: 1,
+            offset_ms: 1,
+            heartbeat: false,
+            message: WireMessage::text(message),
+        };
+        let mut expected = output(Protocol::SocketIo, &[]);
+        expected.events.push(event(r#"42["source",1]"#));
+        let mut target = expected.clone();
+        target.events.push(event(r#"42["extra",2]"#));
+        let compare = |actual: &OutputObservation, proven| {
+            compare_outputs_global_with_time_copies(
+                Some(&expected),
+                Some(actual),
+                None,
+                Default::default(),
+                Default::default(),
+                &Default::default(),
+                None,
+                proven,
+                1024,
+            )
+            .unwrap()
+            .passed()
+        };
+        assert!(!compare(&target, true));
+        target.end.fast_heartbeat_eof_ms = Some(10);
+        assert!(!compare(&target, false));
+        assert!(compare(&target, true));
+        target.end.reason = EndReason::FastHeartbeatTailSkipped;
+        assert!(compare(&target, true));
+        target.events.swap(0, 1);
+        assert!(!compare(&target, true));
+        target.events.swap(0, 1);
+        target.events[1] = event(r#"431[true]"#);
+        assert!(!compare(&target, true));
+        target.events.clear();
+        assert!(!compare(&target, true));
     }
 
     #[test]

@@ -38,40 +38,10 @@ pub(crate) fn prepare(root: &Path) -> Result<Snapshot> {
     if super::recording::root(root).is_some() {
         return prepare_central(root);
     }
-    let (root, dependencies) = store::recording_files(root)?;
+    let (root, files) = legacy_stamps(root)?;
     let run: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("recording-run.json"))?)?;
     let run_id = run["run_id"].as_str().unwrap_or_default().to_owned();
-    let mut files = BTreeMap::new();
-    files.insert(
-        PathBuf::from("recording-run.json"),
-        FileStamp::read(&root.join("recording-run.json"))?,
-    );
-    for dependency in &dependencies {
-        for path in [
-            dependency.clone(),
-            dependency.with_file_name("request.json"),
-            dependency.with_file_name("expected-response.json"),
-        ] {
-            files.insert(
-                path.strip_prefix(&root)?.to_path_buf(),
-                FileStamp::read(&path).with_context(|| {
-                    format!("Source case lacks complete evidence: {}", path.display())
-                })?,
-            );
-        }
-    }
-    let global = root.join("global-dependencies.jsonl");
-    if global.exists() {
-        files.insert(
-            PathBuf::from("global-dependencies.jsonl"),
-            FileStamp::read(&global)?,
-        );
-    }
-    ensure!(
-        files.len() <= 400_002,
-        "Source proof file inventory exceeds bounds"
-    );
     let directory = store::cache_directory(&root);
     store::private_directory(&directory)?;
     let output = directory.join("source-proof-v1.json");
@@ -139,6 +109,75 @@ pub(crate) fn prepare(root: &Path) -> Result<Snapshot> {
     snapshot(&output, &catalog)
 }
 
+fn legacy_stamps(root: &Path) -> Result<(PathBuf, BTreeMap<PathBuf, FileStamp>)> {
+    let (root, dependencies) = store::recording_files(root)?;
+    let mut files = BTreeMap::new();
+    files.insert(
+        PathBuf::from("recording-run.json"),
+        FileStamp::read(&root.join("recording-run.json"))?,
+    );
+    for dependency in &dependencies {
+        for path in [
+            dependency.clone(),
+            dependency.with_file_name("request.json"),
+            dependency.with_file_name("expected-response.json"),
+        ] {
+            files.insert(
+                path.strip_prefix(&root)?.to_path_buf(),
+                FileStamp::read(&path).with_context(|| {
+                    format!("Source case lacks complete evidence: {}", path.display())
+                })?,
+            );
+        }
+    }
+    let global = root.join("global-dependencies.jsonl");
+    if global.exists() {
+        files.insert(
+            PathBuf::from("global-dependencies.jsonl"),
+            FileStamp::read(&global)?,
+        );
+    }
+    ensure!(
+        files.len() <= 400_002,
+        "Source proof file inventory exceeds bounds"
+    );
+    Ok((root, files))
+}
+
+/// The plan already authenticated the catalog. Recheck its identity and the
+/// filesystem stamps without reading the recorded dependency payloads again.
+pub(crate) fn verify_frozen(
+    root: &Path,
+    expected: &Snapshot,
+    validation: std::time::SystemTime,
+) -> Result<()> {
+    let catalog: Catalog = store::read_json(&expected.path)?;
+    ensure!(
+        snapshot(&expected.path, &catalog)? == *expected,
+        "frozen Source proof catalog changed"
+    );
+    let root = if let Some(root) = super::recording::root(root) {
+        root
+    } else {
+        let (root, files) = legacy_stamps(root)?;
+        ensure!(
+            files.keys().eq(catalog.files.keys()),
+            "complete Source case membership changed after planning"
+        );
+        root
+    };
+    for (relative, content) in &catalog.files {
+        let path = root.join(relative);
+        ensure!(
+            FileStamp::read_native(&path)? == content.stamp
+                && (content.stamp.stable_before(validation)
+                    || hash_file(&path, &content.stamp)? == content.sha256),
+            "complete Source evidence changed after planning"
+        );
+    }
+    Ok(())
+}
+
 fn prepare_central(path: &Path) -> Result<Snapshot> {
     let (root, manifest) = super::recording::manifest(path)?;
     super::recording::authenticate(&root)?;
@@ -203,8 +242,9 @@ fn hash_file(path: &Path, stamp: &FileStamp) -> Result<String> {
         size += n as u64;
     }
     ensure!(
-        size == stamp.size && FileStamp::read(path)? == *stamp,
-        "Source evidence changed while hashing"
+        size == stamp.size && FileStamp::read_native(path)? == *stamp,
+        "Source evidence changed while hashing: {}",
+        path.display()
     );
     Ok(format!("{:x}", hash.finalize()))
 }

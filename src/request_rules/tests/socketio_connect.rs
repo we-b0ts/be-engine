@@ -33,6 +33,7 @@ fn input(raw: &str) -> Value {
         input.actions.push(InputAction {
             sequence: index as u64 + 1,
             offset_ms: index as u64 + 5,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,

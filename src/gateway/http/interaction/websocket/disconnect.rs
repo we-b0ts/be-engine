@@ -23,16 +23,13 @@ where
         // failed-case cleanup without converting it into a valid terminal input.
         return cleanup(session, upstream, error).await;
     };
-    let offset = at
-        .saturating_duration_since(session.started)
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
+    let offset = at.saturating_duration_since(session.started);
     session
         .observation
         .lock()
         .expect("interaction observation poisoned")
         .client_transport_end(end, offset)?;
+    session.close_requested_at.get_or_init(|| at);
     session.request_close(EndReason::ClientTransportEnd);
     let completion = closing::ApplicationClose::prepare(session)
         .await?

@@ -1,7 +1,7 @@
 //! One replay-owned driver delivers proven ingress after its live session exists.
 use super::*;
 use std::sync::Weak;
-use tokio::time::{Duration, MissedTickBehavior};
+use tokio::time::{Duration, Instant, MissedTickBehavior};
 
 struct Job {
     index: usize,
@@ -48,19 +48,18 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
         let frame = job.frame.clone();
         let bytes = tokio::task::spawn_blocking(move || frame.bytes()).await;
         let mut replay = state.lock().await;
+        let entry = &replay.redis.pubsub.ingress.entries[job.index];
         if replay.finalized_at.is_some()
             || replay.target_session_stopped
             || replay.active_case_id.as_deref() != Some(&job.case)
-            || replay
-                .redis
-                .request_contracts
-                .request_times(&job.case)
-                .target
-                != Some(job.started)
-            || !replay.redis.pubsub.is_subscribed(
-                job.client,
-                replay.redis.pubsub.ingress.entries[job.index].slot,
-            )
+            || replay.redis.native_request_epoch(&job.case) != Some(job.started)
+            || entry.reply.is_none()
+                && replay.redis.pubsub.namespace_sessions.target_sid(
+                    &job.case,
+                    job.started,
+                    &entry.source.namespace,
+                ) != Some(job.sid.as_str())
+            || !replay.redis.pubsub.is_subscribed(job.client, entry.slot)
         {
             continue;
         }
@@ -120,7 +119,7 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         return Ok(None);
     };
     let contracts = &replay.redis.request_contracts;
-    let Some(started) = contracts.request_times(case).target else {
+    let Some(started) = replay.redis.native_request_epoch(case) else {
         return Ok(None);
     };
     if let Some((index, entry)) = replay
@@ -139,7 +138,7 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
             .as_ref()
             .and_then(|timeline| timeline.reached(case, started, entry.offset))
             .unwrap_or_else(|| Utc::now() >= due);
-        if !reached {
+        if !reached && !fast_dispatch_reached(replay, entry, started, Instant::now()) {
             return Ok(None);
         }
         if !replay
@@ -150,10 +149,19 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         {
             return Ok(None);
         }
-        let Some(sid) = contracts
-            .observed_identity_string(case, &entry.source.sid)
-            .map_err(|_| index)?
-        else {
+        let sid = if entry.reply.is_some() {
+            contracts
+                .observed_identity_string(case, &entry.source.sid)
+                .map_err(|_| index)?
+        } else {
+            replay
+                .redis
+                .pubsub
+                .namespace_sessions
+                .target_sid(case, started, &entry.source.namespace)
+                .map(str::to_owned)
+        };
+        let Some(sid) = sid else {
             return Ok(None);
         };
         let mut subscriptions = replay.redis.pubsub.subscriptions.iter().filter(|sub| {
@@ -179,6 +187,41 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         }));
     }
     Ok(None)
+}
+
+fn fast_dispatch_reached(
+    replay: &ReplayState,
+    entry: &Entry,
+    started: DateTime<Utc>,
+    now: Instant,
+) -> bool {
+    let Some(cap) = replay.input_timing.as_ref().and_then(|timeline| {
+        timeline.native_dispatch_cap(replay, &entry.case, started, entry.offset)
+    }) else {
+        return false;
+    };
+    // A proven RPC push can supply the output this ACK is waiting for.
+    // Its predecessor in the ingress stream must have finished writing
+    // before an accelerated gap starts.
+    let previous = replay
+        .redis
+        .pubsub
+        .ingress
+        .entries
+        .iter()
+        .filter(|previous| {
+            previous.case == entry.case
+                && (previous.offset, previous.ordinal) < (entry.offset, entry.ordinal)
+        })
+        .max_by_key(|previous| (previous.offset, previous.ordinal));
+    previous.is_none_or(|previous| {
+        previous.delivered_at.is_some_and(|delivered| {
+            let gap = (entry.offset - previous.offset)
+                .to_std()
+                .unwrap_or_default();
+            now >= delivered + gap.min(cap)
+        })
+    })
 }
 
 fn render(raw: &[u8], entry: &Entry, sid: &str) -> Result<Vec<u8>> {

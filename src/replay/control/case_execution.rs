@@ -1,5 +1,8 @@
 //! Active execution failures exclude merely unused Source inventory.
 use super::*;
+use serde::Serialize;
+
+const MAX_FAILURES: usize = 8;
 
 pub(super) fn failed(state: &ReplayState, case: &str) -> bool {
     state.dependency_tails.failure(case).is_some()
@@ -33,67 +36,83 @@ pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
         return serde_json::json!({"ok":true,"case_id":case,"failed":false,"failures":[],
             "has_response_time_copies":has_response_time_copies});
     }
-    let report = serde_json::to_value(state.snapshot_report()).expect("Replay report serializes");
     let mut failures = Vec::new();
-    for (protocol, parent, fields) in [
-        (
-            "mysql",
-            &report,
-            &["unmatched_queries", "unsupported_commands"][..],
-        ),
-        (
-            "http",
-            &report,
-            &["unmatched_http_requests", "unsupported_http_exchanges"][..],
-        ),
-        ("network", &report, &["unrecorded_targets"][..]),
-        (
-            "redis",
-            &report["redis"],
-            &["unmatched", "unsupported", "unsafe_events"][..],
-        ),
-        (
-            "kafka",
-            &report["kafka"],
-            &["unmatched", "unsupported", "unsafe_events"][..],
-        ),
-        (
-            "memcached",
-            &report["memcached"],
-            &["unmatched", "unsupported", "unsafe_events"][..],
-        ),
-        (
-            "motan",
-            &report["motan"],
-            &["unmatched", "unsupported", "unsafe_events"][..],
-        ),
-    ] {
-        for field in fields {
-            for entry in parent[*field]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|entry| entry["case_id"] == case)
-            {
-                if failures.len() == 8 {
-                    break;
-                }
-                let mut failure = serde_json::json!({"protocol":protocol,"kind":field});
-                for key in [
-                    "command",
-                    "method",
-                    "reason",
-                    "target_event_index",
-                    "diagnostic",
-                ] {
-                    if let Some(value) = entry.get(key) {
-                        failure[key] = value.clone();
-                    }
-                }
-                failures.push(failure);
-            }
-        }
+    // The primary request polls this endpoint while replay is still running.
+    // Its bounded diagnostic does not need unused inventory or signed witnesses.
+    macro_rules! project {
+        ($protocol:literal, $($kind:literal => $events:expr),+ $(,)?) => {
+            $(append_failures(
+                &mut failures,
+                $protocol,
+                $kind,
+                $events.iter().filter(|entry| entry.case_id.as_deref() == Some(case)),
+            );)+
+        };
     }
+    project!("mysql",
+        "unmatched_queries" => state.mysql.events.unmatched_queries,
+        "unsupported_commands" => state.mysql.events.unsupported_commands,
+    );
+    project!("http",
+        "unmatched_http_requests" => state.http_events.unmatched,
+        "unsupported_http_exchanges" => state.http_events.unsupported,
+    );
+    project!("network", "unrecorded_targets" => state.unrecorded_targets);
+    project!("redis",
+        "unmatched" => state.redis.events.unmatched,
+        "unsupported" => state.redis.events.unsupported,
+        "unsafe_events" => state.redis.events.unsafe_events,
+    );
+    if failures.len() < MAX_FAILURES {
+        append_failures(
+            &mut failures,
+            "redis",
+            "unsafe_events",
+            state
+                .redis
+                .derived_unsafe_events()
+                .filter(|entry| entry.case_id.as_deref() == Some(case)),
+        );
+    }
+    project!("kafka",
+        "unmatched" => state.kafka.events.unmatched,
+        "unsupported" => state.kafka.events.unsupported,
+        "unsafe_events" => state.kafka.events.unsafe_events,
+    );
+    project!("memcached",
+        "unmatched" => state.memcached.events.unmatched,
+        "unsupported" => state.memcached.events.unsupported,
+        "unsafe_events" => state.memcached.events.unsafe_events,
+    );
+    project!("motan",
+        "unmatched" => state.motan.events.unmatched,
+        "unsupported" => state.motan.events.unsupported,
+        "unsafe_events" => state.motan.events.unsafe_events,
+    );
     serde_json::json!({"ok":true,"case_id":case,"failed":true,"failures":failures,
         "has_response_time_copies":has_response_time_copies})
+}
+
+fn append_failures<T: Serialize>(
+    failures: &mut Vec<Value>,
+    protocol: &str,
+    kind: &str,
+    entries: impl Iterator<Item = T>,
+) {
+    for entry in entries.take(MAX_FAILURES - failures.len()) {
+        let entry = serde_json::to_value(entry).expect("Replay failure serializes");
+        let mut failure = serde_json::json!({"protocol":protocol,"kind":kind});
+        for key in [
+            "command",
+            "method",
+            "reason",
+            "target_event_index",
+            "diagnostic",
+        ] {
+            if let Some(value) = entry.get(key) {
+                failure[key] = value.clone();
+            }
+        }
+        failures.push(failure);
+    }
 }

@@ -3,12 +3,13 @@ use super::*;
 use crate::replay::dependencies::DependencyRecord;
 
 mod error_rollback;
-mod locking_read;
+pub(super) mod locking_read;
 
 pub(in crate::replay) struct Plan {
     pub setups: Vec<usize>,
     pub transactions: Vec<Segment>,
     pub reason: Option<&'static str>,
+    pub dispatch_safe_before: Option<DateTime<Utc>>,
     pub failed_ends: Vec<RejectedEnd>,
 }
 
@@ -98,6 +99,7 @@ pub(super) fn prepare(
                     setups,
                     transactions: Vec::new(),
                     reason: Some("source_connection_missing"),
+                    dispatch_safe_before: None,
                     failed_ends: failed_end.into_iter().collect(),
                 });
             }
@@ -116,11 +118,13 @@ pub(super) fn prepare(
                 .iter()
                 .any(|(_, record)| global_reads.contains_wire(record)))
         .then_some(global_reads);
-        let (reason, failed_ends) = collect_transactions(&records, &mut transactions, bridge_reads);
+        let (reason, dispatch_safe_before, failed_ends) =
+            collect_transactions(&records, &mut transactions, bridge_reads);
         plans.push(Plan {
             setups,
             transactions,
             reason,
+            dispatch_safe_before,
             failed_ends,
         });
     }
@@ -142,7 +146,11 @@ fn collect_transactions(
     records: &[(usize, &RecordedMysqlExchange)],
     complete: &mut Vec<Segment>,
     global_reads: Option<&source_evidence::GlobalReads>,
-) -> (Option<&'static str>, Vec<RejectedEnd>) {
+) -> (
+    Option<&'static str>,
+    Option<DateTime<Utc>>,
+    Vec<RejectedEnd>,
+) {
     // Duplicate wire identities can make an already collected end ambiguous.
     // Check them before retaining any partial connection proof.
     if records
@@ -156,6 +164,7 @@ fn collect_transactions(
         };
         return (
             Some(failure.reason),
+            None,
             records
                 .iter()
                 .filter_map(|(index, record)| failure.rejected_end(*index, record))
@@ -167,6 +176,7 @@ fn collect_transactions(
     let mut savepoints = crate::mysql::savepoint::Names::default();
     let mut previous: Option<(&RecordedMysqlExchange, u16)> = None;
     let mut reason = None;
+    let mut dispatch_safe_before = None;
     let mut failed_ends = Vec::new();
     let mut failure: Option<Failure> = None;
     let mut recovered_end = None;
@@ -324,7 +334,17 @@ fn collect_transactions(
                 previous = None;
                 continue;
             }
-            reason.get_or_insert(error);
+            if reason.is_none() {
+                reason = Some(error);
+                if matches!(error, "source_status_discontinuous" | "source_sequence_gap") {
+                    dispatch_safe_before = dispatch_cutoff(
+                        records,
+                        position,
+                        previous,
+                        active.first().map(|&(first, _, _)| first),
+                    );
+                }
+            }
             let failed = Failure {
                 reason: error,
                 sequence: record.query_sequence,
@@ -341,7 +361,37 @@ fn collect_transactions(
     if !active.is_empty() {
         reason.get_or_insert("source_transaction_unclosed");
     }
-    (reason, failed_ends)
+    (reason, dispatch_safe_before, failed_ends)
+}
+
+fn dispatch_cutoff(
+    records: &[(usize, &RecordedMysqlExchange)],
+    failure: usize,
+    previous: Option<(&RecordedMysqlExchange, u16)>,
+    open: Option<usize>,
+) -> Option<DateTime<Utc>> {
+    // An incomplete transaction cannot prove any part of its own lifetime.
+    // An inactive prefix can use the preceding response as its boundary.
+    let (cutoff, suffix) = if let Some(open) = open {
+        let first = records[..failure]
+            .iter()
+            .rposition(|&(index, _)| index == open)?;
+        (records[first].1.request_started_at?, &records[first..])
+    } else {
+        let (previous, status) = previous?;
+        if status & 0x2009 != 0 {
+            return None;
+        }
+        (previous.timestamp?, &records[failure..])
+    };
+    suffix
+        .iter()
+        .all(|(_, record)| {
+            record
+                .request_started_at
+                .is_some_and(|started| started >= cutoff)
+        })
+        .then_some(cutoff)
 }
 
 fn status_after(record: &RecordedMysqlExchange) -> Option<u16> {

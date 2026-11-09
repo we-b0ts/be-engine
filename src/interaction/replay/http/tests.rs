@@ -194,6 +194,7 @@ fn close_action(offset_ms: u64) -> InputAction {
     InputAction {
         sequence: 1,
         offset_ms,
+        offset_us: None,
         after: Vec::new(),
         compressible_gap: false,
         gap_start_ms: None,

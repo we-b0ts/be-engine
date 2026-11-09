@@ -1,4 +1,4 @@
-//! Preserve recorded connection-control failures without requiring SQL text.
+//! Preserve recorded database-selection failures without requiring SQL text.
 use super::*;
 
 impl ReplayState {
@@ -9,7 +9,7 @@ impl ReplayState {
         command: &str,
         argument: Option<&str>,
     ) -> Option<MatchedExchange> {
-        if !matches!(command, "COM_PING" | "COM_INIT_DB") {
+        if command != "COM_INIT_DB" {
             return None;
         }
         for source in [ReplaySource::Case, ReplaySource::Startup] {
@@ -37,6 +37,7 @@ impl ReplayState {
                 .lifecycle
                 .claim(index, &mut exchange.status, kind)?;
             let matched = MatchedExchange {
+                request_observed_at: None,
                 target_observation_id: self.mysql.request_observation_id.clone(),
                 claim,
                 hypothesis_owner: self

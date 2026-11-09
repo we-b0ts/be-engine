@@ -6,11 +6,11 @@ use super::v2::{
 use super::*;
 use anyhow::{Context, Result, ensure};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs::{File, OpenOptions},
     io::Write,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -33,6 +33,67 @@ pub(crate) enum AssociationOutcome {
 pub(crate) struct WitnessStore {
     state: Arc<Mutex<State>>,
 }
+
+/// One independently retained dependency request, reused across its candidates.
+pub(crate) struct RequestAssociation {
+    store: WitnessStore,
+    target: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedRequestSource {
+    store: Weak<Mutex<State>>,
+    index: usize,
+}
+
+impl RequestAssociation {
+    /// Return false when the live scope needs ordinary metadata resolution.
+    pub(crate) fn associate_prepared(
+        &self,
+        source: &PreparedRequestSource,
+        source_case_start: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        if source.store.as_ptr() != Arc::as_ptr(&self.store.state) {
+            return Ok(false);
+        }
+        let mut state = self
+            .store
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        ensure!(
+            !state.sealed,
+            "policy witness store has already been sealed"
+        );
+        let metadata = &state.graph.sources[source.index].metadata;
+        if metadata.clocks.case.source != source_case_start
+            || !v2::compatible(metadata, &state.graph.targets[self.target].metadata)
+        {
+            return Ok(false);
+        }
+        let result = state.associate(source.index, self.target);
+        if !matches!(result, Ok(Some(_))) {
+            state.omitted += 1;
+        }
+        result.map(|_| true)
+    }
+
+    pub(crate) fn associate(
+        &self,
+        metadata: &WitnessMetadata,
+        key_context: &Path,
+        source: Option<&[u8]>,
+    ) -> Result<AssociationOutcome> {
+        self.store.associate_to(metadata, key_context, source, |_| {
+            ensure!(
+                metadata.surface == Surface::DependencyRequest
+                    && metadata.target_role == TargetRole::IndependentTargetObservation,
+                "candidate requires an independent dependency request"
+            );
+            Ok(self.target)
+        })
+    }
+}
 #[derive(Debug)]
 struct State {
     file: File,
@@ -45,11 +106,13 @@ struct State {
     graph: ObservationGraph,
     key: Vec<u8>,
     sources: BTreeMap<String, usize>,
+    sources_by_occurrence: HashMap<SourceIdentity, Vec<usize>>,
     source_records: BTreeMap<String, SourceRecord>,
     unavailable_sources: BTreeSet<String>,
     source_tracking_exhausted: bool,
     targets: BTreeMap<String, usize>,
-    associations: BTreeMap<(usize, usize), usize>,
+    associations: HashMap<(usize, usize), usize>,
+    max_associated_target: Option<usize>,
     blobs: BTreeMap<String, usize>,
     sealed_manifest: Option<WitnessManifest>,
     compact: bool,
@@ -188,11 +251,13 @@ impl WitnessStore {
                 },
                 key,
                 sources: Default::default(),
+                sources_by_occurrence: Default::default(),
                 source_records: Default::default(),
                 unavailable_sources: Default::default(),
                 source_tracking_exhausted: false,
                 targets: Default::default(),
                 associations: Default::default(),
+                max_associated_target: None,
                 blobs: Default::default(),
                 sealed_manifest: None,
                 compact: false,
@@ -316,6 +381,69 @@ impl WitnessStore {
         key_context: &Path,
         source: Option<&[u8]>,
     ) -> Result<AssociationOutcome> {
+        self.associate_to(metadata, key_context, source, |state| {
+            state.resolve_target(&target_key(
+                target_id,
+                metadata.surface,
+                metadata.target_role,
+            ))
+        })
+    }
+
+    pub(crate) fn prepare_request_association(
+        &self,
+        target_id: &str,
+    ) -> Result<RequestAssociation> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        ensure!(
+            !state.sealed,
+            "policy witness store has already been sealed"
+        );
+        let key = target_key(
+            target_id,
+            Surface::DependencyRequest,
+            TargetRole::IndependentTargetObservation,
+        );
+        let target = state
+            .resolve_target(&key)
+            .inspect_err(|_| state.omitted += 1)?;
+        Ok(RequestAssociation {
+            store: self.clone(),
+            target,
+        })
+    }
+
+    pub(crate) fn prepare_request_source(
+        &self,
+        metadata: &WitnessMetadata,
+    ) -> Result<Option<PreparedRequestSource>> {
+        ensure!(
+            metadata.surface == Surface::DependencyRequest,
+            "expected a Source dependency request"
+        );
+        metadata.validate_roles(false)?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        Ok(state
+            .retained_source(metadata)
+            .map(|index| PreparedRequestSource {
+                store: Arc::downgrade(&self.state),
+                index,
+            }))
+    }
+
+    fn associate_to(
+        &self,
+        metadata: &WitnessMetadata,
+        key_context: &Path,
+        source: Option<&[u8]>,
+        resolve_target: impl FnOnce(&State) -> Result<usize>,
+    ) -> Result<AssociationOutcome> {
         let mut state = self
             .state
             .lock()
@@ -327,13 +455,16 @@ impl WitnessStore {
         let mut source_unavailable = false;
         let result = (|| -> Result<AssociationOutcome> {
             metadata.validate_roles(true)?;
-            let key = target_key(target_id, metadata.surface, metadata.target_role);
-            let target_index = *state
-                .targets
-                .get(&key)
-                .context("independent Target observation is missing")?;
+            let target_index = resolve_target(&state)?;
             if !v2::compatible(metadata, &state.graph.targets[target_index].metadata) {
                 return Ok(AssociationOutcome::Incompatible);
+            }
+            if let Some(source_index) = state.retained_source(metadata) {
+                return Ok(if state.associate(source_index, target_index)?.is_some() {
+                    AssociationOutcome::Retained
+                } else {
+                    AssociationOutcome::Unavailable
+                });
             }
             let source_key = v2::source_key(metadata)?;
             let source_index = source_key
@@ -462,7 +593,7 @@ impl State {
                 .segmented
                 .as_mut()
                 .unwrap()
-                .write(context, payload, &headers)?;
+                .write(context, payload, &id, &headers)?;
             let index = self.graph.blobs.len();
             self.graph.payload_bytes += payload.len();
             self.graph.blobs.push(blob);
@@ -598,8 +729,27 @@ impl State {
         });
         if let Some(key) = key {
             self.sources.insert(key, index);
+            self.sources_by_occurrence
+                .entry(self.graph.sources[index].metadata.source.clone())
+                .or_default()
+                .push(index);
         }
         Ok(Some(index))
+    }
+
+    fn retained_source(&self, metadata: &WitnessMetadata) -> Option<usize> {
+        self.sources_by_occurrence
+            .get(&metadata.source)?
+            .iter()
+            .copied()
+            .find(|&index| v2::same_source(&self.graph.sources[index].metadata, metadata))
+    }
+
+    fn resolve_target(&self, key: &str) -> Result<usize> {
+        self.targets
+            .get(key)
+            .copied()
+            .context("independent Target observation is missing")
     }
 
     fn mark_source_unavailable(&mut self, key: Option<String>) {
@@ -674,10 +824,15 @@ impl State {
     }
     fn associate(&mut self, source: usize, target: usize) -> Result<Option<usize>> {
         self.graph.association_attempts += 1;
+        let full = self.associations.len() >= MAX_ASSOCIATIONS;
+        // A later Target has no retained pairs to look up once the budget is full.
+        if full && self.max_associated_target.is_some_and(|max| target > max) {
+            return Ok(None);
+        }
         if let Some(index) = self.associations.get(&(source, target)) {
             return Ok(Some(*index));
         }
-        if self.associations.len() >= MAX_ASSOCIATIONS {
+        if full {
             return Ok(None);
         }
         let left = &self.graph.sources[source];
@@ -686,7 +841,7 @@ impl State {
             v2::compatible(&left.metadata, &right.metadata),
             "candidate association crosses Case, surface, resource or operation"
         );
-        if self.compact {
+        let index = if self.compact {
             if self
                 .graph
                 .groups
@@ -701,21 +856,26 @@ impl State {
             }
             let index = self.graph.groups.len() - 1;
             self.graph.groups[index].sources.push(source);
-            self.associations.insert((source, target), index);
-            return Ok(Some(index));
-        }
-        let authentication = v2::sign(
-            &self.key,
-            "association",
-            &(&self.graph.session_id, &left.id, &right.id),
-        )?;
-        let index = self.graph.associations.len();
-        self.graph.associations.push(CandidateAssociation {
-            source,
-            target,
-            authentication,
-        });
+            index
+        } else {
+            let authentication = v2::sign(
+                &self.key,
+                "association",
+                &(&self.graph.session_id, &left.id, &right.id),
+            )?;
+            let index = self.graph.associations.len();
+            self.graph.associations.push(CandidateAssociation {
+                source,
+                target,
+                authentication,
+            });
+            index
+        };
         self.associations.insert((source, target), index);
+        self.max_associated_target = Some(
+            self.max_associated_target
+                .map_or(target, |max| max.max(target)),
+        );
         Ok(Some(index))
     }
 }

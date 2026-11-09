@@ -106,31 +106,33 @@ pub(super) fn verify(
         return Ok(());
     };
     let clocks = AnchorClocks::for_response(pair.request_times, pair.times);
-    compare_payload(
-        &pair.source,
-        pair.target
-            .as_deref()
-            .context("independent Target response is unavailable")?,
-        global,
-        &native,
-        &context,
-        clocks,
-    )?;
-    compare_headers(
-        &native,
-        &pair.source_headers,
-        &pair.target_headers,
-        pair.times,
-    )?;
-    for (id, _, result) in context.header_results(
-        pair.source_headers.as_ref(),
-        pair.target_headers.as_ref(),
-        pair.request_times,
-    ) {
-        ensure!(
-            result.is_ok(),
-            "independent Target header JWT {id:?} failed: {result:?}"
-        );
+    let target_body = pair
+        .target
+        .as_deref()
+        .context("independent Target response is unavailable")?;
+    let comparison = (|| -> Result<()> {
+        compare_payload(&pair.source, target_body, global, &native, &context, clocks)?;
+        compare_headers(
+            &native,
+            &pair.source_headers,
+            &pair.target_headers,
+            pair.times,
+        )?;
+        for (id, _, result) in context.header_results(
+            pair.source_headers.as_ref(),
+            pair.target_headers.as_ref(),
+            pair.request_times,
+        ) {
+            ensure!(
+                result.is_ok(),
+                "independent Target header JWT {id:?} failed: {result:?}"
+            );
+        }
+        Ok(())
+    })();
+    if comparison.is_err() {
+        result.defer_target_comparison(case, Surface::ApiResponse, None);
+        return Ok(());
     }
     if !source_ids.is_empty() {
         result.independent_target_validations += 1;

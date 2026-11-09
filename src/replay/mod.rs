@@ -41,6 +41,7 @@ pub(crate) use report::source_owned_match;
 mod control;
 pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
 mod attribution;
+pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes};
 mod deferred;
 mod dependencies;
 mod loading;
@@ -167,6 +168,8 @@ pub enum ReplayStreamTiming {
     #[default]
     Recorded,
 }
+
+pub(crate) const FAST_CASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayLifecycleConfig {
@@ -454,6 +457,7 @@ struct ReplayState {
     batch_scope: Option<reconciliation::BatchScope>,
     startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,
+    prepared_socketio_input: Option<control::input_timing::PreparedSource>,
     input_timing: Option<control::input_timing::Live>,
     http_input_timing: Option<Arc<control::http_input_timing::Timeline>>,
     stream_timing: Option<ReplayStreamTiming>,

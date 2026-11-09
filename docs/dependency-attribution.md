@@ -289,6 +289,14 @@ and their complete selected request scope. Source revision, selector coverage,
 epoch, origin request/response, completeness and assignment CAS are checked before
 any state changes. Overlapping decisions in one submission are rejected.
 
+For a sealed Socket.IO recording with a clean client close or server EOF and
+pending work, an analyst may bind `engine.socketio_close_tail:v1` instead of an
+async end rule. Provide exact original occurrence IDs and independent proof of
+the origin. The occurrences must belong to the origin's Source process epoch
+and fall within five minutes of the recorded close. To move a later Case's
+occurrence, also provide its current unused ownership claim. The origin still
+requires fresh Replay with the corrected dependency scope.
+
 The coordinator runs `dependency-attribution apply --file attribution.json`.
 Immutable original facts and decision history remain available. Rule removal,
 changed fingerprints or Source revision invalidate active proofs and reopen the

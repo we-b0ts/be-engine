@@ -1,7 +1,9 @@
 //! Complete SQL envelopes and explicit result-value delivery copies.
 use super::*;
 use crate::policy::{CompiledRule, Slot, Surface};
-use crate::policy_evidence::{TargetRole, WitnessMetadata};
+use crate::policy_evidence::{
+    AssociationOutcome, PreparedRequestSource, RequestAssociation, TargetRole, WitnessMetadata,
+};
 use crate::value_contract::json::{AnchorClocks, Comparison};
 pub(in crate::replay) mod automatic;
 mod delivery;
@@ -219,43 +221,57 @@ pub(in crate::replay) fn prepare_delivery(
     }))
 }
 
+pub(in crate::replay) struct CandidateWitness {
+    pub target: RequestAssociation,
+    pub key_context: PathBuf,
+    pub clocks: AnchorClocks,
+}
+
 pub(in crate::replay) fn record_request(
     owner: &policy::request_contract::RequestContracts,
     case: &str,
     identity: &ReplaySessionIdentity,
     record: &RecordedMysqlExchange,
-    request: ObservedRequest<'_>,
+    observation: &crate::replay::admission::RequestAdmission,
+    prepared: &mut Option<CandidateWitness>,
+    source: Option<&PreparedRequestSource>,
 ) -> Result<()> {
-    if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
+    if prepared.is_none() {
+        let id = observation
+            .observation_id
+            .context("missing MySQL candidate observation identity")?;
+        let at = observation
+            .observed_at
+            .context("missing MySQL candidate observation clock")?;
+        *prepared = Some(owner.prepare_mysql_candidate_witness(case, id, at)?);
+    }
+    let prepared = prepared.as_ref().expect("MySQL candidate witness prepared");
+    if let Some(source) = source
+        && prepared
+            .target
+            .associate_prepared(source, prepared.clocks.case.source)?
+    {
         return Ok(());
     }
-    let Some(observation_id) = request.observation_id else {
-        return Ok(());
-    };
-    let clocks = owner.contract_clocks(
-        Some(case),
-        source_started(record),
-        Some(request.started_at),
-        None,
-        None,
+    let mut clocks = prepared.clocks;
+    clocks.dependency.source = source_started(record);
+    let metadata = owner.mysql_metadata(
+        case,
+        identity,
+        record,
+        (Surface::DependencyRequest, Slot::SqlValue(0)),
+        TargetRole::IndependentTargetObservation,
+        clocks,
     );
-    let slots = [Slot::SqlValue(0)];
-    for slot in slots {
-        let metadata = owner.mysql_metadata(
-            case,
-            identity,
-            record,
-            (Surface::DependencyRequest, slot),
-            TargetRole::IndependentTargetObservation,
-            clocks,
-        );
-        let id = observation_id.to_string();
-        if owner.associate_value_witness(&metadata, &id, None)?
-            == crate::policy_evidence::AssociationOutcome::SourceRequired
-        {
-            let source = serde_json::to_vec(&RequestEnvelope::recorded(record))?;
-            owner.associate_value_witness(&metadata, &id, Some(&source))?;
-        }
+    if prepared
+        .target
+        .associate(&metadata, &prepared.key_context, None)?
+        == AssociationOutcome::SourceRequired
+    {
+        let source = serde_json::to_vec(&RequestEnvelope::recorded(record))?;
+        prepared
+            .target
+            .associate(&metadata, &prepared.key_context, Some(&source))?;
     }
     Ok(())
 }

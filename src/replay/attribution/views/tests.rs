@@ -116,6 +116,49 @@ async fn case_tail_attribution_reuses_unchanged_native_indexes_and_rebuilds_chan
     assert_eq!(empty.records.count, 0);
     assert_ne!(changed_cache, cache);
     assert_eq!(std::fs::read(process).unwrap(), original);
+
+    // A nonempty changed Process scope prepared outside a Replay attempt
+    // is usable from the attempt's independently frozen view.
+    let process_owner = DependencyOwner::Process {
+        process_epoch: manifest.process_epochs[0],
+        source_task: "periodic_task".into(),
+        invocation: None,
+    };
+    let process_moves = BTreeMap::from([(ids[1], process_owner)]);
+    let warmed = freeze_scopes(
+        root,
+        &manifest,
+        &temp.path().join("prewarm"),
+        ["process"].into_iter(),
+        &process_moves,
+        "sha256:changed-process",
+    )
+    .unwrap();
+    assert_eq!(warmed.len(), 1);
+    let (index, cache) = crate::dependency_index::global::load_global_index(
+        &warmed["process"],
+        crate::replay::validate_index_record,
+    )
+    .unwrap();
+    assert_eq!(index.records.count, 2);
+    std::fs::remove_dir_all(temp.path().join("prewarm")).unwrap();
+    let attempt = freeze(
+        root,
+        &manifest,
+        &temp.path().join("next-attempt"),
+        [&case].into_iter(),
+        &process_moves,
+        "sha256:changed-process",
+    )
+    .unwrap();
+    let (reused, root_cache) =
+        crate::dependency_index::global::load_global_index(&attempt["process"], |_| {
+            anyhow::bail!("frozen Process membership must use its already prepared index")
+        })
+        .unwrap();
+    assert_eq!(reused.sha256, index.sha256);
+    assert_eq!(root_cache, cache);
+
     decisions.insert(
         Uuid::new_v4(),
         DependencyOwner::Unattributed {

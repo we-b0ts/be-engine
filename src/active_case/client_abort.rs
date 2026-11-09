@@ -1,21 +1,11 @@
-//! Retain the Source Case's admission after a proven premature client end.
+//! Retain the Source Case's admission after a connection closes with pending work.
 use super::*;
 use crate::interaction::model::{CLIENT_ABORT_LIMIT, CLIENT_ABORT_QUIET};
 
 impl ActiveCaseRegistry {
-    pub(crate) async fn observe_client_abort_tail(&self, case: Uuid, aborted: Instant) {
-        self.observe_client_abort_tail_until(case, aborted, CLIENT_ABORT_QUIET, CLIENT_ABORT_LIMIT)
-            .await;
-    }
-
-    async fn observe_client_abort_tail_until(
-        &self,
-        case: Uuid,
-        aborted: Instant,
-        quiet: Duration,
-        limit: Duration,
-    ) {
-        let deadline = aborted + limit;
+    pub(crate) async fn observe_close_tail(&self, case: Uuid, closed: Instant) {
+        let quiet = CLIENT_ABORT_QUIET;
+        let deadline = closed + CLIENT_ABORT_LIMIT;
         let activity = {
             let state = self.state.lock().expect("active case registry poisoned");
             let Some(case) = state.active.iter().find(|item| item.case.id == case) else {
@@ -28,7 +18,7 @@ impl ActiveCaseRegistry {
         let mut quiescing = self.quiescing.subscribe();
         loop {
             let observed_quiet = tokio::select! {
-                result = activity.wait_until_quiet_after(quiet, deadline, Some(aborted)) => result,
+                result = activity.wait_until_quiet_after(quiet, deadline, Some(closed)) => result,
                 _ = quiescing.wait_for(|closing| *closing) => return,
             };
             let mut state = self.state.lock().expect("active case registry poisoned");
@@ -40,7 +30,7 @@ impl ActiveCaseRegistry {
             let (pending, last) = activity.snapshot();
             if !case.accepting_dependencies
                 || !observed_quiet
-                || (pending == 0 && last.max(aborted).elapsed() >= quiet)
+                || (pending == 0 && last.max(closed).elapsed() >= quiet)
             {
                 case.accepting_dependencies = false;
                 return;

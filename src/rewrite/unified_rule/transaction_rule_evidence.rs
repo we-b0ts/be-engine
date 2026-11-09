@@ -13,7 +13,13 @@ fn current_overview_redirects_to_detail_planning_without_replay_or_redispatch() 
         .find(|query| query.query_id.ends_with("unified-rule-candidates"))
         .unwrap();
     let policy = fs::read(fixture.policy()).unwrap();
-    let before = serde_json::to_value(fixture.state()).unwrap();
+    let state = fixture.state();
+    assert_eq!(
+        inventory::api_for_ownership_evidence_id(fixture.root(), &state, &overview.evidence_id)
+            .unwrap(),
+        state.api
+    );
+    let before = serde_json::to_value(state).unwrap();
     let error = plan_rewrite_unified_rule(
         fixture.context(),
         RewriteUnifiedRulePlanOptions {
@@ -81,6 +87,10 @@ fn replaced_issue_overview_remains_stale_and_cannot_authorize_a_plan() {
         .id
         .push_str("-replaced");
     fixture.store().save(&state).unwrap();
+    assert!(
+        inventory::api_for_ownership_evidence_id(fixture.root(), &state, &overview.evidence_id)
+            .is_err()
+    );
     let policy = fs::read(fixture.policy()).unwrap();
     let error = plan_rewrite_unified_rule(
         fixture.context(),

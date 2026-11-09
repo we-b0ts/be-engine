@@ -9,7 +9,7 @@ mod lexical_cache;
 pub(crate) mod projection;
 pub(crate) mod table_template;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Token {
     Word(String),
     Identifier(String),
@@ -35,14 +35,16 @@ pub(crate) fn tokens(sql: &str) -> Option<Vec<Token>> {
 }
 
 pub(crate) fn tokens_shared(sql: &str) -> Option<std::sync::Arc<Vec<Token>>> {
-    lexical_cache::tokens(sql)
+    tokens_with_spans_shared(sql).map(|(tokens, _)| tokens)
 }
 
 pub(crate) fn tokens_with_spans(sql: &str) -> Option<(Vec<Token>, Vec<std::ops::Range<usize>>)> {
-    let mut spans = Vec::new();
-    let tokens = scan(sql, |span| spans.push(span))?;
-    spans.truncate(tokens.len());
-    Some((tokens, spans))
+    let (tokens, spans) = tokens_with_spans_shared(sql)?;
+    Some(((*tokens).clone(), (*spans).clone()))
+}
+
+fn tokens_with_spans_shared(sql: &str) -> Option<lexical_cache::Lexed> {
+    lexical_cache::tokens_with_spans(sql)
 }
 
 fn scan(sql: &str, mut span: impl FnMut(std::ops::Range<usize>)) -> Option<Vec<Token>> {
@@ -421,19 +423,29 @@ pub(crate) fn normalize_pattern(sql: &str) -> String {
 }
 
 pub(crate) fn normalize(sql: &str) -> String {
-    let Some(tokens) = tokens(sql) else {
+    let Some(tokens) = tokens_shared(sql) else {
         return sql.to_owned();
     };
     render(&tokens)
 }
 
 pub(crate) fn render(tokens: &[Token]) -> String {
+    render_with_slots(tokens, |_, _| false)
+}
+
+fn render_with_slots(tokens: &[Token], slot: impl Fn(usize, &Token) -> bool) -> String {
+    use std::fmt::Write;
+
     let mut out = String::new();
     for (i, token) in tokens.iter().enumerate() {
         let tight_left = ["(", ")", ",", ".", "="].iter().any(|s| token.is(s));
         let tight_right = i > 0 && ["(", ".", "="].iter().any(|s| tokens[i - 1].is(s));
         if i > 0 && !tight_left && !tight_right {
             out.push(' ');
+        }
+        if slot(i, token) {
+            write!(out, "?{i}").unwrap();
+            continue;
         }
         match token {
             Token::Word(s) | Token::Number(s) | Token::Symbol(s) => out.push_str(s),
@@ -457,7 +469,6 @@ pub(crate) fn render(tokens: &[Token]) -> String {
                     }
                     out.push('\'');
                 } else {
-                    use std::fmt::Write;
                     out.push_str("X'");
                     for byte in value {
                         write!(out, "{byte:02x}").unwrap();

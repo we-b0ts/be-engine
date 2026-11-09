@@ -234,26 +234,29 @@ fn changed_delivered_calendar_input_preserves_counter_failures_as_fresh_executio
     ] {
         let fixture = setup(mode);
         let planned = fixture.plan();
-        if matches!(
-            mode,
-            "render-only"
-                | "missing-read"
-                | "future-delivery"
-                | "other-resource"
-                | "unfinalized"
-                | "cross-case-before-read"
-        ) {
-            assert!(planned.is_err(), "{mode}");
+        if mode == "unfinalized" {
+            assert!(planned.is_err());
             assert!(fixture.state().rule_plan.is_none());
             continue;
         }
         let plan = planned.unwrap_or_else(|error| panic!("{mode}: {error:#}"));
         assert_eq!(plan.traffic_e2e_report["verified"], false);
+        let preflight = &plan.traffic_e2e_report["preflight"];
+        let deferred = if matches!(
+            mode,
+            "render-only"
+                | "missing-read"
+                | "future-delivery"
+                | "other-resource"
+                | "cross-case-before-read"
+        ) {
+            &preflight["target_comparison_failures"]
+        } else {
+            &preflight["unvalidated_retimed_witnesses"]
+        };
         assert!(
-            !plan.traffic_e2e_report["preflight"]["unvalidated_retimed_witnesses"]
-                .as_array()
-                .unwrap()
-                .is_empty()
+            deferred.as_array().is_some_and(|rows| !rows.is_empty()),
+            "{mode}: {preflight}"
         );
         assert_eq!(
             plan.traffic_e2e_report["preflight"]["independent_target_validations"],

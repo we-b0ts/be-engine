@@ -232,16 +232,19 @@ impl PubSubState {
         let actual = rpc::broadcast(&exchange.record.command, args)
             .ok()
             .flatten()?;
-        if source.value["room"] != actual.value["room"] {
-            if !self.namespace_sessions.matches_room(
+        for field in ["room", "skip_sid"] {
+            if source.value[field] == actual.value[field] {
+                continue;
+            }
+            if !self.namespace_sessions.matches_sid(
                 exchange.case_id.as_deref(),
                 &source.value["namespace"],
-                &source.value["room"],
-                &actual.value["room"],
+                &source.value[field],
+                &actual.value[field],
             ) {
                 return None;
             }
-            source.value["room"] = actual.value["room"].clone();
+            source.value[field] = actual.value[field].clone();
         }
         let realm = (
             TargetKey {

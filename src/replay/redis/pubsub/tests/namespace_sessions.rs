@@ -21,6 +21,7 @@ fn input(root: &Path) {
     input.actions.push(InputAction {
         sequence: 1,
         offset_ms: 0,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -188,6 +189,90 @@ async fn actual_namespace_sid_admits_only_its_original_publish_and_keeps_busines
                 .unused_case
                 .is_empty()
         );
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn broadcast_self_exclusion_requires_the_observed_namespace_sid() {
+    for formats in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        input(temp.path());
+        let policy = temp.path().join(".traffic-e2e/policy.yaml");
+        if formats {
+            let mut contents = std::fs::read_to_string(&policy).unwrap();
+            contents.push_str("    /skip_sid: {kind: identity, formats: [{string: 64}]}\n");
+            std::fs::write(&policy, contents).unwrap();
+        } else {
+            std::fs::remove_file(&policy).unwrap();
+        }
+        let mut source = payload(SOURCE, "user:7");
+        source["skip_sid"] = json!(SOURCE_SID);
+        let runtime = runtime(
+            temp.path(),
+            &[exchange(
+                Uuid::new_v4(),
+                1,
+                "PUBLISH",
+                &[b"jobs", &serde_json::to_vec(&source).unwrap()],
+                b":1\r\n",
+            )],
+            &[],
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            control(
+                &runtime,
+                json!({"command":"request_begin","case_id":"case"})
+            )
+            .await["ok"],
+            true
+        );
+        let observation = control(
+            &runtime,
+            json!({"command":"native_event_begin","case_id":"case"}),
+        )
+        .await;
+        let mut actual = payload(TARGET, "user:7");
+        actual["skip_sid"] = json!(TARGET_SID);
+        let bytes = serde_json::to_vec(&actual).unwrap();
+        let (mut client, mut task) = connect(&runtime).await;
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &bytes]).await;
+        reconnect(&runtime, &mut client, &mut task).await;
+
+        assert_eq!(
+            control(
+                &runtime,
+                json!({"command":"native_connected","case_id":"case",
+                    "native_event":{"epoch":observation["epoch"],"namespace":"/chat","sid":TARGET_SID}}),
+            )
+            .await["ok"],
+            true
+        );
+        for (field, value) in [
+            ("skip_sid", json!("another-sid")),
+            ("skip_sid", Value::Null),
+            ("skip_sid", json!([TARGET_SID])),
+            ("namespace", json!("/other")),
+            ("room", json!("user:8")),
+            ("data", json!([{"stable":8}])),
+        ] {
+            let mut bad = actual.clone();
+            bad[field] = value;
+            send_unmatched(
+                &mut client,
+                &[b"PUBLISH", b"jobs", &serde_json::to_vec(&bad).unwrap()],
+            )
+            .await;
+            reconnect(&runtime, &mut client, &mut task).await;
+        }
+        assert_eq!(
+            send(&mut client, &[b"PUBLISH", b"jobs", &bytes]).await,
+            b":1\r\n"
+        );
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &bytes]).await;
         task.abort();
     }
 }

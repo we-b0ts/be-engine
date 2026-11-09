@@ -240,14 +240,22 @@ request remains missing, the input is sent at its original offset. Existing
 recordings with sufficient request timestamps and native identities can be
 reused. Explicit `recorded` and `preserve_input_timing` retain original timing.
 
+New input actions record integer `offset_ms` and `offset_us` from the same
+elapsed-time sample. Ordered fast Socket.IO replay uses microseconds to decide
+whether a dependency request preceded an input. Legacy actions without
+`offset_us` still treat requests in the input's millisecond as ambiguous.
+Replay scheduling and output offsets use milliseconds.
+
 For a clean Source business-idle or completed client-close tail, Fast can
 shorten the remaining quiet once the actual output and dependency delivery
 requirements are met. Fast can also skip a direct WebSocket heartbeat tail
-when the last Source Engine.IO PING was unanswered, the clean server close
-followed after the declared `pingTimeout`, and no input or dependency activity
-remained in the tail. Replay waits for the real Target output frames, matching
-native ACK receipts and required dependency deliveries before releasing the connection
-without sending a close frame. The actual response reports
+when the last Source Engine.IO PING was unanswered and the clean server close
+followed after the declared `pingTimeout`. Replay replies to live Target PINGs
+while it verifies the Source EOF prefix. It waits for the real Target output
+frames, matching native ACK receipts and required dependency deliveries before
+releasing the connection without sending a close frame. Recorded one-way inputs
+retain their pending identities and are checked through the output and dependency
+prefix. The actual response reports
 `fast_heartbeat_tail_skipped` and still undergoes business comparison and
 dependency audit. Use recorded timing to verify Target's own heartbeat timeout
 and server close. Other server closures, client cancellation with pending work
@@ -401,13 +409,15 @@ does not terminate Target or require a new run for the remaining selected cases.
 
 An observed client EOF or reset at a complete framing boundary with pending
 business work uses a separate Case tail window in Recorder and managed Replay.
+For Socket.IO, this also applies after a clean protocol close initiated by
+either peer when business inputs remain pending, including WebSocket code 1000.
 The primary transport ends at its actual boundary. Case admission stays open
 until 15 continuous seconds without relevant dependency activity and without
 accepted I/O in flight, with a five-minute observation cap. Real activity
 restarts the quiet interval. The cap closes admission, then the usual bounded
 drain handles already accepted I/O. A quiet or capped observation alone does
 not fail the recorded Case, prove business completion, or waive any dependency
-comparison. A transport end after normal business completion uses the ordinary
+comparison. A close after confirmed business completion uses the ordinary
 close path. An incomplete frame or failed transport confirmation retains its
 existing failure path.
 

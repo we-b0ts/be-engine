@@ -114,30 +114,23 @@ fn redis_candidates_exclude_other_keys_but_preserve_same_key_options_and_missing
             serde_json::to_value(store.sealed_manifest().unwrap()).unwrap();
         write(&fixture.paths.replay, report);
         fixture.confirm();
-        let plan = fixture.plan();
+        let plan = fixture.plan().unwrap();
+        let report = &plan.traffic_e2e_report;
+        let preflight = &report["preflight"];
+        let matches = !matches!(scenario, "wrong-ttl" | "wrong-option" | "unrelated-only");
+        assert_eq!(
+            preflight["independent_target_validations"],
+            u64::from(matches)
+        );
+        assert_eq!(preflight["missing_target_witnesses"], u64::from(!matches));
         if matches!(scenario, "wrong-ttl" | "wrong-option") {
-            let error = format!("{:#}", plan.err().unwrap());
-            assert!(
-                error.contains(if scenario == "wrong-ttl" {
-                    "argument 3"
-                } else {
-                    "argument 2"
-                }),
-                "{error}"
-            );
-        } else {
-            let plan = plan.unwrap();
             assert_eq!(
-                plan.traffic_e2e_report["preflight"]["independent_target_validations"],
-                if scenario == "unrelated-only" { 0 } else { 1 }
+                preflight["target_comparison_failures"][0]["surface"],
+                "dependency.request"
             );
-            assert_eq!(
-                plan.traffic_e2e_report["preflight"]["missing_target_witnesses"],
-                if scenario == "unrelated-only" { 1 } else { 0 }
-            );
-            assert_eq!(plan.traffic_e2e_report["verified"], false);
-            let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
-            assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
         }
+        assert_eq!(report["verified"], false);
+        let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+        assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
     }
 }

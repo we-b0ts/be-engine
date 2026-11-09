@@ -27,6 +27,7 @@ fn action(sequence: u64, offset_ms: u64, data: &str) -> InputAction {
     InputAction {
         sequence,
         offset_ms,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -39,15 +40,39 @@ fn action(sequence: u64, offset_ms: u64, data: &str) -> InputAction {
 
 #[tokio::test]
 async fn completion_feedback_keeps_original_scope_and_request_epoch() {
-    for lazy in [false, true] {
+    for (lazy, disconnect, offset_us) in [
+        (false, false, None),
+        (true, false, None),
+        (false, true, None),
+        (true, true, None),
+        (true, false, Some(40_100)),
+    ] {
         let temp = tempfile::tempdir().unwrap();
-        let (globals, original) = fixture(temp.path());
+        let (mut globals, original) = fixture(temp.path());
         let path = temp.path().join("case/request.json");
         let mut request: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        request["interaction"]["actions"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::to_value(action(2, 10, "42/chat,0[\"join\",{}]")).unwrap());
+        let actions = request["interaction"]["actions"].as_array_mut().unwrap();
+        let mut join = action(2, 10, "42/chat,0[\"join\",{}]");
+        if let Some(us) = offset_us {
+            join.offset_ms = us / 1_000;
+            join.offset_us = Some(us);
+            globals[1]["timestamp"] = "2020-01-01T00:10:00.040750Z".into();
+        }
+        actions.push(serde_json::to_value(join).unwrap());
+        if disconnect {
+            actions.push(serde_json::to_value(action(3, 500, "41/chat,")).unwrap());
+            actions
+                .push(json!({"sequence":4,"offset_ms":600,"action":{"kind":"close","reason":""}}));
+            let response_path = temp.path().join("case/expected-response.json");
+            let mut response: Value =
+                serde_json::from_slice(&std::fs::read(&response_path).unwrap()).unwrap();
+            response["interaction"]["end"]["reason"] = "client_close".into();
+            std::fs::write(response_path, response.to_string()).unwrap();
+            let mut after_disconnect = globals[1].clone();
+            after_disconnect["timestamp"] = "2020-01-01T00:10:00.550Z".into();
+            after_disconnect["duration_ms"] = 600550.into();
+            globals.push(after_disconnect);
+        }
         std::fs::write(path, request.to_string()).unwrap();
         let runtime = runtime(temp.path(), &[], &globals, lazy).await.unwrap();
         let (mut subscriber, task) = connect(&runtime).await;
@@ -80,6 +105,13 @@ async fn completion_feedback_keeps_original_scope_and_request_epoch() {
         assert_eq!(guards::control(&runtime,json!({"command":"native_input_ack","case_id":CASE,"native_event":{"epoch":epoch,"acknowledged":2}})).await["ok"],true);
         assert_eq!(read(&mut subscriber).await, original);
         guards::silent(&mut subscriber).await;
+        if disconnect {
+            let state = runtime.state.lock().await;
+            assert_eq!(
+                state.redis.pubsub.native_clock.timing_evidence(CASE).len(),
+                1
+            );
+        }
         task.abort();
     }
 }

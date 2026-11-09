@@ -101,6 +101,7 @@ async fn delayed_admission(preserve_input_timing: bool) {
             // The independent cancellation deadline must leave room for this
             // test's deliberately slower Target namespace authentication.
             offset_ms: [0, 1, 60, 100][index],
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,
@@ -277,6 +278,7 @@ async fn actual_server_event_ack_remains_available_during_namespace_admission() 
     input.actions.push(InputAction {
         sequence: 3,
         offset_ms: 6,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

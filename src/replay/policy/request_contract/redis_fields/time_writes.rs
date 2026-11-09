@@ -5,6 +5,7 @@ use crate::value_contract::{
     json::AnchorClocks,
     time_copies::{self, TimeCopyLookup, TimeCopyRecord},
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug)]
 pub(in crate::replay) struct PreparedRedisTimeWrite {
@@ -109,11 +110,12 @@ impl RequestContracts {
                 context.database,
                 target,
             );
+            let mut stored_payload = None;
             for leaf in time_copies::global_leaves(&before, global, clocks)? {
                 let observed = after
                     .pointer(&leaf.pointer)
                     .context("Redis temporal write Target field is absent")?;
-                records.push(TimeCopyRecord::new_time(
+                let mut record = TimeCopyRecord::new_time(
                     &leaf.time,
                     source_position,
                     target_position,
@@ -121,7 +123,14 @@ impl RequestContracts {
                     &leaf.pattern,
                     &leaf.value,
                     observed,
-                )?);
+                )?;
+                if context.command == "SET" {
+                    let digest =
+                        stored_payload.get_or_insert_with(|| Sha256::digest(source_payload).into());
+                    record =
+                        record.with_redis_set(*digest, context.connection_id, context.recorded_at);
+                }
+                records.push(record);
                 ensure!(
                     records.len() <= 4096,
                     "Redis pending write time leaves exceed their bound"
@@ -150,6 +159,11 @@ impl RequestContracts {
         let Some(payload) = source.payload else {
             return Ok(Vec::new());
         };
+        let redis_get = clocks
+            .delivery
+            .source
+            .filter(|_| context.command == "GET")
+            .map(|completed| (Sha256::digest(payload).into(), completed));
         let logical = if let Some(logical) = crate::json_value::parse(payload) {
             logical
         } else if let Some(scalar) =
@@ -184,6 +198,12 @@ impl RequestContracts {
             )
             .map(|lookup| lookup.at(&leaf.pointer, &leaf.pointer)) else {
                 continue;
+            };
+            let lookup = match redis_get {
+                Some((payload, completed)) => {
+                    lookup.with_redis_get(payload, context.connection_id, completed)
+                }
+                None => lookup,
             };
             for (value, proof) in
                 self.time_copy_deliveries(context.case, vec![lookup], clocks.dependency)?

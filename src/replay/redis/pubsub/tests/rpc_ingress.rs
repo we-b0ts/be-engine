@@ -181,6 +181,105 @@ async fn remote_rpc_uses_case_clock_observed_sid_and_one_original_notification()
 }
 
 #[tokio::test]
+async fn a_remote_callback_and_a_local_call_share_one_redis_pipeline() {
+    use crate::interaction::model::{InputTranscript, Protocol};
+
+    let temp = tempfile::tempdir().unwrap();
+    let (mut cases, globals) = fixture(temp.path());
+    let input = InputTranscript::new(Protocol::SocketIo, Default::default());
+    std::fs::write(
+        temp.path().join("case/request.json"),
+        json!({"method":"GET", "uri":"/socket.io/", "timestamp":START, "interaction":input})
+            .to_string(),
+    )
+    .unwrap();
+    let mut call: Value = serde_json::from_slice(&request_bytes()).unwrap();
+    call["host_id"] = TARGET.into();
+    call["event"] = "device:sync_capabilities".into();
+    call["callback"][2] = 18.into();
+    let mut publish = exchange(
+        Uuid::parse_str(cases[1]["connection_id"].as_str().unwrap()).unwrap(),
+        3,
+        "PUBLISH",
+        &[b"jobs", &serde_json::to_vec(&call).unwrap()],
+        b":2\r\n",
+    );
+    publish["rpc_callback_capture"] = "bounded_window".into();
+    publish["timestamp"] = "2020-01-01T00:00:00.100Z".into();
+    cases.push(publish);
+    for record in &mut cases {
+        record["request_started_at"] = record["timestamp"].clone();
+    }
+    let runtime = runtime_with_timing(
+        temp.path(),
+        &cases,
+        &globals,
+        false,
+        Some(crate::ReplayStreamTiming::Fast),
+    )
+    .await
+    .unwrap();
+    runtime
+        .state
+        .lock()
+        .await
+        .redis
+        .request_contracts
+        .request_begin("case")
+        .unwrap();
+    let (begin, _) = crate::replay::control::handle_control_request(
+        serde_json::from_value(json!({"command":"input_timing_begin","case_id":"case"})).unwrap(),
+        runtime.state.clone(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(begin["ordered_fast"], true, "{begin}");
+    let (mut subscriber, subscriber_task) = connect(&runtime).await;
+    assert_eq!(
+        send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
+        SUBSCRIBED
+    );
+    let (mut client, client_task) = connect(&runtime).await;
+    let online = serde_json::to_vec(&json!({"socket_id":TARGET_SID})).unwrap();
+    assert_eq!(
+        send(&mut client, &[b"SET", b"online", &online]).await,
+        b"+OK\r\n"
+    );
+    let raw = read(&mut subscriber).await;
+    let push = parse_pubsub_push(&raw).unwrap().unwrap();
+    let incoming: Value = serde_json::from_slice(&push.payload).unwrap();
+    assert_eq!(incoming["callback"], json!([TARGET_SID, "/rpc", 17]));
+
+    call["room"] = TARGET_SID.into();
+    call["callback"][0] = TARGET_SID.into();
+    let call = serde_json::to_vec(&call).unwrap();
+    let callback = serde_json::to_vec(&reply(TARGET_SID)).unwrap();
+    let mut frames = crate::redis::encode_array(&[b"PUBLISH", b"jobs", &call]);
+    frames.extend(crate::redis::encode_array(&[
+        b"PUBLISH", b"jobs", &callback,
+    ]));
+    client.inner.write_all(&frames).await.unwrap();
+    assert_eq!(read(&mut client).await, b":2\r\n");
+    assert_eq!(read(&mut client).await, b":1\r\n");
+    drop(client);
+    client_task.await.unwrap().unwrap();
+    let state = runtime.state.lock().await;
+    let report = state.redis.snapshot();
+    assert!(!report.is_dirty());
+    assert_eq!(
+        report
+            .matched
+            .iter()
+            .filter(|row| row.command == "PUBLISH")
+            .map(|row| (row.sequence, row.target_event_index))
+            .collect::<Vec<_>>(),
+        [(2, Some(3)), (3, Some(2))]
+    );
+    subscriber_task.abort();
+}
+
+#[tokio::test]
 async fn delayed_sid_observation_preserves_ingress_order_when_replies_were_out_of_order() {
     for lazy in [false, true] {
         let temp = tempfile::tempdir().unwrap();

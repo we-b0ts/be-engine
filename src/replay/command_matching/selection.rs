@@ -24,7 +24,7 @@ pub(super) fn match_candidates_in_scope<T: CommandExchangeScope>(
     candidates: impl IntoIterator<Item = usize>,
     source: ReplaySource,
     case_id: Option<&str>,
-    matches: &impl Fn(&T) -> bool,
+    matches: &impl Fn(&T, Option<&T>) -> bool,
     priority: &impl Fn(&T) -> bool,
     lane_blocker: &impl Fn(usize) -> Option<usize>,
 ) -> PreferredMatch {
@@ -33,7 +33,8 @@ pub(super) fn match_candidates_in_scope<T: CommandExchangeScope>(
     let mut priority_blocked = None;
     for index in candidates {
         let exchange = &exchanges[index];
-        if !scope_matches(exchange, source, case_id) || !matches(exchange) {
+        let blocker = priority_blocked.map(|(_, blocker)| &exchanges[blocker]);
+        if !scope_matches(exchange, source, case_id) || !matches(exchange, blocker) {
             continue;
         }
         if let Some(blocker) = lane_blocker(index) {
@@ -63,7 +64,7 @@ pub(in crate::replay) fn preferred_match_indexed_with_priority<T: CommandExchang
     active_case_id: Option<&str>,
     case_candidates: impl IntoIterator<Item = usize>,
     run_candidates: impl IntoIterator<Item = usize>,
-    matches: impl Fn(&T) -> bool,
+    matches: impl Fn(&T, Option<&T>) -> bool,
     priority: impl Fn(&T) -> bool,
     lane_blocker: impl Fn(usize) -> Option<usize>,
 ) -> PreferredMatch {

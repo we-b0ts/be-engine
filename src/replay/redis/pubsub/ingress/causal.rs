@@ -8,6 +8,7 @@ mod tests;
 #[derive(Debug)]
 pub(super) struct Prerequisite {
     wire: Wire,
+    exchange_index: usize,
     event: String,
     occurrence: u64,
 }
@@ -21,8 +22,23 @@ pub(super) struct LiveEvents {
 }
 
 impl super::super::super::RedisReplayState {
-    pub(in crate::replay) fn needs_native_events(&self, case: &str) -> bool {
+    pub(in crate::replay) fn native_request_epoch(&self, case: &str) -> Option<DateTime<Utc>> {
+        // Derived input admission can re-anchor request policy time to the
+        // signed send time. The native feedback and Redis delivery still
+        // belong to the session opened by request_begin.
+        self.pubsub
+            .native_clock
+            .epoch(case)
+            .or_else(|| self.pubsub.namespace_sessions.epoch(case))
+            .or_else(|| self.request_contracts.request_times(case).target)
+    }
+
+    pub(in crate::replay) fn needs_ingress_events(&self, case: &str) -> bool {
         self.pubsub.ingress.needs_native_events(case)
+    }
+
+    pub(in crate::replay) fn needs_native_events(&self, case: &str) -> bool {
+        self.needs_ingress_events(case)
             || self.pubsub.native_clock.needs_observer(case)
             || self.pubsub.namespace_sessions.needs_observer(case)
     }
@@ -65,7 +81,7 @@ pub(super) fn prerequisites(
     before: DateTime<Utc>,
 ) -> Result<Vec<Prerequisite>> {
     let mut prior = Vec::new();
-    for exchange in exchanges {
+    for (index, exchange) in exchanges.iter().enumerate() {
         if exchange.source != ReplaySource::Case
             || exchange.case_id.as_deref() != Some(case)
             || exchange.shared_rule_id.is_some()
@@ -108,21 +124,23 @@ pub(super) fn prerequisites(
         prior.push((
             timestamp,
             (exchange.record.connection_id, exchange.record.sequence),
+            index,
             value["event"]
                 .as_str()
                 .context("native event name missing")?
                 .to_owned(),
         ));
     }
-    prior.sort_by_key(|(timestamp, wire, _)| (*timestamp, *wire));
+    prior.sort_by_key(|(timestamp, wire, _, _)| (*timestamp, *wire));
     let mut counts = HashMap::<String, u64>::new();
     Ok(prior
         .into_iter()
-        .map(|(_, wire, event)| {
+        .map(|(_, wire, exchange_index, event)| {
             let count = counts.entry(event.clone()).or_default();
             *count += 1;
             Prerequisite {
                 wire,
+                exchange_index,
                 event,
                 occurrence: *count,
             }
@@ -234,7 +252,7 @@ impl Ingress {
                     .copied()
                     .unwrap_or(0)
                     >= prior.occurrence
-                    && exchanges.iter().any(|exchange| {
+                    && exchanges.get(prior.exchange_index).is_some_and(|exchange| {
                         exchange.source == ReplaySource::Case
                             && exchange.case_id.as_deref() == Some(&entry.case)
                             && (exchange.record.connection_id, exchange.record.sequence)

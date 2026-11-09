@@ -6,7 +6,7 @@ use sqlparser::{
 };
 use std::ops::ControlFlow;
 
-pub(super) fn transaction_local(sql: &str) -> bool {
+pub(in crate::replay::mysql::transaction_equivalence) fn transaction_local(sql: &str) -> bool {
     if sql.len() > 1024 * 1024 {
         return false;
     }

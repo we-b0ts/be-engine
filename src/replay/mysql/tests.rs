@@ -12,30 +12,34 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 async fn prepare_delivers_complete_metadata_before_waiting_for_execute() {
     let (writer, mut reader) = tokio::io::duplex(65536);
     let mut writer = tokio::io::BufWriter::with_capacity(32768, writer);
-    let metadata = StatementMetadata {
-        param_count: 238,
-        columns: serde_json::from_value(serde_json::json!([
+    let metadata = StatementMetadata::new(
+        238,
+        serde_json::from_value(serde_json::json!([
             {"name":"id", "family":"integer", "sql_type":"BIGINT"}
         ]))
         .unwrap(),
-    };
-    write_stmt_prepare_ok(&mut writer, 1, &metadata, SERVER_STATUS_AUTOCOMMIT)
-        .await
-        .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        // PREPARE OK, 238 parameters, EOF, one result column, EOF.
-        for sequence_id in 1..=242 {
-            let packet = read_packet(&mut reader).await.unwrap().unwrap();
-            assert_eq!(packet.sequence_id, sequence_id);
-            if sequence_id == 1 {
-                assert_eq!(packet.payload[0], 0x00);
-            } else if sequence_id == 240 || sequence_id == 242 {
-                assert_eq!(packet.payload[0], 0xfe);
+    );
+    for (statement_id, status_flags) in [(1u32, SERVER_STATUS_AUTOCOMMIT), (2, 3)] {
+        write_stmt_prepare_ok(&mut writer, statement_id, &metadata, status_flags)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            // PREPARE OK, 238 parameters, EOF, one result column, EOF.
+            for sequence_id in 1..=242 {
+                let packet = read_packet(&mut reader).await.unwrap().unwrap();
+                assert_eq!(packet.sequence_id, sequence_id);
+                if sequence_id == 1 {
+                    assert_eq!(packet.payload[0], 0x00);
+                    assert_eq!(packet.payload[1..5], statement_id.to_le_bytes());
+                } else if sequence_id == 240 || sequence_id == 242 {
+                    assert_eq!(packet.payload[0], 0xfe);
+                    assert_eq!(packet.payload[3..5], status_flags.to_le_bytes());
+                }
             }
-        }
-    })
-    .await
-    .expect("PREPARE metadata must reach the client without another command");
+        })
+        .await
+        .expect("PREPARE metadata must reach the client without another command");
+    }
 }
 
 #[tokio::test]

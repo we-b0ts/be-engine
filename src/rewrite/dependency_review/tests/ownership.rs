@@ -2,6 +2,264 @@
 use super::*;
 use crate::rewrite::model::RewriteAction;
 
+fn mysql_tail_event(
+    connection_id: Uuid,
+    query_sequence: u64,
+    sql: &str,
+    before: u16,
+) -> RecorderEvent {
+    let now = chrono::Utc::now();
+    RecorderEvent::MysqlExchange(crate::recorder::MysqlExchangeEvent {
+        id: Uuid::new_v4(),
+        connection_id,
+        query_sequence,
+        timestamp: now,
+        request_started_at: now,
+        client_addr: None,
+        route_name: None,
+        target_host: Some("mysql.test".into()),
+        target_port: Some(3306),
+        target_addr: None,
+        upstream_addr: None,
+        username: Some("app".into()),
+        database: Some("db".into()),
+        command: "COM_QUERY".into(),
+        sql: Some(sql.into()),
+        statement_id: None,
+        params: None,
+        server_status_before: Some(before),
+        response: crate::recorder::MysqlExchangeResponse {
+            wire_prefix: vec![],
+            server_status: Some(0),
+            status: "ok".into(),
+            error_code: None,
+            error_message: None,
+            affected_rows: Some(0),
+            last_insert_id: Some(0),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            rows_truncated: false,
+        },
+        outcome: crate::DependencyExchangeOutcome::Response,
+        duration_ms: 1,
+        parse_warnings: vec![],
+    })
+}
+
+#[tokio::test]
+async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async_rule() {
+    let target = crate::rewrite::worker::tests::configured_target();
+    fs::write(target.path().join(".traffic-e2e/policy.yaml"), POLICY).unwrap();
+    let recorder = Recorder::new(target.path().join(".traffic-e2e/local/recordings"))
+        .await
+        .unwrap();
+    let now = chrono::Utc::now();
+    let case = |rule_name: &str| crate::recorder::CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: rule_name.into(),
+        uri_group: None,
+    };
+    let origin = case("socketio");
+    let victim = case("later");
+    let mysql_connection = Uuid::new_v4();
+    for (case, start, response) in [
+        (
+            &origin,
+            now - chrono::TimeDelta::seconds(2),
+            json!({"status":101,"interaction":{"protocol":"socket_io",
+                "end":{"reason":"server_eof","offset_ms":500,"clean":true,"pending":[2]}}}),
+        ),
+        (
+            &victim,
+            now - chrono::TimeDelta::seconds(1),
+            json!({"status":101}),
+        ),
+    ] {
+        recorder
+            .write_case_json(
+                case,
+                "request.json",
+                &json!({"method":"GET","uri":"/socket.io/","timestamp":start,
+                    "interaction":{"protocol":"socket_io"}}),
+            )
+            .await
+            .unwrap();
+        recorder
+            .write_case_json(case, "expected-response.json", &response)
+            .await
+            .unwrap();
+        recorder
+            .append_case_dependency(case, &http("/runtime"), "active_window")
+            .await
+            .unwrap();
+        if case.id == victim.id {
+            for (sequence, sql, before) in [
+                (
+                    1,
+                    "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+                    0,
+                ),
+                (2, "COMMIT", 0),
+                (3, "SET @session_value = 1", 0),
+                (4, "COMMIT", 1),
+                (
+                    5,
+                    "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+                    0,
+                ),
+            ] {
+                recorder
+                    .append_case_dependency(
+                        case,
+                        &mysql_tail_event(mysql_connection, sequence, sql, before),
+                        "active_window",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        recorder.publish_case(case).await.unwrap();
+    }
+    recorder
+        .append_global_dependency(&redis(), "between_cases", "runtime", "unattributed")
+        .await
+        .unwrap();
+    recorder.finish_run().await.unwrap();
+    let mut state = crate::rewrite::test_support::test_state();
+    state.case_source = Some(recorder.run_dir.as_ref().clone());
+    state.recording_run_id = recorder
+        .run_dir
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .into();
+    state.source_revision =
+        Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+    let mut source = source::load(&state).unwrap();
+    let ownerless = source
+        .exchanges
+        .iter()
+        .find_map(|(id, event)| {
+            (matches!(
+                event.capture.attribution,
+                DependencyOwner::Unattributed { .. }
+            ))
+            .then_some(*id)
+        })
+        .unwrap();
+    let returned = source
+        .exchanges
+        .iter()
+        .find_map(|(id, event)| {
+            (matches!(event.capture.attribution, DependencyOwner::Case { origin_case_id, .. }
+            if origin_case_id == victim.id)
+                && event.selector["event_type"] == "http_exchange")
+                .then_some(*id)
+        })
+        .unwrap();
+    let mysql = |sequence| {
+        *source.native[&("mysql".into(), mysql_connection.to_string(), sequence)]
+            .first()
+            .unwrap()
+    };
+    let anchors = [mysql(1), mysql(3), mysql(5)];
+    let (empty_commit, active_commit) = (mysql(2), mysql(4));
+    let claim: ForeignUnusedClaim = serde_json::from_value(json!({
+        "id":"returned","api":"/socket.io/","method_api":"GET /socket.io/",
+        "recording_run_id":state.recording_run_id,"source_revision":state.source_revision,
+        "source_inventory_id":source.identity,"attempt":1,"execution_identity":"actual",
+        "report_sha256":"report","source_exchange_ids":[returned, anchors[0], anchors[1], anchors[2]],"reason":"Source tail from earlier connection",
+        "status":"pending","rejection":null
+    })).unwrap();
+    state
+        .dependency_review
+        .claims
+        .insert(claim.id.clone(), claim);
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let context = dependency_attribution_context(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    let proposal: ProposedAttribution = serde_json::from_value(json!({
+        "claim_ids":["returned"],"source_exchange_ids":[ownerless,returned,anchors[0],anchors[1],anchors[2]],"source_task":"socket background",
+        "owner":{"kind":"case","origin_case_id":origin.id},
+        "proof":{"source_revision":context.source_revision,"source_locations":["src/handler.rs:10"],
+            "call_chain":"handler emits both calls after close","exclusive_scope":"exact runtime event identities"},
+        "impact":"classification","obligation_scope":{"kind":"api","api":"/socket.io/","method":"GET"},
+        "missing_evidence":null,"rule_binding":{"policy_fingerprint":context.effective_policy_fingerprint,
+            "rule_ids":[super::super::socketio_tail::RULE_ID]}
+    })).unwrap();
+    let mut unclaimed = proposal.clone();
+    unclaimed.claim_ids.clear();
+    assert!(rules::bind(target.path(), &state, &source, &mut unclaimed).is_err());
+    let mut with_control = proposal.clone();
+    with_control.source_exchange_ids.insert(empty_commit);
+    rules::bind(target.path(), &state, &source, &mut with_control).unwrap();
+    with_control.source_exchange_ids.insert(active_commit);
+    assert!(rules::bind(target.path(), &state, &source, &mut with_control).is_err());
+    source
+        .exchanges
+        .get_mut(&ownerless)
+        .unwrap()
+        .capture
+        .started_at = now + chrono::TimeDelta::seconds(301);
+    assert!(rules::bind(target.path(), &state, &source, &mut proposal.clone()).is_err());
+
+    let path = target.path().join("socketio-tail-proof.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&AttributionSubmission {
+            schema: SCHEMA.into(),
+            assignment_id: context.assignment_id,
+            expected_revision: context.revision,
+            recording_run_id: context.recording_run_id,
+            source_revision: context.source_revision,
+            source_inventory_id: context.source_inventory_id,
+            decisions: vec![proposal.clone()],
+            investigation_resolutions: vec![],
+            unresolved_claim_ids: BTreeSet::new(),
+            claim_rejections: vec![],
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let result = apply_dependency_attribution(AttributionCommandOptions {
+        target_root: target.path().into(),
+        file: path,
+    })
+    .unwrap();
+    assert!(!result["pending_obligations"].as_array().unwrap().is_empty());
+    let state_after = RewriteStore::new(target.path())
+        .unwrap()
+        .load()
+        .unwrap()
+        .unwrap();
+    let source_after = source::load(&state_after).unwrap();
+    let mut companion = proposal;
+    companion.claim_ids.clear();
+    companion.source_exchange_ids = BTreeSet::from([empty_commit]);
+    assert!(rules::bind(target.path(), &state_after, &source_after, &mut companion).is_ok());
+    companion.source_exchange_ids = BTreeSet::from([active_commit]);
+    assert!(rules::bind(target.path(), &state_after, &source_after, &mut companion).is_err());
+    let (effective, _) = freeze_dependency_attribution(
+        Some(target.path()),
+        state.case_source.as_deref().unwrap(),
+        &state.recording_run_id,
+    )
+    .unwrap();
+    for id in [ownerless, returned] {
+        assert!(
+            matches!(effective[&id], DependencyOwner::Case { origin_case_id, .. }
+            if origin_case_id == origin.id)
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_client_abort_proof_can_reassign_unused_occurrences_from_multiple_later_cases() {
     let target = crate::rewrite::worker::tests::configured_target();
@@ -124,6 +382,19 @@ async fn a_client_abort_proof_can_reassign_unused_occurrences_from_multiple_late
         .unwrap(),
     )
     .unwrap();
+    let cache = crate::dependency_index::store::cache_directory(
+        &recorder.run_dir.join("dependencies.jsonl"),
+    );
+    let cached_cases = || {
+        fs::read_dir(&cache)
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.ok()?.path().join("file.json");
+                path.is_file().then_some(path)
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let before = cached_cases();
     let result = apply_dependency_attribution(AttributionCommandOptions {
         target_root: target.path().into(),
         file: path,
@@ -132,6 +403,11 @@ async fn a_client_abort_proof_can_reassign_unused_occurrences_from_multiple_late
     assert_eq!(result["ownership_complete"], true);
     assert_eq!(result["accepted_apis"], json!([]));
     assert!(!result["pending_obligations"].as_array().unwrap().is_empty());
+    assert_eq!(
+        cached_cases().difference(&before).count(),
+        3,
+        "Apply prebuilds the destination and both former Case scopes"
+    );
     let (effective, _) = freeze_dependency_attribution(
         Some(target.path()),
         state.case_source.as_deref().unwrap(),

@@ -30,6 +30,20 @@ pub(super) fn load(
         })
         .transpose()?
         .unwrap_or_default();
+    let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
+        "case-native-admission-ownership/v2",
+        &manifest,
+        &process,
+    ))?);
+    let directory = store::cache_directory(&root);
+    let cache = directory.join(format!(
+        "case-window-ownership-{}.json",
+        key.trim_start_matches("sha256:")
+    ));
+    if let Ok(defaults) = store::read_json(&cache) {
+        recording::authenticate(&root)?;
+        return Ok(defaults);
+    }
     // Only the small unowned view is read. A status query must not reconstruct
     // the complete central Source index just to admit ordinary Case traffic.
     let path = root.join("indexes/unattributed-scope.json");
@@ -58,20 +72,7 @@ pub(super) fn load(
         return Ok(BTreeMap::new());
     }
     recording::authenticate(&root)?;
-    let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
-        "case-native-admission-ownership/v2",
-        &manifest,
-        &process,
-    ))?);
-    let directory = store::cache_directory(&root);
     store::private_directory(&directory)?;
-    let cache = directory.join(format!(
-        "case-window-ownership-{}.json",
-        key.trim_start_matches("sha256:")
-    ));
-    if let Ok(defaults) = store::read_json(&cache) {
-        return Ok(defaults);
-    }
     let mut windows = BTreeMap::new();
     for input in &manifest.inputs {
         if !input.complete {

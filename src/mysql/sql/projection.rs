@@ -1,5 +1,5 @@
 //! Resolve direct-column SELECT projections without changing query semantics.
-use super::{Token, tokens_with_spans};
+use super::{Token, tokens_with_spans_shared};
 
 #[derive(Clone, Debug)]
 pub(crate) struct DirectColumn {
@@ -20,8 +20,16 @@ pub(crate) struct DirectSelect {
 }
 
 impl DirectSelect {
+    pub(crate) fn matches_relation(&self, sql: &[Token]) -> bool {
+        let Some(from) = sql.iter().position(|token| token.is("from")) else {
+            return self.table.is_empty();
+        };
+        identifier_path(&sql[from + 1..])
+            .is_some_and(|(relation, _)| relation.last() == Some(&self.table))
+    }
+
     pub(crate) fn parse(raw: &str, sql: &[Token]) -> Option<Self> {
-        let (original, spans) = tokens_with_spans(raw)?;
+        let (original, spans) = tokens_with_spans_shared(raw)?;
         if original.len() != sql.len() {
             return None;
         }
@@ -277,7 +285,7 @@ fn clause(token: &Token) -> bool {
     ["where", "order", "limit"].iter().any(|s| token.is(s))
 }
 
-fn identifier(token: &Token) -> Option<&str> {
+pub(crate) fn identifier(token: &Token) -> Option<&str> {
     match token {
         Token::Word(value) | Token::Identifier(value) if !value.is_empty() => Some(value),
         _ => None,

@@ -15,7 +15,6 @@ use super::super::{
     inventory,
     model::{RewriteRulePlanRecord, RewriteState},
     store::RewriteStore,
-    worker,
 };
 
 #[derive(Default, Serialize, Deserialize)]
@@ -121,7 +120,6 @@ pub(in crate::rewrite) fn publish(
             && current.replay_identity == expected.replay_identity,
         "API evidence changed during planning; obtain fresh evidence"
     );
-    worker::ensure_api_confirmed(&current, &expected.api, "publishing a unified rule plan")?;
     ensure!(
         current.rule_plan.as_ref().map(|p| &p.id) == expected.rule_plan.as_ref().map(|p| &p.id),
         "pending rule plan changed during planning"

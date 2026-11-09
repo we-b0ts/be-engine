@@ -45,6 +45,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct MatchedExchange {
+    pub(super) request_observed_at: Option<DateTime<Utc>>,
     pub(super) target_observation_id: Option<String>,
     pub(in crate::replay) claim: crate::replay::admission::ClaimTicket,
     pub(in crate::replay) hypothesis_owner:
@@ -68,7 +69,7 @@ pub(in crate::replay) struct MysqlDependencyIdentity {
     pub(in crate::replay) username: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::replay) struct ReplaySessionIdentity {
     pub(in crate::replay) target: Option<TargetKey>,
     pub(in crate::replay) database: Option<String>,
@@ -190,6 +191,17 @@ pub(in crate::replay) struct ReplayBodyCapture {
 pub(in crate::replay) struct StatementMetadata {
     pub(in crate::replay) param_count: usize,
     pub(in crate::replay) columns: Vec<RecordedMysqlColumn>,
+    pub(super) prepare_wire: std::sync::OnceLock<Option<Arc<super::response::EncodedPrepare>>>,
+}
+
+impl StatementMetadata {
+    pub(in crate::replay) fn new(param_count: usize, columns: Vec<RecordedMysqlColumn>) -> Self {
+        Self {
+            param_count,
+            columns,
+            prepare_wire: std::sync::OnceLock::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

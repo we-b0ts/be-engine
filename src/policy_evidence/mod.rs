@@ -21,7 +21,10 @@ mod storage;
 mod store;
 pub(crate) use source::SourceRecord;
 pub(crate) use store::target_key as target_observation_id;
-pub(crate) use store::{AssociationOutcome, ObservationRetention, WitnessStore};
+pub(crate) use store::{
+    AssociationOutcome, ObservationRetention, PreparedRequestSource, RequestAssociation,
+    WitnessStore,
+};
 mod publication;
 pub(crate) use publication::stage;
 mod v2;
@@ -57,7 +60,7 @@ impl WitnessClocks {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct SourceIdentity {
     pub case_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -216,10 +219,23 @@ pub(crate) fn verify_case_clock(witness: &WitnessRef, report: &serde_json::Value
         .map(str::parse::<DateTime<Utc>>)
         .transpose()?;
     ensure!(
-        clock == witness.metadata.clocks.case.target,
+        target_case_clock_matches(witness.metadata.surface, &witness.metadata.clocks, clock),
         "protected Target Case clock differs from the current Replay report"
     );
     Ok(())
+}
+
+fn target_case_clock_matches(
+    surface: Surface,
+    clocks: &WitnessClocks,
+    started: Option<DateTime<Utc>>,
+) -> bool {
+    clocks.case.target == started
+        // Case admission can precede request_begin. The independently observed
+        // dependency clock proves why the primary clock was absent at capture.
+        || surface == Surface::DependencyRequest
+            && clocks.case.target.is_none()
+            && clocks.dependency.target.zip(started).is_some_and(|(observed, start)| observed < start)
 }
 
 #[derive(Serialize, Deserialize)]

@@ -118,7 +118,7 @@ fn client_cancelled(session: &SessionRef) -> Result<()> {
         .observation
         .lock()
         .expect("interaction observation poisoned")
-        .client_close(None, String::new(), session.now())?;
+        .client_close(None, String::new(), session.started.elapsed())?;
     session.request_close(EndReason::ClientClose);
     Ok(())
 }

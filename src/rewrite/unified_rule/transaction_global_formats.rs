@@ -9,18 +9,14 @@ fn global_format_failure_identifies_primary_case_and_independent_target_phase() 
         br#"{"members":[2,1],"client_ip":"private-target-address"}"#,
     );
     fixture.confirm();
-    let error = format!("{:#}", fixture.plan().err().unwrap());
-    for expected in [
-        "case=00000000-0000-4000-8000-000000000001",
-        "surface=api.response",
-        "phase=independent_target_validation",
-        "/client_ip",
-        "unselected value or type changed",
-    ] {
-        assert!(error.contains(expected), "{error}");
-    }
-    assert!(!error.contains("private-source-address"), "{error}");
-    assert!(!error.contains("private-target-address"), "{error}");
+    let report = fixture.plan().unwrap().traffic_e2e_report;
+    assert_eq!(report["status"], "planned_needs_replay");
+    let failure = &report["preflight"]["target_comparison_failures"][0];
+    assert_eq!(failure["case_id"], "00000000-0000-4000-8000-000000000001");
+    assert_eq!(failure["surface"], "api.response");
+    let public = report.to_string();
+    assert!(!public.contains("private-source-address"));
+    assert!(!public.contains("private-target-address"));
 }
 
 #[test]
@@ -141,21 +137,21 @@ redis:
         });
         fixture.confirm();
         let original = fs::read(fixture.policy()).unwrap();
-        let plan = fixture.plan();
+        let planned = fixture.plan().unwrap();
+        let preflight = &planned.traffic_e2e_report["preflight"];
         if changed_control {
-            assert!(
-                format!("{:#}", plan.unwrap_err()).contains("unselected Redis argument 6 changed")
+            assert_eq!(
+                preflight["target_comparison_failures"][0]["surface"],
+                "dependency.request"
             );
-            assert_eq!(fs::read(fixture.policy()).unwrap(), original);
-            continue;
         }
-        let planned = plan.unwrap();
         assert!(
-            planned.traffic_e2e_report["preflight"]["independent_target_validations"]
+            preflight["independent_target_validations"]
                 .as_u64()
                 .unwrap()
                 > 0
         );
+        assert_eq!(fs::read(fixture.policy()).unwrap(), original);
         apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
         assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
         let current = fs::read_to_string(fixture.policy()).unwrap();

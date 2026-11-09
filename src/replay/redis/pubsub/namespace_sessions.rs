@@ -4,14 +4,21 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use crate::replay::ReplayCase;
 mod source;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct NamespaceSessions {
-    source: BTreeMap<String, BTreeMap<String, String>>,
+    source: BTreeMap<String, Source>,
     live: Option<Live>,
+}
+
+#[derive(Debug)]
+struct Source {
+    sids: BTreeMap<String, String>,
+    window: Option<Range<DateTime<Utc>>>,
 }
 
 #[derive(Debug)]
@@ -113,7 +120,7 @@ impl NamespaceSessions {
             valid_identity(namespace),
             "invalid native namespace metadata"
         );
-        if !source.contains_key(namespace) {
+        if !source.sids.contains_key(namespace) {
             return Ok(());
         }
         let Some(sid) = sid else { return Ok(()) };
@@ -135,7 +142,7 @@ impl NamespaceSessions {
         }
     }
 
-    pub(super) fn matches_room(
+    pub(super) fn matches_sid(
         &self,
         case: Option<&str>,
         namespace: &Value,
@@ -150,19 +157,49 @@ impl NamespaceSessions {
         else {
             return false;
         };
+        self.has_source_sid(case, namespace, source)
+            && self.live_sid(case, namespace) == Some(target)
+    }
+
+    pub(super) fn source_window(
+        &self,
+        case: &str,
+        namespace: &str,
+        sid: &str,
+    ) -> Option<&Range<DateTime<Utc>>> {
+        let source = self.source.get(case)?;
+        source
+            .window
+            .as_ref()
+            .filter(|_| source.sids.get(namespace).is_some_and(|value| value == sid))
+    }
+
+    pub(super) fn target_sid(
+        &self,
+        case: &str,
+        epoch: DateTime<Utc>,
+        namespace: &str,
+    ) -> Option<&str> {
+        if self.epoch(case) != Some(epoch) {
+            return None;
+        }
+        self.live_sid(case, namespace)
+    }
+
+    fn has_source_sid(&self, case: &str, namespace: &str, sid: &str) -> bool {
         self.source
             .get(case)
-            .and_then(|sessions| sessions.get(namespace))
-            .is_some_and(|sid| sid == source)
-            && self.live.as_ref().is_some_and(|live| {
-                live.case == case
-                    && live.observing
-                    && !live.closed
-                    && live
-                        .namespaces
-                        .get(namespace)
-                        .is_some_and(|sid| sid == target)
-            })
+            .and_then(|source| source.sids.get(namespace))
+            .is_some_and(|source| source == sid)
+    }
+
+    fn live_sid(&self, case: &str, namespace: &str) -> Option<&str> {
+        self.live
+            .as_ref()
+            .filter(|live| live.case == case && live.observing && !live.closed)?
+            .namespaces
+            .get(namespace)
+            .map(String::as_str)
     }
 }
 

@@ -1,6 +1,7 @@
 pub(in crate::replay) struct ReplaySession {
     pub(in crate::replay) control: crate::dependency::termination::ConnectionControl,
     pub(in crate::replay) request_started: tokio::time::Instant,
+    pub(super) fast_response_timing: bool,
     pub(in crate::replay) target: Option<TargetKey>,
     pub(in crate::replay) database: Option<String>,
     pub(in crate::replay) username: Option<String>,
@@ -184,7 +185,10 @@ pub(super) async fn deliver_matched(
         }
     }
 
-    matched.timing.delay_response().await;
+    matched
+        .timing
+        .delay_response_from_request(session.request_started, session.fast_response_timing)
+        .await;
     let rendered_at = Utc::now();
     let mut delivered_identities = None;
     if let Some(prepared) = &matched.value_delivery {
@@ -290,6 +294,9 @@ pub(super) async fn deliver_matched(
             before: target_status_before,
             after: session.status_flags,
         },
+        matched
+            .request_observed_at
+            .map(|requested_at| (&matched.record.response, requested_at, rendered_at)),
         matched.report.case_id.as_deref(),
         &identity,
     );
@@ -307,14 +314,14 @@ pub(in crate::replay) async fn handle_query(
         case_id,
         observation_id,
         event_index,
-        rejection_recorded,
+        recorded_rejection,
         terminal_reason,
     } = super::admission::match_request(&state, session, "COM_QUERY", Some(sql), None).await;
     if let Some(reason) = terminal_reason {
         return Err(anyhow!(reason));
     }
-    if rejection_recorded {
-        return Err(anyhow!("MySQL admitted request contract commit failed"));
+    if let Some(reason) = recorded_rejection {
+        return Err(anyhow!(reason));
     }
     if matched.is_none()
         && let Some(response) = builtin_response(sql, session.database.as_deref())
@@ -356,6 +363,7 @@ pub(in crate::replay) async fn handle_query(
                 before: target_status_before,
                 after: session.status_flags,
             },
+            None,
             case_id.as_deref(),
             &identity,
         );
@@ -401,15 +409,15 @@ pub(in crate::replay) async fn handle_stmt_prepare(
     let super::admission::RequestSelection {
         matched: failed_prepare,
         case_id,
-        rejection_recorded,
+        recorded_rejection,
         terminal_reason,
         ..
     } = super::admission::match_request(&state, session, "COM_STMT_PREPARE", Some(sql), None).await;
     if let Some(reason) = terminal_reason {
         return Err(anyhow!(reason));
     }
-    if rejection_recorded {
-        return Err(anyhow!("MySQL admitted prepare contract commit failed"));
+    if let Some(reason) = recorded_rejection {
+        return Err(anyhow!(reason));
     }
     if let Some(matched) = failed_prepare {
         return deliver_matched(stream, state, session, matched, ResultRowEncoding::Text).await;
@@ -482,7 +490,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
         case_id,
         observation_id,
         event_index,
-        rejection_recorded,
+        recorded_rejection,
         terminal_reason,
     } = super::admission::match_request(
         &state,
@@ -495,8 +503,8 @@ pub(in crate::replay) async fn handle_stmt_execute(
     if let Some(reason) = terminal_reason {
         return Err(anyhow!(reason));
     }
-    if rejection_recorded {
-        return Err(anyhow!("MySQL admitted request contract commit failed"));
+    if let Some(reason) = recorded_rejection {
+        return Err(anyhow!(reason));
     }
     if matched.is_none()
         && let Some(response) = builtin_response(&statement.sql, session.database.as_deref())
@@ -538,6 +546,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                 before: target_status_before,
                 after: session.status_flags,
             },
+            None,
             case_id.as_deref(),
             &identity,
         );

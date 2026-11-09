@@ -127,6 +127,7 @@ impl InputTranscript {
             seen.insert(0);
         }
         let mut offset = 0;
+        let mut precise_offset = None;
         for (index, action) in self.actions.iter().enumerate() {
             ensure!(
                 self.http_stream_mode != HttpStreamMode::Subscription || action.after.is_empty(),
@@ -148,6 +149,14 @@ impl InputTranscript {
                 action.offset_ms >= offset,
                 "interaction input offsets must not decrease"
             );
+            if let Some(us) = action.offset_us {
+                ensure!(
+                    us / 1_000 == action.offset_ms
+                        && precise_offset.is_none_or(|previous| us >= previous),
+                    "interaction input microsecond offsets must agree with milliseconds and not decrease"
+                );
+                precise_offset = Some(us);
+            }
             ensure!(
                 action.after.iter().all(|sequence| seen.contains(sequence)),
                 "interaction completion barriers must reference previous inputs"
@@ -216,6 +225,9 @@ pub struct HeartbeatResponse {
 pub struct InputAction {
     pub sequence: u64,
     pub offset_ms: u64,
+    /// Precise elapsed time on the same recording epoch as offset_ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_us: Option<u64>,
     /// Completed input sequences, selected from Source observations when recording.
     /// HTTP streams use implicit sequence 0 for their initial request.
     #[serde(default)]
@@ -298,6 +310,13 @@ pub struct EndObservation {
     /// The observed lifecycle ended without capture/transport corruption.
     /// An observed peer close may retain pending business identities.
     pub clean: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_predecessor: Option<MissingPredecessor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_timeout: Option<DispatchTimeout>,
+    /// Replay offset at which a proven Source heartbeat timeout reached its fast close boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_heartbeat_eof_ms: Option<u64>,
     /// Exact unfinished framed-message bytes observed at an explicit client close.
     /// This suffix is not a completed business message or a successful EOF.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -310,6 +329,34 @@ impl EndObservation {
     /// An observed client transport end while recorded business work is pending.
     pub(crate) fn interrupted_by_client(&self) -> bool {
         self.clean && self.reason == EndReason::ClientTransportEnd && !self.pending.is_empty()
+    }
+
+    pub(crate) fn observes_close_tail(&self, protocol: Protocol) -> bool {
+        self.interrupted_by_client()
+            || (protocol == Protocol::SocketIo
+                && self.clean
+                && !self.pending.is_empty()
+                && matches!(self.reason, EndReason::ClientClose | EndReason::ServerEof))
+    }
+
+    pub(crate) fn observes_replay_close_tail(&self, protocol: Protocol) -> bool {
+        if self.observes_close_tail(protocol) {
+            return true;
+        }
+        if protocol != Protocol::SocketIo {
+            return false;
+        }
+        match self.reason {
+            // Replay closes or drops the connection on these failures. The
+            // Target's disconnect work can start after that transport ends.
+            EndReason::DependencyFailure
+            | EndReason::MissingPredecessor
+            | EndReason::DispatchTimeout => true,
+            EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped => {
+                !self.pending.is_empty() || self.fast_heartbeat_eof_ms.is_some()
+            }
+            _ => false,
+        }
     }
 }
 
@@ -324,6 +371,46 @@ pub struct CloseObservation {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MissingPredecessor {
+    pub input_sequence: u64,
+    pub output_sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchTimeout {
+    pub input_sequence: u64,
+    pub stage: DispatchStage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unadmitted_request: Option<DispatchDependency>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchStage {
+    Prerequisites,
+    Timing,
+    Send,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "protocol", rename_all = "snake_case")]
+pub enum DispatchDependency {
+    Redis {
+        connection_id: uuid::Uuid,
+        sequence: u64,
+    },
+    Mysql {
+        connection_id: uuid::Uuid,
+        sequence: u64,
+    },
+    Http {
+        exchange_id: uuid::Uuid,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EndReason {
     ServerEof,
@@ -333,9 +420,75 @@ pub enum EndReason {
     BusinessIdle,
     RequestTimeout,
     DependencyFailure,
+    MissingPredecessor,
+    DispatchTimeout,
     MaxDuration,
     TransportError,
     ProtocolError,
     BudgetExceeded,
     CleanupTimeout,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socketio_close_tail_requires_a_clean_close_with_pending_work() {
+        for reason in [
+            EndReason::ServerEof,
+            EndReason::ClientClose,
+            EndReason::ClientTransportEnd,
+        ] {
+            let mut end = EndObservation {
+                reason,
+                offset_ms: 0,
+                pending: vec![1],
+                clean: true,
+                missing_predecessor: None,
+                dispatch_timeout: None,
+                fast_heartbeat_eof_ms: None,
+                partial_message: None,
+                close: None,
+            };
+            assert!(end.observes_close_tail(Protocol::SocketIo));
+            assert_eq!(
+                end.observes_close_tail(Protocol::WebSocket),
+                reason == EndReason::ClientTransportEnd
+            );
+            end.clean = false;
+            assert!(!end.observes_close_tail(Protocol::SocketIo));
+            assert_eq!(
+                end.observes_replay_close_tail(Protocol::SocketIo),
+                reason == EndReason::ServerEof
+            );
+            end.clean = true;
+            end.pending.clear();
+            assert!(!end.observes_close_tail(Protocol::SocketIo));
+        }
+    }
+
+    #[test]
+    fn failed_socketio_dispatch_retains_replay_ownership_for_disconnect_work() {
+        for reason in [
+            EndReason::DependencyFailure,
+            EndReason::MissingPredecessor,
+            EndReason::DispatchTimeout,
+        ] {
+            let end = EndObservation {
+                reason,
+                offset_ms: 0,
+                pending: vec![],
+                clean: false,
+                missing_predecessor: None,
+                dispatch_timeout: None,
+                fast_heartbeat_eof_ms: None,
+                partial_message: None,
+                close: None,
+            };
+            assert!(end.observes_replay_close_tail(Protocol::SocketIo));
+            assert!(!end.observes_replay_close_tail(Protocol::WebSocket));
+            assert!(!end.observes_close_tail(Protocol::SocketIo));
+        }
+    }
 }

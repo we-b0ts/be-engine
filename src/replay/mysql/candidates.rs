@@ -7,8 +7,11 @@ use crate::replay::native_index::{
 };
 use std::sync::Arc;
 mod family;
-use family::Family;
+mod groups;
+mod windows;
 pub(super) use family::classify as sql_family;
+pub(super) use family::select_hint;
+use family::{Family, SelectHint};
 
 #[derive(Debug)]
 pub(super) struct Candidates {
@@ -17,6 +20,10 @@ pub(super) struct Candidates {
     members: CaseMembership,
     lanes: LaneIndex,
     families: Vec<Option<Family>>,
+    selects: Vec<Option<SelectHint>>,
+    savepoints: Vec<Option<crate::mysql::savepoint::Command>>,
+    windows: windows::Windows,
+    groups: groups::Groups,
 }
 
 impl Default for Candidates {
@@ -27,6 +34,10 @@ impl Default for Candidates {
             members: CaseMembership::default(),
             lanes: LaneIndex::default(),
             families: Vec::new(),
+            selects: Vec::new(),
+            savepoints: Vec::new(),
+            windows: windows::Windows::default(),
+            groups: groups::Groups::default(),
         }
     }
 }
@@ -56,8 +67,30 @@ impl Candidates {
             *self = Self::default();
         }
         for (index, exchange) in exchanges.iter().enumerate().skip(self.count) {
-            self.families
-                .push(sql_family(exchange.record.sql.as_deref()));
+            let tokens = exchange
+                .record
+                .sql
+                .as_deref()
+                .and_then(family::bounded_tokens);
+            self.families.push(
+                tokens
+                    .as_deref()
+                    .and_then(|tokens| family::classify_tokens(tokens)),
+            );
+            self.selects.push(
+                tokens
+                    .as_deref()
+                    .and_then(|tokens| SelectHint::from_tokens(tokens)),
+            );
+            self.groups
+                .register(exchange, self.selects[index].is_some());
+            self.savepoints.push(
+                exchange
+                    .record
+                    .sql
+                    .as_deref()
+                    .and_then(crate::mysql::savepoint::parse),
+            );
             self.members
                 .register(exchange.source, exchange.case_id.as_deref(), index);
             if let Some(connection) = exchange.record.connection_id {
@@ -90,6 +123,12 @@ impl Candidates {
                 &identity,
                 Some(&exchange.record.command),
             ) {
+                self.windows.register(
+                    key.clone(),
+                    self.selects[index].as_ref().map(|hint| hint.table.as_str()),
+                    index,
+                    exchange,
+                );
                 self.index.register(NativeKey::Mysql(key), index);
             }
         }
@@ -111,14 +150,33 @@ impl Candidates {
             .is_none_or(|(source, actual)| source == actual)
     }
 
-    pub(super) fn lane_blocker(
+    pub(super) fn permits_select(
         &self,
-        exchanges: &[ReplayExchange],
         candidate: usize,
-    ) -> Option<usize> {
-        self.lanes.blocker(candidate, |prior| {
+        actual: Option<&SelectHint>,
+        exact_shape: bool,
+    ) -> bool {
+        self.selects
+            .get(candidate)
+            .and_then(Option::as_ref)
+            .zip(actual)
+            .is_none_or(|(source, actual)| {
+                source.table == actual.table
+                    && (!exact_shape || source.scalar_shape == actual.scalar_shape)
+            })
+    }
+
+    pub(super) fn blocked_candidates<'a>(
+        &'a self,
+        exchanges: &'a [ReplayExchange],
+    ) -> impl FnMut(usize) -> bool + 'a {
+        self.lanes.blocked_candidates(move |prior| {
             !exchanges[prior].status.is_consumed() && exchanges[prior].optional_session.is_none()
         })
+    }
+
+    pub(super) fn savepoint(&self, index: usize) -> Option<&crate::mysql::savepoint::Command> {
+        self.savepoints[index].as_ref()
     }
 
     pub(super) fn select(
@@ -132,9 +190,64 @@ impl Candidates {
         // Direct test/repair appends keep their existing compatibility path.
         // Production registration can prepare each appended range before begin.
         self.register(exchanges);
+        self.lookup(source, case, identity, command)
+    }
+
+    pub(super) fn lookup(
+        &self,
+        source: ReplaySource,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: Option<&str>,
+    ) -> Arc<[usize]> {
         let Some(key) = key(source, case, identity, command) else {
             return Arc::from([]);
         };
         self.index.lookup(NativeQuery::Mysql(&key)).into_indices()
+    }
+
+    pub(super) fn select_window(
+        &self,
+        case: &str,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        table: Option<&str>,
+        timeline: &crate::replay::control::input_timing::Live,
+    ) -> Option<windows::Selection> {
+        let key = key(ReplaySource::Case, Some(case), identity, Some(command))?;
+        if let Some(table) = table
+            && let Some(window) = self.windows.optimistic(
+                &key,
+                table,
+                timeline.mysql_dispatch_prefix(case),
+                |anchor| timeline.mysql_candidate_anchor(case, anchor),
+            )
+        {
+            return Some(window);
+        }
+        self.windows.select(&key, table, |anchor| {
+            timeline.mysql_candidate_cutoff(case, anchor)
+        })
+    }
+
+    pub(super) fn select_hypothesis_window(
+        &self,
+        case: &str,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        window: &windows::Selection,
+    ) -> Option<Vec<usize>> {
+        let key = key(ReplaySource::Case, Some(case), identity, Some(command))?;
+        self.windows
+            .select(&key, None, |_| Some(window.cutoff))
+            .map(|selection| selection.indices)
+    }
+
+    pub(super) fn claimed(&mut self, index: usize) {
+        self.windows.claimed(index);
+    }
+
+    pub(super) fn sql_group(&self, index: usize) -> Option<usize> {
+        self.groups.get(index)
     }
 }

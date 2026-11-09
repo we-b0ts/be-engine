@@ -139,9 +139,9 @@ is unclear.
   actual sent inputs and received ACK metadata independently of business
   completion and fast timing; the native clock retains Source windows, original
   subscription ownership and the current request epoch. An input without an ACK
-  or an explicit close ends the notification prefix, rather than invalidating
-  preceding notifications. That boundary also limits delivery lifetime; later
-  actual ACK identities remain admissible without extending the prefix. Native
+  ends the current delivery interval. A later unambiguous Source ACK reopens
+  delivery after its recorded timestamp, gated on the same live ACK. Explicit
+  close still ends delivery. Native
   plan cardinality is bounded by the original finite notification inventory;
   long recordings retain paged payload references and bounded delivery queues.
   RESP delivery retains wire consumption and Case cancellation checks; the
@@ -224,10 +224,17 @@ is unclear.
   adapters expose Source chunk clocks and real flushed prefixes; future chunks
   await the input driver's actual transport cancellation, without changing
   response completion or finite dependency consumption.
-  Independently proven individual Redis delivery prefixes still gate Auto business inputs
-  without requiring compression coverage; ACKs, heartbeat and cancellation keep
-  their own native scheduling. Prefixes exclude future Source completions and
-  never infer handler completion.
+  `recorded_request/socketio_order` projects the recorded server event and ACK
+  identities and offsets before execution. `interaction/replay/event_order`
+  tracks their live arrivals across namespaces. Ordered fast dispatch requires
+  both the preceding server events and admission of the proven Redis, MySQL,
+  and HTTP Case request prefix. Ambiguous timestamps keep conservative timing
+  and cannot create a request barrier. `interaction/replay/socketio/dispatch` supplies readiness
+  and diagnostic feedback. The driver bounds each dispatch, including its wire
+  send, to five seconds after the previous actual send. `input_timing/fast`
+  owns the existing compression cap and commits clock cuts only after both
+  conditions hold. Engine.IO heartbeats, physical cancellation and the closing
+  tail retain their own scheduling. Non-fast paths keep their existing clocks.
   Native coalescing/retiming retains native ownership; successful native completion
   projects exact covered Source references into the delivery journal for compression.
   `heartbeat` records and validates the input program's causal PING/PONG bindings;
@@ -477,6 +484,8 @@ is unclear.
   Its `client_abort` child waits for bounded Case-local inactivity after a
   premature transport end and uses the same atomic release barrier. Source's
   `active_case/client_abort` observes the same lifecycle at capture time.
+  Source Socket.IO closure uses `active_case/socketio_close` for its own
+  dependency admission, rolling silence and supervised stop boundary.
   A failed primary status ends normal async business waiting while
   retaining unused/dirty evidence; protocol owners expose delivery state, and
   runner response assertions retain the primary failure independently of cleanup.
@@ -1599,8 +1608,12 @@ explicit repository-wide audit.
   proof grants neither autocommit equivalence nor end omission. Its parent
   owns connection-local Target BEGIN/end witnesses, ordered finite Source window
   correspondence and delivery-confirmed setup coverage. Multi-write windows
-  include every read after the first write, through the actual matching end;
-  preceding reads remain finite ordinary dependencies. A single write can supply
+  include every read after the first write, through the actual matching end.
+  Preceding reads remain finite ordinary dependencies. The live matcher
+  rejects a required member on an inactive autocommitting
+  Target connection before claiming it. The transaction registry supplies the
+  same single-write eligibility to candidate selection and wire coverage.
+  A single write can supply
   an independent Target autocommit-1/no-active-transaction delivery witness for
   successful Source COMMIT omission. A complete segment containing exactly one
   ordinary UPDATE can also omit successful Source ROLLBACK when that UPDATE

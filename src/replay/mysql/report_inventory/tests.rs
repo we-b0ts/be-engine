@@ -101,6 +101,7 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
     let mut session = ReplaySession {
         control: crate::dependency::termination::ConnectionControl::new(&socket).unwrap(),
         request_started: tokio::time::Instant::now(),
+        fast_response_timing: false,
         target: actual.target,
         database: actual.database,
         username: actual.username,

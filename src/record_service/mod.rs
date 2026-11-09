@@ -243,7 +243,10 @@ async fn run_prepared(
             "run dependency capture did not drain after Source shutdown"
         ));
     }
-    let completion_reason = if normal_shutdown {
+    let close_limit_case = state.inner.active_cases.socketio_close_limit_case();
+    let completion_reason = if close_limit_case.is_some() {
+        RecordingCompletionReason::SocketioCloseTailLimit
+    } else if normal_shutdown {
         RecordingCompletionReason::ShutdownSignal
     } else {
         RecordingCompletionReason::SourceIsolationRequired
@@ -281,9 +284,7 @@ async fn run_prepared(
     let manifest = state.recorder().run_dir.join("recording-run.json");
     let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)?;
     ensure!(
-        report["status"] == "completed"
-            && report["failed_cases"] == 0
-            && report["errors"].as_array().is_some_and(Vec::is_empty),
+        usable_recording(&report, close_limit_case),
         "recording finalized with errors; inspect {}",
         manifest.display()
     );
@@ -291,9 +292,35 @@ async fn run_prepared(
         "{}",
         serde_json::json!({
             "status": "completed", "run_id": report["run_id"], "manifest": manifest,
-            "published_cases": report["published_cases"]
+            "published_cases": report["published_cases"],
+            "failed_cases": report["failed_cases"],
+            "completion_reason": report["completion_reason"]
         })
     ))
+}
+
+fn usable_recording(report: &serde_json::Value, close_limit_case: Option<uuid::Uuid>) -> bool {
+    let Some(errors) = report["errors"].as_array() else {
+        return false;
+    };
+    if report["status"] != "completed" {
+        return false;
+    }
+    let Some(case_id) = close_limit_case else {
+        return report["failed_cases"] == 0 && errors.is_empty();
+    };
+    report["published_cases"]
+        .as_u64()
+        .is_some_and(|count| count > 0)
+        && match errors.as_slice() {
+            [] => report["failed_cases"] == 0,
+            [error] => {
+                report["failed_cases"] == 1
+                    && error["case_id"] == case_id.to_string()
+                    && error["reason"] == crate::active_case::SOCKETIO_CLOSE_TAIL_TIMEOUT
+            }
+            _ => false,
+        }
 }
 
 async fn wait_startup(

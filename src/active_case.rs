@@ -13,10 +13,12 @@ mod correlation;
 mod publication;
 mod recovery;
 mod shutdown;
+mod socketio_close;
 mod stream_tail;
 
 use activity::{DependencyActivity, DependencyReservation};
 pub(crate) use publication::CasePublication;
+pub(crate) use socketio_close::{SOCKETIO_CLOSE_LIMIT, SOCKETIO_CLOSE_TAIL_TIMEOUT};
 use stream_tail::{StreamTail, StreamTailRequest};
 
 #[derive(Clone)]
@@ -37,6 +39,7 @@ struct ActiveCaseState {
     admission_closed: bool,
     quiescing: bool,
     shutdown: Option<shutdown::ShutdownContext>,
+    socketio_close_limit_case: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +147,7 @@ impl ActiveCaseRegistry {
                 admission_closed: false,
                 quiescing: false,
                 shutdown: None,
+                socketio_close_limit_case: None,
             })),
             active_count,
             quiescing,

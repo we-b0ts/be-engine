@@ -78,19 +78,17 @@ fn header_jwt_public_plan_apply_validates_both_original_signatures_and_freezes_k
             "proof":{"source":"oidc.py:login","fact":"Source signs a fresh state nonce and echoes it in the query"}}),
         );
         fixture.confirm();
-        let plan = fixture.plan();
+        let plan = fixture.plan().unwrap();
         if scenario == "bad-signature" {
-            assert!(plan.is_err());
-            continue;
+            assert_eq!(plan.traffic_e2e_report["status"], "planned_needs_replay");
         }
-        let plan = plan.unwrap();
         assert_eq!(
             plan.traffic_e2e_report["preflight"]["source_validations"],
             1
         );
         assert_eq!(
             plan.traffic_e2e_report["preflight"]["independent_target_validations"],
-            1
+            u64::from(scenario != "bad-signature")
         );
         let public = serde_json::to_string(&plan.traffic_e2e_report).unwrap();
         assert!(!public.contains(KEY) && !public.contains("eyJ"));

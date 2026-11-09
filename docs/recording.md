@@ -116,6 +116,16 @@ when they start after the WebSocket close. The existing cleanup budget still
 applies; unknown SIDs, unrelated errors and unconfirmed completion cannot publish
 a successful capture.
 
+Every clean Socket.IO connection closure keeps its original Case open for at
+least 15 seconds from the close, even when no protocol events are pending.
+An admitted business dependency in flight at close or observed during that
+window switches the Case to 60 seconds of rolling silence. Heartbeats and
+known process traffic do not extend it. At five minutes the recorder closes
+admission and the supervisor stops Source before sealing the batch. If
+business I/O is still in flight, the last Case is archived as incomplete.
+The manifest records `socketio_close_tail_limit`. Previously published Cases
+remain usable after successful run finalization.
+
 Socket.IO ACK identities are released when their matching ACK is observed,
 independently of pending business completion. Reusing an acknowledged ID while
 the earlier business request awaits its terminal event is valid; reuse before

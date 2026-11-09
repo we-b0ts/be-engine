@@ -1,17 +1,19 @@
 //! A Target may visit several Source calls with the same physical operation.
-//! Failed search edges remain protected, but only an unpaired Target is an error.
+//! An unpaired Target stays visible and requires fresh Replay.
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use crate::policy_evidence::WitnessRef;
+use crate::{policy::Surface, policy_evidence::WitnessRef};
+
+use super::Preflight;
 
 type Observation = (String, String, String);
 
 #[derive(Default)]
 pub(super) struct Candidates {
     validated: BTreeSet<Observation>,
-    rejected: BTreeMap<Observation, anyhow::Error>,
+    rejected: BTreeMap<Observation, (Surface, String)>,
     deferred: BTreeSet<Observation>,
 }
 
@@ -47,34 +49,22 @@ impl Candidates {
                 Ok(count)
             }
             Ok(_) => Ok(0),
-            Err(error) => {
+            Err(_) => {
                 if !self.validated.contains(&observation) {
-                    self.rejected.entry(observation).or_insert_with(|| {
-                        error.context(format!(
-                            "Source candidate case={}, connection={}, sequence={:?}, operation={}",
-                            witness.metadata.source.case_id,
-                            witness
-                                .metadata
-                                .source
-                                .connection_id
-                                .as_deref()
-                                .unwrap_or("<none>"),
-                            witness.metadata.source.sequence,
-                            witness.metadata.operation,
-                        ))
-                    });
+                    self.rejected
+                        .entry(observation)
+                        .or_insert_with(|| (witness.metadata.surface, witness.id.clone()));
                 }
                 Ok(0)
             }
         }
     }
 
-    pub(super) fn finish(self) -> Result<()> {
-        match self.rejected.into_iter().find(|(id, _)| !self.deferred.contains(id)).map(|(_, error)| error) {
-            Some(error) => Err(error).context(
-                "a related Target dependency observation has no valid pair in the complete Source scope",
-            ),
-            None => Ok(()),
+    pub(super) fn finish(self, result: &mut Preflight) {
+        for (id, (surface, witness)) in self.rejected {
+            if !self.deferred.contains(&id) {
+                result.defer_target_comparison(&id.0, surface, Some(&witness));
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ pub(crate) struct ResponsePayloadPair {
     pub(crate) status_difference: Option<(u16, u16)>,
     pub(crate) source_interaction: Option<crate::interaction::model::OutputObservation>,
     pub(crate) target_interaction: Option<crate::interaction::model::OutputObservation>,
+    pub(crate) max_interaction_message_bytes: usize,
     pub(crate) body_available: bool,
     pub(crate) source: Vec<u8>,
     pub(crate) target: Option<Vec<u8>>,
@@ -67,6 +68,10 @@ pub(crate) fn response_rule_payload_pair(
         status_difference: None,
         source_interaction: source.interaction,
         target_interaction: None,
+        max_interaction_message_bytes: request
+            .interaction
+            .as_ref()
+            .map_or(0, |input| input.policy.max_message_bytes),
         body_available,
         source: source_body.body().into(),
         target: None,

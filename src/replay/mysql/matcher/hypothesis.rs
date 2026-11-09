@@ -1,5 +1,4 @@
 //! Bounded fallback selection; no Source slot or identity is committed here.
-use super::request::TransactionMatch;
 use super::*;
 
 impl ReplayState {
@@ -14,6 +13,8 @@ impl ReplayState {
         transaction: Option<TransactionMatch<'_>>,
         observed: DateTime<Utc>,
         observation_id: Option<uuid::Uuid>,
+        window: Option<&[usize]>,
+        transaction_rejection: &mut Option<usize>,
     ) -> Option<(usize, crate::replay::DependencyRuleDecision)> {
         let owner = self.replay_policy.as_ref()?.request_contracts.clone();
         if !owner.pre_match_enabled() {
@@ -21,15 +22,25 @@ impl ReplayState {
         }
         let projected =
             crate::replay::mysql::sql_match::materialize(sql?, params.unwrap_or_default())?;
-        let candidates = self.mysql.candidates.select(
-            &self.mysql.exchanges,
-            ReplaySource::Case,
-            Some(case),
-            identity,
-            Some(command),
-        );
+        let fallback;
+        let candidates = if let Some(window) = window {
+            window
+        } else {
+            fallback = self.mysql.candidates.lookup(
+                ReplaySource::Case,
+                Some(case),
+                identity,
+                Some(command),
+            );
+            &fallback
+        };
         let mut search = crate::replay::candidate_selection::UniqueCandidate::new(256);
         let sql_family = candidates::sql_family(sql);
+        let normalized_sql = sql.map(normalize_sql);
+        let mut blocked = self
+            .mysql
+            .candidates
+            .blocked_candidates(&self.mysql.exchanges);
         for index in candidates.iter().copied() {
             let exchange = &self.mysql.exchanges[index];
             if !self.mysql.candidates.permits_sql(index, sql_family)
@@ -38,21 +49,11 @@ impl ReplayState {
                 || exchange.record.response.rows_truncated
                 || exchange.optional_session.is_some()
                 || self.mysql.foreign.contains_key(&index)
-                || transaction.is_some_and(|context| {
-                    !self
-                        .mysql
-                        .isolation
-                        .permits(context.connection, index, &self.mysql.exchanges)
-                })
+                || transaction.is_some_and(|context| !context.permits(&self.mysql, index))
             {
                 continue;
             }
-            if self
-                .mysql
-                .candidates
-                .lane_blocker(&self.mysql.exchanges, index)
-                .is_some()
-            {
+            if blocked(index) {
                 continue;
             }
             if search.inspect().is_err() {
@@ -75,6 +76,17 @@ impl ReplayState {
             ) else {
                 continue;
             };
+            if transaction.is_some_and(|context| {
+                context.missing_for_member(
+                    &self.mysql.transaction_equivalence,
+                    index,
+                    exchange,
+                    normalized_sql.as_deref(),
+                )
+            }) {
+                transaction_rejection.get_or_insert(index);
+                continue;
+            }
             if search.accept(index, decision).is_err() {
                 self.mysql
                     .events

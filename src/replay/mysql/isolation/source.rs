@@ -253,6 +253,7 @@ fn prove(
     let mut read_only = true;
     let mut active = false;
     let mut end = None;
+    let mut savepoints = crate::mysql::savepoint::Names::default();
     for &(index, row) in rows.iter().skip(1).take(260) {
         sequence = sequence.checked_add(1)?;
         let before = row.server_status_before? & 0x200b;
@@ -311,8 +312,20 @@ fn prove(
             }
             continue;
         }
-        // Exactly one ordinary implicit Source transaction. Session mutations,
-        // savepoints, failures, gaps and second transactions retain strict matching.
+        if let Some(savepoint) = crate::mysql::savepoint::parse(sql) {
+            if !active
+                || before != 1
+                || after != 1
+                || !control(row)
+                || !savepoints.observe(&savepoint)
+            {
+                return None;
+            }
+            required.insert(index);
+            continue;
+        }
+        // Exactly one implicit Source transaction. Session mutations,
+        // failures, gaps and second transactions retain strict matching.
         let effect = optional_session::read::classify(sql);
         if end.is_some()
             || row.command != "COM_QUERY"

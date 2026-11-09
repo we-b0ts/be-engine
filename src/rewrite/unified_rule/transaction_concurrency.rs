@@ -172,6 +172,59 @@ fn unrelated_prepared_index_bytes_do_not_invalidate_a_plan() {
 }
 
 #[test]
+fn json_identity_plan_survives_code_and_timing_drift_but_keeps_policy_cas() {
+    for policy_changed in [false, true] {
+        let fixture = Fixture::new();
+        fixture
+            .replace_response_bodies(br#"{"id":"old","stable":1}"#, br#"{"id":"new","stable":2}"#);
+        write(
+            &fixture.proposal,
+            json!({"format":"traffic-policy/v3","json":{"fields":{
+                "/id":{"kind":"identity","formats":[{"string":64}]}
+            }}}),
+        );
+        fixture.confirm();
+        let code = fixture.root().join("other-api.rs");
+        fs::write(&code, "fn other_api() {}\n").unwrap();
+        let regression = fixture.root().join(".traffic-e2e/regression.yaml");
+        fs::write(
+            &regression,
+            "replay_timing: fast\nreplay_interval_cap_ms: 3\n",
+        )
+        .unwrap();
+        let plan = fixture.plan().unwrap();
+        assert_eq!(plan.traffic_e2e_report["target_replay_drift_at_plan"], true);
+        let preflight = &plan.traffic_e2e_report["preflight"];
+        assert_eq!(
+            preflight["target_comparison_failures"][0]["case_id"],
+            "00000000-0000-4000-8000-000000000001"
+        );
+        assert_eq!(preflight["independent_target_validations"], 0);
+        fs::write(&code, "fn other_api() -> bool { true }\n").unwrap();
+        if policy_changed {
+            fs::write(
+                fixture.policy(),
+                "format: traffic-policy/v3\n# concurrent policy edit\n",
+            )
+            .unwrap();
+            let error = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap_err();
+            assert!(format!("{error:#}").contains("policy changed after planning"));
+        } else {
+            let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+            assert_eq!(
+                applied.traffic_e2e_report["status"],
+                "applied_pending_replay"
+            );
+            assert_eq!(
+                applied.traffic_e2e_report["target_replay_drift_at_apply"],
+                true
+            );
+            assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+        }
+    }
+}
+
+#[test]
 fn stale_plan_recovery_preserves_a_newer_failure_issue() {
     let fixture = Fixture::new();
     fixture.confirm();

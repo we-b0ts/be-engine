@@ -111,27 +111,26 @@ async fn autocommit_failures_and_multi_write_session_omissions_stay_visible() {
                 .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
         )
         .await;
-        sqlx::raw_sql("UPDATE users SET active=0 WHERE id=1")
-            .execute(&mut client)
-            .await
-            .unwrap();
-        sqlx::raw_sql("UPDATE users SET active=0 WHERE id=2")
-            .execute(&mut client)
-            .await
-            .unwrap();
+        assert!(
+            sqlx::raw_sql("UPDATE users SET active=0 WHERE id=1")
+                .execute(&mut client)
+                .await
+                .is_err()
+        );
         {
             let state = runtime.state.lock().await;
             assert!(state.allowed_unused_autocommit().is_empty());
             assert!(state.transaction_equivalent_autocommit().is_empty());
             assert!(state.mysql.case_is_dirty("case-id"));
             assert!(!state.mysql.events.unmatched_queries.is_empty());
+            assert_eq!(state.mysql.events.matched_query_count, 0);
             assert_eq!(
                 state
                     .unused_exchanges(ReplaySource::Case)
                     .iter()
                     .map(|e| e.index)
                     .collect::<Vec<_>>(),
-                vec![0, 3]
+                vec![0, 1, 2, 3]
             );
         }
         task.abort();

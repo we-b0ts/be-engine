@@ -1,8 +1,8 @@
-//! Slow dependency delivery cannot advance a following unacknowledged input.
+//! Socket.IO business events and resource delivery use independent evidence.
 use super::*;
 
 #[tokio::test]
-async fn business_input_waits_past_its_source_deadline_while_native_ping_remains_live() {
+async fn fast_business_input_waits_for_recorded_events_and_redis_admission() {
     let temp = tempfile::tempdir().unwrap();
     let mut input = InputTranscript::new(
         Protocol::SocketIo,
@@ -27,6 +27,18 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
     let path = temp.path().join("case/request.json");
     std::fs::write(&path, request.to_string()).unwrap();
     let original = std::fs::read(&path).unwrap();
+    std::fs::write(
+        temp.path().join("case/expected-response.json"),
+        json!({"interaction": {
+            "version": crate::interaction::model::TRANSCRIPT_VERSION,
+            "protocol":"socket_io",
+            "events":[
+                {"sequence":1,"offset_ms":24,"message":{"kind":"text","data":"431[true]"}},
+                {"sequence":2,"offset_ms":26,"message":{"kind":"text","data":"42/other,[\"ready\"]"}}
+            ],
+            "end":{"reason":"client_close","offset_ms":600,"clean":true}
+        }}).to_string(),
+    ).unwrap();
     let connection = Uuid::new_v4();
     let mut set = exchange(connection, 1, "SET", &[b"registered", b"yes"], b"+OK\r\n");
     set["response_kind"] = "simple_string".into();
@@ -41,9 +53,11 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
     );
     get["response_kind"] = "bulk_string".into();
     get["timestamp"] = "2020-01-01T00:00:00.055Z".into();
-    get["request_started_at"] = "2020-01-01T00:00:00.030Z".into();
+    get["request_started_at"] = "2020-01-01T00:00:00.045Z".into();
     get["duration_ms"] = 25.into();
-    let runtime = runtime(temp.path(), &[set, get], &[], false).await.unwrap();
+    let runtime = super::ordered_fast::fast_runtime(temp.path(), &[set, get], false)
+        .await
+        .unwrap();
     let (session, control) = serve_control(temp.path(), &runtime).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -64,8 +78,10 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
             .await
             .unwrap();
         assert_eq!(text(&mut socket).await, "421[\"register\"]");
-        // Simulate a slow handler before its native dependency request. The
-        // heartbeat has no after[] or ACK and its Source deadline has elapsed.
+        socket
+            .send(Message::Text("431[true]".into()))
+            .await
+            .unwrap();
         socket.send(Message::Text("2live".into())).await.unwrap();
         assert_eq!(text(&mut socket).await, "3live");
         assert!(
@@ -73,18 +89,23 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
                 .await
                 .is_err()
         );
+        socket
+            .send(Message::Text(r#"42/other,["ready"]"#.into()))
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), socket.next())
+                .await
+                .is_err(),
+            "the event prefix alone must not release the next input"
+        );
         let (mut redis, task) = connect(&target_runtime).await;
         assert_eq!(
             send(&mut redis, &[b"SET", b"registered", b"yes"]).await,
             b"+OK\r\n"
         );
-        socket
-            .send(Message::Text("431[true]".into()))
-            .await
-            .unwrap();
         assert_eq!(text(&mut socket).await, "42[\"heartbeat\"]");
-        // Source started this dependency before the heartbeat but finished it
-        // afterward. Its overlapping handler must not block the next input.
+        // This request starts after B in Source and stays outside B's prefix.
         assert_eq!(
             send(&mut redis, &[b"GET", b"after-heartbeat"]).await,
             b"$3\r\nyes\r\n"
@@ -101,7 +122,7 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
             1024 * 1024,
         )
         .with_input_registration(&session, "case")
-        .send_bytes(&serde_json::to_vec(&request).unwrap(), "delivery-prefix"),
+        .send_recorded_bytes(&serde_json::to_vec(&request).unwrap(), &path),
     )
     .await
     .unwrap()

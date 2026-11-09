@@ -5,9 +5,13 @@ use crate::dependency::attribution::DependencyOwner;
 use crate::dependency_index::recording;
 
 mod inventory;
+mod prewarm;
 #[cfg(test)]
 mod tests;
 mod views;
+
+pub(crate) use prewarm::prewarm_attribution_indexes;
+pub(crate) use views::attribution_scope_key;
 
 pub(super) struct Frozen {
     pub run_value_scopes: BTreeMap<Uuid, Arc<str>>,

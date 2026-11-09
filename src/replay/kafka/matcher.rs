@@ -180,9 +180,9 @@ pub(in crate::replay) struct KafkaReplayEvents {
     matched_count: usize,
     matched: Vec<KafkaMatchedReport>,
     pub(in crate::replay) matched_details: SuccessDetailBudget,
-    unmatched: Vec<KafkaRequestReport>,
-    unsupported: Vec<KafkaRequestReport>,
-    unsafe_events: Vec<KafkaRequestReport>,
+    pub(in crate::replay) unmatched: Vec<KafkaRequestReport>,
+    pub(in crate::replay) unsupported: Vec<KafkaRequestReport>,
+    pub(in crate::replay) unsafe_events: Vec<KafkaRequestReport>,
 }
 
 impl KafkaReplayState {

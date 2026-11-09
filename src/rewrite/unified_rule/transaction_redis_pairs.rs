@@ -174,17 +174,15 @@ fn redis_request_pair_search_cannot_hide_an_invalid_actual_observation() {
         install(&fixture, scenario, false);
         fixture.confirm();
         let original = fs::read(fixture.policy()).unwrap();
-        let error = format!("{:#}", fixture.plan().unwrap_err());
-        assert!(error.contains("no valid pair"), "{scenario}: {error}");
+        let report = fixture.plan().unwrap().traffic_e2e_report;
+        assert_eq!(report["status"], "planned_needs_replay", "{scenario}");
+        let failure = &report["preflight"]["target_comparison_failures"][0];
+        assert_eq!(failure["surface"], "dependency.request");
+        assert_eq!(failure["case_id"], "00000000-0000-4000-8000-000000000001");
         assert!(
-            error.contains("Source candidate case=00000000-0000-4000-8000-000000000001"),
-            "{scenario}: {error}"
+            !report.to_string().contains("changed business content"),
+            "{scenario}"
         );
-        assert!(
-            !error.contains("changed business content"),
-            "{scenario}: {error}"
-        );
-        assert!(fixture.state().rule_plan.is_none());
         assert_eq!(fs::read(fixture.policy()).unwrap(), original);
     }
 }

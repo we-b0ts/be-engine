@@ -25,26 +25,36 @@ pub(super) fn removes_only_read_back(before: &CompiledPolicy, after: &CompiledPo
 /// Narrow identity format changes retain Source-wide validation and independent
 /// Target preflight. They never certify the unfinished Replay.
 pub(super) fn allows_partial(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
-    if removes_only_read_back(before, after)
+    removes_only_read_back(before, after)
+        || adds_only_json_identities(before, after)
         || changes_only_redis_identities(before, after)
+        || json_identity_change(before, after, false)
         || adds_only_json_times(before, after)
-    {
-        return true;
-    }
+}
+
+fn adds_only_json_identities(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
+    json_identity_change(before, after, true)
+}
+
+fn json_identity_change(before: &CompiledPolicy, after: &CompiledPolicy, additions: bool) -> bool {
     let (Some(old), Some(new)) = (&before.global_json, &after.global_json) else {
         return false;
     };
-    if !old.fields.keys().eq(new.fields.keys()) || old.fields == new.fields {
+    if old.fields == new.fields
+        || additions != (old.fields.len() < new.fields.len())
+        || old.fields.keys().any(|key| !new.fields.contains_key(key))
+    {
         return false;
     }
-    for (pointer, old) in &old.fields {
-        let new = &new.fields[pointer];
-        if old == new {
-            continue;
-        }
-        if !same_identity_prefixes(old, new) {
-            return false;
-        }
+    if new
+        .fields
+        .iter()
+        .any(|(pointer, field)| match old.fields.get(pointer) {
+            Some(prior) => prior != field && (additions || !same_identity_prefixes(prior, field)),
+            None => !additions || !matches!(field, crate::policy::GlobalField::Identity { .. }),
+        })
+    {
+        return false;
     }
     let mut expected = before.clone();
     let json = expected.global_json.as_mut().unwrap();

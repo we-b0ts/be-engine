@@ -300,17 +300,18 @@ impl<'a> RequestContext<'a> {
         record: &RecordedMysqlExchange,
     ) -> Self {
         let mut parameter_types = BTreeMap::new();
-        if let Some(tokens) = record
-            .sql
-            .as_deref()
-            .and_then(crate::mysql::sql::bounds::statement)
+        if let Some(params) = record.params.as_ref().filter(|params| !params.is_empty())
+            && let Some(tokens) = record
+                .sql
+                .as_deref()
+                .and_then(crate::mysql::sql::bounds::statement_shared)
         {
             for (position, parameter) in tokens
                 .iter()
                 .enumerate()
                 .filter(|(_, token)| **token == crate::mysql::sql::Token::Placeholder)
                 .map(|(position, _)| position)
-                .zip(record.params.iter().flatten())
+                .zip(params)
             {
                 let temporal = match parameter.kind.as_str() {
                     "date" => Some(Temporal::Date),

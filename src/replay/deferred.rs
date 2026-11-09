@@ -10,7 +10,7 @@ use crate::dependency_index::{FileIndex, RecordLocation, RecordReader};
 
 #[derive(Debug, Clone)]
 pub(super) struct CaseInventory {
-    pub index: FileIndex,
+    pub index: Arc<FileIndex>,
     pub source_bytes: u64,
     pub skip: BTreeSet<usize>,
     pub cleanup: BTreeSet<control::dependency_tail::RecordedReference>,
@@ -25,8 +25,8 @@ pub(super) struct DeferredDependencies {
     pub known_targets: BTreeMap<TargetKey, ReplayTarget>,
     pub timeout: std::time::Duration,
     pub cache_bytes: usize,
-    pub prefetch_tx: tokio::sync::mpsc::Sender<(PathBuf, FileIndex)>,
-    pub prefetch_rx: Mutex<tokio::sync::mpsc::Receiver<(PathBuf, FileIndex)>>,
+    pub prefetch_tx: tokio::sync::mpsc::Sender<(PathBuf, Arc<FileIndex>)>,
+    pub prefetch_rx: Mutex<tokio::sync::mpsc::Receiver<(PathBuf, Arc<FileIndex>)>>,
     serial: Mutex<()>,
     loaded: std::sync::Mutex<BTreeSet<String>>,
     failed: std::sync::Mutex<BTreeMap<String, String>>,
@@ -162,7 +162,7 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
     {
         anyhow::bail!("case dependency preparation previously failed: {error}");
     }
-    let path = {
+    let (recording, fast_cap) = {
         let state = state.lock().await;
         ensure!(
             state.finalized_at.is_none(),
@@ -175,13 +175,13 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
                 .is_none_or(|id| id == case_id),
             "another replay case is active"
         );
-        state
-            .cases
-            .get(case_id)
-            .context("unknown replay case")?
-            .dependencies_path
-            .clone()
+        let recording = state.cases.get(case_id).context("unknown replay case")?;
+        (
+            recording.clone(),
+            control::input_timing::source_fast_cap(&state),
+        )
     };
+    let path = recording.dependencies_path.clone();
     let inventory = deferred
         .files
         .get(case_id)
@@ -206,7 +206,8 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
                     .context("selected Source line identity absent")?;
             }
         }
-        Ok((inventory, raw, records))
+        let input = control::input_timing::PreparedSource::load(&recording, fast_cap, Some(&raw));
+        Ok((inventory, raw, records, input))
     });
     let prepared = match tokio::time::timeout(deferred.timeout, task).await {
         Ok(Ok(result)) => result,
@@ -216,7 +217,7 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
             deferred.timeout.as_secs()
         )),
     };
-    let (inventory, raw, records) = match prepared {
+    let (inventory, raw, records, input) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             deferred
@@ -250,6 +251,7 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
             .expect("failed case set")
             .insert(case_id.into(), format!("{error:#}"));
     } else {
+        state.prepared_socketio_input = Some(input);
         deferred
             .loaded
             .lock()
@@ -309,7 +311,9 @@ fn install(
         .http_ingress
         .register(&state.http_exchanges[http_start..]);
     if let Some(policy) = &mut state.replay_policy {
-        policy.request_contracts.observe_source(case_id, raw)?;
+        policy
+            .request_contracts
+            .observe_source(case_id, raw, Some(&inventory.index))?;
         if policy.dynamic_values.enabled() {
             policy.dynamic_values.observe_source(case_id, raw)?;
         }
@@ -329,6 +333,7 @@ fn install(
         http::observe_recorded_policy_exchanges(policy, &state.http_exchanges[http_start..]);
         memcached::observe_recorded_policy_exchanges(policy, &state.memcached);
     }
+    state.prepare_native_candidates();
     state.install_case_execution_plan(
         case_id,
         execution_plan::SourceScopeIdentity {

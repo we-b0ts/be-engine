@@ -89,6 +89,9 @@ fn sse_reused_created_at_uses_elapsed_to_each_frame_in_either_execution() {
             offset_ms: end_ms + 1,
             pending: vec![],
             clean: true,
+            missing_predecessor: None,
+            dispatch_timeout: None,
+            fast_heartbeat_eof_ms: None,
             partial_message: None,
             close: None,
         },
@@ -108,6 +111,7 @@ fn sse_reused_created_at_uses_elapsed_to_each_frame_in_either_execution() {
             compiled.global_json.as_ref(),
             streams,
             requests,
+            0,
         )
         .unwrap()
     };
@@ -220,6 +224,9 @@ json:
             offset_ms: block_offset + 2,
             pending: vec![],
             clean: true,
+            missing_predecessor: None,
+            dispatch_timeout: None,
+            fast_heartbeat_eof_ms: None,
             partial_message: None,
             close: None,
         },
@@ -244,6 +251,7 @@ json:
                 copies,
                 None,
                 false,
+                0,
             )
             .unwrap()
             .passed()

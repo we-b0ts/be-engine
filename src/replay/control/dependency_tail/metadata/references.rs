@@ -49,7 +49,7 @@ pub(in crate::replay::control::dependency_tail) fn reference(
                 .as_str()
                 .context("Source MySQL command missing")?;
             if crate::mysql::wire::is_no_response_command(command)
-                || command == "COM_PING" && event["response"]["status"] == "ok"
+                || command == "COM_PING"
                 || command == "COM_STMT_PREPARE" && event["response"]["status"] == "stmt_prepare"
             {
                 None
@@ -90,6 +90,16 @@ mod tests {
     use super::*;
     use serde_json::json;
     use uuid::Uuid;
+
+    #[test]
+    fn mysql_ping_failure_is_not_a_dispatch_obligation() {
+        let event = json!({
+            "event_type":"mysql_exchange", "connection_id":Uuid::new_v4(),
+            "query_sequence":7, "command":"COM_PING", "capture":{"semantic_required":true},
+            "response":{"status":"error","error_code":2006}
+        });
+        assert!(reference(&event).unwrap().is_none());
+    }
 
     #[test]
     fn central_redis_control_observations_are_not_finite_tail_obligations() {

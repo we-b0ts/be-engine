@@ -18,11 +18,13 @@ struct Profile {
     phase: &'static str,
     observed: usize,
     end_omission_proven: bool,
+    next_claimed: bool,
 }
 
 #[derive(Debug)]
 struct Binding {
     setup: usize,
+    candidates: BTreeSet<usize>,
     begun: bool,
     valid: bool,
     seen: BTreeSet<usize>,
@@ -93,6 +95,7 @@ impl Registry {
                     phase: "unobserved",
                     observed: 0,
                     end_omission_proven: false,
+                    next_claimed: false,
                 },
             );
         }
@@ -128,18 +131,112 @@ impl Registry {
         {
             return false;
         }
+        self.prior_restored(p, exchanges)
+            && (profile.target.is_none()
+                || !self
+                    .setup_candidates(index, connection, exchanges)
+                    .is_empty())
+    }
+
+    pub(in crate::replay::mysql) fn claim_next(&mut self, setup: usize) {
+        self.profiles
+            .get_mut(&setup)
+            .expect("matched isolation setup")
+            .next_claimed = true;
+    }
+
+    fn permits_setup_slot(profile: &Profile, exchanges: &[ReplayExchange]) -> bool {
+        let status = exchanges[profile.plan.setup].status;
+        status.is_available()
+            || profile.next_claimed
+                && matches!(
+                    status,
+                    ReplayExchangeStatus::Responding | ReplayExchangeStatus::Consumed
+                )
+    }
+
+    fn setup_candidates(
+        &self,
+        index: usize,
+        connection: Uuid,
+        exchanges: &[ReplayExchange],
+    ) -> BTreeSet<usize> {
+        let plan = &self.profiles[&index].plan;
+        self.profiles
+            .iter()
+            .filter_map(|(&setup, other)| {
+                (other.target.is_none()
+                    && other.plan.case == plan.case
+                    && other.plan.identity == plan.identity
+                    && other.plan.baseline == plan.baseline
+                    && other.plan.level == plan.level
+                    && Self::permits_setup_slot(other, exchanges)
+                    && (self.prior_restored(&other.plan, exchanges)
+                        || self.prior_in_flight(&other.plan, connection, exchanges))
+                    && exchanges[setup].record.response == exchanges[index].record.response)
+                    .then_some(setup)
+            })
+            .collect()
+    }
+
+    fn prior_restored(&self, plan: &source::Plan, exchanges: &[ReplayExchange]) -> bool {
+        self.unrestored_priors(plan, exchanges).next().is_none()
+    }
+
+    fn unrestored_priors<'a>(
+        &'a self,
+        plan: &'a source::Plan,
+        exchanges: &'a [ReplayExchange],
+    ) -> impl Iterator<Item = &'a Profile> {
         self.profiles
             .values()
             .filter(|prior| {
-                prior.plan.case == p.case
-                    && prior.plan.source_connection == p.source_connection
-                    && prior.plan.sequence < p.sequence
+                prior.plan.case == plan.case
+                    && prior.plan.source_connection == plan.source_connection
+                    && prior.plan.sequence < plan.sequence
             })
-            .all(|prior| {
+            .filter(|prior| {
                 let reset = &exchanges[prior.plan.reset];
-                reset.status.is_consumed()
-                    || reset.optional_session == Some(OptionalSessionExchange::TransactionIsolation)
+                !reset.status.is_consumed()
+                    && reset.optional_session != Some(OptionalSessionExchange::TransactionIsolation)
             })
+    }
+
+    fn prior_in_flight(
+        &self,
+        plan: &source::Plan,
+        connection: Uuid,
+        exchanges: &[ReplayExchange],
+    ) -> bool {
+        let mut priors = self.unrestored_priors(plan, exchanges).peekable();
+        priors.peek().is_some()
+            && priors.all(|prior| {
+                prior
+                    .target
+                    .filter(|target| *target != connection)
+                    .is_some_and(|target| {
+                        self.bindings.get(&target).is_some_and(|binding| {
+                            binding.setup == prior.plan.setup && binding.begun && binding.valid
+                        })
+                    })
+            })
+    }
+
+    pub(in crate::replay::mysql) fn waiting_for_prior(
+        &self,
+        connection: Uuid,
+        exchanges: &[ReplayExchange],
+    ) -> bool {
+        self.bindings.get(&connection).is_some_and(|binding| {
+            binding.begun
+                && binding.valid
+                && binding.candidates.iter().any(|setup| {
+                    let profile = &self.profiles[setup];
+                    profile.target.is_none()
+                        && Self::permits_setup_slot(profile, exchanges)
+                        && self.prior_in_flight(&profile.plan, connection, exchanges)
+                })
+        })
     }
 
     pub(in crate::replay::mysql) fn permits(
@@ -148,14 +245,31 @@ impl Registry {
         index: usize,
         exchanges: &[ReplayExchange],
     ) -> bool {
+        if let Some(binding) = self.bindings.get(&connection)
+            && !binding.candidates.is_empty()
+        {
+            return binding.begun
+                && binding.valid
+                && self.owners.get(&index).is_some_and(|setup| {
+                    let profile = &self.profiles[setup];
+                    binding.candidates.contains(setup)
+                        && profile.target.is_none()
+                        && profile.plan.required.first() == Some(&index)
+                        && Self::permits_setup_slot(profile, exchanges)
+                        && self.prior_restored(&profile.plan, exchanges)
+                });
+        }
         if let Some(profile) = self
             .owners
             .get(&index)
             .and_then(|owner| self.profiles.get(owner))
             && profile.phase != "covered"
             && (profile.target.is_some_and(|target| target != connection)
-                || profile.plan.required.contains(&index)
-                    && !exchanges[profile.plan.setup].status.is_consumed())
+                && index != profile.plan.setup
+                || profile.target.is_none()
+                    && profile.plan.required.contains(&index)
+                    && (profile.next_claimed
+                        || !exchanges[profile.plan.setup].status.is_consumed()))
         {
             return false;
         }
@@ -170,6 +284,7 @@ impl Registry {
         case: Option<&str>,
         delivery: transaction_equivalence::Delivery<'_>,
         transactions: &transaction_equivalence::Registry,
+        exchanges: &[ReplayExchange],
     ) -> Option<Vec<usize>> {
         let transaction_equivalence::Delivery {
             sql,
@@ -197,7 +312,7 @@ impl Registry {
             return None;
         }
         if let Some(index) = index
-            && let Some(profile) = self.profiles.get_mut(&index)
+            && let Some(profile) = self.profiles.get(&index)
             && crate::mysql::isolation::setting(sql) == Some((Scope::Next, profile.plan.level))
         {
             if successful
@@ -205,16 +320,29 @@ impl Registry {
                 && after & 0x200b == 2
                 && case == Some(profile.plan.case.as_str())
             {
-                profile.target = Some(connection);
-                profile.phase = "pending_begin";
-                profile.end_omission_proven = false;
+                let plan = &profile.plan;
+                // The observed NEXT setting proves a level and a socket. When
+                // two original scopes can supply the same reply, the first
+                // business operation, not the control, assigns the scope.
+                let candidates = self.setup_candidates(index, connection, exchanges);
                 self.defaults
                     .entry(connection)
-                    .or_insert(Some(profile.plan.baseline));
+                    .or_insert(Some(plan.baseline));
+                let profile = self.profiles.get_mut(&index).unwrap();
+                let candidates = if candidates.len() == 1 && candidates.contains(&index) {
+                    profile.target = Some(connection);
+                    profile.phase = "pending_begin";
+                    BTreeSet::new()
+                } else if candidates.is_empty() {
+                    return None;
+                } else {
+                    candidates
+                };
                 self.bindings.insert(
                     connection,
                     Binding {
                         setup: index,
+                        candidates,
                         begun: false,
                         valid: true,
                         seen: BTreeSet::new(),
@@ -230,13 +358,31 @@ impl Registry {
         if matches!(sql.as_str(), "begin" | "start transaction") {
             binding.valid &= !binding.begun && before & 0x200b == 2 && after & 0x200b == 3;
             binding.begun = true;
-            profile.phase = if binding.valid {
-                "active"
-            } else {
-                "invalid_begin"
-            };
+            if binding.candidates.is_empty() {
+                profile.phase = if binding.valid {
+                    "active"
+                } else {
+                    "invalid_begin"
+                };
+            }
             return None;
         }
+        if !binding.candidates.is_empty() {
+            let Some(setup) = index
+                .and_then(|index| self.owners.get(&index).copied())
+                .filter(|setup| binding.candidates.contains(setup))
+            else {
+                binding.valid = false;
+                return None;
+            };
+            binding.setup = setup;
+            binding.candidates.clear();
+            let profile = self.profiles.get_mut(&setup)?;
+            binding.valid &= profile.target.is_none() && case == Some(profile.plan.case.as_str());
+            profile.target = Some(connection);
+            profile.phase = "active";
+        }
+        let profile = self.profiles.get_mut(&binding.setup)?;
         let ending = matches!(sql.as_str(), "commit" | "rollback");
         // A read-only Source end is already optional under the transaction
         // owner. The Target must still really end this explicit transaction,
@@ -274,7 +420,7 @@ impl Registry {
                     .reassertions
                     .iter()
                     .copied()
-                    .chain([profile.plan.reset])
+                    .chain([profile.plan.setup, profile.plan.reset])
                     .collect()
             });
             self.bindings.remove(&connection);
@@ -290,7 +436,9 @@ impl Registry {
     pub(in crate::replay::mysql) fn reject_connection(&mut self, connection: Uuid) {
         if let Some(binding) = self.bindings.get_mut(&connection) {
             binding.valid = false;
-            self.profiles.get_mut(&binding.setup).unwrap().phase = "unmatched_request";
+            if binding.candidates.is_empty() {
+                self.profiles.get_mut(&binding.setup).unwrap().phase = "unmatched_request";
+            }
         }
     }
 

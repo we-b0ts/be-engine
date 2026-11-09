@@ -174,7 +174,9 @@ fn equal_error_response_status_still_validates_selected_fields_strictly() {
                 json!([])
             );
         } else {
-            assert!(planned.is_err());
+            let report = planned.unwrap().traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(report["preflight"]["independent_target_validations"], 0);
         }
     }
 }

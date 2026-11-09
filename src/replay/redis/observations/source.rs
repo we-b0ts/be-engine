@@ -129,7 +129,7 @@ pub(super) fn prepare(
     }
     if kind == Kind::AbsentRead {
         super::absence::validate_causal_order(&timeline)?;
-    } else {
+    } else if kind != Kind::StateRead {
         validate_causal_order(&timeline)?;
     }
     if kind == Kind::AbsentRead {
@@ -145,6 +145,9 @@ pub(super) fn prepare(
         }
         let first_set =
             first_set.context("read observations have no supported successful Case SET")?;
+        if kind == Kind::StateRead {
+            validate_causal_epochs(&timeline, Some(first_set))?;
+        }
         let mut unknown_prefix = false;
         for (_, exchange) in &timeline[..first_set] {
             if exchange.record.command == "GET" {
@@ -185,7 +188,18 @@ pub(super) fn prepare(
     let first = timeline
         .first()
         .and_then(|(_, e)| e.record.earliest_start());
-    let last = timeline.last().and_then(|(_, e)| e.record.timestamp);
+    let last = timeline.last().and_then(|(_, e)| {
+        let last = e.record.timestamp?;
+        Some(if kind == Kind::StateRead {
+            timeline
+                .iter()
+                .filter_map(|(_, e)| e.record.timestamp)
+                .max()
+                .unwrap_or(last)
+        } else {
+            last
+        })
+    });
     for (index, e) in timeline {
         let response = e.response_bytes()?;
         ensure!(
@@ -409,9 +423,25 @@ fn observes_absence(exchange: &ReplayExchange, key: &[u8], response: &[u8]) -> b
 pub(in crate::replay::redis) fn validate_causal_order(
     timeline: &[(usize, &ReplayExchange)],
 ) -> Result<()> {
+    validate_causal_epochs(timeline, None)
+}
+
+fn validate_causal_epochs(
+    timeline: &[(usize, &ReplayExchange)],
+    owned_from: Option<usize>,
+) -> Result<()> {
     let mut lanes = BTreeMap::new();
-    let mut previous: Option<&ReplayExchange> = None;
-    for (_, exchange) in timeline {
+    let mut boundary = None;
+    // Keep the latest completing read on every lane. A short overlapping
+    // GET cannot hide a longer read from the next mutation's barrier.
+    let mut reads = BTreeMap::<_, &ReplayExchange>::new();
+    let multiple_lanes = owned_from.is_some()
+        && timeline.first().is_some_and(|(_, first)| {
+            timeline
+                .iter()
+                .any(|(_, exchange)| exchange.record.connection_id != first.record.connection_id)
+        });
+    for (position, (_, exchange)) in timeline.iter().enumerate() {
         if let Some(sequence) =
             lanes.insert(exchange.record.connection_id, exchange.record.sequence)
         {
@@ -420,10 +450,34 @@ pub(in crate::replay::redis) fn validate_causal_order(
                 "state observation Source clocks reverse a lane"
             );
         }
-        if let Some(before) = previous {
+        if multiple_lanes {
+            ensure!(
+                exchange
+                    .record
+                    .earliest_start()
+                    .zip(exchange.record.timestamp)
+                    .is_some_and(|(start, end)| start <= end),
+                "concurrent owned state observations require complete Source clocks"
+            );
+        }
+        if let Some(before) = boundary {
             require_causal_order(before, exchange)?;
         }
-        previous = Some(exchange);
+        if owned_from.is_some_and(|first_set| position > first_set)
+            && exchange.record.command == "GET"
+        {
+            let read = reads
+                .entry(exchange.record.connection_id)
+                .or_insert(exchange);
+            if read.record.timestamp < exchange.record.timestamp {
+                *read = exchange;
+            }
+        } else {
+            for read in std::mem::take(&mut reads).into_values() {
+                require_causal_order(read, exchange)?;
+            }
+            boundary = Some(exchange);
+        }
     }
     Ok(())
 }

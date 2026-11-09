@@ -1,4 +1,4 @@
-//! Finite remote Socket.IO calls proven by a Global request and a Case reply.
+//! Finite remote Socket.IO calls proven by original Redis and Case evidence.
 use super::*;
 use crate::dependency_index::RecordRef;
 use crate::replay::ReplayCase;
@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 mod causal;
 mod driver;
 mod preparation;
+mod unanswered;
 pub(in crate::replay) use driver::start;
 
 type Wire = (Uuid, u64);
@@ -40,6 +41,7 @@ impl Frame {
 struct Entry {
     case: String,
     source: rpc::Identity,
+    reply: Option<Wire>,
     target_sid: Option<String>,
     endpoint: TargetKey,
     channel: Vec<u8>,
@@ -49,7 +51,7 @@ struct Entry {
     offset: chrono::TimeDelta,
     ordinal: usize,
     reserved: bool,
-    delivered: bool,
+    delivered_at: Option<tokio::time::Instant>,
     failed: bool,
     prerequisites: Vec<causal::Prerequisite>,
 }
@@ -95,7 +97,11 @@ impl Ingress {
             .callbacks
             .get(&(exchange.record.connection_id, exchange.record.sequence))?;
         let entry = &self.entries[index];
-        if !entry.delivered || entry.failed || args.len() != 2 || args[0] != entry.channel {
+        if entry.delivered_at.is_none()
+            || entry.failed
+            || args.len() != 2
+            || args[0] != entry.channel
+        {
             return None;
         }
         let (actual, actual_value) = rpc::callback(&args[1]).ok().flatten()?;
@@ -136,8 +142,9 @@ impl PubSubState {
             return false;
         };
         self.ingress.entries.iter().any(|entry| {
-            entry.reserved
-                && !entry.delivered
+            entry.reply.is_some()
+                && entry.reserved
+                && entry.delivered_at.is_none()
                 && !entry.failed
                 && Some(entry.case.as_str()) == case
                 && entry.endpoint == *endpoint
@@ -152,7 +159,7 @@ impl PubSubState {
     pub(super) fn complete_ingress(&mut self, slot: PushId) {
         for entry in &mut self.ingress.entries {
             if entry.slot == slot {
-                entry.delivered = true;
+                entry.delivered_at = Some(tokio::time::Instant::now());
             }
         }
     }

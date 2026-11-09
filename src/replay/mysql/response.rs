@@ -74,76 +74,109 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
     status_flags: u16,
 ) -> Result<()> {
     super::wire_diagnostics::response_kind("prepare_ok_and_metadata", Some(status_flags));
+    if !super::wire_diagnostics::active()
+        && let Some(encoded) = metadata
+            .prepare_wire
+            .get_or_init(|| EncodedPrepare::new(metadata).map(Arc::new))
+    {
+        let mut bytes = encoded.bytes.clone();
+        // Four header bytes and the leading OK byte precede the statement ID.
+        bytes[5..9].copy_from_slice(&statement_id.to_le_bytes());
+        for &offset in &encoded.status_offsets {
+            bytes[offset..offset + 2].copy_from_slice(&status_flags.to_le_bytes());
+        }
+        stream
+            .write_all(&bytes)
+            .await
+            .context("failed to write MySQL prepare metadata")?;
+        return flush_response(stream, "failed to flush MySQL prepare metadata").await;
+    }
+
     let mut sequence_id = 1_u8;
-    sequence_id = write_packet(
-        stream,
-        MysqlPacket {
-            sequence_id,
-            payload: stmt_prepare_ok_payload(
-                statement_id,
-                metadata.columns.len() as u16,
-                metadata.param_count as u16,
-            ),
-        },
-    )
-    .await?;
-
-    for index in 0..metadata.param_count {
+    for (payload, _) in prepare_messages(metadata, statement_id, status_flags) {
         sequence_id = write_packet(
             stream,
             MysqlPacket {
                 sequence_id,
-                payload: column_definition_payload(&RecordedMysqlColumn {
-                    database: None,
-                    name: format!("param_{}", index + 1),
-                    table: None,
-                    table_alias: None,
-                    column: None,
-                    family: "string".to_string(),
-                    sql_type: "VARCHAR".to_string(),
-                    unsigned: None,
-                    bits: None,
-                    nullable: Some(true),
-                    scale: None,
-                }),
+                payload,
             },
         )
         .await?;
     }
-    if metadata.param_count > 0 {
-        sequence_id = write_packet(
-            stream,
-            MysqlPacket {
-                sequence_id,
-                payload: eof_payload_with_status(status_flags),
-            },
-        )
-        .await?;
-    }
-
-    for column in &metadata.columns {
-        sequence_id = write_packet(
-            stream,
-            MysqlPacket {
-                sequence_id,
-                payload: column_definition_payload(column),
-            },
-        )
-        .await?;
-    }
-    if !metadata.columns.is_empty() {
-        write_packet(
-            stream,
-            MysqlPacket {
-                sequence_id,
-                payload: eof_payload_with_status(status_flags),
-            },
-        )
-        .await?;
-    }
-    // TLS may accept writes into its buffer without sending every packet.
-    // Deliver the complete metadata response before waiting for EXECUTE.
+    // TLS may buffer writes. Deliver the complete metadata before waiting for EXECUTE.
     flush_response(stream, "failed to flush MySQL prepare metadata").await
+}
+
+#[derive(Debug)]
+pub(super) struct EncodedPrepare {
+    bytes: Vec<u8>,
+    status_offsets: Vec<usize>,
+}
+
+impl EncodedPrepare {
+    fn new(metadata: &StatementMetadata) -> Option<Self> {
+        let mut bytes = Vec::new();
+        let mut status_offsets = Vec::new();
+        for (index, (payload, eof)) in prepare_messages(metadata, 0, 0).enumerate() {
+            let packet = MysqlPacket {
+                sequence_id: (index as u8).wrapping_add(1),
+                payload,
+            };
+            let end = bytes.len().checked_add(packet.encoded_len())?;
+            if end > 64 * 1024 {
+                return None;
+            }
+            if eof {
+                status_offsets.push(end - 2);
+            }
+            bytes.extend(packet.to_wire_bytes());
+        }
+        Some(Self {
+            bytes,
+            status_offsets,
+        })
+    }
+}
+
+fn prepare_messages(
+    metadata: &StatementMetadata,
+    statement_id: u32,
+    status_flags: u16,
+) -> impl Iterator<Item = (Vec<u8>, bool)> + '_ {
+    let head = stmt_prepare_ok_payload(
+        statement_id,
+        metadata.columns.len() as u16,
+        metadata.param_count as u16,
+    );
+    let params = (0..metadata.param_count).map(|index| {
+        (
+            column_definition_payload(&RecordedMysqlColumn {
+                database: None,
+                name: format!("param_{}", index + 1),
+                table: None,
+                table_alias: None,
+                column: None,
+                family: "string".to_string(),
+                sql_type: "VARCHAR".to_string(),
+                unsigned: None,
+                bits: None,
+                nullable: Some(true),
+                scale: None,
+            }),
+            false,
+        )
+    });
+    let eof = || (eof_payload_with_status(status_flags), true);
+    std::iter::once((head, false))
+        .chain(params)
+        .chain((metadata.param_count > 0).then(eof))
+        .chain(
+            metadata
+                .columns
+                .iter()
+                .map(|column| (column_definition_payload(column), false)),
+        )
+        .chain((!metadata.columns.is_empty()).then(eof))
 }
 
 pub(in crate::replay) async fn write_resultset(

@@ -1,4 +1,4 @@
-//! Original input namespaces and lifecycle bounds, never response frames.
+//! Original namespaces, lifecycle bounds and protocol checkpoints for native delivery.
 use super::*;
 use crate::interaction::{
     model::{InputActionKind, InputTranscript, Protocol},
@@ -8,6 +8,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::io::BufReader;
 
+mod checkpoints;
+
 pub(super) struct Window {
     pub case: String,
     pub start: Option<DateTime<Utc>>,
@@ -15,14 +17,47 @@ pub(super) struct Window {
     pub end: Option<DateTime<Utc>>,
     pub namespaces: BTreeSet<String>,
     pub projectable: bool,
-    pub inputs: Vec<(u64, u64)>,
-    pub untracked_at_ms: Option<u64>,
+    pub inputs: Vec<InputClock>,
+    fences: Vec<Fence>,
     pub selected: bool,
 }
 
 struct TrackedInputs {
-    acknowledgements: Vec<(u64, u64)>,
-    untracked_at_ms: Option<u64>,
+    acknowledgements: Vec<InputClock>,
+    ack_ids: BTreeMap<u64, (u64, u64)>,
+    unacknowledged: Vec<(u64, u64)>,
+    close_ms: Option<u64>,
+}
+
+pub(super) struct InputClock {
+    pub sequence: u64,
+    pub offset_ms: u64,
+    pub offset_us: Option<u64>,
+}
+
+struct Fence {
+    from_ms: u64,
+    resume_after_ms: Option<u64>,
+}
+
+impl Window {
+    pub(super) fn delivery_cutoff(&self, offset: chrono::TimeDelta) -> Option<chrono::TimeDelta> {
+        let end = self.end? - self.start?;
+        let offset_ms = u64::try_from(offset.num_milliseconds()).ok()?;
+        for fence in &self.fences {
+            if offset_ms < fence.from_ms {
+                let boundary = chrono::TimeDelta::try_milliseconds(fence.from_ms.try_into().ok()?)?;
+                return Some(end.min(boundary));
+            }
+            if fence
+                .resume_after_ms
+                .is_none_or(|resume| offset_ms <= resume)
+            {
+                return None;
+            }
+        }
+        Some(end)
+    }
 }
 
 #[derive(Deserialize)]
@@ -83,13 +118,18 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
             .ok()
             .filter(|input| input.validate().is_ok());
         let namespaces = input.as_ref().map(namespaces).unwrap_or_default();
-        let response = if !complete {
-            None
-        } else {
-            match read::<Response>(&directory.join("expected-response.json"))? {
-                Some(response) => Some(response),
-                None => read::<Response>(&directory.join("expected_response.json"))?,
+        let (response_path, response) = if complete {
+            let preferred = directory.join("expected-response.json");
+            match read::<Response>(&preferred)? {
+                Some(response) => (preferred, Some(response)),
+                None => {
+                    let legacy = directory.join("expected_response.json");
+                    let response = read::<Response>(&legacy)?;
+                    (legacy, response)
+                }
             }
+        } else {
+            (directory.join("expected-response.json"), None)
         };
         let completion = response.as_ref().and_then(|r| r.interaction.as_ref());
         let end = completion.and_then(|c| c.end.as_ref());
@@ -127,11 +167,7 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
         }) && ((end.and_then(|end| end.reason)
             == Some(crate::interaction::model::EndReason::ClientTransportEnd))
             == transport_end.is_some());
-        // Only the prefix preceding an input without an ACK is projectable.
-        // Retain later ACK identities for actual transport receipts, without
-        // using them to grant notifications beyond that prefix.
         let inputs = input.as_ref().and_then(tracked_inputs);
-        let untracked_at_ms = inputs.as_ref().and_then(|inputs| inputs.untracked_at_ms);
         let projectable = complete
             && clean
             && start.zip(closed_at).is_some_and(|(start, end)| end > start)
@@ -145,6 +181,13 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
                         }) && end <= input.policy.max_duration_ms
                     })
             });
+        let selected = selected.contains_key(&case);
+        let fences = match (&input, &inputs, window_elapsed) {
+            (Some(input), Some(inputs), Some(end)) if selected && projectable => {
+                checkpoints::fences(input, inputs, &response_path, end)?
+            }
+            _ => Vec::new(),
+        };
         let connected_after = input
             .as_ref()
             .and_then(|input| input.actions.first())
@@ -154,7 +197,7 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
                     .and_then(|start| start.checked_add_signed(chrono::TimeDelta::milliseconds(ms)))
             });
         windows.push(Window {
-            selected: selected.contains_key(&case),
+            selected,
             case,
             start,
             connected_after,
@@ -164,7 +207,7 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
             inputs: inputs
                 .map(|inputs| inputs.acknowledgements)
                 .unwrap_or_default(),
-            untracked_at_ms,
+            fences,
         });
         ensure!(
             windows.len() <= 16_384,
@@ -195,9 +238,10 @@ fn tracked_inputs(input: &InputTranscript) -> Option<TrackedInputs> {
     if connect.kind != SocketIoKind::Connect {
         return None;
     }
-    let mut ids = BTreeSet::new();
+    let mut ack_ids = BTreeMap::new();
     let mut inputs = Vec::new();
-    let mut untracked_at_ms = None;
+    let mut unacknowledged = Vec::new();
+    let mut close_ms = None;
     for action in input.actions.iter().skip(1) {
         if matches!(action.action, InputActionKind::TransportEnd { .. }) {
             // InputTranscript::validate confines this independent physical end
@@ -205,7 +249,7 @@ fn tracked_inputs(input: &InputTranscript) -> Option<TrackedInputs> {
             continue;
         }
         if matches!(action.action, InputActionKind::Close { .. }) {
-            untracked_at_ms.get_or_insert(action.offset_ms);
+            close_ms.get_or_insert(action.offset_ms);
             continue;
         }
         let event = match packet(action)? {
@@ -215,10 +259,19 @@ fn tracked_inputs(input: &InputTranscript) -> Option<TrackedInputs> {
                 // Socket.IO ACK and must not disable unrelated native inputs.
                 continue;
             }
+            EngineIoPacket::Message(event)
+                if event.kind == SocketIoKind::Disconnect
+                    && event.namespace == connect.namespace
+                    && close_ms.is_none() =>
+            {
+                close_ms = Some(action.offset_ms);
+                continue;
+            }
             EngineIoPacket::Message(event) => event,
             _ => return None,
         };
-        if event.kind != SocketIoKind::Event
+        if close_ms.is_some()
+            || event.kind != SocketIoKind::Event
             || event.attachments != 0
             || event.namespace != connect.namespace
             || matches!(
@@ -231,17 +284,26 @@ fn tracked_inputs(input: &InputTranscript) -> Option<TrackedInputs> {
             return None;
         }
         let Some(id) = event.id else {
-            untracked_at_ms.get_or_insert(action.offset_ms);
+            unacknowledged.push((action.sequence, action.offset_ms));
             continue;
         };
-        if !ids.insert(id) {
+        if ack_ids
+            .insert(id, (action.sequence, action.offset_ms))
+            .is_some()
+        {
             return None;
         }
-        inputs.push((action.sequence, action.offset_ms));
+        inputs.push(InputClock {
+            sequence: action.sequence,
+            offset_ms: action.offset_ms,
+            offset_us: action.offset_us,
+        });
     }
     Some(TrackedInputs {
         acknowledgements: inputs,
-        untracked_at_ms,
+        ack_ids,
+        unacknowledged,
+        close_ms,
     })
 }
 

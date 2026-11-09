@@ -7,7 +7,7 @@ use std::fs;
 use uuid::Uuid;
 
 #[test]
-fn verification_always_rehashes_and_rejects_same_length_tampering_without_a_time_delay() {
+fn recent_evidence_rehashes_and_rejects_same_length_tampering_without_a_time_delay() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("evidence.json");
     fs::write(&path, "original").unwrap();
@@ -32,7 +32,7 @@ fn verification_always_rehashes_and_rejects_same_length_tampering_without_a_time
 }
 
 #[test]
-fn scoped_verification_rehashes_original_ledger_after_same_length_tampering() {
+fn sealed_scope_checks_its_original_ledger_without_rehashing() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("recording-run.json"), "{}").unwrap();
     let original = b"{\"number\":1}\n";
@@ -61,6 +61,7 @@ fn scoped_verification_rehashes_original_ledger_after_same_length_tampering() {
         .unwrap(),
     )
     .unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(2));
     let artifact = Artifact::capture(&path).unwrap();
     reset_capture_stats();
     artifact.verify().unwrap();
@@ -73,5 +74,5 @@ fn scoped_verification_rehashes_original_ledger_after_same_length_tampering() {
         .set_times(fs::FileTimes::new().set_modified(modified))
         .unwrap();
     assert!(artifact.verify().is_err());
-    assert_eq!(capture_stats()[&path].0, 2);
+    assert!(capture_stats().is_empty());
 }

@@ -1,7 +1,7 @@
 //! Session admission and transparent transport for bounded primary interactions.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -58,6 +58,7 @@ pub(super) struct Session {
     observation: Mutex<Observation>,
     started: Instant,
     close: watch::Sender<Option<EndReason>>,
+    close_requested_at: OnceLock<Instant>,
     changed: Notify,
     upstream: String,
     original_uri: Uri,
@@ -77,7 +78,6 @@ pub(super) type SessionRef = Arc<Session>;
 
 impl Session {
     fn observe_input(&self, message: crate::interaction::model::WireMessage) -> Result<()> {
-        let now = self.now();
         let dependency = self
             .state
             .inner
@@ -87,9 +87,10 @@ impl Session {
             .observation
             .lock()
             .expect("interaction observation poisoned");
+        let now = self.started.elapsed();
         if let Some((in_flight, last)) = dependency {
             let activity = if in_flight > 0 {
-                now
+                now.as_millis().try_into().unwrap_or(u64::MAX)
             } else {
                 last.saturating_duration_since(self.started)
                     .as_millis()
@@ -109,6 +110,7 @@ impl Session {
             .unwrap_or(u64::MAX)
     }
     fn request_close(&self, reason: EndReason) {
+        self.close_requested_at.get_or_init(Instant::now);
         self.close.send_replace(Some(reason));
         self.changed.notify_one();
     }
@@ -304,6 +306,7 @@ pub(crate) async fn handle(
         observation: Mutex::new(observation),
         started,
         close,
+        close_requested_at: OnceLock::new(),
         changed: Notify::new(),
         upstream: config.matched_upstream.clone(),
         original_uri: uri.clone(),
@@ -400,6 +403,7 @@ pub(super) async fn adopt_response(
         observation: Mutex::new(observation),
         started,
         close,
+        close_requested_at: OnceLock::new(),
         changed: Notify::new(),
         upstream,
         original_uri: original_uri.clone(),

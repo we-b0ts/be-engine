@@ -8,6 +8,13 @@ use crate::interaction::{
     socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text},
 };
 
+pub(super) fn disconnects(action: &InputAction, limit: usize) -> bool {
+    matches!(&action.action, InputActionKind::Message { message }
+        if message.kind == MessageKind::Text
+        && matches!(decode_engine_io_text(&message.data, limit),
+            Ok(EngineIoPacket::Message(packet)) if packet.kind == SocketIoKind::Disconnect))
+}
+
 #[derive(Default)]
 pub(super) struct Admission {
     pending: BTreeSet<String>,

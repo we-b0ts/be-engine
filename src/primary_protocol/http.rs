@@ -54,7 +54,7 @@ impl NativePrimaryAdapter for HttpPrimary<'_> {
         .with_socketio_timing(context.settings.socketio_timing)
         .with_request_rule_runtime(context.request_rules.clone())
         .with_input_registration(context.session_path, context.case_id)
-        .send_bytes(self.bytes, &context.request_path.display().to_string())
+        .send_recorded_bytes(self.bytes, context.request_path)
         .await?;
         Ok(PrimaryOutput {
             api: self.api.clone(),

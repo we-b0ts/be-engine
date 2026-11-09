@@ -174,7 +174,15 @@ Fast replay aligns plain Socket.IO ACKs by namespace and original client event
 ID. ACKs can cross same-namespace text events when the request was already
 pending and the recorded input has no conflicting completion or transport
 boundary. Business events are compared in their original relative order.
-Packet counts, arguments and stream termination still use ordinary assertions.
+When a Source heartbeat timeout qualifies for fast replay, the engine enters
+the terminal heartbeat phase after dispatching the recorded inputs. It defers
+each Engine.IO Pong until a later business frame arrives within the Target's
+advertised timeout. For a proven passive Pub/Sub prefix, recent delivery to
+the real subscription also keeps the connection open while earlier native
+slots are still draining. If there is no later frame, Target closes the actual
+connection and runs its own disconnect handler. Case ownership remains active
+while disconnect traffic is observed. Earlier assertion and dependency
+differences remain in the report.
 
 If actual execution cleanup fails after Replay readiness, the runner stops Target and asks
 Replay to publish an interrupted diagnostic snapshot before stopping its process.
@@ -1935,6 +1943,8 @@ retain their existing lifecycle timing.
 
 The same fast setting and interval cap accelerate supported
 [Socket.IO input gaps and completed quiet tails](interaction-recording.md#completion-profiles).
+Managed fast replay caps each Case's execution and dependency wait at 120
+seconds from Case activation. Cleanup retains its own budget after a failure.
 
 `replay_timing: recorded` preserves Source stream timing; omitting it has the same
 behavior. The low-level equivalents are
@@ -2524,9 +2534,7 @@ also generates a runnable readiness-only Rust target using `http-server`
 route through `#[api(auth = none)]` and `#[http_server::get(...)]`, returns
 an empty `200` response, and starts with `Server::bind` / `serve_until` for
 graceful shutdown. The generated route must be a literal path without captures,
-query, fragment, whitespace, or a trailing slash (except `/`). Implement
-business APIs with the same macros in their owning modules and combine them
-with `http_server::Router::new(ReadinessApi).merge(business_api)`.
+query, fragment, whitespace, or a trailing slash (except `/`).
 The bootstrap also includes a temporary `src/startup_probe.rs` initialization
 module. Keep that module and its
 `src/main.rs` call through initialization preflight, then delete the module,

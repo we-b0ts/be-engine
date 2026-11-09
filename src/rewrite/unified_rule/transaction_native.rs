@@ -50,12 +50,15 @@ fn native_response_and_global_formats_share_the_public_strict_payload_transactio
             json!({"format":"traffic-policy/v3","json":super::super::rule()["json"],"rules":[generated()]}),
         );
         fixture.confirm();
-        let planned = fixture.plan();
+        let planned = fixture.plan().unwrap();
         if changed_business {
-            assert!(planned.is_err());
+            assert_eq!(planned.traffic_e2e_report["status"], "planned_needs_replay");
+            assert_eq!(
+                planned.traffic_e2e_report["preflight"]["independent_target_validations"],
+                0
+            );
             continue;
         }
-        let planned = planned.unwrap();
         assert_eq!(
             planned.traffic_e2e_report["expanded_rules"]
                 .as_array()

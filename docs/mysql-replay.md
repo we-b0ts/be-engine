@@ -131,9 +131,10 @@ independent probe must have completed strictly before the new scope starts;
 sequence numbers from different connections are never compared. Same-connection
 proof retains its original wire order. Every intervening scope wire sequence,
 physical identity, successful response and transaction-status transition must
-be present. The supported Source scope has one implicit transaction; gaps,
-failures, savepoints, lifecycle cleanup, another transaction or an ambiguous
-baseline retain ordinary strict matching. Preparation is bounded to 128 scopes
+be present. The supported Source scope has one implicit transaction. Proven
+savepoint controls stay required members of that transaction. Gaps, failures,
+lifecycle cleanup, another transaction or an ambiguous baseline retain ordinary
+strict matching. Preparation is bounded to 128 scopes
 per Case, 260 exchanges per scope and 4096 installed scopes and baseline connections.
 
 Target can instead send `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` as
@@ -367,7 +368,8 @@ inconsistent or active boundary status still keep setup required. Global
 evidence retains its stricter post-read sequence continuity.
 Recorder retains semantic COM_PING
 exchanges as continuity evidence, although they are not required business
-dependencies. A complete successful, zero-effect PING with unchanged transaction
+dependencies. Replay answers COM_PING with a built-in OK response. A complete
+successful, zero-effect PING with unchanged transaction
 status preserves that proof, including inside an active read transaction.
 Unknown gaps inside active transactions remain strict.
 This read-only setup check is scoped to one immutable dependency file and does

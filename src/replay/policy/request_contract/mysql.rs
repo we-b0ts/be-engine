@@ -1,12 +1,72 @@
 //! Source-scoped SQL value rules, complete witnesses and atomic accounting.
 use super::*;
+use crate::mysql::sql::{Token, bounds::statement_shared};
 use crate::policy::{CompiledRule, Protocol, Slot, Surface};
 use crate::policy_evidence::{
-    ClockPair, SourceIdentity, SourceRole, TargetRole, WitnessClocks, WitnessMetadata,
+    ClockPair, PreparedRequestSource, SourceIdentity, SourceRole, TargetRole, WitnessClocks,
+    WitnessMetadata,
 };
 use crate::replay::{RecordedMysqlExchange, RecordedMysqlValue, ReplaySessionIdentity};
 use crate::value_contract::json::AnchorClocks;
 impl RequestContracts {
+    pub(in crate::replay) fn prepare_mysql_request_source(
+        &self,
+        case: &str,
+        exchange: &crate::replay::mysql::ReplayExchange,
+        source_case_start: Option<DateTime<Utc>>,
+    ) -> Result<Option<PreparedRequestSource>> {
+        let Some(store) = &self.witnesses else {
+            return Ok(None);
+        };
+        let identity = ReplaySessionIdentity {
+            target: Some(exchange.identity.target.clone()),
+            database: exchange.identity.database.clone(),
+            username: exchange.identity.username.clone(),
+        };
+        let mut clocks = AnchorClocks::default();
+        clocks.case.source = source_case_start;
+        clocks.dependency.source =
+            crate::replay::mysql::contracts::source_started(&exchange.record);
+        store.prepare_request_source(&self.mysql_metadata(
+            case,
+            &identity,
+            &exchange.record,
+            (Surface::DependencyRequest, Slot::SqlValue(0)),
+            TargetRole::Unavailable,
+            clocks,
+        ))
+    }
+
+    pub(in crate::replay) fn prepare_mysql_candidate_witness(
+        &self,
+        case: &str,
+        observation_id: uuid::Uuid,
+        observed: DateTime<Utc>,
+    ) -> Result<crate::replay::mysql::contracts::CandidateWitness> {
+        use crate::value_contract::time::ClockPair;
+        let anchor = self.anchor(case)?;
+        let target = self
+            .witnesses
+            .as_ref()
+            .context("MySQL candidate witness store is missing")?
+            .prepare_request_association(&observation_id.to_string())?;
+        Ok(crate::replay::mysql::contracts::CandidateWitness {
+            target,
+            key_context: anchor.dir,
+            clocks: AnchorClocks::for_request(
+                ClockPair {
+                    source: anchor.recorded,
+                    target: anchor.actual,
+                },
+                ClockPair {
+                    source: None,
+                    target: Some(observed),
+                },
+                ClockPair::default(),
+            ),
+        })
+    }
+
     pub(in crate::replay) fn has_mysql_formats(
         &self,
         identity: &ReplaySessionIdentity,
@@ -95,11 +155,11 @@ impl RequestContracts {
         ) else {
             return false;
         };
-        let Some(actual) = crate::mysql::sql::bounds::statement(sql) else {
+        let Some(actual) = crate::mysql::sql::bounds::statement_shared(sql) else {
             return false;
         };
         source.len() == actual.len()
-            && source.iter().zip(&actual).all(|(source, actual)| {
+            && source.iter().zip(actual.iter()).all(|(source, actual)| {
                 source == actual
                     || (source.is_value()
                         && (actual.is_value() || *actual == crate::mysql::sql::Token::Placeholder))
@@ -117,22 +177,54 @@ impl RequestContracts {
         observed: DateTime<Utc>,
         runtime: &super::super::matcher::ReplayPolicyRuntime,
     ) -> Option<Result<super::super::matcher::DependencyRuleDecision, String>> {
+        self.preview_mysql_values_with_format_cache(
+            case,
+            identity,
+            record,
+            command,
+            sql,
+            params,
+            observed,
+            runtime,
+            None,
+            || sql.and_then(statement_shared),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::replay) fn preview_mysql_values_with_format_cache(
+        &self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        record: &RecordedMysqlExchange,
+        command: &str,
+        sql: Option<&str>,
+        params: Option<&[RecordedMysqlValue]>,
+        observed: DateTime<Utc>,
+        runtime: &super::super::matcher::ReplayPolicyRuntime,
+        source_formats: Option<&mut Option<bool>>,
+        target_tokens: impl FnOnce() -> Option<std::sync::Arc<Vec<Token>>>,
+    ) -> Option<Result<super::super::matcher::DependencyRuleDecision, String>> {
+        let native = self.mysql_native_value_rules(case, identity, record);
+        let automatic = self
+            .compiled_rules()
+            .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some());
+        if native.is_empty()
+            && (automatic.is_none() || source_formats.as_deref() == Some(&Some(false)))
+        {
+            return None;
+        }
         // Most candidates differ in statement/table shape. Reject those before
         // selecting field contracts or touching the AST analysis cache.
         let token_pair = (
-            record
-                .sql
-                .as_deref()
-                .and_then(crate::mysql::sql::bounds::statement),
-            sql.and_then(crate::mysql::sql::bounds::statement),
+            record.sql.as_deref().and_then(statement_shared),
+            target_tokens(),
         );
-        let scalar = |token: &crate::mysql::sql::Token| {
-            token.is_value() || *token == crate::mysql::sql::Token::Placeholder
-        };
+        let scalar = |token: &Token| token.is_value() || *token == Token::Placeholder;
         let related = match &token_pair {
             (Some(source), Some(actual)) => {
                 source.len() == actual.len()
-                    && source.iter().zip(actual).all(|(source, actual)| {
+                    && source.iter().zip(actual.iter()).all(|(source, actual)| {
                         source == actual || scalar(source) && scalar(actual)
                     })
             }
@@ -143,10 +235,7 @@ impl RequestContracts {
             // Retain their failed preview rather than disguising a wrong-table
             // Target request as an inapplicable rule. Generic field candidates
             // still skip AST work on unrelated statement shapes.
-            if self
-                .mysql_native_value_rules(case, identity, record)
-                .is_empty()
-            {
+            if native.is_empty() {
                 return None;
             }
             return Some(Err(
@@ -154,18 +243,14 @@ impl RequestContracts {
             ));
         }
         let rules = Vec::<&CompiledRule>::new();
-        let native = self.mysql_native_value_rules(case, identity, record);
-        let automatic = self
-            .compiled_rules()
-            .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some());
         // A global format map is not a positional SQL contract. If it selects
         // no Source value, retain ordinary predicate/projection compatibility
         // instead of rejecting an otherwise equivalent IN-list permutation.
-        if rules.is_empty()
-            && native.is_empty()
-            && (automatic.is_none() || !self.has_mysql_formats(identity, record))
-        {
-            return None;
+        if native.is_empty() {
+            let detect = || self.has_mysql_formats(identity, record);
+            if !source_formats.map_or_else(detect, |cached| *cached.get_or_insert_with(detect)) {
+                return None;
+            }
         }
         Some(
             (|| {

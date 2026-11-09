@@ -1,5 +1,5 @@
 //! Explicit client endings retain pending work without inventing completions.
-use super::Observation;
+use super::{InputTime, Observation};
 use crate::interaction::model::{
     ClientTransportEnd, CloseObservation, InputAction, InputActionKind, Protocol,
 };
@@ -10,8 +10,9 @@ impl Observation {
         &mut self,
         code: Option<u16>,
         reason: String,
-        now_ms: u64,
+        now: impl Into<InputTime>,
     ) -> Result<InputAction> {
+        let InputTime { ms: now_ms, us } = now.into();
         self.ensure_client_transport_open()?;
         let completed = self
             .close_barrier
@@ -24,6 +25,7 @@ impl Observation {
         let action = InputAction {
             sequence: self.next_input,
             offset_ms: now_ms,
+            offset_us: us,
             after: completed.map_or_else(Vec::new, |(ids, _)| ids.clone()),
             compressible_gap: false,
             gap_start_ms: completed.map(|(_, at)| *at),
@@ -53,7 +55,12 @@ impl Observation {
 
     /// Record only an actually observed end at complete logical-message boundaries.
     /// The transport owner separately proves raw framing and Source cleanup.
-    pub fn client_transport_end(&mut self, end: ClientTransportEnd, now_ms: u64) -> Result<()> {
+    pub fn client_transport_end(
+        &mut self,
+        end: ClientTransportEnd,
+        now: impl Into<InputTime>,
+    ) -> Result<()> {
+        let InputTime { ms: now_ms, us } = now.into();
         self.ensure_client_transport_open()?;
         ensure!(
             matches!(self.protocol, Protocol::SocketIo | Protocol::WebSocket),
@@ -71,6 +78,7 @@ impl Observation {
         self.input.actions.push(InputAction {
             sequence: self.next_input,
             offset_ms: now_ms,
+            offset_us: us,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,

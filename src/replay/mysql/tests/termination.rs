@@ -180,7 +180,7 @@ async fn a_target_fin_before_server_deadline_is_dirty_and_unconsumed() {
 }
 
 #[tokio::test]
-async fn ping_server_reset_is_not_replaced_by_builtin_ok() {
+async fn ping_returns_builtin_ok_even_when_source_reset() {
     let temp = tempdir().unwrap();
     let case_dir = temp.path().join("case-id");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -206,22 +206,24 @@ async fn ping_server_reset_is_not_replaced_by_builtin_ok() {
         },
     )
     .await;
-    let error = tokio::time::timeout(
+    let packet = tokio::time::timeout(
         std::time::Duration::from_millis(200),
         read_packet(&mut client),
     )
     .await
     .unwrap()
-    .unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+    .unwrap()
+    .unwrap();
+    assert_eq!(packet.payload.first(), Some(&0x00));
     for _ in 0..20 {
-        if runtime.state.lock().await.mysql.events.matched_query_count == 1 {
+        if runtime.state.lock().await.mysql.events.builtin_query_count == 1 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.events.matched_query_count, 1);
-    assert_eq!(state.mysql.events.builtin_query_count, 0);
+    assert_eq!(state.mysql.events.matched_query_count, 0);
+    assert_eq!(state.mysql.events.builtin_query_count, 1);
+    assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     task.abort();
 }

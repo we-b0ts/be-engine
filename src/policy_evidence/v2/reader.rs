@@ -51,7 +51,7 @@ pub(in crate::policy_evidence) fn verify(
                 .map(str::parse::<DateTime<Utc>>)
                 .transpose()?;
             ensure!(
-                clock == target.metadata.clocks.case.target,
+                target_case_clock_matches(target.metadata.surface, &target.metadata.clocks, clock),
                 "Target observation Case clock differs from the Replay report"
             );
         }

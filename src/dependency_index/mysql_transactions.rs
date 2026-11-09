@@ -24,6 +24,7 @@ impl SourceFile {
             version: super::model::VERSION,
             stamp: self.stamp.clone(),
             sha256: self.sha256.clone(),
+            scope_membership_sha256: None,
             events: self.records.len(),
             endpoints: vec![],
             metadata: vec![],

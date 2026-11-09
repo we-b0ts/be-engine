@@ -6,6 +6,8 @@ use crate::replay::admission::{
 };
 use crate::replay::report::command::CommandMatchDiagnostic;
 use std::time::Duration;
+mod lane;
+pub(super) mod pipeline;
 
 #[cfg(test)]
 mod activity_tests;
@@ -15,6 +17,7 @@ mod engine_tests;
 mod tests;
 
 const REFRESH_WAIT: Duration = Duration::from_secs(30);
+pub(super) const POOLED_LANE_WAIT: Duration = Duration::from_secs(5);
 
 struct RedisRequest<'a> {
     target: &'a TargetKey,
@@ -25,6 +28,9 @@ struct RedisRequest<'a> {
     username: Option<&'a str>,
     command: &'a RedisCommand,
     connection: Option<TargetConnection>,
+    started: tokio::time::Instant,
+    lane_hint: Option<&'a tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
+    expected_index: Option<usize>,
 }
 
 impl DependencyRequestAdapter for RedisRequest<'_> {
@@ -63,9 +69,9 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         state.redis.request_observed_at = observation.observed_at;
         state.redis.request_observation_id = observation.observation_id;
         state.redis.request_observation_retained = observation.observation_retained;
-        state
-            .redis
-            .select_redis(
+        let fast_socketio = lane::enabled(state);
+        let select = |redis: &mut RedisReplayState, expected_index, predecessors| {
+            redis.select_redis(
                 observation.case.as_deref(),
                 self.target,
                 self.connection
@@ -75,7 +81,25 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
                 self.username,
                 &self.command.name,
                 &self.command.args,
+                expected_index,
+                predecessors,
+                fast_socketio,
             )
+        };
+        select(&mut state.redis, self.expected_index, None)
+            .or_else(|error| {
+                if self.lane_hint.is_none() || !fast_socketio {
+                    return Err(error);
+                }
+                let Some(serial) = observation
+                    .case
+                    .as_deref()
+                    .and_then(|case| pipeline::SerialPublish::from_blocker(state, case, &error))
+                else {
+                    return Err(error);
+                };
+                select(&mut state.redis, Some(serial.index), Some(serial))
+            })
             .map(|mut matched| {
                 matched.report.target_event_index = observation.event_index;
                 matched
@@ -88,6 +112,18 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         observation: &RequestAdmission,
         error: &Self::Error,
     ) -> Option<WaitDependency<'a>> {
+        if lane::enabled(state)
+            && lane::pending_predecessor(&state.redis, observation.case.as_deref(), error)
+        {
+            let deadline = self.started + POOLED_LANE_WAIT;
+            if let Some(sender) = self.lane_hint
+                && let Ok(permit) = sender.try_reserve()
+                && let Some(pair) = pipeline::AdjacentPublish::from_blocker(state, error, deadline)
+            {
+                permit.send(pair);
+            }
+            return Some(WaitDependency::changed(&state.redis.lifecycle).until(deadline));
+        }
         (pending_delivery(
             &state.redis,
             observation.case.as_deref(),
@@ -122,6 +158,9 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
             self.binding
                 .bind(observation.case.as_deref(), matched.connection_id);
         }
+        if lane::enabled(state) {
+            state.redis.lifecycle.notify_waiters();
+        }
         Ok(())
     }
 
@@ -132,10 +171,7 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
         error: &Self::Error,
     ) {
         let hint = redis_authentication_hint(error);
-        if let Some(case) = &observation.case {
-            state.redis.events.dirty_case_ids.insert(case.clone());
-        }
-        state.redis.events.unmatched.push(CommandRequestReport {
+        let report = CommandRequestReport {
             target_observation_id: observation
                 .observation_id
                 .filter(|_| observation.observation_retained)
@@ -162,10 +198,12 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
                 .unwrap_or("no recorded Redis exchange matched target/session/arguments")
                 .into(),
             diagnostic: Some(error.clone()),
-        });
+        };
+        state.redis.record_unmatched_request(report);
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn match_command(
     shared: &Arc<Mutex<ReplayState>>,
@@ -177,6 +215,33 @@ pub(super) async fn match_command(
     username: Option<&str>,
     command: &RedisCommand,
 ) -> std::result::Result<MatchedRedisExchange, &'static str> {
+    match_command_with_hint(
+        shared,
+        target,
+        client_id,
+        binding,
+        resp_version,
+        database,
+        username,
+        command,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn match_command_with_hint(
+    shared: &Arc<Mutex<ReplayState>>,
+    target: &TargetKey,
+    client_id: Uuid,
+    binding: &mut CaseConnectionBinding,
+    resp_version: u8,
+    database: i64,
+    username: Option<&str>,
+    command: &RedisCommand,
+    lane_hint: Option<&tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
+) -> std::result::Result<MatchedRedisExchange, &'static str> {
+    let started = tokio::time::Instant::now();
     request::execute(
         shared,
         &mut RedisRequest {
@@ -188,8 +253,11 @@ pub(super) async fn match_command(
             username,
             command,
             connection: None,
+            started,
+            lane_hint,
+            expected_index: None,
         },
-        tokio::time::Instant::now() + REFRESH_WAIT,
+        started + REFRESH_WAIT,
     )
     .await
     .map_err(|error| {

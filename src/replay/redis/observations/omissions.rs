@@ -10,7 +10,7 @@ pub(in crate::replay) struct OmissionAudit {
 
 impl ReplayExchange {
     pub(in crate::replay::redis) fn requires_delivery(&self) -> bool {
-        !self.status.is_consumed()
+        !self.status.is_covered()
             && !(self.optional_observation_rule.is_some() && self.status.is_available())
     }
 }
@@ -39,5 +39,14 @@ impl RedisReplayState {
                 },
             })
             .collect()
+    }
+}
+
+impl RedisReplayState {
+    pub(in crate::replay) fn record_unmatched_request(&mut self, report: CommandRequestReport) {
+        if let Some(case) = &report.case_id {
+            self.events.dirty_case_ids.insert(case.clone());
+        }
+        self.events.unmatched.push(report);
     }
 }

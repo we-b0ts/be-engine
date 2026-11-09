@@ -176,11 +176,15 @@ fn redis_setex_json_checks_the_actual_value_slot_and_every_option() {
             serde_json::to_vec(&args).unwrap()
         });
         fixture.confirm();
-        let plan = fixture.plan();
+        let plan = fixture.plan().unwrap();
         if change_expiry {
-            assert!(plan.is_err());
+            let report = &plan.traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(
+                report["preflight"]["target_comparison_failures"][0]["surface"],
+                "dependency.request"
+            );
         } else {
-            let plan = plan.unwrap();
             assert_eq!(
                 plan.traffic_e2e_report["preflight"]["independent_target_validations"],
                 2
@@ -213,12 +217,17 @@ fn memcached_request_allows_value_length_changes_and_retains_flags() {
             serde_json::to_vec(&envelope).unwrap()
         });
         fixture.confirm();
-        let result = fixture.plan();
+        let result = fixture.plan().unwrap();
         if change_flags {
-            assert!(result.is_err());
+            let report = &result.traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(
+                report["preflight"]["target_comparison_failures"][0]["surface"],
+                "dependency.request"
+            );
         } else {
             assert_eq!(
-                result.unwrap().traffic_e2e_report["preflight"]["independent_target_validations"],
+                result.traffic_e2e_report["preflight"]["independent_target_validations"],
                 2
             );
         }
@@ -245,12 +254,17 @@ fn http_body_rule_keeps_path_query_and_endpoint_native() {
             serde_json::to_vec(&envelope).unwrap()
         });
         fixture.confirm();
-        let result = fixture.plan();
+        let result = fixture.plan().unwrap();
         if change_query {
-            assert!(result.is_err());
+            let report = &result.traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(
+                report["preflight"]["target_comparison_failures"][0]["surface"],
+                "dependency.request"
+            );
         } else {
             assert!(
-                result.unwrap().traffic_e2e_report["preflight"]["independent_target_validations"]
+                result.traffic_e2e_report["preflight"]["independent_target_validations"]
                     .as_u64()
                     .unwrap()
                     > 0
@@ -276,12 +290,17 @@ fn inferred_sql_json_keeps_other_literals_and_statement_shape_strict() {
             serde_json::to_vec(&envelope).unwrap()
         });
         fixture.confirm();
-        let result = fixture.plan();
+        let result = fixture.plan().unwrap();
         if change_tenant {
-            assert!(result.is_err());
+            let report = &result.traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(
+                report["preflight"]["target_comparison_failures"][0]["surface"],
+                "dependency.request"
+            );
         } else {
             assert_eq!(
-                result.unwrap().traffic_e2e_report["preflight"]["independent_target_validations"],
+                result.traffic_e2e_report["preflight"]["independent_target_validations"],
                 2
             );
         }

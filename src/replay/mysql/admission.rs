@@ -1,9 +1,9 @@
-//! MySQL native hooks use the common observation/selection engine without waits.
+//! MySQL native hooks use the common observation/selection engine.
 //! Transaction, isolation, savepoint and optional-end decisions remain native.
 use super::*;
 use crate::replay::admission::{
     RequestAdmission,
-    request::{DependencyRequestAdapter, execute},
+    request::{DependencyRequestAdapter, WaitDependency, execute},
 };
 
 pub(super) struct RequestSelection {
@@ -11,7 +11,7 @@ pub(super) struct RequestSelection {
     pub(super) case_id: Option<String>,
     pub(super) observation_id: Option<String>,
     pub(super) event_index: Option<usize>,
-    pub(super) rejection_recorded: bool,
+    pub(super) recorded_rejection: Option<String>,
     pub(super) terminal_reason: Option<&'static str>,
 }
 
@@ -22,8 +22,9 @@ struct NativeRequest<'a> {
     params: Option<&'a [RecordedMysqlValue]>,
     case: Option<String>,
     observation: Option<RequestAdmission>,
-    rejection_recorded: bool,
+    recorded_rejection: Option<String>,
     terminal_reason: std::cell::Cell<Option<&'static str>>,
+    isolation_deadline: tokio::time::Instant,
 }
 
 impl DependencyRequestAdapter for NativeRequest<'_> {
@@ -51,11 +52,21 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
         state: &mut ReplayState,
         observation: &RequestAdmission,
     ) -> std::result::Result<MatchedExchange, &'static str> {
+        if self.command == "COM_PING" {
+            return Err("MySQL ping is handled by the replay server");
+        }
         let identity = self.session.identity();
-        if matches!(self.command, "COM_PING" | "COM_INIT_DB") {
+        if self.command == "COM_INIT_DB" {
             return state
                 .match_mysql_control(self.case.as_deref(), &identity, self.command, self.sql)
                 .ok_or("no finite MySQL control candidate");
+        }
+        if self.command == "COM_STMT_PREPARE"
+            && !state
+                .mysql
+                .has_finite_prepare(self.case.as_deref(), &identity)
+        {
+            return Err("no finite MySQL prepare candidate");
         }
         let transaction = matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE").then(|| {
             matcher::TransactionMatch {
@@ -68,6 +79,7 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
                 }),
                 status_flags: self.session.status_flags,
                 connection: self.session.transaction_witness.connection(),
+                witness: &self.session.transaction_witness,
             }
         });
         let unmatched_before = state.mysql.events.unmatched_queries.len();
@@ -80,7 +92,12 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
             transaction,
             observation,
         );
-        self.rejection_recorded = state.mysql.events.unmatched_queries.len() != unmatched_before;
+        self.recorded_rejection = state
+            .mysql
+            .events
+            .unmatched_queries
+            .get(unmatched_before)
+            .map(|query| query.reason.clone());
         selected.ok_or("no finite MySQL semantic candidate")
     }
 
@@ -98,10 +115,23 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
         matched.report.target_event_index = observation.event_index;
         Ok(())
     }
-    // No wait_dependency override: MySQL keeps its existing native constraints,
-    // without importing another protocol's lane barriers. A rejected finite
-    // candidate may still have a genuine native builtin/prepare response; the
-    // protocol response owner resolves that before publishing unmatched evidence.
+    fn wait_dependency<'a>(
+        &self,
+        state: &'a ReplayState,
+        _observation: &RequestAdmission,
+        _error: &Self::Error,
+    ) -> Option<WaitDependency<'a>> {
+        (self.recorded_rejection.is_none()
+            && matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE")
+            && state.mysql.isolation.waiting_for_prior(
+                self.session.transaction_witness.connection(),
+                &state.mysql.exchanges,
+            )
+            && self
+                .sql
+                .is_some_and(|sql| super::transaction_scope::is_business(&normalize_sql(sql))))
+        .then(|| WaitDependency::changed(&state.mysql.lifecycle).until(self.isolation_deadline))
+    }
 }
 
 pub(super) async fn match_request(
@@ -111,6 +141,7 @@ pub(super) async fn match_request(
     sql: Option<&str>,
     params: Option<&[RecordedMysqlValue]>,
 ) -> RequestSelection {
+    let isolation_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
     let mut adapter = NativeRequest {
         session,
         command,
@@ -118,12 +149,11 @@ pub(super) async fn match_request(
         params,
         case: None,
         observation: None,
-        rejection_recorded: false,
+        recorded_rejection: None,
         terminal_reason: std::cell::Cell::new(None),
+        isolation_deadline,
     };
-    let matched = execute(shared, &mut adapter, tokio::time::Instant::now())
-        .await
-        .ok();
+    let matched = execute(shared, &mut adapter, isolation_deadline).await.ok();
     let observation = adapter.observation;
     RequestSelection {
         matched,
@@ -131,7 +161,7 @@ pub(super) async fn match_request(
         event_index: observation
             .as_ref()
             .and_then(|observation| observation.event_index),
-        rejection_recorded: adapter.rejection_recorded,
+        recorded_rejection: adapter.recorded_rejection,
         terminal_reason: adapter.terminal_reason.get(),
         observation_id: observation
             .as_ref()

@@ -214,23 +214,22 @@ fn global_mysql_candidates_preserve_valid_prepared_pairs_and_reject_bad_related_
         }
         install(&fixture, &targets);
         fixture.confirm();
-        let plan = fixture.plan();
+        let plan = fixture.plan().unwrap();
+        let preflight = &plan.traffic_e2e_report["preflight"];
+        assert_eq!(preflight["independent_target_validations"], 1);
+        assert_eq!(preflight["missing_target_witnesses"], 0);
         if bad.is_some() {
-            assert!(plan.is_err());
-            assert!(fixture.state().rule_plan.is_none());
-        } else {
-            let plan = plan.unwrap();
             assert_eq!(
-                plan.traffic_e2e_report["preflight"]["independent_target_validations"],
+                preflight["target_comparison_failures"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
                 1
             );
-            assert_eq!(
-                plan.traffic_e2e_report["preflight"]["missing_target_witnesses"],
-                0
-            );
-            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
-            assert!(fixture.state().rule_replay_pending);
+            assert_eq!(plan.traffic_e2e_report["status"], "planned_needs_replay");
         }
+        apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+        assert!(fixture.state().rule_replay_pending);
     }
 }
 
@@ -340,8 +339,17 @@ fn a_valid_mysql_pair_cannot_hide_another_invalid_target_observation() {
         ],
     );
     fixture.confirm();
-    assert!(fixture.plan().is_err());
-    assert!(fixture.state().rule_plan.is_none());
+    let report = fixture.plan().unwrap().traffic_e2e_report;
+    assert_eq!(report["status"], "planned_needs_replay");
+    let preflight = &report["preflight"];
+    assert_eq!(preflight["independent_target_validations"], 1);
+    assert_eq!(
+        preflight["target_comparison_failures"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -381,12 +389,14 @@ fn related_mysql_candidates_still_reject_unselected_values_and_invalid_times() {
         write(&fixture.proposal, proposal());
         install(&fixture, &[target(sql)]);
         fixture.confirm();
-        let error = format!("{:#}", fixture.plan().unwrap_err());
-        assert!(error.contains("write-clock"));
-        assert!(error.contains("Source connection"));
-        assert!(error.contains("Target observation"));
-        assert!(!error.contains(sql));
-        assert!(fixture.state().rule_plan.is_none());
+        let report = fixture.plan().unwrap().traffic_e2e_report;
+        assert_eq!(report["status"], "planned_needs_replay");
+        assert_eq!(report["preflight"]["independent_target_validations"], 0);
+        assert_eq!(
+            report["preflight"]["target_comparison_failures"][0]["surface"],
+            "dependency.request"
+        );
+        assert!(!report.to_string().contains(sql));
     }
 }
 

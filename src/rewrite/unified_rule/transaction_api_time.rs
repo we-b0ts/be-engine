@@ -71,28 +71,12 @@ fn api_time_plan_apply_validates_source_and_independent_target_response_clocks()
 }
 
 #[test]
-fn api_time_preflight_rejects_wrong_offsets_windows_and_unselected_values() {
-    for (pointer, value, reason) in [
-        (
-            "/expires_at",
-            json!(SOURCE_START + 3600 + 70),
-            "time difference does not preserve the anchor difference",
-        ),
-        (
-            "/created_at",
-            json!(SOURCE_START + 70),
-            "time difference does not preserve the anchor difference",
-        ),
-        (
-            "/remaining",
-            json!(3670),
-            "unselected value or type changed",
-        ),
-        (
-            "/business",
-            json!("changed"),
-            "unselected value or type changed",
-        ),
+fn api_time_preflight_defers_target_value_differences() {
+    for (pointer, value) in [
+        ("/expires_at", json!(SOURCE_START + 3600 + 70)),
+        ("/created_at", json!(SOURCE_START + 70)),
+        ("/remaining", json!(3670)),
+        ("/business", json!("changed")),
     ] {
         let fixture = fixture();
         let mut target = response(60);
@@ -101,14 +85,18 @@ fn api_time_preflight_rejects_wrong_offsets_windows_and_unselected_values() {
             &serde_json::to_vec(&response(0)).unwrap(),
             &serde_json::to_vec(&target).unwrap(),
         );
-        let error = format!("{:#}", fixture.plan().unwrap_err());
-        assert!(error.contains(pointer) && error.contains(reason), "{error}");
-        assert!(fixture.state().rule_plan.is_none());
+        let report = fixture.plan().unwrap().traffic_e2e_report;
+        assert_eq!(report["status"], "planned_needs_replay", "{pointer}");
+        assert_eq!(
+            report["preflight"]["target_comparison_failures"][0]["case_id"],
+            "00000000-0000-4000-8000-000000000001"
+        );
+        assert_eq!(report["preflight"]["independent_target_validations"], 0);
     }
 }
 
 #[test]
-fn api_time_preflight_requires_each_response_clock_without_request_fallback() {
+fn api_time_preflight_defers_comparison_without_paired_response_clocks() {
     for missing_source in [false, true] {
         let fixture = fixture();
         fixture.replace_responses(
@@ -118,12 +106,13 @@ fn api_time_preflight_requires_each_response_clock_without_request_fallback() {
                 "request_sent_at":"2026-10-16T00:01:00Z",
                 "response_completed_at":missing_source.then_some("2026-10-16T00:01:00Z")}),
         );
-        let error = format!("{:#}", fixture.plan().unwrap_err());
-        assert!(
-            error.contains("time relation requires independent source and target anchors"),
-            "{error}"
+        let report = fixture.plan().unwrap().traffic_e2e_report;
+        assert_eq!(report["status"], "planned_needs_replay");
+        assert_eq!(report["preflight"]["independent_target_validations"], 0);
+        assert_eq!(
+            report["preflight"]["target_comparison_failures"][0]["surface"],
+            "api.response"
         );
-        assert!(fixture.state().rule_plan.is_none());
     }
 }
 
@@ -144,11 +133,9 @@ fn api_time_preflight_bounds_unequal_response_latency_without_a_generation_ancho
                 1
             );
         } else {
-            let error = format!("{:#}", planned.unwrap_err());
-            assert!(
-                error.contains("time difference does not preserve the anchor difference"),
-                "{error}"
-            );
+            let report = planned.unwrap().traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(report["preflight"]["independent_target_validations"], 0);
         }
     }
 }

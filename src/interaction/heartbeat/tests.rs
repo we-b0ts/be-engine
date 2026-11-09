@@ -9,6 +9,7 @@ fn input() -> InputTranscript {
     input.actions.push(InputAction {
         sequence: 1,
         offset_ms: 10,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

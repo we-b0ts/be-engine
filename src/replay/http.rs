@@ -468,7 +468,7 @@ impl ReplayState {
                     let allowed = self.allowed_unused_http.as_ref().is_some_and(|config| {
                         config.hosts.contains(&exchange.identity.target.host)
                     });
-                    !exchange.status.is_consumed()
+                    !exchange.status.is_covered()
                         && !allowed
                         && !self.permits_cancelled_http_omission(index)
                 })
@@ -573,7 +573,7 @@ impl ReplayState {
                             .as_ref()
                             .is_some_and(|case| self.cases.contains_key(case))
                 };
-                if !in_scope || exchange.status.is_consumed() {
+                if !in_scope || exchange.status.is_covered() {
                     return false;
                 }
                 let is_allowed = source == ReplaySource::Case

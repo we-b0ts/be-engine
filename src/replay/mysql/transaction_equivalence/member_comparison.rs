@@ -43,8 +43,13 @@ impl Registry {
         }
         let expected = &self.requirements[r].transactions[t].members;
         let actual = &trace.members;
+        let same_first = expected.first().is_some_and(|&first| {
+            trace.prefix_equivalent && self.prefixes.covers(first, trace.neutral_first)
+        });
         let first_difference = (0..expected.len().max(actual.len()))
-            .find(|&position| expected.get(position) != actual.get(position))
+            .find(|&position| {
+                (position != 0 || !same_first) && expected.get(position) != actual.get(position)
+            })
             .map(|member_position| MemberDifference {
                 member_position,
                 expected: expected

@@ -2,16 +2,33 @@
 use super::*;
 
 #[tokio::test]
-async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_frame() {
+async fn terminal_ping_gets_a_pong_only_after_a_new_business_frame() {
+    assert_target_times_out_after_terminal_ping(true, false).await;
+}
+
+#[tokio::test]
+async fn terminal_ping_allows_target_timeout_despite_missing_output_and_dependency_failure() {
+    assert_target_times_out_after_terminal_ping(false, false).await;
+}
+
+#[tokio::test]
+async fn terminal_ping_keeps_an_active_native_prefix_alive_without_a_business_frame() {
+    assert_target_times_out_after_terminal_ping(false, true).await;
+}
+
+async fn assert_target_times_out_after_terminal_ping(business_output: bool, native_prefix: bool) {
     use crate::interaction::replay::timing::{FastTail, InputTiming};
     use futures_util::future::BoxFuture;
-    use std::sync::Arc;
-    use tokio::sync::{Notify, oneshot};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tokio::time::timeout;
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
-    #[derive(Default)]
     struct Timing {
-        reached: Notify,
-        dependencies_delivered: Notify,
+        native_prefix: bool,
+        active: AtomicBool,
     }
     impl InputTiming for Timing {
         fn wait(&self, _: u64, _: Vec<u64>) -> BoxFuture<'_, Result<Advance>> {
@@ -22,29 +39,37 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
                 close_sequence: None,
                 output_count: 3,
                 idle_ms: 5,
-                heartbeat_acks: Some([2].into()),
+                heartbeat_timeout: true,
+                native_observation: self.native_prefix,
             })
         }
-        fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
-            Box::pin(async {
-                self.reached.notify_one();
-                self.dependencies_delivered.notified().await;
-                Ok(Advance::default())
-            })
+        fn native_prefix_active(&self) -> BoxFuture<'_, Result<bool>> {
+            Box::pin(async { Ok(self.active.swap(false, Ordering::Relaxed)) })
         }
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let (input_received, received) = oneshot::channel();
-    let (send_ack, wait_ack) = oneshot::channel();
+    let (failed, failure) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+        stream.set_nodelay(true).unwrap();
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-        socket.send(Message::Text(open().into())).await.unwrap();
+        socket
+            .send(Message::Text(
+                r#"0{"sid":"target","pingInterval":1000,"pingTimeout":100}"#.into(),
+            ))
+            .await
+            .unwrap();
         assert_eq!(
             socket.next().await.unwrap().unwrap().into_text().unwrap(),
             "40"
+        );
+        // The final input has not been sent. Ordinary pings still get a pong.
+        socket.send(Message::Text("2".into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "3"
         );
         socket
             .send(Message::Text(r#"40{"sid":"live"}"#.into()))
@@ -60,30 +85,60 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
                 .unwrap()
                 .starts_with("421")
         );
-        input_received.send(()).unwrap();
-        wait_ack.await.unwrap();
+
+        if native_prefix {
+            socket.send(Message::Text("2".into())).await.unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                "3"
+            );
+        }
+        if business_output {
+            socket.send(Message::Text("2".into())).await.unwrap();
+            assert!(
+                timeout(Duration::from_millis(15), socket.next())
+                    .await
+                    .is_err()
+            );
+            socket
+                .send(Message::Text(r#"431["ok"]"#.into()))
+                .await
+                .unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                "3"
+            );
+        } else {
+            // Deliberately leave the final ACK missing and signal a dependency failure.
+            let _ = failed.send(true);
+        }
+        socket.send(Message::Text("2".into())).await.unwrap();
+        assert!(
+            timeout(Duration::from_millis(100), socket.next())
+                .await
+                .is_err()
+        );
         socket
-            .send(Message::Text(r#"431["ok"]"#.into()))
+            .send(Message::Close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            })))
             .await
             .unwrap();
-        assert!(
-            matches!(socket.next().await, None | Some(Err(_))),
-            "the engine should release TCP without sending a WebSocket or Engine.IO frame"
-        );
     });
 
     let mut input = program();
-    input.policy.completion.clear();
+    input.policy.business_idle_ms = 30;
+    input.policy.request_timeout_ms = 50;
     input.socket_io_heartbeat = Some(Default::default());
-    let timing = Arc::new(Timing::default());
     let origin = format!("http://{address}");
     let request = Request::builder()
         .uri(format!("{origin}/socket.io/?EIO=4&transport=websocket"))
         .body(Full::new(Bytes::new()))
         .unwrap();
     let client = Client::builder(TokioExecutor::new()).build_http();
-    let timing_client = timing.clone();
-    let replay = tokio::spawn(async move {
+    let actual = timeout(
+        Duration::from_secs(2),
         execute_with_feedback(
             &client,
             &origin,
@@ -91,29 +146,28 @@ async fn fast_heartbeat_tail_waits_for_real_ack_and_delivery_and_sends_no_close_
             &input,
             Duration::from_secs(2),
             Feedback {
-                input_timing: Some(timing_client),
+                input_timing: Some(Arc::new(Timing {
+                    native_prefix,
+                    active: AtomicBool::new(native_prefix),
+                })),
+                dependency_failure: Some(failure),
                 ..Feedback::default()
             },
-        )
-        .await
-        .unwrap()
-    });
-    tokio::time::timeout(Duration::from_secs(2), async {
-        received.await.unwrap();
-        assert!(!replay.is_finished());
-        send_ack.send(()).unwrap();
-        timing.reached.notified().await;
-        assert!(!replay.is_finished());
-        timing.dependencies_delivered.notify_one();
-        let actual = replay.await.unwrap().observation;
-        assert_eq!(actual.end.reason, EndReason::FastHeartbeatTailSkipped);
-        assert!(actual.end.clean);
-        assert!(actual.end.close.is_none());
-        assert_eq!(actual.end.pending, vec![2]);
-        server.await.unwrap();
-    })
+        ),
+    )
     .await
-    .unwrap();
+    .unwrap()
+    .unwrap()
+    .observation;
+    assert_eq!(actual.end.reason, EndReason::ServerEof);
+    assert_eq!(actual.end.close.unwrap().code, Some(1000));
+    assert!(actual.end.clean);
+    assert!(actual.end.fast_heartbeat_eof_ms.is_some());
+    assert_eq!(
+        actual.end.pending,
+        if business_output { vec![] } else { vec![2] }
+    );
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -161,6 +215,7 @@ async fn legacy_unproven_gaps_keep_offsets_and_actual_ack_rebinding() {
     input.actions.push(InputAction {
         sequence: 3,
         offset_ms: 160,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -281,6 +336,7 @@ async fn uncompressed_close_retains_missing_heartbeat_evidence() {
     input.actions.push(InputAction {
         sequence: 2,
         offset_ms: 40,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -292,6 +348,7 @@ async fn uncompressed_close_retains_missing_heartbeat_evidence() {
     input.actions.push(InputAction {
         sequence: 3,
         offset_ms: 80,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

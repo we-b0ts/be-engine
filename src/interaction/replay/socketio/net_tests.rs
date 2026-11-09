@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 mod cancellation_timing;
 mod close_completion;
+mod event_order;
 mod fast_execution;
 mod heartbeat_behavior;
 mod namespace_admission;
@@ -37,6 +38,7 @@ fn program() -> InputTranscript {
         InputAction {
             sequence: 1,
             offset_ms: 0,
+            offset_us: None,
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,
@@ -48,6 +50,7 @@ fn program() -> InputTranscript {
         InputAction {
             sequence: 2,
             offset_ms: 5,
+            offset_us: None,
             after: vec![1],
             compressible_gap: true,
             gap_start_ms: Some(1),
@@ -316,6 +319,7 @@ async fn generic_websocket_uses_explicit_terminal_without_injecting_engine_io_pa
     transcript.actions.push(InputAction {
         sequence: 1,
         offset_ms: 0,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,

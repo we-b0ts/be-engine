@@ -1,6 +1,41 @@
 use super::*;
 
 #[tokio::test]
+async fn prepare_metadata_reuses_exact_sql_and_refreshes_after_source_registration() {
+    let response = result(
+        json!([{"name":"id","family":"integer","sql_type":"BIGINT"}]),
+        json!([[{"kind":"integer","value":1}]]),
+    );
+    let (_temp, _addr, runtime, task) = fixture(
+        &[exchange("SELECT id FROM other_table WHERE uid=1", response)],
+        false,
+    )
+    .await;
+    let mut state = runtime.state.lock().await;
+    let mut source = state.mysql.exchanges[0].clone();
+    let identity = ReplaySessionIdentity {
+        target: Some(source.identity.target.clone()),
+        database: source.identity.database.clone(),
+        username: source.identity.username.clone(),
+    };
+    let sql = "SELECT id FROM tasks WHERE uid=?";
+    let first = state.statement_metadata_in_case(Some("case-id"), &identity, sql);
+    let repeated = state.statement_metadata_in_case(Some("case-id"), &identity, sql);
+    assert_eq!(first.param_count, 1);
+    assert!(first.columns.is_empty());
+    assert!(Arc::ptr_eq(&first, &repeated));
+
+    source.record.sql = Some("SELECT id FROM tasks WHERE uid=1".into());
+    state.mysql.register_exchange(source);
+    let refreshed = state.statement_metadata_in_case(Some("case-id"), &identity, sql);
+    assert_eq!(refreshed.columns.len(), 1);
+    assert!(!Arc::ptr_eq(&first, &refreshed));
+    let repeated = state.statement_metadata_in_case(Some("case-id"), &identity, sql);
+    assert!(Arc::ptr_eq(&refreshed, &repeated));
+    task.abort();
+}
+
+#[tokio::test]
 async fn global_formats_preserve_numeric_string_in_permutations() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let source = "SELECT resource_members.resource_id AS resource_members_resource_id FROM resource_members WHERE resource_members.resource_type IN ('Namespace') AND resource_members.entity_type='namespace' AND resource_members.entity_id IN ('801','388','693','535','539','699') AND resource_members.status='approved'";

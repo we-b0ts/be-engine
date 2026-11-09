@@ -148,6 +148,25 @@ async fn modified_source_fails_preparation_without_activating_case() {
 }
 
 #[tokio::test]
+async fn lazy_startup_indexes_preloaded_redis_before_any_case_begins() {
+    let temp = tempfile::tempdir().unwrap();
+    fixture(temp.path()).await;
+    let record = json!({
+        "event_type":"redis_exchange", "connection_id":Uuid::nil(), "sequence":1,
+        "target_host":"redis.test", "target_port":6379, "database":0, "resp_version":2,
+        "command":"GET",
+        "args":[{"encoding":"base64","data":"a2V5","truncated":false}],
+        "response":{"encoding":"base64","data":"JDENCnYNCg==","truncated":false},
+        "response_kind":"bulk", "outcome":"response", "duration_ms":0, "replay_safe":true
+    });
+    std::fs::write(temp.path().join("a/dependencies.jsonl"), record.to_string()).unwrap();
+    let (runtime, _) = load(temp.path(), true).await;
+    let state = runtime.state.lock().await;
+    assert!(state.active_case_id.is_none());
+    assert_eq!(state.redis.prepared_case_members("a").as_ref(), &[0]);
+}
+
+#[tokio::test]
 async fn complete_mysql_connection_is_classified_at_case_preparation() {
     let temp = tempfile::tempdir().unwrap();
     fixture(temp.path()).await;

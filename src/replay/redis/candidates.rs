@@ -73,6 +73,22 @@ impl Candidates {
         self.members.for_case(case)
     }
 
+    pub(super) fn case_lane_slot(
+        &self,
+        case: &str,
+        connection: Uuid,
+        sequence: u64,
+    ) -> Option<usize> {
+        self.lanes.unique_slot(
+            &LaneKey {
+                owner: LaneOwner::Case,
+                case: Some(case.to_owned()),
+                connection,
+            },
+            sequence,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn select(
         &self,
@@ -106,13 +122,36 @@ impl Candidates {
         exchanges: &[ReplayExchange],
         candidate: usize,
     ) -> Option<usize> {
+        self.lane_blocker_excluding(exchanges, candidate, |_| false)
+    }
+
+    pub(super) fn lane_blocker_excluding(
+        &self,
+        exchanges: &[ReplayExchange],
+        candidate: usize,
+        mut excluded: impl FnMut(usize) -> bool,
+    ) -> Option<usize> {
         if !exchanges[candidate].preserves_connection_order() {
             return None;
         }
         self.lanes.blocker(candidate, |prior| {
-            exchanges[prior].preserves_connection_order()
+            !excluded(prior)
+                && exchanges[prior].preserves_connection_order()
                 && !exchanges[prior].satisfies_lane_order()
         })
+    }
+
+    pub(super) fn lane_prefix(
+        &self,
+        first: usize,
+        candidate: usize,
+        limit: usize,
+    ) -> Option<Vec<usize>> {
+        self.lanes.bounded_prefix(first, candidate, limit)
+    }
+
+    pub(super) fn previous_lane_slot(&self, index: usize) -> Option<usize> {
+        self.lanes.previous_slot(index)
     }
 }
 

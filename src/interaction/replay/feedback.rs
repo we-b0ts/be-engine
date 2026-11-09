@@ -29,6 +29,7 @@ pub(crate) trait NativeEventSink: Send + Sync {
 pub(crate) struct Feedback {
     pub dependency_failure: Option<tokio::sync::watch::Receiver<bool>>,
     pub native_events: Option<Arc<dyn NativeEventSink>>,
+    pub event_order: Option<super::event_order::Order>,
     pub input_timing: Option<Arc<dyn super::timing::InputTiming>>,
 }
 
@@ -36,8 +37,7 @@ impl From<Option<tokio::sync::watch::Receiver<bool>>> for Feedback {
     fn from(dependency_failure: Option<tokio::sync::watch::Receiver<bool>>) -> Self {
         Self {
             dependency_failure,
-            native_events: None,
-            input_timing: None,
+            ..Self::default()
         }
     }
 }

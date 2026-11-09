@@ -68,7 +68,7 @@ pub(super) fn verify(path: &Path, manifest: &JournalManifest, key: Option<&[u8]>
         metadata.is_file()
             && !metadata.file_type().is_symlink()
             && metadata.len() >= manifest.bytes
-            && manifest.bytes <= 64 * 1024 * 1024,
+            && manifest.bytes <= super::JOURNAL_BYTE_LIMIT,
         "hypothesis journal must retain its bounded durable prefix"
     );
     let mut reader = std::io::BufReader::new(fs::File::open(path)?.take(manifest.bytes));
@@ -118,6 +118,30 @@ pub(super) fn verify(path: &Path, manifest: &JournalManifest, key: Option<&[u8]>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hypothesis_journal_persists_an_append_burst_before_delivery() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary
+            .path()
+            .join("policy-witnesses-burst.hypotheses.jsonl");
+        let key = vec![9; 32];
+        let journal = Journal::create(path.clone(), key.clone()).unwrap();
+        // Model synchronous admission while the writer has no chance to run.
+        for index in 0..1200 {
+            journal
+                .append(&serde_json::json!({"status":"rejected","index":index}))
+                .unwrap();
+        }
+        assert_eq!(journal.manifest().durable, 0);
+        journal.wait_durable().await.unwrap();
+        let manifest = journal.manifest();
+        assert_eq!(manifest.enqueued, 1200);
+        assert_eq!(manifest.durable, 1200);
+        assert!(manifest.complete);
+        verify(&path, &manifest, Some(&key)).unwrap();
+    }
+
     #[tokio::test]
     async fn hypothesis_journal_rejects_changed_records_and_missing_durable_tail() {
         let temporary = tempfile::tempdir().unwrap();

@@ -336,7 +336,9 @@ pub(super) fn register_dependency_records(
                 )
             })?;
         register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
-        if mysql::is_nonsemantic_session_setup(&exchange) {
+        // Failed PING can still identify a recorded endpoint, but all PINGs
+        // are answered by the replay server without a finite Source claim.
+        if exchange.command == "COM_PING" || mysql::is_nonsemantic_session_setup(&exchange) {
             continue;
         }
         let timing = ReplayExchangeTiming::from_recorded(exchange.duration_ms, exchange.outcome);
@@ -501,17 +503,24 @@ pub(super) fn identity_matches_exchange(
     exchange: &MysqlDependencyIdentity,
 ) -> bool {
     session.target.as_ref() == Some(&exchange.target)
-        && normalize_identity_value(session.database.as_deref())
-            == normalize_identity_value(exchange.database.as_deref())
-        && normalize_identity_value(session.username.as_deref())
-            == normalize_identity_value(exchange.username.as_deref())
+        && same_identity_value(session.database.as_deref(), exchange.database.as_deref())
+        && same_identity_value(session.username.as_deref(), exchange.username.as_deref())
 }
 
 pub(super) fn normalize_identity_value(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
+    identity_value(value).map(str::to_ascii_lowercase)
+}
+
+fn identity_value(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn same_identity_value(left: Option<&str>, right: Option<&str>) -> bool {
+    match (identity_value(left), identity_value(right)) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 pub(super) fn normalize_optional(value: &Option<String>) -> Option<String> {

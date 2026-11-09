@@ -3,6 +3,7 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod member_comparison;
+mod prefix;
 mod source;
 mod source_evidence;
 #[cfg(test)]
@@ -14,7 +15,9 @@ pub(in crate::replay) struct Registry {
     setups: BTreeMap<usize, usize>,
     members: BTreeMap<usize, (usize, usize)>,
     ends: BTreeMap<usize, (usize, usize)>,
+    savepoint_predecessors: BTreeMap<usize, usize>,
     free_reads: BTreeSet<usize>,
+    prefixes: prefix::Index,
     global_reads: source_evidence::GlobalReads,
     rejected_ends: BTreeMap<usize, source::RejectedEnd>,
 }
@@ -26,6 +29,7 @@ struct Requirement {
     reason: &'static str,
     blocked: bool,
     source_reason: Option<&'static str>,
+    dispatch_safe_before: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug)]
@@ -68,6 +72,10 @@ impl Transaction {
                 || self.end == "rollback"
                     && matches!(self.single_update_outcome, "error" | "zero_affected_rows"))
     }
+    fn can_cover_with_autocommit(&self, index: usize) -> bool {
+        self.autocommit_eligible() && self.members.first() == Some(&index)
+    }
+
     fn missing_sequences(&self) -> Option<Vec<u64>> {
         if self.witness.is_some() {
             return Some(Vec::new());
@@ -90,6 +98,7 @@ impl Transaction {
 pub(super) struct Witness {
     connection: Uuid,
     active: Option<Trace>,
+    first_delivery: Option<ReadDelivery>,
 }
 
 impl Default for Witness {
@@ -97,6 +106,7 @@ impl Default for Witness {
         Self {
             connection: Uuid::new_v4(),
             active: None,
+            first_delivery: None,
         }
     }
 }
@@ -105,6 +115,10 @@ impl Witness {
     pub(super) fn connection(&self) -> Uuid {
         self.connection
     }
+
+    pub(super) fn has_active_transaction(&self) -> bool {
+        self.active.is_some()
+    }
 }
 
 #[derive(Debug)]
@@ -112,6 +126,16 @@ struct Trace {
     id: Uuid,
     members: Vec<usize>,
     valid: bool,
+    neutral_first: Option<usize>,
+    prefix_equivalent: bool,
+    skipped_free_read: bool,
+}
+
+#[derive(Debug)]
+struct ReadDelivery {
+    response: RecordedMysqlResponse,
+    requested_at: DateTime<Utc>,
+    delivered_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +156,29 @@ pub(super) struct Observation {
 }
 
 impl Registry {
+    pub(super) fn can_defer_setup(
+        &self,
+        setup: usize,
+        input_at: DateTime<Utc>,
+        exchanges: &[ReplayExchange],
+    ) -> bool {
+        self.setups.get(&setup).is_some_and(|&index| {
+            let requirement = &self.requirements[index];
+            !requirement.blocked
+                && (requirement.source_reason.is_none()
+                    || requirement
+                        .dispatch_safe_before
+                        .is_some_and(|end| input_at < end))
+                && requirement.transactions.iter().all(|transaction| {
+                    transaction.witness.is_some()
+                        || exchanges[transaction.members[0]]
+                            .record
+                            .request_started_at
+                            .is_some_and(|started| started > input_at)
+                })
+        })
+    }
+
     pub(super) fn covered_by(&self, end: usize, connection: Uuid) -> bool {
         self.ends.get(&end).is_some_and(|&(r, t)| {
             let requirement = &self.requirements[r];
@@ -150,17 +197,77 @@ impl Registry {
         })
     }
 
+    /// Only a registered, still-uncovered member can require an active Target
+    /// transaction. Ordinary prefix reads and equivalent single writes can
+    /// be admitted on an autocommitting socket.
+    pub(super) fn requires_active_member(&self, index: usize) -> bool {
+        !self.ends.contains_key(&index)
+            && self.members.get(&index).is_some_and(|&(r, t)| {
+                let group = &self.requirements[r].transactions[t];
+                group.witness.is_none() && !group.can_cover_with_autocommit(index)
+            })
+    }
+
+    /// A later Source member can only follow a savepoint control delivered
+    /// in this very Target transaction. Matching SQL text cannot supply it.
+    pub(super) fn permits_savepoint_member(&self, index: usize, witness: &Witness) -> bool {
+        self.savepoint_predecessors
+            .get(&index)
+            .is_none_or(|previous| {
+                witness
+                    .active
+                    .as_ref()
+                    .is_some_and(|trace| trace.members.contains(previous))
+            })
+    }
+
+    pub(super) fn missing_transaction_diagnostic(
+        &self,
+        index: usize,
+        connection: Uuid,
+        status: u16,
+    ) -> Option<Value> {
+        let mut diagnostic = self.diagnostic(index)?;
+        diagnostic["reason"] = "target_transaction_missing".into();
+        diagnostic["stage"] = "candidate_admission".into();
+        // The focused interval is first. Record only the live pre-send state.
+        let group = &mut diagnostic["source_transactions"][0];
+        group["target_connection_id"] = serde_json::json!(connection);
+        group["target_transaction_id"] = Value::Null;
+        group["target_status_before"] = status.into();
+        group["target_status_after"] = Value::Null;
+        group["missing_required_query_sequences"] = Value::Null;
+        Some(diagnostic)
+    }
+
     /// This socket's delivered write span selects its ordinary finite end.
     pub(super) fn preferred_end(&self, witness: &Witness, sql: &str) -> Option<usize> {
         let trace = witness.active.as_ref().filter(|trace| trace.valid)?;
-        let (requirement, transaction) = self.members.get(trace.members.first()?)?;
-        let requirement = &self.requirements[*requirement];
-        let group = &requirement.transactions[*transaction];
+        let (requirement, transaction) = self.strict_location(trace)?;
+        let requirement = &self.requirements[requirement];
+        let group = &requirement.transactions[transaction];
         (!requirement.blocked
             && group.end == normalize_sql(sql)
             && group.witness.is_none()
-            && trace.members == group.members[..group.members.len() - 1])
-            .then(|| *group.members.last().unwrap())
+            && self.same_members(trace, &group.members[..group.members.len() - 1]))
+        .then(|| *group.members.last().unwrap())
+    }
+
+    fn strict_location(&self, trace: &Trace) -> Option<(usize, usize)> {
+        trace
+            .members
+            .iter()
+            .skip(usize::from(trace.neutral_first.is_some()))
+            .find_map(|index| self.members.get(index).copied())
+    }
+
+    fn same_members(&self, trace: &Trace, expected: &[usize]) -> bool {
+        trace.members == expected
+            || expected.split_first().is_some_and(|(&first, rest)| {
+                trace.prefix_equivalent
+                    && self.prefixes.covers(first, trace.neutral_first)
+                    && trace.members.get(1..) == Some(rest)
+            })
     }
 
     pub(in crate::replay) fn prepare(
@@ -181,6 +288,7 @@ impl Registry {
         mapping: &BTreeMap<usize, usize>,
         exchanges: &[ReplayExchange],
     ) -> Vec<(usize, OptionalSessionExchange)> {
+        self.prefixes.register(&plans, mapping, exchanges);
         let mut omissions = Vec::new();
         for plan in plans {
             for rejected in plan.failed_ends {
@@ -205,6 +313,7 @@ impl Registry {
                     .unwrap_or("target_transaction_coverage_required"),
                 blocked: false,
                 source_reason: plan.reason,
+                dispatch_safe_before: plan.dispatch_safe_before,
             };
             for group in plan.transactions {
                 let Some(all) = group
@@ -226,6 +335,10 @@ impl Registry {
                         .source_reason
                         .get_or_insert("source_statement_effects_unsupported");
                     requirement.reason = requirement.source_reason.unwrap();
+                    requirement.dispatch_safe_before = requirement
+                        .dispatch_safe_before
+                        .zip(exchanges[all[0]].record.request_started_at)
+                        .map(|(before, started)| before.min(started));
                 }
                 let first_write = if group.strict || group.explicit && group.write_count != 0 {
                     0
@@ -316,8 +429,22 @@ impl Registry {
             }
             for (transaction, group) in requirement.transactions.iter().enumerate() {
                 if group.write_count != 0 || group.strict || group.savepoints {
+                    let mut previous_savepoint = None;
                     for &index in &group.members {
                         self.members.insert(index, (id, transaction));
+                        if let Some(previous) = previous_savepoint {
+                            self.savepoint_predecessors.insert(index, previous);
+                        }
+                        if group.savepoints
+                            && exchanges[index]
+                                .record
+                                .sql
+                                .as_deref()
+                                .and_then(crate::mysql::savepoint::parse)
+                                .is_some()
+                        {
+                            previous_savepoint = Some(index);
+                        }
                     }
                 }
             }
@@ -328,10 +455,21 @@ impl Registry {
     }
 
     /// Only successful wire delivery and response-policy commit produce coverage.
+    #[cfg(test)]
     pub(super) fn observe_delivery(
         &mut self,
         witness: &mut Witness,
         delivery: Delivery<'_>,
+        end_admitted: impl Fn(usize) -> bool,
+    ) -> Observation {
+        self.observe_delivery_with_prefix(witness, delivery, None, end_admitted)
+    }
+
+    fn observe_delivery_with_prefix(
+        &mut self,
+        witness: &mut Witness,
+        delivery: Delivery<'_>,
+        confirmed_prefix: Option<usize>,
         end_admitted: impl Fn(usize) -> bool,
     ) -> Observation {
         if self.members.is_empty() {
@@ -346,7 +484,16 @@ impl Registry {
             ..
         } = delivery;
         let sql = normalize_sql(sql);
-        let location = index.and_then(|i| self.members.get(&i).copied());
+        let neutral_first = confirmed_prefix.filter(|_| {
+            successful
+                && after & 1 != 0
+                && witness.active.as_ref().map_or(before & 1 == 0, |trace| {
+                    trace.valid && trace.members.is_empty() && !trace.skipped_free_read
+                })
+        });
+        let location = index
+            .filter(|_| neutral_first.is_none())
+            .and_then(|i| self.members.get(&i).copied());
         if let Some((r, t)) = location {
             let group = &mut self.requirements[r].transactions[t];
             if group.witness.is_none() {
@@ -379,12 +526,7 @@ impl Registry {
             let previous = witness.active.take();
             let valid = previous.is_none() && before & 1 == 0 && after & 1 != 0;
             let violation = previous
-                .and_then(|trace| {
-                    trace
-                        .members
-                        .iter()
-                        .find_map(|i| self.members.get(i).copied())
-                })
+                .and_then(|trace| self.strict_location(&trace))
                 .map(|loc| self.reject(loc, "target_transaction_restarted"));
             witness.active = Some(Trace {
                 id: Uuid::new_v4(),
@@ -393,6 +535,9 @@ impl Registry {
                     .into_iter()
                     .collect(),
                 valid,
+                neutral_first: None,
+                prefix_equivalent: false,
+                skipped_free_read: false,
             });
             return violation.unwrap_or_default();
         }
@@ -412,6 +557,9 @@ impl Registry {
                 id: Uuid::new_v4(),
                 members: Vec::new(),
                 valid: true,
+                neutral_first: None,
+                prefix_equivalent: false,
+                skipped_free_read: false,
             });
         }
         if let Some(loc @ (r, t)) = location {
@@ -428,8 +576,7 @@ impl Registry {
                 return Observation::default();
             }
             if witness.active.is_none()
-                && group.autocommit_eligible()
-                && group.members.first().copied() == index
+                && index.is_some_and(|index| group.can_cover_with_autocommit(index))
                 && before & 3 == 2
                 && after & 3 == 2
             {
@@ -450,10 +597,22 @@ impl Registry {
                 self.reject(loc, "target_transaction_missing")
             });
         };
-        if trace.members.is_empty() && index.is_some_and(|i| self.free_reads.contains(&i)) {
+        if let Some(prefix) = neutral_first {
+            if let Some(index) = index.filter(|i| self.members.contains_key(i)) {
+                tracing::debug!(
+                    index,
+                    "matched a proven equivalent first MySQL transaction read"
+                );
+            }
+            trace.neutral_first = Some(prefix);
+            trace.members.extend(index);
             return Observation::default();
         }
-        if trace.members.is_empty()
+        if trace.members.is_empty() && index.is_some_and(|i| self.free_reads.contains(&i)) {
+            trace.skipped_free_read = true;
+            return Observation::default();
+        }
+        if (trace.members.is_empty() || trace.members.len() == 1 && trace.neutral_first.is_some())
             && let Some(loc) = location
             && !self.previous_admitted(loc, &end_admitted)
         {
@@ -469,10 +628,7 @@ impl Registry {
             return Observation::default();
         }
         let trace = witness.active.take().unwrap();
-        let location = trace
-            .members
-            .iter()
-            .find_map(|i| self.members.get(i).copied());
+        let location = self.strict_location(&trace);
         let Some(loc @ (r, t)) = location else {
             return Observation::default();
         };
@@ -486,7 +642,7 @@ impl Registry {
             || !trace.valid
             || before & 1 == 0
             || after & 1 != 0
-            || trace.members != group.members
+            || !self.same_members(&trace, &group.members)
             || sql != group.end
             || group.witness.is_some()
         {
@@ -681,22 +837,24 @@ impl ReplayState {
         &mut self,
         witness: &mut Witness,
         delivery: Delivery<'_>,
+        read_delivery: Option<(&RecordedMysqlResponse, DateTime<Utc>, DateTime<Utc>)>,
         case: Option<&str>,
         identity: &ReplaySessionIdentity,
     ) {
         let command = delivery.command;
         let params = delivery.params;
         let sql = delivery.sql.to_owned();
+        let prefix = self.prepare_mysql_prefix(witness, delivery, read_delivery, case);
         let exchanges = &self.mysql.exchanges;
-        let observed =
-            self.mysql
-                .transaction_equivalence
-                .observe_delivery(witness, delivery, |index| {
-                    matches!(
-                        exchanges[index].status,
-                        ReplayExchangeStatus::Responding | ReplayExchangeStatus::Consumed
-                    )
-                });
+        let observed = self
+            .mysql
+            .transaction_equivalence
+            .observe_delivery_with_prefix(witness, delivery, prefix, |index| {
+                matches!(
+                    exchanges[index].status,
+                    ReplayExchangeStatus::Responding | ReplayExchangeStatus::Consumed
+                )
+            });
         for (index, kind) in observed.omissions {
             if self.mysql.exchanges[index].status.is_available() {
                 self.mysql.exchanges[index].optional_session = Some(kind);
@@ -726,6 +884,7 @@ impl ReplayState {
             case,
             delivery,
             &mysql.transaction_equivalence,
+            &mysql.exchanges,
         ) {
             for index in indices {
                 if self.mysql.exchanges[index].status.is_available() {
@@ -735,5 +894,97 @@ impl ReplayState {
                 }
             }
         }
+    }
+
+    fn prepare_mysql_prefix(
+        &self,
+        witness: &mut Witness,
+        delivery: Delivery<'_>,
+        wire: Option<(&RecordedMysqlResponse, DateTime<Utc>, DateTime<Utc>)>,
+        case: Option<&str>,
+    ) -> Option<usize> {
+        let previous = witness.first_delivery.take();
+        let index = delivery.index?;
+        let case = case?;
+        let exchanges = &self.mysql.exchanges;
+        let timeline = self.input_timing.as_ref()?;
+        let window = |index: usize| {
+            timeline.mysql_prefix_window(case, exchanges[index].record.request_started_at?)
+        };
+        let registry = &self.mysql.transaction_equivalence;
+        if let Some(previous) = previous {
+            let trace = witness.active.as_mut()?;
+            let actual = *trace.members.first()?;
+            let &(requirement, transaction) = registry.members.get(&index)?;
+            let group = &registry.requirements[requirement].transactions[transaction];
+            if let [expected, effect, _] = group.members.as_slice()
+                && *effect == index
+                && *expected != actual
+                && registry.prefixes.covers(*expected, trace.neutral_first)
+                && window(actual).is_some_and(|actual| window(*expected) == Some(actual))
+                && self.mysql_prefix_response_matches(&exchanges[*expected].record, &previous, case)
+            {
+                trace.prefix_equivalent = true;
+                tracing::debug!(
+                    actual,
+                    expected,
+                    index,
+                    "confirmed equivalent MySQL first read after locking statement"
+                );
+            }
+            return None;
+        }
+        if !delivery.successful
+            || delivery.after & 1 == 0
+            || !witness
+                .active
+                .as_ref()
+                .map_or(delivery.before & 1 == 0, |trace| {
+                    trace.valid && trace.members.is_empty() && !trace.skipped_free_read
+                })
+        {
+            return None;
+        }
+        let (response, requested_at, delivered_at) = wire?;
+        let group = registry.prefixes.group_in_window(index, window)?;
+        witness.first_delivery = Some(ReadDelivery {
+            response: response.clone(),
+            requested_at,
+            delivered_at,
+        });
+        Some(group)
+    }
+
+    fn mysql_prefix_response_matches(
+        &self,
+        expected: &RecordedMysqlExchange,
+        actual: &ReadDelivery,
+        case: &str,
+    ) -> bool {
+        let Ok(source) = expected.response.materialize() else {
+            return false;
+        };
+        let Some((owner, policy)) = self.replay_policy.as_ref().and_then(|policy| {
+            let owner = &policy.request_contracts;
+            owner.compiled_rules().map(|policy| (owner, policy))
+        }) else {
+            return source == actual.response;
+        };
+        let clocks = owner.contract_clocks(
+            Some(case),
+            contracts::source_started(expected),
+            Some(actual.requested_at),
+            expected.timestamp,
+            Some(actual.delivered_at),
+        );
+        contracts::automatic::compare_response(
+            policy,
+            &source,
+            &actual.response,
+            expected.sql.as_deref(),
+            expected.database.as_deref(),
+            clocks,
+        )
+        .is_ok_and(|result| result.passed())
     }
 }

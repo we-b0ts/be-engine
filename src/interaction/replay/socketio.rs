@@ -1,4 +1,5 @@
 //! Fresh sessions share one scheduler; completion uses only actual Target traffic.
+mod dispatch;
 mod heartbeat;
 mod namespace;
 mod transport;
@@ -10,13 +11,17 @@ use hyper::Request;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, Instant, sleep_until};
 
-use super::timing::{Advance, cancellation, delivery_prefix, transport_cancellation};
+use super::event_order::attachment;
+use super::timing::{
+    Advance, SOCKET_IO_DISPATCH_WAIT, cancellation, delivery_prefix, ordered_input,
+    transport_cancellation, websocket_action_due,
+};
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
     lifecycle::LifecycleDecision,
     model::{
-        ClientTransportEnd, EndReason, InputAction, InputActionKind, InputTranscript, Protocol,
-        WireMessage,
+        ClientTransportEnd, DispatchStage, DispatchTimeout, EndReason, InputAction,
+        InputActionKind, InputTranscript, Protocol, WireMessage,
     },
     observation::Observation,
     socketio::{EngineIoPacket, SocketIoDecoder, SocketIoKind, native_receipts},
@@ -35,6 +40,7 @@ pub(super) async fn execute_with_feedback(
         mut dependency_failure,
         native_events,
         input_timing,
+        mut event_order,
     } = feedback;
     transcript.validate()?;
     let started = Instant::now();
@@ -73,28 +79,35 @@ pub(super) async fn execute_with_feedback(
     let ordered_fast = input_timing
         .as_ref()
         .is_some_and(|timing| timing.ordered_fast());
+    let mut dispatch = None::<dispatch::Dispatch>;
+    let mut dispatch_anchor = Instant::now();
+    let mut dispatch_timeout = None;
     let fast_tail = input_timing.as_ref().and_then(|timing| timing.fast_tail());
-    let heartbeat_acks = fast_tail
+    let heartbeat_timeout = fast_tail
         .as_ref()
-        .and_then(|tail| tail.heartbeat_acks.as_ref());
+        .is_some_and(|tail| tail.heartbeat_timeout);
+    let mut terminal = heartbeat::Terminal::default();
     let mut tail_wait: Option<futures_util::future::BoxFuture<'static, Result<Advance>>> = None;
     let mut tail_ready_at: Option<Instant> = None;
     let mut tail_compressed = false;
     let mut output_count = 0;
     let mut last_output = started;
-    let mut heartbeats = heartbeat::Heartbeats::new(transcript);
+    let mut heartbeats =
+        heartbeat::Heartbeats::new(transcript, heartbeat_timeout && transport.is_websocket());
     let mut namespaces = namespace::Admission::default();
     let has_transport_end = transcript
         .actions
         .last()
         .is_some_and(|action| matches!(action.action, InputActionKind::TransportEnd { .. }));
+    let ordered_inputs = ordered_fast.then(|| {
+        transcript
+            .actions
+            .iter()
+            .map(ordered_input)
+            .collect::<Vec<_>>()
+    });
+    let mut missing_predecessor = None;
     let (mut reason, mut transport_clean) = 'session: loop {
-        if dependency_failure
-            .as_ref()
-            .is_some_and(|failure| *failure.borrow())
-        {
-            break (EndReason::DependencyFailure, false);
-        }
         // Protocol controls are evidence, not replay input timers. Target heartbeat
         // replies are generated independently when its own live ping arrives.
         while let Some(action) = transcript.actions.get(next) {
@@ -120,26 +133,51 @@ pub(super) async fn execute_with_feedback(
             );
             next += 1;
         }
+        let awaiting_terminal_ping =
+            heartbeat_timeout && transport.is_websocket() && next == transcript.actions.len();
+        if awaiting_terminal_ping {
+            // Case-level rejection remains in the dependency report. Keep the
+            // actual peer open so its disconnect handler still runs.
+            dependency_failure = None;
+        } else if dependency_failure
+            .as_ref()
+            .is_some_and(|failure| *failure.borrow())
+        {
+            break (EndReason::DependencyFailure, false);
+        }
         let now = elapsed_ms(started);
         match observed.decision(now) {
             LifecycleDecision::Close(EndReason::BusinessIdle)
-                if (transcript.protocol == Protocol::SocketIo || has_transport_end)
-                    && next < transcript.actions.len() => {}
+                if awaiting_terminal_ping
+                    || (transcript.protocol == Protocol::SocketIo || has_transport_end)
+                        && next < transcript.actions.len() => {}
             LifecycleDecision::Close(reason) => break (reason, true),
+            LifecycleDecision::Fail(EndReason::RequestTimeout) if awaiting_terminal_ping => {}
             LifecycleDecision::Fail(reason) => break (reason, false),
             _ => {}
         }
         let action = transcript.actions.get(next);
+        let ordered =
+            action.is_some() && ordered_inputs.as_ref().is_some_and(|inputs| inputs[next]);
+        let namespace_close = ordered_fast
+            && action
+                .is_some_and(|a| namespace::disconnects(a, transcript.policy.max_message_bytes));
+        let missing_event = event_order
+            .as_ref()
+            .zip(action.filter(|_| ordered || namespace_close))
+            .and_then(|(order, action)| order.missing(action));
+        let dispatch_deadline = (ordered || namespace_close && missing_event.is_some())
+            .then_some(dispatch_anchor + SOCKET_IO_DISPATCH_WAIT);
         let namespace_ready = transcript.protocol != Protocol::SocketIo
             || action.is_none_or(|action| {
                 namespaces.permits(action, transcript.policy.max_message_bytes)
             });
-        let admitted = action
-            .filter(|_| namespace_ready)
-            .filter(|action| {
-                transcript.protocol != Protocol::SocketIo
-                    || action.after.iter().all(|id| completed.contains_key(id))
-            })
+        let prerequisites_ready = action.filter(|_| namespace_ready).filter(|action| {
+            transcript.protocol != Protocol::SocketIo
+                || action.after.iter().all(|id| completed.contains_key(id))
+        });
+        let admitted = prerequisites_ready
+            .filter(|_| !namespace_close || missing_event.is_none())
             .filter(|action| {
                 action.ack_ref.as_ref().is_none_or(|reference| {
                     server_acks.contains_key(&(
@@ -148,24 +186,40 @@ pub(super) async fn execute_with_feedback(
                     ))
                 })
             });
-        let at_fast_tail = fast_tail.as_ref().is_some_and(|tail| {
-            let ready = if let Some(required) = heartbeat_acks {
-                transport.is_websocket()
-                    && output_count == tail.output_count
-                    && heartbeats.complete(true)
-                    && required.is_subset(&native_receipts.acknowledged)
-                    && observed
-                        .pending()
-                        .iter()
-                        .all(|id| native_receipts.acknowledged.contains(id))
+        let events_ready = missing_event.is_none() && admitted.is_some();
+        if dispatch_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            let unadmitted = dispatch.as_ref().and_then(dispatch::Dispatch::unadmitted);
+            dispatch_timeout = Some(DispatchTimeout {
+                input_sequence: action.expect("ordered input").sequence,
+                stage: if missing_event.is_some() || unadmitted.is_some() || admitted.is_none() {
+                    DispatchStage::Prerequisites
+                } else {
+                    DispatchStage::Timing
+                },
+                unadmitted_request: unadmitted,
+            });
+            missing_predecessor = missing_event;
+            let reason = if missing_event.is_some() {
+                EndReason::MissingPredecessor
             } else {
-                output_count >= tail.output_count && observed.pending().is_empty()
+                EndReason::DispatchTimeout
             };
-            ready
-                && match tail.close_sequence {
-                    Some(sequence) => admitted.is_some_and(|action| action.sequence == sequence),
-                    None => action.is_none(),
-                }
+            break (reason, false);
+        }
+        if let Some(dispatch) = &dispatch
+            && events_ready
+        {
+            dispatch.events_arrived();
+        }
+        let at_fast_tail = fast_tail.as_ref().is_some_and(|tail| {
+            let at_boundary = match tail.close_sequence {
+                Some(sequence) => admitted.is_some_and(|action| action.sequence == sequence),
+                None => action.is_none(),
+            };
+            at_boundary
+                && output_count >= tail.output_count
+                && (tail.native_observation
+                    || !tail.heartbeat_timeout && observed.pending().is_empty())
         });
         if at_fast_tail
             && tail_wait.is_none()
@@ -177,25 +231,51 @@ pub(super) async fn execute_with_feedback(
         }
         let fast_idle_due = fast_tail
             .as_ref()
-            .filter(|tail| at_fast_tail && tail.close_sequence.is_none())
+            .filter(|_| at_fast_tail)
             .zip(tail_ready_at)
-            .map(|(tail, ready)| {
-                ready.max(last_sent).max(last_output) + Duration::from_millis(tail.idle_ms)
-            });
-        if let (Some(action), Some(timing)) = (admitted, &input_timing)
-            && (action.compressible_gap || delivery_prefix(action))
+            .and_then(|(tail, ready)| tail.business_idle_due(ready, last_sent, last_output));
+        // The dispatch window can release the native push that produces an ACK's
+        // server event. Open it before that event arrives, while keeping the
+        // input gated on the live ACK identity.
+        let timing_action = if ordered {
+            prerequisites_ready
+        } else {
+            admitted
+        };
+        if let (Some(action), Some(timing)) = (timing_action, &input_timing)
+            && (ordered || action.compressible_gap || delivery_prefix(action))
             && !cancellation(action)
             && timing_sequence != Some(action.sequence)
         {
             let timing = timing.clone();
-            let sequence = action.sequence;
-            let completed = action.after.clone();
-            timing_sequence = Some(sequence);
-            timing_wait = Some(Box::pin(
-                async move { timing.wait(sequence, completed).await },
-            ));
+            timing_sequence = Some(action.sequence);
+            timing_wait = Some(if ordered {
+                let (pending, wait) = dispatch::Dispatch::begin(timing, action, events_ready);
+                dispatch = Some(pending);
+                wait
+            } else {
+                let (sequence, completed) = (action.sequence, action.after.clone());
+                Box::pin(async move { timing.wait(sequence, completed).await })
+            });
         }
+        // An input released on its original deadline can be later than the
+        // compressed clock. Pace ordered closes from the preceding actual send.
+        let ordered_close_due = admitted
+            .filter(|action| ordered_fast && !tail_compressed && cancellation(action))
+            .map(|action| {
+                last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset))
+            });
         let due = admitted.and_then(|action| {
+            if ordered {
+                return (timing_ready == Some(action.sequence) && missing_event.is_none())
+                    .then(Instant::now);
+            }
+            if ordered_fast && attachment(action) {
+                // Retain the wire spacing after a compressed binary header.
+                return Some(
+                    last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset)),
+                );
+            }
             if matches!(action.action, InputActionKind::TransportEnd { .. }) {
                 return Some(
                     started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms)),
@@ -243,12 +323,17 @@ pub(super) async fn execute_with_feedback(
                 transcript.policy.input_gap_ms,
             )
         });
-        let lifecycle_deadline = session_deadline(transcript, &observed, next, started);
+        let due = due.into_iter().chain(ordered_close_due).max();
+        let lifecycle_deadline = if awaiting_terminal_ping {
+            started + Duration::from_millis(transcript.policy.max_duration_ms)
+        } else {
+            session_deadline(transcript, &observed, next, started)
+        };
         // A recorded transport cancellation must remain available while an
         // earlier input is waiting for an ACK, namespace or dependency delivery.
         let cancel = transcript.actions.iter().skip(next + 1).find(|action| {
             transport_cancellation(action)
-                && (transcript.protocol == Protocol::SocketIo
+                && ((!(ordered || namespace_close) && transcript.protocol == Protocol::SocketIo)
                     || matches!(action.action, InputActionKind::TransportEnd { .. }))
         });
         let cancel_due = cancel.map(|action| {
@@ -259,7 +344,20 @@ pub(super) async fn execute_with_feedback(
             .into_iter()
             .chain(fast_idle_due)
             .fold(lifecycle_deadline, Instant::min);
-        let heartbeat_due = heartbeats.next_due();
+        let heartbeat_due = heartbeats.next_due().filter(|_| !awaiting_terminal_ping);
+        let io_deadline =
+            dispatch_deadline.map_or(lifecycle_deadline, |due| due.min(lifecycle_deadline));
+        macro_rules! session_io {
+            ($future:expr, $context:literal) => {
+                session_io!(result tokio::time::timeout_at(io_deadline, $future).await, $context)
+            };
+            (result $result:expr, $context:literal) => {
+                match $result {
+                    Err(_) if dispatch_deadline == Some(io_deadline) => continue 'session,
+                    result => result.context($context)??,
+                }
+            };
+        }
         tokio::select! {
             biased;
             _ = async { match dependency_failure.as_mut() {
@@ -269,7 +367,8 @@ pub(super) async fn execute_with_feedback(
                 if dependency_failure.as_ref().is_some_and(|failure|*failure.borrow()) {break (EndReason::DependencyFailure,false);}
                 dependency_failure=None;
             }
-            _ = sleep_until(cancel_due.unwrap_or(lifecycle_deadline)), if cancel_due.is_some_and(|cancel| due.is_none_or(|due| due > cancel)) => {
+            _ = sleep_until(dispatch_deadline.unwrap_or(lifecycle_deadline)), if dispatch_deadline.is_some() => continue 'session,
+            _ = sleep_until(cancel_due.unwrap_or(lifecycle_deadline)), if ordered_close_due.is_none() && cancel_due.is_some_and(|cancel| due.is_none_or(|due| due > cancel)) => {
                 let action = cancel.expect("cancellation deadline");
                 let deadline = Instant::now() + Duration::from_millis(transcript.policy.cleanup_timeout_ms);
                 match &action.action {
@@ -320,30 +419,57 @@ pub(super) async fn execute_with_feedback(
                         note_completed(before, &observed, &mut completed);
                         if transcript.protocol == Protocol::SocketIo {
                             for packet in server_decoder.push(&message)? {
+                                if let (Some(order), EngineIoPacket::Message(packet)) = (&mut event_order, &packet)
+                                    && order.observe(packet) && missing_event.is_some() {
+                                    dispatch_anchor = Instant::now();
+                                }
+                                if awaiting_terminal_ping
+                                    && matches!(&packet, EngineIoPacket::Message(packet)
+                                        if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent
+                                            | SocketIoKind::Ack | SocketIoKind::BinaryAck))
+                                    && let Some(pong) = terminal.observed_progress(Instant::now())
+                                {
+                                    session_io!(transport.send(&pong), "deferred Engine.IO heartbeat send timed out");
+                                }
                                 match packet {
-                                    EngineIoPacket::Open(open) => transport.set_sid(open.sid)?,
+                                    EngineIoPacket::Open(open) => {
+                                        terminal.configure(open.ping_timeout);
+                                        transport.set_sid(open.sid)?;
+                                    }
                                     EngineIoPacket::Message(packet) if packet.kind == SocketIoKind::Connect => {
                                         namespaces.accept(&packet.namespace);
                                         if let Some(sink) = &native_events {
                                             tokio::select! {
                                                 biased;
                                                 _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
-                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.connected(&packet.namespace, packet.data.as_ref().and_then(|data| data.get("sid")).and_then(serde_json::Value::as_str))) => {
-                                                    result.context("native namespace observation timed out")??;
+                                                result = tokio::time::timeout_at(io_deadline, sink.connected(&packet.namespace, packet.data.as_ref().and_then(|data| data.get("sid")).and_then(serde_json::Value::as_str))) => {
+                                                    session_io!(result result, "native namespace observation timed out");
                                                 }
                                             }
                                         }
                                     }
                                     EngineIoPacket::Ping(payload) => {
-                                        if heartbeats.ping(payload.clone(), Instant::now())? {
-                                            tokio::time::timeout_at(lifecycle_deadline,
-                                                transport.send(&WireMessage::text(format!("3{payload}"))))
-                                                .await.context("Engine.IO heartbeat send timed out")??;
+                                        let now = Instant::now();
+                                        if awaiting_terminal_ping {
+                                            terminal.defer_pong(payload, now);
+                                            if fast_tail.as_ref().is_some_and(|tail| tail.native_observation)
+                                                && let Some(timing) = &input_timing
+                                                && session_io!(timing.native_prefix_active(), "native heartbeat progress query timed out")
+                                                && let Some(pong) = terminal.observed_progress(Instant::now())
+                                            {
+                                                session_io!(transport.send(&pong), "native Engine.IO heartbeat send timed out");
+                                            }
+                                        } else if heartbeats.ping(payload.clone(), now)? {
+                                            session_io!(transport.send(&WireMessage::text(format!("3{payload}"))), "Engine.IO heartbeat send timed out");
                                         }
                                     }
                                     EngineIoPacket::Message(packet) if matches!(packet.kind, SocketIoKind::Ack | SocketIoKind::BinaryAck) => {
                                         if let Some(sequence) = native_receipts.acknowledge(&packet) && let Some(sink) = &native_events {
-                                            sink.acknowledged(sequence).await?;
+                                            if ordered {
+                                                session_io!(sink.acknowledged(sequence), "native ACK observation timed out");
+                                            } else {
+                                                sink.acknowledged(sequence).await?;
+                                            }
                                         }
                                     }
                                     EngineIoPacket::Message(packet) if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent) => {
@@ -354,8 +480,8 @@ pub(super) async fn execute_with_feedback(
                                             tokio::select! {
                                                 biased;
                                                 _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
-                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.observe(event)) => {
-                                                    result.context("native event observation timed out")??;
+                                                result = tokio::time::timeout_at(io_deadline, sink.observe(event)) => {
+                                                    session_io!(result result, "native event observation timed out");
                                                 }
                                             }
                                         }
@@ -368,8 +494,7 @@ pub(super) async fn execute_with_feedback(
                         }
                     }
                     ReaderEvent::Ping(bytes) => {
-                        tokio::time::timeout_at(lifecycle_deadline, transport.pong(bytes))
-                            .await.context("WebSocket heartbeat send timed out")??;
+                        session_io!(transport.pong(bytes), "WebSocket heartbeat send timed out");
                     }
                     ReaderEvent::Closed => break (EndReason::ServerEof, true),
                     ReaderEvent::Close { code, reason } => {
@@ -381,17 +506,11 @@ pub(super) async fn execute_with_feedback(
             }
             _ = sleep_until(heartbeat_due.unwrap_or(lifecycle_deadline)), if heartbeat_due.is_some() => {
                 let message = heartbeats.take_due();
-                tokio::time::timeout_at(lifecycle_deadline, transport.send(&message))
-                    .await.context("recorded Engine.IO heartbeat send timed out")??;
+                session_io!(transport.send(&message), "recorded Engine.IO heartbeat send timed out");
             }
             _ = sleep_until(wake) => {
                 if fast_idle_due.is_some_and(|due| Instant::now() >= due) {
-                    let reason = if heartbeat_acks.is_some() {
-                        EndReason::FastHeartbeatTailSkipped
-                    } else {
-                        EndReason::BusinessIdle
-                    };
-                    break (reason, true);
+                    break (EndReason::BusinessIdle, true);
                 }
                 let Some(action) = action.filter(|_| due.is_some_and(|due| Instant::now() >= due)) else { continue; };
                 match &action.action {
@@ -407,9 +526,21 @@ pub(super) async fn execute_with_feedback(
                             && message.kind == crate::interaction::model::MessageKind::Text
                             && crate::interaction::socketio::decode_engine_io_text(&message.data, transcript.policy.max_message_bytes)?.is_heartbeat();
                         if !control || heartbeats.recorded_pong(&message, transcript.policy.max_message_bytes)? {
-                            tokio::time::timeout_at(started + Duration::from_millis(observed.next_deadline_ms()),
-                                transport.send(&message)).await.context("Target session input send timed out")??;
-                            if (native_events.is_some() || heartbeat_acks.is_some()) && transcript.protocol == Protocol::SocketIo {
+                            let policy_deadline = started + Duration::from_millis(observed.next_deadline_ms());
+                            let deadline = dispatch_deadline.map_or(policy_deadline, |deadline| deadline.min(policy_deadline));
+                            match tokio::time::timeout_at(deadline, transport.send(&message)).await {
+                                Err(_) if dispatch_deadline == Some(deadline) => {
+                                    dispatch_timeout = Some(DispatchTimeout {
+                                        input_sequence: action.sequence, stage: DispatchStage::Send, unadmitted_request: None,
+                                    });
+                                    break (EndReason::DispatchTimeout, false);
+                                }
+                                result => result.context("Target session input send timed out")??,
+                            }
+                            if !control {
+                                dispatch_anchor = Instant::now();
+                            }
+                            if native_events.is_some() && transcript.protocol == Protocol::SocketIo {
                                 native_receipts.sent(action.sequence, &message, transcript.policy.max_message_bytes)?;
                             }
                         }
@@ -425,6 +556,7 @@ pub(super) async fn execute_with_feedback(
                         observed.upgrade(uri.clone(), headers.clone(), elapsed_ms(started))?;
                         tokio::time::timeout_at(started + Duration::from_millis(observed.next_deadline_ms()),
                             transport.upgrade(uri, headers)).await.context("Engine.IO upgrade timed out")??;
+                        dispatch_anchor = Instant::now();
                     },
                     InputActionKind::Close { code, reason } => {
                         let actual = observed.client_close(*code, reason.clone(), elapsed_ms(started))?;
@@ -453,6 +585,7 @@ pub(super) async fn execute_with_feedback(
                         break ended;
                     }
                 }
+                dispatch = None;
                 next += 1;
                 last_offset = action.offset_ms;
                 last_sent = Instant::now();
@@ -460,12 +593,7 @@ pub(super) async fn execute_with_feedback(
         }
     };
     let cleanup = Duration::from_millis(transcript.policy.cleanup_timeout_ms);
-    // A skipped heartbeat tail releases the transport by dropping it, without
-    // the protocol CLOSE frames normally sent by the cleanup path.
-    let mut closed = matches!(
-        reason,
-        EndReason::ServerEof | EndReason::FastHeartbeatTailSkipped
-    ) || transport.raw_end_complete();
+    let mut closed = reason == EndReason::ServerEof || transport.raw_end_complete();
     if !closed && transport_clean {
         tokio::select! {
             biased;
@@ -482,28 +610,33 @@ pub(super) async fn execute_with_feedback(
             }
         }
     }
-    if !closed {
+    if !closed && dispatch_timeout.is_none() {
         let _ = tokio::time::timeout(
             cleanup,
             transport.abort(Some(1000), "recording case complete"),
         )
         .await;
     }
-    let (actual_input, observation) = observed.finish(
+    let heartbeat_eof = (reason == EndReason::ServerEof && terminal.expired(Instant::now()))
+        .then(|| elapsed_ms(started));
+    let (actual_input, mut observation) = observed.finish(
         reason,
         elapsed_ms(started),
         transport_clean
             && closed
             && next == transcript.actions.len()
-            && heartbeats.complete(
-                reason == EndReason::FastHeartbeatTailSkipped
-                    || removed_ms > 0
+            && (heartbeat_eof.is_some()
+                || heartbeats.complete(
+                    removed_ms > 0
                         && matches!(
                             reason,
                             EndReason::ClientClose | EndReason::ClientTransportEnd
                         ),
-            ),
+                )),
     )?;
+    observation.end.fast_heartbeat_eof_ms = heartbeat_eof;
+    observation.end.missing_predecessor = missing_predecessor;
+    observation.end.dispatch_timeout = dispatch_timeout;
     if reason == EndReason::ClientTransportEnd && next == transcript.actions.len() {
         ensure!(
             actual_input.actions.last().map(|action| action.sequence)
@@ -721,37 +854,6 @@ fn session_deadline(
     started + Duration::from_millis(millis)
 }
 
-fn websocket_action_due(
-    action: &InputAction,
-    completed: &BTreeMap<u64, Instant>,
-    last_offset: u64,
-    last_sent: Instant,
-    input_gap_ms: u64,
-) -> Option<Instant> {
-    let mut barrier = None;
-    for sequence in &action.after {
-        let at = *completed.get(sequence)?;
-        barrier = Some(barrier.map_or(at, |previous: Instant| previous.max(at)));
-    }
-    let closes = matches!(
-        action.action,
-        InputActionKind::Close { .. } | InputActionKind::TransportEnd { .. }
-    );
-    if closes && let Some(gap_start) = action.gap_start_ms {
-        let delay = action.offset_ms.checked_sub(gap_start)?;
-        // Keep the actual completion barrier even when client idle time is compressed.
-        return barrier?.checked_add(Duration::from_millis(delay));
-    }
-    if action.compressible_gap {
-        let gap_start = action.gap_start_ms?;
-        let delay = action.offset_ms.saturating_sub(gap_start).min(input_gap_ms);
-        Some(barrier? + Duration::from_millis(delay))
-    } else {
-        let due = last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset));
-        Some(barrier.map_or(due, |barrier| due.max(barrier)))
-    }
-}
-
 fn rebind_ack(
     message: &WireMessage,
     action: &InputAction,
@@ -790,106 +892,7 @@ fn rebind_ack(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::interaction::model::InputActionKind;
-
-    #[test]
-    fn future_recorded_input_uses_session_budget_then_restores_business_idle() {
-        let started = Instant::now();
-        let mut input = InputTranscript::new(
-            Protocol::SocketIo,
-            crate::interaction::policy::InteractionPolicy::default(),
-        );
-        input.actions.push(InputAction {
-            sequence: 1,
-            offset_ms: 40_000,
-            after: vec![],
-            compressible_gap: false,
-            gap_start_ms: None,
-            ack_ref: None,
-            action: InputActionKind::Message {
-                message: WireMessage::text("1"),
-            },
-        });
-        let mut observed = Observation::new(input.protocol, input.policy.clone()).unwrap();
-        observed.output(WireMessage::text("0{\"sid\":\"live\",\"upgrades\":[],\"pingInterval\":25000,\"pingTimeout\":20000}"),0).unwrap();
-        assert_eq!(
-            session_deadline(&input, &observed, 0, started),
-            started + Duration::from_millis(input.policy.max_duration_ms)
-        );
-        assert_eq!(
-            session_deadline(&input, &observed, 1, started),
-            started + Duration::from_millis(input.policy.business_idle_ms)
-        );
-    }
-
-    #[test]
-    fn input_gap_compression_waits_for_independently_observed_target_completion() {
-        let sent = Instant::now();
-        let action = InputAction {
-            sequence: 2,
-            offset_ms: 30_000,
-            after: vec![1],
-            compressible_gap: true,
-            gap_start_ms: Some(2_000),
-            ack_ref: None,
-            action: InputActionKind::Message {
-                message: WireMessage::text("42[\"next\"]"),
-            },
-        };
-        let mut completed = BTreeMap::new();
-        assert!(websocket_action_due(&action, &completed, 0, sent, 100).is_none());
-        let target_done = sent + Duration::from_secs(2);
-        completed.insert(1, target_done);
-        assert_eq!(
-            websocket_action_due(&action, &completed, 0, sent, 100),
-            Some(target_done + Duration::from_millis(100))
-        );
-        let overlap = InputAction {
-            after: vec![],
-            compressible_gap: false,
-            ..action
-        };
-        assert_eq!(
-            websocket_action_due(&overlap, &completed, 0, sent, 100),
-            Some(sent + Duration::from_secs(30))
-        );
-    }
-
-    #[test]
-    fn explicit_close_preserves_the_gap_after_actual_completion() {
-        let sent = Instant::now();
-        let target_done = sent + Duration::from_millis(40);
-        let mut completed = BTreeMap::new();
-        let mut action = InputAction {
-            sequence: 3,
-            offset_ms: 57,
-            after: vec![2],
-            compressible_gap: false,
-            gap_start_ms: Some(7),
-            ack_ref: None,
-            action: InputActionKind::Close {
-                code: None,
-                reason: String::new(),
-            },
-        };
-        assert!(websocket_action_due(&action, &completed, 10, sent, 1).is_none());
-        completed.insert(2, target_done);
-        assert_eq!(
-            websocket_action_due(&action, &completed, 10, sent, 1),
-            Some(target_done + Duration::from_millis(50))
-        );
-        action.action = InputActionKind::Message {
-            message: WireMessage::text("1"),
-        };
-        assert_eq!(
-            websocket_action_due(&action, &completed, 10, sent, 1),
-            Some(sent + Duration::from_millis(47)),
-            "a generic WebSocket text message is not an Engine.IO close"
-        );
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod net_tests;

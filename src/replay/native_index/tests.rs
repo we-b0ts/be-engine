@@ -337,3 +337,42 @@ fn optional_mysql_sequences_keep_the_original_predecessor_comparison() {
     assert_eq!(index.blocker(1, |_| true), Some(0));
     assert_eq!(index.blocker(0, |_| true), None);
 }
+
+#[test]
+fn blocker_existence_scans_each_lane_once_per_selection() {
+    use std::cell::Cell;
+
+    let mut index = LaneIndex::default();
+    let lane = LaneKey {
+        owner: LaneOwner::Case,
+        case: Some("active".into()),
+        connection: uuid::Uuid::new_v4(),
+    };
+    index.register(lane.clone(), 10, 0);
+    index.register_optional(lane.clone(), None, 1);
+    for position in 2..1026 {
+        index.register(lane.clone(), position as u64, position);
+    }
+    let other = LaneKey {
+        case: Some("other".into()),
+        ..lane
+    };
+    index.register(other, 20, 1026);
+    let inspections = Cell::new(0);
+    let mut blocked = index.blocked_candidates(|position| {
+        inspections.set(inspections.get() + 1);
+        position == 0 || position == 1
+    });
+    for position in 0..1028 {
+        assert_eq!(
+            blocked(position),
+            index
+                .blocker(position, |prior| prior == 0 || prior == 1)
+                .is_some()
+        );
+    }
+    assert_eq!(inspections.get(), 1027);
+    let mut next = index.blocked_candidates(|position| position == 0);
+    assert!(!next(2));
+    assert!(next(11));
+}

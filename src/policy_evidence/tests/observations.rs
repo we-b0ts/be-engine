@@ -1,6 +1,113 @@
 use super::*;
 
 #[test]
+fn source_occurrence_lookup_keeps_slots_and_source_clocks_separate() {
+    let (_temp, artifacts, store, source) = setup();
+    let target = "request-1";
+    store
+        .record_target(
+            target,
+            TargetMetadata::from_pair(&source),
+            &artifacts,
+            b"target",
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .associate(&source, target, &artifacts, Some(b"source"))
+            .unwrap(),
+        AssociationOutcome::Retained,
+    );
+
+    let mut different_target_clock = source.clone();
+    different_target_clock.clocks.dependency.target = Some(chrono::Utc::now());
+    assert_eq!(
+        store
+            .associate(&different_target_clock, target, &artifacts, None)
+            .unwrap(),
+        AssociationOutcome::Retained,
+    );
+
+    let mut different_source_clock = source.clone();
+    different_source_clock.clocks.dependency.source = Some(chrono::Utc::now());
+    let mut different_slot = source;
+    different_slot.slot = Slot::SqlValue(1);
+    for distinct in [different_source_clock, different_slot] {
+        assert_eq!(
+            store
+                .associate(&distinct, target, &artifacts, None)
+                .unwrap(),
+            AssociationOutcome::SourceRequired,
+        );
+    }
+}
+
+#[test]
+fn prepared_request_source_requires_the_original_case_clock_and_target_domain() {
+    let (_temp, artifacts, store, mut source) = setup();
+    source.target_role = TargetRole::Unavailable;
+    source.clocks.case.source = DateTime::from_timestamp(100, 0);
+    assert!(
+        store
+            .record(source.clone(), &artifacts, b"source", None)
+            .unwrap()
+            .is_some()
+    );
+    let prepared = store.prepare_request_source(&source).unwrap().unwrap();
+    let mut different_clock = source.clone();
+    different_clock.clocks.case.source = DateTime::from_timestamp(101, 0);
+    assert!(
+        store
+            .prepare_request_source(&different_clock)
+            .unwrap()
+            .is_none()
+    );
+
+    let mut target = TargetMetadata::from_pair(&source);
+    target.role = TargetRole::IndependentTargetObservation;
+    store
+        .record_target("matching", target.clone(), &artifacts, b"target")
+        .unwrap();
+    target.case_id = "different-case".into();
+    store
+        .record_target("foreign", target, &artifacts, b"foreign")
+        .unwrap();
+    let matching = store.prepare_request_association("matching").unwrap();
+    let foreign = store.prepare_request_association("foreign").unwrap();
+    assert!(
+        !matching
+            .associate_prepared(&prepared, different_clock.clocks.case.source)
+            .unwrap()
+    );
+    assert!(
+        !foreign
+            .associate_prepared(&prepared, source.clocks.case.source)
+            .unwrap()
+    );
+    assert!(
+        matching
+            .associate_prepared(&prepared, source.clocks.case.source)
+            .unwrap()
+    );
+
+    let manifest = store.sealed_manifest().unwrap();
+    let graph = manifest.observations.as_ref().unwrap();
+    assert!(manifest.complete);
+    assert_eq!(graph.association_attempts, 1);
+    assert_eq!(graph.targets.len(), 2);
+    assert_eq!(graph.associations.len(), 1);
+    let witnesses = manifest.witnesses().unwrap();
+    let pair = witnesses
+        .iter()
+        .find(|witness| witness.target_observation_id.is_some())
+        .unwrap();
+    let path = verify(&artifacts.join("replay.json"), &manifest).unwrap();
+    let (recorded, actual) = read(&path, pair, &artifacts).unwrap();
+    assert_eq!(recorded, b"source");
+    assert_eq!(actual.unwrap(), b"target");
+}
+
+#[test]
 fn run_target_without_a_case_is_authenticated_and_cannot_borrow_a_primary_clock() {
     let (_temp, artifacts, _old, source) = setup();
     let session = uuid::Uuid::new_v4().to_string();
@@ -709,6 +816,17 @@ fn mysql_text_prepared_domain_adapter_does_not_relax_other_commands() {
                 .unwrap(),
             expected
         );
+        let prepared = store.prepare_request_association(command).unwrap();
+        assert_eq!(
+            prepared.associate(&metadata, &artifacts, None).unwrap(),
+            expected
+        );
+        let mut foreign = metadata.clone();
+        foreign.source.case_id = "other-case".into();
+        assert_eq!(
+            prepared.associate(&foreign, &artifacts, None).unwrap(),
+            AssociationOutcome::Incompatible
+        );
     }
     let manifest = store.sealed_manifest().unwrap();
     assert!(manifest.complete);
@@ -717,7 +835,8 @@ fn mysql_text_prepared_domain_adapter_does_not_relax_other_commands() {
 
 #[test]
 fn replay_session_policy_and_case_clock_cannot_be_replaced_with_an_old_valid_graph() {
-    let (_temp, artifacts, _standalone, metadata) = setup();
+    let (_temp, artifacts, _standalone, mut metadata) = setup();
+    metadata.clocks.dependency.target = Some("2026-10-16T00:00:00Z".parse().unwrap());
     let store = WitnessStore::new_bound(&artifacts, "session-a", "policy-a").unwrap();
     store
         .record_observation(
@@ -751,8 +870,16 @@ fn replay_session_policy_and_case_clock_cannot_be_replaced_with_an_old_valid_gra
     assert!(verify(&path, &manifest).is_err());
     let mut witness = manifest.witnesses().unwrap().remove(0);
     assert!(verify_case_clock(&witness, &changed).is_err());
-    write(&original);
+    // An authenticated request observed before the primary clock was set is
+    // still evidence of its actual arrival, without a primary time anchor.
+    changed["cases"][0]["target_request_started_at"] = "2026-10-16T00:00:00.002Z".into();
+    write(&changed);
+    verify(&path, &manifest).unwrap();
+    verify_case_clock(&witness, &changed).unwrap();
+    assert!(witness.metadata.clocks.case.target.is_none());
     witness.metadata.clocks.case.target = DateTime::from_timestamp(1, 0);
+    assert!(verify_case_clock(&witness, &changed).is_err());
+    write(&original);
     assert!(verify_case_clock(&witness, &original).is_err());
 }
 

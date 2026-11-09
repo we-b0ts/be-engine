@@ -232,7 +232,10 @@ pub(in crate::replay) async fn prepare(
                     .lifecycle_cleanup
                     .then(|| Arc::new(AtomicBool::new(false)));
             }
-            let budget = Duration::from_millis(metadata.request_timeout_ms);
+            let mut budget = Duration::from_millis(metadata.request_timeout_ms);
+            if state.stream_timing == Some(crate::replay::ReplayStreamTiming::Fast) {
+                budget = budget.min(crate::replay::FAST_CASE_TIMEOUT);
+            }
             Ok::<_, anyhow::Error>(CaseTail {
                 budget,
                 interaction_post_input: metadata

@@ -1,9 +1,14 @@
 use super::*;
 mod control;
 mod hypothesis;
+mod in_list;
+mod match_order;
 mod observation;
 mod request;
-pub(super) use request::TransactionMatch;
+mod source_formats;
+mod statement_metadata;
+mod transaction;
+pub(super) use transaction::TransactionMatch;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {
@@ -15,7 +20,10 @@ pub(in crate::replay) struct MysqlReplayState {
     case_exchange_index: CaseExchangeIndex,
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
+    source_formats: source_formats::Cache,
+    statement_metadata: statement_metadata::Cache,
     candidates: candidates::Candidates,
+    request_sources: Vec<Option<crate::policy_evidence::PreparedRequestSource>>,
     cleanup_selection: cleanup_selection::Index,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
     pub(in crate::replay) transaction_equivalence: transaction_equivalence::Registry,
@@ -58,14 +66,54 @@ impl MysqlReplayState {
         self.candidates.register(&self.exchanges);
     }
 
+    pub(super) fn has_finite_prepare(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+    ) -> bool {
+        self.prepare_candidates();
+        [ReplaySource::Case, ReplaySource::Startup]
+            .into_iter()
+            .any(|source| {
+                !self
+                    .candidates
+                    .lookup(source, case, identity, Some("COM_STMT_PREPARE"))
+                    .is_empty()
+            })
+    }
+
     pub(in crate::replay) fn prepared_case_members(&self, case: &str) -> Arc<[usize]> {
         self.candidates.case_members(case)
+    }
+
+    pub(in crate::replay) fn prepare_request_sources(
+        &mut self,
+        owner: &crate::replay::policy::request_contract::RequestContracts,
+        case: &str,
+        indices: &[usize],
+    ) -> Result<()> {
+        if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
+            return Ok(());
+        }
+        self.request_sources
+            .resize_with(self.exchanges.len(), || None);
+        let source_case_start = owner.request_times(case).source;
+        for &index in indices {
+            self.request_sources[index] = owner.prepare_mysql_request_source(
+                case,
+                &self.exchanges[index],
+                source_case_start,
+            )?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
     pub(in crate::replay) fn invalidate_scope_index(&mut self) {
         self.candidates = candidates::Candidates::default();
         self.cleanup_selection = cleanup_selection::Index::default();
+        self.statement_metadata = statement_metadata::Cache::default();
+        self.request_sources.clear();
     }
     pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
         if exchange.source == ReplaySource::Case
@@ -107,9 +155,7 @@ impl MysqlReplayState {
                                 OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
                             ) && status == ReplayExchangeStatus::Responding
                     });
-                    !status.is_consumed()
-                        && optional.is_none()
-                        && !self.foreign.contains_key(&index)
+                    !status.is_covered() && optional.is_none() && !self.foreign.contains_key(&index)
                 })
             })
     }
@@ -303,9 +349,20 @@ impl ReplayState {
         sql: Option<&str>,
     ) -> Option<(ReplaySource, usize)> {
         let normalized_sql = sql.map(normalize_sql);
-        let active_case_id = case.map(ToOwned::to_owned);
+        let family = candidates::sql_family(sql);
         for source in [ReplaySource::Case, ReplaySource::Startup] {
-            for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
+            let candidates = self.mysql.candidates.select(
+                &self.mysql.exchanges,
+                source,
+                case,
+                identity,
+                Some(command),
+            );
+            for &index in candidates.iter() {
+                if !self.mysql.candidates.permits_sql(index, family) {
+                    continue;
+                }
+                let exchange = &mut self.mysql.exchanges[index];
                 if !exchange.source.matches_scope(source)
                     || !exchange.status.is_available()
                     || exchange.record.command != command
@@ -317,7 +374,7 @@ impl ReplayState {
                 {
                     continue;
                 }
-                if !active_case_matches(active_case_id.as_deref(), exchange) {
+                if !active_case_matches(case, exchange) {
                     continue;
                 }
                 if !identity_matches_exchange(identity, &exchange.identity) {
@@ -334,6 +391,7 @@ impl ReplayState {
                 ) else {
                     continue;
                 };
+                self.mysql.candidates.claimed(index);
                 ticket.publish_wire();
                 if !self.mysql.lifecycle.complete(&ticket, &mut exchange.status) {
                     continue;
@@ -350,137 +408,6 @@ impl ReplayState {
             }
         }
         None
-    }
-
-    #[cfg(test)]
-    pub(in crate::replay) fn statement_metadata(
-        &mut self,
-        identity: &ReplaySessionIdentity,
-        sql: &str,
-    ) -> StatementMetadata {
-        let case = self.active_case_id.clone();
-        self.statement_metadata_in_case(case.as_deref(), identity, sql)
-    }
-
-    pub(super) fn statement_metadata_in_case(
-        &mut self,
-        case: Option<&str>,
-        identity: &ReplaySessionIdentity,
-        sql: &str,
-    ) -> StatementMetadata {
-        let normalized_sql = normalize_sql(sql);
-        let param_count = count_sql_placeholders(sql);
-        let mut semantic_target = None;
-        for source in [ReplaySource::Case, ReplaySource::Startup] {
-            let candidates =
-                self.mysql
-                    .candidates
-                    .select(&self.mysql.exchanges, source, case, identity, None);
-            for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                for index in candidates.iter().copied() {
-                    let exchange = &self.mysql.exchanges[index];
-                    if !exchange.source.matches_scope(source)
-                        || !active_case_matches(case, exchange)
-                        || !identity_matches_exchange(identity, &exchange.identity)
-                    {
-                        continue;
-                    }
-                    if !project_columns
-                        && !semantic
-                        && matches!(
-                            exchange.record.command.as_str(),
-                            "COM_QUERY" | "COM_STMT_EXECUTE"
-                        )
-                        && self.replay_policy.as_ref().is_some_and(|policy| {
-                            policy.request_contracts.mysql_fields_metadata_matches(
-                                case,
-                                identity,
-                                &exchange.record,
-                                sql,
-                            ) || policy.mysql_sql_values_metadata_matches(&MysqlPolicyContext {
-                                request_times: crate::replay::assertion::RequestTimes {
-                                    source: contracts::source_started(&exchange.record),
-                                    target: None,
-                                },
-                                case_id: case,
-                                identity,
-                                command: "COM_STMT_EXECUTE",
-                                recorded_sql: exchange.record.sql.as_deref(),
-                                sql: Some(sql),
-                                recorded: exchange.record.params.as_deref(),
-                                actual: None,
-                            })
-                        })
-                    {
-                        return StatementMetadata {
-                            param_count,
-                            columns: exchange.record.response.columns.clone(),
-                        };
-                    }
-                    if semantic {
-                        let Some(actual) = semantic_target
-                            .get_or_insert_with(|| self.mysql.sql_cache.get(sql).metadata())
-                            .as_ref()
-                        else {
-                            continue;
-                        };
-                        let Some(recorded_sql) = exchange.record.sql.as_deref() else {
-                            continue;
-                        };
-                        let Some(recorded) = self
-                            .mysql
-                            .sql_cache
-                            .get(recorded_sql)
-                            .bind(&exchange.record.command, exchange.record.params.as_deref())
-                        else {
-                            continue;
-                        };
-                        if let Some(columns) =
-                            projection::semantic_columns(&exchange.record, &recorded, actual)
-                        {
-                            return StatementMetadata {
-                                param_count,
-                                columns,
-                            };
-                        }
-                        continue;
-                    }
-                    if project_columns {
-                        if let Some(columns) = projection::statement_columns(&exchange.record, sql)
-                        {
-                            return StatementMetadata {
-                                param_count,
-                                columns,
-                            };
-                        }
-                        continue;
-                    }
-                    let Some(recorded_sql) = exchange.record.sql.as_deref() else {
-                        continue;
-                    };
-                    let matches = match exchange.record.command.as_str() {
-                        "COM_STMT_EXECUTE" => {
-                            normalize_sql(recorded_sql) == normalized_sql
-                                || sql_match::prepared_metadata_matches(&exchange.record, sql)
-                        }
-                        "COM_QUERY" => sql_match::metadata_matches(sql, recorded_sql),
-                        _ => false,
-                    };
-                    if matches {
-                        return StatementMetadata {
-                            param_count,
-                            columns: projection::statement_columns(&exchange.record, sql)
-                                .unwrap_or_else(|| exchange.record.response.columns.clone()),
-                        };
-                    }
-                }
-            }
-        }
-        StatementMetadata {
-            param_count,
-            columns: builtin_response(sql, identity.database.as_deref())
-                .map_or_else(Vec::new, |r| r.columns),
-        }
     }
 
     pub(in crate::replay) fn unused_exchanges(
@@ -565,7 +492,7 @@ impl ReplayState {
                     OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
                 ) && status == ReplayExchangeStatus::Responding
         });
-        exchange.source.matches_scope(source) && !status.is_consumed() && optional == allowed
+        exchange.source.matches_scope(source) && !status.is_covered() && optional == allowed
     }
 
     pub(super) fn mysql_summary(&self, index: usize) -> RecordedExchangeSummary {

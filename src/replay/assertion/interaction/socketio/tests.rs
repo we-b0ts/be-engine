@@ -16,6 +16,9 @@ fn output(message: &str) -> OutputObservation {
             offset_ms: 1,
             pending: vec![],
             clean: true,
+            missing_predecessor: None,
+            dispatch_timeout: None,
+            fast_heartbeat_eof_ms: None,
             partial_message: None,
             close: None,
         },
@@ -35,6 +38,10 @@ json:
 }
 
 fn check(source: &str, target: &str) -> Comparison {
+    check_with_limit(source, target, 8 * 1024 * 1024).unwrap()
+}
+
+fn check_with_limit(source: &str, target: &str, limit: usize) -> Result<Comparison> {
     let policy = policy();
     compare_outputs_global(
         Some(&output(source)),
@@ -45,8 +52,22 @@ fn check(source: &str, target: &str) -> Comparison {
             target: chrono::DateTime::from_timestamp(2000, 0),
         },
         Default::default(),
+        limit,
     )
-    .unwrap()
+}
+
+#[test]
+fn large_socketio_ack_uses_the_case_message_limit_for_both_sides() {
+    let payload = "x".repeat(1024 * 1024);
+    let source = format!(r#"43/chat,0[{{"id":"11","payload":"{payload}"}}]"#);
+    let target = source.replace(r#""11""#, r#""999""#);
+    assert!(check(&source, &target).passed());
+    assert!(
+        !check_with_limit(&source, &target, source.len())
+            .unwrap()
+            .passed()
+    );
+    assert!(check_with_limit(&source, &target, 1024 * 1024).is_err());
 }
 
 #[test]
@@ -103,7 +124,8 @@ fn ack_ids_argument_count_order_attachments_and_transport_controls_stay_strict()
             &WireMessage::text("0{\"sid\":\"b\"}"),
             &global,
             Default::default(),
-            "root"
+            "root",
+            8 * 1024 * 1024,
         )
         .unwrap()
         .is_none()
@@ -135,6 +157,7 @@ json:
             },
         ),
         "event",
+        8 * 1024 * 1024,
     )
     .unwrap()
     .unwrap();

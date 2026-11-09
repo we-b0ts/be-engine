@@ -134,7 +134,11 @@ pub(super) async fn dispatch(
             .observation
             .lock()
             .expect("interaction observation poisoned")
-            .upgrade(parts.uri.to_string(), recorded_headers, session.now())?;
+            .upgrade(
+                parts.uri.to_string(),
+                recorded_headers,
+                session.started.elapsed(),
+            )?;
     } else {
         *session
             .response
@@ -218,6 +222,9 @@ pub(super) async fn dispatch(
                         phase = "source_observe";
                         observe(&session, &message, false)?;
                         let close = matches!(message, Message::Close(_));
+                        if close {
+                            session.close_requested_at.get_or_init(std::time::Instant::now);
+                        }
                         if !close {
                             source_close.capture_live(&session).await;
                         }
@@ -342,7 +349,7 @@ fn observe(session: &SessionRef, message: &Message, input: bool) -> Result<()> {
                     .as_ref()
                     .map_or("", |frame| frame.reason.as_str())
                     .to_owned(),
-                session.now(),
+                session.started.elapsed(),
             )?;
     }
     let wire = match message {

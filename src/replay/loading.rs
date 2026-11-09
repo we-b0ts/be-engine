@@ -241,7 +241,7 @@ impl ReplayRuntime {
                 deferred_files.insert(
                     case.id.clone(),
                     deferred::CaseInventory {
-                        index: file_index,
+                        index: Arc::new(file_index),
                         source_bytes,
                         skip,
                         cleanup,
@@ -344,9 +344,9 @@ impl ReplayRuntime {
                 .pubsub
                 .prepare_echo_indices()
                 .context("Redis adapter self-echo index preparation failed")?;
-            redis.prepare_ingress(&redis_cases)?;
             redis.prepare_native_clock(&redis_root, &redis_cases)?;
             redis.pubsub.namespace_sessions.prepare(&redis_cases)?;
+            redis.prepare_ingress(&redis_cases)?;
             Ok((redis, targets))
         })
         .await
@@ -460,6 +460,7 @@ impl ReplayRuntime {
             batch_scope: attribution.batch_scope,
             startup_phase: Default::default(),
             dependency_attribution_snapshot: attribution.snapshot,
+            prepared_socketio_input: None,
             input_timing: None,
             http_input_timing: None,
             stream_timing: lifecycle.stream_timing,
@@ -523,6 +524,9 @@ impl ReplayRuntime {
             unrecorded_targets: Vec::new(),
             unrecorded_case_ids: BTreeSet::new(),
         };
+        // Lazy loading has no Case plans here, but already has run-owned
+        // dependencies and the Redis lanes needed during Target startup.
+        state.prepare_native_candidates();
         for (case, source) in prepared_scopes {
             state.install_case_execution_plan(&case, source)?;
         }
@@ -567,6 +571,7 @@ impl ReplayRuntime {
         if let Some(case_id) = initial_case {
             deferred::prepare_case(runtime.state.clone(), &case_id).await?;
             control::dependency_tail::prepare(&runtime.state, &case_id).await?;
+            control::input_timing::prepare_source(&runtime.state, &case_id).await?;
             let mut state = runtime.state.lock().await;
             control::dependency_tail::activate(&mut state, &case_id)?;
         }

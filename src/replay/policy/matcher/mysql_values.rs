@@ -4,7 +4,7 @@
 //! rewrites SQL or recorded evidence.
 use super::*;
 use crate::mysql::sql::Token;
-use crate::replay::mysql::sql_match::materialize;
+use crate::replay::mysql::sql_match::materialize_tokens;
 use crate::replay::policy::config::{MysqlTimeValueRule, TimeRule};
 use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_statement_tokens, extract};
 use crate::replay::policy::value::validate_relative_time;
@@ -14,8 +14,8 @@ pub(in crate::replay::policy) fn materialized(
     params: Option<&[RecordedMysqlValue]>,
 ) -> Result<Vec<Token>, String> {
     let sql = sql.ok_or("MySQL SQL is absent")?;
-    bounded_statement_tokens(sql).ok_or("invalid or oversized MySQL SQL")?;
-    materialize(sql, params.unwrap_or_default())
+    let tokens = bounded_statement_tokens(sql).ok_or("invalid or oversized MySQL SQL")?;
+    materialize_tokens(tokens, params.unwrap_or_default())
         .ok_or_else(|| "MySQL SQL parameters are incomplete".into())
 }
 

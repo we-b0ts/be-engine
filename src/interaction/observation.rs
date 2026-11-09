@@ -1,6 +1,7 @@
 //! Compose protocol observations and lifecycle without transport or persistence.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use anyhow::{Result, ensure};
 
@@ -24,6 +25,28 @@ mod client_end;
 
 const CLIENT_BINARY_PENDING: u64 = u64::MAX - 1;
 const SERVER_BINARY_PENDING: u64 = u64::MAX - 2;
+
+/// Legacy or precise elapsed time at the point a client input is observed.
+pub(crate) struct InputTime {
+    ms: u64,
+    us: Option<u64>,
+}
+
+impl From<u64> for InputTime {
+    fn from(ms: u64) -> Self {
+        Self { ms, us: None }
+    }
+}
+
+impl From<Duration> for InputTime {
+    fn from(elapsed: Duration) -> Self {
+        let us = elapsed.as_micros().try_into().ok();
+        Self {
+            ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+            us,
+        }
+    }
+}
 
 #[cfg(test)]
 mod peer_close_tests;
@@ -133,7 +156,12 @@ impl Observation {
         })
     }
 
-    pub fn input(&mut self, message: WireMessage, now_ms: u64) -> Result<InputAction> {
+    pub fn input(
+        &mut self,
+        message: WireMessage,
+        now: impl Into<InputTime>,
+    ) -> Result<InputAction> {
+        let InputTime { ms: now_ms, us } = now.into();
         self.ensure_client_transport_open()?;
         ensure!(
             matches!(self.protocol, Protocol::SocketIo | Protocol::WebSocket),
@@ -145,6 +173,7 @@ impl Observation {
         let mut action = InputAction {
             sequence,
             offset_ms: now_ms,
+            offset_us: us,
             after: Vec::new(),
             compressible_gap: false,
             gap_start_ms: None,
@@ -336,8 +365,9 @@ impl Observation {
         &mut self,
         uri: String,
         headers: BTreeMap<String, Vec<String>>,
-        now_ms: u64,
+        now: impl Into<InputTime>,
     ) -> Result<InputAction> {
+        let InputTime { ms: now_ms, us } = now.into();
         self.ensure_client_transport_open()?;
         ensure!(
             self.protocol == Protocol::SocketIo,
@@ -350,6 +380,7 @@ impl Observation {
         let action = InputAction {
             sequence: self.next_input,
             offset_ms: now_ms,
+            offset_us: us,
             after: Vec::new(),
             compressible_gap: false,
             gap_start_ms: None,

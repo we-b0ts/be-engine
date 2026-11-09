@@ -646,6 +646,9 @@ pub(super) async fn execute_case(
         let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
         return Ok(());
     }
+    let fast_case_deadline = (config.replay_stream_timing
+        == Some(crate::replay::ReplayStreamTiming::Fast))
+    .then(|| tokio::time::Instant::now() + crate::replay::FAST_CASE_TIMEOUT);
 
     if config.replay_loading.lazy_cases
         && let Some(next) = state.cases.get(position + 1)
@@ -669,6 +672,7 @@ pub(super) async fn execute_case(
                     &actual_response,
                     runtime.request_rules.clone(),
                     (&state.replay_session, case_id),
+                    fast_case_deadline,
                 )
                 .await
             }
@@ -681,15 +685,20 @@ pub(super) async fn execute_case(
         .as_ref()
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
-        .and_then(|response| response.pointer("/interaction/end").cloned())
-        .and_then(|end| {
-            serde_json::from_value::<crate::interaction::model::EndObservation>(end).ok()
+        .and_then(|mut response| {
+            use crate::interaction::model::{EndObservation, Protocol};
+            let interaction = response.get_mut("interaction")?;
+            let protocol =
+                serde_json::from_value::<Protocol>(interaction.get_mut("protocol")?.take()).ok()?;
+            let end = serde_json::from_value::<EndObservation>(interaction.get_mut("end")?.take())
+                .ok()?;
+            Some((protocol, end))
         });
     if interaction_end
         .as_ref()
-        .is_some_and(crate::interaction::model::EndObservation::interrupted_by_client)
+        .is_some_and(|(protocol, end)| end.observes_replay_close_tail(*protocol))
     {
-        control(state, "case_client_aborted", Some(case_id), false, false).await?;
+        control(state, "case_close_tail", Some(case_id), false, false).await?;
     }
     let execution_status =
         control(state, "case_execution_status", Some(case_id), false, false).await?;
@@ -772,9 +781,9 @@ pub(super) async fn execute_case(
         .map(super::primary_driver::response_unavailable_reason);
     // A different primary status (or no usable response) ends the normal
     // business path. Body-only differences retain the recorded async contract.
-    let dependency_failed = interaction_end
-        .as_ref()
-        .is_some_and(|end| end.reason == crate::interaction::model::EndReason::DependencyFailure);
+    let dependency_failed = interaction_end.as_ref().is_some_and(|(_, end)| {
+        end.reason == crate::interaction::model::EndReason::DependencyFailure
+    });
     let primary_failed = assertion_command.is_err()
         || dependency_failed
         || state.cases[case_index].execution_failure.is_some()

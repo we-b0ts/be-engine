@@ -1,6 +1,20 @@
 //! Socket.IO framing stays exact; each business argument is a global JSON carrier.
 use super::*;
-use crate::interaction::socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text};
+use crate::interaction::socketio::{
+    EngineIoPacket, SocketIoDecoder, SocketIoKind, decode_engine_io_text,
+};
+
+pub(super) fn business_event_suffix(events: &[WireMessage], max_message_bytes: usize) -> bool {
+    let mut decoder = SocketIoDecoder::new(max_message_bytes);
+    events.iter().all(|event| {
+        decoder.push(event).is_ok_and(|packets| {
+            packets.into_iter().all(|packet| {
+                matches!(packet, EngineIoPacket::Message(packet)
+                    if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent))
+            })
+        })
+    }) && decoder.finish().is_ok()
+}
 
 pub(super) fn compare_message(
     source: &WireMessage,
@@ -8,6 +22,7 @@ pub(super) fn compare_message(
     global: &crate::policy::CompiledJsonPolicy,
     clocks: crate::value_contract::json::AnchorClocks,
     pointer: &str,
+    max_message_bytes: usize,
 ) -> Result<Option<Comparison>> {
     if source.kind != MessageKind::Text
         || !["42", "43", "45", "46"]
@@ -16,7 +31,8 @@ pub(super) fn compare_message(
     {
         return Ok(None);
     }
-    let EngineIoPacket::Message(source) = decode_engine_io_text(&source.data, 1024 * 1024)? else {
+    let EngineIoPacket::Message(source) = decode_engine_io_text(&source.data, max_message_bytes)?
+    else {
         return Ok(None);
     };
     if !matches!(
@@ -31,7 +47,7 @@ pub(super) fn compare_message(
     let prefix = format!("{pointer}/data/socketio");
     let mut result = Comparison::default();
     let target = if target.kind == MessageKind::Text {
-        decode_engine_io_text(&target.data, 1024 * 1024).ok()
+        decode_engine_io_text(&target.data, max_message_bytes).ok()
     } else {
         None
     };

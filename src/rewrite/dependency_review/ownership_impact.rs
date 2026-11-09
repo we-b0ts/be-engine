@@ -19,7 +19,9 @@ pub(super) fn observe(
     source: &source::SourceSnapshot,
     proposal: &ProposedAttribution,
     moved: &mut BTreeMap<String, BTreeSet<Uuid>>,
+    changed_scopes: &mut BTreeSet<String>,
 ) {
+    let next_scope = crate::replay::attribution_scope_key(&proposal.owner);
     for id in &proposal.source_exchange_ids {
         let previous = state
             .dependency_review
@@ -33,6 +35,12 @@ pub(super) fn observe(
                     .get(id)
                     .map(|event| &event.capture.attribution)
             });
+        if let Some(previous_scope) = previous.map(crate::replay::attribution_scope_key)
+            && previous_scope != next_scope
+        {
+            changed_scopes.insert(previous_scope);
+            changed_scopes.insert(next_scope.clone());
+        }
         if previous == Some(&proposal.owner)
             || matches!((previous,&proposal.owner),(Some(DependencyOwner::Case{origin_case_id:old,..}),DependencyOwner::Case{origin_case_id:new,..}) if old==new)
         {

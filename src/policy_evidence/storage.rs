@@ -106,6 +106,7 @@ impl Writer {
         &mut self,
         context: &Path,
         payload: &[u8],
+        payload_id: &str,
         headers: &[crate::request_headers::evidence::HeaderValueRange],
     ) -> Result<BlobRef> {
         let mut chunks = Vec::new();
@@ -119,7 +120,11 @@ impl Writer {
             })
             .enumerate()
         {
-            let id = digest(chunk);
+            let id = if chunk.len() == payload.len() {
+                payload_id.to_owned()
+            } else {
+                digest(chunk)
+            };
             let mut bytes = serde_json::to_vec(&BlobEnvelope {
                 id: id.clone(),
                 payload: StoredPayload::capture(chunk, index * CHUNK_BYTES, headers, context)?,
@@ -145,7 +150,7 @@ impl Writer {
             self.bytes += bytes.len() as u64;
         }
         Ok(BlobRef {
-            id: digest(payload),
+            id: payload_id.to_owned(),
             offset: 0,
             length: chunks.iter().map(|c| c.length).sum(),
             sha256: digest(&serde_json::to_vec(&chunks)?),

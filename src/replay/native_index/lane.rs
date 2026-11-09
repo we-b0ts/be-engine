@@ -64,4 +64,87 @@ impl LaneIndex {
             (*prior < *sequence && prevents_progress(*index)).then_some(*index)
         })
     }
+
+    /// Build a blocker-existence lookup for one selection with stable status.
+    /// Only the lowest blocking sequence matters when no blocker identity is
+    /// needed. Keep this cache local to the selection because status is live.
+    pub(in crate::replay) fn blocked_candidates(
+        &self,
+        mut prevents_progress: impl FnMut(usize) -> bool,
+    ) -> impl FnMut(usize) -> bool {
+        let mut first_blocking = HashMap::new();
+        move |candidate| {
+            let Some((key, sequence)) = self.references.get(&candidate) else {
+                return false;
+            };
+            first_blocking
+                .entry(key)
+                .or_insert_with(|| {
+                    self.lanes
+                        .get(key)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(index, _)| prevents_progress(*index))
+                        .map(|(_, sequence)| *sequence)
+                        .min()
+                })
+                .is_some_and(|first| first < *sequence)
+        }
+    }
+
+    pub(in crate::replay) fn unique_slot(&self, key: &LaneKey, sequence: u64) -> Option<usize> {
+        let mut slots = self
+            .lanes
+            .get(key)?
+            .iter()
+            .filter(|(_, prior)| *prior == Some(sequence));
+        let (index, _) = slots.next()?;
+        slots.next().is_none().then_some(*index)
+    }
+
+    pub(in crate::replay) fn previous_slot(&self, index: usize) -> Option<usize> {
+        let (key, Some(sequence)) = self.references.get(&index)? else {
+            return None;
+        };
+        let previous = self
+            .lanes
+            .get(key)?
+            .iter()
+            .filter_map(|(_, prior)| prior.filter(|prior| prior < sequence))
+            .max()?;
+        self.unique_slot(key, previous)
+    }
+
+    /// Effective lane members from `first` up to, but excluding, `candidate`.
+    pub(in crate::replay) fn bounded_prefix(
+        &self,
+        first: usize,
+        candidate: usize,
+        limit: usize,
+    ) -> Option<Vec<usize>> {
+        let (first_key, Some(first_sequence)) = self.references.get(&first)? else {
+            return None;
+        };
+        let (key, Some(sequence)) = self.references.get(&candidate)? else {
+            return None;
+        };
+        if first_key != key || first_sequence >= sequence {
+            return None;
+        }
+        let mut slots = Vec::new();
+        for &(index, prior) in self.lanes.get(key)? {
+            if let Some(prior) = prior.filter(|prior| (*first_sequence..*sequence).contains(prior))
+            {
+                if slots.len() == limit {
+                    return None;
+                }
+                slots.push((prior, index));
+            }
+        }
+        slots.sort_unstable();
+        if slots.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return None;
+        }
+        Some(slots.into_iter().map(|(_, index)| index).collect())
+    }
 }

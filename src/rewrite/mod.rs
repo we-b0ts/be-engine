@@ -306,16 +306,8 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
         "this plan uses a retired rule format; run `backend-rewrite rule recover {plan_id}`, obtain fresh evidence and use `rule plan --file <rule.yaml> --evidence <id>`"
     );
     let apply_intent = if unified {
-        let api_confirmation_required = inventory::scoped(&state, Some(&api.parse()?))?
-            .rule_plan
-            .as_ref()
-            .and_then(|plan| plan.unified.as_ref())
-            .is_some_and(|plan| plan.requires_api_confirmation());
-        if api_confirmation_required {
-            worker::ensure_api_confirmed(&state, &api, "applying a unified traffic rule")?;
-        }
         let intent = inventory::with_slice_mut(&mut state, &api, |slice| {
-            unified_rule::begin_apply(&target_root, slice)
+            unified_rule::begin_apply(&target_root, slice, plan_id)
         })?;
         store.save(&state)?;
         Some(intent)

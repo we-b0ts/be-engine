@@ -412,7 +412,7 @@ async fn nested_async_rule_plan_publishes_policy_consumed_by_recording() {
 }
 
 #[tokio::test]
-async fn pending_owner_plan_status_verifies_each_large_artifact_once_per_request() {
+async fn pending_owner_plan_status_does_not_hash_frozen_evidence() {
     use crate::rewrite::unified_rule::manifest::{
         Artifact, artifact_capture_stats, reset_artifact_capture_stats,
     };
@@ -451,13 +451,6 @@ async fn pending_owner_plan_status_verifies_each_large_artifact_once_per_request
     let mut state = store.load().unwrap().unwrap();
     let record = state.rule_plan.as_mut().unwrap().unified.as_mut().unwrap();
     record.artifacts.push(Artifact::capture(&witness).unwrap());
-    let expected = record
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.path != record.policy)
-        .map(|artifact| (artifact.path.clone(), artifact.length))
-        .collect::<BTreeMap<_, _>>();
-    assert!(expected[&witness] >= 32 * 1024 * 1024);
     store.save(&state).unwrap();
 
     let assert_plan = |action: &RewriteAction, operation: &str| {
@@ -474,10 +467,7 @@ async fn pending_owner_plan_status_verifies_each_large_artifact_once_per_request
             "apply",
         );
     }
-    let before = artifact_capture_stats();
-    for (path, length) in &expected {
-        assert_eq!(before.get(path), Some(&(3, 3 * length)), "{path:?}");
-    }
+    assert!(artifact_capture_stats().is_empty());
 
     let state_path = crate::internal_runtime::root(target.path()).join("rewrite/state.json");
     let policy_path = target.path().join(".traffic-e2e/policy.yaml");
@@ -492,7 +482,7 @@ async fn pending_owner_plan_status_verifies_each_large_artifact_once_per_request
     .collect::<BTreeMap<_, _>>();
     reset_artifact_capture_stats();
     let mut first = None;
-    for request in 1..=2 {
+    for _ in 0..2 {
         let status = status_rewrite(context()).unwrap();
         assert_plan(&status.action, "apply");
         assert_eq!(status.pending, 1);
@@ -503,39 +493,25 @@ async fn pending_owner_plan_status_verifies_each_large_artifact_once_per_request
         } else {
             first = Some(value);
         }
-        let captures = artifact_capture_stats();
-        assert_eq!(captures.len(), expected.len());
-        for (path, length) in &expected {
-            assert_eq!(
-                captures.get(path),
-                Some(&(request, request as u64 * length)),
-                "request {request}: {path:?}"
-            );
-        }
+        assert!(artifact_capture_stats().is_empty());
         for (path, bytes) in &frozen {
             assert_eq!(&fs::read(path).unwrap(), bytes, "{path:?}");
         }
     }
-    let after = artifact_capture_stats();
-    println!(
-        "{}",
-        json!({"artifact_kind":"additional_frozen_regular_file","artifact_bytes":expected[&witness],
-        "three_uncached_checks":before[&witness],"two_public_status_requests":after[&witness]})
-    );
-
-    // A later request cannot borrow the prior successful content check. The
-    // unchanged length ensures this tests content integrity, not truncation.
+    // Read-only status does not authenticate the witness. Apply still rejects
+    // a same-length mutation before publishing policy or a durable intent.
     fs::OpenOptions::new()
         .write(true)
         .open(&witness)
         .unwrap()
         .write_all(b"y")
         .unwrap();
-    let stale = status_rewrite(context()).unwrap();
-    assert_plan(&stale.action, "recover");
+    assert_plan(&status_rewrite(context()).unwrap().action, "apply");
+    assert!(artifact_capture_stats().is_empty());
+    let error = apply_rewrite_rule(context(), &plan.plan_id).unwrap_err();
+    assert!(format!("{error:#}").contains("rule evidence changed after planning"));
     for (path, bytes) in &frozen {
         assert_eq!(&fs::read(path).unwrap(), bytes, "{path:?}");
     }
-    assert!(apply_rewrite_rule(context(), &plan.plan_id).is_err());
-    assert_eq!(fs::read(&policy_path).unwrap(), frozen[&policy_path]);
+    crate::rewrite::recover_rewrite_rule_plan(context(), &plan.plan_id).unwrap();
 }

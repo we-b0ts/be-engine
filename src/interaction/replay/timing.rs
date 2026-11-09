@@ -1,11 +1,16 @@
 //! Replay timing is separate from immutable recording policy and protocol completion.
 use crate::interaction::{
-    model::{InputAction, InputActionKind, MessageKind},
+    model::{DispatchDependency, InputAction, InputActionKind, MessageKind},
     socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text},
 };
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use tokio::sync::watch;
+use tokio::time::{Duration, Instant};
+
+pub(crate) const SOCKET_IO_DISPATCH_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -19,6 +24,18 @@ pub(crate) enum SocketIoTiming {
 /// dependency replay owner supplies delivery facts and commits clock changes.
 pub(crate) trait InputTiming: Send + Sync {
     fn wait(&self, sequence: u64, completed: Vec<u64>) -> BoxFuture<'_, Result<Advance>>;
+    fn wait_dispatch(
+        &self,
+        sequence: u64,
+        completed: Vec<u64>,
+        mut events_ready: watch::Receiver<bool>,
+        _unadmitted: watch::Sender<Option<DispatchDependency>>,
+    ) -> BoxFuture<'_, Result<Advance>> {
+        Box::pin(async move {
+            events_ready.wait_for(|ready| *ready).await?;
+            self.wait(sequence, completed).await
+        })
+    }
     fn ordered_fast(&self) -> bool {
         false
     }
@@ -27,6 +44,9 @@ pub(crate) trait InputTiming: Send + Sync {
     }
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
         Box::pin(async { Ok(Advance::default()) })
+    }
+    fn native_prefix_active(&self) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async { Ok(false) })
     }
     fn closed(&self, _started_at: chrono::DateTime<chrono::Utc>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async { Ok(()) })
@@ -38,8 +58,53 @@ pub(crate) struct FastTail {
     pub close_sequence: Option<u64>,
     pub output_count: usize,
     pub idle_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub heartbeat_acks: Option<std::collections::BTreeSet<u64>>,
+    #[serde(default)]
+    pub heartbeat_timeout: bool,
+    #[serde(default)]
+    pub native_observation: bool,
+}
+
+impl FastTail {
+    pub(super) fn business_idle_due(
+        &self,
+        ready: Instant,
+        last_sent: Instant,
+        last_output: Instant,
+    ) -> Option<Instant> {
+        (self.close_sequence.is_none() && !self.heartbeat_timeout)
+            .then(|| ready.max(last_sent).max(last_output) + Duration::from_millis(self.idle_ms))
+    }
+}
+
+pub(super) fn websocket_action_due(
+    action: &InputAction,
+    completed: &BTreeMap<u64, Instant>,
+    last_offset: u64,
+    last_sent: Instant,
+    input_gap_ms: u64,
+) -> Option<Instant> {
+    let mut barrier = None;
+    for sequence in &action.after {
+        let at = *completed.get(sequence)?;
+        barrier = Some(barrier.map_or(at, |previous: Instant| previous.max(at)));
+    }
+    let closes = matches!(
+        action.action,
+        InputActionKind::Close { .. } | InputActionKind::TransportEnd { .. }
+    );
+    if closes && let Some(gap_start) = action.gap_start_ms {
+        let delay = action.offset_ms.checked_sub(gap_start)?;
+        // Keep the actual completion barrier even when client idle time is compressed.
+        return barrier?.checked_add(Duration::from_millis(delay));
+    }
+    if action.compressible_gap {
+        let gap_start = action.gap_start_ms?;
+        let delay = action.offset_ms.saturating_sub(gap_start).min(input_gap_ms);
+        Some(barrier? + Duration::from_millis(delay))
+    } else {
+        let due = last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset));
+        Some(barrier.map_or(due, |barrier| due.max(barrier)))
+    }
 }
 
 /// Business inputs retain the Source dependency-delivery prefix even when no
@@ -52,6 +117,10 @@ pub(crate) fn delivery_prefix(action: &InputAction) -> bool {
             Ok(EngineIoPacket::Message(crate::interaction::socketio::SocketIoPacket {
                 kind: SocketIoKind::Event | SocketIoKind::BinaryEvent, ..
             }))))
+}
+
+pub(crate) fn ordered_input(action: &InputAction) -> bool {
+    action.ack_ref.is_some() || delivery_prefix(action)
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]

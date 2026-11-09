@@ -21,6 +21,8 @@ struct Observer {
     socket: PathBuf,
     case: String,
     epoch: DateTime<Utc>,
+    events: bool,
+    input_acks: bool,
 }
 
 pub(crate) async fn connect(
@@ -45,6 +47,8 @@ pub(crate) async fn connect(
         socket,
         case: case.into(),
         epoch: serde_json::from_value(response["epoch"].clone())?,
+        events: response["events"].as_bool().unwrap_or(true),
+        input_acks: response["input_acks"].as_bool().unwrap_or(true),
     })))
 }
 
@@ -62,6 +66,9 @@ impl NativeEventSink for Observer {
     }
     fn observe(&self, event: NativeEvent) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
+            if !self.events {
+                return Ok(());
+            }
             send(
                 &self.socket,
                 serde_json::json!({"command":"native_event", "case_id":self.case,
@@ -73,6 +80,9 @@ impl NativeEventSink for Observer {
     }
     fn acknowledged(&self, sequence: u64) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
+            if !self.input_acks {
+                return Ok(());
+            }
             send(&self.socket, serde_json::json!({"command":"native_input_ack","case_id":self.case,
                 "native_event":Observation {epoch:self.epoch,event:None,namespace:None,sid:None,acknowledged:Some(sequence)}})).await?;
             Ok(())
@@ -81,6 +91,15 @@ impl NativeEventSink for Observer {
 }
 
 pub(super) async fn send(socket: &Path, request: Value) -> Result<Value> {
+    send_with_response_limit(socket, request, 8192).await
+}
+
+pub(super) async fn send_with_response_limit(
+    socket: &Path,
+    request: Value,
+    response_limit: usize,
+) -> Result<Value> {
+    let command = feedback_command(&request);
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut payload = serde_json::to_vec(&request)?;
         ensure!(
@@ -93,11 +112,11 @@ pub(super) async fn send(socket: &Path, request: Value) -> Result<Value> {
         let mut line = String::new();
         use tokio::io::AsyncReadExt;
         BufReader::new(stream)
-            .take(8193)
+            .take((response_limit + 1) as u64)
             .read_line(&mut line)
             .await?;
         ensure!(
-            line.len() <= 8192,
+            line.len() <= response_limit,
             "native event control response exceeds bound"
         );
         let response: Value = serde_json::from_str(&line)?;
@@ -109,7 +128,7 @@ pub(super) async fn send(socket: &Path, request: Value) -> Result<Value> {
         Ok(response)
     })
     .await
-    .context("native event control feedback timed out")?
+    .with_context(|| format!("replay control feedback timed out ({command})"))?
 }
 
 pub(super) async fn accept(
@@ -133,15 +152,17 @@ pub(super) async fn accept(
         }
         let epoch = state
             .redis
-            .pubsub
-            .native_clock
-            .epoch(case)
-            .or_else(|| state.redis.pubsub.namespace_sessions.epoch(case))
-            .or_else(|| state.redis.request_contracts.request_times(case).target)
+            .native_request_epoch(case)
             .context("native event feedback requires request admission")?;
         if request.command == "native_event_begin" {
             let enabled = state.redis.native_events_begin(case, epoch);
-            return Ok(serde_json::json!({"ok":true,"enabled":enabled,"epoch":epoch}));
+            return Ok(serde_json::json!({
+                "ok":true,
+                "enabled":enabled,
+                "epoch":epoch,
+                "events":state.redis.needs_ingress_events(case),
+                "input_acks":state.redis.pubsub.native_clock.needs_input_acks(case),
+            }));
         }
         let observation = request
             .native_event
@@ -211,8 +232,8 @@ pub(super) async fn accept(
     })
 }
 
-fn feedback_rejection(request: &Value, response: &Value) -> Value {
-    let command = request["command"]
+fn feedback_command(request: &Value) -> &str {
+    request["command"]
         .as_str()
         .filter(|command| {
             matches!(
@@ -224,9 +245,16 @@ fn feedback_rejection(request: &Value, response: &Value) -> Value {
                     | "input_timing_begin"
                     | "input_timing"
                     | "input_timing_tail"
+                    | "input_timing_native_prefix"
+                    | "http_input_timing_begin"
+                    | "http_input_timing_wait"
+                    | "http_input_timing_closed"
             )
         })
-        .unwrap_or("unknown_command");
+        .unwrap_or("unknown_command")
+}
+
+fn feedback_rejection(request: &Value, response: &Value) -> Value {
     let reason = response["reason"]
         .as_str()
         .filter(|reason| {
@@ -240,12 +268,34 @@ fn feedback_rejection(request: &Value, response: &Value) -> Value {
         .unwrap_or("control_rejected");
     // Control errors can originate in private Source evidence. Propagate only
     // engine-owned categories, never arbitrary server details or payloads.
-    serde_json::json!({"command":command,"reason":reason})
+    serde_json::json!({"command":feedback_command(request),"reason":reason})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn namespace_only_observer_does_not_send_unneeded_feedback() {
+        let directory = tempfile::tempdir().unwrap();
+        let observer = Observer {
+            socket: directory.path().join("unused.sock"),
+            case: "case".into(),
+            epoch: Utc::now(),
+            events: false,
+            input_acks: false,
+        };
+        observer
+            .observe(NativeEvent {
+                namespace: "/rpc".into(),
+                event: "ready".into(),
+                ordinal: 1,
+            })
+            .await
+            .unwrap();
+        observer.acknowledged(2).await.unwrap();
+        assert!(observer.connected("/rpc", Some("sid")).await.is_err());
+    }
 
     #[test]
     fn feedback_rejection_names_the_stage_without_disclosing_server_details() {

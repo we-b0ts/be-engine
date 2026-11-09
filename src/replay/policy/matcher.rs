@@ -141,6 +141,10 @@ enum RecordedCaseKind {
 }
 
 impl ReplayPolicyRuntime {
+    pub(in crate::replay) fn fingerprint(&self) -> &str {
+        &self.loaded.fingerprint
+    }
+
     #[cfg(test)]
     pub(in crate::replay) fn load(
         path: &Path,
@@ -260,7 +264,9 @@ impl ReplayPolicyRuntime {
             for case in cases.values() {
                 let bytes = crate::dependency_index::scoped::read_bytes(&case.dependencies_path)?;
                 runtime.dynamic_values.observe_source(&case.id, &bytes)?;
-                runtime.request_contracts.observe_source(&case.id, &bytes)?;
+                runtime
+                    .request_contracts
+                    .observe_source(&case.id, &bytes, None)?;
             }
         }
         Ok(runtime)
@@ -503,6 +509,43 @@ impl ReplayPolicyRuntime {
                     context.sql,
                 )
                 && self.mysql_selectors.matches_sql(rule, context.recorded_sql)
+        })
+    }
+
+    pub(in crate::replay) fn mysql_sql_difference_may_apply(
+        &self,
+        case_id: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+    ) -> bool {
+        let Some(case) = case_id.and_then(|id| self.cases.get(id)) else {
+            return false;
+        };
+        self.loaded.document.dependency_rules.iter().any(|rule| {
+            rule.protocol == DependencyProtocol::Mysql
+                && rule_matches_case(rule, case)
+                && self.mysql_selectors.matches(rule, identity, command, sql)
+        })
+    }
+
+    pub(in crate::replay) fn mysql_legacy_sql_selector_applies(
+        &self,
+        case_id: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+    ) -> bool {
+        let Some(case) = case_id.and_then(|id| self.cases.get(id)) else {
+            return false;
+        };
+        self.loaded.document.dependency_rules.iter().any(|rule| {
+            rule.protocol == DependencyProtocol::Mysql
+                && rule_matches_case(rule, case)
+                && rule
+                    .mysql
+                    .as_ref()
+                    .is_some_and(|mysql| !mysql.params.is_empty())
+                && self.mysql_selectors.matches_scope(rule, identity, command)
         })
     }
 

@@ -16,7 +16,11 @@ struct Request {
     interaction: InputTranscript,
 }
 
-pub(super) fn load(case: &ReplayCase, fast_cap: Option<u64>) -> Result<Plan> {
+pub(super) fn load(
+    case: &ReplayCase,
+    fast_cap: Option<u64>,
+    prepared_dependencies: Option<&[u8]>,
+) -> Result<Plan> {
     let raw = crate::request_headers::load_request_file(&case.dir.join("request.json"))?;
     let request: Request = serde_json::from_slice(&raw)?;
     request.interaction.validate()?;
@@ -26,7 +30,6 @@ pub(super) fn load(case: &ReplayCase, fast_cap: Option<u64>) -> Result<Plan> {
     );
     // Other protocols retain recorded timing until their actual delivery
     // adapters exist. Their claim/consumed state is not a delivery substitute.
-    let mut records = crate::dependency_index::RecordStream::open(&case.dependencies_path)?;
     let mut covered = request.timestamp.is_some();
     let mut fast = fast_cap
         .zip(request.timestamp)
@@ -36,12 +39,9 @@ pub(super) fn load(case: &ReplayCase, fast_cap: Option<u64>) -> Result<Plan> {
     struct Kind {
         event_type: String,
     }
-    // Prepare once at request admission, following the frozen scope's original
-    // offsets. Keep one record buffer and deserialize only its kind; carrier
-    // values never enter the live per-input timing plan.
-    while let Some((_, raw)) = records.next()? {
+    let mut observe = |raw: &[u8]| -> Result<()> {
         if raw.iter().all(u8::is_ascii_whitespace) {
-            continue;
+            return Ok(());
         }
         let kind: Kind = serde_json::from_slice(raw)?;
         covered &= matches!(
@@ -50,6 +50,19 @@ pub(super) fn load(case: &ReplayCase, fast_cap: Option<u64>) -> Result<Plan> {
         );
         if let Some(fast) = fast.as_mut() {
             fast.record(raw)?;
+        }
+        Ok(())
+    };
+    // Deferred preparation already authenticated the frozen scope. Reuse
+    // those bytes instead of traversing the recording again after admission.
+    if let Some(bytes) = prepared_dependencies {
+        for raw in bytes.split(|byte| *byte == b'\n') {
+            observe(raw)?;
+        }
+    } else {
+        let mut records = crate::dependency_index::RecordStream::open(&case.dependencies_path)?;
+        while let Some((_, raw)) = records.next()? {
+            observe(raw)?;
         }
     }
     Ok(Plan {

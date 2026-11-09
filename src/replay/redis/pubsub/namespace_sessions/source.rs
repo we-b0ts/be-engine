@@ -1,16 +1,17 @@
 //! Read original namespace CONNECT metadata; retain no expected business payloads.
-use super::valid_identity;
+use super::{Source, valid_identity};
 use crate::interaction::{
-    model::{InputActionKind, InputTranscript, MessageKind, Protocol},
+    model::{EndReason, InputActionKind, InputTranscript, MessageKind, Protocol},
     socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text},
 };
 use crate::replay::ReplayCase;
 use anyhow::{Context, Result};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::Value;
 use std::collections::BTreeMap;
-pub(super) fn load(
-    cases: &BTreeMap<String, ReplayCase>,
-) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+use std::ops::Range;
+
+pub(super) fn load(cases: &BTreeMap<String, ReplayCase>) -> Result<BTreeMap<String, Source>> {
     let mut result = BTreeMap::new();
     for (case, replay) in cases {
         let request_path = replay.dir.join("request.json");
@@ -45,10 +46,52 @@ pub(super) fn load(
             .context("native namespace session Source output could not be authenticated")?;
         let namespaces = sessions(&input, &output);
         if !namespaces.is_empty() {
-            result.insert(case.clone(), namespaces);
+            result.insert(
+                case.clone(),
+                Source {
+                    sids: namespaces,
+                    window: window(&request, &input, &output),
+                },
+            );
         }
     }
     Ok(result)
+}
+
+fn window(
+    request: &Value,
+    input: &InputTranscript,
+    output: &Value,
+) -> Option<Range<DateTime<Utc>>> {
+    let start = serde_json::from_value::<DateTime<Utc>>(request["timestamp"].clone()).ok()?;
+    let end = &output["interaction"]["end"];
+    let reason = serde_json::from_value::<EndReason>(end["reason"].clone()).ok()?;
+    if end["clean"] != true
+        || !matches!(
+            reason,
+            EndReason::BusinessIdle
+                | EndReason::ClientClose
+                | EndReason::ServerEof
+                | EndReason::ClientTransportEnd
+        )
+    {
+        return None;
+    }
+    let elapsed = end["offset_ms"].as_u64()?;
+    let transport_end = input
+        .actions
+        .last()
+        .filter(|action| matches!(action.action, InputActionKind::TransportEnd { .. }))
+        .map(|action| action.offset_ms);
+    if (reason == EndReason::ClientTransportEnd) != transport_end.is_some() {
+        return None;
+    }
+    let elapsed = transport_end.map_or(elapsed, |at| at.min(elapsed));
+    if elapsed == 0 || elapsed > input.policy.max_duration_ms {
+        return None;
+    }
+    let elapsed = TimeDelta::try_milliseconds(i64::try_from(elapsed).ok()?)?;
+    Some(start..start.checked_add_signed(elapsed)?)
 }
 
 pub(super) fn sessions(input: &InputTranscript, output: &Value) -> BTreeMap<String, String> {

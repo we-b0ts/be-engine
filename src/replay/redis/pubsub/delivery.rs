@@ -62,6 +62,7 @@ pub(in crate::replay::redis) async fn deliver_input(
             )
         })
         .and_then(|result| result);
+    let written_at = tokio::time::Instant::now();
     let mut replay = state.lock().await;
     match sent {
         Ok(()) if !delivery.case_is_current(&replay) => {
@@ -73,6 +74,14 @@ pub(in crate::replay::redis) async fn deliver_input(
         }
         Ok(()) => {
             replay.redis.pubsub.complete(delivery.push);
+            if let (Some(case), Some(epoch)) = (&delivery.case_id, delivery.request_epoch) {
+                replay.redis.pubsub.native_clock.fast_written(
+                    case,
+                    epoch,
+                    delivery.push,
+                    written_at,
+                );
+            }
             super::super::input_timing::delivered(
                 &mut replay,
                 timing_scope.as_ref(),

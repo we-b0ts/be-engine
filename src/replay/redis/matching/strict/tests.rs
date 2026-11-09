@@ -111,8 +111,9 @@ fn compare(
         |exchange| request.matches(state, exchange),
         |exchange| request.priority(state, exchange),
     );
-    let indexed =
-        state.match_strict_redis(case, &target, connection, 2, 0, None, command, &arguments);
+    let indexed = state.match_strict_redis(
+        case, &target, connection, 2, 0, None, command, &arguments, None, None, false,
+    );
     assert_eq!(indexed, scanned);
     indexed
 }
@@ -186,6 +187,62 @@ fn strict_redis_walk_is_case_local_with_thousands_of_unrelated_commands() {
         )
         .collect::<Vec<_>>();
     assert_eq!(candidates, [2050]);
+}
+
+#[test]
+fn blocked_publish_keeps_its_first_match_and_can_fall_back_to_another_lane() {
+    let mut state = RedisReplayState::default();
+    let case = Some("active");
+    add(
+        &mut state,
+        ReplaySource::Case,
+        case,
+        10,
+        1,
+        "PUBLISH",
+        "before",
+    );
+    add(
+        &mut state,
+        ReplaySource::Case,
+        case,
+        10,
+        2,
+        "PUBLISH",
+        "event",
+    );
+    for sequence in 3..1027 {
+        add(
+            &mut state,
+            ReplaySource::Case,
+            case,
+            10,
+            sequence,
+            "PUBLISH",
+            "event",
+        );
+    }
+    assert_eq!(
+        compare(&mut state, case, "PUBLISH", "event"),
+        PreferredMatch::LaneBlocked {
+            candidate: 1,
+            blocker: 0
+        }
+    );
+
+    add(
+        &mut state,
+        ReplaySource::Case,
+        case,
+        20,
+        1,
+        "PUBLISH",
+        "event",
+    );
+    assert_eq!(
+        compare(&mut state, case, "PUBLISH", "event"),
+        PreferredMatch::Matched(1026)
+    );
 }
 
 #[test]

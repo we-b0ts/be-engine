@@ -262,12 +262,12 @@ pub(super) async fn handle_control_request(
             let state = state.lock().await;
             case_execution::status(&state, request.case_id.as_deref())
         }
-        "case_client_aborted" => {
+        "case_close_tail" | "case_client_aborted" => {
             let mut state = state.lock().await;
             let result = request
                 .case_id
                 .as_deref()
-                .context("case_client_aborted requires case_id")
+                .context("close tail observation requires case_id")
                 .and_then(|case| case_cleanup::mark_client_aborted(&mut state, case));
             match result {
                 Ok(()) => serde_json::json!({"ok":true}),
@@ -308,9 +308,10 @@ pub(super) async fn handle_control_request(
         "native_event_begin" | "native_event" | "native_connected" | "native_input_ack" => {
             native_event::accept(&request, &state).await
         }
-        "input_timing_begin" | "input_timing" | "input_timing_tail" => {
-            input_timing::accept(&request, &state).await
-        }
+        "input_timing_begin"
+        | "input_timing"
+        | "input_timing_tail"
+        | "input_timing_native_prefix" => input_timing::accept(&request, &state).await,
         "http_input_timing_begin" | "http_input_timing_wait" | "http_input_timing_closed" => {
             http_input_timing::accept(&request, &state).await
         }
@@ -542,6 +543,9 @@ pub(super) async fn begin_case(
     if let Err(error) = dependency_tail::prepare(&state, case_id).await {
         return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency preparation failed: {error:#}")});
     }
+    if let Err(error) = input_timing::prepare_source(&state, case_id).await {
+        return serde_json::json!({"ok": false, "error": format!("input timing preparation failed: {error:#}")});
+    }
     let counter_start = match counter_reader {
         Some(reader) => Some(reader.sample().await),
         None => None,
@@ -674,7 +678,7 @@ pub(super) async fn end_case(
         case_cleanup::drain_started(&state, case_id, deadline).await
     };
     let cleanup = match (client_aborted, deadline) {
-        // A premature client end gets its own observation bound. The normal
+        // A close with pending business gets its own observation bound. The normal
         // request's deadline and unstarted business obligations are independent.
         (Some(_), _) => Ok(()),
         (None, Some(deadline)) => tokio::time::timeout_at(deadline, cleanup)

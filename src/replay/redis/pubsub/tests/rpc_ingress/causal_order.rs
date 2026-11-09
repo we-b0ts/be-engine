@@ -244,6 +244,7 @@ fn input_program() -> InputTranscript {
     .map(|(i, (message, ordinal))| InputAction {
         sequence: i as u64 + 1,
         offset_ms: i as u64 * 20,
+        offset_us: None,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -274,19 +275,38 @@ fn assert_ack(message: Message, id: u64, data: Value) {
 
 #[tokio::test]
 async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_redis() {
-    for lazy in [false, true] {
+    for (lazy, fast) in [(false, false), (true, false), (true, true)] {
         let temp = tempfile::tempdir().unwrap();
-        let (mut cases, globals) = fixture(temp.path());
+        let (mut cases, mut globals) = fixture(temp.path());
         let call = preceding(&mut cases);
         let mut reply_value = reply(SOURCE_SID);
         reply_value["args"] = json!([{"workspaces":[],"success":true}]);
         cases[2]["args"][1] = capture(&serde_json::to_vec(&reply_value).unwrap());
+        let mut input = input_program();
+        if fast {
+            input.policy.max_duration_ms = 15_000;
+            input.policy.request_timeout_ms = 15_000;
+            input.actions[2].offset_ms = 12_000;
+            globals[1]["timestamp"] = "2020-01-01T00:00:11.990Z".into();
+            cases[0]["request_started_at"] = START.into();
+            cases[1]["request_started_at"] = "2020-01-01T00:00:00.010Z".into();
+            cases[2]["request_started_at"] = "2020-01-01T00:00:12.005Z".into();
+            cases[2]["timestamp"] = "2020-01-01T00:00:12.010Z".into();
+        }
         // Runtime timing preparation and execution must see the same complete
         // original input program, rather than a protocol-only fixture hint.
         let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
-            "timestamp":START,"headers":{},"body":capture(b""),"interaction":input_program()});
+            "timestamp":START,"headers":{},"body":capture(b""),"interaction":input});
         std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
-        let runtime = runtime(temp.path(), &cases, &globals, lazy).await.unwrap();
+        let runtime = runtime_with_timing(
+            temp.path(),
+            &cases,
+            &globals,
+            lazy,
+            fast.then_some(crate::ReplayStreamTiming::Fast),
+        )
+        .await
+        .unwrap();
         // This is the same private control path used by RecordedHttpClient.
         let socket_path = temp.path().join("control.sock");
         let session = temp.path().join("session.json");
@@ -301,14 +321,10 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
                     .unwrap();
             }
         });
-        runtime
-            .state
-            .lock()
-            .await
-            .redis
-            .request_contracts
-            .request_begin("case")
-            .unwrap();
+        {
+            let state = runtime.state.lock().await;
+            state.redis.request_contracts.request_begin("case").unwrap();
+        }
         let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = ws_listener.local_addr().unwrap();
         let target_runtime = runtime.clone();
@@ -356,6 +372,11 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
                 ))
                 .await
                 .unwrap();
+            assert_ack(
+                socket.next().await.unwrap().unwrap(),
+                71,
+                json!([{"plugins":[],"success":false}]),
+            );
             let raw = read(&mut subscriber).await;
             let incoming: Value =
                 serde_json::from_slice(&parse_pubsub_push(&raw).unwrap().unwrap().payload).unwrap();
@@ -364,11 +385,6 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
                 .send(Message::Text("42/rpc,72[\"runtime:rpc\",{}]".into()))
                 .await
                 .unwrap();
-            assert_ack(
-                socket.next().await.unwrap().unwrap(),
-                71,
-                json!([{"plugins":[],"success":false}]),
-            );
             assert_ack(
                 socket.next().await.unwrap().unwrap(),
                 72,
@@ -397,10 +413,13 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
             1024 * 1024,
         )
         .with_input_registration(&session, "case");
-        let response = client
-            .send_bytes(&serde_json::to_vec(&request).unwrap(), "causal-input")
-            .await
-            .unwrap();
+        let response = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.send_bytes(&serde_json::to_vec(&request).unwrap(), "causal-input"),
+        )
+        .await
+        .expect("the original 12-second ingress offset must compress in fast mode")
+        .unwrap();
         assert!(response.interaction.unwrap().end.clean);
         target.await.unwrap();
         let state = runtime.state.lock().await;

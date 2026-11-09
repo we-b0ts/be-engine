@@ -8,21 +8,39 @@ pub(super) async fn runtime_with_source(
     events: &[Value],
     document: Value,
 ) -> (tempfile::TempDir, ReplayRuntime) {
+    runtime_with_request(
+        events,
+        document,
+        json!({"method":"POST", "uri":"/tasks", "timestamp":"2020-01-01T00:00:00Z"}),
+        Default::default(),
+    )
+    .await
+}
+
+pub(super) async fn runtime_with_request(
+    events: &[Value],
+    document: Value,
+    request: Value,
+    lifecycle: crate::replay::ReplayLifecycleConfig,
+) -> (tempfile::TempDir, ReplayRuntime) {
+    runtime_with_response(events, document, request, json!({}), lifecycle).await
+}
+
+pub(super) async fn runtime_with_response(
+    events: &[Value],
+    document: Value,
+    request: Value,
+    response: Value,
+    lifecycle: crate::replay::ReplayLifecycleConfig,
+) -> (tempfile::TempDir, ReplayRuntime) {
     let root = tempfile::tempdir().unwrap();
     let case = root
         .path()
         .join(".traffic-e2e/local/artifacts/recordings/run/apis/tasks/case");
     std::fs::create_dir_all(&case).unwrap();
     crate::platform::encryption_key::load_or_create(root.path()).unwrap();
-    std::fs::write(
-        case.join("request.json"),
-        json!({
-            "method":"POST", "uri":"/tasks", "timestamp":"2020-01-01T00:00:00Z"
-        })
-        .to_string(),
-    )
-    .unwrap();
-    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    std::fs::write(case.join("request.json"), request.to_string()).unwrap();
+    std::fs::write(case.join("expected-response.json"), response.to_string()).unwrap();
     std::fs::write(
         case.join("dependencies.jsonl"),
         events.iter().map(|e| format!("{e}\n")).collect::<String>(),
@@ -51,7 +69,7 @@ pub(super) async fn runtime_with_source(
         },
         addr,
         addr,
-        Default::default(),
+        lifecycle,
     )
     .await
     .unwrap();

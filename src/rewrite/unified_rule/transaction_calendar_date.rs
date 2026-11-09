@@ -44,22 +44,24 @@ fn finalized_partial_calendar_plan_still_checks_independent_targets_and_stale_ar
         }
         fixture.confirm();
         let planned = fixture.plan();
-        if matches!(scenario, "counter" | "unfinalized") {
-            let error = format!("{:#}", planned.unwrap_err());
-            if scenario == "counter" {
-                assert!(!error.contains("complete finalized Replay"), "{error}");
-            }
+        if scenario == "unfinalized" {
+            assert!(planned.is_err());
             assert!(fixture.state().rule_plan.is_none());
             continue;
         }
         let plan = planned.unwrap();
         assert_eq!(plan.traffic_e2e_report["verified"], false);
-        assert!(
-            plan.traffic_e2e_report["preflight"]["independent_target_validations"]
-                .as_u64()
-                .unwrap()
-                > 0
+        let preflight = &plan.traffic_e2e_report["preflight"];
+        assert_eq!(
+            preflight["independent_target_validations"],
+            u64::from(scenario != "counter")
         );
+        if scenario == "counter" {
+            assert_eq!(
+                preflight["target_comparison_failures"][0]["surface"],
+                "dependency.request"
+            );
+        }
         if scenario == "stale-source" {
             let source = fixture
                 .state()
@@ -131,16 +133,21 @@ fn calendar_date_plan_apply_preserves_strict_counters_and_requires_fresh_replay(
             });
             fixture.confirm();
             let planned = fixture.plan();
-            if change != "valid" && !(response && change == "date") {
-                assert!(planned.is_err(), "response={response}, change={change}");
+            if response && change == "counter" {
+                let error = format!("{:#}", planned.unwrap_err());
+                assert!(error.contains("MySQL delivered input changed"), "{error}");
                 continue;
             }
+            let target_matches = change == "valid" || response;
             let plan = planned.unwrap();
             let preflight = &plan.traffic_e2e_report["preflight"];
             assert_eq!(
                 preflight["independent_target_validations"],
-                if response { 1 } else { 2 }
+                if !response && target_matches { 2 } else { 1 }
             );
+            if !target_matches {
+                assert_eq!(plan.traffic_e2e_report["status"], "planned_needs_replay");
+            }
             assert_eq!(preflight["derived_delivery_validations"], 0);
             assert_eq!(plan.traffic_e2e_report["verified"], false);
             let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
