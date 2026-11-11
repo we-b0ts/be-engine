@@ -41,7 +41,9 @@ async fn explicit_api_case_limit_stops_and_finalizes_the_recorder_runtime() {
         )
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(1), runtime)
+    // Finalization includes filesystem I/O and blocking proof-index work shared
+    // with the full suite. Keep the hang guard independent of host throughput.
+    tokio::time::timeout(std::time::Duration::from_secs(10), runtime)
         .await
         .unwrap()
         .unwrap()

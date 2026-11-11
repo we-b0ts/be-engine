@@ -51,6 +51,43 @@ fn primary_metadata_preserves_independent_status_and_body_assertions() {
 }
 
 #[test]
+fn non_json_target_response_preserves_status_and_body_differences() {
+    let (_temp, options) = write_raw_case(
+        "",
+        r#"{"id":"11111111-1111-4111-8111-111111111111"}"#,
+        "fallback upstream unavailable",
+    );
+    fs::write(
+        &options.policy,
+        "format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n",
+    )
+    .unwrap();
+    for status in [200, 502] {
+        let mut actual = with_primary(&options);
+        actual["status"] = json!(status);
+        fs::write(&options.actual_response, actual.to_string()).unwrap();
+        let report = evaluate(&options).unwrap();
+        assert!(!report.passed);
+        assert_eq!(report.body_codec, ResponseBodyCodec::Json);
+        assert!(report.identity_pairs.is_empty());
+        assert!(report.applied_body_rule_ids.is_empty());
+        assert!(
+            report
+                .differences
+                .iter()
+                .any(|difference| { difference.kind == ResponseDifferenceKind::ValueMismatch })
+        );
+        assert_eq!(
+            report
+                .differences
+                .iter()
+                .any(|difference| { difference.kind == ResponseDifferenceKind::StatusMismatch }),
+            status != 200
+        );
+    }
+}
+
+#[test]
 fn primary_metadata_cannot_override_input_identity_or_observed_clocks() {
     let (_temp, options) = write_raw_case("", "{}", "{}");
     let original = with_primary(&options);

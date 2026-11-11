@@ -15,13 +15,28 @@ pub(super) fn compare(
 ) -> Result<()> {
     let global = global.context("global JSON field strategy missing")?;
     let (source_payload, target_payload) = (source.body(), target.body());
-    let comparison = crate::value_contract::global::compare(
+    let comparison = match crate::value_contract::global::compare(
         source_payload,
         target_payload,
         global,
         &[],
         clocks,
-    )?;
+    ) {
+        Ok(comparison) => comparison,
+        Err(_)
+            if crate::json_value::parse(source_payload).is_some()
+                && crate::json_value::parse(target_payload).is_none() =>
+        {
+            // A complete primary response can carry a body outside the Source
+            // codec. Preserve the response and its independent status evidence.
+            report.body_codec = ResponseBodyCodec::Json;
+            report
+                .differences
+                .push(ResponseDifference::body_value_mismatch());
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     report.identity_pairs.extend(comparison.identity_pairs());
     report.body_codec = if crate::json_value::parse(source_payload).is_some() {
         ResponseBodyCodec::Json
