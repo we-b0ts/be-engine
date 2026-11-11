@@ -133,7 +133,6 @@ pub(super) fn apply(
     state.recording_request_reason = None;
     state.recording_input_case_source = None;
     state.recording_input_diagnosis = None;
-    state.case_pattern_identification = None;
     state.active_slice = RewriteSliceState::pending(String::new(), String::new());
     state.phase = RewritePhase::RecordingRequired;
     Ok(true)

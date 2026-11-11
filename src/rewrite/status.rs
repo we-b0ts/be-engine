@@ -39,13 +39,16 @@ fn inventory_rewrite_uncached(context: RewriteContext) -> Result<RewriteInventor
             inventory::initialize_legacy(&mut state);
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
-            let details = if let Some(report) = super::configuration_commit::status(&target_root)?
-                && !matches!(report.action, super::RewriteAction::ExpertRequired { .. })
-            {
-                super::coordination::single_ready("commit_configuration", report.pending)
-            } else {
-                super::coordination::status_details(&target_root, &state)?
-            };
+            let details =
+                if let Some(report) = super::configuration_commit::status(&target_root)?
+                    && matches!(report.action, super::RewriteAction::InputRequired {
+                    reason: super::model::RewriteInputRequiredReason::ConfigurationCommitRequired,
+                    ..
+                }) {
+                    super::coordination::single_ready("commit_configuration", report.pending)
+                } else {
+                    super::coordination::status_details(&target_root, &state)?
+                };
             RewriteInventoryReport {
                 implementers: super::implementer::view(&target_root, &state)?,
                 repository_analysis: state.repository_analysis.clone(),

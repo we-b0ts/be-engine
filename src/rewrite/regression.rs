@@ -217,6 +217,7 @@ fn reset(mut state: RewriteState) -> RewriteState {
     state.recording_input_case_source = None;
     state.recording_input_diagnosis = None;
     state.case_pattern_identification = None;
+    state.case_pattern_analysis = None;
     state.recording_refresh = None;
     state.revalidation_round = None;
     state.pre_revalidation_review = None;

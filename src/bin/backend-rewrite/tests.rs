@@ -92,7 +92,6 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "inventory",
             "purpose",
             "case",
-            "case-pattern",
             "repository-analysis",
             "dependency-attribution",
             "implementer",
@@ -253,7 +252,7 @@ fn parses_the_bounded_rewrite_surface() {
             "--patterns-json",
             r#"["/api/tasks/*/tree"]"#,
         ])
-        .is_ok()
+        .is_err()
     );
     assert!(
         Cli::try_parse_from([

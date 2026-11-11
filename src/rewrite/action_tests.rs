@@ -15,7 +15,8 @@ use super::super::model::{
 
 #[test]
 fn status_recovers_pending_case_pattern_identification_after_recording_finalizes() {
-    let target = tempfile::tempdir().unwrap();
+    let target = super::super::worker::tests::configured_target();
+    super::super::test_support::install_source_snapshot(target.path());
     let mut state = crate::rewrite::test_state();
     state.case_pattern_identification =
         Some(super::super::model::RewriteCasePatternIdentification {
@@ -23,6 +24,8 @@ fn status_recovers_pending_case_pattern_identification_after_recording_finalizes
             recording_run_id: state.recording_run_id.clone(),
             candidates: vec!["GET /api/tasks/123/tree".to_string()],
             observed_apis: vec!["GET /api/tasks/123/tree".to_string()],
+            canonical_apis: vec!["GET /api/tasks/123/tree".to_string()],
+            effective_patterns: Vec::new(),
         });
     let manifest = artifacts::recording_manifest(target.path(), &state.recording_run_id);
     fs::create_dir_all(manifest.parent().unwrap()).unwrap();
@@ -34,13 +37,10 @@ fn status_recovers_pending_case_pattern_identification_after_recording_finalizes
 
     let status = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
 
+    assert_eq!(status["action"]["kind"], "repository_analysis_required");
     assert_eq!(
-        status["action"]["kind"],
-        serde_json::json!("case_pattern_identification_required")
-    );
-    assert_eq!(
-        status["action"]["details"]["batch_id"],
-        serde_json::json!("case-patterns-current")
+        status["action"]["details"]["case_patterns"]["candidates"],
+        serde_json::json!(["GET /api/tasks/123/tree"])
     );
 }
 

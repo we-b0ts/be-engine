@@ -104,8 +104,7 @@ listed protocol before handling that action.
 | --- | --- | --- | --- |
 | `purpose_required` | Confirm the user-authorized purpose after the required live runtime query | None | [authorized regression start](coordinator-agent-protocol.md#authorized-regression-start) |
 | `recording_in_progress`, `recording_refresh_pending` | Observe external publication and wait for the selected evidence | External recording owner | [recording actions](coordinator-recording.md) |
-| `case_pattern_identification_required` | Retain the batch, delegate analysis, then apply the exact result | Repository analyst in read-only `route_analysis` mode | [case patterns](coordinator-case-patterns.md) |
-| `repository_analysis_required` | Complete incremental grouping before Replay | Repository analyst | [repository analysis](coordinator-repository-analysis.md) |
+| `repository_analysis_required` | Complete one batch of case pattern identification and API grouping before Replay | Repository analyst | [repository analysis](coordinator-repository-analysis.md) |
 | `dependency_attribution_required` | Obtain the exact context, reconcile rule assessment and proposals, then apply independent ownership proof | Repository analyst in read-only `dependency_attribution` mode | [independent dependency attribution](coordinator-rule-actions.md#independent-dependency-attribution) |
 | `implementer_dispatch_required` | Create/resume the fixed slot and confirm its exact same-group API batch | API implementer | [fixed implementers](coordinator-implementers.md) |
 | `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
@@ -304,20 +303,13 @@ The selected external recording is still being published. Execute `commands.wait
 and refresh status. The coordinator never starts or recovers its process.
 See [external recording evidence](coordinator-recording.md).
 
-### `case_pattern_identification_required`
-
-Read [coordinator-case-patterns.md](coordinator-case-patterns.md). Delegate
-read-only route analysis of the complete batch to the repository analyst, then
-apply its matched result through the returned command. Do not create an
-implementation issue for it.
-
 ### `repository_analysis_required`
 
-Read [repository analysis](coordinator-repository-analysis.md). Give the analyst
-fresh context containing all existing groups and exactly the pending APIs. Apply
-one complete incremental submission through the returned batch/version-bound
-command. Finish analysis before Replay; no overlap or implementer binding is
-needed. Existing grouped APIs reuse the project catalog.
+Read [repository analysis](coordinator-repository-analysis.md). Give one
+repository analyst the fresh context and Source location. Apply its complete
+case pattern and group submission through the returned batch-bound command.
+Finish analysis before Replay. The analyst assignment has no implementation
+worker binding.
 
 ### `dependency_attribution_required`
 

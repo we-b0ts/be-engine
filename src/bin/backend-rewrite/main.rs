@@ -10,14 +10,14 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions, RewriteContext,
-    RewriteNextOptions, RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
+    RewriteCaseDependenciesOptions, RewriteContext, RewriteNextOptions,
+    RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
     RewriteTargetQualityOptions, RewriteWorkerConfirmOptions, RewriteWorkerReportOptions,
-    RewriteWorkerTransferOptions, apply_rewrite_case_patterns, confirm_rewrite_worker,
-    inventory_rewrite, query_rewrite_case_dependencies, query_rewrite_case_dependency_exchange,
-    recover_rewrite, report_rewrite_worker, request_rewrite_revalidation,
-    resume_rewrite_replay_planning, retry_rewrite_operation, route_rewrite, start_rewrite_next,
-    start_rewrite_target_quality, status_rewrite, transfer_rewrite_worker, verify_rewrite_repair,
+    RewriteWorkerTransferOptions, confirm_rewrite_worker, inventory_rewrite,
+    query_rewrite_case_dependencies, query_rewrite_case_dependency_exchange, recover_rewrite,
+    report_rewrite_worker, request_rewrite_revalidation, resume_rewrite_replay_planning,
+    retry_rewrite_operation, route_rewrite, start_rewrite_next, start_rewrite_target_quality,
+    status_rewrite, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -123,9 +123,7 @@ enum RewriteCommand {
     Purpose(purpose::PurposeArgs),
     /// Inspect bounded dependency evidence from one published case.
     Case(CaseArgs),
-    /// Apply one coordinator-requested batch of API case path patterns.
-    CasePattern(CasePatternArgs),
-    /// Inspect or apply incremental source-backed API grouping before Replay.
+    /// Inspect or apply Source-backed case patterns and API groups before Replay.
     RepositoryAnalysis(repository_analysis::RepositoryAnalysisArgs),
     /// Review and apply Source-backed dependency ownership without fabricating consumption.
     DependencyAttribution(dependency_attribution::DependencyAttributionArgs),
@@ -178,31 +176,6 @@ struct StatusArgs {
 struct CaseArgs {
     #[command(subcommand)]
     command: CaseCommand,
-}
-
-#[derive(Debug, Args)]
-struct CasePatternArgs {
-    #[command(subcommand)]
-    command: CasePatternCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum CasePatternCommand {
-    /// Apply every identified pattern; an empty JSON array confirms all candidates are static.
-    Apply(CasePatternApplyArgs),
-}
-
-#[derive(Debug, Args)]
-struct CasePatternApplyArgs {
-    /// Opaque batch id returned by case_pattern_identification_required.
-    batch_id: String,
-    /// Complete JSON array of identified path patterns.
-    #[arg(
-        long,
-        env = "BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON",
-        hide_env_values = true
-    )]
-    patterns_json: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -540,20 +513,6 @@ async fn run(cli: Cli) -> Result<()> {
                     _ => bail!("--connection-id and --sequence must be provided together"),
                 };
                 print_json(&report, pretty)
-            }
-        },
-        RewriteCommand::CasePattern(args) => match args.command {
-            CasePatternCommand::Apply(args) => {
-                let patterns = serde_json::from_str::<Vec<String>>(&args.patterns_json)
-                    .map_err(|error| anyhow::anyhow!("invalid case path patterns JSON: {error}"))?;
-                print_json(
-                    &apply_rewrite_case_patterns(RewriteCasePatternApplyOptions {
-                        target_root,
-                        batch_id: args.batch_id,
-                        patterns,
-                    })?,
-                    pretty,
-                )
             }
         },
         RewriteCommand::RepositoryAnalysis(args) => {

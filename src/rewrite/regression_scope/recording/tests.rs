@@ -105,14 +105,25 @@ fn pending_pattern_state(root: &Path) -> RewriteState {
 fn pinned_pattern_wait_reuses_observations_but_apply_still_validates_cases() {
     let root = target();
     let state = pending_pattern_state(root.path());
-    let batch_id = state
-        .case_pattern_identification
-        .as_ref()
-        .unwrap()
-        .id
-        .clone();
     let store = RewriteStore::new(root.path()).unwrap();
     store.save(&state).unwrap();
+    let analysis =
+        rewrite::repository_analysis_context(rewrite::RepositoryAnalysisContextOptions {
+            target_root: root.path().into(),
+        })
+        .unwrap();
+    let submission = root.path().join(".traffic-e2e/local/analysis.json");
+    fs::write(
+        &submission,
+        serde_json::json!({
+            "schema_version": 1,
+            "catalog_revision": analysis.catalog_revision,
+            "case_patterns": {"GET /new-static": null},
+            "assignments": {},
+        })
+        .to_string(),
+    )
+    .unwrap();
     let state_path = crate::internal_runtime::root(root.path()).join("rewrite/state.json");
     let state_before = fs::read(&state_path).unwrap();
     let policy_path = root.path().join(".traffic-e2e/policy.yaml");
@@ -130,15 +141,15 @@ fn pinned_pattern_wait_reuses_observations_but_apply_still_validates_cases() {
         .unwrap();
         assert!(matches!(
             status.action,
-            RewriteAction::CasePatternIdentificationRequired { .. }
+            RewriteAction::RepositoryAnalysisRequired { .. }
         ));
     }
     assert_eq!(fs::read(&state_path).unwrap(), state_before);
     assert!(
-        rewrite::case_patterns::apply(rewrite::RewriteCasePatternApplyOptions {
+        rewrite::apply_repository_analysis(rewrite::RepositoryAnalysisApplyOptions {
             target_root: root.path().into(),
-            batch_id,
-            patterns: vec![],
+            batch_id: analysis.batch_id,
+            file: submission,
         })
         .is_err()
     );

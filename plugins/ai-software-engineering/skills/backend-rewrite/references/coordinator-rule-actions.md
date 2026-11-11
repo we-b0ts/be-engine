@@ -117,7 +117,7 @@ Apply command, then continue with `next` and its normal configuration commit and
 verification gates. Stale plans return recovery guidance. Preserve failed API
 issues; applying a rule does not establish a pass or replace implementation work.
 
-Use `case-pattern` for pre-inventory capture catalog bootstrap. The Source-gap
+Use the case pattern portion of `repository-analysis` for pre-inventory capture catalog bootstrap. The Source-gap
 `route`/`recorder-capture` workflows below remain explicit acquisition owners and
 write the same unified policy atomically. They are not value relaxations.
 

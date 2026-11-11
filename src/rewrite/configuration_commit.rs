@@ -123,6 +123,12 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
     };
     let mut envelope = match RewriteStore::new(&target_root)?.load()? {
         Some(state) => {
+            if super::repository_analysis::publication_pending(&state)
+                && let Some(analysis) =
+                    super::repository_analysis::required_action(&target_root, &state)?
+            {
+                return Ok(Some(action::envelope(&target_root, &state, analysis)));
+            }
             // Read-only expert assistance cannot change the validation baseline.
             // Its deadline remains actionable while configuration needs a commit.
             if let Some(expert) = super::expert::required_action(&target_root, &state, None) {

@@ -168,7 +168,6 @@ pub use case_group_rebuild::{
     RewriteCaseGroupRebuildOptions, RewriteCaseGroupRebuildReport,
     archive_unmanaged_rewrite_case_groups, rebuild_rewrite_case_groups,
 };
-pub use case_patterns::{RewriteCasePatternApplyOptions, apply as apply_rewrite_case_patterns};
 pub use dependency_rule::{
     RewriteDependencyOwnership, RewriteDependencyPayloadRulePlanOptions,
     RewriteDependencyPayloadRulePlanReport, RewriteDependencyRulePlanOptions,

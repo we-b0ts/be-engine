@@ -325,7 +325,7 @@ async fn advance_atomic(
                 state.recording_rejection = None;
                 state.bump();
                 store.save(&state)?;
-                return Ok(action::for_state(&target_root, &state));
+                return action::for_status(&target_root, &state);
             }
             let apis = match artifacts::standard_recording_apis(&target_root, &state) {
                 Ok(apis) => apis,

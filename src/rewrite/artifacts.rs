@@ -97,12 +97,30 @@ pub(super) fn standard_recording_apis_for_scope(
     run_id: &str,
     requested: Vec<String>,
 ) -> Result<Vec<String>> {
+    if !requested.is_empty() {
+        return validate_api_members(&recording_run(target_root, run_id), requested);
+    }
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    let config = crate::config::AppConfig::load(&project.recorder_config)?;
+    recording_apis_with_config(target_root, run_id, requested, &config)
+}
+
+pub(super) fn recording_apis_with_config(
+    target_root: &Path,
+    run_id: &str,
+    requested: Vec<String>,
+    config: &crate::config::AppConfig,
+) -> Result<Vec<String>> {
     let case_source = recording_run(target_root, run_id);
-    let mut apis = if requested.is_empty() {
-        discover_recorded_apis(target_root, &case_source)?
+    let apis = if requested.is_empty() {
+        discover_recorded_apis_from_config(config, &case_source)?
     } else {
         requested
     };
+    validate_api_members(&case_source, apis)
+}
+
+fn validate_api_members(case_source: &Path, mut apis: Vec<String>) -> Result<Vec<String>> {
     apis.sort();
     apis.dedup();
     ensure!(
@@ -113,7 +131,7 @@ pub(super) fn standard_recording_apis_for_scope(
         .iter()
         .map(|api| api.parse::<RecordingApi>())
         .collect::<Result<Vec<_>>>()?;
-    crate::case_group::validate_recording_api_cases(&case_source, &selectors)
+    crate::case_group::validate_recording_api_cases(case_source, &selectors)
         .context("standard recording has no canonical case member for its API inventory")?;
     Ok(apis)
 }
@@ -149,12 +167,6 @@ pub(super) fn recording_rejection(error: &anyhow::Error) -> String {
         ],
         "standard recording evidence is unreadable or invalid",
     )
-}
-
-fn discover_recorded_apis(target_root: &Path, case_source: &Path) -> Result<Vec<String>> {
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    let config = crate::config::AppConfig::load(&project.recorder_config)?;
-    discover_recorded_apis_from_config(&config, case_source)
 }
 
 fn discover_recorded_apis_from_config(

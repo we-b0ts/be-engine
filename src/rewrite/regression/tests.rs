@@ -293,8 +293,8 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
     );
 }
 
-#[test]
-fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
+#[tokio::test]
+async fn replay_purpose_analyzes_case_patterns_and_groups_in_one_batch() {
     let target = fixture();
     let store = RewriteStore::new(target.path()).unwrap();
     let mut previous = store.load().unwrap().unwrap();
@@ -306,10 +306,20 @@ fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
         .collect();
     store.save(&previous).unwrap();
 
+    let catalog_path = target
+        .path()
+        .join(".traffic-e2e/local/repository-analysis/catalog.json");
+    fs::write(
+        &catalog_path,
+        br#"{"api_groups":{"/api":"api","/api/known/*":"known"}}"#,
+    )
+    .unwrap();
     let run = artifacts::recording_run(target.path(), &previous.recording_run_id);
     for (index, path) in [
         "/api/knowledge-bases/304487/artifacts",
         "/api/knowledge-bases/304541/artifacts",
+        "/api/known/1",
+        "/new-static",
     ]
     .iter()
     .enumerate()
@@ -328,91 +338,108 @@ fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
         serde_json::to_vec(&serde_json::json!({
             "status":"completed",
             "recording_apis":[],
-            "published_cases":4
+            "published_cases":6
         }))
         .unwrap(),
     )
     .unwrap();
 
     let report = begin(options(target.path())).unwrap();
-    let value = serde_json::to_value(&report.next).unwrap();
+    let rewrite::RewriteAction::RepositoryAnalysisRequired { analysis, .. } = report.next.action
+    else {
+        panic!("expected one combined analysis action");
+    };
+    assert_eq!(analysis.pending_apis, ["/other"]);
     assert_eq!(
-        value["action"]["kind"],
-        "case_pattern_identification_required"
-    );
-    assert_eq!(
-        value["action"]["details"]["candidates"],
-        serde_json::json!([
-            "GET /api/knowledge-bases/304487/artifacts",
-            "GET /api/knowledge-bases/304541/artifacts"
-        ])
-    );
-
-    let pending = store
-        .load()
-        .unwrap()
-        .unwrap()
-        .case_pattern_identification
-        .unwrap();
-    assert!(store.load().unwrap().unwrap().api_inventory.is_empty());
-    case_patterns::apply(case_patterns::RewriteCasePatternApplyOptions {
-        target_root: target.path().into(),
-        batch_id: pending.id,
-        patterns: vec!["/api/knowledge-bases/*/artifacts".into()],
-    })
-    .unwrap();
-
-    let mut state = store.load().unwrap().unwrap();
-    let canonical = artifacts::standard_recording_apis(target.path(), &state).unwrap();
-    assert_eq!(
-        canonical,
+        analysis.case_patterns.unwrap().candidates,
         [
-            "GET /api",
-            "GET /api/knowledge-bases/*/artifacts",
-            "GET /other"
+            "GET /api/knowledge-bases/304487/artifacts",
+            "GET /api/knowledge-bases/304541/artifacts",
+            "GET /api/known/1",
+            "GET /new-static",
         ]
     );
-    // Model the normal next inventory-installation step, without running traffic.
-    // Path identification never grants module grouping to the newly canonical API.
-    inventory::install(&mut state, canonical).unwrap();
-    store.save(&state).unwrap();
-    let Some(rewrite::RewriteAction::RepositoryAnalysisRequired { analysis, .. }) =
-        rewrite::repository_analysis::required_action(target.path(), &state).unwrap()
-    else {
-        panic!("new canonical routes require incremental grouping before Replay");
-    };
-    assert_eq!(analysis.pending_apis, ["/api/knowledge-bases/*/artifacts"]);
-    let catalog: serde_json::Value =
-        serde_json::from_slice(&fs::read(&analysis.catalog_path).unwrap()).unwrap();
-    assert_eq!(catalog["api_groups"]["/api"], "api");
-    assert_eq!(catalog["api_groups"]["/other"], "other");
-    assert!(state.api_inventory.iter().all(|item| item.attempts == 0));
-    let submission = target
+    assert!(store.load().unwrap().unwrap().api_inventory.is_empty());
+
+    let file = target
         .path()
         .join(".traffic-e2e/local/new-api-analysis.json");
-    fs::write(
-        &submission,
-        serde_json::to_vec(&serde_json::json!({
-            "schema_version": 1,
-            "catalog_revision": analysis.catalog_revision,
-            "assignments": {"/api/knowledge-bases/*/artifacts": "knowledge-artifacts"}
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    rewrite::repository_analysis::apply_repository_analysis(
-        rewrite::RepositoryAnalysisApplyOptions {
-            target_root: target.path().into(),
-            batch_id: analysis.batch_id,
-            file: submission,
+    let request = rewrite::RepositoryAnalysisApplyOptions {
+        target_root: target.path().into(),
+        batch_id: analysis.batch_id,
+        file: file.clone(),
+    };
+    let policy = target.path().join(".traffic-e2e/policy.yaml");
+    let before_policy = fs::read(&policy).unwrap();
+    let before_catalog = fs::read(&catalog_path).unwrap();
+    let valid = serde_json::json!({
+        "schema_version": 1,
+        "catalog_revision": analysis.catalog_revision,
+        "case_patterns": {
+            "GET /api/knowledge-bases/304487/artifacts": "/api/knowledge-bases/*/artifacts",
+            "GET /api/knowledge-bases/304541/artifacts": "/api/knowledge-bases/*/artifacts",
+            "GET /api/known/1": "/api/known/*",
+            "GET /new-static": null,
         },
-    )
+        "assignments": {
+            "/api/knowledge-bases/*/artifacts": "knowledge-artifacts",
+            "/new-static": "static",
+            "/other": "other",
+        }
+    });
+
+    for field in ["case_patterns", "assignments"] {
+        let mut invalid = valid.clone();
+        let entries = invalid[field].as_object_mut().unwrap();
+        let first = entries.keys().next().unwrap().clone();
+        entries.remove(&first);
+        fs::write(&file, invalid.to_string()).unwrap();
+        assert!(rewrite::apply_repository_analysis(request.clone()).is_err());
+        assert_eq!(fs::read(&policy).unwrap(), before_policy);
+        assert_eq!(fs::read(&catalog_path).unwrap(), before_catalog);
+    }
+
+    fs::write(&file, valid.to_string()).unwrap();
+    let outcome = rewrite::apply_repository_analysis(request.clone()).unwrap();
+    assert!(matches!(
+        outcome.action,
+        rewrite::RewriteAction::AdvanceRequired { .. }
+    ));
+    let state = store.load().unwrap().unwrap();
+    assert!(state.case_pattern_identification.is_none());
+    assert!(state.api_catalog.contains("GET /new-static"));
+    let revision = state.revision;
+    rewrite::apply_repository_analysis(request).unwrap();
+    assert_eq!(store.load().unwrap().unwrap().revision, revision);
+
+    git(target.path(), &["add", ".traffic-e2e/policy.yaml"]);
+    git(target.path(), &["commit", "-qm", "apply case paths"]);
+    let next = rewrite::advance::advance_rewrite(rewrite::RewriteNextOptions {
+        target_root: target.path().into(),
+        api: None,
+        source_route: None,
+    })
+    .await
     .unwrap();
+    assert!(!matches!(
+        next.envelope.action,
+        rewrite::RewriteAction::RepositoryAnalysisRequired { .. }
+    ));
     let state = store.load().unwrap().unwrap();
     assert!(rewrite::repository_analysis::is_complete(&state));
+    assert!(state.api_inventory.iter().all(|item| item.attempts == 0));
     assert_eq!(
-        state.repository_analysis.as_ref().unwrap().api_groups["/api/knowledge-bases/*/artifacts"],
-        "knowledge-artifacts"
+        state.repository_analysis.unwrap().api_groups,
+        [
+            ("/api", "api"),
+            ("/api/knowledge-bases/*/artifacts", "knowledge-artifacts"),
+            ("/api/known/*", "known"),
+            ("/new-static", "static"),
+            ("/other", "other"),
+        ]
+        .into_iter()
+        .map(|(api, group)| (api.to_owned(), group.to_owned()))
+        .collect()
     );
 }
 

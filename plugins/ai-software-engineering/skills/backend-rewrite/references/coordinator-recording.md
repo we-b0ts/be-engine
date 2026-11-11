@@ -25,7 +25,7 @@ The coordinator does not produce it. Applied capture rules accumulate
 through the existing parked-API refresh lifecycle. Continue other runnable work;
 when refresh is required, arrange external recording with the new policy.
 
-After adoption, follow case-pattern identification and normal coordinator actions.
+After adoption, follow the combined repository analysis and normal coordinator actions.
 Recording contents, old batch identities and verification history remain immutable.
 
 Valid recorded HTTP paths retain their exact identity, including trailing slashes

@@ -1,29 +1,40 @@
 # Coordinator Repository Analysis
 
-Use for `repository_analysis_required`, after static/dynamic path identification
-and inventory installation. Finish grouping before Replay or implementation.
+Use for `repository_analysis_required` before Replay or implementation.
+Execute `commands.context` and give one read-only `repository-analyst` the
+complete returned context, an assignment ID and the Source repository location.
+Keep the exact workflow, recording, Source revision and batch in the assignment
+and result.
 
-Execute `commands.context` (`repository-analysis context`). Give one read-only
-`repository-analyst` the returned `pending_apis`, Source repository location and
-`catalog_path`. The analyst reads existing assignments from that file and only
-classifies the pending APIs. If `catalog_revision` is `absent`, no catalog exists.
-Do not inline the catalog in status or agent assignments.
+The project catalog at `catalog_path` maps canonical routes to group names in
+`api_groups`. The analyst reads it directly. A revision of `absent` means there
+is no existing catalog. Existing assignments carry forward across workflows and
+recordings.
 
-The project-wide `.traffic-e2e/local/repository-analysis/catalog.json` contains
-only `api_groups`, mapping canonical API routes to group names. It survives
-workflow and recording changes. Existing assignments are reused unchanged.
-Groups have no separate definitions, evidence requirements or count limit.
-The analyst chooses how to group APIs; the engine does not judge that choice.
+For `context.case_patterns.candidates`, return one entry per concrete API.
+Use the Source-proven wildcard path for a dynamic route and JSON `null` for a
+confirmed static route. Include Source file or symbol references in the analyst
+handoff. Omit `case_patterns` if the context has no such field.
 
-Return an incremental submission containing exactly the pending routes:
+Return `assignments` for `pending_apis` and the newly resolved in-scope routes
+that need a group. Apply the context’s optional `case_patterns.only_apis` and
+`case_patterns.skipped_apis` to the resolved routes, with skips taking
+precedence. Use canonical path keys for HTTP APIs. Multiple concrete
+paths and methods of the same canonical HTTP route share one assignment. Reuse
+existing group assignments. For a context with `grouping_enabled: false`,
+submit empty `assignments`.
 
 ```json
 {
   "schema_version": 1,
   "catalog_revision": "<exact context.catalog_revision>",
+  "case_patterns": {
+    "GET /api/auth/sessions/123": "/api/auth/sessions/*",
+    "GET /api/health": null
+  },
   "assignments": {
-    "/api/auth/wework/sessions": "wework-auth",
-    "/api/auth/wework/sessions/*": "wework-auth"
+    "/api/auth/sessions/*": "auth",
+    "/api/health": "health"
   }
 }
 ```
@@ -35,7 +46,6 @@ apply command with `BACKEND_REWRITE_REPOSITORY_ANALYSIS_FILE` or `--file`:
 backend-rewrite --target-root <canonical-root> repository-analysis apply <batch-id> --file <analysis.json>
 ```
 
-The engine checks complete API coverage, valid group names and stale submission
-identity before saving. Existing API assignments cannot be changed by this
-incremental interface. Identical retries are safe. For stale input, obtain fresh
-context. No evidence bundle, call graph or justification report is required.
+The engine checks complete coverage, effective route identity and batch
+revisions before publication. Retry interrupted publication with the same batch
+and submission. For stale analysis, use fresh context.

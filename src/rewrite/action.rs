@@ -10,8 +10,8 @@ use super::model::{
     RewriteInputRequiredReason, RewritePhase, RewriteState, RewriteWorkflowView,
 };
 use super::{
-    case_patterns, inventory, progress_publication, recorder_capture, recording_action, repair,
-    target_quality, worker,
+    inventory, progress_publication, recorder_capture, recording_action, repair, target_quality,
+    worker,
 };
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
@@ -75,9 +75,7 @@ fn status_base_without_idle_plan(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteAction> {
-    if state.case_pattern_identification.is_some()
-        || super::transition::replay_completion_pending(state)
-    {
+    if super::transition::replay_completion_pending(state) {
         return Ok(state_action(target_root, state));
     }
     if let Some(analysis) = super::repository_analysis::required_action(target_root, state)? {
@@ -462,9 +460,6 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
     }
     let selected_api = super::api_selector::work_scope(state, &state.api).binding_key();
     let display_api = super::api_selector::public_api(&state.api);
-    if let Some(action) = case_patterns::state_action(target_root, state) {
-        return action;
-    }
     if let Ok(Some(action)) = super::repository_analysis::required_action(target_root, state) {
         return action;
     }

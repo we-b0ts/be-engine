@@ -15,9 +15,9 @@ pub(super) struct RepositoryAnalysisArgs {
 
 #[derive(Debug, Subcommand)]
 enum RepositoryAnalysisCommand {
-    /// Show the current canonical routes requiring source-backed grouping.
+    /// Show unresolved case paths and canonical routes requiring Source analysis.
     Context,
-    /// Apply a complete incremental grouping for the exact returned analysis batch.
+    /// Apply the case patterns and API groups for the exact returned analysis batch.
     Apply {
         batch_id: String,
         #[arg(
