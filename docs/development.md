@@ -549,7 +549,7 @@ the exact API method/pattern, including APIs absent from an intermediate batch.
 Verification results still reset for the new recording. Existing workflow states
 retain their valid routes when their inventory is rebuilt; routes already lost
 by older resets fall back to their confirmed recorded patterns. New uncovered
-paths are handled by case-pattern identification before inventory installation;
+paths are handled by repository analysis before inventory installation;
 only an explicitly selected dynamic API without recorded pattern coverage needs
 source-route confirmation. An explicit `source_baseline_changed` external recording requirement
 discards retained source routes while recorded patterns remain usable. Restarting
@@ -1407,8 +1407,8 @@ backend-rewrite status
 backend-rewrite status --api '/api/widgets/*'
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
-BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON='["/api/tasks/*/tree"]' \
-  backend-rewrite case-pattern apply <batch-id>
+backend-rewrite repository-analysis context
+backend-rewrite repository-analysis apply <batch-id> --file /absolute/analysis.json
 # Provide finalized external recordings in .traffic-e2e/local/artifacts/recordings/<run-id>/.
 # Optionally select recording_run_id in .traffic-e2e/regression.yaml, then:
 backend-rewrite next
@@ -1626,42 +1626,45 @@ engine-returned root, based on the integrated target revision. Confirmation
 rejects ordinary directories, symlinks and mismatched Git roots. The engine does
 not create task-runtime sessions or fabricate their handles.
 
-After static/dynamic route identification and inventory adoption, the engine
-requires complete incremental repository analysis before any group Replay:
+Before Replay, one `repository_analysis_required` action supplies the exact
+batch, workflow, recording and Source revision, existing catalog location and
+routes requiring analysis. Action schema 41 includes unresolved recording paths
+and missing API groups in the same batch. Rerun analysis for any pending batch
+from an earlier action schema.
 
 ```bash
 backend-rewrite repository-analysis context
 backend-rewrite repository-analysis apply <batch-id> --file /absolute/analysis.json
 ```
 
-`repository_analysis_required` returns the exact batch, selected/pending routes,
-Source/workflow/recording identity and existing group catalog. A read-only
-`repository-analyst` traces shared modules/state machines/write hotspots and
-returns one complete incremental submission:
+The read-only `repository-analyst` returns one incremental submission:
 
 ```json
 {
   "schema_version": 1,
   "catalog_revision": "<exact returned catalog revision>",
-  "groups": {
-    "sessions": {
-      "summary": "Session lifecycle",
-      "source_refs": ["src/routes/sessions.py:create_session"],
-      "shared_modules": ["auth/session"],
-      "write_hotspots": ["src/session.rs"]
-    }
+  "case_patterns": {
+    "GET /api/sessions/123": "/api/sessions/*",
+    "GET /api/health": null
   },
-  "assignments": {"/api/sessions": "sessions"}
+  "assignments": {"/api/sessions/*": "sessions", "/api/health": "health"}
 }
 ```
 
-The assignments cover exactly pending canonical routes. Define only new groups;
-joining an existing group references its ID without redefining it. Existing group
-metadata and assignments are immutable through this incremental interface. The
-engine checks batch/version/Source/recording identity and writes
-`.traffic-e2e/local/repository-analysis/catalog.json`. This ignored project catalog
-survives workflow changes; it is read through the context command, not edited by
-agents. No ungrouped API starts Replay, and analysis does not overlap Replay.
+`case_patterns` covers every concrete candidate in
+`context.case_patterns.candidates`. Use `null` for a confirmed static route and
+omit the field for a grouping-only batch. `pending_apis` lists already-resolved
+routes with missing groups. `assignments` covers exactly the canonical routes
+that still need a group after applying the proposed patterns and selecting the
+workflow's scope. Multiple recorded paths and HTTP methods sharing a canonical
+route need one assignment. Existing groups are available in the project catalog
+at `catalog_path`, and existing assignments are reused. Unpooled workflows
+submit empty `assignments` for their route analysis.
+
+The engine validates both results before publishing changes to the managed
+traffic policy and the ignored project catalog. It checks batch, Source,
+recording, configuration and catalog revisions. Retry an interrupted publication
+with the same batch and submission. Recording files remain immutable.
 
 Group count is unlimited. New group IDs are mapped in stable order round-robin
 to the workflow’s slots; persisted mappings remain stable. Same-group APIs default
@@ -2186,18 +2189,12 @@ current target fingerprint plus the existing review and publication gates.
 A commit preserving effective worktree content does not change the fingerprint.
 
 After a finalized unscoped standard recording, the coordinator compares its
-concrete APIs with a persistent historical API catalog canonicalized by current
-`case_path_patterns`. Only new uncovered APIs produce one
-`case_pattern_identification_required` batch. The coordinator delegates this
-read-only static/dynamic source route analysis to `repository-analyst`, separately
-from API implementation; the analyst has no implementation-worker binding or
-worktree. Its fixed apply command receives
-the complete JSON pattern list through
-`BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON`; `[]` confirms that every candidate is
-static. This action has no source-revision or evidence input. Apply updates the
-managed source traffic policy and the catalog, while existing recording files
-remain immutable. The current recording inventory is then derived again under
-the updated policy.
+concrete APIs with a persistent historical catalog canonicalized by current
+`case_path_patterns`. New uncovered paths enter the repository analysis batch
+along with canonical routes that still need a group. A successful apply updates
+the capture policy as needed and completes grouping before installing the
+inventory. Previously confirmed static paths and existing patterns carry forward
+to later recordings.
 
 Recording and focused Replay share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
@@ -3010,10 +3007,10 @@ and validates the recording inventory and progress before writing anything.
 Both paths validate a repair subset using the same prepared API fingerprint and
 complete partition of selected and skipped passed cases. Missing, overlapping,
 unknown or duplicate case identities remain invalid; final Replay cannot skip.
-While case pattern identification waits, a pinned recording reuses the pending
+While repository analysis of unresolved paths waits, a pinned recording reuses the pending
 batch's persisted API observations even before installing the API inventory.
 Status still checks the completed recording manifest and current selectors;
-pattern apply and initial adoption retain full case validation.
+analysis apply and initial adoption retain full case validation.
 Legacy selectors resolved only by recorded `api_pattern` metadata fall back to
 validated discovery when the current policy and observation snapshot cannot
 establish membership.

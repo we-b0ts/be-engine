@@ -13,6 +13,7 @@ fn submission(routes: &[&str]) -> AnalysisSubmission {
     AnalysisSubmission {
         schema_version: SCHEMA_VERSION,
         catalog_revision: "absent".into(),
+        case_patterns: None,
         assignments: routes
             .iter()
             .map(|route| ((*route).into(), "auth".into()))
@@ -143,22 +144,13 @@ fn classification_catalog_contains_only_api_groups() {
 }
 
 #[test]
-fn legacy_workflows_and_unconfirmed_patterns_do_not_enter_grouping() {
+fn group_only_analysis_requires_an_installed_inventory_and_pool() {
     let root = tempfile::tempdir().unwrap();
     let mut state = state(&["GET /api/static"]);
     state.implementers = None;
     assert!(!refresh(root.path(), &mut state).unwrap());
     assert!(required_action(root.path(), &state).unwrap().is_none());
     state.implementers = Some(crate::rewrite::implementer::ImplementerPool::new(16));
-    state.case_pattern_identification =
-        Some(crate::rewrite::model::RewriteCasePatternIdentification {
-            id: "patterns".into(),
-            recording_run_id: "recording".into(),
-            candidates: vec!["GET /api/static".into()],
-            observed_apis: vec!["GET /api/static".into()],
-        });
-    assert!(required_action(root.path(), &state).unwrap().is_none());
-    state.case_pattern_identification = None;
     state.phase = RewritePhase::RecordingRequired;
     assert!(required_action(root.path(), &state).unwrap().is_none());
     assert!(!catalog::path(root.path()).exists());

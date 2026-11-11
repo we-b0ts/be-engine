@@ -25,6 +25,7 @@ fn older_state_uses_bounded_recording_defaults() {
         "api_catalog_initialized",
         "api_catalog",
         "case_pattern_identification",
+        "case_pattern_analysis",
     ] {
         object.remove(field);
     }
@@ -49,6 +50,7 @@ fn older_state_uses_bounded_recording_defaults() {
     assert!(!state.api_catalog_initialized);
     assert!(state.api_catalog.is_empty());
     assert!(state.case_pattern_identification.is_none());
+    assert!(state.case_pattern_analysis.is_none());
     assert!(state.target_quality_fingerprint.is_none());
 }
 

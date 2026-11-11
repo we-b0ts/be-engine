@@ -92,6 +92,14 @@ impl RegressionScope {
         self.only.iter().chain(self.skip.iter()).flatten()
     }
 
+    pub(crate) fn only_apis(&self) -> &[String] {
+        self.only.as_deref().unwrap_or_default()
+    }
+
+    pub(crate) fn skipped_apis(&self) -> &[String] {
+        self.skip.as_deref().unwrap_or_default()
+    }
+
     pub(crate) fn includes(&self, api: &str) -> bool {
         let api = crate::recording_api::identity(api);
         self.only

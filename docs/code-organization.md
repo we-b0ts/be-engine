@@ -807,10 +807,11 @@ is unclear.
   result-transition cleanup. E2E state/result publication preserves the actual
   executor revision; `build_info` exposes its build-time constant without status I/O.
 
-- `rewrite/repository_analysis` owns incremental Source-backed module grouping,
-  batch/version validation and workflow snapshots; its `catalog` child owns the
-  ignored project catalog and atomic publication. Route identity and pattern
-  recognition remain with their existing recording/case-pattern owners.
+- `rewrite/repository_analysis` owns incremental Source-backed route and module
+  analysis, batch validation and workflow snapshots. Its `case_pattern_batch`
+  child projects the proposed canonical inventory and fences resumable publication
+  across policy and group catalog writes. Its `catalog` child owns group storage.
+  Recording and case-pattern owners supply route identity and pattern validation.
   `rewrite/implementer` owns fixed slot identity, stable round-robin group
   assignment, queued API leases and explicit runtime feedback. Its `delivery`
   child freezes accepted commits/reports separately from reusable checkouts;
@@ -1392,10 +1393,8 @@ is unclear.
   Its `inventory/source_route` child owns source-route binding,
   correction of unused invalid bindings, and validated binding retention across
   recording batches, reusing case-group route validation.
-  `case_patterns.rs` owns the low-frequency post-recording pattern
-  identification gate, persistent canonical API catalog, and add-only policy
-  application; it does not mutate recorded cases or delegate this gate to API
-  workers. Recognizing static routes or repeating existing patterns advances the
+  `case_patterns.rs` owns post-recording pattern candidates, the historical
+  canonical API catalog, and add-only capture policy rendering. Recognizing static routes or repeating existing patterns advances the
   catalog while preserving capture policy bytes, identities and proofs.
   `work_scope.rs` owns the API worker scope identity.
   `revalidation/focused` owns explicit ordinary replay of prior API successes,

@@ -54,21 +54,30 @@ pub(super) fn load(root: &Path) -> Result<LoadedCatalog> {
 }
 
 pub(super) fn publish(root: &Path, expected: &str, document: &CatalogDocument) -> Result<()> {
+    let bytes = encode(document)?;
+    publish_encoded(root, expected, &bytes)
+}
+
+pub(super) fn encode(document: &CatalogDocument) -> Result<Vec<u8>> {
     validate(document)?;
-    ensure!(
-        load(root)?.revision == expected,
-        "repository analysis catalog changed during application; request fresh context"
-    );
     let mut bytes = serde_json::to_vec_pretty(document)?;
     bytes.push(b'\n');
     ensure!(
         bytes.len() <= MAX_DOCUMENT_BYTES,
         "repository analysis catalog is too large"
     );
+    Ok(bytes)
+}
+
+pub(super) fn publish_encoded(root: &Path, expected: &str, bytes: &[u8]) -> Result<()> {
+    ensure!(
+        load(root)?.revision == expected,
+        "repository analysis catalog changed during application; request fresh context"
+    );
     if expected == "absent" {
-        crate::config::edit::create_atomic(&path(root), &bytes)
+        crate::config::edit::create_atomic(&path(root), bytes)
     } else {
-        crate::config::edit::write_atomic(&path(root), &bytes)
+        crate::config::edit::write_atomic(&path(root), bytes)
     }
 }
 

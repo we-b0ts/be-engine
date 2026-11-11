@@ -1,6 +1,9 @@
 //! Incremental source-backed API grouping. Project facts stay separate from workflow slots.
+mod case_pattern_batch;
 mod catalog;
 mod model;
+
+pub(super) use case_pattern_batch::{CasePatternAnalysisCommit, publication_pending};
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -43,23 +46,30 @@ pub(in crate::rewrite) fn is_complete(state: &RewriteState) -> bool {
 }
 
 pub(super) fn required_action(root: &Path, state: &RewriteState) -> Result<Option<RewriteAction>> {
-    if !available(state) {
+    if !available(state) && state.case_pattern_identification.is_none() {
         return Ok(None);
     }
     let loaded = catalog::load(root)?;
     // Routine status must not rescan the Source snapshot after grouping is complete.
-    if selected_scope(state)
-        .iter()
-        .all(|api| loaded.document.api_groups.contains_key(api))
+    if state.case_pattern_identification.is_none()
+        && selected_scope(state)
+            .iter()
+            .all(|api| loaded.document.api_groups.contains_key(api))
     {
         return Ok(None);
     }
     let analysis = context_for_state(root, state, &loaded)?;
     Ok(Some(RewriteAction::RepositoryAnalysisRequired {
-        summary: format!(
-            "analyze source module relationships and explicitly group all {} ungrouped canonical API routes before Replay",
-            analysis.pending_apis.len()
-        ),
+        summary: match &analysis.case_patterns {
+            Some(patterns) => format!(
+                "analyze {} unresolved case path(s) and group canonical APIs in one Source batch",
+                patterns.candidates.len()
+            ),
+            None => format!(
+                "group all {} ungrouped canonical API routes before Replay",
+                analysis.pending_apis.len()
+            ),
+        },
         context: action::command(
             root,
             vec!["repository-analysis".into(), "context".into()],
@@ -86,8 +96,8 @@ pub fn repository_analysis_context(
         .load()?
         .context("rewrite workflow has not been initialized")?;
     ensure!(
-        available(&state),
-        "repository analysis requires an enabled implementer pool and an installed canonical API inventory after case pattern identification"
+        available(&state) || state.case_pattern_identification.is_some(),
+        "repository analysis requires a pending case pattern batch or an installed API inventory with an implementer pool"
     );
     context_for_state(&root, &state, &catalog::load(&root)?)
 }
@@ -107,9 +117,14 @@ pub fn apply_repository_analysis(
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
+    if let Some(envelope) =
+        case_pattern_batch::apply(&root, &store, &mut state, &options.batch_id, &submission)?
+    {
+        return Ok(envelope);
+    }
     ensure!(
-        available(&state),
-        "repository analysis is unavailable before canonical API inventory installation or without an implementer pool"
+        submission.case_patterns.is_none() && available(&state),
+        "repository analysis has no matching batch for this submission"
     );
     let mut loaded = catalog::load(&root)?;
     let context = context_for_state(&root, &state, &loaded)?;
@@ -167,6 +182,9 @@ fn context_for_state(
     state: &RewriteState,
     loaded: &catalog::LoadedCatalog,
 ) -> Result<RepositoryAnalysisContext> {
+    if let Some(pending) = state.case_pattern_identification.as_ref() {
+        return case_pattern_batch::context(root, state, pending, loaded);
+    }
     let scope = selected_scope(state);
     let pending_apis = scope
         .iter()
@@ -181,6 +199,7 @@ fn context_for_state(
         source_revision,
         scope,
         pending_apis,
+        case_patterns: None,
         batch_id: String::new(),
         catalog_path: catalog::path(root),
         catalog_revision: loaded.revision.clone(),

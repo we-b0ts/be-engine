@@ -434,6 +434,8 @@ pub(super) fn next_runnable_index(state: &RewriteState) -> Option<usize> {
 }
 
 pub(super) fn reset_for_recording(state: &mut RewriteState) {
+    state.case_pattern_identification = None;
+    state.case_pattern_analysis = None;
     source_route::retain_bindings(state);
     state.api_inventory.clear();
     state.revalidation_round = None;

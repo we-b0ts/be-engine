@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 2;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 40;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 41;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -447,6 +447,8 @@ pub(super) struct RewriteState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_pattern_identification: Option<RewriteCasePatternIdentification>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_pattern_analysis: Option<super::repository_analysis::CasePatternAnalysisCommit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_quality_fingerprint: Option<String>,
     /// A lost receipt must never restore the initial diagnostic Replay exemption.
     #[serde(default)]
@@ -476,6 +478,10 @@ pub(super) struct RewriteCasePatternIdentification {
     pub recording_run_id: String,
     pub candidates: Vec<String>,
     pub observed_apis: Vec<String>,
+    #[serde(default)]
+    pub canonical_apis: Vec<String>,
+    #[serde(default)]
+    pub effective_patterns: Vec<String>,
 }
 
 impl Deref for RewriteState {
@@ -681,13 +687,6 @@ pub enum RewriteAction {
         progress: RewriteRecordingProgress,
         status_poll_after_seconds: u64,
         status: RewriteCommandSpec,
-    },
-    CasePatternIdentificationRequired {
-        summary: String,
-        batch_id: String,
-        recording_run_id: String,
-        candidates: Vec<String>,
-        command: RewriteCommandSpec,
     },
     ImplementationRequired {
         summary: String,
