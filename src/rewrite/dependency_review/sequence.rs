@@ -12,7 +12,10 @@ pub(in crate::rewrite) fn register(
     state: &mut RewriteState,
     results: &[crate::E2eApiRunResult],
 ) -> Result<()> {
-    for result in results.iter().filter(|result| !result.passed) {
+    for result in results
+        .iter()
+        .filter(|result| !result.passed && result.gates.replay == crate::E2eReplayGate::Complete)
+    {
         let selected = inventory::scoped(state, Some(&result.api.parse()?))?;
         let context = crate::E2eRunContext {
             target_root: root.into(),
@@ -90,4 +93,50 @@ pub(in crate::rewrite) fn register(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failed_result(executed: usize) -> crate::E2eApiRunResult {
+        serde_json::from_value(serde_json::json!({
+            "run_key":"runtime-failure", "api":"GET /api/health", "attempt":1,
+            "status":"interrupted", "passed":false,
+            "gates":{"responses":"incomplete", "replay":"incomplete", "dependencies":"unknown"},
+            "diagnosis":{
+                "counts":{"selected":20, "executed":executed, "response_passed":0,
+                    "response_nonpassing":0, "response_incomplete":20},
+                "response_differences":{"total_differences":0, "indexed_differences":0,
+                    "omitted_differences":0, "failure_clusters":[], "omitted_failure_clusters":0},
+                "representative":null
+            },
+            "progress":".traffic-e2e/progress.yaml"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn unfinalized_runtime_failures_keep_their_original_recovery_path() {
+        let root = tempfile::tempdir().unwrap();
+        let mut state = crate::rewrite::test_state();
+        state.case_source = None;
+        state.group_id = None;
+        for executed in [0, 1] {
+            register(root.path(), &mut state, &[failed_result(executed)]).unwrap();
+        }
+        assert!(state.dependency_review.claims.is_empty());
+        assert_eq!(state.dependency_review.revision, 0);
+    }
+
+    #[test]
+    fn finalized_failures_still_require_authenticated_source_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let mut state = crate::rewrite::test_state();
+        state.case_source = None;
+        let mut result = failed_result(20);
+        result.gates.replay = crate::E2eReplayGate::Complete;
+        assert!(register(root.path(), &mut state, &[result]).is_err());
+        assert!(state.dependency_review.claims.is_empty());
+    }
 }

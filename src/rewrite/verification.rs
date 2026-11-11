@@ -95,9 +95,9 @@ async fn run_attempt_and_transition(
     }
     let (_, _project) = crate::e2e_run::resolve_project(target_root)?;
     api_batch::apply_results(target_root, state, &results, prepared.as_ref())?;
-    super::dependency_review::sequence::register(target_root, state, &results)?;
     let group_can_continue =
         super::group_replay::after_replay(target_root, state, &replayed_route)?;
+    super::dependency_review::sequence::register(target_root, state, &results)?;
     Ok(!results.is_empty()
         && (group_can_continue
             || results.iter().all(|result| result.passed)
