@@ -111,12 +111,26 @@ pub enum ProcessSelector {
         initial_load_timeout_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         fields: Vec<String>,
+        #[serde(
+            default,
+            deserialize_with = "super::super::strict_map::unique_map",
+            skip_serializing_if = "std::collections::BTreeMap::is_empty"
+        )]
+        when_message: std::collections::BTreeMap<String, RedisPublishPredicate>,
     },
     Motan {
         group: String,
         interface: String,
         method: String,
     },
+}
+
+/// A condition on one concrete JSON pointer in the outgoing PUBLISH payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum RedisPublishPredicate {
+    Equals { equals: serde_json::Value },
+    Prefix { prefix: String },
 }
 
 /// Ownership of received native inputs, independent of their external publisher.

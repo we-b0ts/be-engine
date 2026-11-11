@@ -1,4 +1,6 @@
-# Process-owned Redis GET
+# Process-owned Redis
+
+## Finite GET and initialization
 
 A proven independent process read can be classified without turning its value
 into a reusable initialization snapshot. Declare exact bounded keys and ports
@@ -38,3 +40,35 @@ monitor and a request path can issue the same GET/key, task names, timing,
 neighbouring SQL and unused inventory cannot establish which path issued it.
 Keep attribution unresolved until independent evidence disambiguates it; neither
 finite GET mode nor snapshot mode supplies that missing proof.
+
+## Finite PUBLISH
+
+A Source-proven process publisher can declare exact channels in `keys` and
+select an independent message on a shared channel using JSON conditions:
+
+```yaml
+process_dependencies:
+  tasks:
+    socketio-ack-probe:
+      requests:
+        - redis:
+            ports: [6379]
+            operation: PUBLISH
+            keys: [{kind: exact, value: socketio}]
+            when_message:
+              /method: {equals: callback}
+              /sid: {prefix: 'wegent-ack-probe:'}
+```
+
+Use the actual Source task name, recorded service port, and channel. Conditions
+are conjunctive. `equals` compares a literal JSON value at a concrete JSON
+pointer and `prefix` matches the start of a string at that pointer. Omit
+`when_message` when independent Source proof covers the entire selected
+channel. A complete successful Redis integer reply is required, including
+zero subscribers. This declaration leaves the original request and reply
+available for one Replay consumption. Incoming notifications have their own
+scope and subscription evidence.
+
+For an existing sealed recording, publish the ownership rule through Source
+attribution planning, then bind the exact occurrences with the independent
+Source proof. This preserves the recording and requires no acquisition refresh.

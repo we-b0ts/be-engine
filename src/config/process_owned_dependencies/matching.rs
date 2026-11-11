@@ -97,7 +97,15 @@ pub(super) fn matches(rule: &BackgroundDependencyRuleConfig, event: &RecorderEve
                     .any(|candidate| candidate.eq_ignore_ascii_case(&exchange.method))
                 && path_prefixes.iter().any(|prefix| path.starts_with(prefix))
         }
-        (BackgroundDependencyRuleConfig::Redis { .. }, RecorderEvent::RedisExchange(exchange)) => {
+        (
+            BackgroundDependencyRuleConfig::RedisPublish { .. },
+            RecorderEvent::RedisExchange(exchange),
+        ) if !super::publish::successful_exchange(exchange) => false,
+        (
+            BackgroundDependencyRuleConfig::Redis { .. }
+            | BackgroundDependencyRuleConfig::RedisPublish { .. },
+            RecorderEvent::RedisExchange(exchange),
+        ) => {
             let args = exchange
                 .args
                 .iter()

@@ -44,6 +44,7 @@ fn rule() -> CompiledNativeRule {
                 script: None,
                 initial_load_timeout_ms: None,
                 fields: vec![],
+                when_message: Default::default(),
             },
         }),
     })

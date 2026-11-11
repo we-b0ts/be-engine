@@ -123,6 +123,10 @@ fn matching_rule<'a>(
             BackgroundDependencyRuleConfig::RedisPubsub { selector, .. } => {
                 crate::config::process_owned_dependencies::pubsub::matches_value(selector, event)
             }
+            BackgroundDependencyRuleConfig::RedisPublish { selector, .. } => {
+                selector.matches_recorded_request(event)
+                    && crate::config::process_owned_dependencies::publish::successful_record(event)
+            }
             BackgroundDependencyRuleConfig::Redis { .. } => redis_event_matches_rule(event, rule),
             BackgroundDependencyRuleConfig::Memcached {
                 name,

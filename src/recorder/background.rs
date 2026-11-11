@@ -165,6 +165,7 @@ impl BackgroundDependencyMatcher {
                 BackgroundDependencyRuleConfig::Mysql { .. }
                 | BackgroundDependencyRuleConfig::Http { .. }
                 | BackgroundDependencyRuleConfig::RedisPubsub { .. }
+                | BackgroundDependencyRuleConfig::RedisPublish { .. }
                 | BackgroundDependencyRuleConfig::Motan { .. } => {
                     rules_without_specialized_matching.push(rule.clone());
                 }

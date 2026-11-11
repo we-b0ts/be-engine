@@ -237,7 +237,41 @@ fn process_owned(rule: &n::NativeRule, effect: &n::ProcessOwnedEffect) -> Result
             script,
             initial_load_timeout_ms,
             fields,
+            when_message,
         } => {
+            if operation.eq_ignore_ascii_case("PUBLISH") {
+                ensure!(
+                    effect.origin.is_none()
+                        && key_templates.is_empty()
+                        && key_sequence.is_empty()
+                        && arguments.is_empty()
+                        && script.is_none()
+                        && fields.is_empty()
+                        && initial_load_timeout_ms.is_none(),
+                    "process Redis PUBLISH requires exact channels and finite exchanges"
+                );
+                let channels = keys
+                    .iter()
+                    .map(|key| match key {
+                        n::NativeKeySelector::Exact { value } => Ok(value.clone()),
+                        _ => anyhow::bail!("process Redis PUBLISH requires exact channels"),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                return Ok(B::RedisPublish {
+                    name,
+                    source_revision,
+                    source_evidence,
+                    selector: crate::config::process_owned_dependencies::publish::Selector {
+                        ports: ports.clone(),
+                        channels,
+                        when_message: when_message.clone(),
+                    },
+                });
+            }
+            ensure!(
+                when_message.is_empty(),
+                "process Redis when_message requires PUBLISH"
+            );
             let mut exact = vec![];
             let mut patterns = vec![];
             let mut affix = None;
