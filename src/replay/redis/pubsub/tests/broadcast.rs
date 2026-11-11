@@ -9,6 +9,77 @@ fn broadcast(host: &str) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn compact_broadcast_delivers_the_finite_echo_with_target_bytes() {
+    let payload = |host| {
+        serde_json::to_vec(&json!({
+            "method": "emit", "event": "work:run", "data": [{"job": 7}],
+            "namespace": "/worker", "room": "worker:1", "host_id": host,
+        }))
+        .unwrap()
+    };
+    for lazy in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let sub = Uuid::new_v4();
+        let publisher = Uuid::new_v4();
+        let source = payload(SOURCE);
+        let target = payload(TARGET);
+        let raw = crate::redis::encode_array(&[b"message", b"jobs", &source]);
+        let confirmed = b"*3\r\n$9\r\nsubscribe\r\n$4\r\njobs\r\n:1\r\n";
+        let runtime = runtime(
+            temp.path(),
+            &[exchange(
+                publisher,
+                1,
+                "PUBLISH",
+                &[b"jobs", &source],
+                b":1\r\n",
+            )],
+            &[
+                exchange(sub, 1, "SUBSCRIBE", &[b"jobs"], confirmed),
+                push(sub, None, &raw, 600_000),
+            ],
+            lazy,
+        )
+        .await
+        .unwrap();
+        let (mut subscriber, sub_task) = connect(&runtime).await;
+        assert_eq!(
+            send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
+            confirmed
+        );
+        let (mut client, task) = connect(&runtime).await;
+        assert_eq!(
+            send(&mut client, &[b"PUBLISH", b"jobs", &target]).await,
+            b":1\r\n"
+        );
+        let received = read(&mut subscriber).await;
+        assert_eq!(
+            parse_pubsub_push(&received).unwrap().unwrap().payload,
+            target
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), read_redis_frame(&mut subscriber))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            runtime
+                .state
+                .lock()
+                .await
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
+        task.abort();
+        sub_task.abort();
+    }
+}
+
+#[tokio::test]
 async fn ordinary_broadcast_translates_only_host_and_delivers_one_finite_echo() {
     for lazy in [false, true] {
         let temp = tempfile::tempdir().unwrap();

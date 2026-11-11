@@ -34,6 +34,63 @@ pub struct RewriteCaseGroupRebuildReport {
     pub run_index_backup: Option<PathBuf>,
 }
 
+/// Archive only a conflicting grouping index from an unsuccessful standalone
+/// replay. The next coordinator prepare binds the recording to its own Source
+/// snapshot; the old attempt and its sequence remain available for diagnosis.
+pub fn archive_unmanaged_rewrite_case_groups(
+    target_root: &Path,
+    run_id: &str,
+    expected_revision: &str,
+) -> Result<PathBuf> {
+    ensure!(
+        run_id.len() == 14 && run_id.bytes().all(|byte| byte.is_ascii_digit()),
+        "recording run id must contain exactly 14 digits"
+    );
+    ensure!(
+        expected_revision.strip_prefix("fnv1a64:").is_some_and(
+            |hash| hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        ),
+        "provide the exact standalone fnv1a64 source revision"
+    );
+    let (target_root, _) = crate::e2e_run::resolve_project(target_root)?;
+    let store = RewriteStore::new(&target_root)?;
+    let _lock = store.lock()?;
+    ensure_admin_idle(&target_root)?;
+    let state = store
+        .load_snapshot()?
+        .context("rewrite workflow has not been initialized")?;
+    ensure!(
+        state.recording_run_id != run_id || state.api_inventory.is_empty(),
+        "archive requires a run without an installed coordinator API inventory"
+    );
+    artifacts::standard_recording_scope(&target_root, run_id)?;
+    let current_revision = super::fingerprint::source_image_revision(&target_root)?;
+    ensure!(
+        current_revision.starts_with("sha256:"),
+        "the rewrite workflow needs a pinned Source image"
+    );
+    let case_source = artifacts::recording_run(&target_root, run_id);
+    let context = E2eRunContext {
+        target_root,
+        case_source,
+        run_key: Some(run_id.to_owned()),
+    };
+    let index = crate::e2e_run::prepare_case_group_index_rebuild(&context)?;
+    let inventory = load_complete_case_group_inventory(&index, &context.case_source)?;
+    ensure!(
+        inventory.source_revision == expected_revision,
+        "case group index does not match the specified standalone revision"
+    );
+    crate::e2e_run::require_failed_unmanaged_index(
+        &context,
+        expected_revision,
+        &inventory.case_inventory_id,
+    )?;
+    let backup = backup_path(&index)?;
+    fs::rename(&index, &backup).context("failed to archive standalone case group index")?;
+    Ok(backup)
+}
+
 pub fn rebuild_rewrite_case_groups(
     options: RewriteCaseGroupRebuildOptions,
 ) -> Result<RewriteCaseGroupRebuildReport> {
@@ -301,6 +358,90 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn archives_only_the_failed_standalone_group_index() {
+        let target = tempfile::tempdir().unwrap();
+        let target = target.path();
+        test_support::install_project_config(
+            target,
+            "master",
+            test_support::managed_test_recorder(),
+            None,
+        );
+        fs::write(
+            target.join(".traffic-e2e/Dockerfile.target"),
+            "FROM scratch\n",
+        )
+        .unwrap();
+        fs::write(
+            target.join(".traffic-e2e/verification.yaml"),
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        )
+        .unwrap();
+        git(target, &["init", "-q", "-b", "master"]);
+        git(target, &["config", "user.name", "Test"]);
+        git(target, &["config", "user.email", "test@example.com"]);
+        git(target, &["commit", "--allow-empty", "-qm", "baseline"]);
+        let revision = test_support::install_source_snapshot(target);
+        let run_id = "20260802000001";
+        let source = artifacts::recording_run(target, run_id);
+        let member = write_case(&source, "health", "case-health", "/health");
+        fs::write(
+            source.join("recording-run.json"),
+            br#"{"status":"completed","recording_apis":["GET /health"],"published_cases":1}"#,
+        )
+        .unwrap();
+        let state = test_support::test_state();
+        RewriteStore::new(target).unwrap().save(&state).unwrap();
+        let index = crate::e2e_run::prepare_case_group_index_rebuild(&E2eRunContext {
+            target_root: target.into(),
+            case_source: source.clone(),
+            run_key: Some(run_id.into()),
+        })
+        .unwrap();
+        let standalone = "fnv1a64:a1dea635c3db5e56";
+        let prepare = |revision: &str| {
+            ensure_case_group_with_target_root(
+                CaseGroupOptions {
+                    case_source: source.clone(),
+                    case_dir: member.clone(),
+                    method: "GET".into(),
+                    source_route: "/health".into(),
+                    pattern: None,
+                    source_revision: revision.into(),
+                    output: index.clone(),
+                    recorder_config: None,
+                },
+                target,
+            )
+        };
+        let group = prepare(standalone).unwrap();
+        let run_index = index.with_file_name("state.yaml");
+        let write_run_index = |passed_runs| {
+            let state = serde_json::json!({
+                "version": 3, "run_key": run_id, "case_source": source,
+                "source_revision": standalone, "case_inventory_id": group.case_inventory_id,
+                "executions": 1, "passed_runs": passed_runs, "replayed_cases": 1,
+                "passed_cases": passed_runs, "latest_status": "failed"
+            });
+            fs::write(&run_index, state.to_string()).unwrap();
+        };
+        write_run_index(1);
+        assert!(archive_unmanaged_rewrite_case_groups(target, run_id, standalone).is_err());
+        write_run_index(0);
+        let before = fs::read(&index).unwrap();
+        let history = fs::read(&run_index).unwrap();
+        assert!(
+            archive_unmanaged_rewrite_case_groups(target, run_id, "fnv1a64:0000000000000000")
+                .is_err()
+        );
+        let backup = archive_unmanaged_rewrite_case_groups(target, run_id, standalone).unwrap();
+        assert!(!index.exists());
+        assert_eq!(fs::read(backup).unwrap(), before);
+        assert_eq!(fs::read(run_index).unwrap(), history);
+        prepare(&revision).unwrap();
     }
 
     #[test]

@@ -267,6 +267,33 @@ pub(crate) fn prepare_case_group_index_rebuild(context: &E2eRunContext) -> Resul
     Ok(layout.group_index_path)
 }
 
+pub(crate) fn require_failed_unmanaged_index(
+    context: &E2eRunContext,
+    revision: &str,
+    inventory_id: &str,
+) -> Result<()> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    ensure!(
+        layout.index_path.is_file(),
+        "unmanaged replay run index is missing"
+    );
+    let index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
+    ensure!(
+        index.source_revision == revision
+            && index.case_inventory_id == inventory_id
+            && index.executions > 0
+            && index.passed_runs == 0
+            && index.passed_cases == 0
+            && index.latest_status == Some(model::RunStatus::Failed),
+        "run index must bind the exact failed unmanaged inventory and contain no passing evidence"
+    );
+    Ok(())
+}
+
 pub(crate) fn reanchor_case_group_run_index(
     context: &E2eRunContext,
     source_revision: &str,

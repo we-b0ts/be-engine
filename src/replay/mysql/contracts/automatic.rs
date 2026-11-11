@@ -170,6 +170,14 @@ impl RequestContext<'_> {
                 native_scalar: true,
             }));
         }
+        // The binary protocol can omit a DATETIME's zero-valued time bytes.
+        // Resolve this exact representation equivalence before the global
+        // timestamp recognizer interprets the compact value as a calendar date.
+        if let Some(midnight) = equivalent_midnight(source, target)
+            && self.native_temporal(origin, position) == Some(Temporal::Datetime)
+        {
+            return temporal_selection(midnight.clone(), midnight, Temporal::Datetime).map(Some);
+        }
         if let Some(json) = &self.policy.global_json
             && let crate::mysql::sql::Token::Bytes(bytes) = source
             && (10..=35).contains(&bytes.len())
@@ -183,25 +191,9 @@ impl RequestContext<'_> {
         {
             return Ok(Some(selected));
         }
-        if native_scope(self.policy) {
-            if let Some(temporal) =
-                origin.and_then(|origin| self.metadata.temporal(self.identity, origin))
-            {
-                return temporal_selection(
-                    native_scalar(source)?,
-                    native_scalar(target)?,
-                    temporal,
-                )
+        if let Some(temporal) = self.native_temporal(origin, position) {
+            return temporal_selection(native_scalar(source)?, native_scalar(target)?, temporal)
                 .map(Some);
-            }
-            if let Some(temporal) = self.parameter_types.get(&position) {
-                return temporal_selection(
-                    native_scalar(source)?,
-                    native_scalar(target)?,
-                    *temporal,
-                )
-                .map(Some);
-            }
         }
         let Some(json) = &self.policy.global_json else {
             return Ok(None);
@@ -244,6 +236,15 @@ impl<'a> RequestContext<'a> {
         clocks: AnchorClocks,
     ) -> Result<bool> {
         self.selects_values_in_scope(tokens, database, clocks, false)
+    }
+
+    fn native_temporal(&self, origin: Option<&FieldIdentity>, position: usize) -> Option<Temporal> {
+        if !native_scope(self.policy) {
+            return None;
+        }
+        origin
+            .and_then(|origin| self.metadata.temporal(self.identity, origin))
+            .or_else(|| self.parameter_types.get(&position).copied())
     }
 
     pub(in crate::replay) fn selects_authored_values(
@@ -330,6 +331,29 @@ impl<'a> RequestContext<'a> {
             parameter_types,
         }
     }
+}
+
+fn equivalent_midnight(
+    source: &crate::mysql::sql::Token,
+    target: &crate::mysql::sql::Token,
+) -> Option<Value> {
+    use crate::mysql::sql::Token;
+    let (Token::Bytes(source), Token::Bytes(target)) = (source, target) else {
+        return None;
+    };
+    let (date, datetime) = match (source.len(), target.len()) {
+        (10, 19..=26) => (source, target),
+        (19..=26, 10) => (target, source),
+        _ => return None,
+    };
+    if !datetime.starts_with(date) {
+        return None;
+    }
+    let date =
+        chrono::NaiveDate::parse_from_str(std::str::from_utf8(date).ok()?, "%Y-%m-%d").ok()?;
+    let datetime = std::str::from_utf8(datetime).ok()?;
+    let parsed = chrono::NaiveDateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S%.f").ok()?;
+    (parsed == date.and_hms_opt(0, 0, 0)?).then(|| Value::String(datetime.to_owned()))
 }
 
 fn native_scalar(token: &crate::mysql::sql::Token) -> Result<Value> {

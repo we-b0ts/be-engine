@@ -17,7 +17,7 @@ use super::{FileStamp, PageManifest, PageWriter, Paged, RecordLocation, RecordSt
 pub(crate) use recording::seal_recording_scopes;
 
 pub(crate) const GLOBAL_FRAGMENT: &str = ".global-replay-index.json";
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GlobalEntry {

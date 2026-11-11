@@ -7,7 +7,7 @@ use crate::interaction::{
     },
     replay::{
         heartbeat_tail,
-        timing::{FastTail, ordered_input},
+        timing::{FastTail, namespace_disconnect, ordered_input},
     },
     socketio::{EngineIoPacket, decode_engine_io_text},
 };
@@ -220,7 +220,8 @@ impl Source {
                 ms: action.offset_ms,
                 us: action.offset_us,
             };
-            if ordered_input(action) {
+            if ordered_input(action) || namespace_disconnect(action, input.policy.max_message_bytes)
+            {
                 let first_request = self
                     .requests
                     .partition_point(|request| request.started_us < previous.earliest_us());

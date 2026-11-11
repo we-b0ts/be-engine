@@ -380,3 +380,126 @@ async fn ordered_fast_push_arrives_before_the_input_that_awaits_its_output() {
     assert!(output.end.missing_predecessor.is_none());
     control.abort();
 }
+
+#[tokio::test]
+async fn namespace_disconnect_opens_fast_window_for_earlier_native_push() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("case")).unwrap();
+    let mut source = Observation::new(Protocol::SocketIo, InteractionPolicy::default()).unwrap();
+    source.output(WireMessage::text(OPEN), 0).unwrap();
+    source.input(WireMessage::text(CONNECT), 1).unwrap();
+    source.output(WireMessage::text(CONNECTED), 2).unwrap();
+    source.input(WireMessage::text(JOIN), 10).unwrap();
+    source.output(WireMessage::text(JOINED), 20).unwrap();
+    source.output(WireMessage::text(packet(1)), 11_001).unwrap();
+    source.input(WireMessage::text("41/chat,"), 30_000).unwrap();
+    source.client_close(None, String::new(), 30_001).unwrap();
+    let (input, expected) = source.finish(EndReason::ClientClose, 30_002, true).unwrap();
+    let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
+        "timestamp":START,"headers":{},"body":capture(b""),"interaction":input});
+    std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
+    std::fs::write(
+        temp.path().join("case/expected-response.json"),
+        json!({"status":101,"interaction":expected}).to_string(),
+    )
+    .unwrap();
+    let subscriber = Uuid::new_v4();
+    let value = json!({"method":"emit","event":"notice","data":[1],"binary":false,
+        "namespace":"/chat","room":"user:7","skip_sid":null,"callback":null,"host_id":SOURCE});
+    let raw =
+        crate::redis::encode_array(&[b"message", b"jobs", &serde_json::to_vec(&value).unwrap()]);
+    let mut incoming = push(subscriber, None, &raw, 600_000);
+    incoming["timestamp"] = "2020-01-01T00:10:11.000Z".into();
+    let globals = [
+        exchange(subscriber, 1, "SUBSCRIBE", &[b"jobs"], SUBSCRIBED),
+        incoming,
+    ];
+    let runtime = super::recording::fast_runtime(temp.path(), &[], &globals)
+        .await
+        .unwrap();
+    let socket_path = temp.path().join("control.sock");
+    let session = temp.path().join("session.json");
+    std::fs::write(&session, json!({"control_socket":socket_path}).to_string()).unwrap();
+    let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
+    let state = runtime.state.clone();
+    let control = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            crate::replay::control::handle_control_stream(stream, state.clone(), None, None)
+                .await
+                .unwrap();
+        }
+    });
+    assert_eq!(
+        guards::control(&runtime, json!({"command":"request_begin","case_id":CASE})).await["ok"],
+        true
+    );
+
+    let ws = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = ws.local_addr().unwrap();
+    let target_runtime = runtime.clone();
+    let target = tokio::spawn(async move {
+        let (stream, _) = ws.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket.send(Message::Text(OPEN.into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            CONNECT
+        );
+        let (mut subscriber, task) = connect(&target_runtime).await;
+        assert_eq!(
+            send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
+            SUBSCRIBED
+        );
+        socket.send(Message::Text(CONNECTED.into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            JOIN
+        );
+        socket.send(Message::Text(JOINED.into())).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(1), read(&mut subscriber))
+                .await
+                .unwrap(),
+            raw
+        );
+        assert!(
+            timeout(Duration::from_millis(30), socket.next())
+                .await
+                .is_err()
+        );
+        socket.send(Message::Text(packet(1).into())).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "41/chat,"
+        );
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "1"
+        );
+        assert!(matches!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Close(_)
+        ));
+        task.abort();
+    });
+    let client = crate::recorded_request::RecordedHttpClient::new(
+        format!("http://{address}"),
+        Duration::from_secs(2),
+        1024 * 1024,
+    )
+    .with_input_registration(&session, CASE);
+    let actual = timeout(
+        Duration::from_secs(2),
+        client.send(&temp.path().join("case/request.json")),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .interaction
+    .unwrap();
+    assert_eq!(actual.end.reason, EndReason::ClientClose);
+    assert!(actual.end.clean);
+    target.await.unwrap();
+    control.abort();
+}

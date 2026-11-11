@@ -123,6 +123,13 @@ pub(crate) fn ordered_input(action: &InputAction) -> bool {
     action.ack_ref.is_some() || delivery_prefix(action)
 }
 
+pub(crate) fn namespace_disconnect(action: &InputAction, limit: usize) -> bool {
+    matches!(&action.action, InputActionKind::Message { message }
+        if message.kind == MessageKind::Text
+        && matches!(decode_engine_io_text(&message.data, limit),
+            Ok(EngineIoPacket::Message(packet)) if packet.kind == SocketIoKind::Disconnect))
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub(crate) struct Advance {
     pub removed_ms: u64,
