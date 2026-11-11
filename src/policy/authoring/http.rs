@@ -160,10 +160,14 @@ fn capture(
         "HTTP response URL capture cannot select an inbound API"
     );
     ensure!(
-        (1..=128).contains(&capture.capture_urls.len())
+        capture.capture_urls.len() <= 128
             && capture.status_codes.len() <= 500
             && capture.content_types.len() <= 64,
         "HTTP response capture exceeds URL, status or content-type bounds"
+    );
+    ensure!(
+        capture.capture_urls.is_empty() != capture.documents.is_empty(),
+        "response rewrite requires exactly one json_urls or documents declaration"
     );
     let proof = inherit(entry.proof.as_ref(), None)?;
     let mut seen = BTreeSet::new();
@@ -209,7 +213,13 @@ fn capture(
             },
             status_codes: capture.status_codes.clone(),
             content_types: capture.content_types.clone(),
-            contract: CaptureResponseContract::Urls { pointers },
+            contract: if capture.documents.is_empty() {
+                CaptureResponseContract::Urls { pointers }
+            } else {
+                CaptureResponseContract::Documents {
+                    rules: capture.documents.clone(),
+                }
+            },
         }),
         proof,
     ))

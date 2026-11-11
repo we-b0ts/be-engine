@@ -14,6 +14,8 @@ mod activity_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
+mod sequence_tests;
+#[cfg(test)]
 mod tests;
 
 const REFRESH_WAIT: Duration = Duration::from_secs(30);
@@ -31,11 +33,15 @@ struct RedisRequest<'a> {
     started: tokio::time::Instant,
     lane_hint: Option<&'a tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
     expected_index: Option<usize>,
+    observed: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl DependencyRequestAdapter for RedisRequest<'_> {
     type Matched = MatchedRedisExchange;
     type Error = CommandMatchDiagnostic;
+    fn sequence_request_bytes(&self) -> Option<usize> {
+        Some(self.command.name.len() + self.command.args.iter().map(Vec::len).sum::<usize>())
+    }
 
     fn observe_once(&mut self, state: &mut ReplayState) -> RequestAdmission {
         let case = state.active_case_id.clone();
@@ -51,13 +57,17 @@ impl DependencyRequestAdapter for RedisRequest<'_> {
             &self.command.name,
             &self.command.args,
         );
-        RequestAdmission::capture(
+        let observation = RequestAdmission::capture(
             state,
             state.redis.request_event_index,
             state.redis.request_observed_at,
             state.redis.request_observation_id,
             state.redis.request_observation_retained,
-        )
+        );
+        if let Some(observed) = self.observed.take() {
+            let _ = observed.send(());
+        }
+        observation
     }
 
     fn try_select(
@@ -225,6 +235,7 @@ pub(super) async fn match_command(
         username,
         command,
         None,
+        None,
     )
     .await
 }
@@ -240,6 +251,7 @@ pub(super) async fn match_command_with_hint(
     username: Option<&str>,
     command: &RedisCommand,
     lane_hint: Option<&tokio::sync::mpsc::Sender<pipeline::AdjacentPublish>>,
+    observed: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> std::result::Result<MatchedRedisExchange, &'static str> {
     let started = tokio::time::Instant::now();
     request::execute(
@@ -256,6 +268,7 @@ pub(super) async fn match_command_with_hint(
             started,
             lane_hint,
             expected_index: None,
+            observed,
         },
         started + REFRESH_WAIT,
     )

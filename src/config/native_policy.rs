@@ -135,16 +135,11 @@ fn capture_response(
                 proxy_listen: *proxy_listen,
             }),
         ),
-        n::CaptureResponseContract::VintageNaming { services, clusters } => (
+        n::CaptureResponseContract::Documents { rules } => (
             vec![],
-            Some(super::HttpResponseRewritePluginConfig::VintageNaming {
-                services: services.clone(),
-                clusters: clusters.clone(),
+            Some(super::HttpResponseRewritePluginConfig::Documents {
+                rules: rules.clone(),
             }),
-        ),
-        n::CaptureResponseContract::VintageCacheConfig => (
-            vec![],
-            Some(super::HttpResponseRewritePluginConfig::VintageCacheConfig),
         ),
     };
     super::HttpResponseRewriteRuleConfig {

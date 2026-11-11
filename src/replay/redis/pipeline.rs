@@ -5,6 +5,8 @@ use crate::redis::RedisFrame;
 use tokio::{pin, sync::mpsc, time::Instant};
 
 type QueuedFrame = (Result<Option<RedisFrame>>, Instant);
+mod sequence;
+pub(super) use sequence::Queue;
 
 pub(super) struct Request<'a> {
     pub(super) state: &'a Arc<Mutex<ReplayState>>,
@@ -24,7 +26,7 @@ impl Request<'_> {
         control: &ConnectionControl,
         binding: &mut CaseConnectionBinding,
         push_tx: &mpsc::Sender<pubsub::Delivery>,
-        queued: &mut Option<QueuedFrame>,
+        queued: &mut Queue,
     ) -> Result<bool> {
         let (response, predecessor) = if self.command.name == "PUBLISH" {
             self.admit_with_lookahead(reader, binding, queued).await
@@ -63,19 +65,31 @@ impl Request<'_> {
             );
             return Ok(false);
         }
+        self.await_sequence(reader, binding, queued, &matched)
+            .await?;
+        self.deliver(reader, control, push_tx, &matched).await
+    }
+
+    pub(super) async fn deliver(
+        &self,
+        reader: &mut RedisBufferedReader<&mut TcpStream>,
+        control: &ConnectionControl,
+        push_tx: &mpsc::Sender<pubsub::Delivery>,
+        matched: &MatchedRedisExchange,
+    ) -> Result<bool> {
         let deliveries = self.state.lock().await.redis.pubsub.subscription(
             self.client_id,
             self.target,
             self.database,
             self.username,
             self.command,
-            &matched,
+            matched,
             push_tx.clone(),
         )?;
         if deliver_redis_exchange(
             reader,
             self.state,
-            &matched,
+            matched,
             control,
             self.started,
             self.client_id,
@@ -105,6 +119,7 @@ impl Request<'_> {
             self.username,
             self.command,
             hint,
+            None,
         )
         .await
     }
@@ -113,7 +128,7 @@ impl Request<'_> {
         &self,
         reader: &mut RedisBufferedReader<&mut TcpStream>,
         binding: &mut CaseConnectionBinding,
-        queued: &mut Option<QueuedFrame>,
+        queued: &mut Queue,
     ) -> (
         std::result::Result<MatchedRedisExchange, &'static str>,
         Option<(MatchedRedisExchange, Instant)>,
@@ -152,7 +167,7 @@ impl Request<'_> {
             tokio::select! {
                 biased;
                 response = &mut first => {
-                    *queued = Some((read, started));
+                    queued.frame = Some((read, started));
                     return (response, None);
                 }
                 predecessor = pair.admit_predecessor(
@@ -185,7 +200,7 @@ impl Request<'_> {
             }
             return (response, Some((predecessor, started)));
         }
-        *queued = Some((read, started));
+        queued.frame = Some((read, started));
         (first.await, None)
     }
 }

@@ -255,18 +255,30 @@ impl ReplayState {
         &mut self,
         index: usize,
         status: super::super::ReplayExchangeStatus,
-    ) {
+    ) -> std::result::Result<(), HttpReplayMatchError> {
+        if !self.http_sequence_claims.contains_key(&index)
+            && let Some(claim) = self
+                .http_sequence
+                .claim(index)
+                .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?
+        {
+            self.http_sequence_claims.insert(index, claim);
+        }
         if self.http_exchanges[index].status == super::super::ReplayExchangeStatus::StartupBlocked {
             // This can only be selected by a genuine pre-boundary admission.
             // A rejected preview or failed response materialization never pays debt.
             self.startup_phase.admit_existing_http();
         }
         self.http_exchanges[index].status = status;
+        Ok(())
     }
 }
 
 impl ReplayState {
     pub(in crate::replay) fn set_active_case(&mut self, case: Option<String>) {
+        if self.active_case_id != case {
+            self.activate_sequence(case.as_deref());
+        }
         self.http_ingress.activate_case(case.as_deref());
         self.active_case_id = case;
     }

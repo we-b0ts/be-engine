@@ -184,7 +184,7 @@ fn capture_source_proof_requires_fresh_recording_and_crash_recovery_restores_the
         let event = json!({"event_type":"http_exchange","id":uuid::Uuid::new_v4(),"scheme":"http",
             "authority":"service.test:8080","method":"GET","uri":"/config",
             "request_headers":{},"request_body":raw_body(b""),"response_status":200,
-            "response_headers":{"content-type":["application/json"]},"response_body":raw_body(b"{}"),
+            "response_headers":{"content-type":["application/json"]},"response_body":raw_body(br#"{"addresses":["10.0.0.1:6379"]}"#),
             "timestamp":"2026-10-16T00:00:00Z","request_started_at":"2026-10-16T00:00:00Z",
             "duration_ms":0,"outcome":"response","error":null});
         fs::write(
@@ -197,7 +197,7 @@ fn capture_source_proof_requires_fresh_recording_and_crash_recovery_restores_the
             json!({"id":"capture-config","match":{},"effect":{
             "kind":"capture_http_response","authorities":["service.test:8080"],"methods":["GET"],
             "path":{"kind":"exact","value":"/config"},"status_codes":[200],
-            "content_types":["application/json"],"contract":{"kind":"vintage_cache_config"}},
+            "content_types":["application/json"],"contract":{"kind":"documents","rules":[{"fields":[{"path":"/addresses/*","format":"host_port","protocol":"redis"}]}]}},
             "proof":{"source":"src/config.rs:12","fact":"Source loads the process cache configuration from this exact response"}}),
         );
         fixture.confirm();

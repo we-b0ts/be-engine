@@ -1,3 +1,8 @@
+[workspace]
+members = [".", "crates/*"]
+default-members = [".", "crates/*"]
+resolver = "3"
+
 [package]
 name = "traffic-e2e"
 version = "0.1.0"
@@ -5,6 +10,14 @@ edition = "2024"
 default-run = "traffic-e2e"
 
 [dependencies]
+traffic-response-rewrite = { path = "crates/traffic-response-rewrite" }
+traffic-model = { path = "crates/traffic-model" }
+traffic-protocol = { path = "crates/traffic-protocol" }
+traffic-protocol-http = { path = "crates/traffic-protocol-http" }
+traffic-recording = { path = "crates/traffic-recording" }
+traffic-replay = { path = "crates/traffic-replay" }
+traffic-protocol-mysql = { path = "crates/traffic-protocol-mysql" }
+traffic-protocol-redis = { path = "crates/traffic-protocol-redis" }
 aes-gcm = "0.10"
 anyhow = "1"
 base64 = "0.22"

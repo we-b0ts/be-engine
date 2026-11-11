@@ -24,11 +24,16 @@ where
         return cleanup(session, upstream, error).await;
     };
     let offset = at.saturating_duration_since(session.started);
-    session
+    let action = session
         .observation
         .lock()
         .expect("interaction observation poisoned")
         .client_transport_end(end, offset)?;
+    session.state.recorder().capture.input(
+        session.case.id,
+        action.sequence,
+        traffic_model::trace::InputKind::TransportEnd,
+    )?;
     session.close_requested_at.get_or_init(|| at);
     session.request_close(EndReason::ClientTransportEnd);
     let completion = closing::ApplicationClose::prepare(session)

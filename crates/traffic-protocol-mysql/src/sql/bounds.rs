@@ -1,0 +1,35 @@
+//! Shared statement capability bounds, independent of cache admission.
+use super::Token;
+
+pub const MAX_STATEMENT_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_TOKENS: usize = 32_768;
+
+pub fn statement(sql: &str) -> Option<Vec<Token>> {
+    statement_shared(sql).map(|tokens| (*tokens).clone())
+}
+
+pub fn statement_shared(sql: &str) -> Option<std::sync::Arc<Vec<Token>>> {
+    if sql.len() > MAX_STATEMENT_BYTES {
+        return None;
+    }
+    super::tokens_shared(sql).filter(|tokens| valid(tokens))
+}
+
+/// Semantic SELECT parsing retains its existing grammar/terminator checks.
+pub fn tokens(sql: &str) -> Option<Vec<Token>> {
+    if sql.len() > MAX_STATEMENT_BYTES {
+        return None;
+    }
+    super::tokens(sql).filter(|tokens| tokens.len() <= MAX_TOKENS)
+}
+
+pub fn statement_with_spans(sql: &str) -> Option<super::lexical_cache::Lexed> {
+    if sql.len() > MAX_STATEMENT_BYTES {
+        return None;
+    }
+    super::tokens_with_spans_shared(sql).filter(|(tokens, _)| valid(tokens))
+}
+
+fn valid(tokens: &[Token]) -> bool {
+    tokens.len() <= MAX_TOKENS && !tokens.iter().any(|token| token.is(";"))
+}

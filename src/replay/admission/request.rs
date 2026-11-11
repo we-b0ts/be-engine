@@ -48,6 +48,13 @@ impl<'a> WaitDependency<'a> {
 pub(in crate::replay) trait DependencyRequestAdapter {
     type Matched;
     type Error;
+    fn sequence_request_bytes(&self) -> Option<usize> {
+        None
+    }
+    fn sequence_wait_allowed(&self, _state: &ReplayState, _error: &Self::Error) -> bool {
+        true
+    }
+    fn on_sequence_wait(&mut self, _state: &mut ReplayState) {}
     fn observe_once(&mut self, state: &mut ReplayState) -> RequestAdmission;
     fn try_select(
         &mut self,
@@ -92,8 +99,42 @@ pub(in crate::replay) async fn execute<A: DependencyRequestAdapter>(
         return Err(adapter.interrupted("Replay session is finalized"));
     }
     let observation = adapter.observe_once(&mut state);
+    let mut sequence_wait = adapter
+        .sequence_request_bytes()
+        .and_then(|bytes| super::super::sequence::RequestWait::new(&state, bytes));
     let mut result = adapter.try_select(&mut state, &observation);
     'select: while let Err(error) = &result {
+        if sequence_wait.as_ref().is_some_and(|wait| wait.failed()) {
+            result = Err(adapter.interrupted("recorded dependency delivery failed"));
+            break;
+        }
+        if adapter.sequence_wait_allowed(&state, error)
+            && let Some(waiter) = &mut sequence_wait
+            && let Some(until) = waiter.deadline(deadline)
+        {
+            if waiter.reserve().is_err() {
+                result = Err(adapter.interrupted("early dependency request queue budget exceeded"));
+                break;
+            }
+            adapter.on_sequence_wait(&mut state);
+            drop(state);
+            let changed = waiter.wait(until).await;
+            state = shared.lock().await;
+            if let Some(reason) = observation.cancel_reason(&state) {
+                result = Err(adapter.interrupted(reason));
+                break;
+            }
+            if !changed {
+                let diagnoses = waiter.diagnose(state.admission_epoch, observation.case.as_deref());
+                state.sequence_missing.extend(diagnoses);
+                result = Err(adapter.interrupted(
+                    "next recorded dependency missing; dependency attribution review required",
+                ));
+                break;
+            }
+            result = adapter.try_select(&mut state, &observation);
+            continue;
+        }
         let Some((mut waiter, mut local_deadline)) = adapter
             .wait_dependency(&state, &observation, error)
             .and_then(WaitDependency::register)

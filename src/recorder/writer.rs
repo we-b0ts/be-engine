@@ -6,6 +6,8 @@ use anyhow::{Result, anyhow};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::warn;
+use traffic_model::trace::RecordedEvent;
+use traffic_recording::RecordingClock;
 use uuid::Uuid;
 
 use super::jsonl::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
@@ -36,7 +38,7 @@ enum WriterCommand {
         identity: SourceArtifactIdentity,
         ack: WriterAck,
     },
-    Lifecycle(super::ledger::LifecycleRecord),
+    Lifecycle(RecordedEvent<super::ledger::LifecycleRecord>),
     RegisterInput {
         case_id: Uuid,
         path: String,
@@ -81,6 +83,7 @@ enum WriterCommand {
 pub(super) struct RecorderWriter {
     sender: mpsc::Sender<Box<WriterCommand>>,
     failure: Arc<StdMutex<Option<String>>>,
+    pub(super) clock: RecordingClock,
     #[cfg(test)]
     pub(super) completion: Arc<tokio::sync::Notify>,
 }
@@ -112,6 +115,7 @@ impl RecorderWriter {
         };
         let (sender, receiver) = mpsc::channel(queue_capacity);
         let failure = Arc::new(StdMutex::new(None));
+        let clock = RecordingClock::default();
         let state = WriterState {
             traffic_jsonl,
             traffic_file,
@@ -123,6 +127,7 @@ impl RecorderWriter {
                 &run_dir,
                 process_epoch,
                 capture_policy_identity,
+                clock.clone(),
             ),
         };
         super::storage::write(&run_dir.join("dependencies.jsonl"), b"").await?;
@@ -140,6 +145,7 @@ impl RecorderWriter {
         Ok(Self {
             sender,
             failure,
+            clock,
             #[cfg(test)]
             completion,
         })
@@ -176,6 +182,13 @@ impl RecorderWriter {
     pub(super) fn try_record_lifecycle(
         &self,
         record: super::ledger::LifecycleRecord,
+    ) -> Result<()> {
+        self.try_record_sequenced_lifecycle(self.clock.event(record)?)
+    }
+
+    pub(super) fn try_record_sequenced_lifecycle(
+        &self,
+        record: RecordedEvent<super::ledger::LifecycleRecord>,
     ) -> Result<()> {
         self.try_send(
             WriterCommand::Lifecycle(record),

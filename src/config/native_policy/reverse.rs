@@ -62,15 +62,10 @@ pub(super) fn rules(
                 kubectl_binary: kubectl_binary.clone(),
                 proxy_listen: *proxy_listen,
             },
-            Some(super::super::HttpResponseRewritePluginConfig::VintageNaming {
-                services,
-                clusters,
-            }) => n::CaptureResponseContract::VintageNaming {
-                services: services.clone(),
-                clusters: clusters.clone(),
-            },
-            Some(super::super::HttpResponseRewritePluginConfig::VintageCacheConfig) => {
-                n::CaptureResponseContract::VintageCacheConfig
+            Some(super::super::HttpResponseRewritePluginConfig::Documents { rules }) => {
+                n::CaptureResponseContract::Documents {
+                    rules: rules.clone(),
+                }
             }
         };
         rules.push(rule(

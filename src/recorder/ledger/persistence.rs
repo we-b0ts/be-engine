@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use traffic_model::trace::{RecordedDependency, RecordedEvent};
+use traffic_recording::RecordingClock;
 use uuid::Uuid;
 
 use crate::active_case::DependencyTargets;
@@ -19,6 +21,7 @@ pub(in crate::recorder) struct LedgerWriter {
     root: PathBuf,
     process_epoch: Uuid,
     run_epoch: Uuid,
+    clock: RecordingClock,
     offset: u64,
     records: usize,
     unattributed: u64,
@@ -33,7 +36,7 @@ pub(in crate::recorder) struct LedgerWriter {
     process: Vec<ScopeRecordLocation>,
     shutdown: Vec<ScopeRecordLocation>,
     unknown: Vec<ScopeRecordLocation>,
-    inputs: BTreeMap<Uuid, RecordingInput>,
+    inputs: BTreeMap<Uuid, RecordedCase>,
     capture_policy_identity: String,
     source_artifact: SourceArtifactIdentity,
     sealed: bool,
@@ -46,11 +49,13 @@ impl LedgerWriter {
         root: &Path,
         process_epoch: Uuid,
         capture_policy_identity: String,
+        clock: RecordingClock,
     ) -> Self {
         Self {
             root: root.into(),
             process_epoch,
-            run_epoch: Uuid::new_v4(),
+            run_epoch: clock.recording_id(),
+            clock,
             offset: 0,
             records: 0,
             unattributed: 0,
@@ -95,13 +100,13 @@ impl LedgerWriter {
     pub(in crate::recorder) async fn lifecycle(
         &mut self,
         files: &mut crate::recorder::jsonl::JsonlWriterPool,
-        record: &LifecycleRecord,
+        record: &RecordedEvent<LifecycleRecord>,
     ) -> Result<()> {
         anyhow::ensure!(
             !self.sealed,
             "recording dependency ledger is already sealed"
         );
-        match record {
+        match &record.event {
             LifecycleRecord::Started { exchange_id, .. } => anyhow::ensure!(
                 self.lifecycle.insert(*exchange_id, false).is_none(),
                 "duplicate physical dependency admission"
@@ -114,11 +119,13 @@ impl LedgerWriter {
                 anyhow::ensure!(!*terminal, "duplicate physical dependency termination");
                 *terminal = true;
             }
-            LifecycleRecord::Bound { exchange_id, .. } => anyhow::ensure!(
+            LifecycleRecord::Bound { exchange_id, .. }
+            | LifecycleRecord::OutputStarted { exchange_id, .. }
+            | LifecycleRecord::Output { exchange_id, .. } => anyhow::ensure!(
                 self.lifecycle.get(exchange_id) == Some(&false),
                 "dependency pairing changed after termination or without admission"
             ),
-            LifecycleRecord::Sealed { .. } => {}
+            LifecycleRecord::Sealed { .. } | LifecycleRecord::Input { .. } => {}
         }
         let line = json_line(record)?;
         files
@@ -159,7 +166,9 @@ impl LedgerWriter {
                     _ => None,
                 };
                 CaptureMetadata {
+                    transformations: Vec::new(),
                     exchange_id: Uuid::new_v4(),
+                    sequence: self.clock.next_dependency()?,
                     process_epoch: self.process_epoch,
                     phase: capture_phase(targets, global, &owner),
                     observed_case: targets
@@ -230,29 +239,32 @@ impl LedgerWriter {
                 .and_then(|targets| targets.observed_case)
                 .or(admitted_case);
             let started_at = Utc::now();
+            let (sequence, started) =
+                self.clock
+                    .begin_dependency(|sequence| LifecycleRecord::Started {
+                        exchange_id,
+                        dependency_sequence: sequence,
+                        process_epoch: self.process_epoch,
+                        phase,
+                        observed_case,
+                        admitted_case,
+                        started_at,
+                    })?;
+            self.lifecycle(files, &started).await?;
             self.lifecycle(
                 files,
-                &LifecycleRecord::Started {
+                &self.clock.event(LifecycleRecord::Terminal {
                     exchange_id,
-                    process_epoch: self.process_epoch,
-                    phase,
-                    observed_case,
-                    admitted_case,
-                    started_at,
-                },
-            )
-            .await?;
-            self.lifecycle(
-                files,
-                &LifecycleRecord::Terminal {
-                    exchange_id,
+                    dependency_sequence: sequence,
                     outcome: terminal,
                     capture_complete: complete,
-                },
+                })?,
             )
             .await?;
             CaptureMetadata {
+                transformations: Vec::new(),
                 exchange_id,
+                sequence,
                 process_epoch: self.process_epoch,
                 phase,
                 observed_case,
@@ -269,10 +281,20 @@ impl LedgerWriter {
         metadata.matched_rule_id = matched_rule_id;
         metadata.matched_rule_ids = matched_rule_ids;
         let mut value = serde_json::to_value(event)?;
-        value
+        let outcome = value
             .as_object_mut()
             .context("dependency event is not an object")?
-            .insert("capture".into(), serde_json::to_value(&metadata)?);
+            .remove("outcome")
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        let value = serde_json::to_value(RecordedDependency {
+            recording_id: self.run_epoch,
+            capture: metadata.clone(),
+            outcome,
+            capture_complete: complete,
+            payload: value,
+        })?;
         let line = json_line(&value)?;
         let location = ScopeRecordLocation {
             line: self.records + 1,
@@ -441,7 +463,7 @@ impl LedgerWriter {
     ) {
         self.inputs.insert(
             case_id,
-            RecordingInput {
+            RecordedCase {
                 case_id,
                 path,
                 complete,
@@ -465,10 +487,10 @@ impl LedgerWriter {
             || self.lifecycle.values().filter(|ended| **ended).count() as u64 != coverage.terminal;
         self.lifecycle(
             files,
-            &LifecycleRecord::Sealed {
+            &self.clock.event(LifecycleRecord::Sealed {
                 process_epoch: self.process_epoch,
                 coverage: coverage.clone(),
-            },
+            })?,
         )
         .await?;
         // Empty runs still have explicit ledger identities and discoverable views.

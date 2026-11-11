@@ -91,13 +91,9 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                         "kubeconfig proxy must use loopback and nonzero port"
                     );
                 }
-                CaptureResponseContract::VintageNaming { services, clusters } => {
-                    ensure!(
-                        services.len() <= 4096 && clusters.len() <= 4096,
-                        "naming capture exceeds bounds"
-                    );
+                CaptureResponseContract::Documents { rules } => {
+                    traffic_response_rewrite::CompiledRewrite::compile(rules)?;
                 }
-                CaptureResponseContract::VintageCacheConfig => (),
             }
         }
         NativeEffect::ProcessOwned(effect) => {

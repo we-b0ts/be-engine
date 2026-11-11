@@ -38,9 +38,9 @@ Before opening or updating an MR, run at least the following. Replace
 `origin/master` when the MR targets another branch:
 
 ```bash
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 CODE_ORG_BASE=origin/master \
   plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
 ```
@@ -48,7 +48,7 @@ CODE_ORG_BASE=origin/master \
 Useful focused tests:
 
 ```bash
-cargo test mysql::wire
+cargo test -p traffic-protocol-mysql
 cargo test recorder::mysql::semantic
 cargo test proxy_integration
 ```

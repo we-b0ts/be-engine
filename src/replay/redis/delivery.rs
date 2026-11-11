@@ -18,6 +18,9 @@ pub(super) async fn deliver_redis_exchange(
         Claim::Finite(ticket) => Some(ticket.guard()),
         Claim::Native(_) => None,
     };
+    if let Claim::Finite(ticket) = &matched.claim {
+        ticket.wait_sequence_delivery().await?;
+    }
     let (lifecycle, timing_scope, fast, serial_predecessors, serial_deadline) = {
         let state = state.lock().await;
         let exchange = &state.redis.exchanges[matched.index];
@@ -82,7 +85,7 @@ pub(super) async fn deliver_redis_exchange(
     if matched.timing.outcome().is_server_terminated() {
         // The RESP decoder first obtains a terminal prefix at EOF. Preserve
         // that observed ordering, with a single request-relative deadline.
-        if let Err(error) = await_server_end(reader, matched, started).await {
+        if let Err(error) = await_server_end(reader, matched, started, fast).await {
             state
                 .lock()
                 .await
@@ -106,6 +109,7 @@ pub(super) async fn deliver_redis_exchange(
             reader.inner.write_all(&matched.response).await?;
             matched
                 .timing
+                .for_replay(fast)
                 .terminate_server_at(&mut reader.inner, control, started)
                 .await
         }
@@ -493,8 +497,13 @@ async fn await_server_end(
     reader: &mut RedisBufferedReader<&mut TcpStream>,
     matched: &MatchedRedisExchange,
     started: tokio::time::Instant,
+    fast: bool,
 ) -> Result<()> {
-    let deadline = started + std::time::Duration::from_millis(matched.publish_duration_ms);
+    let deadline = if fast {
+        started
+    } else {
+        started + std::time::Duration::from_millis(matched.publish_duration_ms)
+    };
     loop {
         ensure!(
             reader.buffer.len() <= reader.max_frame_bytes,

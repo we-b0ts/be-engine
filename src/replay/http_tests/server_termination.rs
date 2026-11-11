@@ -23,13 +23,13 @@ async fn records_and_replays_http_server_reset_after_response_prefix() {
 async fn exercise(reset: bool, prefix: bool) {
     tokio::time::timeout(
         Duration::from_secs(5),
-        capture_and_replay(reset, prefix, false),
+        capture_and_replay(reset, prefix, false, false),
     )
     .await
     .unwrap();
 }
 
-async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool) {
+async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool, fast: bool) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
     let mut config = crate::AppConfig::default();
@@ -58,7 +58,7 @@ async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool) {
             stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n").await.unwrap();
             stream.flush().await.unwrap();
         }
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        tokio::time::sleep(Duration::from_millis(if fast { 1200 } else { 80 })).await;
         if reset {
             control.reset().unwrap();
         } else {
@@ -123,15 +123,25 @@ async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool) {
     assert!(!recorder.recorder().finish_run().await.unwrap());
 
     let (address, runtime, replay) = spawn_http_replay(&case_dir, Vec::new()).await;
+    if fast {
+        runtime.state.lock().await.stream_timing = Some(crate::replay::ReplayStreamTiming::Fast);
+    }
     let mut target = TcpStream::connect(address).await.unwrap();
     let started = tokio::time::Instant::now();
     target
         .write_all(format!("GET /server-end HTTP/1.1\r\nHost: {authority}\r\n\r\n").as_bytes())
         .await
         .unwrap();
-    let delivered = read_termination(&mut target, reset).await;
+    let delivered =
+        tokio::time::timeout(Duration::from_secs(1), read_termination(&mut target, reset))
+            .await
+            .unwrap();
     assert_prefix(&delivered, prefix);
-    assert!(started.elapsed() >= Duration::from_millis(60));
+    if fast {
+        assert!(started.elapsed() < Duration::from_secs(1));
+    } else {
+        assert!(started.elapsed() >= Duration::from_millis(60));
+    }
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if runtime.state.lock().await.http_events.matched_count == 1 {
@@ -207,8 +217,21 @@ fn assert_prefix(bytes: &[u8], prefix: bool) {
 async fn replay_http_input_after_server_fin_marks_dependency_dirty() {
     tokio::time::timeout(
         Duration::from_secs(5),
-        capture_and_replay(false, true, true),
+        capture_and_replay(false, true, true, false),
     )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn fast_compresses_recorded_http_server_termination_and_preserves_prefix() {
+    tokio::time::timeout(Duration::from_secs(12), async {
+        for reset in [false, true] {
+            for prefix in [false, true] {
+                capture_and_replay(reset, prefix, false, true).await;
+            }
+        }
+    })
     .await
     .unwrap();
 }

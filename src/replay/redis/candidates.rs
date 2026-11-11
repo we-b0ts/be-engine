@@ -13,6 +13,7 @@ use crate::replay::{
 pub(in crate::replay) struct Candidates {
     count: usize,
     index: ProtocolIndex,
+    exempt: ProtocolIndex,
     lanes: LaneIndex,
     members: CaseMembership,
 }
@@ -22,6 +23,7 @@ impl Default for Candidates {
         Self {
             count: 0,
             index: ProtocolIndex::redis(),
+            exempt: ProtocolIndex::redis(),
             lanes: LaneIndex::default(),
             members: CaseMembership::default(),
         }
@@ -29,6 +31,62 @@ impl Default for Candidates {
 }
 
 impl Candidates {
+    pub(super) fn register_exempt(
+        &mut self,
+        exchanges: &[ReplayExchange],
+        indices: impl Iterator<Item = usize>,
+    ) {
+        for index in indices {
+            let exchange = &exchanges[index];
+            let record = &exchange.record;
+            let mut key = key(
+                exchange.source,
+                exchange.case_id.as_deref(),
+                &TargetKey {
+                    host: normalize_host(&record.target_host),
+                    port: record.target_port,
+                },
+                record.resp_version,
+                record.database,
+                record.username.as_deref(),
+                &record.command,
+            );
+            self.exempt.register(NativeKey::Redis(key.clone()), index);
+            if exchange.subscription_alias {
+                key.scope = ScopePartition::Shared;
+                self.exempt.register(NativeKey::Redis(key), index);
+            }
+        }
+        self.exempt.seal();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_exempt(
+        &self,
+        source: ReplaySource,
+        case: Option<&str>,
+        target: &TargetKey,
+        resp_version: u8,
+        database: i64,
+        username: Option<&str>,
+        command: &str,
+    ) -> CandidateCursor {
+        let mut key = key(
+            source,
+            case,
+            target,
+            resp_version,
+            database,
+            username,
+            command,
+        );
+        let scoped = self.exempt.lookup(NativeQuery::Redis(&key));
+        if !source.is_run_owned() {
+            return scoped;
+        }
+        key.scope = ScopePartition::Shared;
+        scoped.merge(self.exempt.lookup(NativeQuery::Redis(&key)))
+    }
     pub(super) fn register(&mut self, exchanges: &[ReplayExchange]) {
         if self.count > exchanges.len() {
             *self = Self::default();

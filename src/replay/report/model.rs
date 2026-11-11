@@ -2,6 +2,8 @@ use super::super::*;
 
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) dependency_sequence_missing: Vec<sequence::MissingDependency>,
     pub(in crate::replay) batch_reconciliation: Option<reconciliation::BatchReconciliation>,
     pub(in crate::replay) startup_phase: startup::StartupPhaseReport,
     pub(in crate::replay) http_ingress: http::ingress::IngressReport,

@@ -58,8 +58,16 @@ impl ReplayState {
             body,
             started_at: request_started_at,
         };
-        let retention =
-            if let (Some(policy), Some(case)) = (&self.replay_policy, active_case_id.as_deref()) {
+        let cached = admission
+            .and_then(|admission| admission.evidence.get())
+            .copied();
+        let observation_retained = if let Some((id, retained)) = cached {
+            observation_id = id;
+            retained
+        } else {
+            let retention = if let (Some(policy), Some(case)) =
+                (&self.replay_policy, active_case_id.as_deref())
+            {
                 contracts::record_target(policy, case, &request)
             } else {
                 contracts::record_unanchored_target(
@@ -68,18 +76,25 @@ impl ReplayState {
                     &request,
                 )
             };
-        let observation_retained = self.target_observations.retained(&retention);
-        if matches!(
-            &retention,
-            Ok(crate::policy_evidence::ObservationRetention::Unavailable)
-        ) {
-            observation_id = None;
-        }
-        if retention.is_err() {
-            tracing::warn!(
-                "HTTP Target observation unavailable; inspect target_observation_coverage_error"
-            );
-        }
+            let observation_retained = self.target_observations.retained(&retention);
+            if matches!(
+                &retention,
+                Ok(crate::policy_evidence::ObservationRetention::Unavailable)
+            ) {
+                observation_id = None;
+            }
+            if retention.is_err() {
+                tracing::warn!(
+                    "HTTP Target observation unavailable; inspect target_observation_coverage_error"
+                );
+            }
+            if let Some(admission) = admission {
+                let _ = admission
+                    .evidence
+                    .set((observation_id, observation_retained));
+            }
+            observation_retained
+        };
         let report_observation_id = observation_id.filter(|_| observation_retained);
         if let Some(host) = host
             && !host_matches_target(host, target)
@@ -136,7 +151,19 @@ impl ReplayState {
                 .replay_policy
                 .as_ref()
                 .is_some_and(|policy| policy.dynamic_values.enabled());
-            let candidates = if variable_path || exact.clone().next().is_none() {
+            let sequence_index = self.http_sequence.expected_in(source);
+            let candidates = if let Some(expected) = sequence_index {
+                crate::replay::native_index::CandidateCursor::new(expected).merge(
+                    self.http_candidates.select_exempt(
+                        source,
+                        active_case_id.as_deref(),
+                        scheme,
+                        target,
+                        method.as_str(),
+                        (!variable_path).then_some(uri.path()),
+                    ),
+                )
+            } else if variable_path || exact.clone().next().is_none() {
                 self.http_candidates.select_coarse(
                     source,
                     active_case_id.as_deref(),
@@ -619,7 +646,7 @@ impl ReplayState {
             && !exchange.record.outcome.is_server_terminated()
             && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
         {
-            self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Consumed);
+            self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Consumed)?;
             self.refresh_http_global_report(index);
             let reason = "recorded HTTP exchange contains an upstream error that replay v1 cannot synthesize"
                 .to_string();
@@ -741,9 +768,9 @@ impl ReplayState {
             self.claim_http_status(
                 index,
                 crate::replay::ReplayExchangeStatus::AwaitingClientTermination,
-            );
+            )?;
             if exchange.record.response_stream.is_some() {
-                self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding);
+                self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding)?;
                 exchange.record.lifecycle_stop = Some(gate);
                 exchange.record.stream_delivery = Some(detail);
                 return Ok(exchange.record);
@@ -759,7 +786,7 @@ impl ReplayState {
         if exchange.record.outcome.is_server_terminated()
             && exchange.record.response_stream.is_none()
         {
-            self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding);
+            self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding)?;
             return Err(HttpReplayMatchError::ServerTerminated(Box::new(
                 termination::PendingHttpTermination::new(detail, &exchange.record),
             )));
@@ -770,7 +797,7 @@ impl ReplayState {
             self.claim_http_status(
                 index,
                 crate::replay::ReplayExchangeStatus::AwaitingClientTermination,
-            );
+            )?;
             return Err(HttpReplayMatchError::ClientTerminated(Box::new(
                 termination::PendingHttpTermination::new(detail, &exchange.record),
             )));
@@ -786,12 +813,12 @@ impl ReplayState {
                 } else {
                     crate::replay::ReplayExchangeStatus::Responding
                 },
-            );
+            )?;
             self.refresh_http_global_report(index);
             exchange.record.stream_delivery = Some(detail);
             return Ok(exchange.record);
         }
-        self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding);
+        self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding)?;
         self.refresh_http_global_report(index);
         exchange.record.stream_delivery = Some(detail);
         Ok(exchange.record)

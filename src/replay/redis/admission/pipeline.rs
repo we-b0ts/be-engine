@@ -212,6 +212,7 @@ impl AdjacentPublish {
             started: tokio::time::Instant::now(),
             lane_hint: None,
             expected_index: Some(self.earlier),
+            observed: None,
         };
         let observation = request.observe_once(&mut state);
         let result = request

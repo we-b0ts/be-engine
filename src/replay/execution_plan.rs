@@ -73,6 +73,7 @@ pub(in crate::replay) struct CaseExecutionPlan {
     pub source: SourceScopeIdentity,
     pub native: NativeCaseRefs,
     pub rules: PreparedCaseRules,
+    pub sequence: Option<Arc<traffic_replay::SequencePlan>>,
 }
 
 impl CaseExecutionPlan {
@@ -86,6 +87,7 @@ impl CaseExecutionPlan {
             source,
             native,
             rules: PreparedCaseRules::default(),
+            sequence: None,
         }
     }
 }

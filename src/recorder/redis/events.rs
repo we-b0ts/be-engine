@@ -12,6 +12,7 @@ pub(super) async fn record_exchange(
     outcome: DependencyExchangeOutcome,
     max_frame_bytes: usize,
 ) -> Result<()> {
+    pending.targets.record_output(outcome);
     let subscription_replay_safe = if outcome.is_client_terminated()
         || outcome.is_server_terminated()
     {

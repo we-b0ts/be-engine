@@ -1,0 +1,15 @@
+[package]
+name = "traffic-protocol-mysql"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+sqlparser = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
+anyhow = "1"
+bytes = "1"
+traffic-protocol = { path = "../traffic-protocol" }
+tokio = { version = "1", features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "io-util"] }

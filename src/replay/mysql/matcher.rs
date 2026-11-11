@@ -12,7 +12,7 @@ pub(super) use transaction::TransactionMatch;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {
-    pub(super) lifecycle: crate::replay::admission::Lifecycle,
+    pub(in crate::replay) lifecycle: crate::replay::admission::Lifecycle,
     pub(in crate::replay) request_observation_id: Option<String>,
     #[cfg(test)]
     pub(in crate::replay) observed_at_for_test: Option<DateTime<Utc>>,
@@ -37,6 +37,17 @@ pub(in crate::replay) struct MysqlReplayState {
 }
 
 impl MysqlReplayState {
+    pub(in crate::replay) fn prepare_sequence_exempt(
+        &mut self,
+        indices: impl Iterator<Item = usize>,
+    ) {
+        self.candidates.register_exempt(&self.exchanges, indices);
+    }
+    pub(in crate::replay) fn recorded_sequence(&self, index: usize) -> Option<u64> {
+        let capture = self.exchanges.get(index)?.record.capture.as_ref()?;
+        capture.semantic_required.then_some(capture.sequence)
+    }
+
     pub(in crate::replay) fn exchange_status(&self, index: usize) -> Option<ReplayExchangeStatus> {
         self.exchanges
             .get(index)

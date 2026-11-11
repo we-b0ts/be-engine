@@ -100,6 +100,7 @@ mod native_index;
 mod network_access;
 mod policy;
 mod preparation;
+mod sequence;
 pub(crate) use policy::replace_request_rule_section;
 pub(crate) use policy::request_contract::redis_bulk_payload;
 pub(crate) use policy::request_contract::{
@@ -454,6 +455,12 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 struct ReplayState {
     admission_epoch: u64,
     case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
+    sequence_catalog: Option<Arc<traffic_replay::SequenceCatalog>>,
+    active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,
+    run_sequence: Option<sequence::RunBindings>,
+    http_sequence: sequence::Binding,
+    http_sequence_claims: BTreeMap<usize, traffic_replay::SequenceClaim>,
+    sequence_missing: Vec<sequence::MissingDependency>,
     batch_scope: Option<reconciliation::BatchScope>,
     startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,

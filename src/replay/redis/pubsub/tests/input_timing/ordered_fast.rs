@@ -301,17 +301,21 @@ async fn ordered_fast_advances_on_request_admission_and_closes_after_tail_delive
         "2020-01-01T00:00:00.200Z",
     );
     publish["duration_ms"] = 500.into();
+    let payload = vec![b'x'; 6 * 1024 * 1024];
+    let mut tail_response = format!("${}\r\n", payload.len()).into_bytes();
+    tail_response.extend_from_slice(&payload);
+    tail_response.extend_from_slice(b"\r\n");
     let mut get = recorded_exchange(
         connection,
         2,
         "GET",
         &[b"tail"],
-        b"+OK\r\n",
+        &tail_response,
         "2020-01-01T00:00:30.001Z",
         "2020-01-01T00:00:30.010Z",
     );
     get["duration_ms"] = 250.into();
-    get["response_kind"] = "simple_string".into();
+    get["response_kind"] = "bulk_string".into();
     let runtime = fast_runtime(temp.path(), &[publish, get], true)
         .await
         .unwrap();
@@ -335,6 +339,7 @@ async fn ordered_fast_advances_on_request_admission_and_closes_after_tail_delive
             .unwrap();
         assert_eq!(text(&mut socket).await, "421[\"work\"]");
         let (mut redis, task) = connect(&runtime).await;
+        redis.max_frame_bytes = 8 * 1024 * 1024;
         redis
             .inner
             .write_all(&crate::redis::encode_array(&[
@@ -367,7 +372,7 @@ async fn ordered_fast_advances_on_request_admission_and_closes_after_tail_delive
                 .await
                 .is_err()
         );
-        assert_eq!(read(&mut redis).await, b"+OK\r\n");
+        assert_eq!(read(&mut redis).await, tail_response);
         assert_eq!(text(&mut socket).await, "1");
         socket.send(Message::Close(None)).await.unwrap();
         task.abort();

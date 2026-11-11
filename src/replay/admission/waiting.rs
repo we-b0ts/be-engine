@@ -78,6 +78,14 @@ impl RequestAdmission {
 
 impl ReplayState {
     pub(in crate::replay) fn advance_admission_epoch(&mut self) {
+        if let Some(run) = &self.run_sequence {
+            for runtime in &run.runtimes {
+                runtime.wake_requests();
+            }
+        }
+        if let Some(sequence) = &self.active_sequence {
+            sequence.wake_requests();
+        }
         self.admission_epoch = self
             .admission_epoch
             .checked_add(1)

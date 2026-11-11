@@ -3,11 +3,13 @@ use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine;
 use bytes::Bytes;
 use hyper::header::{
     CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, TRANSFER_ENCODING,
 };
 use hyper::{HeaderMap, Method, StatusCode, Uri};
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::config::{
@@ -18,11 +20,13 @@ use crate::dns_mock::{FakeDnsRegistry, FakeDnsUpstreamProtocol};
 use crate::http::content_encoding;
 
 #[cfg(test)]
+mod document_tests;
+mod documents;
+#[cfg(test)]
 mod json_url_tests;
 mod json_urls;
 mod kubectl_proxy;
 mod pluto;
-mod vintage;
 
 pub(crate) use json_urls::{UrlTarget, inspect_url_target};
 pub(crate) use kubectl_proxy::KubectlProxyManager;
@@ -38,6 +42,7 @@ pub(crate) struct RewriteInput<'a> {
 }
 
 pub(crate) struct RewrittenResponse {
+    pub(crate) transformation: traffic_model::recording::Transformation,
     pub(crate) headers: HeaderMap,
     pub(crate) body: Bytes,
     pub(crate) discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
@@ -59,8 +64,7 @@ enum PluginResult {
 
 enum RewrittenBody {
     Complete(Vec<u8>),
-    VintageNaming(vintage::NamingResponsePlan),
-    VintageCacheConfig(vintage::CacheConfigResponsePlan),
+    Documents(traffic_response_rewrite::RewritePlan),
     JsonUrls(json_urls::ResponsePlan),
 }
 
@@ -71,14 +75,41 @@ struct DiscoveredTarget {
     upstream_protocol: Option<FakeDnsUpstreamProtocol>,
 }
 
+pub(crate) struct CompiledRewrites {
+    fingerprint: String,
+    config: HttpResponseRewriteConfig,
+    documents: BTreeMap<String, documents::Documents>,
+}
+
+impl CompiledRewrites {
+    pub(crate) fn new(config: &HttpResponseRewriteConfig) -> Result<Self> {
+        let documents = config
+            .rules
+            .iter()
+            .filter_map(|rule| match &rule.plugin {
+                Some(HttpResponseRewritePluginConfig::Documents { rules }) => Some(
+                    documents::Documents::new(rules).map(|compiled| (rule.name.clone(), compiled)),
+                ),
+                _ => None,
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            fingerprint: format!("{:x}", Sha256::digest(serde_json::to_vec(config)?)),
+            config: config.clone(),
+            documents,
+        })
+    }
+}
+
 pub(crate) async fn apply(
-    config: &HttpResponseRewriteConfig,
+    compiled: &CompiledRewrites,
     registry: &FakeDnsRegistry,
     kubectl_proxy_manager: &KubectlProxyManager,
     recorder_ca_pem: &str,
     max_decoded_body_bytes: usize,
     input: RewriteInput<'_>,
 ) -> Result<Option<RewrittenResponse>> {
+    let config = &compiled.config;
     if !config.is_enabled() {
         return Ok(None);
     }
@@ -110,21 +141,38 @@ pub(crate) async fn apply(
         body: decoded_body.as_ref(),
         ..input
     };
+    let rule_ids = if rule.plugin.is_some() {
+        vec![rule.name.clone()]
+    } else {
+        config
+            .rules
+            .iter()
+            .filter(|candidate| candidate.plugin.is_none() && matches(candidate, &input))
+            .map(|candidate| candidate.name.clone())
+            .collect()
+    };
 
-    let plugin: Box<dyn Plugin> = match &rule.plugin {
+    let owned: Box<dyn Plugin>;
+    let plugin: &dyn Plugin = match &rule.plugin {
         Some(HttpResponseRewritePluginConfig::PlutoEciKubeconfig {
             kubectl_binary,
             proxy_listen,
-        }) => Box::new(pluto::EciKubeconfig::new(
-            kubectl_binary,
-            *proxy_listen,
-            recorder_ca_pem,
-        )?),
-        Some(HttpResponseRewritePluginConfig::VintageNaming { services, clusters }) => {
-            Box::new(vintage::Naming::new(services, clusters))
+        }) => {
+            owned = Box::new(pluto::EciKubeconfig::new(
+                kubectl_binary,
+                *proxy_listen,
+                recorder_ca_pem,
+            )?);
+            owned.as_ref()
         }
-        Some(HttpResponseRewritePluginConfig::VintageCacheConfig) => Box::new(vintage::CacheConfig),
-        None => Box::new(json_urls::JsonUrls::new(&rule.pointers)),
+        Some(HttpResponseRewritePluginConfig::Documents { .. }) => compiled
+            .documents
+            .get(&rule.name)
+            .ok_or_else(|| anyhow!("response rewrite rule was not compiled"))?,
+        None => {
+            owned = Box::new(json_urls::JsonUrls::new(&rule.pointers));
+            owned.as_ref()
+        }
     };
 
     let PluginResult::Rewritten {
@@ -150,7 +198,6 @@ pub(crate) async fn apply(
             })?;
     }
 
-    let mut registered = BTreeMap::new();
     let mut registered_aliases = BTreeMap::new();
     for target in targets {
         let entry = match (&target.upstream_authority, target.upstream_protocol) {
@@ -179,16 +226,10 @@ pub(crate) async fn apply(
             "registered response-discovered target"
         );
         registered_aliases.insert(target.alias, entry.clone());
-        registered.insert(target.connect_ip, entry);
     }
     let (body, discovered_tcp_targets) = match *body {
         RewrittenBody::Complete(body) => (body, Vec::new()),
-        RewrittenBody::VintageNaming(plan) => plan
-            .render(&registered)
-            .context("failed to render rewritten Vintage naming response")?,
-        RewrittenBody::VintageCacheConfig(plan) => plan
-            .render(&registered)
-            .context("failed to render rewritten Vintage cache config response")?,
+        RewrittenBody::Documents(plan) => documents::render(plan, &registered_aliases)?,
         RewrittenBody::JsonUrls(plan) => plan.render(&registered_aliases)?,
     };
 
@@ -201,6 +242,14 @@ pub(crate) async fn apply(
         "rewrote HTTP response and registered discovered target"
     );
     Ok(Some(RewrittenResponse {
+        transformation: traffic_model::recording::Transformation {
+            surface: "http_response".into(),
+            rule_ids,
+            policy_sha256: compiled.fingerprint.clone(),
+            original_sha256: format!("{:x}", Sha256::digest(input.body)),
+            delivered_sha256: format!("{:x}", Sha256::digest(&body)),
+            original_body_base64: base64::engine::general_purpose::STANDARD.encode(input.body),
+        },
         headers,
         body: Bytes::from(body),
         discovered_tcp_targets,

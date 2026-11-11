@@ -100,24 +100,53 @@ impl RedisReplayState {
                 PreferredMatch::Matched(candidate)
             };
         }
-        let case_candidates = self.candidates.select(
-            ReplaySource::Case,
-            case,
-            target,
-            resp_version,
-            database,
-            username,
-            command,
-        );
-        let run_candidates = self.candidates.select(
-            ReplaySource::Startup,
-            None,
-            target,
-            resp_version,
-            database,
-            username,
-            command,
-        );
+        let case_candidates = if let Some(expected) = self.lifecycle.sequence.expected_index() {
+            crate::replay::native_index::CandidateCursor::only(expected).merge(
+                self.candidates.select_exempt(
+                    ReplaySource::Case,
+                    case,
+                    target,
+                    resp_version,
+                    database,
+                    username,
+                    command,
+                ),
+            )
+        } else {
+            self.candidates.select(
+                ReplaySource::Case,
+                case,
+                target,
+                resp_version,
+                database,
+                username,
+                command,
+            )
+        };
+        let run_candidates =
+            if let Some(expected) = self.lifecycle.sequence.expected_in(ReplaySource::Startup) {
+                crate::replay::native_index::CandidateCursor::new(expected).merge(
+                    self.candidates.select_exempt(
+                        ReplaySource::Startup,
+                        None,
+                        target,
+                        resp_version,
+                        database,
+                        username,
+                        command,
+                    ),
+                )
+            } else {
+                self.candidates.select(
+                    ReplaySource::Startup,
+                    None,
+                    target,
+                    resp_version,
+                    database,
+                    username,
+                    command,
+                )
+            };
         preferred_match_indexed_with_priority(
             &self.exchanges,
             case,

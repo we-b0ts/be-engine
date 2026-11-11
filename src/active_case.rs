@@ -178,6 +178,9 @@ impl ActiveCaseRegistry {
             return Err(ActiveCaseRejection::Busy);
         }
         state.bootstrap_open = false;
+        if let Some(capture) = &self.capture {
+            let _ = capture.input(case.id, 0, traffic_model::trace::InputKind::Request);
+        }
         state.active.push(ActiveCaseRegistration {
             case: case.clone(),
             invalidation: None,
@@ -513,6 +516,30 @@ impl ActiveCaseRegistry {
 }
 
 impl DependencyTargets {
+    pub(crate) fn prepare_output(
+        &self,
+        output: traffic_model::trace::OutputKind,
+    ) -> Option<crate::recorder::ledger::OutputReservation> {
+        self.capture.as_ref()?.prepare_output(output)
+    }
+    pub(crate) fn transformed(&self, transformation: traffic_model::recording::Transformation) {
+        if let Some(capture) = &self.capture {
+            capture.transformed(transformation);
+        }
+    }
+    pub(crate) fn record_output(&self, outcome: crate::DependencyExchangeOutcome) {
+        use traffic_model::trace::OutputKind;
+        if let Some(capture) = &self.capture {
+            capture.output(match outcome {
+                crate::DependencyExchangeOutcome::Response => OutputKind::End,
+                crate::DependencyExchangeOutcome::NoResponse => OutputKind::NoResponse,
+                crate::DependencyExchangeOutcome::ClientTerminated => return,
+                crate::DependencyExchangeOutcome::Terminated(termination) => {
+                    OutputKind::Terminated { termination }
+                }
+            });
+        }
+    }
     pub(crate) fn bind_protocol(&self, protocol: crate::dependency::observation::ProtocolRef) {
         if let Some(capture) = &self.capture {
             capture.bind_protocol(protocol);

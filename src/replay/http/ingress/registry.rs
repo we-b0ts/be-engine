@@ -97,12 +97,14 @@ impl Handle {
             changed: self.changed.clone(),
             released: false,
             started: tokio::time::Instant::now(),
+            evidence: Default::default(),
         }
     }
 }
 
 #[derive(Debug)]
 pub(in crate::replay::http) struct Admission {
+    pub(in crate::replay::http) evidence: std::sync::OnceLock<(Option<uuid::Uuid>, bool)>,
     observation: Arc<Observation>,
     counter: Arc<AtomicUsize>,
     registry: Arc<std::sync::Mutex<Registry>>,

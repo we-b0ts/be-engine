@@ -1,7 +1,10 @@
 use super::*;
 use crate::http::rewrite::{RewriteInput, matches};
 use crate::policy::{Codec, Surface};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 
 pub(super) fn validate(
     scope: &NativeSourceScope<'_>,
@@ -67,6 +70,12 @@ pub(super) fn validate(
         }
         n::NativeEffect::CaptureHttpResponse(effect) => {
             let projected = super::super::capture_response(rule, effect);
+            let documents = match &effect.contract {
+                n::CaptureResponseContract::Documents { rules } => {
+                    Some(traffic_response_rewrite::CompiledRewrite::compile(rules)?)
+                }
+                _ => None,
+            };
             let mut pointers = std::collections::BTreeMap::<String, usize>::new();
             if let n::CaptureResponseContract::Urls { pointers: selected } = &effect.contract {
                 pointers.extend(
@@ -91,11 +100,24 @@ pub(super) fn validate(
                     let body =
                         crate::replay::http_witness_value(&envelope, Surface::DependencyResponse)?
                             .context("capture response has no complete body slot")?;
-                    let decoded = crate::http::rewrite::decode_rewrite_body(
-                        &headers,
-                        &body,
-                        8 * 1024 * 1024,
-                    )?;
+                    let decoded = original_body(event, &headers, &body)?;
+                    if let Some(documents) = &documents {
+                        let uri: hyper::Uri = event["uri"]
+                            .as_str()
+                            .context("capture response has no request URI")?
+                            .parse()?;
+                        if documents
+                            .inspect_with_query(
+                                &decoded,
+                                traffic_response_rewrite::RewriteBudget::default(),
+                                uri.query(),
+                            )?
+                            .is_some()
+                        {
+                            count += 1;
+                        }
+                        return Ok(());
+                    }
                     let logical =
                         crate::value_codec::CodecView::decode(&Codec::Json, &decoded)?.logical;
                     for (pointer, seen) in &mut pointers {
@@ -121,6 +143,39 @@ pub(super) fn validate(
             Ok(count)
         }
         _ => anyhow::bail!("Source capture owner received another effect"),
+    }
+}
+
+fn original_body<'a>(
+    event: &Value,
+    headers: &hyper::HeaderMap,
+    body: &'a [u8],
+) -> Result<Cow<'a, [u8]>> {
+    let original = event["capture"]["transformations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|receipt| receipt["surface"] == "http_response");
+    if let Some(receipt) = original {
+        let receipt: traffic_model::recording::Transformation =
+            serde_json::from_value(receipt.clone())?;
+        let original = STANDARD.decode(&receipt.original_body_base64)?;
+        ensure!(
+            original.len() <= crate::value_limits::MAX_VALUE_BYTES,
+            "original response rewrite body exceeds its budget"
+        );
+        ensure!(
+            format!("{:x}", Sha256::digest(&original)) == receipt.original_sha256
+                && format!("{:x}", Sha256::digest(body)) == receipt.delivered_sha256,
+            "response rewrite provenance does not match its original and delivered bodies"
+        );
+        Ok(Cow::Owned(original))
+    } else {
+        crate::http::rewrite::decode_rewrite_body(
+            headers,
+            body,
+            crate::value_limits::MAX_VALUE_BYTES,
+        )
     }
 }
 

@@ -7,6 +7,7 @@ impl ReplayState {
         let allowed_unused_case_http_exchanges =
             self.unused_http_exchanges(ReplaySource::Case, true);
         let mut report = ReplayReport {
+            dependency_sequence_missing: self.sequence_missing.clone(),
             batch_reconciliation: None,
             startup_phase: self.startup_phase.report(),
             http_ingress: self.http_ingress.report(),

@@ -67,6 +67,7 @@ pub(super) struct ClaimTicket {
     // Inventory observers never own this lease. The last actual matched
     // request cancels even if delivery's future has not been polled yet.
     _owner: Option<Arc<ClaimOwner>>,
+    sequence: Option<traffic_replay::SequenceClaim>,
 }
 #[derive(Debug)]
 struct ClaimOwner {
@@ -86,6 +87,7 @@ impl ClaimTicket {
             changed: self.changed.clone(),
             cancelled: self.cancelled.clone(),
             _owner: None,
+            sequence: self.sequence.clone(),
         }
     }
     /// Publish after the actual native wire operation has succeeded. This fact
@@ -97,6 +99,13 @@ impl ClaimTicket {
             .compare_exchange(CLAIMED, WIRE, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
         if changed {
+            if let Some(sequence) = &self.sequence
+                && !sequence.complete()
+                && sequence.publish().is_err()
+            {
+                cancel(self);
+                return false;
+            }
             self.changed.notify_waiters();
         }
         changed
@@ -113,6 +122,17 @@ impl ClaimTicket {
             ticket: self.clone(),
             armed: true,
         }
+    }
+    pub(super) async fn wait_sequence_delivery(&self) -> anyhow::Result<()> {
+        if let Some(sequence) = &self.sequence {
+            sequence
+                .wait_delivery(tokio::time::Instant::now() + std::time::Duration::from_secs(30))
+                .await?;
+        }
+        Ok(())
+    }
+    pub(super) fn sequence(&self) -> Option<&traffic_replay::SequenceClaim> {
+        self.sequence.as_ref()
     }
 }
 
@@ -137,6 +157,12 @@ impl Drop for DeliveryGuard {
     }
 }
 fn cancel(ticket: &ClaimTicket) {
+    if ticket.receipt.phase.load(Ordering::Acquire) == CONSUMED {
+        return;
+    }
+    if let Some(sequence) = &ticket.sequence {
+        sequence.fail();
+    }
     let receipt = &ticket.receipt;
     let mut phase = receipt.phase.load(Ordering::Acquire);
     while matches!(phase, CLAIMED | WIRE) {
@@ -168,6 +194,7 @@ struct Slot {
 
 #[derive(Debug, Default)]
 pub(super) struct Lifecycle {
+    pub(super) sequence: super::sequence::Binding,
     // Sparse by actual claims: the first request in a late Case must not
     // allocate/initialize every unrelated earlier inventory position.
     slots: HashMap<usize, Slot>,
@@ -195,6 +222,7 @@ impl Lifecycle {
         if !status.is_available() {
             return None;
         }
+        let sequence = self.sequence.claim(index).ok()?;
         let slot = self.slots.entry(index).or_default();
         slot.generation = slot
             .generation
@@ -216,6 +244,7 @@ impl Lifecycle {
             changed: self.changed.clone(),
             cancelled: self.cancelled.clone(),
             _owner: None,
+            sequence,
         };
         ticket._owner = Some(Arc::new(ClaimOwner {
             ticket: ticket.observer(),

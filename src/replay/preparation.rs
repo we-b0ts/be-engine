@@ -23,6 +23,9 @@ impl ReplayState {
         // Optional loop observations need their immutable Source proof even
         // when Target executes zero iterations and sends no Redis command.
         self.redis.prepare_optional_observations(case)?;
+        if self.sequence_catalog.is_some() {
+            self.redis.prepare_native_sequence(case)?;
+        }
         let native = NativeCaseRefs {
             http: self.http_candidates.case_members(case),
             redis: self.redis.prepared_case_members(case),
@@ -33,6 +36,42 @@ impl ReplayState {
                 .prepare_request_sources(&policy.request_contracts, case, &native.mysql)?;
         }
         let mut plan = CaseExecutionPlan::new(case.to_owned(), source, native);
+        self.http_candidates.register_exempt(
+            &self.http_exchanges,
+            plan.native
+                .http
+                .iter()
+                .copied()
+                .filter(|index| self.http_exchanges[*index].recorded_sequence().is_none()),
+        );
+        self.redis
+            .prepare_sequence_exempt(plan.native.redis.iter().copied());
+        let mysql_exempt: Vec<_> = plan
+            .native
+            .mysql
+            .iter()
+            .copied()
+            .filter(|index| self.mysql.recorded_sequence(*index).is_none())
+            .collect();
+        self.mysql.prepare_sequence_exempt(mysql_exempt.into_iter());
+        if let Some(catalog) = &self.sequence_catalog {
+            let http = plan
+                .native
+                .http
+                .iter()
+                .filter_map(|index| self.http_exchanges.get(*index)?.recorded_sequence());
+            let redis = plan
+                .native
+                .redis
+                .iter()
+                .filter_map(|index| self.redis.recorded_sequence(*index));
+            let mysql = plan
+                .native
+                .mysql
+                .iter()
+                .filter_map(|index| self.mysql.recorded_sequence(*index));
+            plan.sequence = Some(catalog.scope(http.chain(redis).chain(mysql))?);
+        }
         plan.rules = rules;
         self.case_execution_plans
             .insert(case.to_owned(), Arc::new(plan));

@@ -1,8 +1,16 @@
 use crate::config::{TcpApplicationProtocol, TcpProtocolDetectionConfig};
 use crate::memcached::text_request_line_is_valid;
+use traffic_protocol::{Peer, Probe, RegisteredProtocol};
 
 const MEMCACHED_BINARY_REQUEST_MAGIC: u8 = 0x80;
-const MYSQL_HANDSHAKE_PROTOCOL_VERSION: u8 = 0x0a;
+
+const CLIENT_PROVIDERS: &[RegisteredProtocol<DetectedProtocol>] = &[
+    RegisteredProtocol::new::<traffic_protocol_http::HttpProvider>(DetectedProtocol::Http),
+    RegisteredProtocol::new::<traffic_protocol_redis::RedisProvider>(DetectedProtocol::Redis),
+];
+const SERVER_PROVIDERS: &[RegisteredProtocol<DetectedProtocol>] = &[RegisteredProtocol::new::<
+    traffic_protocol_mysql::MysqlProvider,
+>(DetectedProtocol::Mysql)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DetectedProtocol {
@@ -49,6 +57,22 @@ pub(crate) fn protocol_override(
 }
 
 pub(crate) fn detect_client_protocol(bytes: &[u8]) -> Detection {
+    let recognition = traffic_protocol::recognize(
+        CLIENT_PROVIDERS,
+        Probe {
+            peer: Peer::Client,
+            bytes,
+        },
+    );
+    let incomplete = matches!(recognition, Ok(traffic_protocol::Detection::NeedMore));
+    match recognition {
+        Ok(traffic_protocol::Detection::Match(protocol)) => return Detection::Match(protocol),
+        Err(error) => {
+            tracing::warn!(%error, "dependency protocol recognition failed");
+            return Detection::NoMatch;
+        }
+        _ => (),
+    }
     if bytes.is_empty() {
         return Detection::NeedMore;
     }
@@ -78,7 +102,10 @@ pub(crate) fn detect_client_protocol(bytes: &[u8]) -> Detection {
             Detection::NoMatch
         };
     }
-    detect_text_protocol(bytes)
+    match detect_text_protocol(bytes) {
+        Detection::NoMatch if incomplete => Detection::NeedMore,
+        detection => detection,
+    }
 }
 
 fn detect_motan(bytes: &[u8]) -> Detection {
@@ -110,13 +137,16 @@ fn redis_array_is_command(values: &[redis_protocol::resp2::types::OwnedFrame]) -
 }
 
 pub(crate) fn detect_mysql_server(bytes: &[u8]) -> Detection {
-    if bytes.len() < 5 {
-        return Detection::NeedMore;
-    }
-    if bytes[3] == 0 && bytes[4] == MYSQL_HANDSHAKE_PROTOCOL_VERSION {
-        Detection::Match(DetectedProtocol::Mysql)
-    } else {
-        Detection::NoMatch
+    match traffic_protocol::recognize(
+        SERVER_PROVIDERS,
+        Probe {
+            peer: Peer::Server,
+            bytes,
+        },
+    ) {
+        Ok(traffic_protocol::Detection::Match(protocol)) => Detection::Match(protocol),
+        Ok(traffic_protocol::Detection::NeedMore) => Detection::NeedMore,
+        _ => Detection::NoMatch,
     }
 }
 
@@ -259,10 +289,25 @@ mod tests {
     }
 
     #[test]
-    fn fragmented_redis_and_storage_commands_stay_undecided_until_complete() {
+    fn fragmented_commands_wait_only_for_their_recognition_prefix() {
+        assert_eq!(
+            detect_client_protocol(b"PROPFIND /items HTTP/1."),
+            Detection::NeedMore
+        );
+        assert_eq!(
+            detect_client_protocol(b"PROPFIND /items HTTP/1.1\r\n"),
+            Detection::Match(DetectedProtocol::Http)
+        );
         let redis = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
-        for end in 1..redis.len() {
+        let command_prefix = b"*2\r\n$3\r\nGET\r\n".len();
+        for end in 1..command_prefix {
             assert_eq!(detect_client_protocol(&redis[..end]), Detection::NeedMore);
+        }
+        for end in command_prefix..=redis.len() {
+            assert_eq!(
+                detect_client_protocol(&redis[..end]),
+                Detection::Match(DetectedProtocol::Redis)
+            );
         }
         assert_eq!(
             detect_client_protocol(redis),

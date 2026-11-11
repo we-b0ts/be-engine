@@ -51,13 +51,9 @@ pub enum HttpResponseRewritePluginConfig {
         kubectl_binary: String,
         proxy_listen: SocketAddr,
     },
-    VintageNaming {
-        #[serde(default)]
-        services: Vec<String>,
-        #[serde(default)]
-        clusters: Vec<String>,
+    Documents {
+        rules: Vec<traffic_response_rewrite::DocumentRule>,
     },
-    VintageCacheConfig,
 }
 
 impl HttpResponseRewriteConfig {
@@ -99,7 +95,7 @@ impl HttpResponseRewriteConfig {
                 (Some(plugin), true) => plugin.validate(name)?,
                 (None, false) => validate_pointers(name, &rule.pointers)?,
                 _ => bail!(
-                    "HTTP response rewrite rule {name:?} requires pointers or a legacy plugin, exclusively"
+                    "HTTP response rewrite rule {name:?} requires exactly one of pointers or a plugin"
                 ),
             }
         }
@@ -150,13 +146,10 @@ impl HttpResponseRewritePluginConfig {
                 }
                 Ok(())
             }
-            Self::VintageNaming {
-                services, clusters, ..
-            } => {
-                validate_values(rule_name, "plugin.services", services)?;
-                validate_values(rule_name, "plugin.clusters", clusters)
+            Self::Documents { rules } => {
+                traffic_response_rewrite::CompiledRewrite::compile(rules)?;
+                Ok(())
             }
-            Self::VintageCacheConfig => Ok(()),
         }
     }
 }
@@ -170,7 +163,6 @@ fn validate_values(rule_name: &str, field: &str, values: &[String]) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::HttpResponseRewritePluginConfig;
 
     #[test]
     fn parses_pluto_eci_kubeconfig_rule() {
@@ -220,80 +212,5 @@ mod tests {
         .unwrap();
 
         assert!(config.http_response_rewrite.validate().is_err());
-    }
-
-    #[test]
-    fn parses_vintage_naming_rule_without_cache_behavior_changes() {
-        let config: crate::AppConfig = toml::from_str(
-            r#"
-            [http_response_rewrite]
-            enabled = true
-
-            [dns_mock]
-            enabled = true
-
-            [tcp_gateway]
-            enabled = true
-            record_http = true
-
-            [[http_response_rewrite.rules]]
-            name = "vintage-motan"
-            authorities = ["static.config.api.demo.test"]
-            methods = ["GET"]
-            path = "/naming/service"
-            status_codes = [200]
-            content_types = ["application/json"]
-            plugin = { name = "vintage-naming", services = ["yf-rpc"], clusters = ["cn.sina.api.data.service.SinaUserService/service"] }
-            "#,
-        )
-        .unwrap();
-
-        config.validate().unwrap();
-        let HttpResponseRewritePluginConfig::VintageNaming { services, clusters } =
-            config.http_response_rewrite.rules[0]
-                .plugin
-                .as_ref()
-                .unwrap()
-        else {
-            panic!("expected Vintage naming plugin");
-        };
-        assert_eq!(services, &["yf-rpc"]);
-        assert_eq!(
-            clusters,
-            &["cn.sina.api.data.service.SinaUserService/service"]
-        );
-    }
-
-    #[test]
-    fn parses_vintage_cache_config_rule() {
-        let config: crate::AppConfig = toml::from_str(
-            r#"
-            [http_response_rewrite]
-            enabled = true
-
-            [dns_mock]
-            enabled = true
-
-            [tcp_gateway]
-            enabled = true
-            record_http = true
-
-            [[http_response_rewrite.rules]]
-            name = "vintage-cache-config"
-            authorities = ["config.api.demo.test"]
-            methods = ["GET"]
-            path = "/1/config/service"
-            status_codes = [200]
-            content_types = ["application/json"]
-            plugin = { name = "vintage-cache-config" }
-            "#,
-        )
-        .unwrap();
-
-        config.validate().unwrap();
-        assert!(matches!(
-            config.http_response_rewrite.rules[0].plugin,
-            Some(HttpResponseRewritePluginConfig::VintageCacheConfig)
-        ));
     }
 }

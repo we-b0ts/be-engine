@@ -50,6 +50,7 @@ pub(super) fn seal(root: &Path) {
     directories(&root.join("apis"), &mut cases);
     cases.sort();
     let mut raw = Vec::new();
+    let mut events = Vec::new();
     let mut line = 0;
     let mut inputs = Vec::new();
     let mut scopes = Vec::new();
@@ -120,7 +121,9 @@ pub(super) fn seal(root: &Path) {
                     _ => None,
                 };
                 let capture = CaptureMetadata {
+                    transformations: Vec::new(),
                     exchange_id: id,
+                    sequence: line as u64 + 1,
                     process_epoch: epoch,
                     phase: if case.is_some() {
                         CapturePhase::Runtime
@@ -140,6 +143,31 @@ pub(super) fn seal(root: &Path) {
                     effect_index: 0,
                     semantic_required: true,
                 };
+                let begin = json!({
+                    "sequence": capture.sequence * 2 - 1,
+                    "offset_micros": capture.sequence * 2 - 1,
+                    "event_type": "capture_started",
+                    "exchange_id": id,
+                    "dependency_sequence": capture.sequence,
+                    "process_epoch": epoch,
+                    "phase": capture.phase,
+                    "observed_case": case,
+                    "admitted_case": case,
+                    "started_at": capture.started_at,
+                });
+                let end = json!({
+                    "sequence": capture.sequence * 2,
+                    "offset_micros": capture.sequence * 2,
+                    "event_type": "capture_terminated",
+                    "exchange_id": id,
+                    "dependency_sequence": capture.sequence,
+                    "outcome": event["outcome"].as_str().unwrap_or("response"),
+                    "capture_complete": true,
+                });
+                for event in [begin, end] {
+                    serde_json::to_writer(&mut events, &event).unwrap();
+                    events.push(b'\n');
+                }
                 event["capture"] = serde_json::to_value(capture).unwrap();
                 let mut bytes = serde_json::to_vec(&event).unwrap();
                 bytes.push(b'\n');
@@ -184,7 +212,7 @@ pub(super) fn seal(root: &Path) {
                 },
             );
             scopes.push(path);
-            inputs.push(RecordingInput {
+            inputs.push(RecordedCase {
                 case_id,
                 path: directory
                     .strip_prefix(root)
@@ -221,7 +249,7 @@ pub(super) fn seal(root: &Path) {
         scopes.push(path);
     }
     fs::write(root.join("dependencies.jsonl"), &raw).unwrap();
-    fs::write(root.join("dependency-lifecycle.jsonl"), b"").unwrap();
+    fs::write(root.join("dependency-lifecycle.jsonl"), events).unwrap();
     let run_id = root.file_name().unwrap().to_str().unwrap().to_owned();
     let run_path = root.join("recording-run.json");
     let mut run: Value = fs::read(&run_path)

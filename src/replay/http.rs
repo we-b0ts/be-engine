@@ -1,3 +1,4 @@
+mod admission;
 pub(in crate::replay) mod cancelled;
 pub(in crate::replay) mod candidates;
 pub(in crate::replay) mod contracts;
@@ -23,6 +24,7 @@ use hyper::header::{CONNECTION, CONTENT_LENGTH, HOST, TRANSFER_ENCODING};
 use hyper::http::uri::Authority;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri};
+#[cfg(test)]
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

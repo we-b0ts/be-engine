@@ -17,6 +17,7 @@ use family::{Family, SelectHint};
 pub(super) struct Candidates {
     count: usize,
     index: ProtocolIndex,
+    exempt: ProtocolIndex,
     members: CaseMembership,
     lanes: LaneIndex,
     families: Vec<Option<Family>>,
@@ -31,6 +32,7 @@ impl Default for Candidates {
         Self {
             count: 0,
             index: ProtocolIndex::mysql(),
+            exempt: ProtocolIndex::mysql(),
             members: CaseMembership::default(),
             lanes: LaneIndex::default(),
             families: Vec::new(),
@@ -60,6 +62,44 @@ fn key(
 }
 
 impl Candidates {
+    pub(super) fn register_exempt(
+        &mut self,
+        exchanges: &[ReplayExchange],
+        indices: impl Iterator<Item = usize>,
+    ) {
+        for index in indices {
+            let exchange = &exchanges[index];
+            let identity = ReplaySessionIdentity {
+                target: Some(exchange.identity.target.clone()),
+                database: exchange.identity.database.clone(),
+                username: exchange.identity.username.clone(),
+            };
+            for command in [None, Some(exchange.record.command.as_str())] {
+                if let Some(key) = key(
+                    exchange.source,
+                    exchange.case_id.as_deref(),
+                    &identity,
+                    command,
+                ) {
+                    self.exempt.register(NativeKey::Mysql(key), index);
+                }
+            }
+        }
+        self.exempt.seal();
+    }
+
+    pub(super) fn lookup_exempt(
+        &self,
+        source: ReplaySource,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: Option<&str>,
+    ) -> Arc<[usize]> {
+        let Some(key) = key(source, case, identity, command) else {
+            return Arc::from([]);
+        };
+        self.exempt.lookup(NativeQuery::Mysql(&key)).into_indices()
+    }
     pub(super) fn register(&mut self, exchanges: &[ReplayExchange]) {
         // Some test/repair constructors append directly. Reconcile their immutable
         // inventory before lookup; payload release never changes vector positions.

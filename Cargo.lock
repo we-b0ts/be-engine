@@ -2915,11 +2915,107 @@ dependencies = [
  "tower-service",
  "tracing",
  "tracing-subscriber",
+ "traffic-model",
+ "traffic-protocol",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-recording",
+ "traffic-replay",
+ "traffic-response-rewrite",
  "url",
  "uuid",
  "webpki-roots 1.0.8",
  "x509-parser",
  "zip",
+]
+
+[[package]]
+name = "traffic-model"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "traffic-protocol-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "http-body",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "tokio",
+ "traffic-protocol",
+]
+
+[[package]]
+name = "traffic-protocol-mysql"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "serde",
+ "sqlparser",
+ "tokio",
+ "traffic-protocol",
+]
+
+[[package]]
+name = "traffic-protocol-redis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "redis-protocol",
+ "tokio",
+ "traffic-protocol",
+]
+
+[[package]]
+name = "traffic-recording"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "traffic-model",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-replay"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tokio",
+ "traffic-model",
+]
+
+[[package]]
+name = "traffic-response-rewrite"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "url",
 ]
 
 [[package]]

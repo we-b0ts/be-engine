@@ -21,12 +21,28 @@ ownership.
 
 ## Package Shape
 
-Keep this repository as one Rust crate while the companion `traffic-e2e`,
-`backend-rewrite`, and `backend-rewrite-admin` binaries share the same engine
-and coordinator library.
-Introduce a workspace only when independently versioned packages or a real
-package dependency boundary appears. Ask before creating one when the boundary
-is unclear.
+Use a Rust workspace with the root `traffic-e2e` application composing the
+`traffic-e2e`, `backend-rewrite`, and `backend-rewrite-admin` binaries.
+Extract libraries incrementally when their responsibility and dependency
+direction are explicit. `traffic-model` owns protocol-independent recording
+identities, ownership and outcomes. `traffic-protocol-mysql` and
+`traffic-protocol-redis` own their native framing and messages. Lower libraries
+must not depend on the root application, its configuration, `AppState`, or
+`ReplayState`. Protocol extensions publish typed facts through the framework's
+event contract; the application owns capture and Replay execution.
+
+`traffic-protocol` owns registration and bounded frame I/O, and the HTTP provider
+owns its native Hyper driver and response stream model. `traffic-recording`
+owns shared recording identities and sequence allocation. `traffic-replay`
+owns immutable event plans, bounded pending admissions and actual delivery
+receipts. `traffic-response-rewrite` owns pure document selection, decoding,
+address discovery and materialization. The root HTTP adapter owns route
+registration, managed processes and provenance. See
+[dependency protocols and response rules](dependency-provider.md).
+
+Run tests and Clippy across the workspace so extracted library tests remain
+part of the ordinary verification path. Product source files in `crates/`
+retain the same responsibility and 1000-line requirements as `src/`.
 
 ## Current Boundaries
 

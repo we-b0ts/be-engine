@@ -87,8 +87,10 @@ recording; it is not a value-comparison exemption.
 An optional rewrite `name` retains an existing capture identity during a
 syntax-only migration, preserving its capture fingerprint and recorded routing
 identity. New unnamed declarations derive a stable proof-independent identity.
-Existing Vintage and kubeconfig rewrite adapters retain their current native
-configuration and behavior; this change does not migrate or enable them.
+`documents` declarations handle nested service-discovery and cache configuration
+responses through explicit selectors, decoding steps and address formats.
+See [dependency protocols and response rules](dependency-provider.md). The
+kubeconfig adapter retains its framework-owned process and credential lifecycle.
 
 ## Codec bindings and generated headers
 

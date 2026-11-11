@@ -59,7 +59,7 @@ impl Observation {
         &mut self,
         end: ClientTransportEnd,
         now: impl Into<InputTime>,
-    ) -> Result<()> {
+    ) -> Result<InputAction> {
         let InputTime { ms: now_ms, us } = now.into();
         self.ensure_client_transport_open()?;
         ensure!(
@@ -75,7 +75,7 @@ impl Observation {
                 .is_none_or(|action| now_ms >= action.offset_ms),
             "client transport termination predates an observed input"
         );
-        self.input.actions.push(InputAction {
+        let action = InputAction {
             sequence: self.next_input,
             offset_ms: now_ms,
             offset_us: us,
@@ -84,13 +84,14 @@ impl Observation {
             gap_start_ms: None,
             ack_ref: None,
             action: InputActionKind::TransportEnd { end },
-        });
+        };
+        self.input.actions.push(action.clone());
         self.next_input += 1;
         self.safe_barrier = None;
         if self.protocol == Protocol::SocketIo {
             self.input.socket_io_heartbeat = Some(self.heartbeats.program());
         }
-        Ok(())
+        Ok(action)
     }
 }
 

@@ -21,24 +21,32 @@ pub(in crate::replay) struct CandidateCursor {
     second: Option<Arc<[usize]>>,
     first_position: usize,
     second_position: usize,
+    third: Option<Arc<[usize]>>,
+    third_position: usize,
 }
 
 impl CandidateCursor {
-    fn new(indices: Arc<[usize]>) -> Self {
+    pub(in crate::replay) fn only(index: Option<usize>) -> Self {
+        Self::new(index.into_iter().collect::<Vec<_>>().into())
+    }
+    pub(in crate::replay) fn new(indices: Arc<[usize]>) -> Self {
         Self {
             first: indices,
             second: None,
             first_position: 0,
             second_position: 0,
+            third: None,
+            third_position: 0,
         }
     }
 
     pub(in crate::replay) fn merge(self, other: Self) -> Self {
-        assert!(self.second.is_none() && other.second.is_none());
+        assert!(self.second.is_none() && self.third.is_none() && other.third.is_none());
         assert_eq!(self.first_position, 0);
         assert_eq!(other.first_position, 0);
         Self {
             second: Some(other.first),
+            third: other.second,
             ..self
         }
     }
@@ -62,10 +70,20 @@ impl Iterator for CandidateCursor {
         let selected = match (first, second) {
             (Some(first), Some(second)) => first.min(second),
             (Some(index), None) | (None, Some(index)) => index,
-            (None, None) => return None,
+            (None, None) => usize::MAX,
         };
+        let third = self
+            .third
+            .as_ref()
+            .and_then(|indices| indices.get(self.third_position))
+            .copied();
+        let selected = third.map_or(selected, |third| selected.min(third));
+        if selected == usize::MAX {
+            return None;
+        }
         self.first_position += usize::from(first == Some(selected));
         self.second_position += usize::from(second == Some(selected));
+        self.third_position += usize::from(third == Some(selected));
         Some(selected)
     }
 }

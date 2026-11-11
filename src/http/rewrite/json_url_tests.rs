@@ -37,7 +37,7 @@ async fn rewrite(
         headers.insert(CONTENT_ENCODING, "gzip".parse()?);
     }
     apply(
-        config,
+        &CompiledRewrites::new(config)?,
         registry,
         &KubectlProxyManager::default(),
         "",

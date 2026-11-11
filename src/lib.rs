@@ -332,6 +332,7 @@ struct AppStateInner {
     interactions: gateway::http::interaction::Sessions,
     dependency_connections: DependencyConnections,
     kubectl_proxy_manager: KubectlProxyManager,
+    response_rewrites: http::rewrite::CompiledRewrites,
     recording_lifecycle: RecordingLifecycle,
     process_owned_dependencies: BackgroundDependencyMatcher,
     cache_snapshots: CacheSnapshotStore,
@@ -431,6 +432,8 @@ impl AppState {
         let ca = MitmCa::load_or_generate(&config.tls.ca_cert_path, &config.tls.ca_key_path)
             .context("failed to initialize MITM CA")?;
         let upstream_tls_config = build_upstream_tls_config(&ca)?;
+        let response_rewrites =
+            http::rewrite::CompiledRewrites::new(&config.http_response_rewrite)?;
         let client = http::client::new_proxy_client();
         let forwarded_http_client = http::client::new_unpooled_proxy_client();
 
@@ -456,6 +459,7 @@ impl AppState {
                 interactions: gateway::http::interaction::Sessions::default(),
                 dependency_connections: DependencyConnections::default(),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
+                response_rewrites,
                 recording_lifecycle,
                 process_owned_dependencies,
                 cache_snapshots,
@@ -605,6 +609,10 @@ impl AppState {
 
     pub(crate) fn dns_bypass_matcher(&self) -> &DomainMatcher {
         &self.inner.dns_bypass_matcher
+    }
+
+    pub(crate) fn response_rewrites(&self) -> &http::rewrite::CompiledRewrites {
+        &self.inner.response_rewrites
     }
 
     pub(crate) fn kubectl_proxy_manager(&self) -> &KubectlProxyManager {

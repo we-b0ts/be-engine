@@ -65,6 +65,7 @@ impl HttpCaptureContext {
             .saturating_duration_since(self.started)
             .as_millis();
         event.error = None;
+        self.targets.record_output(event.outcome);
         self.state
             .record_event_for_targets(RecorderEvent::HttpExchange(event), self.targets.clone());
         true
@@ -118,10 +119,21 @@ impl PendingHttpCapture {
         }
     }
 
-    pub(crate) async fn run<F: Future>(mut self, future: F) -> F::Output {
+    pub(crate) async fn run<F>(mut self, future: F) -> F::Output
+    where
+        F: Future<
+            Output = hyper::Response<
+                http_body_util::combinators::BoxBody<bytes::Bytes, std::io::Error>,
+            >,
+        >,
+    {
         let result = future.await;
         self.event = None;
-        result
+        crate::http::wire_events::record(
+            result,
+            self.targets.capture.clone(),
+            self.termination.clone(),
+        )
     }
 }
 
@@ -141,6 +153,9 @@ impl Drop for PendingHttpCapture {
                 "HTTP dependency capture cancelled without observed client termination".into(),
             );
             event.duration_ms = self.started.elapsed().as_millis();
+        }
+        if event.outcome.termination().is_some() {
+            self.targets.record_output(event.outcome);
         }
         self.state
             .record_event_for_targets(RecorderEvent::HttpExchange(event), self.targets.clone());

@@ -1,8 +1,7 @@
 use super::*;
 use crate::{
     dependency::observation::{
-        CaptureCoverage, RecordingInput, RecordingManifest, SemanticInventory,
-        SourceArtifactIdentity,
+        CaptureCoverage, RecordedCase, RecordingManifest, SemanticInventory, SourceArtifactIdentity,
     },
     e2e_run::{
         case_selection::{self, ReplayIteration},
@@ -95,7 +94,7 @@ fn fixture(root: &Path) -> Fixture {
         inputs: state
             .cases
             .iter()
-            .map(|case| RecordingInput {
+            .map(|case| RecordedCase {
                 case_id: case.case_id.parse().unwrap(),
                 path: case.case_id.clone(),
                 complete: true,
@@ -180,7 +179,7 @@ fn complete_unselected_methods_need_no_implementation_or_case_group_for_workflow
     let root = tempfile::tempdir().unwrap();
     let mut f = fixture(root.path());
     let id = Uuid::from_u128(999);
-    f.manifest.inputs.push(RecordingInput {
+    f.manifest.inputs.push(RecordedCase {
         case_id: id,
         path: id.to_string(),
         complete: true,
@@ -363,7 +362,7 @@ fn incomplete_unselected_source_inputs_are_never_hidden_by_a_clean_workflow_scop
         let mut manifest = f.manifest.clone();
         match mutation {
             0 => manifest.capture_complete = false,
-            1 => manifest.inputs.push(RecordingInput {
+            1 => manifest.inputs.push(RecordedCase {
                 case_id: Uuid::new_v4(),
                 path: "failed/unselected".into(),
                 complete: false,

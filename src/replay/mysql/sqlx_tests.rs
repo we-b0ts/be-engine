@@ -40,6 +40,7 @@ mod recorded_performance;
 mod rollback_tests;
 mod savepoints;
 mod select_time_tests;
+mod sequence;
 mod source_read_bridge;
 mod sql_values_tests;
 mod subquery_tests;

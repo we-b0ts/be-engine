@@ -52,6 +52,10 @@ impl ReplayRuntime {
                 None
             };
         let process_owned_dependencies = &config.process_owned_dependencies;
+        let event_source = root_dir.clone();
+        let sequence_catalog = tokio::task::spawn_blocking(move || sequence::load(&event_source))
+            .await
+            .context("Source event preparation task failed")??;
         let replay_artifact_dir = config
             .report_path
             .as_ref()
@@ -457,6 +461,12 @@ impl ReplayRuntime {
         let mut state = ReplayState {
             admission_epoch: 0,
             case_execution_plans: BTreeMap::new(),
+            sequence_catalog,
+            active_sequence: None,
+            run_sequence: None,
+            http_sequence: Default::default(),
+            http_sequence_claims: BTreeMap::new(),
+            sequence_missing: Vec::new(),
             batch_scope: attribution.batch_scope,
             startup_phase: Default::default(),
             dependency_attribution_snapshot: attribution.snapshot,
@@ -527,6 +537,8 @@ impl ReplayRuntime {
         // Lazy loading has no Case plans here, but already has run-owned
         // dependencies and the Redis lanes needed during Target startup.
         state.prepare_native_candidates();
+        state.prepare_run_sequence()?;
+        state.attach_run_sequence();
         for (case, source) in prepared_scopes {
             state.install_case_execution_plan(&case, source)?;
         }
@@ -574,6 +586,7 @@ impl ReplayRuntime {
             control::input_timing::prepare_source(&runtime.state, &case_id).await?;
             let mut state = runtime.state.lock().await;
             control::dependency_tail::activate(&mut state, &case_id)?;
+            state.activate_sequence(Some(&case_id));
         }
         Ok(runtime)
     }

@@ -109,11 +109,7 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
             let result = ownership
                 .termination
                 .serve(
-                    hyper::server::conn::http1::Builder::new()
-                        .half_close(true)
-                        .preserve_header_case(true)
-                        .title_case_headers(true)
-                        .serve_connection(io, service)
+                    traffic_protocol_http::HttpProvider::connection(io.into_inner(), service, true)
                         .with_upgrades(),
                 )
                 .await;
@@ -226,13 +222,11 @@ async fn serve_mitm_connection(
 
     let result = ownership
         .termination
-        .serve(
-            hyper::server::conn::http1::Builder::new()
-                .half_close(true)
-                .preserve_header_case(true)
-                .title_case_headers(true)
-                .serve_connection(io, service),
-        )
+        .serve(traffic_protocol_http::HttpProvider::connection(
+            io.into_inner(),
+            service,
+            true,
+        ))
         .await;
     ownership.finish(result).await
 }
@@ -455,7 +449,7 @@ async fn forward_and_record(
                     };
                     let mut discovered_tcp_targets = Vec::new();
                     match rewrite::apply(
-                        &state.config().http_response_rewrite,
+                        state.response_rewrites(),
                         state.dns_registry(),
                         state.kubectl_proxy_manager(),
                         state.ca().ca_cert_pem_ref(),
@@ -472,6 +466,7 @@ async fn forward_and_record(
                     .await
                     {
                         Ok(Some(rewritten)) => {
+                            targets.transformed(rewritten.transformation);
                             response_headers = rewritten.headers;
                             body_bytes = rewritten.body;
                             discovered_tcp_targets = rewritten.discovered_tcp_targets;

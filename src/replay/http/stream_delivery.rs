@@ -90,8 +90,11 @@ pub(super) async fn response(
             bound.wait_release().await?;
         }
     } else if timing == crate::replay::ReplayStreamTiming::Fast
+        && record.outcome.is_server_terminated()
+    {
+        cap_stream_intervals(&mut stream, 0);
+    } else if timing == crate::replay::ReplayStreamTiming::Fast
         && stream.complete
-        && status.is_success()
         && record.lifecycle_stop.is_none()
         && client_prefix.is_none()
         && server_close.is_none()
@@ -309,8 +312,28 @@ struct DeliveryCompletion {
 impl DeliveryCompletion {
     async fn apply(&mut self, result: Result<()>) {
         if let Some(detail) = self.detail.take() {
-            self.state.lock().await.finish_http_response(detail, result);
+            Self::commit(self.state.clone(), detail, result).await;
         }
+    }
+    async fn commit(
+        state: Arc<Mutex<ReplayState>>,
+        detail: MatchedHttpExchangeReport,
+        mut result: Result<()>,
+    ) {
+        let claim = state
+            .lock()
+            .await
+            .http_sequence_claims
+            .get(&detail.index)
+            .cloned();
+        if result.is_ok()
+            && let Some(claim) = claim
+        {
+            result = claim
+                .wait_complete(tokio::time::Instant::now() + std::time::Duration::from_secs(30))
+                .await;
+        }
+        state.lock().await.finish_http_response(detail, result);
     }
     fn finish(&mut self, result: Result<()>) {
         let Some(detail) = self.detail.take() else {
@@ -318,7 +341,7 @@ impl DeliveryCompletion {
         };
         let state = self.state.clone();
         tokio::spawn(async move {
-            state.lock().await.finish_http_response(detail, result);
+            Self::commit(state, detail, result).await;
         });
     }
 }

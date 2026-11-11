@@ -99,7 +99,12 @@ impl Session {
             };
             observation.dependency_activity(activity);
         }
-        observation.input(message, now)?;
+        let action = observation.input(message, now)?;
+        self.state.recorder().capture.input(
+            self.case.id,
+            action.sequence,
+            traffic_model::trace::InputKind::Message,
+        )?;
         Ok(())
     }
     fn now(&self) -> u64 {

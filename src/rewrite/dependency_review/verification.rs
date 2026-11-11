@@ -17,6 +17,25 @@ pub(super) struct ActualAttempt {
     report: Value,
 }
 
+impl ActualAttempt {
+    pub(super) fn missing_sequences(&self, source: &source::SourceSnapshot) -> BTreeSet<Uuid> {
+        let sequences: BTreeSet<_> = self.report["dependency_sequence_missing"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|missing| missing["expected"]["dependency_sequence"].as_u64())
+            .collect();
+        source
+            .exchanges
+            .iter()
+            .filter(|(id, exchange)| {
+                self.unused.contains(*id) && sequences.contains(&exchange.capture.sequence)
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+}
+
 pub(super) fn actual(
     root: &Path,
     state: &RewriteState,

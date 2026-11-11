@@ -1,0 +1,10 @@
+[package]
+name = "traffic-protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["io-util"] }

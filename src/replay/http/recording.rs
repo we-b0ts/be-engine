@@ -42,3 +42,27 @@ pub(super) fn visit_matching_or_all(
     }
     Ok(())
 }
+impl super::ReplayHttpExchange {
+    pub(in crate::replay) fn run_owned(&self) -> bool {
+        self.source.is_run_owned()
+    }
+    pub(in crate::replay) fn recorded_owner(
+        &self,
+    ) -> Option<traffic_model::attribution::DependencyOwner> {
+        Some(self.record.capture.as_ref()?.attribution.clone())
+    }
+    pub(in crate::replay) fn run_sequence(&self) -> Option<u64> {
+        (self.source.is_run_owned()
+            && self.shared_origin.is_none()
+            && !self.is_repeatable_preflight_probe())
+        .then(|| self.recorded_sequence())
+        .flatten()
+    }
+    pub(in crate::replay) fn recorded_sequence(&self) -> Option<u64> {
+        let capture = self.record.capture.as_ref()?;
+        (capture.semantic_required
+            && self.shared_origin.is_none()
+            && !self.is_repeatable_preflight_probe())
+        .then_some(capture.sequence)
+    }
+}

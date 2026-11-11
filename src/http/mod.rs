@@ -7,3 +7,4 @@ pub(crate) mod rewrite;
 pub(crate) mod sse;
 pub(crate) mod stream;
 pub(crate) mod termination;
+pub(crate) mod wire_events;

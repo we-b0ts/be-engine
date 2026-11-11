@@ -53,6 +53,11 @@ pub(super) async fn record_query_completion(
     let sequence = response_sequence.or(exchange_sequence);
     let ownership = sequence.and_then(|sequence| ownerships.take(sequence));
     let (response, exchange) = completion.into_parts();
+    if let Some(targets) = &ownership
+        && let Some(exchange) = &exchange
+    {
+        targets.record_output(exchange.outcome);
+    }
     if let Some(response) = response {
         record_event(
             state,

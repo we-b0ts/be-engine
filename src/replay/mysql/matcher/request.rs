@@ -97,7 +97,7 @@ impl ReplayState {
                 policy.request_contracts.retains_value_witnesses()
                     && policy.request_contracts.compiled_rules().is_some()
             }))
-        .then(|| vec![false; self.mysql.exchanges.len()]);
+        .then(std::collections::HashSet::new);
         let mut candidate_witness = None;
         if let Some(policy) = self
             .replay_policy
@@ -167,6 +167,10 @@ impl ReplayState {
             (ReplaySource::Process, false),
             (ReplaySource::Case, true),
         ] {
+            let sequence_index = self.mysql.lifecycle.sequence.expected_in(source);
+            if allow_hypotheses && sequence_index.is_some() {
+                break;
+            }
             let hypothesis = if allow_hypotheses {
                 // Explicit hypotheses may describe a different physical table.
                 // They still have to stay within the same Source time boundary.
@@ -198,10 +202,24 @@ impl ReplayState {
                 None
             };
             // Keep Case before run-owned traffic and respect an authoritative transaction end.
-            let case_window = (source == ReplaySource::Case && !allow_hypotheses)
-                .then_some(window.as_ref())
-                .flatten();
-            let candidates = if let Some((index, _)) = &hypothesis {
+            let case_window =
+                (source == ReplaySource::Case && !allow_hypotheses && sequence_index.is_none())
+                    .then_some(window.as_ref())
+                    .flatten();
+            let candidates = if let Some(expected) = &sequence_index {
+                let exempt =
+                    self.mysql
+                        .candidates
+                        .lookup_exempt(source, case, identity, Some(command));
+                let mut selected: Vec<_> = expected
+                    .iter()
+                    .copied()
+                    .chain(exempt.iter().copied())
+                    .collect();
+                selected.sort_unstable();
+                selected.dedup();
+                Some(std::sync::Arc::from(selected))
+            } else if let Some((index, _)) = &hypothesis {
                 Some(std::sync::Arc::from(vec![*index]))
             } else {
                 (transaction_end.is_none() && case_window.is_none()).then(|| {
@@ -229,6 +247,11 @@ impl ReplayState {
                 })
             };
             let indices = preferred_end
+                .filter(|index| {
+                    sequence_index.as_ref().is_none_or(|expected| {
+                        expected.contains(index) || self.mysql.recorded_sequence(*index).is_none()
+                    })
+                })
                 .into_iter()
                 .chain(
                     case_window
@@ -312,7 +335,7 @@ impl ReplayState {
                             // Strict, projected, and semantic passes may visit
                             // the same immutable Source occurrence. The request
                             // and candidate evidence are identical each time.
-                            && !std::mem::replace(&mut witnessed[index], true)
+                            && witnessed.insert(index)
                             && let (Some(policy), Some(case)) =
                                 (&self.replay_policy, active_case_id.as_deref())
                             && let Err(error) = contracts::record_request(

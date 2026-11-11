@@ -18,7 +18,7 @@ pub(crate) use diagnosis::observed_since;
 use diagnosis::{IoDiagnosis, IoLayer, IoOperation};
 #[cfg(test)]
 mod tests;
-pub(crate) use delivery::{DeliveryProgress, PrefixDelivery};
+pub(crate) use delivery::{DeliveryProgress, FlushReceipt, PrefixDelivery};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 #[derive(Clone)]

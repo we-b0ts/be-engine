@@ -159,7 +159,7 @@ async fn rewritten(
     let result = async {
         let mut bytes = response::collect_body(&mut upstream, deadline, recovery.as_mut()).await?;
         let targets = if let Some(rewritten) = rewrite::apply(
-            &context.state.config().http_response_rewrite,
+            context.state.response_rewrites(),
             context.state.dns_registry(),
             context.state.kubectl_proxy_manager(),
             context.state.ca().ca_cert_pem_ref(),

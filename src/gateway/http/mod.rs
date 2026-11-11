@@ -120,11 +120,7 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
 
             if let Err(err) = termination
                 .serve(
-                    hyper::server::conn::http1::Builder::new()
-                        .half_close(true)
-                        .preserve_header_case(true)
-                        .title_case_headers(true)
-                        .serve_connection(io, service)
+                    traffic_protocol_http::HttpProvider::connection(io.into_inner(), service, true)
                         .with_upgrades(),
                 )
                 .await

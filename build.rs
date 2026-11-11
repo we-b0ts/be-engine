@@ -8,7 +8,7 @@ const TARGET_RUNTIME_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e
 fn main() {
     println!("cargo:rerun-if-env-changed={BUILD_REVISION_ENV}");
     println!("cargo:rerun-if-env-changed=CARGO_MANIFEST_DIR");
-    for path in ["build.rs", "Cargo.toml", "Cargo.lock", "src"] {
+    for path in ["build.rs", "Cargo.toml", "Cargo.lock", "src", "crates"] {
         println!("cargo:rerun-if-changed={path}");
     }
     emit_git_rerun_paths();

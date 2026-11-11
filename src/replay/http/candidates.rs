@@ -10,6 +10,7 @@ use crate::replay::native_index::{
 pub(in crate::replay) struct Candidates {
     count: usize,
     index: ProtocolIndex,
+    exempt: ProtocolIndex,
     members: CaseMembership,
 }
 
@@ -18,12 +19,56 @@ impl Default for Candidates {
         Self {
             count: 0,
             index: ProtocolIndex::http(),
+            exempt: ProtocolIndex::http(),
             members: CaseMembership::default(),
         }
     }
 }
 
 impl Candidates {
+    pub(in crate::replay) fn register_exempt(
+        &mut self,
+        exchanges: &[ReplayHttpExchange],
+        indices: impl Iterator<Item = usize>,
+    ) {
+        for index in indices {
+            let exchange = &exchanges[index];
+            let exact = key(
+                exchange.source,
+                exchange.case_id.as_deref(),
+                exchange.identity.scheme,
+                &exchange.identity.target,
+                &exchange.record.method,
+                Some(&uri_path_only(&exchange.record.uri)),
+            );
+            let mut coarse = exact.clone();
+            coarse.path = None;
+            for mut key in [exact, coarse] {
+                self.exempt.register(NativeKey::Http(key.clone()), index);
+                if exchange.shared_origin.is_some() {
+                    key.scope = ScopePartition::Shared;
+                    self.exempt.register(NativeKey::Http(key), index);
+                }
+            }
+        }
+        self.exempt.seal();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_exempt(
+        &self,
+        source: ReplaySource,
+        case: Option<&str>,
+        scheme: HttpReplayScheme,
+        target: &TargetKey,
+        method: &str,
+        path: Option<&str>,
+    ) -> CandidateCursor {
+        let mut key = key(source, case, scheme, target, method, path);
+        let scoped = self.exempt.lookup(NativeQuery::Http(&key));
+        key.scope = ScopePartition::Shared;
+        scoped.merge(self.exempt.lookup(NativeQuery::Http(&key)))
+    }
     pub(in crate::replay) fn register(&mut self, exchanges: &[ReplayHttpExchange]) {
         if self.count > exchanges.len() {
             *self = Self::default();

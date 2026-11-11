@@ -281,6 +281,11 @@ impl Capture {
         if let Some(observed) = terminated {
             event.timestamp = crate::dependency::termination::observed_wall_time(observed.at);
             event.outcome = crate::DependencyExchangeOutcome::Terminated(observed.termination);
+            if self.error.is_none() {
+                self.context.targets.record_output(event.outcome);
+            }
+        } else if source_stop && let Some(capture) = &self.context.targets.capture {
+            capture.output(traffic_model::trace::OutputKind::TargetStop);
         }
         event.response_body = Some(crate::recorder::capture_body_with_original_len(
             &self.payload,

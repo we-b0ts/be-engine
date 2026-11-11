@@ -32,10 +32,18 @@ pub(super) async fn run_ordered_writer(
                 buffered.insert(sequence, (payload, completion));
                 while let Some((payload, completion)) = buffered.remove(&next_sequence) {
                     if client_open {
+                        let receipt = completion.as_ref().and_then(|(exchange, _)| {
+                            exchange
+                                .targets
+                                .prepare_output(traffic_model::trace::OutputKind::End)
+                        });
                         let (written, result) = write_response(&client_write, &payload).await;
                         bytes += written as u64;
                         match result {
                             Ok(()) => {
+                                if let Some(receipt) = receipt {
+                                    receipt.commit();
+                                }
                                 if let Some((exchange, response_kind)) = completion {
                                     record_exchange(
                                         &state,
@@ -152,6 +160,18 @@ pub(super) async fn run_ordered_writer(
                 // It is not another peer FIN/RST, and repeating the shutdown
                 // can turn an idle clean connection into a false capture error.
                 if !termination.engine_stopped() {
+                    let receipts: Vec<_> = exchanges
+                        .iter()
+                        .filter_map(|exchange| {
+                            let (outcome, _) = termination.outcome_since(exchange.started)?;
+                            let terminal = outcome.termination()?;
+                            exchange.targets.prepare_output(
+                                traffic_model::trace::OutputKind::Terminated {
+                                    termination: terminal,
+                                },
+                            )
+                        })
+                        .collect();
                     let close = if reset {
                         client_control.reset()
                     } else {
@@ -165,6 +185,9 @@ pub(super) async fn run_ordered_writer(
                         && error.kind() != std::io::ErrorKind::NotConnected
                     {
                         return Err(error.into());
+                    }
+                    for receipt in receipts {
+                        receipt.commit();
                     }
                 }
                 client_open = false;

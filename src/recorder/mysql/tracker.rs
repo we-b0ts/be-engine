@@ -11,6 +11,7 @@ use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent};
 
 use super::response::MysqlResponseTracker;
 use super::semantic::{MysqlExchangeContext, MysqlSemanticTracker};
+use traffic_protocol_mysql::response_progress::{ResponseBoundary, ResponseProgress};
 
 const MAX_PENDING_QUERIES: usize = 64;
 const MAX_PENDING_QUERY_BYTES: usize = 16 * 1024 * 1024;
@@ -21,12 +22,14 @@ pub(super) struct MysqlQueryTracker {
     pending_requests: VecDeque<PendingRequest>,
     pending_query_bytes: usize,
     server_message: MysqlPacketAssembler,
+    output: Option<(u64, ResponseBoundary)>,
 }
 
 struct PendingRequest {
     query_sequence: u64,
     payload_bytes: usize,
     started: Instant,
+    progress: ResponseProgress,
 }
 
 #[derive(Default)]
@@ -48,6 +51,7 @@ impl MysqlQueryTracker {
             pending_requests: VecDeque::new(),
             pending_query_bytes: 0,
             server_message: MysqlPacketAssembler::default(),
+            output: None,
         }
     }
 
@@ -97,6 +101,7 @@ impl MysqlQueryTracker {
         self.pending_requests.push_back(PendingRequest {
             query_sequence,
             payload_bytes: packet.payload.len(),
+            progress: ResponseProgress::new(&command.command_name),
             started: self
                 .semantic
                 .pending_started_at()
@@ -120,6 +125,10 @@ impl MysqlQueryTracker {
         packet: &MysqlPacket,
     ) -> Result<MysqlQueryCompletion> {
         let message = self.server_message.push(packet)?;
+        self.output = message.as_deref().and_then(|message| {
+            let pending = self.pending_requests.front_mut()?;
+            Some((pending.query_sequence, pending.progress.observe(message)?))
+        });
         if let Some(message) = &message {
             self.semantic.observe_packet(message);
         }
@@ -132,6 +141,10 @@ impl MysqlQueryTracker {
 
     pub(super) fn observe_delivery(&mut self, packet: &MysqlPacket) {
         self.semantic.observe_delivery(packet);
+    }
+
+    pub(super) fn take_output(&mut self) -> Option<(u64, ResponseBoundary)> {
+        self.output.take()
     }
 
     pub(super) fn finish_active(&mut self, status: &str) -> Result<MysqlQueryCompletion> {

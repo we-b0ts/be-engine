@@ -365,7 +365,10 @@ fn mixed_capture_plugins_and_compact_declarations_keep_authored_precedence() {
     let NativeEffect::CaptureHttpResponse(effect) = &mut plugin.effect else {
         panic!("capture owner");
     };
-    effect.contract = CaptureResponseContract::VintageCacheConfig;
+    effect.contract = CaptureResponseContract::Kubeconfig {
+        kubectl_binary: "kubectl".into(),
+        proxy_listen: "127.0.0.1:8001".parse().unwrap(),
+    };
     for (rules, compact_count) in [
         (vec![first[0].clone(), plugin.clone(), second[0].clone()], 1),
         (vec![plugin.clone(), first[0].clone(), second[0].clone()], 1),

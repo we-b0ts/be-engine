@@ -102,7 +102,9 @@ pub(super) fn publish(case: &Path, raw: &str) -> PathBuf {
         };
         let started_at = "2026-10-01T00:00:00Z".parse().unwrap();
         event["capture"] = serde_json::to_value(CaptureMetadata {
+            transformations: Vec::new(),
             exchange_id,
+            sequence: index as u64 + 1,
             process_epoch: epoch,
             phase: CapturePhase::Runtime,
             observed_case: Some(case_id),
@@ -213,7 +215,7 @@ pub(super) fn publish(case: &Path, raw: &str) -> PathBuf {
             records: count,
             unattributed_records: 0,
             semantic_inventory: inventory,
-            inputs: vec![RecordingInput {
+            inputs: vec![RecordedCase {
                 case_id,
                 path: case.strip_prefix(root).unwrap().to_string_lossy().into(),
                 complete: true,

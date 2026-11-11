@@ -102,13 +102,11 @@ async fn serve_http_connection(
     });
 
     let result = owner
-        .serve(
-            hyper::server::conn::http1::Builder::new()
-                .half_close(true)
-                .preserve_header_case(true)
-                .title_case_headers(true)
-                .serve_connection(io, service),
-        )
+        .serve(traffic_protocol_http::HttpProvider::connection(
+            io.into_inner(),
+            service,
+            true,
+        ))
         .await;
     if owner.server_write_half_closed() {
         owner.retain_read_half().await?;
@@ -194,13 +192,11 @@ async fn serve_https_mitm_connection(
     });
 
     let result = owner
-        .serve(
-            hyper::server::conn::http1::Builder::new()
-                .half_close(true)
-                .preserve_header_case(true)
-                .title_case_headers(true)
-                .serve_connection(io, service),
-        )
+        .serve(traffic_protocol_http::HttpProvider::connection(
+            io.into_inner(),
+            service,
+            true,
+        ))
         .await;
     if owner.server_write_half_closed() {
         owner.retain_read_half().await?;
@@ -429,7 +425,7 @@ async fn handle_http_request(
                     };
                     let mut discovered_tcp_targets = Vec::new();
                     match rewrite::apply(
-                        &state.config().http_response_rewrite,
+                        state.response_rewrites(),
                         state.dns_registry(),
                         state.kubectl_proxy_manager(),
                         state.ca().ca_cert_pem_ref(),
@@ -446,6 +442,7 @@ async fn handle_http_request(
                     .await
                     {
                         Ok(Some(rewritten)) => {
+                            targets.transformed(rewritten.transformation);
                             response_headers = rewritten.headers;
                             body_bytes = rewritten.body;
                             discovered_tcp_targets = rewritten.discovered_tcp_targets;
@@ -790,7 +787,7 @@ async fn handle_https_request(
                     };
                     let mut discovered_tcp_targets = Vec::new();
                     match rewrite::apply(
-                        &state.config().http_response_rewrite,
+                        state.response_rewrites(),
                         state.dns_registry(),
                         state.kubectl_proxy_manager(),
                         state.ca().ca_cert_pem_ref(),
@@ -807,6 +804,7 @@ async fn handle_https_request(
                     .await
                     {
                         Ok(Some(rewritten)) => {
+                            targets.transformed(rewritten.transformation);
                             response_headers = rewritten.headers;
                             body_bytes = rewritten.body;
                             discovered_tcp_targets = rewritten.discovered_tcp_targets;

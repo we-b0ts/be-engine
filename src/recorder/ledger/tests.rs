@@ -60,6 +60,41 @@ async fn records(state: &AppState) -> Vec<serde_json::Value> {
 }
 
 #[tokio::test]
+async fn admission_sequences_survive_reverse_completion_in_the_real_writer() {
+    let (_temp, state) = state().await;
+    let first = start(&state);
+    let second = start(&state);
+    state.record_event_for_targets(failure(), second);
+    state.record_event_for_targets(failure(), first);
+    state.recorder().finish_run().await.unwrap();
+
+    let rows = records(&state).await;
+    assert_eq!(rows[0]["capture"]["sequence"], 2);
+    assert_eq!(rows[1]["capture"]["sequence"], 1);
+    let raw =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("dependency-lifecycle.jsonl"))
+            .await
+            .unwrap();
+    let events = raw
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let mut sequences = events
+        .iter()
+        .map(|event| event["sequence"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    sequences.sort_unstable();
+    assert_eq!(sequences, (1..=events.len() as u64).collect::<Vec<_>>());
+    assert!(events.iter().all(|event| event["offset_micros"].is_u64()));
+    let admitted = events
+        .iter()
+        .filter(|event| event["event_type"] == "capture_started")
+        .map(|event| event["dependency_sequence"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(admitted, [1, 2]);
+}
+
+#[tokio::test]
 async fn unattributed_requests_survive_disabled_traffic_and_have_unique_terminal_receipts() {
     let (_temp, state) = state().await;
     state.record_event_for_targets(failure(), start(&state));

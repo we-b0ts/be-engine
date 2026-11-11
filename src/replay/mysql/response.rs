@@ -4,6 +4,16 @@ pub(in crate::replay) async fn write_response(
     row_encoding: ResultRowEncoding,
     status_flags: u16,
 ) -> Result<()> {
+    write_response_ordered(stream, response, row_encoding, status_flags, None).await
+}
+
+pub(super) async fn write_response_ordered(
+    stream: &mut (impl MysqlReplayIo + ?Sized),
+    response: &RecordedMysqlResponse,
+    row_encoding: ResultRowEncoding,
+    status_flags: u16,
+    sequence: Option<&traffic_replay::SequenceClaim>,
+) -> Result<()> {
     let kind = match response.status.as_str() {
         "resultset" => "resultset",
         "ok" => "ok",
@@ -12,12 +22,13 @@ pub(in crate::replay) async fn write_response(
     super::wire_diagnostics::response_kind(kind, Some(status_flags));
     match response.status.as_str() {
         "resultset" => {
-            write_resultset(
+            write_resultset_ordered(
                 stream,
                 &response.columns,
                 &response.rows,
                 row_encoding,
                 status_flags,
+                sequence,
             )
             .await
         }
@@ -179,12 +190,13 @@ fn prepare_messages(
         .chain((!metadata.columns.is_empty()).then(eof))
 }
 
-pub(in crate::replay) async fn write_resultset(
+async fn write_resultset_ordered(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     columns: &[RecordedMysqlColumn],
     rows: &[Vec<RecordedMysqlValue>],
     row_encoding: ResultRowEncoding,
     status_flags: u16,
+    sequence: Option<&traffic_replay::SequenceClaim>,
 ) -> Result<()> {
     if columns.is_empty() {
         return write_packet_and_flush(
@@ -226,19 +238,54 @@ pub(in crate::replay) async fn write_resultset(
     )
     .await?;
 
-    for row in rows {
-        let payload = match row_encoding {
-            ResultRowEncoding::Text => text_row_payload(row),
-            ResultRowEncoding::Binary => binary_row_payload(columns, row),
-        }?;
-        sequence_id = write_packet(
-            stream,
-            MysqlPacket {
-                sequence_id,
-                payload,
-            },
-        )
-        .await?;
+    // The prepared Source trace decides whether this response exposes logical
+    // row boundaries. Ordinary one-message responses retain one wire receipt.
+    let rows_sequence = sequence
+        .filter(|claim| claim.reserved_kind() == Some(traffic_replay::EventKind::ResponseHeaders));
+    if let Some(claim) = rows_sequence {
+        flush_response(stream, "failed to flush MySQL result metadata").await?;
+        claim.publish()?;
+    }
+    let mut next_row = 0;
+    while next_row < rows.len() {
+        let count = if let Some(claim) = rows_sequence {
+            claim
+                .wait_delivery(tokio::time::Instant::now() + std::time::Duration::from_secs(30))
+                .await?;
+            let count = claim.consecutive_parts(rows.len() - next_row);
+            ensure!(count > 0, "MySQL row has no recorded output boundary");
+            count
+        } else {
+            rows.len() - next_row
+        };
+        for row in &rows[next_row..next_row + count] {
+            let payload = match row_encoding {
+                ResultRowEncoding::Text => text_row_payload(row),
+                ResultRowEncoding::Binary => binary_row_payload(columns, row),
+            }?;
+            sequence_id = write_packet(
+                stream,
+                MysqlPacket {
+                    sequence_id,
+                    payload,
+                },
+            )
+            .await?;
+        }
+        if let Some(claim) = rows_sequence {
+            flush_response(stream, "failed to flush MySQL result rows").await?;
+            claim.publish_parts(count)?;
+        }
+        next_row += count;
+    }
+    if let Some(claim) = rows_sequence {
+        claim
+            .wait_delivery(tokio::time::Instant::now() + std::time::Duration::from_secs(30))
+            .await?;
+        ensure!(
+            claim.reserved_kind() == Some(traffic_replay::EventKind::ResponseEnd),
+            "MySQL result has remaining recorded rows"
+        );
     }
     write_packet(
         stream,

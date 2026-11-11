@@ -302,7 +302,24 @@ impl ReplayState {
         detail: MatchedHttpExchangeReport,
         result: Result<()>,
     ) {
+        let sequence = self.http_sequence_claims.remove(&detail.index);
         let result = result.and_then(|()| {
+            if let Some(sequence) = &sequence {
+                if sequence.reserved_kind().is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        traffic_replay::EventKind::ClientTermination
+                            | traffic_replay::EventKind::ServerTermination
+                            | traffic_replay::EventKind::TargetStop
+                    )
+                }) {
+                    sequence.publish()?;
+                }
+                anyhow::ensure!(
+                    sequence.complete(),
+                    "HTTP response has no final wire sequence receipt"
+                );
+            }
             contracts::time_copies::commit(
                 self.replay_policy.as_ref(),
                 &mut self.http_exchanges[detail.index],
@@ -315,6 +332,9 @@ impl ReplayState {
                 self.complete_http_exchange(detail);
             }
             Err(error) => {
+                if let Some(sequence) = &sequence {
+                    sequence.fail();
+                }
                 self.http_exchanges[detail.index].time_copy_delivery = None;
                 self.http_exchanges[detail.index].status = ReplayExchangeStatus::Failed;
                 self.refresh_http_global_report(detail.index);

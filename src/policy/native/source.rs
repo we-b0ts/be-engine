@@ -48,11 +48,9 @@ pub enum CaptureResponseContract {
         kubectl_binary: String,
         proxy_listen: SocketAddr,
     },
-    VintageNaming {
-        services: Vec<String>,
-        clusters: Vec<String>,
+    Documents {
+        rules: Vec<traffic_response_rewrite::DocumentRule>,
     },
-    VintageCacheConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -11,6 +11,7 @@ mod ownership_impact;
 mod projection;
 mod queries;
 mod rules;
+pub(in crate::rewrite) mod sequence;
 mod snapshot;
 mod socketio_tail;
 mod source;

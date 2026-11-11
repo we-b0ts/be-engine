@@ -397,6 +397,12 @@ impl RedisReplayState {
                 return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
             }
             PreferredMatch::NotFound => {
+                if let Some(expected) = self.lifecycle.sequence.expected_index() {
+                    return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                        reason: expected.map_or_else(|| "recorded dependency predecessor is pending".into(),
+                            |index| format!("request differs from next recorded Redis dependency at index {index}")),
+                    });
+                }
                 if let Some(expected) = expected_index {
                     let exchange = &self.exchanges[expected];
                     let fields = redis_mismatch_fields(

@@ -54,6 +54,7 @@ mod read_back_tests;
 pub(in crate::replay) mod read_commutation;
 mod report_inventory;
 mod request_order;
+mod sequence;
 pub(crate) mod shared_read;
 mod snapshot_seed;
 mod startup;
@@ -207,7 +208,7 @@ struct MatchedRedisExchange {
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
     pub(in crate::replay) run_value_scopes: BTreeMap<Uuid, Arc<str>>,
-    lifecycle: Lifecycle,
+    pub(in crate::replay) lifecycle: Lifecycle,
     timing_deliveries: input_timing::Deliveries,
     activity_refresh: activity::ActivityRefreshes,
     pub(super) shared_source_directories: BTreeMap<String, PathBuf>,
@@ -606,9 +607,35 @@ async fn serve_connection(
     let mut username: Option<String> = None;
     let mut connection_binding = CaseConnectionBinding::default();
     let (push_tx, mut push_rx) = tokio::sync::mpsc::channel::<pubsub::Delivery>(256);
-    let mut queued = None;
+    let mut queued = pipeline::Queue::default();
     loop {
-        let (read, request_started) = match queued.take() {
+        if let Some((command, matched, binding, started)) = queued.admissions.pop().await? {
+            let Ok(matched) = matched else {
+                break;
+            };
+            connection_binding = binding;
+            let request = pipeline::Request {
+                state: &state,
+                target: &target_key,
+                client_id,
+                resp_version,
+                database,
+                username: username.as_deref(),
+                command: &command,
+                started,
+            };
+            request
+                .await_sequence(&mut reader, &connection_binding, &mut queued, &matched)
+                .await?;
+            if request
+                .deliver(&mut reader, &control, &push_tx, &matched)
+                .await?
+            {
+                break;
+            }
+            continue;
+        }
+        let (read, request_started) = match queued.frame.take() {
             Some(queued) => queued,
             None => {
                 let read = tokio::select! {

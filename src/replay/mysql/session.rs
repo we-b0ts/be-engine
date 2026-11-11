@@ -99,6 +99,7 @@ pub(super) async fn deliver_matched(
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
     let _delivery = matched.claim.guard();
+    matched.claim.wait_sequence_delivery().await?;
     if let Some(owner) = &matched.hypothesis_owner
         && let Err(error) = owner.await_hypotheses_durable().await
     {
@@ -116,6 +117,7 @@ pub(super) async fn deliver_matched(
             &matched,
             session.request_started,
             row_encoding,
+            session.fast_response_timing,
         )
         .await
         {
@@ -145,6 +147,7 @@ pub(super) async fn deliver_matched(
             &session.control,
             session.request_started,
             row_encoding,
+            session.fast_response_timing,
         )
         .await;
         match result {
@@ -226,11 +229,12 @@ pub(super) async fn deliver_matched(
             .fail_exchange(&matched, &session.identity(), error);
         return Err(anyhow!(error));
     }
-    if let Err(error) = write_response(
+    if let Err(error) = super::response::write_response_ordered(
         stream,
         &matched.record.response,
         row_encoding,
         session.status_flags,
+        matched.claim.sequence(),
     )
     .await
     {

@@ -149,6 +149,48 @@ async fn server_reset_is_a_real_reset_and_consumes_failure_exchange() {
 }
 
 #[tokio::test]
+async fn fast_compresses_redis_server_fin_and_reset_with_real_delivery() {
+    for kind in [TerminationKind::Eof, TerminationKind::Reset] {
+        let prefix = if kind == TerminationKind::Eof {
+            "$5\r\npar"
+        } else {
+            ""
+        };
+        let (_temp, mut client, state, task) = fixture(dependency(
+            "GET",
+            termination(TerminationSide::Server, kind),
+            prefix,
+            30_000,
+        ))
+        .await;
+        state.lock().await.stream_timing = Some(crate::replay::ReplayStreamTiming::Fast);
+        client.write_all(GET).await.unwrap();
+        let mut received = Vec::new();
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut received))
+                .await
+                .unwrap();
+        if kind == TerminationKind::Eof {
+            result.unwrap();
+            assert_eq!(received, prefix.as_bytes());
+            assert!(!task.is_finished());
+            client.shutdown().await.unwrap();
+        } else {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                std::io::ErrorKind::ConnectionReset
+            );
+        }
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
+    }
+}
+
+#[tokio::test]
 async fn client_eof_is_observed_without_server_initiating_close() {
     let (_temp, mut client, state, task) = fixture(dependency(
         "GET",

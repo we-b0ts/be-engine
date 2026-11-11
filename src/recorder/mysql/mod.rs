@@ -525,6 +525,7 @@ pub(crate) async fn handle_connected_mysql(
                 } else {
                     Default::default()
                 };
+                let output = s2c_query_tracker.lock().await.take_output();
                 if s2c_termination.snapshot().is_some_and(|observed| {
                     observed.termination.side == TerminationSide::Client
                         && observed.termination.kind == crate::dependency::TerminationKind::Reset
@@ -547,12 +548,38 @@ pub(crate) async fn handle_connected_mysql(
                 }
                 let response_complete = !completion.is_empty();
                 upstream_read.begin_capture(0);
-                let write_result = {
+                let (write_result, receipt) = {
                     let mut client_write = s2c_client_write.lock().await;
-                    write_packet(&mut *client_write, &packet).await
+                    use traffic_model::trace::OutputKind;
+                    use traffic_protocol_mysql::response_progress::ResponseBoundary;
+                    let boundary = output
+                        .map(|(sequence, boundary)| {
+                            (
+                                sequence,
+                                match boundary {
+                                    ResponseBoundary::Headers => OutputKind::Headers,
+                                    ResponseBoundary::Row => OutputKind::Part,
+                                },
+                            )
+                        })
+                        .or_else(|| {
+                            completion
+                                .sequences()
+                                .0
+                                .map(|sequence| (sequence, OutputKind::End))
+                        });
+                    let receipt = boundary.and_then(|(sequence, output)| {
+                        s2c_dependency_ownerships
+                            .get(sequence)?
+                            .prepare_output(output)
+                    });
+                    (write_packet(&mut *client_write, &packet).await, receipt)
                 };
                 match write_result {
                     Ok(()) => {
+                        if let Some(receipt) = receipt {
+                            receipt.commit();
+                        }
                         if response_complete {
                             completion.mark_delivered();
                             record_query_completion(

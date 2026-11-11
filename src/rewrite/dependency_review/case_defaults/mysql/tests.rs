@@ -16,7 +16,7 @@ fn event(seq: u64, owner: Option<Uuid>, before: u16, after: u16) -> Value {
         "params":null,"outcome":"response","server_status_before":before,"parse_warnings":[],
         "response":{"status":"ok","server_status":after,"error_code":null,"error_message":null,
             "affected_rows":0,"last_insert_id":0,"row_count":0,"rows_truncated":false,"rows":[],"columns":[]},
-        "capture":{"exchange_id":Uuid::from_u128(u128::from(seq)+100),"effect_index":2,
+        "capture":{"sequence":seq,"exchange_id":Uuid::from_u128(u128::from(seq)+100),"effect_index":2,
             "process_epoch":Uuid::from_u128(20),"phase":"runtime","started_at":at,
             "semantic_required":true,"observed_case":case(),"admitted_case":owner,
             "matched_rule_id":null,"matched_rule_ids":[],

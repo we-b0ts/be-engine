@@ -52,7 +52,10 @@ pub(super) struct ResponseRewrite {
     pub host: String,
     pub method: String,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub json_urls: Vec<Annotated<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<traffic_response_rewrite::DocumentRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub status_codes: Vec<u16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -76,6 +79,7 @@ pub(super) struct Request {
 pub(super) struct Capture {
     pub name: Option<String>,
     pub capture_urls: Vec<Annotated<String>>,
+    pub documents: Vec<traffic_response_rewrite::DocumentRule>,
     pub status_codes: Vec<u16>,
     pub content_types: Vec<String>,
 }
@@ -105,6 +109,7 @@ impl From<ResponseRewrite> for Request {
             response: Some(Capture {
                 name: rewrite.name,
                 capture_urls: rewrite.json_urls,
+                documents: rewrite.documents,
                 status_codes: rewrite.status_codes,
                 content_types: rewrite.content_types,
             }),

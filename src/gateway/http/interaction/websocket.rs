@@ -130,7 +130,7 @@ pub(super) async fn dispatch(
             .state
             .recorder()
             .capture_request_headers(&parts.headers)?;
-        session
+        let action = session
             .observation
             .lock()
             .expect("interaction observation poisoned")
@@ -139,6 +139,11 @@ pub(super) async fn dispatch(
                 recorded_headers,
                 session.started.elapsed(),
             )?;
+        session.state.recorder().capture.input(
+            session.case.id,
+            action.sequence,
+            traffic_model::trace::InputKind::Upgrade,
+        )?;
     } else {
         *session
             .response
@@ -339,7 +344,7 @@ fn observe(session: &SessionRef, message: &Message, input: bool) -> Result<()> {
             );
     }
     if input && let Message::Close(frame) = message {
-        session
+        let action = session
             .observation
             .lock()
             .expect("interaction observation poisoned")
@@ -351,6 +356,11 @@ fn observe(session: &SessionRef, message: &Message, input: bool) -> Result<()> {
                     .to_owned(),
                 session.started.elapsed(),
             )?;
+        session.state.recorder().capture.input(
+            session.case.id,
+            action.sequence,
+            traffic_model::trace::InputKind::ClientClose,
+        )?;
     }
     let wire = match message {
         Message::Text(text) => Some(WireMessage::text(text.as_str())),

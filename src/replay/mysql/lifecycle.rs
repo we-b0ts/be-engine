@@ -1,7 +1,6 @@
 //! Complete admitted SQL requests interrupted only by the Source lifecycle.
 use super::*;
 use crate::replay::control::dependency_tail::RecordedReference;
-use tokio::io::AsyncWriteExt;
 
 impl RecordedMysqlExchange {
     pub(in crate::replay) fn authorize_lifecycle_cleanup(&mut self) -> Result<()> {
@@ -58,6 +57,7 @@ pub(super) async fn deliver(
     matched: &MatchedExchange,
     started: tokio::time::Instant,
     row_encoding: ResultRowEncoding,
+    fast: bool,
 ) -> Result<()> {
     let case = matched
         .report
@@ -80,11 +80,8 @@ pub(super) async fn deliver(
         .async_cleanup_gate(case, reference)
         .context("MySQL request has no authenticated async cleanup context")?;
     let prefix = super::termination::prefix_packets(matched, row_encoding)?;
-    for (offset, raw) in prefix {
-        tokio::time::sleep_until(started + std::time::Duration::from_millis(offset)).await;
-        stream.write_all(&raw).await?;
-        stream.flush().await?;
-    }
+    super::termination::deliver_prefix(stream, matched, started, fast, prefix).await?;
+    matched.claim.wait_sequence_delivery().await?;
     {
         let mut replay = state.lock().await;
         let mysql = &mut replay.mysql;

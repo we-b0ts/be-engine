@@ -346,7 +346,10 @@ fn changing_a_response_capture_keeps_plugin_precedence_and_untouched_typed_facts
     document.rules.push(
         response(
             "a-fallback-plugin",
-            n::CaptureResponseContract::VintageCacheConfig,
+            n::CaptureResponseContract::Kubeconfig {
+                kubectl_binary: "kubectl".into(),
+                proxy_listen: "127.0.0.1:8001".parse().unwrap(),
+            },
         )
         .into(),
     );

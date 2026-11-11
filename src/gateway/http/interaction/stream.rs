@@ -114,11 +114,16 @@ pub(super) async fn forward(
 }
 
 fn client_cancelled(session: &SessionRef) -> Result<()> {
-    session
+    let action = session
         .observation
         .lock()
         .expect("interaction observation poisoned")
         .client_close(None, String::new(), session.started.elapsed())?;
+    session.state.recorder().capture.input(
+        session.case.id,
+        action.sequence,
+        traffic_model::trace::InputKind::ClientClose,
+    )?;
     session.request_close(EndReason::ClientClose);
     Ok(())
 }

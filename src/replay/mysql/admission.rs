@@ -30,6 +30,22 @@ struct NativeRequest<'a> {
 impl DependencyRequestAdapter for NativeRequest<'_> {
     type Matched = MatchedExchange;
     type Error = &'static str;
+    fn sequence_request_bytes(&self) -> Option<usize> {
+        let params = self
+            .params
+            .into_iter()
+            .flatten()
+            .map(|value| {
+                value.kind.len()
+                    + value.raw.as_ref().map_or(0, |raw| raw.data.len())
+                    + value
+                        .value
+                        .as_ref()
+                        .map_or(0, |value| value.as_str().map_or(32, str::len))
+            })
+            .sum::<usize>();
+        Some(self.command.len() + self.sql.map_or(0, str::len) + params)
+    }
 
     fn observe_once(&mut self, state: &mut ReplayState) -> RequestAdmission {
         let business = matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE");
@@ -104,6 +120,19 @@ impl DependencyRequestAdapter for NativeRequest<'_> {
     fn interrupted(&self, reason: &'static str) -> &'static str {
         self.terminal_reason.set(Some(reason));
         reason
+    }
+    fn sequence_wait_allowed(&self, _state: &ReplayState, error: &Self::Error) -> bool {
+        self.recorded_rejection.is_none()
+            && !matches!(
+                *error,
+                "MySQL ping is handled by the replay server"
+                    | "no finite MySQL prepare candidate"
+                    | "no finite MySQL control candidate"
+            )
+            && !self.sql.is_some_and(|sql| {
+                super::session_setup::is_mysql_session_setup_sql(sql)
+                    && builtin_response(sql, self.session.database.as_deref()).is_some()
+            })
     }
 
     fn on_selected(

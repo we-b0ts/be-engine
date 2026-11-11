@@ -12,7 +12,6 @@ use crate::dependency::{TerminationKind, TerminationScope};
 
 const CLIENT_TERMINATION_EARLY_TOLERANCE: Duration = Duration::from_millis(50);
 const CLIENT_TERMINATION_LATE_TOLERANCE: Duration = Duration::from_secs(1);
-const FAST_RESPONSE_MIN_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum ReplayExchangeStatus {
@@ -46,6 +45,7 @@ impl ReplayExchangeStatus {
 pub(super) struct ReplayExchangeTiming {
     duration: Duration,
     outcome: DependencyExchangeOutcome,
+    fast_server: bool,
 }
 
 impl ReplayExchangeTiming {
@@ -53,6 +53,7 @@ impl ReplayExchangeTiming {
         Self {
             duration: Duration::from_millis(duration_ms),
             outcome,
+            fast_server: false,
         }
     }
 
@@ -60,8 +61,20 @@ impl ReplayExchangeTiming {
         self.outcome
     }
 
+    pub(super) fn for_replay(mut self, fast: bool) -> Self {
+        if fast && self.outcome.is_server_terminated() {
+            self.duration = Duration::ZERO;
+            self.fast_server = true;
+        }
+        self
+    }
+
     pub(super) fn termination_deadline(self, started: Instant) -> Instant {
-        started + self.duration + CLIENT_TERMINATION_LATE_TOLERANCE
+        if self.fast_server {
+            started + super::FAST_CASE_TIMEOUT
+        } else {
+            started + self.duration + CLIENT_TERMINATION_LATE_TOLERANCE
+        }
     }
 
     pub(super) fn response_deadline(self, started: Instant) -> Instant {
@@ -105,7 +118,7 @@ impl ReplayExchangeTiming {
     }
 
     pub(super) async fn delay_response_from_request(self, started: Instant, fast: bool) {
-        if fast && self.duration < FAST_RESPONSE_MIN_DELAY {
+        if fast {
             return;
         }
         let deadline = self.response_deadline(started);
@@ -135,8 +148,8 @@ impl ReplayExchangeTiming {
         loop {
             let count = tokio::select! {
                 biased;
-                _ = tokio::time::sleep_until(deadline) => return Ok(inputs),
                 result = reader.read(&mut bytes) => result?,
+                _ = tokio::time::sleep_until(deadline) => return Ok(inputs),
             };
             anyhow::ensure!(
                 count != 0,
@@ -340,8 +353,10 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn fast_response_skips_only_delays_under_ten_milliseconds() {
-        for (duration_ms, fast, expected_ms) in [(9, true, 0), (10, true, 10), (9, false, 9)] {
+    async fn fast_response_compresses_recorded_response_delays() {
+        for (duration_ms, fast, expected_ms) in
+            [(9, true, 0), (10, true, 0), (1_000, true, 0), (9, false, 9)]
+        {
             let timing = ReplayExchangeTiming::from_recorded(
                 duration_ms,
                 DependencyExchangeOutcome::Response,
@@ -352,6 +367,54 @@ mod tests {
             assert_eq!(elapsed.is_zero(), expected_ms == 0);
             assert!(elapsed >= Duration::from_millis(expected_ms));
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fast_server_deadline_compresses_delay_and_observes_ready_client_eof() {
+        let timing = ReplayExchangeTiming::from_recorded(
+            30_000,
+            DependencyExchangeOutcome::Terminated(DependencyTermination {
+                side: TerminationSide::Server,
+                kind: TerminationKind::Eof,
+                scope: TerminationScope::WriteHalf,
+            }),
+        )
+        .for_replay(true);
+        let started = Instant::now();
+        let (mut peer, mut reader) = tokio::io::duplex(16);
+        assert!(
+            timing
+                .await_server_deadline(&mut reader, started, 16)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(started.elapsed() < Duration::from_millis(1));
+        assert_eq!(
+            timing.termination_deadline(started),
+            started + super::super::FAST_CASE_TIMEOUT
+        );
+        peer.shutdown().await.unwrap();
+        let error = timing
+            .await_server_deadline(&mut reader, started, 16)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Target closed"));
+    }
+
+    #[test]
+    fn fast_retains_client_cancellation_timing() {
+        let timing = ReplayExchangeTiming::from_recorded(
+            30_000,
+            DependencyExchangeOutcome::ClientTerminated,
+        )
+        .for_replay(true);
+        assert!(timing.validate_client_termination(Duration::ZERO).is_err());
+        assert!(
+            timing
+                .validate_client_termination(Duration::from_secs(30))
+                .is_ok()
+        );
     }
 
     #[tokio::test]
