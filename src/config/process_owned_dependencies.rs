@@ -1,5 +1,6 @@
 mod matching;
 pub(crate) mod mysql;
+pub(crate) mod publish;
 pub(crate) mod pubsub;
 mod redis;
 pub use mysql::{MysqlBackgroundSelector, MysqlBackgroundTableSeries};
@@ -30,6 +31,13 @@ pub struct RedisKeyPatternConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
+    RedisPublish {
+        name: String,
+        selector: publish::Selector,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        source_revision: String,
+        source_evidence: String,
+    },
     RedisPubsub {
         name: String,
         selector: crate::policy::native::RedisPubsubSelector,
@@ -132,6 +140,7 @@ impl BackgroundDependencyRuleConfig {
             | Self::Memcached { name, .. }
             | Self::Redis { name, .. }
             | Self::RedisPubsub { name, .. }
+            | Self::RedisPublish { name, .. }
             | Self::Motan { name, .. } => name,
         }
     }
@@ -165,6 +174,18 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
             bail!("duplicate process-owned dependency rule name {name:?}");
         }
         match rule {
+            BackgroundDependencyRuleConfig::RedisPublish {
+                selector,
+                source_revision,
+                source_evidence,
+                ..
+            } => {
+                selector.validate(name)?;
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
+                validate_optional_source_evidence(source_evidence)?;
+            }
             BackgroundDependencyRuleConfig::RedisPubsub {
                 selector,
                 source_revision,
@@ -703,6 +724,9 @@ pub(crate) fn redis_rule_matches(
         return false;
     }
 
+    if let BackgroundDependencyRuleConfig::RedisPublish { selector, .. } = rule {
+        return selector.matches(target_port, command, args);
+    }
     let BackgroundDependencyRuleConfig::Redis {
         ports,
         command: expected_command,

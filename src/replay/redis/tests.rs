@@ -3,6 +3,7 @@ use crate::BackgroundDependencyRuleConfig;
 
 mod client_info;
 mod pooling_scope;
+mod process_owned_publish;
 mod process_owned_set;
 mod termination;
 

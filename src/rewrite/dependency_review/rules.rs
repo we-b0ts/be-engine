@@ -20,6 +20,9 @@ use std::{
 use uuid::Uuid;
 
 #[cfg(test)]
+#[path = "rules_publish_tests.rs"]
+mod publish_tests;
+#[cfg(test)]
 #[path = "rules_pubsub_tests.rs"]
 mod pubsub_tests;
 
@@ -472,6 +475,20 @@ fn process_matches(
         &policy.process_owned_dependencies,
     )?;
     let ports = matcher.resolved_memcached_rule_ports();
+    let publish_selectors = policy
+        .process_owned_dependencies
+        .iter()
+        .filter_map(|rule| {
+            if let crate::config::BackgroundDependencyRuleConfig::RedisPublish {
+                selector, ..
+            } = rule
+            {
+                Some(selector)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
     let origins = crate::api_trigger::OriginIndex::default();
     let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
     let mut covered = BTreeSet::new();
@@ -484,6 +501,7 @@ fn process_matches(
         }
         let original;
         let selector = if event.selector["_source_proof_requires_original"] == true
+            || publish_selectors.iter().any(|selector| selector.matches_recorded_request(&event.selector))
             || event.selector["event_type"] == "redis_pub_sub_push"
                 && policy.process_owned_dependencies.iter().any(|rule| matches!(rule,
                     crate::config::process_owned_dependencies::BackgroundDependencyRuleConfig::RedisPubsub { .. })) {

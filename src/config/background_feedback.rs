@@ -159,8 +159,13 @@ pub(crate) fn plan_rule_config(
             source_revision,
             source_evidence,
             ..
-        } => (source_revision, source_evidence),
-        BackgroundDependencyRuleConfig::Mysql {
+        }
+        | BackgroundDependencyRuleConfig::RedisPublish {
+            source_revision,
+            source_evidence,
+            ..
+        }
+        | BackgroundDependencyRuleConfig::Mysql {
             source_revision,
             source_evidence,
             ..

@@ -75,6 +75,10 @@ The current narrow rule types are:
   Without `initial_load_timeout_ms`, each original exchange remains single-use;
   this supports proven periodic process reads whose values can change. A positive
   `initial_load_timeout_ms` retains initialization observation and snapshot reuse;
+- Redis `PUBLISH` with exact ports and channels. For a shared channel, scope the
+  publisher with Source-proven `when_message` conditions on the outgoing JSON
+  payload. A successful integer response remains finite; see
+  [process-owned Redis](../../../../../docs/process-owned-redis.md#finite-publish).
 - Redis bootstrap `HGET`/`HMGET` with a stable service port set, optional exact
   keys, bounded numeric-middle key patterns, and the exact field sequence;
 - Redis process-owned `HSCAN` with a stable service port set and exact keys or
@@ -120,7 +124,7 @@ Case ordering and snapshot compatibility.
 
 Global exchanges explicitly emitted by any process-owned rule use
 connection-independent replay. Ordinary process-owned exchanges remain
-single-use. Except for finite GET rules, a configured Redis rule makes Recorder hold the first
+single-use. An explicit Redis initial-load snapshot makes Recorder hold the first
 successful response for each logical rule/session/command/argument tuple for
 the rest of that run. Only that first exchange is semantic Global evidence;
 later snapshot hits remain diagnostic traffic. Replay reuses the marked seed

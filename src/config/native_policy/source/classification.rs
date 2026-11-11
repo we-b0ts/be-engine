@@ -66,7 +66,8 @@ pub(super) fn validate(
     }
     let event_kind = match rule {
         BackgroundDependencyRuleConfig::Mysql { .. } => "mysql_exchange",
-        BackgroundDependencyRuleConfig::Redis { .. } => "redis_exchange",
+        BackgroundDependencyRuleConfig::Redis { .. }
+        | BackgroundDependencyRuleConfig::RedisPublish { .. } => "redis_exchange",
         BackgroundDependencyRuleConfig::RedisPubsub { .. } => "redis_pub_sub_push",
         BackgroundDependencyRuleConfig::Http { .. } => "http_exchange",
         BackgroundDependencyRuleConfig::Memcached { .. } => "memcached_exchange",
@@ -82,6 +83,11 @@ pub(super) fn validate(
                 // read. Complete metadata retains origin wire identity and
                 // SQL fingerprints; the original event still decides ownership.
                 return Ok(event["event_type"] == event_kind);
+            }
+            if let BackgroundDependencyRuleConfig::RedisPublish { selector, .. } = rule {
+                // Compact metadata has request selectors. Confirm the integer
+                // reply from the original record before authorizing ownership.
+                return Ok(selector.matches_recorded_request(event));
             }
             crate::replay::source_owned_match(event, role.case_id(), rule, &ports, &origins)
         },
@@ -153,8 +159,11 @@ pub(super) fn validate(
                         event["replay_safe"] == true && event["outcome"] == "response",
                         "Source-owned exchange is unsafe or incomplete"
                     );
-                    if matches!(rule, BackgroundDependencyRuleConfig::Redis { .. })
-                        && !rule.uses_redis_snapshot()
+                    if matches!(
+                        rule,
+                        BackgroundDependencyRuleConfig::Redis { .. }
+                            | BackgroundDependencyRuleConfig::RedisPublish { .. }
+                    ) && !rule.uses_redis_snapshot()
                     {
                         ensure!(
                             event["cache_snapshot_rule"].is_null()

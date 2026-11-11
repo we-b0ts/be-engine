@@ -4,6 +4,24 @@ use crate::policy::{Database, Endpoint, Protocol, Resource};
 pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
     let selector = match value {
         B::RedisPubsub { selector, .. } => n::ProcessSelector::RedisPubsub(selector.clone()),
+        B::RedisPublish { selector, .. } => n::ProcessSelector::Redis {
+            ports: selector.ports.clone(),
+            operation: "PUBLISH".into(),
+            keys: selector
+                .channels
+                .iter()
+                .map(|value| n::NativeKeySelector::Exact {
+                    value: value.clone(),
+                })
+                .collect(),
+            key_templates: Vec::new(),
+            key_sequence: Vec::new(),
+            arguments: Vec::new(),
+            script: None,
+            initial_load_timeout_ms: None,
+            fields: Vec::new(),
+            when_message: selector.when_message.clone(),
+        },
         B::Http {
             authorities,
             methods,
@@ -106,6 +124,7 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
                 }),
                 initial_load_timeout_ms: *initial_load_timeout_ms,
                 fields: fields.clone(),
+                when_message: Default::default(),
             }
         }
     };
@@ -114,6 +133,9 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
             source_revision, ..
         }
         | B::RedisPubsub {
+            source_revision, ..
+        }
+        | B::RedisPublish {
             source_revision, ..
         }
         | B::Mysql {
