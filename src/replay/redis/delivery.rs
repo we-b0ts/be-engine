@@ -511,7 +511,7 @@ async fn await_server_end(
         );
         tokio::select! {
             biased;
-            read = reader.inner.read_buf(&mut reader.buffer) => {
+            read = { let buffered = &mut **reader; buffered.inner.read_buf(&mut buffered.buffer) } => {
                 match read {
                     Ok(0) => return Err(anyhow!("Target closed Redis connection before recorded server termination")),
                     Ok(_) => {},

@@ -1,5 +1,5 @@
 //! Conservative Redis key-access exclusion shared by immutable Source proofs.
-pub(super) fn touches(command: &str, args: &[Vec<u8>], key: &[u8]) -> bool {
+pub fn touches(command: &str, args: &[Vec<u8>], key: &[u8]) -> bool {
     match command {
         "EVAL" | "EVALSHA" | "EVAL_RO" | "EVALSHA_RO" => {
             // Redis scripts declare their complete key inventory after numkeys.

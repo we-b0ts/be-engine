@@ -6,7 +6,7 @@ use crate::replay::native_index::{
     ProtocolIndex, ScopePartition,
 };
 use std::sync::Arc;
-mod family;
+use traffic_protocol_mysql::sql_family as family;
 mod groups;
 mod windows;
 pub(super) use family::classify as sql_family;

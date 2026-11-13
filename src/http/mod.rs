@@ -4,7 +4,7 @@ pub(crate) mod content_encoding;
 pub(crate) mod forward;
 pub(crate) mod response_headers;
 pub(crate) mod rewrite;
-pub(crate) mod sse;
+pub(crate) use traffic_protocol_http::sse;
 pub(crate) mod stream;
 pub(crate) mod termination;
 pub(crate) mod wire_events;

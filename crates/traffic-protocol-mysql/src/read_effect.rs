@@ -1,20 +1,20 @@
 //! Bounded query classification for optional session cleanup, independent of
 //! SQL equivalence. Ordinary SELECT expressions are accepted without a function
 //! or expression whitelist; common locking and side-effect forms remain strict.
-use crate::mysql::sql::{self, Token};
+use crate::sql::{self, Token};
 use sqlparser::{ast::Statement, dialect::MySqlDialect, parser::Parser};
 
 const MAX_SQL_BYTES: usize = 1024 * 1024;
 const MAX_TOKENS: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::replay::mysql) enum Effect {
+pub enum Effect {
     ReadOnly,
     StateChange,
     Unknown,
 }
 
-pub(in crate::replay::mysql) fn classify(sql: &str) -> Effect {
+pub fn classify(sql: &str) -> Effect {
     if sql.len() > MAX_SQL_BYTES {
         return Effect::Unknown;
     }
@@ -96,7 +96,7 @@ fn has_lock_or_write(tokens: &[Token]) -> bool {
     })
 }
 
-pub(in crate::replay::mysql) fn has_session_effect(tokens: &[Token]) -> bool {
+pub fn has_session_effect(tokens: &[Token]) -> bool {
     tokens.iter().enumerate().any(|(index, token)| {
         if ["@", "@@", ":=", "sql_calc_found_rows", "procedure"]
             .iter()

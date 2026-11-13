@@ -93,18 +93,3 @@ fn rejects_malformed_mismatched_truncated_duplicate_or_extra_content() {
         .is_err()
     );
 }
-
-#[test]
-fn protocol_equivalence_does_not_expand_cross_case_fingerprint_sharing() {
-    let source = body("source", b"file");
-    let actual = body("target", b"file");
-    assert!(
-        preview(&source, &headers("source"), &actual, &headers("target"))
-            .unwrap()
-            .is_ok()
-    );
-    assert_ne!(
-        super::super::cross_case::request_fingerprint("/upload", &source, &headers("source")),
-        super::super::cross_case::request_fingerprint("/upload", &actual, &headers("target")),
-    );
-}

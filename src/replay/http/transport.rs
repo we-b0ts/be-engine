@@ -85,7 +85,9 @@ where
         )
     });
     let result = {
-        let connection = traffic_protocol_http::HttpProvider::connection(io, service, false);
+        let providers = state.lock().await.providers.clone();
+        let mut session = crate::protocols::http_session(&providers)?;
+        let connection = session.connection(io, service, false);
         tokio::pin!(connection);
         let deadline_wait = wait_for_deadline(deadline_rx);
         tokio::pin!(deadline_wait);

@@ -22,11 +22,14 @@ async fn handle_connection_inner(
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     let control = crate::dependency::termination::ConnectionControl::new(&tcp_stream)?;
+    let providers = state.lock().await.providers.clone();
+    let mut decoder = crate::protocols::mysql_session(&providers)?;
     write_packet_and_flush(&mut tcp_stream, handshake_packet(1)).await?;
-    let first_login_packet = read_packet(&mut tcp_stream)
-        .await
-        .context("failed to read MySQL replay login packet")?
-        .context("MySQL replay client closed before login packet")?;
+    let first_login_packet =
+        traffic_protocol_mysql::read_packet_with_session(&mut tcp_stream, decoder.as_mut())
+            .await
+            .context("failed to read MySQL replay login packet")?
+            .context("MySQL replay client closed before login packet")?;
     let first_login = parse_handshake_response(&first_login_packet);
     let (mut stream, login_packet): (BoxedMysqlReplayIo, MysqlPacket) = if first_login.tls_requested
     {
@@ -39,10 +42,11 @@ async fn handle_connection_inner(
             .accept(tcp_stream)
             .await
             .context("failed to accept MySQL replay client TLS")?;
-        let secure_login_packet = read_packet(&mut tls_stream)
-            .await
-            .context("failed to read MySQL replay TLS login packet")?
-            .context("MySQL replay TLS client closed before login packet")?;
+        let secure_login_packet =
+            traffic_protocol_mysql::read_packet_with_session(&mut tls_stream, decoder.as_mut())
+                .await
+                .context("failed to read MySQL replay TLS login packet")?
+                .context("MySQL replay TLS client closed before login packet")?;
         (Box::new(tls_stream), secure_login_packet)
     } else {
         (Box::new(tcp_stream), first_login_packet)
@@ -82,7 +86,9 @@ async fn handle_connection_inner(
         transaction_witness: Default::default(),
     };
     loop {
-        let Some(packet) = read_packet(&mut stream).await? else {
+        let Some(packet) =
+            traffic_protocol_mysql::read_packet_with_session(&mut stream, decoder.as_mut()).await?
+        else {
             super::wire_diagnostics::client_eof();
             break;
         };

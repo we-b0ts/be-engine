@@ -1,5 +1,5 @@
 /// SDK identity is advisory connection metadata, independent of application data.
-pub(crate) fn is_client_library_info(command: &str, args: &[Vec<u8>]) -> bool {
+pub fn is_client_library_info(command: &str, args: &[Vec<u8>]) -> bool {
     command.eq_ignore_ascii_case("CLIENT")
         && matches!(args, [subcommand, attribute, value]
             if subcommand.eq_ignore_ascii_case(b"SETINFO")

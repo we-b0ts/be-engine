@@ -710,10 +710,6 @@ pub(crate) fn matches_memcached_key_series(
     value >= start && value <= end && value.to_string() == prefix
 }
 
-pub(crate) fn matches_redis_key(key: &[u8], prefix: &[u8], suffix: &[u8]) -> bool {
-    key.starts_with(prefix) && key.ends_with(suffix)
-}
-
 pub(crate) fn redis_rule_matches(
     rule: &BackgroundDependencyRuleConfig,
     target_port: u16,
@@ -766,16 +762,6 @@ pub(crate) fn redis_rule_matches(
                 .iter()
                 .map(Vec::as_slice)
                 .eq(fields.iter().map(|field| field.as_bytes())))
-}
-
-pub(crate) fn matches_redis_numeric_key_pattern(key: &[u8], prefix: &[u8], suffix: &[u8]) -> bool {
-    let Some(middle) = key
-        .strip_prefix(prefix)
-        .and_then(|value| value.strip_suffix(suffix))
-    else {
-        return false;
-    };
-    !middle.is_empty() && middle.iter().all(u8::is_ascii_digit)
 }
 
 pub(crate) fn matches_exact_redis_key(key: &[u8], keys: &[String]) -> bool {
@@ -887,3 +873,7 @@ mod redis_tests;
 #[cfg(test)]
 #[path = "process_owned_dependencies/tests.rs"]
 mod tests;
+
+pub(crate) use traffic_protocol_redis::keys::{
+    matches_redis_key, matches_redis_numeric_key_pattern,
+};

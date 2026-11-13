@@ -1,7 +1,7 @@
 //! Physical key positions, independent of identities or recording lifecycle.
 use anyhow::{Context, Result, ensure};
 
-pub(crate) fn key_indices(command: &str, args: &[Vec<u8>]) -> Result<Vec<usize>> {
+pub fn key_indices(command: &str, args: &[Vec<u8>]) -> Result<Vec<usize>> {
     let indices = match command {
         "MGET" | "DEL" | "UNLINK" | "EXISTS" | "TOUCH" | "SDIFF" | "SINTER" | "SUNION"
         | "PFCOUNT" => (0..args.len()).collect(),

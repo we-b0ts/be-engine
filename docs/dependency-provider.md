@@ -50,6 +50,17 @@ sequenceDiagram
 `recognize(Probe)` 接受方向及只读前缀。`decode` 消费框架提供的 `BytesMut`，`encode` 输出原生帧。
 `parse` 把类型化消息交给 `EventHandler`。`read_size` 表达下一步帧读取需求，MySQL 使用该接口保护 SSLRequest 边界。
 
+`DependencyProvider` 使用对象安全的 `name(&self)`、`recognize(&self, Probe)` 和 `create_session(&self)`。
+`ProviderRegistry` 持有 `Arc<dyn DependencyProvider>`，启动组装时注册或替换实现，各个录制与回放实例持有自己的不可变注册表。
+公共 `Session` 保存原生会话接口，协议适配器在连接建立时完成一次类型绑定。
+MySQL 与 Redis 使用 `Box<dyn FrameDecoder<Frame = ...>>`，HTTP 使用 `Box<dyn HttpConnectionSession>` 配置 Hyper 原生连接驱动。
+公共缓冲器支持 `dyn FrameDecoder` 和 `dyn EventHandler`，帧解析保留原生 Rust 类型及现有字节引用。
+HTTP 的请求、body、upgrade 和流式状态由 Hyper 驱动，配置后的连接继续使用原有具体类型。
+
+`traffic_e2e::protocols` 是应用组装入口。调用方可以克隆默认注册表并替换某个 Provider，随后通过
+`AppState::new_with_providers` 或 `run_replay_with_providers` 注入实例。
+默认入口使用同一套动态注册与会话创建流程。协议识别通过实例注册表执行，原生读取器按连接复用会话。
+
 HTTP Provider 使用 Hyper 的原生 HTTP/1 connection driver，保留流式 body 与 upgrade。
 MySQL Provider 还提供逻辑结果边界识别，列定义整体对应 Headers，每个逻辑行对应 Part。
 物理 continuation packet 的数量由编码层处理。

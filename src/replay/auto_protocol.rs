@@ -3,13 +3,23 @@ use tokio::net::TcpStream;
 use tokio::time::{Duration, sleep, timeout};
 
 use super::ReplayProtocol;
-use crate::tcp_gateway::{ClientProtocolDetection, DetectedClientProtocol, detect_client_protocol};
+use crate::tcp_gateway::{
+    ClientProtocolDetection, DetectedClientProtocol, detect_client_protocol_with,
+};
 
 const MAX_SNIFF_BYTES: usize = 4096;
 const SNIFF_TIMEOUT: Duration = Duration::from_secs(1);
 const RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
+#[cfg(test)]
 pub(super) async fn detect(stream: &TcpStream) -> Result<Option<ReplayProtocol>> {
+    detect_with_providers(stream, &crate::protocols::default_providers()).await
+}
+
+pub(super) async fn detect_with_providers(
+    stream: &TcpStream,
+    providers: &crate::protocols::DependencyProviders,
+) -> Result<Option<ReplayProtocol>> {
     let mut buffer = vec![0_u8; MAX_SNIFF_BYTES];
     let initial_len = stream.peek(&mut buffer).await?;
     if initial_len == 0 {
@@ -25,7 +35,7 @@ pub(super) async fn detect(stream: &TcpStream) -> Result<Option<ReplayProtocol>>
             .await
             .map_err(|_| anyhow!("timed out peeking auto replay target protocol"))??;
         let bytes = &buffer[..len];
-        match detect_client_protocol(bytes) {
+        match detect_client_protocol_with(bytes, providers) {
             ClientProtocolDetection::Match(DetectedClientProtocol::Redis) => {
                 return Ok(Some(ReplayProtocol::Redis));
             }
@@ -40,9 +50,6 @@ pub(super) async fn detect(stream: &TcpStream) -> Result<Option<ReplayProtocol>>
             }
             ClientProtocolDetection::NeedMore if len < MAX_SNIFF_BYTES => {
                 sleep(RETRY_INTERVAL).await;
-            }
-            ClientProtocolDetection::NeedMore if bytes.first() == Some(&b'*') => {
-                return Ok(Some(ReplayProtocol::Redis));
             }
             ClientProtocolDetection::NeedMore | ClientProtocolDetection::NoMatch => {
                 return Err(anyhow!(

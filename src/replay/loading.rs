@@ -459,6 +459,7 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
+            providers: crate::protocols::default_providers(),
             admission_epoch: 0,
             case_execution_plans: BTreeMap::new(),
             sequence_catalog,

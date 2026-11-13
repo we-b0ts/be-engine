@@ -1,6 +1,6 @@
 use super::*;
-use crate::mysql::sql::tokens;
-use crate::replay::mysql::{mysql_json, mysql_null};
+use crate::sql::tokens;
+use crate::values::{mysql_json, mysql_null};
 use serde_json::json;
 
 mod join_tests;

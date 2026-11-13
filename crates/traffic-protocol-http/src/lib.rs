@@ -1,4 +1,7 @@
 //! HTTP wire recognition and native message adaptation.
+pub mod headers;
+pub mod multipart;
+pub mod sse;
 use traffic_protocol::{Peer, Probe, Recognition};
 
 pub fn recognize(probe: Probe<'_>) -> Recognition {
@@ -47,9 +50,46 @@ pub mod stream;
 /// transports and services retain scheduling, capture, policy and storage.
 pub struct HttpProvider;
 
+/// Native HTTP driver configuration. Hyper retains HTTP framing, streaming and
+/// upgrade state, and the framework supplies its transport and request service.
+pub trait HttpConnectionSession: Send {
+    fn configure(
+        &mut self,
+        builder: &mut hyper::server::conn::http1::Builder,
+        preserve_header_case: bool,
+    );
+}
+
+pub type HttpSession = Box<dyn HttpConnectionSession>;
+
+struct NativeHttpSession;
+
+impl HttpConnectionSession for NativeHttpSession {
+    fn configure(
+        &mut self,
+        builder: &mut hyper::server::conn::http1::Builder,
+        preserve_header_case: bool,
+    ) {
+        builder
+            .half_close(true)
+            .preserve_header_case(preserve_header_case)
+            .title_case_headers(preserve_header_case);
+    }
+}
+
 impl traffic_protocol::DependencyProvider for HttpProvider {
-    fn recognize(probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
+    fn name(&self) -> &'static str {
+        "http"
+    }
+
+    fn recognize(&self, probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
         recognize(probe)
+    }
+
+    fn create_session(&self) -> anyhow::Result<traffic_protocol::Session> {
+        Ok(traffic_protocol::Session::new::<HttpSession>(Box::new(
+            NativeHttpSession,
+        )))
     }
 }
 
@@ -69,11 +109,34 @@ impl HttpProvider {
         B: http_body::Body + 'static,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        hyper::server::conn::http1::Builder::new()
-            .half_close(true)
-            .preserve_header_case(preserve_header_case)
-            .title_case_headers(preserve_header_case)
-            .serve_connection(hyper_util::rt::TokioIo::new(io), service)
+        (&mut NativeHttpSession as &mut dyn HttpConnectionSession).connection(
+            io,
+            service,
+            preserve_header_case,
+        )
+    }
+}
+
+impl dyn HttpConnectionSession + '_ {
+    pub fn connection<I, S, B>(
+        &mut self,
+        io: I,
+        service: S,
+        preserve_header_case: bool,
+    ) -> hyper::server::conn::http1::Connection<hyper_util::rt::TokioIo<I>, S>
+    where
+        I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+        S: hyper::service::Service<
+                hyper::Request<hyper::body::Incoming>,
+                Response = hyper::Response<B>,
+            >,
+        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        B: http_body::Body + 'static,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let mut builder = hyper::server::conn::http1::Builder::new();
+        self.configure(&mut builder, preserve_header_case);
+        builder.serve_connection(hyper_util::rt::TokioIo::new(io), service)
     }
 }
 

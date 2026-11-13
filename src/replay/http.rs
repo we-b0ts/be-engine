@@ -4,7 +4,7 @@ pub(in crate::replay) mod candidates;
 pub(in crate::replay) mod contracts;
 pub(crate) mod diagnosis;
 mod matching;
-pub(in crate::replay) mod multipart;
+pub(in crate::replay) use traffic_protocol_http::multipart;
 mod report_inventory;
 pub(super) use report_inventory::visit_global_report_range as visit_global_report_rows;
 use std::collections::{BTreeMap, BTreeSet};

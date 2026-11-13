@@ -113,7 +113,7 @@ async fn a_full_native_delivery_queue_applies_backpressure_without_failing_sourc
         send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
         SUBSCRIBED
     );
-    let mut subscriber = RedisBufferedReader::new(subscriber.inner, 16 * 1024 * 1024);
+    let mut subscriber = RedisBufferedReader::new(subscriber.into_inner(), 16 * 1024 * 1024);
     let epoch = guards::begin(&runtime).await;
     assert_eq!(
         guards::connected(&runtime, epoch, "/chat").await["ok"],

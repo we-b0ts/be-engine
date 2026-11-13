@@ -1,16 +1,9 @@
 use crate::config::{TcpApplicationProtocol, TcpProtocolDetectionConfig};
 use crate::memcached::text_request_line_is_valid;
-use traffic_protocol::{Peer, Probe, RegisteredProtocol};
+use crate::protocols::{DependencyProtocol, DependencyProviders};
+use traffic_protocol::{Peer, Probe};
 
 const MEMCACHED_BINARY_REQUEST_MAGIC: u8 = 0x80;
-
-const CLIENT_PROVIDERS: &[RegisteredProtocol<DetectedProtocol>] = &[
-    RegisteredProtocol::new::<traffic_protocol_http::HttpProvider>(DetectedProtocol::Http),
-    RegisteredProtocol::new::<traffic_protocol_redis::RedisProvider>(DetectedProtocol::Redis),
-];
-const SERVER_PROVIDERS: &[RegisteredProtocol<DetectedProtocol>] = &[RegisteredProtocol::new::<
-    traffic_protocol_mysql::MysqlProvider,
->(DetectedProtocol::Mysql)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DetectedProtocol {
@@ -56,17 +49,24 @@ pub(crate) fn protocol_override(
         })
 }
 
+#[cfg(test)]
 pub(crate) fn detect_client_protocol(bytes: &[u8]) -> Detection {
-    let recognition = traffic_protocol::recognize(
-        CLIENT_PROVIDERS,
-        Probe {
-            peer: Peer::Client,
-            bytes,
-        },
-    );
+    detect_client_protocol_with(bytes, &crate::protocols::default_providers())
+}
+
+pub(crate) fn detect_client_protocol_with(
+    bytes: &[u8],
+    providers: &DependencyProviders,
+) -> Detection {
+    let recognition = providers.recognize(Probe {
+        peer: Peer::Client,
+        bytes,
+    });
     let incomplete = matches!(recognition, Ok(traffic_protocol::Detection::NeedMore));
     match recognition {
-        Ok(traffic_protocol::Detection::Match(protocol)) => return Detection::Match(protocol),
+        Ok(traffic_protocol::Detection::Match(protocol)) => {
+            return Detection::Match(native_protocol(protocol));
+        }
         Err(error) => {
             tracing::warn!(%error, "dependency protocol recognition failed");
             return Detection::NoMatch;
@@ -83,14 +83,10 @@ pub(crate) fn detect_client_protocol(bytes: &[u8]) -> Detection {
         return detect_memcached_binary(bytes);
     }
     if bytes[0] == b'*' {
-        return match redis_protocol::resp2::decode::decode(bytes) {
-            Ok(Some((redis_protocol::resp2::types::OwnedFrame::Array(values), _)))
-                if redis_array_is_command(&values) =>
-            {
-                Detection::Match(DetectedProtocol::Redis)
-            }
-            Ok(Some(_)) | Err(_) => Detection::NoMatch,
-            Ok(None) => Detection::NeedMore,
+        return if incomplete {
+            Detection::NeedMore
+        } else {
+            Detection::NoMatch
         };
     }
     if bytes[0] == 0x16 {
@@ -116,37 +112,24 @@ fn detect_motan(bytes: &[u8]) -> Detection {
     }
 }
 
-fn redis_array_is_command(values: &[redis_protocol::resp2::types::OwnedFrame]) -> bool {
-    !values.is_empty()
-        && values.iter().all(|value| {
-            matches!(
-                value,
-                redis_protocol::resp2::types::OwnedFrame::BulkString(_)
-                    | redis_protocol::resp2::types::OwnedFrame::SimpleString(_)
-            )
-        })
-        && values.first().is_some_and(|value| match value {
-            redis_protocol::resp2::types::OwnedFrame::BulkString(value)
-            | redis_protocol::resp2::types::OwnedFrame::SimpleString(value) => {
-                std::str::from_utf8(value).is_ok_and(|name| {
-                    !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_graphic())
-                })
-            }
-            _ => false,
-        })
-}
-
-pub(crate) fn detect_mysql_server(bytes: &[u8]) -> Detection {
-    match traffic_protocol::recognize(
-        SERVER_PROVIDERS,
-        Probe {
-            peer: Peer::Server,
-            bytes,
-        },
-    ) {
-        Ok(traffic_protocol::Detection::Match(protocol)) => Detection::Match(protocol),
+pub(crate) fn detect_mysql_server_with(bytes: &[u8], providers: &DependencyProviders) -> Detection {
+    match providers.recognize(Probe {
+        peer: Peer::Server,
+        bytes,
+    }) {
+        Ok(traffic_protocol::Detection::Match(protocol)) => {
+            Detection::Match(native_protocol(protocol))
+        }
         Ok(traffic_protocol::Detection::NeedMore) => Detection::NeedMore,
         _ => Detection::NoMatch,
+    }
+}
+
+fn native_protocol(protocol: DependencyProtocol) -> DetectedProtocol {
+    match protocol {
+        DependencyProtocol::Http => DetectedProtocol::Http,
+        DependencyProtocol::Mysql => DetectedProtocol::Mysql,
+        DependencyProtocol::Redis => DetectedProtocol::Redis,
     }
 }
 
@@ -179,9 +162,6 @@ fn detect_text_protocol(bytes: &[u8]) -> Detection {
     let Some(command) = tokens.first().map(|value| value.to_ascii_lowercase()) else {
         return Detection::NoMatch;
     };
-    if is_http_request_line(&tokens) {
-        return Detection::Match(DetectedProtocol::Http);
-    }
     if tokens[0] == command && text_request_line_is_valid(&tokens, false) {
         Detection::Match(DetectedProtocol::MemcachedText)
     } else {
@@ -189,24 +169,8 @@ fn detect_text_protocol(bytes: &[u8]) -> Detection {
     }
 }
 
-fn is_http_request_line(tokens: &[&str]) -> bool {
-    tokens.len() == 3
-        && matches!(
-            tokens[0],
-            "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
-        )
-        && matches!(tokens[2], "HTTP/1.0" | "HTTP/1.1")
-}
-
 fn looks_like_known_text_prefix(bytes: &[u8]) -> bool {
     const PREFIXES: &[&[u8]] = &[
-        b"GET ",
-        b"POST ",
-        b"PUT ",
-        b"PATCH ",
-        b"DELETE ",
-        b"HEAD ",
-        b"OPTIONS ",
         b"get ",
         b"gets ",
         b"set ",

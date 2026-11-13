@@ -46,6 +46,7 @@ pub mod policy;
 pub(crate) mod policy_evidence;
 mod primary_protocol;
 mod protocol_contract;
+pub mod protocols;
 mod proxy;
 pub mod record_service;
 mod recorded_request;
@@ -319,6 +320,7 @@ pub struct AppState {
 
 struct AppStateInner {
     config: AppConfig,
+    providers: Arc<protocols::DependencyProviders>,
     recording_apis: Vec<RecordingApi>,
     recorder: Recorder,
     dns_registry: FakeDnsRegistry,
@@ -343,6 +345,25 @@ struct AppStateInner {
 impl AppState {
     pub async fn new(config: AppConfig) -> Result<Self> {
         Self::new_with_run_id(config, None).await
+    }
+
+    pub async fn new_with_providers(
+        config: AppConfig,
+        providers: Arc<protocols::DependencyProviders>,
+    ) -> Result<Self> {
+        Self::new_with_recording_options_and_providers(
+            config,
+            None,
+            Vec::new(),
+            None,
+            None,
+            providers,
+        )
+        .await
+    }
+
+    pub fn dependency_providers(&self) -> &protocols::DependencyProviders {
+        &self.inner.providers
     }
 
     pub async fn new_with_run_id(config: AppConfig, run_id: Option<String>) -> Result<Self> {
@@ -372,6 +393,25 @@ impl AppState {
         recording_apis: Vec<RecordingApi>,
         artifact_owner: Option<ArtifactOwner>,
         preflight_probe: Option<PreflightProbeKind>,
+    ) -> Result<Self> {
+        Self::new_with_recording_options_and_providers(
+            config,
+            run_id,
+            recording_apis,
+            artifact_owner,
+            preflight_probe,
+            protocols::default_providers(),
+        )
+        .await
+    }
+
+    pub async fn new_with_recording_options_and_providers(
+        config: AppConfig,
+        run_id: Option<String>,
+        recording_apis: Vec<RecordingApi>,
+        artifact_owner: Option<ArtifactOwner>,
+        preflight_probe: Option<PreflightProbeKind>,
+        providers: Arc<protocols::DependencyProviders>,
     ) -> Result<Self> {
         config
             .validate()
@@ -445,6 +485,7 @@ impl AppState {
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
+                providers,
                 recording_apis,
                 recorder,
                 dns_registry,

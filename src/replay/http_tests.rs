@@ -274,6 +274,8 @@ async fn replays_http_exchange_with_stable_query_matching() {
     .await;
     let (addr, runtime, task) = spawn_http_replay(&case_dir, vec!["signature".to_string()]).await;
 
+    let (providers, counts) = crate::protocols::tests::counted_providers();
+    runtime.state.lock().await.providers = providers;
     let stream = TcpStream::connect(addr).await.unwrap();
     let response = send_request(
         TokioIo::new(stream),
@@ -295,6 +297,20 @@ async fn replays_http_exchange_with_stable_query_matching() {
         state
             .unused_http_exchanges(ReplaySource::Case, false)
             .is_empty()
+    );
+    assert_eq!(
+        counts
+            .http
+            .sessions
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        counts
+            .http
+            .native_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
     );
     task.abort();
 }

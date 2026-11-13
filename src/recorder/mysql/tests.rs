@@ -381,7 +381,10 @@ async fn assert_blocked_query(sql: &str) {
     config.recording.access_policy = RecordingAccessPolicy::BlockKnownWrites;
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
-    let state = AppState::new(config).await.unwrap();
+    let (providers, counts) = crate::protocols::tests::counted_providers();
+    let state = AppState::new_with_providers(config, providers)
+        .await
+        .unwrap();
 
     let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let client_addr = client_listener.local_addr().unwrap();
@@ -471,6 +474,20 @@ async fn assert_blocked_query(sql: &str) {
     assert!(traffic.contains(r#""operation":"COM_QUERY""#));
     assert!(!traffic.contains(sql));
     handler.abort();
+    assert_eq!(
+        counts
+            .mysql
+            .sessions
+            .load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+    assert!(
+        counts
+            .mysql
+            .native_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 3
+    );
 }
 
 #[tokio::test]

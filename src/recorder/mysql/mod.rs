@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::mysql::wire::read_packet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -21,7 +23,7 @@ use crate::mysql::access::analyze_command;
 use crate::mysql::wire::{
     MysqlPacket, ServerPacketInfo, clear_client_compression_capability,
     clear_server_compression_capability, parse_client_command, parse_handshake_response,
-    parse_server_packet, read_packet, readonly_error_packet,
+    parse_server_packet, readonly_error_packet,
 };
 use crate::recorder::{
     MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
@@ -208,13 +210,16 @@ pub(crate) async fn handle_connected_mysql(
     let target_addr = context.target_addr.clone();
     let upstream_addr = context.upstream_addr.clone();
 
+    let mut client_decoder = crate::protocols::mysql_session(state.dependency_providers())?;
+    let mut server_decoder = crate::protocols::mysql_session(state.dependency_providers())?;
     let mut server_to_client_bytes = 0_u64;
     let mut client_to_server_bytes = 0_u64;
 
-    let mut handshake = read_packet(&mut upstream)
-        .await
-        .context("failed to read MySQL upstream handshake")?
-        .context("MySQL upstream closed before handshake")?;
+    let mut handshake =
+        traffic_protocol_mysql::read_packet_with_session(&mut upstream, server_decoder.as_mut())
+            .await
+            .context("failed to read MySQL upstream handshake")?
+            .context("MySQL upstream closed before handshake")?;
     // Semantic capture parses ordinary MySQL packets. Negotiate compression
     // off before either peer can switch to the seven-byte compressed header.
     clear_server_compression_capability(&mut handshake);
@@ -223,10 +228,11 @@ pub(crate) async fn handle_connected_mysql(
         .await
         .context("failed to forward MySQL handshake")?;
 
-    let mut login_packet = read_packet(&mut client)
-        .await
-        .context("failed to read MySQL login packet")?
-        .context("MySQL client closed before login packet")?;
+    let mut login_packet =
+        traffic_protocol_mysql::read_packet_with_session(&mut client, client_decoder.as_mut())
+            .await
+            .context("failed to read MySQL login packet")?
+            .context("MySQL client closed before login packet")?;
     clear_client_compression_capability(&mut login_packet);
     client_to_server_bytes += login_packet.encoded_len() as u64;
     let mut login = parse_handshake_response(&login_packet);
@@ -257,10 +263,13 @@ pub(crate) async fn handle_connected_mysql(
         let (mut client_tls, mut upstream_tls) =
             tokio::try_join!(accept_downstream, connect_upstream)?;
 
-        let mut secure_login_packet = read_packet(&mut client_tls)
-            .await
-            .context("failed to read MySQL TLS login packet")?
-            .context("MySQL TLS client closed before login packet")?;
+        let mut secure_login_packet = traffic_protocol_mysql::read_packet_with_session(
+            &mut client_tls,
+            client_decoder.as_mut(),
+        )
+        .await
+        .context("failed to read MySQL TLS login packet")?
+        .context("MySQL TLS client closed before login packet")?;
         clear_client_compression_capability(&mut secure_login_packet);
         client_to_server_bytes += secure_login_packet.encoded_len() as u64;
         login = parse_handshake_response(&secure_login_packet);
@@ -341,7 +350,12 @@ pub(crate) async fn handle_connected_mysql(
         let mut bytes = 0_u64;
         loop {
             let before = client_read.bytes_read();
-            let packet = match read_packet(&mut client_read).await {
+            let packet = match traffic_protocol_mysql::read_packet_with_session(
+                &mut client_read,
+                client_decoder.as_mut(),
+            )
+            .await
+            {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
                     c2s_termination.observe_client_eof();
@@ -496,7 +510,12 @@ pub(crate) async fn handle_connected_mysql(
             loop {
                 upstream_read.begin_capture(0x00ff_ffff + 4);
                 let before = upstream_read.bytes_read();
-                let packet = match read_packet(&mut upstream_read).await {
+                let packet = match traffic_protocol_mysql::read_packet_with_session(
+                    &mut upstream_read,
+                    server_decoder.as_mut(),
+                )
+                .await
+                {
                     Ok(Some(packet)) => packet,
                     Ok(None) => {
                         s2c_termination.observe_server_eof();

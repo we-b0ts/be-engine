@@ -2960,6 +2960,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "serde",
+ "sha2",
  "tokio",
  "traffic-protocol",
 ]
@@ -2969,8 +2970,10 @@ name = "traffic-protocol-mysql"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bytes",
  "serde",
+ "serde_json",
  "sqlparser",
  "tokio",
  "traffic-protocol",
@@ -2983,6 +2986,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "redis-protocol",
+ "serde",
  "tokio",
  "traffic-protocol",
 ]

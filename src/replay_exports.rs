@@ -33,7 +33,7 @@ pub use crate::replay::{
     plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_redis_cross_case,
     plan_response_body_rule, plan_response_rule, run_mysql_replay, run_mysql_replay_control,
     run_replay, run_replay_control, run_replay_with_counters, run_replay_with_lifecycle,
-    validate_replay_policy,
+    run_replay_with_providers, validate_replay_policy,
 };
 pub use crate::replay::{
     DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,

@@ -91,6 +91,14 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
             _registration: stream.registration(),
         };
         let state = state.clone();
+        let mut protocol_session =
+            match crate::protocols::http_session(state.dependency_providers()) {
+                Ok(session) => session,
+                Err(error) => {
+                    warn!(%error, "failed to create HTTP protocol session");
+                    continue;
+                }
+            };
         tokio::spawn(async move {
             let io = TokioIo::new(ObservedClientIo::new(stream, ownership.termination.clone()));
             let service_ownership = ownership.clone();
@@ -109,7 +117,8 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
             let result = ownership
                 .termination
                 .serve(
-                    traffic_protocol_http::HttpProvider::connection(io.into_inner(), service, true)
+                    protocol_session
+                        .connection(io.into_inner(), service, true)
                         .with_upgrades(),
                 )
                 .await;
@@ -199,6 +208,7 @@ async fn serve_mitm_connection(
         .with_context(|| format!("failed TLS handshake with client for {authority}"))?;
 
     let termination = ownership.termination.clone();
+    let mut protocol_session = crate::protocols::http_session(state.dependency_providers())?;
     let io = TokioIo::new(ObservedClientIo::new(tls, termination.clone()));
     let service = service_fn(move |req| {
         let state = state.clone();
@@ -222,11 +232,7 @@ async fn serve_mitm_connection(
 
     let result = ownership
         .termination
-        .serve(traffic_protocol_http::HttpProvider::connection(
-            io.into_inner(),
-            service,
-            true,
-        ))
+        .serve(protocol_session.connection(io.into_inner(), service, true))
         .await;
     ownership.finish(result).await
 }

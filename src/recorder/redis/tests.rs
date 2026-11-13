@@ -77,7 +77,9 @@ fn only_single_subscription_confirmations_are_classified_as_replay_safe() {
 
 #[tokio::test]
 async fn single_subscription_confirmation_is_recorded_as_replay_safe() {
-    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let (providers, counts) = crate::protocols::tests::counted_providers();
+    let (state, _temp) =
+        test_state_with_providers(RecordingAccessPolicy::Unrestricted, providers).await;
     let (mut client, proxy_client) = tcp_pair().await;
     let (mut upstream, proxy_upstream) = tcp_pair().await;
     let upstream_addr = upstream.peer_addr().unwrap();
@@ -120,6 +122,20 @@ async fn single_subscription_confirmation_is_recorded_as_replay_safe() {
     assert_eq!(exchange["response_kind"], "array");
     assert_eq!(exchange["replay_safe"], true);
     assert_eq!(exchange["parse_warnings"], serde_json::json!([]));
+    assert_eq!(
+        counts
+            .redis
+            .sessions
+            .load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+    assert_eq!(
+        counts
+            .redis
+            .native_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
 }
 
 #[tokio::test]
@@ -687,6 +703,13 @@ async fn case_proxy_errors(state: &AppState, case: &CaseContext) -> Vec<serde_js
 }
 
 async fn test_state(access_policy: RecordingAccessPolicy) -> (AppState, TempDir) {
+    test_state_with_providers(access_policy, crate::protocols::default_providers()).await
+}
+
+async fn test_state_with_providers(
+    access_policy: RecordingAccessPolicy,
+    providers: std::sync::Arc<crate::protocols::DependencyProviders>,
+) -> (AppState, TempDir) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
     let mut config = AppConfig::default();
@@ -694,7 +717,12 @@ async fn test_state(access_policy: RecordingAccessPolicy) -> (AppState, TempDir)
     config.recording.access_policy = access_policy;
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
-    (AppState::new(config).await.unwrap(), temp)
+    (
+        AppState::new_with_providers(config, providers)
+            .await
+            .unwrap(),
+        temp,
+    )
 }
 
 async fn snapshot_test_state() -> (AppState, TempDir) {

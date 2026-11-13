@@ -96,6 +96,14 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
             .context("failed to enable TCP_NODELAY for HTTP gateway client")?;
         let state = state.clone();
         let config = config.clone();
+        let mut protocol_session =
+            match crate::protocols::http_session(state.dependency_providers()) {
+                Ok(session) => session,
+                Err(error) => {
+                    warn!(%error, "failed to create HTTP protocol session");
+                    continue;
+                }
+            };
         tokio::spawn(async move {
             let termination =
                 match crate::http::termination::ClientTermination::with_control(&stream) {
@@ -120,7 +128,8 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
 
             if let Err(err) = termination
                 .serve(
-                    traffic_protocol_http::HttpProvider::connection(io.into_inner(), service, true)
+                    protocol_session
+                        .connection(io.into_inner(), service, true)
                         .with_upgrades(),
                 )
                 .await

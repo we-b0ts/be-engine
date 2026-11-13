@@ -90,6 +90,8 @@ pub(crate) async fn handle_connected(
     state: AppState,
     context: ConnectionContext,
 ) -> Result<()> {
+    let client_decoder = crate::protocols::redis_session(state.dependency_providers())?;
+    let server_decoder = crate::protocols::redis_session(state.dependency_providers())?;
     let connection_id = Uuid::new_v4();
     let termination = ConnectionTermination::default();
     let _connection = state.dependency_connections().register_observed(
@@ -155,13 +157,14 @@ pub(crate) async fn handle_connected(
     let c2s_output = output_tx.clone();
     let c2s_termination = termination.clone();
     let c2s = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(
+        let mut reader = BufferedReader::with_session(
             ObservedIo::new(
                 client_read,
                 c2s_termination.clone(),
                 TerminationSide::Client,
             ),
             max_frame_bytes,
+            client_decoder,
         );
         let mut upstream_write = ObservedIo::new(
             upstream_write,
@@ -406,13 +409,14 @@ pub(crate) async fn handle_connected(
     let s2c_client_write = client_write.clone();
     let s2c_termination = termination.clone();
     let s2c = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(
+        let mut reader = BufferedReader::with_session(
             ObservedIo::new(
                 upstream_read,
                 s2c_termination.clone(),
                 TerminationSide::Server,
             ),
             max_frame_bytes,
+            server_decoder,
         );
         let mut terminal_response = Bytes::new();
         let mut server_reset = false;

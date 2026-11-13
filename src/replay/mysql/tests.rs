@@ -52,6 +52,15 @@ async fn accepts_tls_login_with_replay_ca() {
         .unwrap();
     let (addr, runtime, task) = spawn_replay(&case_dir).await;
 
+    let state = Arc::downgrade(&runtime.state);
+    let (providers, counts) =
+        crate::protocols::tests::counted_providers_with_probe(Arc::new(move || {
+            assert!(
+                state.upgrade().unwrap().try_lock().is_ok(),
+                "provider factory must run outside Replay state lock"
+            );
+        }));
+    runtime.state.lock().await.providers = providers;
     let mut client = TcpStream::connect(addr).await.unwrap();
     let handshake = read_packet(&mut client).await.unwrap().unwrap();
     assert!(server_handshake_capabilities(&handshake) & CLIENT_SSL != 0);
@@ -95,6 +104,20 @@ async fn accepts_tls_login_with_replay_ca() {
     assert_eq!(response.sequence_id, 3);
     assert_eq!(response.payload[0], 0x00);
     assert_eq!(runtime.state.lock().await.mysql.events.connections, 1);
+    assert_eq!(
+        counts
+            .mysql
+            .sessions
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        counts
+            .mysql
+            .native_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
     task.abort();
 }
 

@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 mod autocommit;
 mod connection_default;
 mod control;
-pub(in crate::replay::mysql) mod read;
 pub(in crate::replay::mysql) use control::successful_begin;
 pub(in crate::replay::mysql) use control::{successful_control, successful_end};
+pub(in crate::replay::mysql) use traffic_protocol_mysql::read_effect as read;
 
 impl MysqlReplayState {
     /// Reuse the native Source/Target proof without claiming consumption.

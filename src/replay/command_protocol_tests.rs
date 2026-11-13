@@ -47,7 +47,15 @@ async fn replays_redis_pipeline_in_recorded_lane_order() {
         .await
         .unwrap();
     let report_path = temp.path().join("report.json");
-    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let (providers, counts) = crate::protocols::tests::counted_providers();
+    let (addr, task) = spawn_replay_with_providers(
+        &case_dir,
+        Some(report_path.clone()),
+        None,
+        Vec::new(),
+        providers,
+    )
+    .await;
     let mut client = TcpStream::connect(addr).await.unwrap();
 
     client
@@ -61,6 +69,20 @@ async fn replays_redis_pipeline_in_recorded_lane_order() {
     let report = wait_for_matched_count(&report_path, "redis", 2).await;
     assert_eq!(report["redis"]["matched"].as_array().unwrap().len(), 2);
     assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
+    assert_eq!(
+        counts
+            .redis
+            .sessions
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        counts
+            .redis
+            .native_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
     task.abort();
 }
 
@@ -701,6 +723,23 @@ async fn spawn_replay_configured(
     policy_path: Option<PathBuf>,
     process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_replay_with_providers(
+        case_dir,
+        report_path,
+        policy_path,
+        process_owned_dependencies,
+        crate::protocols::default_providers(),
+    )
+    .await
+}
+
+async fn spawn_replay_with_providers(
+    case_dir: &Path,
+    report_path: Option<PathBuf>,
+    policy_path: Option<PathBuf>,
+    process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    providers: std::sync::Arc<crate::protocols::DependencyProviders>,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     super::write_test_recording_network_manifest(case_dir);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -726,6 +765,7 @@ async fn spawn_replay_configured(
     )
     .await
     .unwrap();
+    runtime.state.lock().await.providers = providers;
     runtime.write_report().await.unwrap();
     let task = tokio::spawn(async move {
         tokio::select! {

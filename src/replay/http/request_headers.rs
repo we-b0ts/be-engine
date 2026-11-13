@@ -5,39 +5,6 @@ mod global;
 pub(in crate::replay) mod time_reference;
 pub(super) use global::preview as preview_global;
 
-const TRANSPORT_HEADERS: &[&str] = &[
-    "host",
-    "connection",
-    "keep-alive",
-    "proxy-connection",
-    "transfer-encoding",
-    "content-length",
-    "te",
-    "trailer",
-    "upgrade",
-    "proxy-authorization",
-];
-const IGNORED_HEADERS: &[&str] = &[
-    "user-agent",
-    "accept-encoding",
-    "traceparent",
-    "tracestate",
-    "b3",
-    "x-correlation-id",
-    "x-amzn-trace-id",
-    "x-cloud-trace-context",
-];
-const IGNORED_PREFIXES: &[&str] = &["x-b3-", "x-datadog-"];
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Ignore,
-    Observe,
-    Presence,
-    SourcePresence,
-    Strict,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct HeaderDifferenceReport {
     pub(in crate::replay) case_id: Option<String>,
@@ -81,100 +48,9 @@ pub(super) fn capture(headers: &hyper::HeaderMap) -> HeaderSnapshot {
     snapshot
 }
 
-fn normalized(headers: &HeaderSnapshot) -> HeaderSnapshot {
-    let mut normalized = HeaderSnapshot::new();
-    for (name, values) in headers {
-        normalized
-            .entry(name.to_ascii_lowercase())
-            .or_default()
-            .extend(
-                values
-                    .iter()
-                    .map(|value| value.trim_matches([' ', '\t']).to_string()),
-            );
-    }
-    normalized
-}
-
-pub(in crate::replay) fn exact_contract_match(
-    expected: &HeaderSnapshot,
-    actual: &HeaderSnapshot,
-) -> bool {
-    let filter = |headers: &HeaderSnapshot| {
-        normalized(headers)
-            .into_iter()
-            .filter(|(name, _)| mode(name, &BTreeSet::new()) != Mode::Ignore)
-            .collect::<HeaderSnapshot>()
-    };
-    filter(expected) == filter(actual)
-}
-
-/// Match the native audit's acceptance modes. Body contracts cannot turn
-/// presence-only credentials or observational negotiation into exact values.
-pub(super) fn native_contract_match(expected: &HeaderSnapshot, actual: &HeaderSnapshot) -> bool {
-    let expected = normalized(expected);
-    let actual = normalized(actual);
-    let connection_headers = [&expected, &actual]
-        .into_iter()
-        .filter_map(|headers| headers.get("connection"))
-        .flatten()
-        .flat_map(|value| value.split(','))
-        .map(|name| name.trim().to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
-    expected.keys().chain(actual.keys()).all(|name| {
-        let before = expected.get(name);
-        let after = actual.get(name);
-        match mode(name, &connection_headers) {
-            Mode::Ignore | Mode::Observe => true,
-            Mode::Presence => before.is_some() == after.is_some(),
-            Mode::SourcePresence => before.is_none() || after.is_some(),
-            Mode::Strict => {
-                if before.is_some_and(|values| values.iter().any(|value| value == "<redacted>")) {
-                    before.is_some() == after.is_some()
-                } else {
-                    before == after
-                }
-            }
-        }
-    })
-}
-
-fn mode(name: &str, connection_headers: &BTreeSet<String>) -> Mode {
-    if TRANSPORT_HEADERS.contains(&name)
-        || name.starts_with("x-recorder-")
-        || connection_headers.contains(name)
-        || IGNORED_HEADERS.contains(&name)
-        || IGNORED_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-    {
-        Mode::Ignore
-    } else if name == "x-request-id" {
-        Mode::SourcePresence
-    } else if matches!(name, "content-type" | "accept" | "accept-language") {
-        Mode::Observe
-    } else if matches!(name, "authorization" | "cookie") {
-        Mode::Presence
-    } else {
-        Mode::Strict
-    }
-}
-
-fn protected(name: &str) -> bool {
-    matches!(name, "authorization" | "cookie" | "set-cookie")
-        || [
-            "token",
-            "secret",
-            "password",
-            "credential",
-            "api-key",
-            "apikey",
-            "signature",
-            "session",
-        ]
-        .iter()
-        .any(|part| name.contains(part))
-}
+pub(in crate::replay) use traffic_protocol_http::headers::{
+    Mode, exact_contract_match, mode, native_contract_match, normalized, protected,
+};
 
 fn observation(name: &str, values: Option<&Vec<String>>, encrypted: bool) -> HeaderObservation {
     let protected = encrypted || protected(name);

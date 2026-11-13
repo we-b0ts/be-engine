@@ -1,10 +1,10 @@
 pub(crate) mod access;
-mod client_info;
-pub(crate) mod key_slots;
+
+pub(crate) use traffic_protocol_redis::key_slots;
 pub(crate) mod socketio_rpc;
 mod wire;
 
-pub(crate) use client_info::is_client_library_info;
+pub(crate) use traffic_protocol_redis::client_info::is_client_library_info;
 
 pub(crate) use wire::{
     BufferedReader, RedisCommand, RedisFrame, RedisFrameKind, RedisPubSubPush,

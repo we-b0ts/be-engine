@@ -1,9 +1,21 @@
 pub mod autocommit;
 pub mod isolation;
+pub mod model;
 pub mod operation;
+pub mod prepare;
+pub mod prepared;
+pub mod projection;
+pub mod read_effect;
+pub mod response;
 pub mod response_progress;
 pub mod savepoint;
+pub mod session_setup;
+pub mod session_status;
 pub mod sql;
+pub mod sql_family;
+pub mod sql_match;
+pub mod types;
+pub mod values;
 
 use std::io;
 
@@ -97,15 +109,29 @@ pub fn readonly_error_packet(sequence_id: u8) -> MysqlPacket {
 
 #[derive(Default)]
 pub struct MysqlProvider;
-pub use MysqlProvider as MysqlDecoder;
+
+#[derive(Default)]
+pub struct MysqlDecoder;
+
+pub type MysqlSession = Box<dyn FrameDecoder<Frame = MysqlPacket>>;
 
 impl traffic_protocol::DependencyProvider for MysqlProvider {
-    fn recognize(probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
+    fn name(&self) -> &'static str {
+        "mysql"
+    }
+
+    fn recognize(&self, probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
         recognize(probe)
+    }
+
+    fn create_session(&self) -> anyhow::Result<traffic_protocol::Session> {
+        Ok(traffic_protocol::Session::new::<MysqlSession>(Box::new(
+            MysqlDecoder,
+        )))
     }
 }
 
-impl FrameDecoder for MysqlProvider {
+impl FrameDecoder for MysqlDecoder {
     type Frame = MysqlPacket;
     fn encode(&self, frame: &MysqlPacket, output: &mut BytesMut) -> anyhow::Result<()> {
         anyhow::ensure!(
@@ -142,16 +168,19 @@ impl FrameDecoder for MysqlProvider {
 pub async fn read_packet<R: AsyncRead + Unpin + ?Sized>(
     reader: &mut R,
 ) -> io::Result<Option<MysqlPacket>> {
-    traffic_protocol::io::read_one(
-        reader,
-        &mut MysqlDecoder,
-        continuation::MAX_PACKET_PAYLOAD_LEN + 4,
-    )
-    .await
-    .map_err(|error| match error.downcast::<io::Error>() {
-        Ok(error) => error,
-        Err(error) => io::Error::new(io::ErrorKind::InvalidData, error),
-    })
+    read_packet_with_session(reader, &mut MysqlDecoder).await
+}
+
+pub async fn read_packet_with_session<R: AsyncRead + Unpin + ?Sized>(
+    reader: &mut R,
+    session: &mut dyn FrameDecoder<Frame = MysqlPacket>,
+) -> io::Result<Option<MysqlPacket>> {
+    traffic_protocol::io::read_one(reader, session, continuation::MAX_PACKET_PAYLOAD_LEN + 4)
+        .await
+        .map_err(|error| match error.downcast::<io::Error>() {
+            Ok(error) => error,
+            Err(error) => io::Error::new(io::ErrorKind::InvalidData, error),
+        })
 }
 
 pub fn parse_handshake_response(packet: &MysqlPacket) -> HandshakeResponse {

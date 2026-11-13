@@ -11,7 +11,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Number, Value};
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UdpSocket, UnixListener, UnixStream};
 use tokio::sync::Mutex;
@@ -312,6 +312,21 @@ pub async fn run_replay_with_counters(
     lifecycle: ReplayLifecycleConfig,
     counter_reader: Option<ReplayEgressCounterReader>,
 ) -> Result<()> {
+    run_replay_with_providers(
+        config,
+        lifecycle,
+        counter_reader,
+        crate::protocols::default_providers(),
+    )
+    .await
+}
+
+pub async fn run_replay_with_providers(
+    config: ReplayConfig,
+    lifecycle: ReplayLifecycleConfig,
+    counter_reader: Option<ReplayEgressCounterReader>,
+    providers: Arc<crate::protocols::DependencyProviders>,
+) -> Result<()> {
     validate_replay_request_headers(&config).await?;
     let tcp_listener = TcpListener::bind(config.tcp_listen)
         .await
@@ -332,7 +347,11 @@ pub async fn run_replay_with_counters(
         .context("failed to read dependency replay DNS listen address")?;
     let runtime =
         ReplayRuntime::load_with_lifecycle(config, dns_listen, tcp_listen, lifecycle).await?;
-    runtime.state.lock().await.egress_counter_reader = counter_reader;
+    {
+        let mut state = runtime.state.lock().await;
+        state.egress_counter_reader = counter_reader;
+        state.providers = providers;
+    }
     info!(
         dns_listen = %dns_listen,
         tcp_listen = %tcp_listen,
@@ -453,6 +472,7 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    providers: Arc<crate::protocols::DependencyProviders>,
     admission_epoch: u64,
     case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
     sequence_catalog: Option<Arc<traffic_replay::SequenceCatalog>>,
@@ -575,7 +595,8 @@ async fn handle_gateway_connection(
     match target.as_ref().map(|target| target.protocol) {
         Some(ReplayProtocol::Auto) => {
             let target = target.context("auto replay connection has no target")?;
-            match auto_protocol::detect(&stream).await? {
+            let providers = state.lock().await.providers.clone();
+            match auto_protocol::detect_with_providers(&stream, &providers).await? {
                 Some(ReplayProtocol::Redis) => {
                     redis::handle_connection(stream, target, state).await
                 }

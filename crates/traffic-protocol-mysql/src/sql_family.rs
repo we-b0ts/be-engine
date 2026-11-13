@@ -1,16 +1,16 @@
 //! Conservative SQL families exclude structurally impossible native candidates.
 //! Unknown syntax keeps the complete existing matcher and policy path.
-use crate::mysql::sql::{Token, projection::identifier, tokens_shared};
+use crate::sql::{Token, projection::identifier, tokens_shared};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 #[derive(Debug)]
-pub(in crate::replay::mysql) struct SelectHint {
+pub struct SelectHint {
     pub table: String,
     pub scalar_shape: u64,
 }
 
 impl SelectHint {
-    pub(super) fn from_tokens(tokens: &[Token]) -> Option<Self> {
+    pub fn from_tokens(tokens: &[Token]) -> Option<Self> {
         let table = select_table(tokens)?.to_owned();
         let mut shape = DefaultHasher::new();
         tokens.len().hash(&mut shape);
@@ -30,7 +30,7 @@ impl SelectHint {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::replay::mysql) enum Family {
+pub enum Family {
     Select,
     Write,
     Set,
@@ -38,19 +38,19 @@ pub(in crate::replay::mysql) enum Family {
     End,
 }
 
-pub(in crate::replay::mysql) fn classify(sql: Option<&str>) -> Option<Family> {
+pub fn classify(sql: Option<&str>) -> Option<Family> {
     let tokens = bounded_tokens(sql?)?;
     classify_tokens(&tokens)
 }
 
-pub(super) fn bounded_tokens(sql: &str) -> Option<std::sync::Arc<Vec<Token>>> {
-    if sql.len() > crate::mysql::sql::bounds::MAX_STATEMENT_BYTES {
+pub fn bounded_tokens(sql: &str) -> Option<std::sync::Arc<Vec<Token>>> {
+    if sql.len() > crate::sql::bounds::MAX_STATEMENT_BYTES {
         return None;
     }
-    tokens_shared(sql).filter(|tokens| tokens.len() <= crate::mysql::sql::bounds::MAX_TOKENS)
+    tokens_shared(sql).filter(|tokens| tokens.len() <= crate::sql::bounds::MAX_TOKENS)
 }
 
-pub(super) fn classify_tokens(tokens: &[Token]) -> Option<Family> {
+pub fn classify_tokens(tokens: &[Token]) -> Option<Family> {
     let Token::Word(word) = tokens.first()? else {
         return None;
     };
@@ -67,7 +67,7 @@ pub(super) fn classify_tokens(tokens: &[Token]) -> Option<Family> {
 
 /// Prove the physical relation for an unambiguous single-table SELECT.
 /// Complex statements retain the existing candidate path.
-pub(super) fn select_table(tokens: &[Token]) -> Option<&str> {
+pub fn select_table(tokens: &[Token]) -> Option<&str> {
     if !tokens.first()?.is("select")
         || tokens.iter().skip(1).any(|token| {
             [
@@ -115,7 +115,7 @@ pub(super) fn select_table(tokens: &[Token]) -> Option<&str> {
     Some(table)
 }
 
-pub(in crate::replay::mysql) fn select_hint(sql: &str) -> Option<SelectHint> {
+pub fn select_hint(sql: &str) -> Option<SelectHint> {
     SelectHint::from_tokens(&bounded_tokens(sql)?)
 }
 

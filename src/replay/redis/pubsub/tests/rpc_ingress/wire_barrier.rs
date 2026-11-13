@@ -23,7 +23,7 @@ async fn callback_admission_waits_for_real_ingress_wire_delivery() {
         .request_begin("case")
         .unwrap();
     let (reader, sub_task) = connect(&runtime).await;
-    let mut subscriber = RedisBufferedReader::new(reader.inner, 16 * 1024 * 1024);
+    let mut subscriber = RedisBufferedReader::new(reader.into_inner(), 16 * 1024 * 1024);
     let (mut client, client_task) = connect(&runtime).await;
     assert_eq!(
         send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,

@@ -33,14 +33,14 @@ impl<'a> Document<'a> {
 
 /// Check the same bounded Content-Type grammar before materializing body bytes.
 /// A supported header alone never selects multipart without a complete body.
-pub(super) fn supports_headers(headers: &Headers) -> bool {
+pub fn supports_headers(headers: &Headers) -> bool {
     content_type(headers).is_ok()
 }
 
 /// A complete supported Source selects this protocol comparison. Unknown or
 /// incomplete Source encodings retain the ordinary exact-byte matcher; a
 /// selected Target can never fall back after a malformed body or header.
-pub(super) fn preview(
+pub fn preview(
     source: &[u8],
     source_headers: &Headers,
     actual: &[u8],
@@ -53,14 +53,14 @@ pub(super) fn preview(
         source_identity.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
         actual_identity.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
         ensure!(
-            super::request_headers::exact_contract_match(&source_identity, &actual_identity),
+            crate::headers::exact_contract_match(&source_identity, &actual_identity),
             "multipart identity headers differ"
         );
         source.compare(&Document::parse(actual, actual_headers)?)
     })())
 }
 
-pub(in crate::replay) fn compare(
+pub fn compare(
     source: &[u8],
     source_headers: &Headers,
     actual: &[u8],
@@ -71,11 +71,11 @@ pub(in crate::replay) fn compare(
 
 /// Protected planning witness: exact part bytes are represented by SHA-256 digests.
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
-pub(in crate::replay) struct MultipartContract {
+pub struct MultipartContract {
     parameters: Vec<(String, String)>,
     part_fingerprints: Vec<String>,
 }
-pub(in crate::replay) fn contract(body: &[u8], headers: &Headers) -> Result<MultipartContract> {
+pub fn contract(body: &[u8], headers: &Headers) -> Result<MultipartContract> {
     let document = Document::parse(body, headers)?;
     let part_fingerprints = document
         .parts

@@ -23,7 +23,7 @@ fn projection_reuses_the_source_shape_but_checks_each_recorded_result() {
     let mut query = Query::prepare("COM_QUERY", "SELECT uid FROM tasks WHERE id=7", None).unwrap();
     assert!(query.response(&source).is_some());
     assert!(query.response(&invalid).is_none());
-    assert_eq!(query.source_shapes.len(), 1);
+    assert_eq!(query.source_shape_count(), 1);
     assert!(query.response(&source).is_some());
 }
 
@@ -40,7 +40,7 @@ fn grouped_projection_reads_each_occurrences_response() {
     assert!(query.grouped_response(&invalid, Some(0)).is_none());
     let later = query.grouped_response(&later, Some(0)).unwrap();
     assert_eq!(later.rows[0][0].value, Some(json!(73)));
-    assert_eq!(query.source_groups.len(), 1);
+    assert_eq!(query.source_group_count(), 1);
 }
 
 #[test]

@@ -30,7 +30,7 @@ use crate::recording_control::RecordingListener;
 
 use super::{
     RawTcpOptions, TcpConnectionRecord, detection::DetectedProtocol, detection::Detection,
-    detection::detect_client_protocol, detection::detect_mysql_server,
+    detection::detect_client_protocol_with, detection::detect_mysql_server_with,
     detection::protocol_override, record_proxy_error, record_tcp_connection, serve_http_connection,
     serve_https_mitm_connection,
 };
@@ -184,7 +184,7 @@ async fn handle_connection(
     {
         Detection::Match(DetectedProtocol::Kafka)
     } else if config.protocol_detection.enabled || config.record_http {
-        peek_client_protocol(&client)
+        peek_client_protocol(&client, state.dependency_providers())
             .await
             .unwrap_or(Detection::NeedMore)
     } else {
@@ -296,16 +296,27 @@ async fn proxy_raw_tcp(
     let mut protocol = options.detected_protocol;
     if protocol.is_none()
         && options.sniff_server_first_protocols
-        && upstream_looks_like_mysql(&upstream).await.unwrap_or(false)
+        && upstream_looks_like_mysql(&upstream, state.dependency_providers())
+            .await
+            .unwrap_or(false)
     {
         protocol = Some(DetectedProtocol::Mysql);
     }
     if protocol.is_none() && state.config().tcp_gateway.protocol_detection.enabled {
         let hint = protocol_hint(&state, fake_addr.port());
         protocol = if options.sniff_server_first_protocols && hint.is_none() {
-            Some(detect_protocol_when_data_arrives(&client, &upstream).await?)
+            Some(
+                detect_protocol_when_data_arrives(&client, &upstream, state.dependency_providers())
+                    .await?,
+            )
         } else {
-            match peek_client_protocol_with_timeout(&client, PARTIAL_PEEK_TIMEOUT).await? {
+            match peek_client_protocol_with_timeout(
+                &client,
+                PARTIAL_PEEK_TIMEOUT,
+                state.dependency_providers(),
+            )
+            .await?
+            {
                 Detection::Match(protocol) => Some(protocol),
                 Detection::NeedMore | Detection::NoMatch => hint,
             }
@@ -569,22 +580,26 @@ fn plaintext_protocol_port_hint(state: &AppState, port: u16) -> Option<&'static 
     }
 }
 
-async fn peek_client_protocol(stream: &TcpStream) -> Result<Detection> {
-    peek_client_protocol_with_timeout(stream, INITIAL_PEEK_TIMEOUT).await
+async fn peek_client_protocol(
+    stream: &TcpStream,
+    providers: &crate::protocols::DependencyProviders,
+) -> Result<Detection> {
+    peek_client_protocol_with_timeout(stream, INITIAL_PEEK_TIMEOUT, providers).await
 }
 
 async fn detect_protocol_when_data_arrives(
     client: &TcpStream,
     upstream: &TcpStream,
+    providers: &crate::protocols::DependencyProviders,
 ) -> Result<DetectedProtocol> {
     tokio::select! {
-        detection = peek_client_protocol_after_data(client) => {
+        detection = peek_client_protocol_after_data(client, providers) => {
             Ok(match detection? {
                 Detection::Match(protocol) => protocol,
                 Detection::NeedMore | Detection::NoMatch => DetectedProtocol::Raw,
             })
         }
-        mysql = upstream_looks_like_mysql_after_data(upstream) => {
+        mysql = upstream_looks_like_mysql_after_data(upstream, providers) => {
             Ok(if mysql? {
                 DetectedProtocol::Mysql
             } else {
@@ -594,24 +609,28 @@ async fn detect_protocol_when_data_arrives(
     }
 }
 
-async fn peek_client_protocol_after_data(stream: &TcpStream) -> Result<Detection> {
+async fn peek_client_protocol_after_data(
+    stream: &TcpStream,
+    providers: &crate::protocols::DependencyProviders,
+) -> Result<Detection> {
     let mut first = [0_u8; 1];
     if stream.peek(&mut first).await? == 0 {
         return Ok(Detection::NoMatch);
     }
-    peek_client_protocol_with_timeout(stream, PARTIAL_PEEK_TIMEOUT).await
+    peek_client_protocol_with_timeout(stream, PARTIAL_PEEK_TIMEOUT, providers).await
 }
 
 async fn peek_client_protocol_with_timeout(
     stream: &TcpStream,
     wait: Duration,
+    providers: &crate::protocols::DependencyProviders,
 ) -> Result<Detection> {
     let mut buf = vec![0_u8; MAX_SNIFF_BYTES];
     let len = match timeout(wait, stream.peek(&mut buf)).await {
         Ok(result) => result?,
         Err(_) => return Ok(Detection::NeedMore),
     };
-    let mut detection = detect_client_protocol(&buf[..len]);
+    let mut detection = detect_client_protocol_with(&buf[..len], providers);
     if detection == Detection::NeedMore && len > 0 && len < MAX_SNIFF_BYTES {
         let deadline = tokio::time::Instant::now() + PARTIAL_PEEK_TIMEOUT;
         let mut observed_len = len;
@@ -625,35 +644,42 @@ async fn peek_client_protocol_with_timeout(
                 continue;
             }
             observed_len = len;
-            detection = detect_client_protocol(&buf[..len]);
+            detection = detect_client_protocol_with(&buf[..len], providers);
         }
     }
     Ok(detection)
 }
 
-async fn upstream_looks_like_mysql(stream: &TcpStream) -> Result<bool> {
+async fn upstream_looks_like_mysql(
+    stream: &TcpStream,
+    providers: &crate::protocols::DependencyProviders,
+) -> Result<bool> {
     let mut buf = [0_u8; 5];
     let mut len = match timeout(INITIAL_PEEK_TIMEOUT, stream.peek(&mut buf)).await {
         Ok(result) => result?,
         Err(_) => return Ok(false),
     };
     let deadline = tokio::time::Instant::now() + PARTIAL_PEEK_TIMEOUT;
-    while detect_mysql_server(&buf[..len]) == Detection::NeedMore
+    while detect_mysql_server_with(&buf[..len], providers) == Detection::NeedMore
         && len < buf.len()
         && tokio::time::Instant::now() < deadline
     {
         sleep(Duration::from_millis(5)).await;
         len = stream.peek(&mut buf).await?;
     }
-    Ok(detect_mysql_server(&buf[..len]) == Detection::Match(DetectedProtocol::Mysql))
+    Ok(detect_mysql_server_with(&buf[..len], providers)
+        == Detection::Match(DetectedProtocol::Mysql))
 }
 
-async fn upstream_looks_like_mysql_after_data(stream: &TcpStream) -> Result<bool> {
+async fn upstream_looks_like_mysql_after_data(
+    stream: &TcpStream,
+    providers: &crate::protocols::DependencyProviders,
+) -> Result<bool> {
     let mut first = [0_u8; 1];
     if stream.peek(&mut first).await? == 0 {
         return Ok(false);
     }
-    upstream_looks_like_mysql(stream).await
+    upstream_looks_like_mysql(stream, providers).await
 }
 
 pub(super) fn routed_upstream_addr(

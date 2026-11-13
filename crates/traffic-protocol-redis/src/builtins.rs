@@ -1,6 +1,6 @@
-use crate::redis::{RedisCommand, is_pubsub_command};
+use crate::{RedisCommand, is_pubsub_command};
 
-pub(super) fn redis_builtin(
+pub fn redis_builtin(
     command: &RedisCommand,
     resp_version: &mut u8,
     database: &mut i64,
@@ -53,7 +53,7 @@ pub(super) fn redis_builtin(
         "CLIENT" => match command.args.first().map(Vec::as_slice) {
             Some(subcommand)
                 if subcommand.eq_ignore_ascii_case(b"SETNAME")
-                    || crate::redis::is_client_library_info(&command.name, &command.args) =>
+                    || crate::is_client_library_info(&command.name, &command.args) =>
             {
                 Some(b"+OK\r\n".to_vec())
             }
@@ -77,14 +77,14 @@ pub(super) fn redis_builtin(
     }
 }
 
-pub(super) fn redis_is_builtin(command: &str) -> bool {
+pub fn redis_is_builtin(command: &str) -> bool {
     matches!(
         command,
         "AUTH" | "SELECT" | "HELLO" | "CLIENT" | "PING" | "QUIT"
     )
 }
 
-pub(super) fn redis_is_unsupported(command: &RedisCommand) -> bool {
+pub fn redis_is_unsupported(command: &RedisCommand) -> bool {
     matches!(
         command.name.as_str(),
         "MONITOR" | "CLUSTER" | "ACL" | "CONFIG" | "MIGRATE" | "SENTINEL"

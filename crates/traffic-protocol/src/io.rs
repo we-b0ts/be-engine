@@ -35,7 +35,7 @@ impl<R> BufferedReader<R> {
     }
 }
 
-pub async fn read_frame<R: AsyncRead + Unpin, P: FrameDecoder>(
+pub async fn read_frame<R: AsyncRead + Unpin, P: FrameDecoder + ?Sized>(
     reader: &mut BufferedReader<R>,
     provider: &mut P,
 ) -> Result<Option<P::Frame>> {
@@ -74,7 +74,7 @@ pub async fn read_frame<R: AsyncRead + Unpin, P: FrameDecoder>(
 }
 
 /// A bounded single frame with no read-ahead, suitable for native TLS upgrades.
-pub async fn read_one<R: AsyncRead + Unpin + ?Sized, P: FrameDecoder>(
+pub async fn read_one<R: AsyncRead + Unpin + ?Sized, P: FrameDecoder + ?Sized>(
     reader: &mut R,
     provider: &mut P,
     max_frame_bytes: usize,

@@ -1,4 +1,13 @@
+pub mod builtins;
+pub mod client_info;
+pub mod expiration;
+pub mod key_access;
+pub mod key_selector;
+pub mod key_slots;
+pub mod keys;
+pub mod subject;
 use anyhow::{Context, Result, anyhow};
+pub use client_info::is_client_library_info;
 
 mod recognition;
 use bytes::{Bytes, BytesMut};
@@ -6,7 +15,7 @@ pub use recognition::recognize;
 use redis_protocol::resp2::types::BytesFrame as Resp2Frame;
 use tokio::io::AsyncRead;
 use traffic_protocol::FrameDecoder;
-pub use traffic_protocol::io::BufferedReader;
+use traffic_protocol::io::BufferedReader as FrameBuffer;
 
 #[derive(Debug, Clone)]
 pub struct RedisCommand {
@@ -62,15 +71,29 @@ pub struct RedisFrame {
 
 #[derive(Default)]
 pub struct RedisProvider;
-pub use RedisProvider as RedisDecoder;
+
+#[derive(Default)]
+pub struct RedisDecoder;
+
+pub type RedisSession = Box<dyn FrameDecoder<Frame = RedisFrame>>;
 
 impl traffic_protocol::DependencyProvider for RedisProvider {
-    fn recognize(probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
+    fn name(&self) -> &'static str {
+        "redis"
+    }
+
+    fn recognize(&self, probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
         recognize(probe)
+    }
+
+    fn create_session(&self) -> Result<traffic_protocol::Session> {
+        Ok(traffic_protocol::Session::new::<RedisSession>(Box::new(
+            RedisDecoder,
+        )))
     }
 }
 
-impl FrameDecoder for RedisProvider {
+impl FrameDecoder for RedisDecoder {
     type Frame = RedisFrame;
     fn encode(&self, frame: &RedisFrame, output: &mut BytesMut) -> Result<()> {
         frame_kind(&frame.raw)?;
@@ -89,10 +112,48 @@ impl FrameDecoder for RedisProvider {
     }
 }
 
+/// The framework owns buffering while this connection retains its injected
+/// native decoder across pipelined requests and server pushes.
+pub struct BufferedReader<R> {
+    reader: FrameBuffer<R>,
+    session: RedisSession,
+}
+
+impl<R> BufferedReader<R> {
+    pub fn new(inner: R, max_frame_bytes: usize) -> Self {
+        Self::with_session(inner, max_frame_bytes, Box::new(RedisDecoder))
+    }
+
+    pub fn with_session(inner: R, max_frame_bytes: usize, session: RedisSession) -> Self {
+        Self {
+            reader: FrameBuffer::new(inner, max_frame_bytes),
+            session,
+        }
+    }
+
+    pub fn into_inner(self) -> R {
+        self.reader.inner
+    }
+}
+
+impl<R> std::ops::Deref for BufferedReader<R> {
+    type Target = FrameBuffer<R>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.reader
+    }
+}
+
+impl<R> std::ops::DerefMut for BufferedReader<R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.reader
+    }
+}
+
 pub async fn read_frame<R: AsyncRead + Unpin>(
     reader: &mut BufferedReader<R>,
 ) -> Result<Option<RedisFrame>> {
-    traffic_protocol::io::read_frame(reader, &mut RedisDecoder).await
+    traffic_protocol::io::read_frame(&mut reader.reader, reader.session.as_mut()).await
 }
 
 pub fn frame_kind(raw: &Bytes) -> Result<RedisFrameKind> {

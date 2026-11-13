@@ -22,10 +22,8 @@ pub enum RedisValueKeySelector {
     },
 }
 impl RedisValueKeySelector {
-    pub(crate) fn matches(&self, key: &[u8]) -> bool {
-        use crate::config::process_owned_dependencies::{
-            matches_redis_key, matches_redis_numeric_key_pattern,
-        };
+    pub fn matches(&self, key: &[u8]) -> bool {
+        use crate::keys::{matches_redis_key, matches_redis_numeric_key_pattern};
         match self {
             Self::Exact { value } => key == value.as_bytes(),
             Self::Affix { prefix, suffix } => {
@@ -36,7 +34,7 @@ impl RedisValueKeySelector {
             }
         }
     }
-    pub(in crate::replay) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let valid = match self {
             Self::Exact { value } => !value.is_empty() && value.len() <= 1024,
             Self::Affix { prefix, suffix } => {
@@ -50,7 +48,7 @@ impl RedisValueKeySelector {
         );
         Ok(())
     }
-    pub(in crate::replay) fn overlaps(&self, other: &Self) -> bool {
+    pub fn overlaps(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Exact { value }, other) | (other, Self::Exact { value }) => {
                 other.matches(value.as_bytes())

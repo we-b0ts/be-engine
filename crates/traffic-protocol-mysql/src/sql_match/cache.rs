@@ -5,8 +5,8 @@ use super::{
     predicate::{Key, Template},
     query_in,
 };
-use crate::mysql::sql::{Token, projection::DirectSelect};
-use crate::replay::mysql::RecordedMysqlValue;
+use crate::model::MysqlValue as RecordedMysqlValue;
+use crate::sql::{Token, projection::DirectSelect};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, OnceLock},
@@ -17,16 +17,16 @@ const MAX_SQL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SINGLE_SQL_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Default)]
-pub(in crate::replay::mysql) struct SqlCache {
+pub struct SqlCache {
     entries: HashMap<String, Arc<CompiledSql>>,
     order: VecDeque<String>,
     bytes: usize,
-    #[cfg(test)]
-    pub(in crate::replay::mysql) compilations: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    pub compilations: usize,
 }
 
 #[derive(Debug)]
-pub(in crate::replay::mysql) struct CompiledSql {
+pub struct CompiledSql {
     tokens: Vec<Token>,
     predicate: Option<Template>,
     query_in: Option<query_in::Template>,
@@ -39,14 +39,14 @@ pub(in crate::replay::mysql) struct CompiledSql {
 }
 
 #[derive(Debug)]
-pub(in crate::replay::mysql) struct BoundSql {
+pub struct BoundSql {
     key: SemanticKey,
-    pub(in crate::replay::mysql) projection: Option<DirectSelect>,
+    pub projection: Option<DirectSelect>,
     projection_key: Option<Key>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(in crate::replay::mysql) struct InListKey(Key);
+pub struct InListKey(Key);
 
 #[derive(Debug)]
 enum SemanticKey {
@@ -55,11 +55,11 @@ enum SemanticKey {
 }
 
 impl SqlCache {
-    pub(in crate::replay::mysql) fn get(&mut self, sql: &str) -> Arc<CompiledSql> {
+    pub fn get(&mut self, sql: &str) -> Arc<CompiledSql> {
         if let Some(compiled) = self.entries.get(sql) {
             return Arc::clone(compiled);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.compilations += 1;
         }
@@ -94,7 +94,7 @@ impl CompiledSql {
     }
 
     fn parse(sql: &str) -> Self {
-        let tokens = crate::mysql::sql::bounds::tokens(sql).unwrap_or_default();
+        let tokens = crate::sql::bounds::tokens(sql).unwrap_or_default();
         let mut predicate = Template::parse(&tokens, true);
         let query_in = predicate
             .is_none()
@@ -140,7 +140,7 @@ impl CompiledSql {
         }
     }
 
-    pub(in crate::replay::mysql) fn bind(
+    pub fn bind(
         &self,
         command: &str,
         params: Option<&[RecordedMysqlValue]>,
@@ -155,7 +155,7 @@ impl CompiledSql {
         }
     }
 
-    pub(in crate::replay::mysql) fn bind_in_lists(
+    pub fn bind_in_lists(
         &self,
         command: &str,
         params: Option<&[RecordedMysqlValue]>,
@@ -190,7 +190,7 @@ impl CompiledSql {
         }
     }
 
-    pub(in crate::replay::mysql) fn metadata(&self) -> Option<Arc<BoundSql>> {
+    pub fn metadata(&self) -> Option<Arc<BoundSql>> {
         self.metadata
             .get_or_init(|| {
                 self.instantiate(&vec![Token::Placeholder; self.param_count])
@@ -239,7 +239,7 @@ fn bind_tokens(tokens: &[Token], values: &[Token]) -> Option<Vec<Token>> {
 }
 
 impl BoundSql {
-    pub(in crate::replay::mysql) fn matches(&self, recorded: &Self, metadata: bool) -> bool {
+    pub fn matches(&self, recorded: &Self, metadata: bool) -> bool {
         match (&self.key, &recorded.key) {
             (SemanticKey::Predicate(actual), SemanticKey::Predicate(recorded)) => {
                 actual == recorded || metadata && actual.metadata_matches(recorded)
@@ -251,11 +251,7 @@ impl BoundSql {
         }
     }
 
-    pub(in crate::replay::mysql) fn projection_matches(
-        &self,
-        recorded: &Self,
-        metadata: bool,
-    ) -> bool {
+    pub fn projection_matches(&self, recorded: &Self, metadata: bool) -> bool {
         self.projection_key
             .as_ref()
             .zip(recorded.projection_key.as_ref())

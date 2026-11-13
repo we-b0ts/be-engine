@@ -56,7 +56,9 @@ async fn fragmented_sniff_waits_for_a_complete_command_without_consuming_it() {
     let (mut server, _) = listener.accept().await.unwrap();
 
     assert_eq!(
-        peek_client_protocol(&server).await.unwrap(),
+        peek_client_protocol(&server, &crate::protocols::default_providers())
+            .await
+            .unwrap(),
         Detection::Match(DetectedProtocol::Redis)
     );
     let mut actual = vec![0_u8; command.len()];
@@ -293,7 +295,12 @@ async fn idle_detection_accepts_a_delayed_mysql_greeting() {
     let (mut upstream_server, _) = upstream_listener.accept().await.unwrap();
     let proxy_upstream = upstream_task.await.unwrap().unwrap();
     let detection = tokio::spawn(async move {
-        detect_protocol_when_data_arrives(&proxy_client, &proxy_upstream).await
+        detect_protocol_when_data_arrives(
+            &proxy_client,
+            &proxy_upstream,
+            &crate::protocols::default_providers(),
+        )
+        .await
     });
 
     sleep(INITIAL_PEEK_TIMEOUT + PARTIAL_PEEK_TIMEOUT + Duration::from_millis(200)).await;

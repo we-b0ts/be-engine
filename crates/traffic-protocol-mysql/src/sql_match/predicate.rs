@@ -1,7 +1,7 @@
 //! Bounded MySQL predicate equivalence. sqlparser owns grammar; this module
 //! admits only pure predicates and retains the rest of each query verbatim.
 use super::MAX_SQL_TOKENS;
-use crate::mysql::sql::{Token, render};
+use crate::sql::{Token, render};
 use sqlparser::{
     ast::{BinaryOperator, Distinct, Expr, SelectItem, SetExpr, Statement, TableFactor, Value},
     dialect::MySqlDialect,

@@ -25,7 +25,7 @@ use super::{
     register_replay_target,
 };
 
-mod builtins;
+use traffic_protocol_redis::builtins;
 mod connection_scope;
 mod request_identity;
 pub(crate) use request_identity::request_fingerprint;
@@ -40,8 +40,8 @@ mod case_scope;
 pub(crate) mod expiration;
 #[cfg(test)]
 mod field_identity_tests;
-mod key_access;
-pub(in crate::replay) mod key_selector;
+use traffic_protocol_redis::key_access;
+pub(in crate::replay) use traffic_protocol_redis::key_selector;
 #[cfg(test)]
 mod lane_tests;
 mod matching;
@@ -601,7 +601,9 @@ async fn serve_connection(
     };
     state.lock().await.redis.events.connections += 1;
     let control = crate::dependency::termination::ConnectionControl::new(&stream)?;
-    let mut reader = RedisBufferedReader::new(&mut stream, 64 * 1024 * 1024);
+    let providers = state.lock().await.providers.clone();
+    let decoder = crate::protocols::redis_session(&providers)?;
+    let mut reader = RedisBufferedReader::with_session(&mut stream, 64 * 1024 * 1024, decoder);
     let mut resp_version = 2_u8;
     let mut database = 0_i64;
     let mut username: Option<String> = None;

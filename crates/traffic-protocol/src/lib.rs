@@ -1,17 +1,47 @@
 //! Typed protocol facts consumed by the connection, recording and Replay framework.
 use anyhow::{Result, ensure};
 use bytes::BytesMut;
+use std::any::Any;
+use std::sync::Arc;
 
 pub mod io;
 
-/// Registration is protocol recognition only. The framework retains connection
-/// ownership and selects the native framing adapter after bounded pre-reading.
+/// A process-local provider factory. Connection ownership, scheduling and
+/// persistence belong to the framework.
 pub trait DependencyProvider: Send + Sync {
-    fn recognize(probe: Probe<'_>) -> Recognition;
+    fn name(&self) -> &'static str;
+    fn recognize(&self, probe: Probe<'_>) -> Recognition;
+    fn create_session(&self) -> Result<Session>;
+}
+
+/// One native session interface, erased at the registration boundary and bound
+/// once by its protocol adapter before I/O. Frames retain their native types.
+pub struct Session {
+    native: Box<dyn Any + Send>,
+}
+
+impl Session {
+    pub fn new<T: Send + 'static>(native: T) -> Self {
+        Self {
+            native: Box::new(native),
+        }
+    }
+
+    pub fn bind<T: Send + 'static>(self) -> Result<T> {
+        self.native
+            .downcast::<T>()
+            .map(|native| *native)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "provider session does not implement {}",
+                    std::any::type_name::<T>()
+                )
+            })
+    }
 }
 
 /// Incremental native byte framing. Framework I/O supplies and bounds the buffer.
-pub trait FrameDecoder: DependencyProvider {
+pub trait FrameDecoder: Send {
     type Frame;
     fn decode(&mut self, input: &mut BytesMut) -> Result<Option<Self::Frame>>;
     fn encode(&self, frame: &Self::Frame, output: &mut BytesMut) -> Result<()>;
@@ -22,7 +52,7 @@ pub trait FrameDecoder: DependencyProvider {
     fn parse(
         &mut self,
         input: &mut BytesMut,
-        handler: &mut impl EventHandler<Self::Frame>,
+        handler: &mut dyn EventHandler<Self::Frame>,
     ) -> Result<()> {
         if let Some(frame) = self.decode(input)? {
             handler.on_event(frame)?;
@@ -55,9 +85,10 @@ pub enum Recognition {
     Reject,
 }
 
+#[derive(Clone)]
 pub struct RegisteredProtocol<Kind> {
     pub kind: Kind,
-    pub recognize: fn(Probe<'_>) -> Recognition,
+    pub provider: Arc<dyn DependencyProvider>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +106,7 @@ pub fn recognize<Kind: Copy>(
     let mut matched = None;
     let mut incomplete = false;
     for provider in providers {
-        match (provider.recognize)(probe) {
+        match provider.provider.recognize(probe) {
             Recognition::Match => {
                 ensure!(
                     matched.is_none(),
@@ -95,10 +126,89 @@ pub fn recognize<Kind: Copy>(
 }
 
 impl<Kind> RegisteredProtocol<Kind> {
-    pub const fn new<P: DependencyProvider>(kind: Kind) -> Self {
+    pub fn new(kind: Kind, provider: Arc<dyn DependencyProvider>) -> Self {
+        Self { kind, provider }
+    }
+}
+
+/// Immutable after startup assembly. Sessions keep using the provider selected
+/// for their connection, independently of other recorder or Replay instances.
+#[derive(Clone)]
+pub struct ProviderRegistry<Kind> {
+    providers: Vec<RegisteredProtocol<Kind>>,
+}
+
+impl<Kind: std::fmt::Debug> std::fmt::Debug for ProviderRegistry<Kind> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_list()
+            .entries(
+                self.providers
+                    .iter()
+                    .map(|entry| (&entry.kind, entry.provider.name())),
+            )
+            .finish()
+    }
+}
+
+impl<Kind> Default for ProviderRegistry<Kind> {
+    fn default() -> Self {
         Self {
-            kind,
-            recognize: P::recognize,
+            providers: Vec::new(),
         }
     }
 }
+
+impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
+    pub fn register(&mut self, kind: Kind, provider: Arc<dyn DependencyProvider>) -> Result<()> {
+        ensure!(!provider.name().is_empty(), "provider name is empty");
+        ensure!(
+            self.providers
+                .iter()
+                .all(|registered| registered.kind != kind
+                    && registered.provider.name() != provider.name()),
+            "dependency provider is already registered"
+        );
+        self.providers.push(RegisteredProtocol::new(kind, provider));
+        Ok(())
+    }
+
+    pub fn recognize(&self, probe: Probe<'_>) -> Result<Detection<Kind>> {
+        recognize(&self.providers, probe)
+    }
+
+    pub fn replace(&mut self, kind: Kind, provider: Arc<dyn DependencyProvider>) -> Result<()> {
+        let index = self
+            .providers
+            .iter()
+            .position(|registered| registered.kind == kind)
+            .ok_or_else(|| anyhow::anyhow!("dependency provider is not registered"))?;
+        ensure!(!provider.name().is_empty(), "provider name is empty");
+        ensure!(
+            self.providers
+                .iter()
+                .enumerate()
+                .all(|(position, registered)| {
+                    position == index || registered.provider.name() != provider.name()
+                }),
+            "dependency provider name is already registered"
+        );
+        self.providers[index] = RegisteredProtocol::new(kind, provider);
+        Ok(())
+    }
+
+    pub fn provider(&self, kind: Kind) -> Result<&Arc<dyn DependencyProvider>> {
+        self.providers
+            .iter()
+            .find(|registered| registered.kind == kind)
+            .map(|registered| &registered.provider)
+            .ok_or_else(|| anyhow::anyhow!("dependency provider is not registered"))
+    }
+
+    pub fn create_session(&self, kind: Kind) -> Result<Session> {
+        self.provider(kind)?.create_session()
+    }
+}
+
+#[cfg(test)]
+mod tests;

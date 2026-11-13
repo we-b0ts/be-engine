@@ -1,3 +1,4 @@
+mod multipart;
 use super::super::tests::{spawn_http_replay_with_policy, write_http_case, write_http_dependency};
 use super::*;
 use crate::replay::control::{ReplayControlRequest, end_case, handle_control_request};

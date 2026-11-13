@@ -49,7 +49,7 @@ pub(crate) use connection::run;
 use detection::DetectedProtocol;
 pub(crate) use detection::{
     DetectedProtocol as DetectedClientProtocol, Detection as ClientProtocolDetection,
-    detect_client_protocol,
+    detect_client_protocol_with,
 };
 use http_transport::{
     GatewayBody, build_downstream_response, build_origin_form_uri, build_upstream_request,
@@ -80,6 +80,7 @@ async fn serve_http_connection(
     let _registration = client.registration();
     let owner = termination.clone();
     let io = TokioIo::new(ObservedClientIo::new(client, termination.clone()));
+    let mut protocol_session = crate::protocols::http_session(state.dependency_providers())?;
     let service = service_fn(move |req| {
         let state = state.clone();
         let entry = entry.clone();
@@ -102,11 +103,7 @@ async fn serve_http_connection(
     });
 
     let result = owner
-        .serve(traffic_protocol_http::HttpProvider::connection(
-            io.into_inner(),
-            service,
-            true,
-        ))
+        .serve(protocol_session.connection(io.into_inner(), service, true))
         .await;
     if owner.server_write_half_closed() {
         owner.retain_read_half().await?;
@@ -166,6 +163,7 @@ async fn serve_https_mitm_connection(
     };
 
     let io = TokioIo::new(ObservedClientIo::new(tls, termination.clone()));
+    let mut protocol_session = crate::protocols::http_session(state.dependency_providers())?;
     let service = service_fn(move |req| {
         let state = state.clone();
         let entry = entry.clone();
@@ -192,11 +190,7 @@ async fn serve_https_mitm_connection(
     });
 
     let result = owner
-        .serve(traffic_protocol_http::HttpProvider::connection(
-            io.into_inner(),
-            service,
-            true,
-        ))
+        .serve(protocol_session.connection(io.into_inner(), service, true))
         .await;
     if owner.server_write_half_closed() {
         owner.retain_read_half().await?;

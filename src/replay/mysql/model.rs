@@ -152,76 +152,12 @@ pub(in crate::replay) struct RecordedMysqlWireCapture {
     pub(in crate::replay) truncated: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub(in crate::replay) struct RecordedMysqlColumn {
-    pub(in crate::replay) name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) database: Option<String>,
-    pub(in crate::replay) table: Option<String>,
-    /// Delivered table label; the recording's table remains the physical origin.
-    #[serde(skip)]
-    pub(in crate::replay) table_alias: Option<String>,
-    pub(in crate::replay) column: Option<String>,
-    pub(in crate::replay) family: String,
-    pub(in crate::replay) sql_type: String,
-    pub(in crate::replay) unsigned: Option<bool>,
-    pub(in crate::replay) bits: Option<u16>,
-    pub(in crate::replay) nullable: Option<bool>,
-    pub(in crate::replay) scale: Option<u8>,
-}
+pub(in crate::replay) use traffic_protocol_mysql::model::{
+    MysqlColumn as RecordedMysqlColumn, MysqlValue as RecordedMysqlValue, PreparedStatement,
+    ResultRowEncoding, ValueCapture as ReplayBodyCapture,
+};
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub(in crate::replay) struct RecordedMysqlValue {
-    pub(in crate::replay) kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) value: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) raw: Option<ReplayBodyCapture>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub(in crate::replay) struct ReplayBodyCapture {
-    pub(in crate::replay) encoding: String,
-    pub(in crate::replay) data: String,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(in crate::replay) truncated: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(in crate::replay) struct StatementMetadata {
-    pub(in crate::replay) param_count: usize,
-    pub(in crate::replay) columns: Vec<RecordedMysqlColumn>,
-    pub(super) prepare_wire: std::sync::OnceLock<Option<Arc<super::response::EncodedPrepare>>>,
-}
-
-impl StatementMetadata {
-    pub(in crate::replay) fn new(param_count: usize, columns: Vec<RecordedMysqlColumn>) -> Self {
-        Self {
-            param_count,
-            columns,
-            prepare_wire: std::sync::OnceLock::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(in crate::replay) struct PreparedStatement {
-    pub(in crate::replay) sql: String,
-    pub(in crate::replay) param_count: usize,
-    pub(in crate::replay) last_param_types: Vec<BoundParamType>,
-}
-
-#[derive(Debug, Clone)]
-pub(in crate::replay) struct BoundParamType {
-    pub(in crate::replay) type_code: u8,
-    pub(in crate::replay) unsigned: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(in crate::replay) enum ResultRowEncoding {
-    Text,
-    Binary,
-}
+pub(in crate::replay) use traffic_protocol_mysql::prepare::StatementMetadata;
 
 impl PartialEq for RecordedMysqlResponse {
     fn eq(&self, other: &Self) -> bool {
@@ -235,5 +171,17 @@ impl PartialEq for RecordedMysqlResponse {
             && self.columns == other.columns
             && self.rows == other.rows
             && self.rows_truncated == other.rows_truncated
+    }
+}
+
+impl traffic_protocol_mysql::sql_match::SqlRequest for RecordedMysqlExchange {
+    fn command(&self) -> &str {
+        &self.command
+    }
+    fn sql(&self) -> Option<&str> {
+        self.sql.as_deref()
+    }
+    fn params(&self) -> Option<&[RecordedMysqlValue]> {
+        self.params.as_deref()
     }
 }

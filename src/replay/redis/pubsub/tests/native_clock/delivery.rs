@@ -96,7 +96,7 @@ async fn partial_input(
     );
     assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
     drop(state);
-    let subscriber = RedisBufferedReader::new(subscriber.inner, 16 * 1024 * 1024);
+    let subscriber = RedisBufferedReader::new(subscriber.into_inner(), 16 * 1024 * 1024);
     (runtime, subscriber, task, raw)
 }
 

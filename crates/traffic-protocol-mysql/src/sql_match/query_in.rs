@@ -1,7 +1,7 @@
 //! Bounded full-AST matching for unordered IN lists in supported complex queries.
 //! The complete query AST stays exact; only scalar/flat-tuple list order changes.
 use super::MAX_SQL_TOKENS;
-use crate::mysql::sql::{Token, render};
+use crate::sql::{Token, render};
 use sqlparser::{
     ast::{
         BinaryOperator, Expr, GroupByExpr, Query, Select, SelectFlavor, SelectItem, SetExpr,
