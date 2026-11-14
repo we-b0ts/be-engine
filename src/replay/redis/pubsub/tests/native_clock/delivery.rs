@@ -80,7 +80,14 @@ async fn partial_input(
     );
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if runtime.state.lock().await.redis.has_case_in_flight() {
+            if runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .redis
+                .has_case_in_flight()
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -91,10 +98,19 @@ async fn partial_input(
     tokio::time::sleep(Duration::from_millis(35)).await;
     let state = runtime.state.lock().await;
     assert!(
-        state.redis.has_case_in_flight(),
+        state.protocols.redis.has_case_in_flight(),
         "fixture must exercise real backpressure"
     );
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
+    assert_eq!(
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        0
+    );
     drop(state);
     let subscriber = RedisBufferedReader::new(subscriber.into_inner(), 16 * 1024 * 1024);
     (runtime, subscriber, task, raw)
@@ -135,12 +151,21 @@ async fn failed_primary_cleanup_waits_for_partial_native_input_before_next_case(
         guards::control(&runtime, json!({"command":"begin","case_id":next_case})).await["ok"],
         false
     );
-    assert!(runtime.state.lock().await.redis.has_case_in_flight());
+    assert!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .has_case_in_flight()
+    );
     assert_eq!(
         runtime
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()
@@ -159,11 +184,23 @@ async fn failed_primary_cleanup_waits_for_partial_native_input_before_next_case(
     assert_eq!(ended["dirty"], false);
     let state = runtime.state.lock().await;
     assert!(state.active_case_id.is_none());
-    assert!(!state.redis.has_case_in_flight());
-    assert!(!state.redis.case_has_runtime_failure(CASE));
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
-    assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
-    assert!(state.redis.snapshot().unused_case.is_empty());
+    assert!(!state.protocols.redis.has_case_in_flight());
+    assert!(!state.protocols.redis.case_has_runtime_failure(CASE));
+    assert_eq!(
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        1
+    );
+    assert_eq!(
+        state.protocols.redis.pubsub.report().unwrap().failed_pushes,
+        0
+    );
+    assert!(state.protocols.redis.snapshot().unused_case.is_empty());
     drop(state);
     assert_eq!(
         guards::control(&runtime, json!({"command":"begin","case_id":next_case})).await["ok"],
@@ -189,12 +226,26 @@ async fn a_closed_subscriber_leaves_partial_native_input_failed_and_case_dirty()
             .is_err()
     );
     let state = runtime.state.lock().await;
-    assert!(!state.redis.has_case_in_flight());
-    assert!(state.redis.case_has_runtime_failure(CASE));
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
-    assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 1);
+    assert!(!state.protocols.redis.has_case_in_flight());
+    assert!(state.protocols.redis.case_has_runtime_failure(CASE));
     assert_eq!(
-        state.redis.events.unsafe_events[0].case_id.as_deref(),
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        0
+    );
+    assert_eq!(
+        state.protocols.redis.pubsub.report().unwrap().failed_pushes,
+        1
+    );
+    assert_eq!(
+        state.protocols.redis.events.unsafe_events[0]
+            .case_id
+            .as_deref(),
         Some(CASE)
     );
 }
@@ -229,8 +280,20 @@ async fn closing_a_case_prevents_future_native_input_admission() {
     tokio::time::sleep(Duration::from_millis(55)).await;
     guards::silent(&mut subscriber).await;
     let state = runtime.state.lock().await;
-    assert!(!state.redis.has_case_in_flight());
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
-    assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
+    assert!(!state.protocols.redis.has_case_in_flight());
+    assert_eq!(
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        0
+    );
+    assert_eq!(
+        state.protocols.redis.pubsub.report().unwrap().failed_pushes,
+        0
+    );
     task.abort();
 }

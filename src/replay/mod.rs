@@ -23,7 +23,6 @@ use crate::request_headers::validate_request_file;
 mod adapters;
 pub(crate) mod admission;
 mod assertion;
-mod auto_protocol;
 mod candidate_selection;
 mod case_index;
 mod command_matching;
@@ -32,7 +31,7 @@ mod command_protocol_tests;
 mod connect_failure;
 mod contract_value;
 mod lifecycle_cleanup;
-mod native;
+pub(crate) mod native;
 pub(crate) use memcached::contracts::{
     source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
 };
@@ -40,6 +39,7 @@ pub(crate) use policy::validate_finite_sharing as validate_native_finite_sharing
 pub(crate) use policy::{NativeSourceCase, validate_native_source_dependencies};
 pub(crate) use report::source_owned_match;
 mod control;
+pub(crate) use control::http_input_timing::Timeline as HttpInputTimeline;
 pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
 mod attribution;
 pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes};
@@ -65,7 +65,7 @@ pub use egress_counter::{
 };
 #[cfg(test)]
 mod global_dependency_tests;
-mod http;
+pub(crate) mod http;
 pub(crate) use http::contracts::{
     multipart_witness_matches as http_multipart_witness_matches,
     source_witness as http_source_witness, validate_witness as http_validate_witness,
@@ -79,14 +79,14 @@ pub(crate) use http::tests::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
 };
 pub(crate) use http::unordered as http_unordered;
-mod kafka;
+pub(crate) mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod legacy_tests;
-mod memcached;
+pub(crate) mod memcached;
 mod model;
-mod motan;
-mod mysql;
+pub(crate) mod motan;
+pub(crate) mod mysql;
 pub(crate) use mysql::contracts::automatic::Metadata as MysqlInferenceMetadata;
 pub(crate) use mysql::contracts::source_witness as mysql_source_witness;
 pub(crate) use mysql::contracts::time_copies::global::delivered_witness_time_copies as mysql_global_delivered_time_copies;
@@ -99,27 +99,34 @@ pub(crate) use policy::validate_mysql_value_selector;
 mod execution_plan;
 mod native_index;
 mod network_access;
-mod policy;
+pub(crate) mod policy;
 mod preparation;
-mod sequence;
+pub(crate) use policy::request_contract::RequestContracts;
+pub(crate) use traffic_replay::preparation::{
+    PreparedProtocol, PreparedProtocols, RunSequenceReference,
+};
+pub(crate) mod protocol_runtime;
+use protocol_runtime::{InFlightScope, ReplayProtocolSet};
+pub(crate) mod sequence;
 pub(crate) use policy::replace_request_rule_section;
 pub(crate) use policy::request_contract::redis_bulk_payload;
 pub(crate) use policy::request_contract::{
     RedisFieldValue, RedisTimeRead, redis_delivered_global_time_copies,
     redis_delivered_scalar_time_copies, redis_field_values, redis_time_position,
 };
-mod redis;
+pub(crate) mod redis;
 pub(crate) mod report;
 #[cfg(test)]
 mod test_support;
 
-use case_index::*;
+pub(crate) use case_index::CaseExchangeIndex;
 use control::*;
 pub(crate) use dependencies::validate_index_record;
 use dependencies::*;
 use dns::*;
 use exchange::*;
 use model::*;
+pub(crate) use model::{ReplayProtocol, ReplayTarget};
 use mysql::*;
 use policy::*;
 #[cfg(test)]
@@ -471,8 +478,12 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
     Ok(())
 }
 
+type ReplayState = RuntimeState<crate::protocols::replay::ReplayProtocols>;
+
 #[derive(Debug)]
-struct ReplayState {
+pub(crate) struct RuntimeState<P: ReplayProtocolSet> {
+    protocols: P,
+    replay_policy: Option<ReplayPolicyRuntime>,
     providers: Arc<crate::protocols::DependencyProviders>,
     native: native::Inventory,
     admission_epoch: u64,
@@ -480,18 +491,14 @@ struct ReplayState {
     sequence_catalog: Option<Arc<traffic_replay::SequenceCatalog>>,
     active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,
     run_sequence: Option<sequence::RunBindings>,
-    http_sequence: sequence::Binding,
-    http_sequence_claims: BTreeMap<usize, traffic_replay::SequenceClaim>,
     sequence_missing: Vec<sequence::MissingDependency>,
     batch_scope: Option<reconciliation::BatchScope>,
     startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,
     prepared_socketio_input: Option<control::input_timing::PreparedSource>,
     input_timing: Option<control::input_timing::Live>,
-    http_input_timing: Option<Arc<control::http_input_timing::Timeline>>,
     stream_timing: Option<ReplayStreamTiming>,
     stream_interval_cap_ms: u64,
-    http_ingress: http::ingress::HttpIngress,
     target_observations: target_observation::TargetObservations,
     case_cleanup: control::case_cleanup::CaseCleanup,
     connect_failures: connect_failure::Inventory,
@@ -517,20 +524,7 @@ struct ReplayState {
     global_path: Option<PathBuf>,
     regular_global: BTreeMap<String, report::global_evidence::regular::RegularBaseline>,
     targets: Vec<ReplayTarget>,
-    mysql: mysql::MysqlReplayState,
-    http_exchanges: Vec<http::ReplayHttpExchange>,
-    http_case_exchange_index: CaseExchangeIndex,
-    http_candidates: http::candidates::Candidates,
-    http_blackholes: Vec<http::ReplayHttpBlackhole>,
-    redis: redis::RedisReplayState,
-    memcached: memcached::MemcachedReplayState,
-    kafka: kafka::KafkaReplayState,
-    motan: motan::MotanReplayState,
-    http_events: http::HttpReplayEvents,
     ca_cert_path: PathBuf,
-    replay_policy: Option<ReplayPolicyRuntime>,
-    http_ignore_query_params: Vec<String>,
-    allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
     recording_network_path: Option<PathBuf>,
     recorded_dns_only_domains: BTreeSet<String>,
     fake_cidr: Ipv4Cidr,
@@ -594,111 +588,20 @@ async fn handle_gateway_connection(
     {
         return Ok(());
     }
-    match target.as_ref().map(|target| target.protocol) {
-        Some(ReplayProtocol::Auto) => {
-            let target = target.context("auto replay connection has no target")?;
-            let providers = state.lock().await.providers.clone();
-            match auto_protocol::detect_with_providers(&stream, &providers).await? {
-                Some(ReplayProtocol::Redis) => {
-                    redis::handle_connection(stream, target, state).await
-                }
-                Some(ReplayProtocol::Memcached) => {
-                    memcached::handle_connection(stream, target, state).await
-                }
-                Some(protocol @ (ReplayProtocol::Http | ReplayProtocol::Https)) => {
-                    let mut target = target.clone();
-                    target.protocol = protocol;
-                    http::handle_http_replay_connection(stream, peer_addr, target, state, ca).await
-                }
-                Some(protocol)
-                    if providers.registrations().iter().any(|entry| {
-                        entry.kind.id() == protocol.id()
-                            && entry.provider.native_protocol().is_some()
-                    }) =>
-                {
-                    let mut target = target;
-                    target.protocol = protocol;
-                    native::handle_connection(stream, peer_addr, target, state).await
-                }
-                Some(protocol) => Err(anyhow!(
-                    "auto replay target resolved to unsupported protocol {protocol:?}"
-                )),
-                None => Ok(()),
-            }
+    if target.is_none() {
+        let registered_targets = state.lock().await.targets.len();
+        #[cfg(test)]
+        if registered_targets == 0 {
+            return RuntimeState::serve_connection(stream, peer_addr, None, state, ca).await;
         }
-        Some(ReplayProtocol::Http) | Some(ReplayProtocol::Https) => {
-            http::handle_http_replay_connection(
-                stream,
-                peer_addr,
-                target.context("HTTP replay connection has no target")?,
-                state,
-                ca,
-            )
-            .await
-        }
-        Some(ReplayProtocol::Redis) => {
-            redis::handle_connection(
-                stream,
-                target.context("Redis replay connection has no target")?,
-                state,
-            )
-            .await
-        }
-        Some(ReplayProtocol::Memcached) => {
-            memcached::handle_connection(
-                stream,
-                target.context("Memcached replay connection has no target")?,
-                state,
-            )
-            .await
-        }
-        Some(ReplayProtocol::Kafka) => {
-            kafka::handle_connection(
-                stream,
-                target.context("Kafka replay connection has no target")?,
-                state,
-            )
-            .await
-        }
-        Some(ReplayProtocol::Motan) => {
-            motan::handle_connection(
-                stream,
-                target.context("Motan replay connection has no target")?,
-                state,
-            )
-            .await
-        }
-        Some(ReplayProtocol::Mysql) => {
-            let target = target.map(|target| TargetKey {
-                host: target.host,
-                port: target.port,
-            });
-            mysql::handle_connection(stream, peer_addr, target, state, ca).await
-        }
-        Some(_) => {
-            native::handle_connection(
-                stream,
-                peer_addr,
-                target.context("native replay connection has no target")?,
-                state,
-            )
-            .await
-        }
-        None => {
-            let registered_targets = state.lock().await.targets.len();
-            #[cfg(test)]
-            if registered_targets == 0 {
-                return mysql::handle_connection(stream, peer_addr, None, state, ca).await;
-            }
-            let original = original_dst(&stream)
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|error| format!("unavailable ({error})"));
-            Err(anyhow!(
-                "no replay target is registered for intercepted destination {original}; \
-                 loaded {registered_targets} target mappings"
-            ))
-        }
+        let original = original_dst(&stream)
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|error| format!("unavailable ({error})"));
+        return Err(anyhow!(
+            "no replay target is registered for intercepted destination {original}; loaded {registered_targets} target mappings"
+        ));
     }
+    RuntimeState::serve_connection(stream, peer_addr, target, state, ca).await
 }
 
 enum ReplayDestination {

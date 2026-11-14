@@ -87,9 +87,27 @@ async fn native_clock_keeps_large_ws_output_without_unused_event_feedback() {
     assert_eq!(output.events.len(), EVENTS + 2);
     let epoch = {
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
-        assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
-        state.redis.pubsub.native_clock.epoch(CASE).unwrap()
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
+        assert_eq!(
+            state.protocols.redis.pubsub.report().unwrap().failed_pushes,
+            0
+        );
+        state
+            .protocols
+            .redis
+            .pubsub
+            .native_clock
+            .epoch(CASE)
+            .unwrap()
     };
     // This native clock has no ingress event prerequisites. Capturing a large
     // WS response leaves the control-side event ordinal unused.

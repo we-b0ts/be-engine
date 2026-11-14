@@ -13,15 +13,16 @@ use tokio::sync::Mutex;
 use crate::dependency::DependencyExchangeOutcome;
 use crate::kafka::{decode_request, read_frame, replay_supports, write_frame};
 
+pub(crate) use matcher::KafkaReplayState;
 pub(super) use matcher::{
-    FiniteExchange, KafkaReplayState, RecordedKafkaConnection, RecordedKafkaDelivery,
-    RecordedKafkaFetch, RecordedKafkaProduce,
+    FiniteExchange, RecordedKafkaConnection, RecordedKafkaDelivery, RecordedKafkaFetch,
+    RecordedKafkaProduce,
 };
 pub(super) use report::KafkaProtocolReport;
 
 use super::{ReplayState, ReplayTarget, TargetKey};
 
-pub(super) async fn handle_connection(
+pub(crate) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
@@ -30,7 +31,7 @@ pub(super) async fn handle_connection(
         host: target.host,
         port: target.port,
     };
-    state.lock().await.kafka.events.connections += 1;
+    state.lock().await.protocols.kafka.events.connections += 1;
     let control = crate::dependency::termination::ConnectionControl::new(&stream)?;
 
     while let Some(payload) = read_frame(&mut stream, 64 * 1024 * 1024).await? {
@@ -42,7 +43,7 @@ pub(super) async fn handle_connection(
                 "Kafka {:?} version {} is outside the replay V1 profile",
                 decoded.api_key, decoded.header.request_api_version
             );
-            state.lock().await.kafka.record_unsupported(
+            state.lock().await.protocols.kafka.record_unsupported(
                 active_case_id.as_deref(),
                 &target_key,
                 format!("{:?}", decoded.api_key),
@@ -128,7 +129,7 @@ pub(super) async fn handle_connection(
                                 let mut probe = [0_u8; 1];
                                 if matches!(tokio::io::AsyncReadExt::read(&mut stream, &mut probe).await, Ok(count) if count > 0)
                                 {
-                                    state.lock().await.kafka.record_unsupported(active_case_id.as_deref(), &target_key, "after_server_eof".into(), "client sent another Kafka request after recorded server EOF".into());
+                                    state.lock().await.protocols.kafka.record_unsupported(active_case_id.as_deref(), &target_key, "after_server_eof".into(), "client sent another Kafka request after recorded server EOF".into());
                                     super::exchange::retain_connection(&mut stream).await;
                                 }
                             }

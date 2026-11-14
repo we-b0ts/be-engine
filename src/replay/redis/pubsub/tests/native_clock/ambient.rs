@@ -22,14 +22,15 @@ async fn ambient_native_input_delivers_without_admitting_unknown_outgoing_comman
             let state = runtime.state.lock().await;
             assert!(
                 !state
+                    .protocols
                     .redis
                     .exchanges
                     .iter()
                     .any(|e| e.record.command == "SET")
             );
-            assert_eq!(state.redis.pubsub.indexed.total, 1);
+            assert_eq!(state.protocols.redis.pubsub.indexed.total, 1);
             assert_eq!(
-                state.redis.pubsub.indexed.lanes[0].source_kind,
+                state.protocols.redis.pubsub.indexed.lanes[0].source_kind,
                 ReplaySource::Unattributed
             );
             assert!(!ReplaySource::Unattributed.is_run_owned());
@@ -58,7 +59,16 @@ async fn ambient_native_input_delivers_without_admitting_unknown_outgoing_comman
         assert_eq!(read(&mut subscriber).await, original);
         guards::silent(&mut subscriber).await;
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
         assert_eq!(
             state
                 .batch_scope
@@ -110,6 +120,7 @@ async fn ambient_input_has_no_subscription_age_fallback_without_a_proven_window(
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()
@@ -155,6 +166,7 @@ async fn original_order_survives_a_subscription_split_between_owned_and_ambient_
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()

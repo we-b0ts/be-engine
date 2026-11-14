@@ -96,7 +96,7 @@ pub(crate) struct CommandSnapshotOverlayReport {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(in crate::replay) struct CommandProtocolReport {
+pub(crate) struct CommandProtocolReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) activity_refreshes: Vec<crate::replay::redis::activity::ActivityAudit>,
     pub(in crate::replay) activity_refreshes_omitted: usize,
@@ -162,7 +162,7 @@ impl CommandProtocolReport {
     }
 
     #[cfg(test)]
-    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+    pub(crate) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.unmatched
             .iter()
             .any(|request| request.case_id.as_deref() == Some(case_id))

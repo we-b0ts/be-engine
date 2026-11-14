@@ -151,7 +151,13 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                runtime.state.lock().await.redis.complete_exchange(&matched);
+                runtime
+                    .state
+                    .lock()
+                    .await
+                    .protocols
+                    .redis
+                    .complete_exchange(&matched);
             }
             let early = match_command(
                 &runtime.state,
@@ -169,8 +175,11 @@ mod tests {
                 assert_eq!(published.report.sequence, 4);
                 {
                     let mut state = runtime.state.lock().await;
-                    state.redis.complete_exchange(&published);
-                    assert_eq!(state.redis.snapshot().unused_case[0].command, "DEL");
+                    state.protocols.redis.complete_exchange(&published);
+                    assert_eq!(
+                        state.protocols.redis.snapshot().unused_case[0].command,
+                        "DEL"
+                    );
                 }
                 let removed = match_command(
                     &runtime.state,
@@ -185,13 +194,15 @@ mod tests {
                 .await
                 .unwrap();
                 let mut state = runtime.state.lock().await;
-                state.redis.complete_exchange(&removed);
-                assert!(!state.redis.snapshot().is_dirty());
+                state.protocols.redis.complete_exchange(&removed);
+                assert!(!state.protocols.redis.snapshot().is_dirty());
             } else {
                 assert!(early.is_err());
                 let state = runtime.state.lock().await;
-                assert!(matches!(state.redis.events.unmatched[0].diagnostic,
-                    Some(CommandMatchDiagnostic::LaneBlocked { ref blocked_by, .. }) if blocked_by.sequence == 3));
+                assert!(
+                    matches!(state.protocols.redis.events.unmatched[0].diagnostic,
+                    Some(CommandMatchDiagnostic::LaneBlocked { ref blocked_by, .. }) if blocked_by.sequence == 3)
+                );
             }
         }
     }
@@ -275,20 +286,20 @@ mod tests {
                 assert_eq!(published.report.sequence, 2);
                 assert_eq!(published.report.target_event_index, Some(0));
                 let mut state = runtime.state.lock().await;
-                state.redis.complete_exchange(&read);
-                state.redis.complete_exchange(&published);
-                assert!(!state.redis.snapshot().is_dirty());
-                assert!(state.redis.snapshot().unused_case.is_empty());
+                state.protocols.redis.complete_exchange(&read);
+                state.protocols.redis.complete_exchange(&published);
+                assert!(!state.protocols.redis.snapshot().is_dirty());
+                assert!(state.protocols.redis.snapshot().unused_case.is_empty());
             } else {
                 tokio::time::advance(POOLED_LANE_WAIT).await;
                 assert!(pending.await.is_err());
                 let state = runtime.state.lock().await;
                 assert!(matches!(
-                    &state.redis.events.unmatched[0].diagnostic,
+                    &state.protocols.redis.events.unmatched[0].diagnostic,
                     Some(CommandMatchDiagnostic::LaneBlocked { blocked_by, .. })
                         if blocked_by.sequence == 1
                 ));
-                assert_eq!(state.redis.snapshot().unused_case.len(), 2);
+                assert_eq!(state.protocols.redis.snapshot().unused_case.len(), 2);
             }
         }
     }

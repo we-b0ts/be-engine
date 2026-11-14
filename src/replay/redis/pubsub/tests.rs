@@ -256,6 +256,7 @@ async fn rpc_ack_crosses_real_connections_and_maps_only_protocol_identities() {
         {
             let state = runtime.state.lock().await;
             let exchange = state
+                .protocols
                 .redis
                 .exchanges
                 .iter()
@@ -263,6 +264,7 @@ async fn rpc_ack_crosses_real_connections_and_maps_only_protocol_identities() {
                 .unwrap();
             assert_eq!(
                 state
+                    .protocols
                     .redis
                     .pubsub
                     .matches(exchange, &[b"jobs".to_vec(), request(TARGET, 9)]),
@@ -279,7 +281,14 @@ async fn rpc_ack_crosses_real_connections_and_maps_only_protocol_identities() {
             b":2\r\n"
         );
         assert_eq!(
-            runtime.state.lock().await.redis.events.matched_count,
+            runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .redis
+                .events
+                .matched_count,
             1,
             "PUBLISH waits for its ACK"
         );
@@ -292,7 +301,7 @@ async fn rpc_ack_crosses_real_connections_and_maps_only_protocol_identities() {
         assert_eq!(value["args"][0]["stdout"], "example result");
         // Successful delivery releases the finite call, but cannot replenish it.
         send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await;
-        let snapshot = runtime.state.lock().await.redis.snapshot();
+        let snapshot = runtime.state.lock().await.protocols.redis.snapshot();
         assert_eq!(snapshot.matched_count, 2);
         assert!(snapshot.unused_case.is_empty());
         sub_task.abort();
@@ -344,6 +353,7 @@ async fn generic_pubsub_replays_binary_message_pattern_and_shard_notifications()
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .unused(ReplaySource::Startup)
@@ -477,8 +487,8 @@ async fn rpc_callback_counters_are_bijective_and_failure_results_are_preserved()
     assert_eq!(identity.id, 10);
     assert_eq!(value["args"], failure["args"]);
     let state = runtime.state.lock().await;
-    assert!(state.redis.snapshot().unused_case.is_empty());
-    let report = state.redis.pubsub.report().unwrap();
+    assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+    let report = state.protocols.redis.pubsub.report().unwrap();
     assert_eq!(report.delivered_rpc_callbacks, 2);
     task.abort();
     sub_task.abort();
@@ -540,7 +550,7 @@ async fn rpc_callback_cannot_escape_its_case_or_a_disconnected_subscriber() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
         let state = runtime.state.lock().await;
-        let snapshot = state.redis.snapshot();
+        let snapshot = state.protocols.redis.snapshot();
         assert_eq!(snapshot.matched_count, 1);
         assert!(!snapshot.unused_case.is_empty());
         assert!(!snapshot.unsafe_events.is_empty());
@@ -704,7 +714,7 @@ async fn rpc_subscriber_can_confirm_while_call_is_pending_before_ack_deadline() 
     .await
     .unwrap();
     let state = runtime.state.lock().await;
-    assert!(state.redis.snapshot().unused_case.is_empty());
+    assert!(state.protocols.redis.snapshot().unused_case.is_empty());
     task.abort();
     sub_task.abort();
 }

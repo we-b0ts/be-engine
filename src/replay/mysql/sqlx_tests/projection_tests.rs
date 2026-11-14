@@ -37,12 +37,12 @@ async fn sqlx_projects_orm_columns_for_text_and_cached_prepared_queries() {
             assert_eq!(rows[0].get::<u64, _>(1), u64::MAX);
             client.close().await.unwrap();
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.matched_query_count, 3);
-            assert_eq!(state.mysql.events.matched_queries.iter().map(|q| q.command.as_str()).collect::<Vec<_>>(), ["COM_STMT_EXECUTE", "COM_STMT_EXECUTE", "COM_QUERY"]);
-            assert!(state.mysql.events.unmatched_queries.is_empty());
-            assert!(state.mysql.events.metadata_warnings.is_empty());
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 3);
+            assert_eq!(state.protocols.mysql.events.matched_queries.iter().map(|q| q.command.as_str()).collect::<Vec<_>>(), ["COM_STMT_EXECUTE", "COM_STMT_EXECUTE", "COM_QUERY"]);
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+            assert!(state.protocols.mysql.events.metadata_warnings.is_empty());
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-            assert_eq!(state.mysql.exchanges[0].record.response.columns.len(), 5);
+            assert_eq!(state.protocols.mysql.exchanges[0].record.response.columns.len(), 5);
             assert_eq!(std::fs::read(path).unwrap(), original);
             task.abort();
         }
@@ -114,8 +114,8 @@ async fn sqlx_count_and_constant_aliases_preserve_values_and_conditions() {
         assert_eq!(count.get::<i64, _>("count(*)"), 7);
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 4);
-        assert_eq!(state.mysql.events.matched_query_count, 3);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 4);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 3);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         task.abort();
     })
@@ -146,7 +146,7 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
     ];
     let (_temp, _addr, runtime, task) = fixture(&records, false).await;
     let mut state = runtime.state.lock().await;
-    let source = &state.mysql.exchanges[0].identity;
+    let source = &state.protocols.mysql.exchanges[0].identity;
     let identity = ReplaySessionIdentity {
         target: Some(source.target.clone()),
         database: source.database.clone(),
@@ -195,12 +195,12 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
             .is_none()
     );
-    assert_eq!(state.mysql.events.matched_query_count, 2);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
     // A Global candidate remains available across cases, and is still finite.
-    state.mysql.exchanges[0].source = ReplaySource::Startup;
-    state.mysql.exchanges[0].case_id = None;
-    state.mysql.invalidate_scope_index();
-    state.mysql.exchanges[0].status = ReplayExchangeStatus::Available;
+    state.protocols.mysql.exchanges[0].source = ReplaySource::Startup;
+    state.protocols.mysql.exchanges[0].case_id = None;
+    state.protocols.mysql.invalidate_scope_index();
+    state.protocols.mysql.exchanges[0].status = ReplayExchangeStatus::Available;
     state.active_case_id = Some("other-case".into());
     let global = state
         .match_exchange(&identity, "COM_QUERY", Some(sql), None)
@@ -213,11 +213,11 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
             .is_none()
     );
-    state.mysql.exchanges[0].status = ReplayExchangeStatus::Available;
-    state.mysql.exchanges[0].record.command = "COM_STMT_EXECUTE".into();
-    state.mysql.exchanges[0].record.sql =
+    state.protocols.mysql.exchanges[0].status = ReplayExchangeStatus::Available;
+    state.protocols.mysql.exchanges[0].record.command = "COM_STMT_EXECUTE".into();
+    state.protocols.mysql.exchanges[0].record.sql =
         Some("SELECT id AS tasks_id, uid FROM tasks WHERE uid=?".into());
-    state.mysql.exchanges[0].record.params = Some(vec![mysql_json("integer", json!(1))]);
+    state.protocols.mysql.exchanges[0].record.params = Some(vec![mysql_json("integer", json!(1))]);
     let prepared = "SELECT id FROM tasks WHERE uid=?";
     assert!(
         state

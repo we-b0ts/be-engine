@@ -504,18 +504,14 @@ impl ReplayRuntime {
             sequence_catalog,
             active_sequence: None,
             run_sequence: None,
-            http_sequence: Default::default(),
-            http_sequence_claims: BTreeMap::new(),
             sequence_missing: Vec::new(),
             batch_scope: attribution.batch_scope,
             startup_phase: Default::default(),
             dependency_attribution_snapshot: attribution.snapshot,
             prepared_socketio_input: None,
             input_timing: None,
-            http_input_timing: None,
             stream_timing: lifecycle.stream_timing,
             stream_interval_cap_ms: lifecycle.stream_interval_cap_ms,
-            http_ingress: Default::default(),
             target_observations,
             case_cleanup: Default::default(),
             target_stop_prepared: BTreeSet::new(),
@@ -550,20 +546,26 @@ impl ReplayRuntime {
             global_path,
             regular_global: BTreeMap::new(),
             targets,
-            mysql,
-            http_exchanges,
-            http_case_exchange_index,
-            http_candidates: Default::default(),
-            http_blackholes,
-            redis,
-            memcached,
-            kafka,
-            motan,
-            http_events,
-            ca_cert_path,
             replay_policy,
-            http_ignore_query_params,
-            allowed_unused_http: config.allowed_unused_http,
+            protocols: crate::protocols::replay::ReplayProtocols {
+                mysql,
+                redis,
+                memcached,
+                kafka,
+                motan,
+                http_exchanges,
+                http_case_exchange_index,
+                http_candidates: Default::default(),
+                http_blackholes,
+                http_events,
+                http_sequence: Default::default(),
+                http_sequence_claims: BTreeMap::new(),
+                http_input_timing: None,
+                http_ingress: Default::default(),
+                http_ignore_query_params,
+                allowed_unused_http: config.allowed_unused_http,
+            },
+            ca_cert_path,
             recording_network_path: Some(recording_network.path),
             recorded_dns_only_domains: recording_network.dns_only_domains,
             fake_cidr,
@@ -584,9 +586,15 @@ impl ReplayRuntime {
         }
 
         state.initialize_startup_phase();
-        state.http_ingress.register(&state.http_exchanges);
+        state
+            .protocols
+            .http_ingress
+            .register(&state.protocols.http_exchanges);
         let admitted_case = state.active_case_id.clone();
-        state.http_ingress.activate_case(admitted_case.as_deref());
+        state
+            .protocols
+            .http_ingress
+            .activate_case(admitted_case.as_deref());
         let state = tokio::task::spawn_blocking(move || -> Result<_> {
             if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
                 ensure!(

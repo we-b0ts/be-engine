@@ -49,7 +49,7 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
             id: self.client_id,
             bound: self.binding.connection(case.as_deref()),
         });
-        state.redis.observe_redis(
+        state.protocols.redis.observe_redis(
             case.as_deref(),
             self.target,
             self.database,
@@ -59,10 +59,10 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
         );
         let observation = RequestAdmission::capture(
             state,
-            state.redis.request_event_index,
-            state.redis.request_observed_at,
-            state.redis.request_observation_id,
-            state.redis.request_observation_retained,
+            state.protocols.redis.request_event_index,
+            state.protocols.redis.request_observed_at,
+            state.protocols.redis.request_observation_id,
+            state.protocols.redis.request_observation_retained,
         );
         if let Some(observed) = self.observed.take() {
             let _ = observed.send(());
@@ -75,10 +75,10 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
         state: &mut ReplayState,
         observation: &RequestAdmission,
     ) -> Result<Self::Matched, Self::Error> {
-        state.redis.request_event_index = observation.event_index;
-        state.redis.request_observed_at = observation.observed_at;
-        state.redis.request_observation_id = observation.observation_id;
-        state.redis.request_observation_retained = observation.observation_retained;
+        state.protocols.redis.request_event_index = observation.event_index;
+        state.protocols.redis.request_observed_at = observation.observed_at;
+        state.protocols.redis.request_observation_id = observation.observation_id;
+        state.protocols.redis.request_observation_retained = observation.observation_retained;
         let fast_socketio = lane::enabled(state);
         let select = |redis: &mut RedisReplayState, expected_index, predecessors| {
             redis.select_redis(
@@ -96,7 +96,7 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
                 fast_socketio,
             )
         };
-        select(&mut state.redis, self.expected_index, None)
+        select(&mut state.protocols.redis, self.expected_index, None)
             .or_else(|error| {
                 if self.lane_hint.is_none() || !fast_socketio {
                     return Err(error);
@@ -108,7 +108,7 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
                 else {
                     return Err(error);
                 };
-                select(&mut state.redis, Some(serial.index), Some(serial))
+                select(&mut state.protocols.redis, Some(serial.index), Some(serial))
             })
             .map(|mut matched| {
                 matched.report.target_event_index = observation.event_index;
@@ -123,7 +123,7 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
         error: &Self::Error,
     ) -> Option<WaitDependency<'a>> {
         if lane::enabled(state)
-            && lane::pending_predecessor(&state.redis, observation.case.as_deref(), error)
+            && lane::pending_predecessor(&state.protocols.redis, observation.case.as_deref(), error)
         {
             let deadline = self.started + POOLED_LANE_WAIT;
             if let Some(sender) = self.lane_hint
@@ -132,21 +132,21 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
             {
                 permit.send(pair);
             }
-            return Some(WaitDependency::changed(&state.redis.lifecycle).until(deadline));
+            return Some(WaitDependency::changed(&state.protocols.redis.lifecycle).until(deadline));
         }
         (pending_delivery(
-            &state.redis,
+            &state.protocols.redis,
             observation.case.as_deref(),
             &self.command.name,
             observation.event_index,
             error,
-        ) || state.redis.pubsub.pending_ingress_reply(
+        ) || state.protocols.redis.pubsub.pending_ingress_reply(
             observation.case.as_deref(),
             self.target,
             &self.command.name,
             &self.command.args,
         ))
-        .then(|| WaitDependency::changed(&state.redis.lifecycle))
+        .then(|| WaitDependency::changed(&state.protocols.redis.lifecycle))
     }
 
     fn interrupted(&self, reason: &'static str) -> Self::Error {
@@ -169,7 +169,7 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
                 .bind(observation.case.as_deref(), matched.connection_id);
         }
         if lane::enabled(state) {
-            state.redis.lifecycle.notify_waiters();
+            state.protocols.redis.lifecycle.notify_waiters();
         }
         Ok(())
     }
@@ -209,7 +209,7 @@ impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
                 .into(),
             diagnostic: Some(error.clone()),
         };
-        state.redis.record_unmatched_request(report);
+        state.protocols.redis.record_unmatched_request(report);
     }
 }
 

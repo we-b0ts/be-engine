@@ -68,6 +68,7 @@ async fn original_order_and_subscription_realm_survive_late_correct_subscription
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()

@@ -59,8 +59,8 @@ async fn large_identity_write_keeps_blob_status_predicate_and_consumption_exact(
                 }
                 client.close().await.unwrap();
                 let state=runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count,2);
-                assert_eq!(state.mysql.events.unmatched_queries.len(),4);
+                assert_eq!(state.protocols.mysql.events.matched_query_count,2);
+                assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),4);
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                 assert_eq!(std::fs::read(path).unwrap(),original);
                 task.abort();

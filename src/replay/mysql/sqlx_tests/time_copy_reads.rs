@@ -70,7 +70,13 @@ async fn historical_read_then_immediate_write_on_another_connection_is_repeatabl
             // write; authorization comes from this completed read delivery.
             let delivered_created = document["createdAt"].clone();
             let observed = Utc::now();
-            runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
+            runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .mysql
+                .observed_at_for_test = Some(observed);
             document["updatedAt"] = json!(
                 (observed + chrono::Duration::seconds(1))
                     .format("%Y-%m-%dT%H:%M:%S")
@@ -87,8 +93,8 @@ async fn historical_read_then_immediate_write_on_another_connection_is_repeatabl
         reader.close().await.unwrap();
         writer.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, COUNT * 2);
-        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert_eq!(state.protocols.mysql.events.matched_query_count, COUNT * 2);
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
         let manifest = state
             .replay_policy
             .as_ref()
@@ -151,7 +157,7 @@ async fn delivered_time_facts_are_visible_before_the_async_global_delivery_ledge
         // while its ordinary async global ledger is deliberately unavailable.
         let ledger = loop {
             let ledger = runtime.state.lock().await;
-            if ledger.mysql.exchanges[0].status == ReplayExchangeStatus::Responding {
+            if ledger.protocols.mysql.exchanges[0].status == ReplayExchangeStatus::Responding {
                 break ledger;
             }
             drop(ledger);
@@ -168,7 +174,13 @@ async fn delivered_time_facts_are_visible_before_the_async_global_delivery_ledge
         .expect("wire success must commit copy facts without the global async mutex");
         drop(ledger);
         let observed = Utc::now();
-        runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .observed_at_for_test = Some(observed);
         document["updatedAt"] = json!(
             (observed + chrono::Duration::seconds(1))
                 .format("%Y-%m-%dT%H:%M:%S")

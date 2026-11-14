@@ -10,7 +10,9 @@ use traffic_replay::SequenceRuntime;
 
 pub(super) use traffic_replay::request_wait::MissingDependency;
 
-impl traffic_replay::request::ExecutionState for super::ReplayState {
+impl<P: super::ReplayProtocolSet> traffic_replay::request::ExecutionState
+    for super::RuntimeState<P>
+{
     type Observation = super::admission::RequestAdmission;
 
     fn is_finalized(&self) -> bool {
@@ -42,9 +44,9 @@ impl traffic_replay::request::ExecutionState for super::ReplayState {
     }
 }
 
-pub(super) use traffic_replay::SequenceBinding as Binding;
+pub(crate) use traffic_replay::SequenceBinding as Binding;
 
-impl super::ReplayState {
+impl<P: super::ReplayProtocolSet> super::RuntimeState<P> {
     pub(super) fn activate_sequence(&mut self, case: Option<&str>) {
         if let Some(runtime) = self.active_sequence.take()
             && !runtime.complete()
@@ -63,50 +65,42 @@ impl super::ReplayState {
             .and_then(|case| self.case_execution_plans.get(case))
             .and_then(|plan| plan.sequence.clone())
             .map(SequenceRuntime::new);
-        self.http_sequence_claims.retain(|_, claim| {
-            self.run_sequence
+        let run = self
+            .run_sequence
+            .as_ref()
+            .map(|run| run.runtimes.as_slice())
+            .unwrap_or_default();
+        let bindings = self
+            .active_sequence
+            .as_ref()
+            .map(|runtime| {
+                self.case_execution_plans[case.expect("prepared Case sequence")]
+                    .native
+                    .protocols
+                    .iter()
+                    .map(|(protocol, inventory)| {
+                        (
+                            *protocol,
+                            Binding::new(runtime.clone(), inventory.sequence.iter().copied()),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.protocols.bind_case_sequence(bindings, run);
+        self.native.core.lifecycle.sequence =
+            self.active_sequence
                 .as_ref()
-                .is_some_and(|run| run.runtimes.iter().any(|runtime| claim.belongs_to(runtime)))
-        });
-        self.http_sequence = Binding::default();
-        self.redis.lifecycle.sequence = Binding::default();
-        self.mysql.lifecycle.sequence = Binding::default();
-        self.native.core.lifecycle.sequence = Binding::default();
-        let Some(runtime) = self.active_sequence.clone() else {
-            self.attach_run_sequence();
-            return;
-        };
-        let plan = &self.case_execution_plans[case.expect("prepared Case sequence")];
-        self.http_sequence = Binding::new(
-            runtime.clone(),
-            plan.native.http.iter().filter_map(|index| {
-                Some((
-                    *index,
-                    self.http_exchanges.get(*index)?.recorded_sequence()?,
-                ))
-            }),
-        );
-        self.redis.lifecycle.sequence = Binding::new(
-            runtime.clone(),
-            plan.native
-                .redis
-                .iter()
-                .filter_map(|index| Some((*index, self.redis.recorded_sequence(*index)?))),
-        );
-        self.mysql.lifecycle.sequence = Binding::new(
-            runtime.clone(),
-            plan.native
-                .mysql
-                .iter()
-                .filter_map(|index| Some((*index, self.mysql.recorded_sequence(*index)?))),
-        );
-        self.native.core.lifecycle.sequence = Binding::new(
-            runtime,
-            plan.native
-                .registered
-                .iter()
-                .filter_map(|index| Some((*index, self.native.recorded_sequence(*index)?))),
-        );
+                .map(|runtime| {
+                    let plan = &self.case_execution_plans[case.expect("prepared Case sequence")];
+                    Binding::new(
+                        runtime.clone(),
+                        plan.native.registered.iter().filter_map(|index| {
+                            Some((*index, self.native.recorded_sequence(*index)?))
+                        }),
+                    )
+                })
+                .unwrap_or_default();
         self.attach_run_sequence();
     }
 }

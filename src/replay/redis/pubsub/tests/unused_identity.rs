@@ -33,7 +33,7 @@ async fn unused_case_notifications_keep_each_physical_source_identity_after_deli
         let runtime = runtime(temp.path(), &records, &[], lazy).await.unwrap();
         {
             let state = runtime.state.lock().await;
-            let report = state.redis.snapshot();
+            let report = state.protocols.redis.snapshot();
             let notifications: Vec<_> = report
                 .unused_case
                 .iter()
@@ -63,7 +63,7 @@ async fn unused_case_notifications_keep_each_physical_source_identity_after_deli
         assert_eq!(send(&mut client, &[b"SUBSCRIBE", b"jobs"]).await, CONFIRMED);
         assert_eq!(read(&mut client).await, raw);
         let state = runtime.state.lock().await;
-        let report = state.redis.snapshot();
+        let report = state.protocols.redis.snapshot();
         assert_eq!(report.unused_case.len(), 183);
         assert_eq!(
             report
@@ -73,7 +73,16 @@ async fn unused_case_notifications_keep_each_physical_source_identity_after_deli
                 .collect::<BTreeSet<_>>(),
             ids[1..].iter().copied().collect()
         );
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
         task.abort();
     }
 }

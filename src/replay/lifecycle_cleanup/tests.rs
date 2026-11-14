@@ -200,7 +200,17 @@ async fn lifecycle_redis_pipeline_requires_every_real_request_and_target_termina
         client.shutdown().await.unwrap();
         task.await.unwrap().unwrap();
         assert_eq!(command(&state, "end_stopped").await["ok"], true);
-        assert_eq!(state.lock().await.redis.snapshot().unused_case.len(), 0);
+        assert_eq!(
+            state
+                .lock()
+                .await
+                .protocols
+                .redis
+                .snapshot()
+                .unused_case
+                .len(),
+            0
+        );
     }
 }
 
@@ -278,7 +288,7 @@ async fn lifecycle_mysql_waits_without_fabricating_an_error_or_result() {
         task.await.unwrap().unwrap();
         assert_eq!(command(&state, "end_stopped").await["ok"], true);
         assert_eq!(
-            state.lock().await.mysql.exchanges[0].status,
+            state.lock().await.protocols.mysql.exchanges[0].status,
             ReplayExchangeStatus::Consumed
         );
     }
@@ -359,7 +369,7 @@ async fn dependency_failure_closes_pending_redis_only_after_real_error_delivery(
             .await
             .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while state.lock().await.redis.exchange_status(0)
+            while state.lock().await.protocols.redis.exchange_status(0)
                 != Some(ReplayExchangeStatus::AwaitingClientTermination)
             {
                 tokio::task::yield_now().await;
@@ -392,7 +402,17 @@ async fn dependency_failure_closes_pending_redis_only_after_real_error_delivery(
             task.await.unwrap().unwrap();
             assert_eq!(command(&state, "prepare_end").await["ok"], true);
             assert_eq!(command(&state, "end_stopped").await["ok"], true);
-            assert_eq!(state.lock().await.redis.snapshot().unused_case.len(), 0);
+            assert_eq!(
+                state
+                    .lock()
+                    .await
+                    .protocols
+                    .redis
+                    .snapshot()
+                    .unused_case
+                    .len(),
+                0
+            );
         }
     }
 }

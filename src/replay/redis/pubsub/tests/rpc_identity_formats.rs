@@ -112,6 +112,7 @@ async fn rpc_sid_representation_requires_explicit_formats_without_relaxing_busin
                         .state
                         .lock()
                         .await
+                        .protocols
                         .redis
                         .snapshot()
                         .unused_case

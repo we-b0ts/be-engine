@@ -68,9 +68,9 @@ async fn sqlx_savepoint_names_and_retry_depth_preserve_one_outer_transaction() {
             outer.commit().await.unwrap();
             let state = runtime.state.lock().await;
             assert!(
-                state.mysql.events.unmatched_queries.is_empty(),
+                state.protocols.mysql.events.unmatched_queries.is_empty(),
                 "{:?}",
-                state.mysql.events.unmatched_queries
+                state.protocols.mysql.events.unmatched_queries
             );
             assert!(
                 state.unused_exchanges(ReplaySource::Case).is_empty(),
@@ -123,7 +123,15 @@ async fn a_savepoint_reference_on_another_socket_or_after_release_is_rejected() 
                 .await
                 .is_err()
         );
-        assert!(runtime.state.lock().await.mysql.case_is_dirty("case-id"));
+        assert!(
+            runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .mysql
+                .case_is_dirty("case-id")
+        );
         task.abort();
     })
     .await
@@ -182,7 +190,7 @@ async fn identical_select_cannot_claim_a_member_past_another_sockets_savepoint()
     nested.commit().await.unwrap();
     outer.commit().await.unwrap();
     let state = runtime.state.lock().await;
-    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     task.abort();
 }

@@ -155,9 +155,9 @@ async fn exercise(cancel: bool) {
     assert!(started.elapsed() >= Duration::from_millis(130));
     {
         let state = runtime.state.lock().await;
-        assert_eq!(state.http_events.matched_count, 0);
+        assert_eq!(state.protocols.http_events.matched_count, 0);
         assert_eq!(
-            state.http_exchanges[0].status,
+            state.protocols.http_exchanges[0].status,
             super::super::super::ReplayExchangeStatus::Responding
         );
     }
@@ -181,7 +181,7 @@ async fn exercise(cancel: bool) {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let state = runtime.state.lock().await;
-            if state.http_exchanges[0].status
+            if state.protocols.http_exchanges[0].status
                 != super::super::super::ReplayExchangeStatus::Responding
             {
                 break;
@@ -194,16 +194,20 @@ async fn exercise(cancel: bool) {
     .unwrap();
     let state = runtime.state.lock().await;
     if cancel {
-        assert_eq!(state.http_events.matched_count, 0);
+        assert_eq!(state.protocols.http_events.matched_count, 0);
         assert_eq!(
-            state.http_exchanges[0].status,
+            state.protocols.http_exchanges[0].status,
             super::super::super::ReplayExchangeStatus::Failed
         );
-        assert!(state.http_events.unsupported[0].reason.contains("dropped"));
+        assert!(
+            state.protocols.http_events.unsupported[0]
+                .reason
+                .contains("dropped")
+        );
     } else {
-        assert_eq!(state.http_events.matched_count, 1);
-        assert!(state.http_exchanges[0].status.is_consumed());
-        assert!(state.http_events.unsupported.is_empty());
+        assert_eq!(state.protocols.http_events.matched_count, 1);
+        assert!(state.protocols.http_exchanges[0].status.is_consumed());
+        assert!(state.protocols.http_events.unsupported.is_empty());
     }
     task.abort();
 }

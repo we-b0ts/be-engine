@@ -132,6 +132,7 @@ async fn fixture(shared: bool, end_path: &str, captured_scope: bool) -> Fixture 
         .state
         .lock()
         .await
+        .protocols
         .http_exchanges
         .iter_mut()
         .find(|x| x.record.id.as_deref() == Some(&completed.to_string()))
@@ -146,6 +147,7 @@ async fn fixture(shared: bool, end_path: &str, captured_scope: bool) -> Fixture 
 
 fn index(state: &ReplayState, cache: Uuid) -> usize {
     state
+        .protocols
         .http_exchanges
         .iter()
         .position(|x| x.record.id.as_deref() == Some(&cache.to_string()))
@@ -163,7 +165,7 @@ async fn shared_http_permission_does_not_waive_the_case_actual_inventory() {
     .unwrap();
     assert_eq!(ended["ok"], false, "{ended}");
     let state = fixture.runtime.state.lock().await;
-    let exchange = &state.http_exchanges[index(&state, fixture.cache)];
+    let exchange = &state.protocols.http_exchanges[index(&state, fixture.cache)];
     assert_eq!(exchange.source, ReplaySource::Case);
     assert_eq!(exchange.status, ReplayExchangeStatus::Available);
     assert!(exchange.shared_origin.is_some());
@@ -217,7 +219,7 @@ async fn started_shared_http_still_waits_for_real_completion() {
         let at = {
             let mut s = state.lock().await;
             let at = index(&s, fixture.cache);
-            s.http_exchanges[at].status = status;
+            s.protocols.http_exchanges[at].status = status;
             at
         };
         let end_state = state.clone();
@@ -225,7 +227,7 @@ async fn started_shared_http_still_waits_for_real_completion() {
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(!ending.is_finished());
         assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
-        state.lock().await.http_exchanges[at].status = ReplayExchangeStatus::Consumed;
+        state.lock().await.protocols.http_exchanges[at].status = ReplayExchangeStatus::Consumed;
         let ended = tokio::time::timeout(Duration::from_secs(1), ending)
             .await
             .unwrap()
@@ -240,13 +242,17 @@ async fn failed_or_unproven_global_http_is_not_a_cache_hit() {
     {
         let mut state = fixture.runtime.state.lock().await;
         let at = index(&state, fixture.cache);
-        let origin = state.http_exchanges[at].shared_origin.take();
+        let origin = state.protocols.http_exchanges[at].shared_origin.take();
         assert!(!state.http_shared_initialization(at, &[]));
-        state.http_exchanges[at].shared_origin = origin;
-        state.http_exchanges[at].status = ReplayExchangeStatus::Failed;
+        state.protocols.http_exchanges[at].shared_origin = origin;
+        state.protocols.http_exchanges[at].status = ReplayExchangeStatus::Failed;
         // Actual HTTP transport failure also records the independent dirty
         // observation for the active Target case, including shared inputs.
-        state.http_events.dirty_case_ids.insert("case-a".into());
+        state
+            .protocols
+            .http_events
+            .dirty_case_ids
+            .insert("case-a".into());
     }
     let mut ending = command("end");
     ending.fail_on_dirty = true;

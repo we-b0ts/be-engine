@@ -121,10 +121,10 @@ async fn activity_refresh_tcp_supports_split_merge_and_unchanged_finite_trace() 
             .unwrap()
             .unwrap();
         let state = runtime.state.lock().await;
-        let report = state.redis.snapshot();
+        let report = state.protocols.redis.snapshot();
         assert!(!report.is_dirty(), "{report:?}");
         assert!(report.unused_case.is_empty());
-        assert!(!state.redis.has_case_in_flight());
+        assert!(!state.protocols.redis.has_case_in_flight());
         assert_eq!(
             fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
             original

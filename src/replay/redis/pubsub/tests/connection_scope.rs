@@ -61,8 +61,8 @@ async fn pooled_reads_before_subscription_allow_a_dedicated_target_subscriber() 
                 confirmation(unsubscribe, 0)
             );
             let state = runtime.state.lock().await;
-            assert!(state.redis.snapshot().unused_case.is_empty());
-            assert_eq!(state.redis.snapshot().unmatched.len(), 2);
+            assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+            assert_eq!(state.protocols.redis.snapshot().unmatched.len(), 2);
             pool_task.abort();
             sub_task.abort();
             sub_task_after_reject.abort();

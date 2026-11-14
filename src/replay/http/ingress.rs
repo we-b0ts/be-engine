@@ -27,12 +27,12 @@ struct Owners {
 type HeadKey = (String, u16, String, String, bool);
 
 #[derive(Debug, Default)]
-pub(in crate::replay) struct HttpIngress {
+pub(crate) struct HttpIngress {
     heads: BTreeMap<HeadKey, Owners>,
     cases: BTreeMap<String, Arc<AtomicUsize>>,
     run: Arc<AtomicUsize>,
     registry: Arc<std::sync::Mutex<registry::Registry>>,
-    pub(in crate::replay) changed: Arc<tokio::sync::Notify>,
+    pub(crate) changed: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +74,7 @@ fn key(scheme: HttpReplayScheme, target: &TargetKey, method: &str, path: &str) -
 }
 
 impl HttpIngress {
-    pub(in crate::replay) fn register(&mut self, exchanges: &[ReplayHttpExchange]) {
+    pub(crate) fn register(&mut self, exchanges: &[ReplayHttpExchange]) {
         for exchange in exchanges {
             let owners = self
                 .heads
@@ -117,7 +117,7 @@ impl HttpIngress {
             self.changed.clone(),
         )
     }
-    pub(in crate::replay) fn activate_case(&mut self, case: Option<&str>) {
+    pub(crate) fn activate_case(&mut self, case: Option<&str>) {
         let count = case
             .map(|case| self.cases.entry(case.into()).or_default().clone())
             .unwrap_or_else(|| self.run.clone());
@@ -126,13 +126,13 @@ impl HttpIngress {
             .expect("HTTP ingress registry poisoned")
             .activate(case, count);
     }
-    pub(in crate::replay) fn close_startup(&self) {
+    pub(crate) fn close_startup(&self) {
         self.registry
             .lock()
             .expect("HTTP ingress registry poisoned")
             .startup_open = false;
     }
-    pub(in crate::replay) fn try_close_case(&self, case: &str) -> bool {
+    pub(crate) fn try_close_case(&self, case: &str) -> bool {
         self.registry
             .lock()
             .expect("HTTP ingress registry poisoned")
@@ -188,7 +188,7 @@ impl HttpIngress {
                     && matches!(o.status.load(Ordering::Acquire), CANCELLED | BODY_ERROR)
             })
     }
-    pub(in crate::replay) fn pending_diagnostic(&self) -> Value {
+    pub(crate) fn pending_diagnostic(&self) -> Value {
         let registry = self
             .registry
             .lock()
@@ -256,30 +256,23 @@ impl ReplayState {
         index: usize,
         status: super::super::ReplayExchangeStatus,
     ) -> std::result::Result<(), HttpReplayMatchError> {
-        if !self.http_sequence_claims.contains_key(&index)
+        if !self.protocols.http_sequence_claims.contains_key(&index)
             && let Some(claim) = self
+                .protocols
                 .http_sequence
                 .claim(index)
                 .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?
         {
-            self.http_sequence_claims.insert(index, claim);
+            self.protocols.http_sequence_claims.insert(index, claim);
         }
-        if self.http_exchanges[index].status == super::super::ReplayExchangeStatus::StartupBlocked {
+        if self.protocols.http_exchanges[index].status
+            == super::super::ReplayExchangeStatus::StartupBlocked
+        {
             // This can only be selected by a genuine pre-boundary admission.
             // A rejected preview or failed response materialization never pays debt.
             self.startup_phase.admit_existing_http();
         }
-        self.http_exchanges[index].status = status;
+        self.protocols.http_exchanges[index].status = status;
         Ok(())
-    }
-}
-
-impl ReplayState {
-    pub(in crate::replay) fn set_active_case(&mut self, case: Option<String>) {
-        if self.active_case_id != case {
-            self.activate_sequence(case.as_deref());
-        }
-        self.http_ingress.activate_case(case.as_deref());
-        self.active_case_id = case;
     }
 }

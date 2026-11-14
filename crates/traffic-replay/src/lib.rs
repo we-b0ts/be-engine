@@ -7,11 +7,14 @@ use serde::{Deserialize, Serialize};
 
 pub mod index;
 pub mod output;
+pub mod preparation;
 pub mod request;
 pub mod request_wait;
 pub mod rules;
 mod scope;
 pub use scope::ReplaySource;
+mod startup;
+pub use startup::StartupCounts;
 mod status;
 pub use status::ReplayExchangeStatus;
 mod sequence_binding;

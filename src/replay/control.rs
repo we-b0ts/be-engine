@@ -227,18 +227,21 @@ pub(super) async fn handle_control_request(
                     Ok(_) => {
                         state.close_startup_phase(case);
                         let epoch = state
+                            .protocols
                             .redis
                             .request_contracts
                             .request_times(case)
                             .target
                             .unwrap_or_else(Utc::now);
                         match state
+                            .protocols
                             .redis
                             .pubsub
                             .native_clock
                             .request_begin(case, epoch)
                             .and_then(|()| {
                                 state
+                                    .protocols
                                     .redis
                                     .pubsub
                                     .namespace_sessions
@@ -416,15 +419,7 @@ async fn finalize_replay(
         tracing::warn!(error=%error,"finalizing incomplete hypothesis evidence");
     }
     let mut state = state.lock().await;
-    if state.mysql.has_in_flight()
-        || state.native.has_in_flight()
-        || state.redis.has_in_flight()
-        || state.kafka.has_in_flight()
-        || state.connect_failures.has_in_flight()
-        || state.memcached.has_in_flight()
-        || state.motan.has_in_flight()
-        || state.http_has_in_flight()
-    {
+    if state.has_protocol_io(InFlightScope::All) {
         return (
             serde_json::json!({"ok":false,"complete":false,"error":"cannot finalize Replay while dependency delivery or termination evidence is still in flight"}),
             None,
@@ -567,11 +562,9 @@ pub(super) async fn begin_case(
         Ok(plan) => serde_json::json!({
             "source_sha256": plan.source.sha256,
             "source_bytes": plan.source.source_bytes,
-            "indexed_native_counts": {
-                "http": plan.native.http.len(),
-                "redis": plan.native.redis.len(),
-                "mysql": plan.native.mysql.len(),
-            },
+            "indexed_native_counts": plan.native.protocols.iter()
+                .map(|(protocol, inventory)| (protocol.as_str(), inventory.members.len()))
+                .collect::<BTreeMap<_, _>>(),
             "rules":plan.rules.summary(),
         }),
         Err(error) => return serde_json::json!({"ok":false,"error":format!("{error:#}")}),
@@ -589,11 +582,7 @@ pub(super) async fn begin_case(
     state.advance_admission_epoch();
     state.set_active_case(Some(case_id.to_string()));
     state.input_timing = None;
-    if let Some(timeline) = state.http_input_timing.take() {
-        timeline.abort();
-    }
-    state.redis.pubsub.native_clock.begin_case(case_id);
-    state.redis.pubsub.namespace_sessions.begin_case();
+    state.protocols.begin_case(case_id);
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
     } else {
@@ -646,8 +635,7 @@ pub(super) async fn end_case(
                 "error": format!("replay case {case_id} is not active")
             });
         }
-        state.redis.pubsub.native_clock.close_case(case_id);
-        state.redis.pubsub.namespace_sessions.close_case(case_id);
+        state.protocols.close_case(case_id);
         (
             state.case_dependency_post_response_window,
             state.cases[case_id].dir.clone(),
@@ -891,42 +879,13 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
     report.is_complete()
 }
 
-impl ReplayState {
-    fn case_is_dirty(&self, case_id: &str) -> bool {
-        if self.dependency_tails.failure(case_id).is_some() {
-            return true;
-        }
-        if self.connect_failures.case_is_dirty(case_id) {
-            return true;
-        }
-        let dirty = self.unrecorded_case_ids.contains(case_id)
-            || self.native.case_is_dirty(case_id)
-            || self.mysql.case_is_dirty(case_id)
-            || self.http_case_is_dirty(case_id)
-            || self.redis.case_is_dirty(case_id)
-            || self.memcached.case_is_dirty(case_id)
-            || self.kafka.case_is_dirty(case_id)
-            || self.motan.case_is_dirty(case_id);
-        #[cfg(test)]
-        {
-            debug_assert_eq!(
-                self.redis.case_is_dirty(case_id),
-                self.redis.snapshot().case_is_dirty(case_id)
-            );
-            debug_assert_eq!(
-                self.memcached.case_is_dirty(case_id),
-                self.memcached.snapshot().case_is_dirty(case_id)
-            );
-            debug_assert_eq!(
-                self.kafka.case_is_dirty(case_id),
-                self.kafka.snapshot().case_is_dirty(case_id)
-            );
-            debug_assert_eq!(
-                self.motan.case_is_dirty(case_id),
-                self.motan.snapshot().case_is_dirty(case_id)
-            );
-        }
-        dirty
+impl<P: ReplayProtocolSet> RuntimeState<P> {
+    fn case_is_dirty(&self, case: &str) -> bool {
+        self.dependency_tails.failure(case).is_some()
+            || self.connect_failures.case_is_dirty(case)
+            || self.unrecorded_case_ids.contains(case)
+            || self.native.case_is_dirty(case)
+            || self.protocols.case_is_dirty(case)
     }
 }
 

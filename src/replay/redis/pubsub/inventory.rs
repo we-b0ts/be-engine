@@ -284,10 +284,7 @@ impl IndexedNotifications {
 }
 
 impl IndexedNotifications {
-    pub(in crate::replay) fn startup_counts(
-        &mut self,
-        close: bool,
-    ) -> crate::replay::startup::Counts {
+    pub(crate) fn startup_counts(&mut self, close: bool) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
         for lane in &mut self.lanes {
             if lane.source_kind != ReplaySource::Startup {

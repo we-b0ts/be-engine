@@ -28,14 +28,20 @@ fn preceding(cases: &mut Vec<Value>) -> Value {
 
 async fn admit(runtime: &Arc<ReplayRuntime>) -> chrono::DateTime<chrono::Utc> {
     let mut state = runtime.state.lock().await;
-    state.redis.request_contracts.request_begin("case").unwrap();
+    state
+        .protocols
+        .redis
+        .request_contracts
+        .request_begin("case")
+        .unwrap();
     let epoch = state
+        .protocols
         .redis
         .request_contracts
         .request_times("case")
         .target
         .unwrap();
-    assert!(state.redis.native_events_begin("case", epoch));
+    assert!(state.protocols.redis.native_events_begin("case", epoch));
     epoch
 }
 
@@ -71,6 +77,7 @@ async fn ordinary_case_without_ingress_does_not_require_an_rpc_clock_or_policy()
             .state
             .lock()
             .await
+            .protocols
             .redis
             .request_contracts
             .request_times("case")
@@ -107,12 +114,14 @@ async fn causal_ingress_needs_both_prefix_consumption_and_actual_event_in_curren
                 let mut state = runtime.state.lock().await;
                 assert!(
                     state
+                        .protocols
                         .redis
                         .observe_native_event("other", epoch, &proof)
                         .is_err()
                 );
                 assert!(
                     state
+                        .protocols
                         .redis
                         .observe_native_event(
                             "case",
@@ -123,6 +132,7 @@ async fn causal_ingress_needs_both_prefix_consumption_and_actual_event_in_curren
                 );
                 assert!(
                     state
+                        .protocols
                         .redis
                         .observe_native_event(
                             "case",
@@ -133,6 +143,7 @@ async fn causal_ingress_needs_both_prefix_consumption_and_actual_event_in_curren
                 );
                 // An unrelated actual event never proves the prerequisite.
                 state
+                    .protocols
                     .redis
                     .observe_native_event(
                         "case",
@@ -146,6 +157,7 @@ async fn causal_ingress_needs_both_prefix_consumption_and_actual_event_in_curren
                     .state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .observe_native_event("case", epoch, &proof)
                     .unwrap();
@@ -179,6 +191,7 @@ async fn causal_ingress_needs_both_prefix_consumption_and_actual_event_in_curren
                     .state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .observe_native_event("case", epoch, &proof)
                     .unwrap();
@@ -190,6 +203,7 @@ async fn causal_ingress_needs_both_prefix_consumption_and_actual_event_in_curren
                     .state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .observe_native_event("case", epoch, &proof)
                     .is_err(),
@@ -212,6 +226,7 @@ async fn causal_ingress_needs_both_prefix_consumption_and_actual_event_in_curren
                     .state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .snapshot()
                     .unused_case
@@ -323,7 +338,12 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
         });
         {
             let state = runtime.state.lock().await;
-            state.redis.request_contracts.request_begin("case").unwrap();
+            state
+                .protocols
+                .redis
+                .request_contracts
+                .request_begin("case")
+                .unwrap();
         }
         let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = ws_listener.local_addr().unwrap();
@@ -423,9 +443,18 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
         assert!(response.interaction.unwrap().end.clean);
         target.await.unwrap();
         let state = runtime.state.lock().await;
-        assert!(state.redis.snapshot().unused_case.is_empty());
-        assert!(state.redis.snapshot().unmatched.is_empty());
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+        assert!(state.protocols.redis.snapshot().unmatched.is_empty());
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
         control.abort();
     }
 }

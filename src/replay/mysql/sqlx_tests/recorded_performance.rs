@@ -109,7 +109,7 @@ async fn captured_candidate_and_evidence_performance() {
                     let sql = query["sql"].as_str();
                     let params: Option<Vec<RecordedMysqlValue>> =
                         serde_json::from_value(query["params"].clone()).unwrap();
-                    state.mysql.observed_at_for_test = Some(
+                    state.protocols.mysql.observed_at_for_test = Some(
                         query["request_started_at"]
                             .as_str()
                             .unwrap()

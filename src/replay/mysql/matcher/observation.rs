@@ -13,8 +13,12 @@ impl ReplayState {
         #[cfg(not(test))]
         let request_observed_at = Utc::now();
         #[cfg(test)]
-        let request_observed_at = self.mysql.observed_at_for_test.unwrap_or_else(Utc::now);
-        let event_index = self.mysql.events.request_order.reserve(case);
+        let request_observed_at = self
+            .protocols
+            .mysql
+            .observed_at_for_test
+            .unwrap_or_else(Utc::now);
+        let event_index = self.protocols.mysql.events.request_order.reserve(case);
         let mut observation_id = Some(uuid::Uuid::new_v4());
         let request = contracts::ObservedRequest {
             observation_id,
@@ -36,9 +40,9 @@ impl ReplayState {
             observation_id = None;
         }
         if retention.is_err() {
-            self.mysql.events.metadata_warnings.push("independent SQL Target observation unavailable; inspect target_observation_coverage_error".into());
+            self.protocols.mysql.events.metadata_warnings.push("independent SQL Target observation unavailable; inspect target_observation_coverage_error".into());
         }
-        self.mysql.request_observation_id =
+        self.protocols.mysql.request_observation_id =
             observation_id.filter(|_| observation_retained).map(|id| {
                 crate::policy_evidence::target_observation_id(
                     &id.to_string(),

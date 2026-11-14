@@ -12,7 +12,7 @@ struct TerminationTransport {
     io_finished: tokio::sync::watch::Receiver<bool>,
 }
 
-pub(in crate::replay) async fn handle_http_replay_connection(
+pub(crate) async fn handle_http_replay_connection(
     stream: TcpStream,
     _peer_addr: std::net::SocketAddr,
     target: ReplayTarget,
@@ -67,7 +67,7 @@ where
     let pending = Arc::new(std::sync::Mutex::new(None));
     let service_pending = pending.clone();
     let service_state = state.clone();
-    let ingress = state.lock().await.http_ingress.handle();
+    let ingress = state.lock().await.protocols.http_ingress.handle();
     let service = service_fn(move |request| {
         // Synchronous service admission precedes any await on Replay state.
         let admission = ingress.admit();
@@ -231,7 +231,7 @@ async fn handle_http_request(
             let _ = transport.control.reset();
             return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
         }
-        state.http_ingress.configure_head(
+        state.protocols.http_ingress.configure_head(
             &mut admission,
             scheme,
             &target_key,
@@ -378,7 +378,13 @@ async fn handle_http_request(
         }
     };
     let sequence_claim = if let Some(index) = output_index {
-        state.lock().await.http_sequence_claims.get(&index).cloned()
+        state
+            .lock()
+            .await
+            .protocols
+            .http_sequence_claims
+            .get(&index)
+            .cloned()
     } else {
         None
     };
@@ -412,7 +418,7 @@ async fn handle_http_request(
         );
         exchange.prefix_delivered = Some(delivered.clone());
         if record.lifecycle_stop.is_some() {
-            state.lock().await.http_exchanges[exchange.detail.index].lifecycle_prefix =
+            state.lock().await.protocols.http_exchanges[exchange.detail.index].lifecycle_prefix =
                 Some(delivered.clone());
         }
         if record.lifecycle_stop.is_none() && record.outcome.is_server_terminated() {

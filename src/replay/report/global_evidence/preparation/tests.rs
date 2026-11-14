@@ -182,7 +182,11 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
         )
         .unwrap();
     }
-    let session = state.redis.global_notification_evidence().unwrap();
+    let session = state
+        .protocols
+        .redis
+        .global_notification_evidence()
+        .unwrap();
     let notifications = super::super::shared::retain(&report, &session.lanes).unwrap();
     assert_eq!(
         notifications.key(),

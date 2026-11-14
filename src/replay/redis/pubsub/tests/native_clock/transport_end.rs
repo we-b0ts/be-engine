@@ -47,7 +47,7 @@ async fn clean_client_transport_end_keeps_its_original_native_input_window() {
         tokio::time::sleep(Duration::from_millis(100)).await;
         guards::silent(&mut subscriber).await;
         let state = runtime.state.lock().await;
-        let report = state.redis.pubsub.report().unwrap();
+        let report = state.protocols.redis.pubsub.report().unwrap();
         assert_eq!(report.recorded_pushes, 2);
         assert_eq!(report.delivered_pushes, 1);
         assert_eq!(report.failed_pushes, 0);

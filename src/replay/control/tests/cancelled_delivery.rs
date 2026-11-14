@@ -89,14 +89,14 @@ async fn finalize_after_cancelled_mysql_delivery_seals_dirty_evidence() {
     {
         let state = state.lock().await;
         assert_eq!(
-            state.mysql.exchanges[index].status,
+            state.protocols.mysql.exchanges[index].status,
             ReplayExchangeStatus::Responding
         );
         assert_eq!(
-            state.mysql.exchange_status(index),
+            state.protocols.mysql.exchange_status(index),
             Some(ReplayExchangeStatus::Failed)
         );
-        assert!(!state.mysql.has_in_flight());
+        assert!(!state.protocols.mysql.has_in_flight());
     }
     let ended = tokio::time::timeout(
         Duration::from_secs(2),

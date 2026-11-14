@@ -103,7 +103,17 @@ async fn heartbeat_tail_broadcasts(complete: bool) {
         );
         if i == 3 {
             tokio::time::advance(Duration::from_secs(7)).await;
-            assert_eq!(runtime.state.lock().await.redis.snapshot().matched_count, 0);
+            assert_eq!(
+                runtime
+                    .state
+                    .lock()
+                    .await
+                    .protocols
+                    .redis
+                    .snapshot()
+                    .matched_count,
+                0
+            );
         }
     }
     drop(client);
@@ -112,16 +122,16 @@ async fn heartbeat_tail_broadcasts(complete: bool) {
         tokio::time::advance(crate::replay::FAST_CASE_TIMEOUT).await;
         tokio::task::yield_now().await;
         let state = runtime.state.lock().await;
-        let report = state.redis.snapshot();
+        let report = state.protocols.redis.snapshot();
         assert!(report.is_dirty());
-        assert!(state.redis.case_has_runtime_failure("case"));
+        assert!(state.protocols.redis.case_has_runtime_failure("case"));
         assert_eq!(report.matched_count, 1);
         return;
     }
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let state = runtime.state.lock().await;
-            let report = state.redis.snapshot();
+            let report = state.protocols.redis.snapshot();
             if report.matched_count == 4 {
                 assert!(!report.is_dirty());
                 assert_eq!(
@@ -205,6 +215,7 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .events
                 .request_order
@@ -241,7 +252,7 @@ async fn adjacent_socketio_publishes_admit_in_source_order_and_reply_in_resp_ord
     task.await.unwrap().unwrap();
 
     let state = runtime.state.lock().await;
-    let report = state.redis.snapshot();
+    let report = state.protocols.redis.snapshot();
     assert!(!report.is_dirty());
     assert!(report.unused_case.is_empty());
     assert_eq!(
@@ -340,6 +351,7 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool, foreign_gap: bool) 
             ))
             .unwrap();
             state
+                .protocols
                 .redis
                 .register_exchange(
                     record,
@@ -400,6 +412,7 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool, foreign_gap: bool) 
                     .state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .snapshot()
                     .matched
@@ -413,9 +426,9 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool, foreign_gap: bool) 
         drop(client);
         task.await.unwrap().unwrap();
         let state = runtime.state.lock().await;
-        let report = state.redis.snapshot();
+        let report = state.protocols.redis.snapshot();
         assert!(report.is_dirty());
-        assert!(state.redis.case_has_runtime_failure("case"));
+        assert!(state.protocols.redis.case_has_runtime_failure("case"));
         assert_eq!(
             report
                 .matched
@@ -436,7 +449,14 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool, foreign_gap: bool) 
     task.await.unwrap().unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if runtime.state.lock().await.redis.snapshot().matched_count
+            if runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .redis
+                .snapshot()
+                .matched_count
                 == (last_broadcast + 1) as usize
             {
                 break;
@@ -448,8 +468,8 @@ async fn serial_room_broadcasts(pairs: u64, send_last: bool, foreign_gap: bool) 
     .unwrap();
 
     let state = runtime.state.lock().await;
-    let report = state.redis.snapshot();
-    assert!(!state.redis.case_is_dirty("case"));
+    let report = state.protocols.redis.snapshot();
+    assert!(!state.protocols.redis.case_is_dirty("case"));
     assert_eq!(report.unused_case.len(), if foreign_gap { 2 } else { 0 });
     assert_eq!(
         report

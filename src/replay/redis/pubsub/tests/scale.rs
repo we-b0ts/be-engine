@@ -27,10 +27,10 @@ async fn more_than_65536_notifications_use_pages_with_exact_counts_and_fresh_con
     for lazy in [true, false] {
         let runtime = load_runtime(dir.path(), lazy).await.unwrap();
         let state = runtime.state.lock().await;
-        assert!(state.redis.pubsub.pushes.is_empty());
-        assert_eq!(state.redis.pubsub.indexed.total, 65537);
-        assert_eq!(state.redis.pubsub.indexed.delivered, 0);
-        let report = state.redis.snapshot();
+        assert!(state.protocols.redis.pubsub.pushes.is_empty());
+        assert_eq!(state.protocols.redis.pubsub.indexed.total, 65537);
+        assert_eq!(state.protocols.redis.pubsub.indexed.delivered, 0);
+        let report = state.protocols.redis.snapshot();
         assert_eq!(report.unused_global_count, Some(65538));
         assert_eq!(report.unused_global.len(), 100);
         assert_eq!(report.pubsub.unwrap().recorded_pushes, 65537);
@@ -79,8 +79,8 @@ async fn notifications_preserve_wire_order_across_pages_and_stop_on_unsubscribe(
         .is_err()
     );
     let state = runtime.state.lock().await;
-    assert_eq!(state.redis.pubsub.indexed.delivered, 513);
-    assert_eq!(state.redis.pubsub.global_unused_count(), 1);
-    assert!(state.redis.events.unsafe_events.is_empty());
+    assert_eq!(state.protocols.redis.pubsub.indexed.delivered, 513);
+    assert_eq!(state.protocols.redis.pubsub.global_unused_count(), 1);
+    assert!(state.protocols.redis.events.unsafe_events.is_empty());
     task.abort();
 }

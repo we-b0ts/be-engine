@@ -42,7 +42,7 @@ rules:
         let (temp,addr,runtime,task) = fixture_with_policy(&[read,write],Some(&policy)).await;
         let recording = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
         let original = std::fs::read(&recording).unwrap();
-        runtime.state.lock().await.mysql.observed_at_for_test = Some(target_time);
+        runtime.state.lock().await.protocols.mysql.observed_at_for_test = Some(target_time);
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!((&mut client).fetch_one("SELECT payload FROM pets WHERE id=8").await.is_err());
         client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
@@ -62,8 +62,8 @@ rules:
         client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,2);
-        assert_eq!(state.mysql.events.unmatched_queries.len(),3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,2);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),3);
         assert_eq!(std::fs::read(recording).unwrap(),original);
         task.abort();
     }).await.unwrap();

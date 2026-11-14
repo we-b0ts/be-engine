@@ -23,7 +23,7 @@ pub(super) async fn deliver_redis_exchange(
     }
     let (lifecycle, timing_scope, fast, serial_predecessors, serial_deadline) = {
         let state = state.lock().await;
-        let exchange = &state.redis.exchanges[matched.index];
+        let exchange = &state.protocols.redis.exchanges[matched.index];
         (
             exchange.record.lifecycle_cleanup,
             super::input_timing::scope(&state),
@@ -38,13 +38,19 @@ pub(super) async fn deliver_redis_exchange(
     if lifecycle {
         match super::lifecycle::deliver(reader, state, matched, client_id).await {
             Ok(()) => {
-                state.lock().await.redis.complete_exchange(matched);
+                state
+                    .lock()
+                    .await
+                    .protocols
+                    .redis
+                    .complete_exchange(matched);
                 return Ok(true);
             }
             Err(error) => {
                 state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .fail_exchange(matched, error.to_string());
                 return Err(error);
@@ -65,13 +71,19 @@ pub(super) async fn deliver_redis_exchange(
         };
         match result {
             Ok(()) => {
-                state.lock().await.redis.complete_exchange(matched);
+                state
+                    .lock()
+                    .await
+                    .protocols
+                    .redis
+                    .complete_exchange(matched);
                 return Ok(true);
             }
             Err(error) => {
                 state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .fail_exchange(matched, error.to_string());
                 // A failed expectation is a report fact. It is not permission
@@ -89,6 +101,7 @@ pub(super) async fn deliver_redis_exchange(
             state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .fail_exchange(matched, error.to_string());
             return Err(error);
@@ -99,6 +112,7 @@ pub(super) async fn deliver_redis_exchange(
                 state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .fail_exchange(matched, error.to_string());
                 retain_failed_connection(reader, state).await;
@@ -117,16 +131,22 @@ pub(super) async fn deliver_redis_exchange(
         match result {
             Ok(()) => {
                 let mut state = state.lock().await;
-                state.redis.complete_exchange(matched);
+                state.protocols.redis.complete_exchange(matched);
                 for exchange in &pipeline {
-                    state.redis.complete_exchange(exchange);
+                    state.protocols.redis.complete_exchange(exchange);
                 }
             }
             Err(error) => {
                 let mut state = state.lock().await;
-                state.redis.fail_exchange(matched, error.to_string());
+                state
+                    .protocols
+                    .redis
+                    .fail_exchange(matched, error.to_string());
                 for exchange in &pipeline {
-                    state.redis.fail_exchange(exchange, error.to_string());
+                    state
+                        .protocols
+                        .redis
+                        .fail_exchange(exchange, error.to_string());
                 }
                 return Err(error);
             }
@@ -163,7 +183,7 @@ pub(super) async fn deliver_redis_exchange(
                     tracing::debug!(%error, "deferred Redis call delivery failed");
                 }
             } else {
-                state.lock().await.redis.fail_exchange(
+                state.lock().await.protocols.redis.fail_exchange(
                     &matched,
                     "deferred Redis call did not observe every predecessor broadcast".into(),
                 );
@@ -188,7 +208,7 @@ async fn wait_serial_publishes(
         }
         let mut statuses = predecessors
             .iter()
-            .map(|&index| state.redis.exchange_status(index));
+            .map(|&index| state.protocols.redis.exchange_status(index));
         if statuses
             .clone()
             .all(|status| status == Some(ReplayExchangeStatus::Consumed))
@@ -198,7 +218,7 @@ async fn wait_serial_publishes(
         if statuses.any(|status| matches!(status, None | Some(ReplayExchangeStatus::Failed))) {
             return false;
         }
-        let wait = state.redis.lifecycle.subscribe();
+        let wait = state.protocols.redis.lifecycle.subscribe();
         drop(state);
         if wait.wait(deadline).await == WaitOutcome::Deadline {
             return false;
@@ -259,8 +279,11 @@ pub(super) async fn deliver_publish_pair(
     if let Err(error) = &result {
         let mut state = state.lock().await;
         let reason = format!("pipelined Redis response delivery failed: {error:#}");
-        state.redis.fail_exchange(earlier.0, reason.clone());
-        state.redis.fail_exchange(later.0, reason);
+        state
+            .protocols
+            .redis
+            .fail_exchange(earlier.0, reason.clone());
+        state.protocols.redis.fail_exchange(later.0, reason);
     }
     result
 }
@@ -303,6 +326,7 @@ async fn write_response(
             state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .fail_exchange(matched, error.to_string());
             return Err(error);
@@ -312,7 +336,7 @@ async fn write_response(
         .as_deref()
         .unwrap_or(matched.response.as_slice());
     if let Err(error) = reader.inner.write_all(response).await {
-        state.lock().await.redis.fail_exchange(
+        state.lock().await.protocols.redis.fail_exchange(
             matched,
             format!("failed to deliver recorded Redis response: {error}"),
         );
@@ -362,7 +386,7 @@ async fn finish_response(
         if !serial_delivery_current(&mut replay, matched, timing_scope) {
             return Ok(());
         }
-        replay.redis.finish_delivery(
+        replay.protocols.redis.finish_delivery(
             matched,
             response,
             unified_rendered_at,
@@ -376,6 +400,7 @@ async fn finish_response(
         state
             .lock()
             .await
+            .protocols
             .redis
             .fail_exchange(matched, error.to_string());
         return Err(error);
@@ -385,39 +410,50 @@ async fn finish_response(
     if !serial_delivery_current(&mut state, matched, timing_scope) {
         return Ok(());
     }
-    let serial_scope = state.redis.exchanges[matched.index]
+    let serial_scope = state.protocols.redis.exchanges[matched.index]
         .serial_predecessors
         .as_ref()
         .and(timing_scope);
     if let Some(delivery) = &matched.read_back
         && let Err(error) = state
+            .protocols
             .redis
             .request_contracts
             .commit_redis_read_back(delivery, chrono::Utc::now())
     {
-        state.redis.fail_exchange(matched, error.to_string());
+        state
+            .protocols
+            .redis
+            .fail_exchange(matched, error.to_string());
         return Err(error);
     }
     if let Some(delivery) = &matched.unified_delivery
-        && let Err(error) = state.redis.request_contracts.commit_redis_delivery(
-            delivery,
-            response,
-            unified_rendered_at,
-        )
+        && let Err(error) = state
+            .protocols
+            .redis
+            .request_contracts
+            .commit_redis_delivery(delivery, response, unified_rendered_at)
     {
-        state.redis.fail_exchange(matched, error.to_string());
+        state
+            .protocols
+            .redis
+            .fail_exchange(matched, error.to_string());
         return Err(error);
     }
     if let Some(read) = &matched.time_read {
         // Ordinary Case responses remain resident and immutable. Publish the
         // scalar pairs only after the final native/schema bytes reached TCP.
-        let original = &state.redis.exchanges[matched.index].response;
+        let original = &state.protocols.redis.exchanges[matched.index].response;
         if let Err(error) = state
+            .protocols
             .redis
             .request_contracts
             .record_redis_time_read_witness(read, Some(original), response, delivered_at)
         {
-            state.redis.fail_exchange(matched, error.to_string());
+            state
+                .protocols
+                .redis
+                .fail_exchange(matched, error.to_string());
             return Err(error);
         }
     }
@@ -431,6 +467,7 @@ async fn finish_response(
         state_ref
             .lock()
             .await
+            .protocols
             .redis
             .fail_exchange(matched, format!("adapter self-echo failed: {error:#}"));
         return Err(error);
@@ -440,16 +477,16 @@ async fn finish_response(
         return Ok(());
     }
     if let Some(push) = matched.rpc_push {
-        let detached = state.redis.pubsub.rpc_is_detached(matched);
-        let delivery = state.redis.pubsub.rpc_delivery(matched);
+        let detached = state.protocols.redis.pubsub.rpc_is_detached(matched);
+        let delivery = state.protocols.redis.pubsub.rpc_delivery(matched);
         match delivery {
             Ok((delay, mut delivery)) => {
                 if let Some(case) = serial_scope.and(matched.report.case_id.as_deref()) {
                     delivery.case_id = Some(case.into());
-                    delivery.request_epoch = state.redis.native_request_epoch(case);
+                    delivery.request_epoch = state.protocols.redis.native_request_epoch(case);
                 }
                 if detached {
-                    state.redis.complete_exchange(matched);
+                    state.protocols.redis.complete_exchange(matched);
                 }
                 drop(state);
                 pubsub::schedule(state_ref.clone(), delay, delivery, None);
@@ -458,11 +495,18 @@ async fn finish_response(
                 }
             }
             Err(error) => {
-                state.redis.pubsub.fail(pubsub::PushId::Inline(push));
-                state.redis.fail_exchange(matched, error.to_string());
+                state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .fail(pubsub::PushId::Inline(push));
+                state
+                    .protocols
+                    .redis
+                    .fail_exchange(matched, error.to_string());
             }
         }
-    } else if let Some(covered) = state.redis.complete_exchange_covered(matched) {
+    } else if let Some(covered) = state.protocols.redis.complete_exchange_covered(matched) {
         super::input_timing::response_indices_delivered(&mut state, &covered, timing_scope);
     }
     Ok(())
@@ -479,14 +523,14 @@ fn serial_delivery_current(
     matched: &MatchedRedisExchange,
     timing_scope: Option<&super::input_timing::DeliveryScope>,
 ) -> bool {
-    if state.redis.exchanges[matched.index]
+    if state.protocols.redis.exchanges[matched.index]
         .serial_predecessors
         .is_none()
         || serial_scope_current(state, timing_scope)
     {
         return true;
     }
-    state.redis.fail_exchange(
+    state.protocols.redis.fail_exchange(
         matched,
         "deferred Redis call lost its Case before delivery".into(),
     );
@@ -531,7 +575,7 @@ async fn claim_terminated_pipeline(
 ) -> Result<Vec<MatchedRedisExchange>> {
     let mut state = state.lock().await;
     let case_id = state.active_case_id.clone();
-    let record = state.redis.exchanges[first.index].record.clone();
+    let record = state.protocols.redis.exchanges[first.index].record.clone();
     let connection = TargetConnection {
         id: client_id,
         bound: Some(first.connection_id),
@@ -551,6 +595,7 @@ async fn claim_terminated_pipeline(
             let command = redis_command(&raw)?;
             let matched = if redis_is_builtin(&command.name) {
                 state
+                    .protocols
                     .redis
                     .match_redis_builtin_failure(
                         case_id.as_deref(),
@@ -564,6 +609,7 @@ async fn claim_terminated_pipeline(
                     .ok_or_else(|| anyhow!("no recorded Redis pipeline termination matched"))?
             } else {
                 state
+                    .protocols
                     .redis
                     .match_redis(
                         case_id.as_deref(),
@@ -583,7 +629,7 @@ async fn claim_terminated_pipeline(
             {
                 let reason =
                     "Redis pipelined command did not share the recorded connection termination";
-                state.redis.fail_exchange(&matched, reason.into());
+                state.protocols.redis.fail_exchange(&matched, reason.into());
                 return Err(anyhow!(reason));
             }
             if let Some(policy) = &mut state.replay_policy {
@@ -595,7 +641,10 @@ async fn claim_terminated_pipeline(
     })();
     if let Err(error) = result {
         for exchange in &pipeline {
-            state.redis.fail_exchange(exchange, error.to_string());
+            state
+                .protocols
+                .redis
+                .fail_exchange(exchange, error.to_string());
         }
         return Err(error);
     }
@@ -628,18 +677,28 @@ async fn retain_after_server_end(
     {
         let mut state = state.lock().await;
         if let Some(case) = &matched.report.case_id {
-            state.redis.events.dirty_case_ids.insert(case.clone());
+            state
+                .protocols
+                .redis
+                .events
+                .dirty_case_ids
+                .insert(case.clone());
         }
-        state.redis.events.unsafe_events.push(CommandRequestReport {
-            target_observation_id: None,
-            case_id: matched.report.case_id.clone(),
-            target: matched.report.target.clone(),
-            command: "POST_TERMINATION_BYTES".into(),
-            target_event_index: None,
-            request_fingerprint: None,
-            reason: "Target sent Redis data after recorded server termination".into(),
-            diagnostic: None,
-        });
+        state
+            .protocols
+            .redis
+            .events
+            .unsafe_events
+            .push(CommandRequestReport {
+                target_observation_id: None,
+                case_id: matched.report.case_id.clone(),
+                target: matched.report.target.clone(),
+                command: "POST_TERMINATION_BYTES".into(),
+                target_event_index: None,
+                request_fingerprint: None,
+                reason: "Target sent Redis data after recorded server termination".into(),
+                diagnostic: None,
+            });
     }
     retain_failed_connection(reader, state).await;
 }

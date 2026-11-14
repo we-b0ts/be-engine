@@ -30,6 +30,7 @@ async fn ordinary_case_notifications_are_delivered_once_over_the_real_subscripti
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .case_is_dirty("case")
@@ -37,10 +38,19 @@ async fn ordinary_case_notifications_are_delivered_once_over_the_real_subscripti
         assert_eq!(read(&mut client).await, raw);
         {
             let state = runtime.state.lock().await;
-            assert!(!state.redis.pubsub.case_is_dirty("case"));
-            assert!(state.redis.snapshot().unused_case.is_empty());
-            assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
-            assert!(!state.redis.pubsub.has_case_delivery());
+            assert!(!state.protocols.redis.pubsub.case_is_dirty("case"));
+            assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+            assert_eq!(
+                state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .report()
+                    .unwrap()
+                    .delivered_pushes,
+                1
+            );
+            assert!(!state.protocols.redis.pubsub.has_case_delivery());
         }
         assert!(
             tokio::time::timeout(Duration::from_millis(40), read_redis_frame(&mut client))
@@ -76,9 +86,18 @@ async fn ordinary_notification_cannot_be_delivered_into_a_later_case() {
             .is_err()
     );
     let state = runtime.state.lock().await;
-    assert!(state.redis.pubsub.case_is_dirty("case"));
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
-    assert!(!state.redis.pubsub.has_case_delivery());
+    assert!(state.protocols.redis.pubsub.case_is_dirty("case"));
+    assert_eq!(
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        0
+    );
+    assert!(!state.protocols.redis.pubsub.has_case_delivery());
     task.abort();
 }
 
@@ -122,7 +141,12 @@ async fn notification_runtime(
     {
         let mut state = runtime.state.lock().await;
         state.stream_timing = timing;
-        state.redis.request_contracts.request_begin("case").unwrap();
+        state
+            .protocols
+            .redis
+            .request_contracts
+            .request_begin("case")
+            .unwrap();
     }
     runtime
 }
@@ -167,10 +191,22 @@ async fn fast_case_notifications_cross_long_source_intervals_in_order_once() {
                 .is_err()
         );
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 4);
-        assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
-        assert!(state.redis.snapshot().unused_case.is_empty());
-        assert!(!state.redis.pubsub.has_case_delivery());
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            4
+        );
+        assert_eq!(
+            state.protocols.redis.pubsub.report().unwrap().failed_pushes,
+            0
+        );
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+        assert!(!state.protocols.redis.pubsub.has_case_delivery());
         task.abort();
     }
 }
@@ -239,9 +275,21 @@ async fn zero_interval_cap_drains_more_than_a_queue_of_finite_notifications() {
     .await
     .expect("a zero cap must drain the finite lane without Source delays");
     let state = runtime.state.lock().await;
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 300);
-    assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
-    assert!(state.redis.snapshot().unused_case.is_empty());
+    assert_eq!(
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        300
+    );
+    assert_eq!(
+        state.protocols.redis.pubsub.report().unwrap().failed_pushes,
+        0
+    );
+    assert!(state.protocols.redis.snapshot().unused_case.is_empty());
     task.abort();
 }
 
@@ -303,7 +351,15 @@ async fn backpressured_notifications(
     assert_eq!(send(&mut client, &[b"SUBSCRIBE", b"jobs"]).await, CONFIRMED);
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if runtime.state.lock().await.redis.pubsub.has_case_delivery() {
+            if runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .redis
+                .pubsub
+                .has_case_delivery()
+            {
                 break;
             }
             tokio::task::yield_now().await;
@@ -314,14 +370,23 @@ async fn backpressured_notifications(
     tokio::time::sleep(Duration::from_millis(35)).await;
     {
         let state = runtime.state.lock().await;
-        assert!(state.redis.pubsub.has_case_delivery());
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
+        assert!(state.protocols.redis.pubsub.has_case_delivery());
         assert_eq!(
-            state.redis.pubsub.pushes[0].status,
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            0
+        );
+        assert_eq!(
+            state.protocols.redis.pubsub.pushes[0].status,
             ReplayExchangeStatus::Responding
         );
         assert_eq!(
-            state.redis.pubsub.pushes[1].status,
+            state.protocols.redis.pubsub.pushes[1].status,
             ReplayExchangeStatus::Available
         );
     }
@@ -336,10 +401,22 @@ async fn fast_notifications_wait_for_actual_wire_progress_under_backpressure() {
     let later = crate::redis::encode_array(&[b"message", b"jobs", b"later input"]);
     assert_eq!(read(&mut client).await, later);
     let state = runtime.state.lock().await;
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 2);
-    assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
-    assert!(!state.redis.pubsub.has_case_delivery());
-    assert!(state.redis.snapshot().unused_case.is_empty());
+    assert_eq!(
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        2
+    );
+    assert_eq!(
+        state.protocols.redis.pubsub.report().unwrap().failed_pushes,
+        0
+    );
+    assert!(!state.protocols.redis.pubsub.has_case_delivery());
+    assert!(state.protocols.redis.snapshot().unused_case.is_empty());
     task.abort();
 }
 
@@ -354,12 +431,14 @@ async fn fast_notification_wire_completion_respects_case_request_epoch_and_stop(
                 "case" => state.active_case_id = Some("later-case".into()),
                 "request_epoch" => {
                     let epoch = state
+                        .protocols
                         .redis
                         .request_contracts
                         .request_times("case")
                         .target
                         .unwrap();
                     state
+                        .protocols
                         .redis
                         .request_contracts
                         .restore_request_clock_for_test(
@@ -381,15 +460,24 @@ async fn fast_notification_wire_completion_respects_case_request_epoch_and_stop(
             "{boundary} must prevent the later input"
         );
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
-        assert!(state.redis.pubsub.case_is_dirty("case"));
-        assert!(!state.redis.pubsub.has_case_delivery());
         assert_eq!(
-            state.redis.pubsub.pushes[0].status,
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            0
+        );
+        assert!(state.protocols.redis.pubsub.case_is_dirty("case"));
+        assert!(!state.protocols.redis.pubsub.has_case_delivery());
+        assert_eq!(
+            state.protocols.redis.pubsub.pushes[0].status,
             ReplayExchangeStatus::Failed
         );
         assert_eq!(
-            state.redis.pubsub.pushes[1].status,
+            state.protocols.redis.pubsub.pushes[1].status,
             ReplayExchangeStatus::Available
         );
         task.abort();

@@ -116,7 +116,10 @@ async fn server_eof_replays_partial_prefix_and_preserves_request_half() {
         .unwrap();
     assert_eq!(received, b"$5\r\npar");
     assert!(started.elapsed() >= Duration::from_millis(25));
-    assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
+    assert_eq!(
+        state.lock().await.protocols.redis.snapshot().matched_count,
+        1
+    );
     assert!(
         !task.is_finished(),
         "server FIN must preserve its request read direction"
@@ -145,7 +148,10 @@ async fn server_reset_is_a_real_reset_and_consumes_failure_exchange() {
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
     task.await.unwrap().unwrap();
-    assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
+    assert_eq!(
+        state.lock().await.protocols.redis.snapshot().matched_count,
+        1
+    );
 }
 
 #[tokio::test]
@@ -186,7 +192,10 @@ async fn fast_compresses_redis_server_fin_and_reset_with_real_delivery() {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
+        assert_eq!(
+            state.lock().await.protocols.redis.snapshot().matched_count,
+            1
+        );
     }
 }
 
@@ -207,7 +216,10 @@ async fn client_eof_is_observed_without_server_initiating_close() {
     );
     client.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
-    assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
+    assert_eq!(
+        state.lock().await.protocols.redis.snapshot().matched_count,
+        1
+    );
 }
 
 #[tokio::test]
@@ -226,7 +238,7 @@ async fn missed_client_close_deadline_marks_dirty_and_keeps_connection_open() {
             .await
             .is_err()
     );
-    let snapshot = state.lock().await.redis.snapshot();
+    let snapshot = state.lock().await.protocols.redis.snapshot();
     assert_eq!(snapshot.matched_count, 0);
     assert!(!snapshot.unsafe_events.is_empty());
     assert!(!task.is_finished());
@@ -262,7 +274,10 @@ async fn builtin_setup_failure_does_not_turn_into_a_success_reply() {
     );
     client.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
-    assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
+    assert_eq!(
+        state.lock().await.protocols.redis.snapshot().matched_count,
+        1
+    );
 }
 
 #[test]
@@ -314,7 +329,10 @@ async fn server_close_consumes_each_pending_pipelined_request() {
         .unwrap()
         .unwrap();
     assert_eq!(received, b"$5\r\npar");
-    assert_eq!(state.lock().await.redis.snapshot().matched_count, 2);
+    assert_eq!(
+        state.lock().await.protocols.redis.snapshot().matched_count,
+        2
+    );
     client.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
 }
@@ -338,7 +356,7 @@ async fn target_close_before_server_failure_is_dirty() {
             .to_string()
             .contains("before recorded server termination")
     );
-    let report = state.lock().await.redis.snapshot();
+    let report = state.lock().await.protocols.redis.snapshot();
     assert_eq!(report.matched_count, 0);
     assert!(!report.unsafe_events.is_empty());
 }
@@ -356,7 +374,7 @@ async fn client_fin_does_not_satisfy_recorded_client_reset() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     client.shutdown().await.unwrap();
     assert!(task.await.unwrap().is_err());
-    let report = state.lock().await.redis.snapshot();
+    let report = state.lock().await.protocols.redis.snapshot();
     assert_eq!(report.matched_count, 0);
     assert!(!report.unsafe_events.is_empty());
 }
@@ -380,12 +398,29 @@ async fn extra_request_after_server_fin_is_dirty_without_forcing_client_close() 
     );
     client.write_all(GET).await.unwrap();
     for _ in 0..50 {
-        if !state.lock().await.redis.snapshot().unsafe_events.is_empty() {
+        if !state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .snapshot()
+            .unsafe_events
+            .is_empty()
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(!state.lock().await.redis.snapshot().unsafe_events.is_empty());
+    assert!(
+        !state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .snapshot()
+            .unsafe_events
+            .is_empty()
+    );
     assert!(!task.is_finished());
     client.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
@@ -420,6 +455,7 @@ async fn distinct_global_failures_keep_their_connection_identity(kind: Terminati
             let mut record = dependency("GET", termination(TerminationSide::Server, kind), "", 20);
             record["global_dependency_reason"] = "background_rule".into();
             state
+                .protocols
                 .redis
                 .register_exchange(
                     serde_json::from_value(record).unwrap(),
@@ -432,6 +468,7 @@ async fn distinct_global_failures_keep_their_connection_identity(kind: Terminati
         }
         assert!(
             state
+                .protocols
                 .redis
                 .exchanges
                 .iter()
@@ -446,7 +483,7 @@ async fn distinct_global_failures_keep_their_connection_identity(kind: Terminati
             .await
             .is_err()
     );
-    let report = state.lock().await.redis.snapshot();
+    let report = state.lock().await.protocols.redis.snapshot();
     assert_eq!(report.matched_count, 0);
     assert!(!report.unsafe_events.is_empty());
     assert!(!task.is_finished());

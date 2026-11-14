@@ -1,13 +1,11 @@
-//! Install one immutable Case view after all native registration has completed.
+//! Install one immutable Case view after provider registration has completed.
 use super::*;
 use execution_plan::{CaseExecutionPlan, NativeCaseRefs, SourceScopeIdentity};
 
-impl ReplayState {
+impl<P: ReplayProtocolSet> RuntimeState<P> {
     pub(super) fn prepare_native_candidates(&mut self) {
         self.native.core.seal();
-        self.http_candidates.register(&self.http_exchanges);
-        self.mysql.prepare_candidates();
-        self.redis.prepare_candidates();
+        self.protocols.prepare_candidates();
     }
 
     pub(super) fn install_case_execution_plan(
@@ -15,69 +13,35 @@ impl ReplayState {
         case: &str,
         source: SourceScopeIdentity,
     ) -> Result<()> {
-        let rules = self
+        let contracts = self
             .replay_policy
             .as_ref()
-            .map(|policy| policy.request_contracts.prepare_case_rules(case))
+            .map(|policy| &policy.request_contracts);
+        let rules = contracts
+            .map(|contracts| contracts.prepare_case_rules(case))
             .transpose()?
             .unwrap_or_default();
-        // Optional loop observations need their immutable Source proof even
-        // when Target executes zero iterations and sends no Redis command.
-        self.redis.prepare_optional_observations(case)?;
-        if self.sequence_catalog.is_some() {
-            self.redis.prepare_native_sequence(case)?;
-        }
         let native = NativeCaseRefs {
             registered: self.native.core.case_members(case),
-            http: self.http_candidates.case_members(case),
-            redis: self.redis.prepared_case_members(case),
-            mysql: self.mysql.prepared_case_members(case),
+            protocols: self.protocols.prepare_case(
+                case,
+                self.sequence_catalog.is_some(),
+                contracts,
+            )?,
         };
-        if let Some(policy) = &self.replay_policy {
-            self.mysql
-                .prepare_request_sources(&policy.request_contracts, case, &native.mysql)?;
-        }
         let mut plan = CaseExecutionPlan::new(case.to_owned(), source, native);
-        self.http_candidates.register_exempt(
-            &self.http_exchanges,
-            plan.native
-                .http
-                .iter()
-                .copied()
-                .filter(|index| self.http_exchanges[*index].recorded_sequence().is_none()),
-        );
-        self.redis
-            .prepare_sequence_exempt(plan.native.redis.iter().copied());
-        let mysql_exempt: Vec<_> = plan
-            .native
-            .mysql
-            .iter()
-            .copied()
-            .filter(|index| self.mysql.recorded_sequence(*index).is_none())
-            .collect();
-        self.mysql.prepare_sequence_exempt(mysql_exempt.into_iter());
         if let Some(catalog) = &self.sequence_catalog {
-            let http = plan
+            let protocols = plan
                 .native
-                .http
-                .iter()
-                .filter_map(|index| self.http_exchanges.get(*index)?.recorded_sequence());
-            let redis = plan
-                .native
-                .redis
-                .iter()
-                .filter_map(|index| self.redis.recorded_sequence(*index));
-            let mysql = plan
-                .native
-                .mysql
-                .iter()
-                .filter_map(|index| self.mysql.recorded_sequence(*index));
+                .protocols
+                .values()
+                .flat_map(|inventory| inventory.sequence.iter().map(|(_, sequence)| *sequence));
             let registered = plan
                 .native
                 .registered
                 .iter()
                 .filter_map(|index| self.native.recorded_sequence(*index));
-            plan.sequence = Some(catalog.scope(http.chain(redis).chain(mysql).chain(registered))?);
+            plan.sequence = Some(catalog.scope(protocols.chain(registered))?);
         }
         plan.rules = rules;
         self.case_execution_plans

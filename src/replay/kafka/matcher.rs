@@ -162,7 +162,7 @@ pub(super) struct KafkaFetchReservation {
 }
 
 #[derive(Debug, Default)]
-pub(in crate::replay) struct KafkaReplayState {
+pub(crate) struct KafkaReplayState {
     produces: Vec<ReplayKafkaProduce>,
     produce_case_index: CaseExchangeIndex,
     fetches: Vec<ReplayKafkaFetch>,
@@ -609,7 +609,7 @@ impl KafkaReplayState {
         });
     }
 
-    pub(in crate::replay) fn snapshot(&self) -> KafkaProtocolReport {
+    pub(crate) fn snapshot(&self) -> KafkaProtocolReport {
         KafkaProtocolReport {
             connections: self.events.connections,
             matched_count: self.events.matched_count,
@@ -627,7 +627,7 @@ impl KafkaReplayState {
         self.events.dirty_case_ids.contains(case)
     }
 
-    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+    pub(crate) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.events.dirty_case_ids.contains(case_id)
             || self.produce_case_index.any(case_id, |index| {
                 self.produces
@@ -646,11 +646,11 @@ impl KafkaReplayState {
             })
     }
 
-    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+    pub(crate) fn has_in_flight(&self) -> bool {
         self.in_flight(None)
     }
 
-    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
+    pub(crate) fn has_case_in_flight(&self) -> bool {
         self.in_flight(Some(ReplaySource::Case))
     }
 

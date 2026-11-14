@@ -116,7 +116,7 @@ impl Observations {
             "omitted":self.in_flight.len().saturating_sub(4)})
     }
 
-    pub(super) fn has_in_flight(&self) -> bool {
+    pub(crate) fn has_in_flight(&self) -> bool {
         !self.in_flight.is_empty()
     }
     pub(super) fn reports(&self) -> Vec<ObservationAudit> {

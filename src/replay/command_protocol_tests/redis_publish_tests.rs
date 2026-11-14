@@ -135,7 +135,7 @@ async fn global_publish_formats_preserve_order_stable_fields_and_cross_protocol_
     publish(&mut second, "events", &payload(TARGET_B, 3), b":3\r\n").await;
     publish(&mut second, "events", &payload(TARGET_B, 3), ERROR).await;
     let state = state.lock().await;
-    assert_eq!(state.http_events.matched_count, 1);
+    assert_eq!(state.protocols.http_events.matched_count, 1);
     let report = serde_json::to_value(state.snapshot_report()).unwrap();
     assert_eq!(report["redis"]["matched_count"], 3);
     assert!(
@@ -234,9 +234,15 @@ async fn unknown_pickle_payload_is_exact_bytes_without_publisher_substring_rewri
     let (address, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "events", &binary(TARGET_A), ERROR).await;
-    assert_eq!(state.lock().await.redis.snapshot().matched_count, 0);
+    assert_eq!(
+        state.lock().await.protocols.redis.snapshot().matched_count,
+        0
+    );
     client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "events", &binary(SOURCE_A), b":1\r\n").await;
-    assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
+    assert_eq!(
+        state.lock().await.protocols.redis.snapshot().matched_count,
+        1
+    );
     task.abort();
 }

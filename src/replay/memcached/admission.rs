@@ -45,6 +45,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
     fn observe_once(&mut self, state: &mut ReplayState) -> RequestAdmission {
         let case = state.active_case_id.clone();
         let event = state
+            .protocols
             .memcached
             .events
             .request_order
@@ -80,11 +81,12 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
             return Err(Rejection::Unsupported);
         }
         let ReplayState {
-            memcached,
+            protocols,
             replay_policy,
             ..
         } = state;
-        memcached
+        protocols
+            .memcached
             .select_memcached(
                 MemcachedMatchContext {
                     active_case_id: observation.case.as_deref(),
@@ -111,14 +113,19 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
         else {
             return None;
         };
-        let index = state.memcached.exchanges.iter().position(|exchange| {
-            exchange.source == blocked_by.source
-                && exchange.case_id == blocked_by.case_id
-                && exchange.record.connection_id == blocked_by.connection_id
-                && exchange.record.sequence == blocked_by.sequence
-        })?;
+        let index = state
+            .protocols
+            .memcached
+            .exchanges
+            .iter()
+            .position(|exchange| {
+                exchange.source == blocked_by.source
+                    && exchange.case_id == blocked_by.case_id
+                    && exchange.record.connection_id == blocked_by.connection_id
+                    && exchange.record.sequence == blocked_by.sequence
+            })?;
         Some(WaitDependency::slot(
-            &state.memcached.lifecycle,
+            &state.protocols.memcached.lifecycle,
             index,
             Barrier::Delivered,
         ))
@@ -141,7 +148,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
             && let Err(error) =
                 policy.commit(observation.case.as_deref(), matched.policy_decision.clone())
         {
-            state.memcached.fail_exchange(
+            state.protocols.memcached.fail_exchange(
                 matched,
                 format!("Memcached request contract commit failed: {error:#}"),
             );
@@ -162,7 +169,12 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
             return;
         }
         if let Some(case) = &observation.case {
-            state.memcached.events.dirty_case_ids.insert(case.clone());
+            state
+                .protocols
+                .memcached
+                .events
+                .dirty_case_ids
+                .insert(case.clone());
         }
         let unsupported = matches!(error, Rejection::Unsupported);
         let report = CommandRequestReport {
@@ -184,9 +196,9 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
             },
         };
         if unsupported {
-            state.memcached.events.unsupported.push(report);
+            state.protocols.memcached.events.unsupported.push(report);
         } else {
-            state.memcached.events.unmatched.push(report);
+            state.protocols.memcached.events.unmatched.push(report);
         }
     }
 }

@@ -34,7 +34,7 @@ pub(in crate::replay) struct KafkaUnusedReport {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(in crate::replay) struct KafkaProtocolReport {
+pub(crate) struct KafkaProtocolReport {
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) matched_count: usize,
     pub(in crate::replay) matched: Vec<KafkaMatchedReport>,
@@ -64,7 +64,7 @@ impl KafkaProtocolReport {
     }
 
     #[cfg(test)]
-    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+    pub(crate) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.unmatched
             .iter()
             .any(|request| request.case_id.as_deref() == Some(case_id))

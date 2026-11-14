@@ -73,11 +73,12 @@ async fn readiness_prepares_only_relevant_lanes_for_case_and_startup_publishers(
             let runtime = runtime(temp.path(), &cases, &globals, lazy).await.unwrap();
             let prepared = {
                 let state = runtime.state.lock().await;
-                assert_eq!(state.redis.events.connections, 0);
-                assert!(state.redis.pubsub.subscriptions.is_empty());
-                assert_eq!(state.redis.pubsub.indexed.delivered, 0);
-                assert_eq!(state.redis.pubsub.indexed.lanes.len(), 5);
+                assert_eq!(state.protocols.redis.events.connections, 0);
+                assert!(state.protocols.redis.pubsub.subscriptions.is_empty());
+                assert_eq!(state.protocols.redis.pubsub.indexed.delivered, 0);
+                assert_eq!(state.protocols.redis.pubsub.indexed.lanes.len(), 5);
                 state
+                    .protocols
                     .redis
                     .pubsub
                     .indexed
@@ -98,11 +99,14 @@ async fn readiness_prepares_only_relevant_lanes_for_case_and_startup_publishers(
             };
             let next = load_runtime(temp.path(), lazy).await.unwrap();
             let state = next.state.lock().await;
-            for (old, lane) in prepared.iter().zip(&state.redis.pubsub.indexed.lanes) {
+            for (old, lane) in prepared
+                .iter()
+                .zip(&state.protocols.redis.pubsub.indexed.lanes)
+            {
                 assert!(!Arc::ptr_eq(old, &lane.echoes));
                 assert_eq!(old.get().is_some(), lane.echoes.get().is_some());
             }
-            assert_eq!(state.redis.pubsub.indexed.delivered, 0);
+            assert_eq!(state.protocols.redis.pubsub.indexed.delivered, 0);
         }
     }
 }
@@ -133,8 +137,13 @@ async fn ordinary_publishers_do_not_prepare_adapter_echo_indices() {
         .await
         .unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.pubsub.indexed.lanes.len(), 1);
-        assert!(state.redis.pubsub.indexed.lanes[0].echoes.get().is_none());
+        assert_eq!(state.protocols.redis.pubsub.indexed.lanes.len(), 1);
+        assert!(
+            state.protocols.redis.pubsub.indexed.lanes[0]
+                .echoes
+                .get()
+                .is_none()
+        );
     }
 }
 
@@ -176,7 +185,7 @@ async fn prepared_self_echo_preserves_pipelined_publish_delete_and_live_payload(
         .unwrap();
         let prepared = {
             let state = runtime.state.lock().await;
-            let lane = &state.redis.pubsub.indexed.lanes[0];
+            let lane = &state.protocols.redis.pubsub.indexed.lanes[0];
             assert!(lane.pages.as_ref().unwrap().pages() > 1);
             assert!(lane.echoes.get().unwrap().is_ok());
             lane.echoes.clone()
@@ -201,11 +210,11 @@ async fn prepared_self_echo_preserves_pipelined_publish_delete_and_live_payload(
         let state = runtime.state.lock().await;
         assert!(Arc::ptr_eq(
             &prepared,
-            &state.redis.pubsub.indexed.lanes[0].echoes
+            &state.protocols.redis.pubsub.indexed.lanes[0].echoes
         ));
-        assert!(state.redis.snapshot().unused_case.is_empty());
-        assert_eq!(state.redis.pubsub.indexed.delivered, 1);
-        assert_eq!(state.redis.pubsub.global_unused_count(), 513);
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+        assert_eq!(state.protocols.redis.pubsub.indexed.delivered, 1);
+        assert_eq!(state.protocols.redis.pubsub.global_unused_count(), 513);
         client_task.abort();
         subscriber_task.abort();
     }

@@ -33,7 +33,7 @@ async fn selected(
         panic!("native full response must match")
     };
     assert_eq!(
-        state.lock().await.http_exchanges[0].status,
+        state.lock().await.protocols.http_exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
     (temp, state, record, serving)
@@ -41,7 +41,7 @@ async fn selected(
 async fn status(state: &Arc<Mutex<ReplayState>>, expected: ReplayExchangeStatus) {
     timeout(Duration::from_secs(1), async {
         loop {
-            if state.lock().await.http_exchanges[0].status == expected {
+            if state.lock().await.protocols.http_exchanges[0].status == expected {
                 break;
             }
             tokio::task::yield_now().await;
@@ -81,12 +81,12 @@ async fn final_body_frame_is_not_consumption_until_actual_http_writer_flushes() 
     let frame = response.body_mut().frame().await.unwrap().unwrap();
     assert_eq!(frame.into_data().unwrap(), b"abcdef".as_slice());
     assert_eq!(
-        state.lock().await.http_exchanges[0].status,
+        state.lock().await.protocols.http_exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
     progress.flushed();
     status(&state, ReplayExchangeStatus::Consumed).await;
-    assert_eq!(state.lock().await.http_events.matched_count, 1);
+    assert_eq!(state.lock().await.protocols.http_events.matched_count, 1);
     serving.abort();
 }
 
@@ -104,7 +104,7 @@ async fn ordinary_body_cancellation_before_and_after_queue_never_consumes() {
         finished.send_replace(true);
         status(&state, ReplayExchangeStatus::Failed).await;
         let locked = state.lock().await;
-        assert_eq!(locked.http_events.matched_count, 0);
+        assert_eq!(locked.protocols.http_events.matched_count, 0);
         assert!(locked.http_case_is_dirty("case"));
         serving.abort();
     }
@@ -120,7 +120,7 @@ async fn empty_body_keeps_its_header_delivery_obligation_when_hyper_skips_body_p
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     drop(response);
     assert_eq!(
-        state.lock().await.http_exchanges[0].status,
+        state.lock().await.protocols.http_exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
     progress.flushed();
@@ -156,7 +156,7 @@ async fn real_tcp_cancellation_of_an_unflushed_ordinary_body_keeps_source_unused
     .unwrap();
     assert!(head.starts_with(b"HTTP/1.1 200"));
     assert_eq!(
-        runtime.state.lock().await.http_exchanges[0].status,
+        runtime.state.lock().await.protocols.http_exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
     crate::dependency::termination::ConnectionControl::new(&client)
@@ -165,7 +165,7 @@ async fn real_tcp_cancellation_of_an_unflushed_ordinary_body_keeps_source_unused
         .unwrap();
     status(&runtime.state, ReplayExchangeStatus::Failed).await;
     let locked = runtime.state.lock().await;
-    assert_eq!(locked.http_events.matched_count, 0);
+    assert_eq!(locked.protocols.http_events.matched_count, 0);
     assert_eq!(
         locked
             .unused_http_exchanges(ReplaySource::Case, false)

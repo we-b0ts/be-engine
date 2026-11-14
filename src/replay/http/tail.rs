@@ -10,7 +10,7 @@ impl ReplayState {
         selected: &BTreeSet<Uuid>,
     ) -> Result<BTreeMap<Uuid, usize>> {
         let mut indices = BTreeMap::new();
-        for (index, exchange) in self.http_exchanges.iter().enumerate() {
+        for (index, exchange) in self.protocols.http_exchanges.iter().enumerate() {
             if exchange.case_id.as_deref() != Some(case_id) {
                 continue;
             }
@@ -41,23 +41,26 @@ impl ReplayState {
         index: usize,
         completion: &[crate::policy::AsyncHttpEnd],
     ) -> bool {
-        self.http_exchanges.get(index).is_some_and(|exchange| {
-            exchange.shared_origin.is_some()
-                && !completion.iter().any(|end| {
-                    exchange.record.method.eq_ignore_ascii_case(&end.method)
-                        && exchange.identity.target.host
-                            == super::super::normalize_host(&end.endpoint.host)
-                        && exchange.identity.target.port == end.endpoint.port
-                        && uri_path_only(&exchange.record.uri) == end.path
-                })
-        })
+        self.protocols
+            .http_exchanges
+            .get(index)
+            .is_some_and(|exchange| {
+                exchange.shared_origin.is_some()
+                    && !completion.iter().any(|end| {
+                        exchange.record.method.eq_ignore_ascii_case(&end.method)
+                            && exchange.identity.target.host
+                                == super::super::normalize_host(&end.endpoint.host)
+                            && exchange.identity.target.port == end.endpoint.port
+                            && uri_path_only(&exchange.record.uri) == end.path
+                    })
+            })
     }
 
     pub(in crate::replay) fn http_exchange_status(
         &self,
         index: usize,
     ) -> Option<super::super::ReplayExchangeStatus> {
-        self.http_exchanges.get(index).map(|exchange| {
+        self.protocols.http_exchanges.get(index).map(|exchange| {
             if exchange.status == super::super::ReplayExchangeStatus::Responding
                 && exchange
                     .lifecycle_prefix

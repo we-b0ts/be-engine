@@ -102,9 +102,9 @@ impl Delivery {
                 .as_deref()
                 .is_none_or(|case| !stopped && Some(case) == active)
             && self.request_epoch.is_none_or(|epoch| {
-                self.case_id
-                    .as_deref()
-                    .is_some_and(|case| replay.redis.native_request_epoch(case) == Some(epoch))
+                self.case_id.as_deref().is_some_and(|case| {
+                    replay.protocols.redis.native_request_epoch(case) == Some(epoch)
+                })
             })
     }
 }
@@ -489,7 +489,7 @@ pub(super) fn schedule(
         let detached = delivery
             .matched
             .as_ref()
-            .is_some_and(|matched| replay.redis.pubsub.rpc_is_detached(matched));
+            .is_some_and(|matched| replay.protocols.redis.pubsub.rpc_is_detached(matched));
         if closed
             || replay.finalized_at.is_some()
             || delivery
@@ -497,10 +497,10 @@ pub(super) fn schedule(
                 .as_ref()
                 .is_some_and(|m| !detached && m.report.case_id != replay.active_case_id)
         {
-            replay.redis.pubsub.fail(delivery.push);
+            replay.protocols.redis.pubsub.fail(delivery.push);
             if let Some(matched) = &delivery.matched {
                 fail_rpc_delivery(
-                    &mut replay.redis,
+                    &mut replay.protocols.redis,
                     matched,
                     detached,
                     "RPC callback subscriber closed or case ended".into(),
@@ -511,15 +511,16 @@ pub(super) fn schedule(
         let sender = match sender {
             Some(sender) => sender,
             None => match replay
+                .protocols
                 .redis
                 .pubsub
                 .rpc_sender(delivery.matched.as_ref().expect("RPC delivery"))
             {
                 Ok(sender) => sender,
                 Err(error) => {
-                    replay.redis.pubsub.fail(delivery.push);
+                    replay.protocols.redis.pubsub.fail(delivery.push);
                     fail_rpc_delivery(
-                        &mut replay.redis,
+                        &mut replay.protocols.redis,
                         delivery.matched.as_ref().expect("RPC delivery"),
                         detached,
                         error.to_string(),
@@ -535,10 +536,10 @@ pub(super) fn schedule(
             delivery.matched = None;
         }
         if sender.try_send(delivery.clone()).is_err() {
-            replay.redis.pubsub.fail(delivery.push);
+            replay.protocols.redis.pubsub.fail(delivery.push);
             if let Some(matched) = &origin {
                 fail_rpc_delivery(
-                    &mut replay.redis,
+                    &mut replay.protocols.redis,
                     matched,
                     detached,
                     "Redis Pub/Sub subscriber unavailable or queue full".into(),

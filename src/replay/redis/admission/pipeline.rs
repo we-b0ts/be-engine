@@ -36,26 +36,34 @@ impl SerialPublish {
         {
             return None;
         }
-        let index = lane::ordinary_slot(&state.redis, case, candidate)?;
-        let first = lane::ordinary_slot(&state.redis, case, blocked_by)?;
+        let index = lane::ordinary_slot(&state.protocols.redis, case, candidate)?;
+        let first = lane::ordinary_slot(&state.protocols.redis, case, blocked_by)?;
         if let Some(broadcast) = close_tail::prove(state, case, first, index) {
             return Some(broadcast);
         }
         // An attribution overlay can move other cases' traffic away from the
         // physical connection without renumbering the remaining Source slots.
-        let predecessors = state.redis.candidates.lane_prefix(first, index, 4)?;
+        let predecessors = state
+            .protocols
+            .redis
+            .candidates
+            .lane_prefix(first, index, 4)?;
         if !matches!(predecessors.len(), 2 | 4) {
             return None;
         }
-        let later = &state.redis.exchanges[index];
+        let later = &state.protocols.redis.exchanges[index];
         if predecessors
             .iter()
             .chain(std::iter::once(&index))
-            .map(|&index| &state.redis.exchanges[index])
+            .map(|&index| &state.protocols.redis.exchanges[index])
             .any(|exchange| {
                 exchange.record.command != "PUBLISH"
                     || !lane::is_ordinary(exchange)
-                    || state.redis.connection_scopes.is_stateful(exchange)
+                    || state
+                        .protocols
+                        .redis
+                        .connection_scopes
+                        .is_stateful(exchange)
                     || !exchange.status.is_available()
                     || exchange.record.response_kind != "integer"
                     || exchange.record.lifecycle_cleanup
@@ -67,8 +75,8 @@ impl SerialPublish {
         let call = socketio_rpc::request("PUBLISH", &later.args).ok()??;
         let mut pairs = predecessors.as_chunks::<2>().0.iter().map(|pair| {
             room_broadcast_pair(
-                &state.redis.exchanges[pair[0]],
-                &state.redis.exchanges[pair[1]],
+                &state.protocols.redis.exchanges[pair[0]],
+                &state.protocols.redis.exchanges[pair[1]],
             )
         });
         let first_pair = pairs.next()??;
@@ -141,14 +149,14 @@ impl AdjacentPublish {
             return None;
         }
         let case = state.active_case_id.as_deref()?;
-        let earlier = lane::ordinary_slot(&state.redis, case, blocked_by)?;
-        let later = lane::ordinary_slot(&state.redis, case, candidate)?;
-        let first = &state.redis.exchanges[earlier];
-        let second = &state.redis.exchanges[later];
+        let earlier = lane::ordinary_slot(&state.protocols.redis, case, blocked_by)?;
+        let later = lane::ordinary_slot(&state.protocols.redis, case, candidate)?;
+        let first = &state.protocols.redis.exchanges[earlier];
+        let second = &state.protocols.redis.exchanges[later];
         let route = recorded_route(first)?;
         let later_route = recorded_route(second)?;
         if matches!(route, AdapterRoute::Callback(_))
-            && !state.redis.pubsub.is_adapter_source(first)
+            && !state.protocols.redis.pubsub.is_adapter_source(first)
         {
             return None;
         }
@@ -196,7 +204,7 @@ impl AdjacentPublish {
         {
             return None;
         }
-        let earlier = state.redis.exchanges.get(self.earlier)?;
+        let earlier = state.protocols.redis.exchanges.get(self.earlier)?;
         if !earlier.status.is_available() || earlier.args.first() != command.args.first() {
             return None;
         }

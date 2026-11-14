@@ -18,8 +18,9 @@ impl ReplayState {
         let params = delivery.params;
         let sql = delivery.sql.to_owned();
         let prefix = self.prepare_mysql_prefix(witness, delivery, read_delivery, case);
-        let exchanges = &self.mysql.exchanges;
+        let exchanges = &self.protocols.mysql.exchanges;
         let observed = self
+            .protocols
             .mysql
             .transaction_equivalence
             .observe_delivery_with_prefix(witness, delivery, prefix, |index| {
@@ -29,14 +30,18 @@ impl ReplayState {
                 )
             });
         for (index, kind) in observed.omissions {
-            if self.mysql.exchanges[index].status.is_available() {
-                self.mysql.exchanges[index].optional_session = Some(kind);
+            if self.protocols.mysql.exchanges[index].status.is_available() {
+                self.protocols.mysql.exchanges[index].optional_session = Some(kind);
                 self.refresh_mysql_global_report(index);
             }
         }
         if let Some((index, reason)) = observed.violation {
-            let source = self.mysql.exchanges[index].source;
-            let diagnostic = self.mysql.transaction_equivalence.diagnostic(index);
+            let source = self.protocols.mysql.exchanges[index].source;
+            let diagnostic = self
+                .protocols
+                .mysql
+                .transaction_equivalence
+                .diagnostic(index);
             self.record_unmatched_in_case(
                 case,
                 identity,
@@ -45,13 +50,13 @@ impl ReplayState {
                 params,
                 &format!("MySQL transaction coverage: {reason}"),
             );
-            if let Some(event) = self.mysql.events.unmatched_queries.last_mut() {
+            if let Some(event) = self.protocols.mysql.events.unmatched_queries.last_mut() {
                 event.recorded_source = Some(source);
                 event.recorded_index = Some(index);
                 event.diagnostic = diagnostic;
             }
         }
-        let mysql = &mut self.mysql;
+        let mysql = &mut self.protocols.mysql;
         if let Some(indices) = mysql.isolation.observe(
             witness.connection(),
             case,
@@ -60,8 +65,8 @@ impl ReplayState {
             &SessionContext(&mysql.exchanges),
         ) {
             for index in indices {
-                if self.mysql.exchanges[index].status.is_available() {
-                    self.mysql.exchanges[index].optional_session =
+                if self.protocols.mysql.exchanges[index].status.is_available() {
+                    self.protocols.mysql.exchanges[index].optional_session =
                         Some(OptionalSessionExchange::TransactionIsolation);
                     self.refresh_mysql_global_report(index);
                 }
@@ -76,20 +81,22 @@ impl ReplayState {
         wire: Option<(&RecordedMysqlResponse, DateTime<Utc>, DateTime<Utc>)>,
         case: Option<&str>,
     ) -> Option<usize> {
-        self.mysql.transaction_equivalence.prepare_prefix(
+        self.protocols.mysql.transaction_equivalence.prepare_prefix(
             witness,
             delivery,
             wire,
             |index| {
                 self.input_timing.as_ref()?.mysql_prefix_window(
                     case?,
-                    self.mysql.exchanges[index].record.request_started_at?,
+                    self.protocols.mysql.exchanges[index]
+                        .record
+                        .request_started_at?,
                 )
             },
             |expected, actual| {
                 case.is_some_and(|case| {
                     self.mysql_prefix_response_matches(
-                        &self.mysql.exchanges[expected].record,
+                        &self.protocols.mysql.exchanges[expected].record,
                         actual,
                         case,
                     )

@@ -18,7 +18,7 @@ pub(super) fn prove(
     if Instant::now() >= deadline {
         return None;
     }
-    let redis = &state.redis;
+    let redis = &state.protocols.redis;
     let later = &redis.exchanges[index];
     if !ordinary_publish(redis, later)
         || !later.status.is_available()

@@ -67,6 +67,7 @@ async fn compact_broadcast_delivers_the_finite_echo_with_target_bytes() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .report()
@@ -149,8 +150,17 @@ async fn ordinary_broadcast_translates_only_host_and_delivers_one_finite_echo() 
                 .is_err()
         );
         let state = runtime.state.lock().await;
-        assert!(state.redis.snapshot().unused_case.is_empty());
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
         task.abort();
         sub_task.abort();
     }
@@ -207,6 +217,7 @@ async fn recorded_publish_error_remains_a_matched_result_without_sending_an_echo
             .state
             .lock()
             .await
+            .protocols
             .redis
             .case_has_runtime_failure("case")
     );
@@ -226,6 +237,7 @@ async fn recorded_publish_error_remains_a_matched_result_without_sending_an_echo
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()

@@ -145,7 +145,7 @@ async fn read_back_tcp_preserves_generated_identity_without_target_local_cache()
     client.inner.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
     let state = runtime.state.lock().await;
-    let report = state.redis.snapshot();
+    let report = state.protocols.redis.snapshot();
     assert!(
         report.unused_case.is_empty()
             && report.unmatched.is_empty()

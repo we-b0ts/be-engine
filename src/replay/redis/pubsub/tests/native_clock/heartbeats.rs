@@ -83,6 +83,7 @@ async fn legacy_and_explicit_heartbeats_preserve_native_delivery_and_business_ac
                     .state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .pubsub
                     .report()
@@ -132,6 +133,7 @@ async fn client_ping_and_business_dependent_pong_do_not_gain_native_input_permis
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .report()

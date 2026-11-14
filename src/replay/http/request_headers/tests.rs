@@ -190,8 +190,8 @@ async fn excludes_transport_tracing_and_engine_metadata_but_normalizes_business_
     .await;
     let state = runtime.state.lock().await;
     assert!(!state.snapshot_report().is_dirty());
-    assert!(state.http_events.header_mismatches.is_empty());
-    assert!(state.http_events.header_observations.is_empty());
+    assert!(state.protocols.http_events.header_mismatches.is_empty());
+    assert!(state.protocols.http_events.header_observations.is_empty());
     task.abort();
 }
 
@@ -445,6 +445,7 @@ async fn encrypted_dependency_headers_are_decrypted_before_audit_and_remain_prot
             .state
             .lock()
             .await
+            .protocols
             .http_events
             .header_observations
             .is_empty()
@@ -454,6 +455,7 @@ async fn encrypted_dependency_headers_are_decrypted_before_audit_and_remain_prot
             .state
             .lock()
             .await
+            .protocols
             .http_events
             .header_mismatches
             .is_empty()

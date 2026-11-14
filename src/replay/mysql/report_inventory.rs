@@ -103,12 +103,17 @@ impl MysqlReplayState {
 
 impl ReplayState {
     pub(in crate::replay) fn global_mysql_extra_unused_count(&self) -> usize {
-        self.mysql
+        self.protocols
+            .mysql
             .events
             .global_report
-            .rows(0, &self.mysql.exchanges, true)
+            .rows(0, &self.protocols.mysql.exchanges, true)
             .filter(|(index, exchange)| {
-                let status = self.mysql.lifecycle.live_status(*index, exchange.status);
+                let status = self
+                    .protocols
+                    .mysql
+                    .lifecycle
+                    .live_status(*index, exchange.status);
                 let optional = exchange.optional_session.filter(|kind| {
                     status.is_available()
                         || matches!(
@@ -122,6 +127,7 @@ impl ReplayState {
     }
     pub(in crate::replay) fn refresh_mysql_global_report(&mut self, index: usize) {
         let Some(exchange) = self
+            .protocols
             .mysql
             .exchanges
             .get(index)
@@ -129,7 +135,11 @@ impl ReplayState {
         else {
             return;
         };
-        let status = self.mysql.lifecycle.live_status(index, exchange.status);
+        let status = self
+            .protocols
+            .mysql
+            .lifecycle
+            .live_status(index, exchange.status);
         let optional = exchange.optional_session.filter(|kind| {
             status.is_available()
                 || matches!(
@@ -137,7 +147,7 @@ impl ReplayState {
                     OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
                 ) && status == ReplayExchangeStatus::Responding
         });
-        self.mysql.events.global_report.observe(
+        self.protocols.mysql.events.global_report.observe(
             0,
             index,
             exchange.optional_session.is_none(),
@@ -150,13 +160,17 @@ impl ReplayState {
         &self,
         visitor: &mut dyn FnMut(Row) -> Result<()>,
     ) -> Result<()> {
-        self.mysql.visit_global_report_range(false, visitor)
+        self.protocols
+            .mysql
+            .visit_global_report_range(false, visitor)
     }
     pub(in crate::replay) fn visit_mysql_global_report_extras(
         &self,
         visitor: &mut dyn FnMut(Row) -> Result<()>,
     ) -> Result<()> {
-        self.mysql.visit_global_report_range(true, visitor)
+        self.protocols
+            .mysql
+            .visit_global_report_range(true, visitor)
     }
 }
 

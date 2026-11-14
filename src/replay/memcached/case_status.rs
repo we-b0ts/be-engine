@@ -5,7 +5,7 @@ impl MemcachedReplayState {
         self.events.dirty_case_ids.contains(case)
     }
 
-    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+    pub(crate) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.events.dirty_case_ids.contains(case_id)
             || self.case_exchange_index.any(case_id, |index| {
                 self.exchanges

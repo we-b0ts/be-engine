@@ -58,9 +58,9 @@ async fn explicit_read_transaction_does_not_require_orm_commit_or_rollback() {
             );
             client.close().await.unwrap();
             let state = runtime.state.lock().await;
-            assert!(!state.mysql.case_is_dirty("case-id"), "{end}");
+            assert!(!state.protocols.mysql.case_is_dirty("case-id"), "{end}");
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-            assert_eq!(state.mysql.events.matched_query_count, 2);
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
             assert_eq!(
                 state.allowed_unused_commits().len(),
                 usize::from(end == "COMMIT")
@@ -101,22 +101,22 @@ async fn empty_source_ends_can_be_omitted_and_keep_finite_consumption_when_sent(
             .unwrap();
         {
             let state = runtime.state.lock().await;
-            assert!(!state.mysql.case_is_dirty("case-id"));
+            assert!(!state.protocols.mysql.case_is_dirty("case-id"));
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
             assert_eq!(state.allowed_unused_commits().len(), 2);
             assert_eq!(state.allowed_unused_rollbacks().len(), 1);
-            assert_eq!(state.mysql.events.matched_query_count, 1);
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         }
         for sql in ["COMMIT", "COMMIT", "COMMIT", "ROLLBACK", "ROLLBACK"] {
             sqlx::raw_sql(sql).execute(&mut client).await.unwrap();
         }
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 4);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 4);
         assert!(state.allowed_unused_commits().is_empty());
         assert!(state.allowed_unused_rollbacks().is_empty());
-        assert!(state.mysql.events.unmatched_queries.is_empty());
-        assert!(!state.mysql.case_is_dirty("case-id"));
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+        assert!(!state.protocols.mysql.case_is_dirty("case-id"));
         task.abort();
     })
     .await
@@ -155,7 +155,7 @@ async fn empty_cleanup_cannot_replace_a_write_transactions_required_end() {
             );
             client.close().await.unwrap();
             let state = runtime.state.lock().await;
-            assert!(state.mysql.case_is_dirty("case-id"), "{end}");
+            assert!(state.protocols.mysql.case_is_dirty("case-id"), "{end}");
             let unused = state.unused_exchanges(ReplaySource::Case);
             assert_eq!(unused.len(), 1);
             assert_eq!(unused[0].index, 2);
@@ -177,7 +177,7 @@ async fn failed_noop_end_delivery_stays_dirty_after_other_successful_cleanup() {
         ];
         let (_temp, _addr, runtime, task) = fixture(&records, false).await;
         let mut state = runtime.state.lock().await;
-        let source = &state.mysql.exchanges[0].identity;
+        let source = &state.protocols.mysql.exchanges[0].identity;
         let identity = ReplaySessionIdentity {
             target: Some(source.target.clone()),
             database: source.database.clone(),
@@ -186,19 +186,19 @@ async fn failed_noop_end_delivery_stays_dirty_after_other_successful_cleanup() {
         let first = state
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
             .unwrap();
-        assert!(!state.mysql.case_is_dirty("case-id"));
+        assert!(!state.protocols.mysql.case_is_dirty("case-id"));
         state.fail_exchange(&first, &identity, "test cleanup delivery failure");
-        assert!(state.mysql.case_is_dirty("case-id"));
+        assert!(state.protocols.mysql.case_is_dirty("case-id"));
         let second = state
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
             .unwrap();
         assert!(second.claim.publish_wire());
         assert!(state.complete_exchange(&second));
-        assert!(state.mysql.case_is_dirty("case-id"));
+        assert!(state.protocols.mysql.case_is_dirty("case-id"));
         let unused = state.unused_exchanges(ReplaySource::Case);
         assert_eq!(unused.len(), 1);
         assert_eq!(unused[0].index, first.index);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
         assert!(
             state
                 .match_exchange(&identity, "COM_QUERY", Some(sql), None)

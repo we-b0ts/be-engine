@@ -1,10 +1,7 @@
 //! Protocol control and proven reusable snapshots do not become startup business debt.
 use super::*;
 impl RedisReplayState {
-    pub(in crate::replay) fn startup_counts(
-        &mut self,
-        close: bool,
-    ) -> crate::replay::startup::Counts {
+    pub(crate) fn startup_counts(&mut self, close: bool) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
         for (index, exchange) in self.exchanges.iter_mut().enumerate() {
             self.lifecycle.synchronize(index, &mut exchange.status);

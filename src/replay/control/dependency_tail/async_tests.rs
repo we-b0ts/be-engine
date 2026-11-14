@@ -77,7 +77,17 @@ async fn primary_failure_skips_success_work_but_preserves_the_target_stop_receip
     );
     assert!(state.lock().await.target_session_stopped);
     assert!(state.lock().await.active_case_id.is_none());
-    assert_eq!(state.lock().await.redis.snapshot().unused_case.len(), 1);
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .snapshot()
+            .unused_case
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

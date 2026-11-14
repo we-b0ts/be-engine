@@ -258,7 +258,7 @@ async fn replay_tcp_scope(
         .unwrap()
         .unwrap();
     let state = runtime.state.lock().await;
-    let report = state.redis.snapshot();
+    let report = state.protocols.redis.snapshot();
     assert_eq!(report.is_dirty(), reject_first, "{report:?}");
     assert_eq!(report.unmatched.len(), usize::from(reject_first));
     if reject_first {

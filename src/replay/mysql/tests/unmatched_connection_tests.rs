@@ -70,8 +70,8 @@ async fn unmatched_mysql_query_and_execute_close_connections_without_consuming_s
         assert_eof(&mut rejected).await;
         {
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-            let event = &state.mysql.events.unmatched_queries[0];
+            assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+            let event = &state.protocols.mysql.events.unmatched_queries[0];
             assert_eq!(
                 event.command,
                 if prepared {
@@ -140,6 +140,7 @@ async fn unknown_mysql_statement_closes_connection() {
             .state
             .lock()
             .await
+            .protocols
             .mysql
             .events
             .unmatched_queries
@@ -176,7 +177,7 @@ async fn recorded_mysql_1105_error_keeps_connection_usable() {
         0
     );
     let state = runtime.state.lock().await;
-    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     task.abort();
 }

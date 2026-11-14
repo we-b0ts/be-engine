@@ -3,7 +3,7 @@ use super::*;
 use serde_json::{Value, json};
 
 impl RedisReplayState {
-    pub(in crate::replay) fn case_in_flight_diagnostic(&self) -> Value {
+    pub(crate) fn case_in_flight_diagnostic(&self) -> Value {
         let pending = self.exchanges.iter().enumerate().filter(|(index, e)| {
             e.source == ReplaySource::Case
                 && !self.append_streams.idle_source(*index)

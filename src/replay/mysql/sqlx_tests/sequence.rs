@@ -51,7 +51,7 @@ async fn streamed_mysql_rows_keep_interleaved_dependency_barriers() {
     {
         let mut state = runtime.state.lock().await;
         state.active_sequence = Some(sequence.clone());
-        state.mysql.lifecycle.sequence =
+        state.protocols.mysql.lifecycle.sequence =
             crate::replay::sequence::Binding::new(sequence.clone(), [(0, 1), (1, 2)].into_iter());
     }
     let mut rows = sqlx::query("SELECT id FROM first_table").fetch(&mut first);

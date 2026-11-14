@@ -32,7 +32,10 @@ impl CaseCleanup {
     }
 }
 
-pub(super) fn mark_failed(state: &mut ReplayState, case: &str) -> Result<()> {
+pub(super) fn mark_failed<P: ReplayProtocolSet>(
+    state: &mut RuntimeState<P>,
+    case: &str,
+) -> Result<()> {
     ensure!(
         state.active_case_id.as_deref() == Some(case) && state.finalized_at.is_none(),
         "primary failure requires the active, unfinalized Case"
@@ -43,13 +46,12 @@ pub(super) fn mark_failed(state: &mut ReplayState, case: &str) -> Result<()> {
         .failed
         .entry(case.into())
         .or_insert_with(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE);
-    state.redis.pubsub.native_clock.close_case(case);
-    state.redis.pubsub.namespace_sessions.close_case(case);
+    state.protocols.close_case(case);
     Ok(())
 }
 
-pub(super) async fn failure_description(
-    state: &Arc<Mutex<ReplayState>>,
+pub(super) async fn failure_description<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     error: &anyhow::Error,
 ) -> String {
     let error = format!("{error:#}");
@@ -62,19 +64,12 @@ pub(super) async fn failure_description(
     format!("{error}; pending={}", pending::snapshot(&state))
 }
 
-pub(in crate::replay) fn has_started(state: &ReplayState) -> bool {
-    state.mysql.has_case_in_flight()
-        || state.native.has_case_in_flight()
-        || state.redis.has_case_in_flight()
-        || state.kafka.has_case_in_flight()
-        || state.connect_failures.has_in_flight()
-        || state.memcached.has_case_in_flight()
-        || state.motan.has_case_in_flight()
-        || state.http_has_case_in_flight()
+pub(in crate::replay) fn has_started<P: ReplayProtocolSet>(state: &RuntimeState<P>) -> bool {
+    state.has_protocol_io(InFlightScope::Case)
 }
 
-pub(super) async fn drain_started(
-    state: &Arc<Mutex<ReplayState>>,
+pub(super) async fn drain_started<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case: &str,
     deadline: Option<TokioInstant>,
 ) -> Result<()> {
@@ -84,18 +79,18 @@ pub(super) async fn drain_started(
 
 /// Close header admission at the same linearization point as the final empty
 /// observation. A header queued for Replay state already owns its atomic guard.
-pub(super) async fn lock_for_release<'a>(
-    shared: &'a Arc<Mutex<ReplayState>>,
+pub(super) async fn lock_for_release<'a, P: ReplayProtocolSet>(
+    shared: &'a Arc<Mutex<RuntimeState<P>>>,
     case: &str,
     deadline: Option<TokioInstant>,
-) -> Result<tokio::sync::MutexGuard<'a, ReplayState>> {
+) -> Result<tokio::sync::MutexGuard<'a, RuntimeState<P>>> {
     let deadline = Some(
         deadline
             .unwrap_or_else(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE),
     );
     loop {
         let state = lock_drained(shared, case, deadline).await?;
-        if state.http_ingress.try_close_case(case) {
+        if state.protocols.try_close_case(case) {
             return Ok(state);
         }
         drop(state);
@@ -103,15 +98,15 @@ pub(super) async fn lock_for_release<'a>(
 }
 
 /// Keep the final empty-I/O observation locked through Case ownership release.
-pub(super) async fn lock_drained<'a>(
-    state: &'a Arc<Mutex<ReplayState>>,
+pub(super) async fn lock_drained<'a, P: ReplayProtocolSet>(
+    state: &'a Arc<Mutex<RuntimeState<P>>>,
     case: &str,
     deadline: Option<TokioInstant>,
-) -> Result<tokio::sync::MutexGuard<'a, ReplayState>> {
+) -> Result<tokio::sync::MutexGuard<'a, RuntimeState<P>>> {
     let deadline = deadline
         .unwrap_or_else(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE);
     loop {
-        let changed = { state.lock().await.http_ingress.changed.clone() };
+        let changed = { state.lock().await.protocols.io_changed() };
         // Register before the empty check so a synchronous RAII release cannot
         // be lost between inspecting the counter and awaiting the notification.
         let notified = changed.notified();

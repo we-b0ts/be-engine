@@ -48,7 +48,7 @@ impl DependencyRequestAdapter<ReplayState> for Probe {
         _error: &Self::Error,
     ) -> Option<WaitDependency<'a>> {
         (!self.counts.lock().unwrap().ready)
-            .then(|| WaitDependency::changed(&state.redis.lifecycle))
+            .then(|| WaitDependency::changed(&state.protocols.redis.lifecycle))
     }
     fn interrupted(&self, reason: &'static str) -> Self::Error {
         reason
@@ -97,7 +97,7 @@ async fn finalized_engine_rejects_without_observation_selection_or_report_hooks(
             tokio::select! {biased; result=&mut execute=>panic!("must wait before finalization: {result:?}"),_=std::future::ready(())=>{}}
             let mut state = runtime.state.lock().await;
             state.finalized_at = Some(chrono::Utc::now());
-            state.redis.lifecycle.notify_waiters();
+            state.protocols.redis.lifecycle.notify_waiters();
         }
         assert!(execute.await.unwrap_err().contains("finalized"));
         let seen = counts.lock().unwrap();
@@ -143,7 +143,7 @@ async fn no_policy_same_case_control_boundaries_cancel_the_previous_engine_epoch
             assert_eq!(state.active_case_id.as_deref(), Some(case.as_str()));
             assert!(state.replay_policy.is_none());
             counts.lock().unwrap().ready = true;
-            state.redis.lifecycle.notify_waiters();
+            state.protocols.redis.lifecycle.notify_waiters();
         }
         assert!(execute.await.unwrap_err().contains("stopped"));
         let seen = counts.lock().unwrap();
@@ -198,15 +198,15 @@ async fn cancelling_the_real_redis_durable_wait_before_delivery_cancels_its_clai
     tokio::select! {biased; ()=&mut wait=>panic!("durable wait must be parked on the real state lock"),_=std::future::ready(())=>{}}
     drop(wait);
     assert_eq!(
-        state.redis.exchange_status(index),
+        state.protocols.redis.exchange_status(index),
         Some(ReplayExchangeStatus::Failed)
     );
-    assert_eq!(state.redis.lifecycle.cancelled_indices(), [index]);
-    assert!(!state.redis.has_case_in_flight());
-    assert!(!state.redis.has_in_flight());
-    assert_eq!(state.redis.events.matched_count, 0);
-    assert_eq!(state.redis.snapshot().unused_case.len(), 1);
-    let redis = &mut state.redis;
+    assert_eq!(state.protocols.redis.lifecycle.cancelled_indices(), [index]);
+    assert!(!state.protocols.redis.has_case_in_flight());
+    assert!(!state.protocols.redis.has_in_flight());
+    assert_eq!(state.protocols.redis.events.matched_count, 0);
+    assert_eq!(state.protocols.redis.snapshot().unused_case.len(), 1);
+    let redis = &mut state.protocols.redis;
     assert!(
         redis
             .lifecycle
@@ -228,7 +228,14 @@ async fn common_engine_ignores_foreign_notifications_and_reuses_the_original_obs
     );
     tokio::pin!(execute);
     tokio::select! {biased; result=&mut execute=>panic!("must wait: {result:?}"),_=std::future::ready(())=>{}}
-    runtime.state.lock().await.redis.lifecycle.notify_waiters();
+    runtime
+        .state
+        .lock()
+        .await
+        .protocols
+        .redis
+        .lifecycle
+        .notify_waiters();
     tokio::select! {biased; result=&mut execute=>panic!("foreign completion cannot admit: {result:?}"),_=std::future::ready(())=>{}}
     {
         let seen = counts.lock().unwrap();
@@ -236,11 +243,11 @@ async fn common_engine_ignores_foreign_notifications_and_reuses_the_original_obs
     }
     {
         let mut state = runtime.state.lock().await;
-        state.redis.request_event_index = Some(999);
-        state.redis.request_observed_at = chrono::DateTime::from_timestamp(999, 0);
-        state.redis.request_observation_id = Some(Uuid::from_u128(99));
+        state.protocols.redis.request_event_index = Some(999);
+        state.protocols.redis.request_observed_at = chrono::DateTime::from_timestamp(999, 0);
+        state.protocols.redis.request_observation_id = Some(Uuid::from_u128(99));
         counts.lock().unwrap().ready = true;
-        state.redis.lifecycle.notify_waiters();
+        state.protocols.redis.lifecycle.notify_waiters();
     }
     let observed = execute.await.unwrap();
     assert_eq!(observed.event_index, Some(7));
@@ -277,7 +284,7 @@ async fn common_engine_case_cancellation_and_deadline_never_reobserve_or_retry_s
             tokio::select! {biased; result=&mut execute=>panic!("must wait: {result:?}"),_=std::future::ready(())=>{}}
             let mut state = runtime.state.lock().await;
             state.active_case_id = Some("another-case".into());
-            state.redis.lifecycle.notify_waiters();
+            state.protocols.redis.lifecycle.notify_waiters();
         }
         let reason = execute.await.unwrap_err();
         assert!(reason.contains(if cancel_case { "stopped" } else { "timed out" }));

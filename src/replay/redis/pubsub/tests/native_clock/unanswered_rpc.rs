@@ -74,6 +74,7 @@ async fn process_rpc_without_reply_replays_once_after_the_live_local_event() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .request_contracts
                 .restore_request_clock_for_test(CASE, native + chrono::TimeDelta::seconds(1));
@@ -111,8 +112,17 @@ async fn process_rpc_without_reply_replays_once_after_the_live_local_event() {
         assert_eq!(read(&mut subscriber).await, notification(&foreign));
         guards::silent(&mut subscriber).await;
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 2);
-        assert!(state.redis.snapshot().unused_case.is_empty());
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            2
+        );
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
         sub_task.abort();
         client_task.abort();
     }

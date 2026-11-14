@@ -144,7 +144,7 @@ async fn exercise_buffering(source_refresh: bool) {
         .unwrap()
         .unwrap()
         .unwrap();
-    let report = runtime.state.lock().await.redis.snapshot();
+    let report = runtime.state.lock().await.protocols.redis.snapshot();
     assert!(!report.is_dirty(), "{report:?}");
     assert!(report.unused_case.is_empty());
     assert_eq!(

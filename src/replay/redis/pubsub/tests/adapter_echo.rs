@@ -86,13 +86,35 @@ async fn matched_publish_echoes_actual_payload_without_recorded_idle_or_duplicat
             .is_err()
         );
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
         assert_eq!(
-            state.redis.pubsub.report().unwrap().delivered_rpc_callbacks,
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
+        assert_eq!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_rpc_callbacks,
             0
         );
-        assert!(state.redis.snapshot().unused_case.is_empty());
-        assert!(state.redis.pubsub.unused(ReplaySource::Startup).is_empty());
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+        assert!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .unused(ReplaySource::Startup)
+                .is_empty()
+        );
         task.abort();
         sub_task.abort();
     }
@@ -196,6 +218,7 @@ async fn self_echo_preserves_its_exact_subscription_across_redis_logical_databas
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()
@@ -273,6 +296,7 @@ async fn unrelated_native_adapter_notification_retains_recorded_bytes_and_timer(
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()

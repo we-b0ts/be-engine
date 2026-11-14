@@ -62,9 +62,9 @@ async fn large_or_with_empty_names_uses_real_prepare_execute_and_projection_mapp
                     }
                     client.close().await.unwrap();
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.matched_query_count,1);
-                    assert_eq!(state.mysql.events.unmatched_queries.len(),2);
-                    assert!(state.mysql.events.metadata_warnings.is_empty(), "{:?}",state.mysql.events.metadata_warnings);
+                    assert_eq!(state.protocols.mysql.events.matched_query_count,1);
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),2);
+                    assert!(state.protocols.mysql.events.metadata_warnings.is_empty(), "{:?}",state.protocols.mysql.events.metadata_warnings);
                     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                     assert_eq!(std::fs::read(path).unwrap(),original);
                     task.abort();
@@ -97,8 +97,8 @@ async fn five_tuple_in_with_is_true_matches_literal_and_bound_prepared_statement
             assert_eq!(row.get::<i64,_>("id"),7);
             client.close().await.unwrap();
             let state=runtime.state.lock().await;
-            assert!(state.mysql.events.unmatched_queries.is_empty());
-            assert!(state.mysql.events.metadata_warnings.is_empty());
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+            assert!(state.protocols.mysql.events.metadata_warnings.is_empty());
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
             task.abort();
         }

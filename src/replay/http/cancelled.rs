@@ -25,10 +25,11 @@ pub(in crate::replay) struct Audit {
 
 impl ReplayState {
     pub(in crate::replay) fn permits_cancelled_http_omission(&self, index: usize) -> bool {
-        self.http_exchanges
+        self.protocols
+            .http_exchanges
             .get(index)
             .is_some_and(|e| e.status == super::super::ReplayExchangeStatus::Cancelled)
-            && self.http_events.cancelled.contains_key(&index)
+            && self.protocols.http_events.cancelled.contains_key(&index)
     }
 }
 
@@ -103,10 +104,14 @@ pub(super) fn finish(
                 recorded_eof_delivered: false,
                 observed_termination: end,
             };
-            let exchange = &mut state.http_exchanges[detail.index];
+            let exchange = &mut state.protocols.http_exchanges[detail.index];
             exchange.time_copy_delivery = None;
             exchange.status = super::super::ReplayExchangeStatus::Cancelled;
-            state.http_events.cancelled.insert(detail.index, audit);
+            state
+                .protocols
+                .http_events
+                .cancelled
+                .insert(detail.index, audit);
             state.complete_http_exchange(detail);
         } else {
             tracing::warn!(case_id = ?detail.case_id, source_http_index = detail.index,

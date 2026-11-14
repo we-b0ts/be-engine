@@ -37,7 +37,13 @@ async fn prepared_midnight_datetime_matches_text_insert_with_dynamic_update_time
     )
     .await;
     let observed = Utc::now();
-    runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
+    runtime
+        .state
+        .lock()
+        .await
+        .protocols
+        .mysql
+        .observed_at_for_test = Some(observed);
     let ca = temp
         .path()
         .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
@@ -66,7 +72,14 @@ async fn prepared_midnight_datetime_matches_text_insert_with_dynamic_update_time
     assert_eq!(result.rows_affected(), 1);
     client.close().await.unwrap();
     assert_eq!(
-        runtime.state.lock().await.mysql.events.matched_query_count,
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .matched_query_count,
         2
     );
     task.abort();
@@ -92,8 +105,8 @@ async fn sql_json_contract_preserves_statement_and_finite_consumption_over_tls()
         }
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(),3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),3);
         let report = state.replay_policy.as_ref().unwrap().report();
         assert_eq!(report.global_formats.iter().find(|r| r.id=="global.json").unwrap().time_validations,1);
         assert_eq!(std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap(),original);
@@ -117,7 +130,13 @@ async fn mysql_json_wildcard_times_preserve_array_shape_members_and_finite_consu
         let policy = "format: traffic-policy/v3\njson:\n  fields:\n    /blocks/*/timestamp: {kind: time, formats: [unix_seconds]}\n";
         let (temp, addr, runtime, task) = fixture_with_policy(&[record], Some(policy)).await;
         let observed = Utc::now();
-        runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .observed_at_for_test = Some(observed);
         let good = payload(observed.timestamp());
         let mut business = good.clone();
         business["status"] = json!("changed");
@@ -154,8 +173,8 @@ async fn mysql_json_wildcard_times_preserve_array_shape_members_and_finite_consu
         }
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 3);
         let report = state.replay_policy.as_ref().unwrap().report();
         assert_eq!(
             report
@@ -203,7 +222,13 @@ async fn sql_json_response_changes_only_explicit_delivery_time() {
         // This SQL request starts far from the API clock; only its own observation rebases delivery.
         let dependency_start =
             chrono::DateTime::from_timestamp(2_000_000_000, 123_456_000).unwrap();
-        runtime.state.lock().await.mysql.observed_at_for_test = Some(dependency_start);
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .observed_at_for_test = Some(dependency_start);
         let mut client = connect(
             addr,
             &temp
@@ -229,7 +254,7 @@ async fn sql_json_response_changes_only_explicit_delivery_time() {
         .await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         assert_eq!(
             std::fs::read(
                 temp.path()
@@ -273,6 +298,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .mysql
                 .exchanges
                 .iter()
@@ -361,8 +387,8 @@ async fn absent_sql_json_leaf_is_inactive_and_business_values_remain_exact() {
         assert!(!rule.applicable);
         assert_eq!(rule.validations, 0);
         assert!(report.unused_applicable_dependency_rule_ids.is_empty());
-        assert_eq!(state.mysql.events.matched_query_count, 1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         server.abort();
     }).await.unwrap();

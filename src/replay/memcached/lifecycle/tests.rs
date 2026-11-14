@@ -224,6 +224,7 @@ async fn failed_native_policy_commit_after_real_wire_delivery_is_terminal_and_di
     decision.value_contracts.push(contract);
     // Exercise the exact native transaction passed to shared finish by delivery.rs.
     let error = state
+        .protocols
         .memcached
         .finish_exchange(&matched, || policy.commit(Some(&case), decision))
         .unwrap_err();
@@ -233,15 +234,19 @@ async fn failed_native_policy_commit_after_real_wire_delivery_is_terminal_and_di
             .contains("identity equality relationship changed")
     );
     assert_eq!(
-        state.memcached.finite_exchange_status(matched.index),
+        state
+            .protocols
+            .memcached
+            .finite_exchange_status(matched.index),
         Some(ReplayExchangeStatus::Failed)
     );
-    assert!(!state.memcached.has_in_flight());
-    assert!(state.memcached.case_is_dirty(&case));
-    assert_eq!(state.memcached.events.matched_count, 0);
-    assert_eq!(state.memcached.events.unsafe_events.len(), 1);
+    assert!(!state.protocols.memcached.has_in_flight());
+    assert!(state.protocols.memcached.case_is_dirty(&case));
+    assert_eq!(state.protocols.memcached.events.matched_count, 0);
+    assert_eq!(state.protocols.memcached.events.unsafe_events.len(), 1);
     assert!(
         state
+            .protocols
             .memcached
             .finish_exchange::<()>(&matched, || panic!("failed delivery cannot become success"))
             .unwrap()
@@ -357,7 +362,7 @@ async fn pooled_successor_after_actual_wire_delivery_precedes_first_delivery_boo
     // drains it. Hold the actual ReplayState lock across that drain to force
     // wire publication before the first delivery can update native accounting.
     let mut state = runtime.state.lock().await;
-    let wire = state.memcached.lifecycle.subscribe();
+    let wire = state.protocols.memcached.lifecycle.subscribe();
     tokio::time::timeout(Duration::from_secs(3), client.read_exact(&mut output[1..]))
         .await
         .unwrap()
@@ -369,12 +374,13 @@ async fn pooled_successor_after_actual_wire_delivery_precedes_first_delivery_boo
     );
     assert_eq!(output, frame);
     assert_eq!(
-        state.memcached.exchanges[0].status,
+        state.protocols.memcached.exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
-    assert_eq!(state.memcached.events.matched_count, 0);
+    assert_eq!(state.protocols.memcached.events.matched_count, 0);
     let case = state.active_case_id.clone();
     let second = state
+        .protocols
         .memcached
         .match_memcached(MemcachedMatchContext {
             active_case_id: case.as_deref(),
@@ -402,7 +408,7 @@ async fn pooled_successor_after_actual_wire_delivery_precedes_first_delivery_boo
     client.read_exact(&mut output).await.unwrap();
     assert_eq!(&output, b"END\r\n");
     let state = runtime.state.lock().await;
-    assert_eq!(state.memcached.events.matched_count, 2);
-    assert!(state.memcached.events.unmatched.is_empty());
-    assert!(!state.memcached.has_in_flight());
+    assert_eq!(state.protocols.memcached.events.matched_count, 2);
+    assert!(state.protocols.memcached.events.unmatched.is_empty());
+    assert!(!state.protocols.memcached.has_in_flight());
 }

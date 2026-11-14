@@ -124,7 +124,7 @@ impl ActivityRefreshes {
                 })
             })
     }
-    pub(super) fn has_in_flight(&self) -> bool {
+    pub(crate) fn has_in_flight(&self) -> bool {
         !self.pending.is_empty()
     }
     pub(super) fn in_flight_diagnostic(&self) -> serde_json::Value {

@@ -7,7 +7,7 @@ use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 mod connection;
 mod report;
 mod request;
-pub(super) use connection::handle_connection;
+pub(crate) use connection::handle_connection;
 pub(super) use report::ProtocolReport;
 
 #[derive(Debug)]

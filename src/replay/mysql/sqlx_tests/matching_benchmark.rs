@@ -88,7 +88,10 @@ async fn recorded_mysql_matching_benchmark() {
                 assert!(state.complete_exchange(&matched));
             }
             durations.push(started.elapsed().as_secs_f64() * 1000.0);
-            assert_eq!(state.mysql.events.matched_query_count, calls.len());
+            assert_eq!(
+                state.protocols.mysql.events.matched_query_count,
+                calls.len()
+            );
             let fingerprint = format!("{:x}", fingerprint.finalize());
             if let Some(expected) = &expected_fingerprint {
                 assert_eq!(&fingerprint, expected);

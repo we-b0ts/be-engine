@@ -216,7 +216,7 @@ async fn timed_process_write(
         .unwrap(),
     );
     assert_eq!(
-        runtime.state.lock().await.redis.exchanges[0].source,
+        runtime.state.lock().await.protocols.redis.exchanges[0].source,
         ReplaySource::Process
     );
     (temp, runtime)
@@ -281,7 +281,11 @@ async fn process_owned_set_uses_global_timestamp_contract_with_independent_depen
                 // A frozen scope may have a proven Process owner while the raw
                 // capture metadata still states its original unknown owner.
                 let mut state = runtime.state.lock().await;
-                let capture = state.redis.exchanges[0].record.capture.as_mut().unwrap();
+                let capture = state.protocols.redis.exchanges[0]
+                    .record
+                    .capture
+                    .as_mut()
+                    .unwrap();
                 let id = capture.exchange_id;
                 let scope =
                     crate::replay::attribution::run_value_scope(&capture.attribution).unwrap();
@@ -290,6 +294,7 @@ async fn process_owned_set_uses_global_timestamp_contract_with_independent_depen
                         reason: "outside_admission".into(),
                     };
                 state
+                    .protocols
                     .redis
                     .run_value_scopes
                     .insert(id, Arc::<str>::from(scope));
@@ -321,7 +326,17 @@ async fn process_owned_set_uses_global_timestamp_contract_with_independent_depen
             .await;
             if matches!(mode, "valid" | "overlay_owner") {
                 assert_eq!(response.as_deref(), Some(b"+OK\r\n".as_slice()), "{mode}");
-                assert_eq!(runtime.state.lock().await.redis.snapshot().matched_count, 1);
+                assert_eq!(
+                    runtime
+                        .state
+                        .lock()
+                        .await
+                        .protocols
+                        .redis
+                        .snapshot()
+                        .matched_count,
+                    1
+                );
                 assert_ne!(
                     send_write(&runtime, &value, "120").await.as_deref(),
                     Some(b"+OK\r\n".as_slice()),
@@ -329,7 +344,17 @@ async fn process_owned_set_uses_global_timestamp_contract_with_independent_depen
                 );
             } else {
                 assert_ne!(response.as_deref(), Some(b"+OK\r\n".as_slice()), "{mode}");
-                assert_eq!(runtime.state.lock().await.redis.snapshot().matched_count, 0);
+                assert_eq!(
+                    runtime
+                        .state
+                        .lock()
+                        .await
+                        .protocols
+                        .redis
+                        .snapshot()
+                        .matched_count,
+                    0
+                );
             }
         }
     }

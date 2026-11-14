@@ -5,7 +5,7 @@ use super::*;
 mod tests;
 
 impl MemcachedReplayState {
-    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
+    pub(crate) fn has_case_in_flight(&self) -> bool {
         self.exchanges.iter().enumerate().any(|(index, e)| {
             e.source == ReplaySource::Case
                 && matches!(
@@ -16,7 +16,7 @@ impl MemcachedReplayState {
         })
     }
 
-    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+    pub(crate) fn has_in_flight(&self) -> bool {
         self.exchanges.iter().enumerate().any(|(index, e)| {
             matches!(
                 self.lifecycle.live_status(index, e.status),

@@ -220,7 +220,7 @@ async fn server_terminated_fetch_closes_at_the_recorded_time() {
     write_frame(&mut client, &payload).await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
-            if state.lock().await.kafka.has_in_flight() {
+            if state.lock().await.protocols.kafka.has_in_flight() {
                 break;
             }
             tokio::task::yield_now().await;
@@ -265,7 +265,7 @@ async fn server_terminated_fetch_closes_at_the_recorded_time() {
     assert!(started.elapsed() >= std::time::Duration::from_millis(140));
     let report = wait_for_kafka_matches(&report_path, 1).await;
     assert_eq!(report["kafka"]["matched"][0]["operation"], "fetch");
-    assert!(!state.lock().await.kafka.has_in_flight());
+    assert!(!state.lock().await.protocols.kafka.has_in_flight());
     drop(client);
     task.abort();
 }

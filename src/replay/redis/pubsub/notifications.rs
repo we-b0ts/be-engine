@@ -92,7 +92,7 @@ pub(in crate::replay::redis) fn schedule_notifications(
                 };
                 let (offset, fast, cap_ms) = {
                     let replay = state.lock().await;
-                    let push = &replay.redis.pubsub.pushes[index];
+                    let push = &replay.protocols.redis.pubsub.pushes[index];
                     (
                         push.record.duration_ms,
                         replay.stream_timing == Some(crate::replay::ReplayStreamTiming::Fast)
@@ -109,7 +109,7 @@ pub(in crate::replay::redis) fn schedule_notifications(
                 previous_offset = offset;
                 let digest = {
                     let replay = state.lock().await;
-                    replay.redis.pubsub.pushes[index]
+                    replay.protocols.redis.pubsub.pushes[index]
                         .bytes()
                         .ok()
                         .and_then(|raw| parse_pubsub_push(&raw).ok().flatten())
@@ -117,7 +117,7 @@ pub(in crate::replay::redis) fn schedule_notifications(
                 };
                 let namespace = {
                     let replay = state.lock().await;
-                    replay.redis.pubsub.pushes[index]
+                    replay.protocols.redis.pubsub.pushes[index]
                         .bytes()
                         .ok()
                         .and_then(|raw| parse_pubsub_push(&raw).ok().flatten())
@@ -153,11 +153,13 @@ async fn deliver(
     fast: bool,
 ) -> Progress {
     if let Some(state) = weak.upgrade()
-        && state.lock().await.redis.pubsub.timer_is_correlated(
-            id,
-            adapter_echo,
-            adapter_namespace.as_deref(),
-        )
+        && state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .pubsub
+            .timer_is_correlated(id, adapter_echo, adapter_namespace.as_deref())
     {
         return Progress::Skipped;
     }
@@ -171,19 +173,21 @@ async fn deliver(
     };
     let (reference, inline, case_id, request_epoch) = {
         let replay = state.lock().await;
-        if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
+        if replay.finalized_at.is_some()
+            || !replay.protocols.redis.pubsub.is_subscribed(job.client, id)
+        {
             return Progress::Ended;
         }
-        if replay
-            .redis
-            .pubsub
-            .timer_is_correlated(id, adapter_echo, adapter_namespace.as_deref())
-        {
+        if replay.protocols.redis.pubsub.timer_is_correlated(
+            id,
+            adapter_echo,
+            adapter_namespace.as_deref(),
+        ) {
             return Progress::Skipped;
         }
         match id {
             PushId::Inline(index) => {
-                let push = &replay.redis.pubsub.pushes[index];
+                let push = &replay.protocols.redis.pubsub.pushes[index];
                 if !push.status.is_available() {
                     return Progress::Skipped;
                 }
@@ -195,14 +199,14 @@ async fn deliver(
                     {
                         return Progress::Skipped;
                     }
-                    replay.redis.native_request_epoch(case)
+                    replay.protocols.redis.native_request_epoch(case)
                 } else {
                     None
                 };
                 (reference, raw, case, epoch)
             }
             PushId::Indexed { lane, index } => {
-                if !replay.redis.pubsub.indexed.available(lane, index) {
+                if !replay.protocols.redis.pubsub.indexed.available(lane, index) {
                     return Progress::Skipped;
                 }
                 (reference, Vec::new(), None, None)
@@ -274,7 +278,7 @@ async fn deliver(
     };
     let mut replay = state.lock().await;
     if replay.finalized_at.is_some()
-        || !replay.redis.pubsub.is_subscribed(job.client, id)
+        || !replay.protocols.redis.pubsub.is_subscribed(job.client, id)
         || !delivery.case_is_current(&replay)
     {
         fail(
@@ -284,13 +288,17 @@ async fn deliver(
         );
         return Progress::Ended;
     }
-    if !replay.redis.pubsub.push_available(id) {
+    if !replay.protocols.redis.pubsub.push_available(id) {
         return Progress::Skipped;
     }
     if let Some(case) = &delivery.case_id {
-        replay.redis.pubsub.reserve_case_push(id, case, job.client);
+        replay
+            .protocols
+            .redis
+            .pubsub
+            .reserve_case_push(id, case, job.client);
     } else {
-        replay.redis.pubsub.reserve_push(id);
+        replay.protocols.redis.pubsub.reserve_push(id);
     }
     if let Some(permit) = permit {
         permit.send(delivery);
@@ -311,14 +319,18 @@ async fn wait_predecessors(
             let mut replay = state.lock().await;
             if replay.finalized_at.is_some()
                 || !delivery.case_is_current(&replay)
-                || !replay.redis.pubsub.is_subscribed(job.client, delivery.push)
-                || !replay.redis.pubsub.push_available(delivery.push)
+                || !replay
+                    .protocols
+                    .redis
+                    .pubsub
+                    .is_subscribed(job.client, delivery.push)
+                || !replay.protocols.redis.pubsub.push_available(delivery.push)
             {
                 return false;
             }
             match super::value_delivery::ready(&replay, delivery) {
                 Ok(true) => return true,
-                Ok(false) => replay.redis.lifecycle.subscribe(),
+                Ok(false) => replay.protocols.redis.lifecycle.subscribe(),
                 Err(_) => {
                     fail(
                         &mut replay,
@@ -348,7 +360,7 @@ async fn wait_delivered(
         let wait = {
             let replay = state.lock().await;
             let status = match id {
-                PushId::Inline(index) => replay.redis.pubsub.pushes[index].status,
+                PushId::Inline(index) => replay.protocols.redis.pubsub.pushes[index].status,
                 PushId::Indexed { .. } => return false,
             };
             if status == ReplayExchangeStatus::Consumed {
@@ -356,13 +368,13 @@ async fn wait_delivered(
             }
             if status != ReplayExchangeStatus::Responding
                 || replay.finalized_at.is_some()
-                || !replay.redis.pubsub.is_subscribed(job.client, id)
+                || !replay.protocols.redis.pubsub.is_subscribed(job.client, id)
             {
                 return false;
             }
             // Register under the ownership mutex before releasing it. A very
             // fast actual write cannot complete between this check and wait.
-            replay.redis.lifecycle.subscribe()
+            replay.protocols.redis.lifecycle.subscribe()
         };
         tokio::select! {
             _ = wait.changed() => {}
@@ -374,23 +386,27 @@ async fn wait_delivered(
 
 fn fail(replay: &mut ReplayState, id: PushId, reason: String) {
     let case = match id {
-        PushId::Inline(index) => replay.redis.pubsub.pushes[index].case_id.clone(),
+        PushId::Inline(index) => replay.protocols.redis.pubsub.pushes[index].case_id.clone(),
         PushId::Indexed { .. } => None,
     };
     if case.is_some() {
-        replay.redis.fail_pubsub_input(id, case.as_deref(), &reason);
+        replay
+            .protocols
+            .redis
+            .fail_pubsub_input(id, case.as_deref(), &reason);
         return;
     }
-    replay.redis.pubsub.fail(id);
+    replay.protocols.redis.pubsub.fail(id);
     let record = match id {
-        PushId::Inline(index) => &replay.redis.pubsub.pushes[index].record,
-        PushId::Indexed { lane, .. } => &replay.redis.pubsub.indexed.lanes[lane].record,
+        PushId::Inline(index) => &replay.protocols.redis.pubsub.pushes[index].record,
+        PushId::Indexed { lane, .. } => &replay.protocols.redis.pubsub.indexed.lanes[lane].record,
     };
     let target = TargetKey {
         host: record.target_host.clone(),
         port: record.target_port,
     };
     replay
+        .protocols
         .redis
         .events
         .unsafe_events

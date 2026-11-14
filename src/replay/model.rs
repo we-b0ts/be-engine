@@ -5,57 +5,29 @@ pub(super) use traffic_replay::ReplaySource;
 pub(super) use traffic_protocol::connection::Endpoint as TargetKey;
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct ReplayTarget {
-    pub(super) host: String,
-    pub(super) port: u16,
-    pub(super) fake_ip: Ipv4Addr,
-    pub(super) protocol: ReplayProtocol,
+pub(crate) struct ReplayTarget {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) fake_ip: Ipv4Addr,
+    pub(crate) protocol: ReplayProtocol,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-pub(super) struct ReplayProtocol(traffic_protocol::ProtocolId);
+pub(crate) struct ReplayProtocol(traffic_protocol::ProtocolId);
 
 #[allow(non_upper_case_globals)]
 impl ReplayProtocol {
     pub const Auto: Self = Self(traffic_protocol::ProtocolId::new("auto"));
-    pub const Mysql: Self = Self(traffic_protocol::ProtocolId::new("mysql"));
-    pub const Http: Self = Self(traffic_protocol::ProtocolId::new("http"));
-    pub const Https: Self = Self(traffic_protocol::ProtocolId::new("https"));
-    pub const Redis: Self = Self(traffic_protocol::ProtocolId::new("redis"));
-    pub const Memcached: Self = Self(traffic_protocol::ProtocolId::new("memcached"));
-    pub const Kafka: Self = Self(traffic_protocol::ProtocolId::new("kafka"));
-    pub const Motan: Self = Self(traffic_protocol::ProtocolId::new("motan"));
 
-    pub fn registered(protocol: crate::protocols::DependencyProtocol) -> Self {
-        Self(protocol.id())
+    pub const fn new(protocol: traffic_protocol::ProtocolId) -> Self {
+        Self(protocol)
+    }
+    pub fn registered(protocol: impl Into<traffic_protocol::ProtocolId>) -> Self {
+        Self(protocol.into())
     }
     pub fn id(self) -> traffic_protocol::ProtocolId {
         self.0
-    }
-
-    pub fn resolve(value: &str, providers: &crate::protocols::DependencyProviders) -> Result<Self> {
-        let known = [
-            Self::Auto,
-            Self::Mysql,
-            Self::Http,
-            Self::Https,
-            Self::Redis,
-            Self::Memcached,
-            Self::Kafka,
-            Self::Motan,
-        ];
-        known
-            .into_iter()
-            .find(|protocol| protocol.id().as_str() == value)
-            .or_else(|| {
-                providers
-                    .registrations()
-                    .iter()
-                    .find(|entry| entry.kind.as_str() == value)
-                    .map(|entry| Self::registered(entry.kind))
-            })
-            .context("dependency protocol has no registered implementation")
     }
 }
 

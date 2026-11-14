@@ -128,8 +128,8 @@ async fn dependency_request_time_supports_faster_batches_over_tls_text_and_prepa
         drop(client);
 
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 50);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 4);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 50);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 4);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         let policy = state.replay_policy.as_ref().unwrap();
         let usage = policy.report();

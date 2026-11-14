@@ -127,6 +127,7 @@ async fn later_unacknowledged_input_preserves_only_the_proven_notification_prefi
                         .state
                         .lock()
                         .await
+                        .protocols
                         .redis
                         .pubsub
                         .report()
@@ -174,6 +175,7 @@ async fn delayed_ack_cannot_deliver_a_prefix_notification_after_its_boundary() {
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()
@@ -244,10 +246,26 @@ async fn later_source_ack_reopens_delivery_only_after_the_matching_live_ack() {
             );
             guards::silent(&mut subscriber).await;
             let state = runtime.state.lock().await;
-            assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+            assert_eq!(
+                state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .report()
+                    .unwrap()
+                    .delivered_pushes,
+                1
+            );
         } else {
             let state = runtime.state.lock().await;
-            assert!(!state.redis.pubsub.native_clock.needs_observer(CASE));
+            assert!(
+                !state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .native_clock
+                    .needs_observer(CASE)
+            );
         }
         task.abort();
     }

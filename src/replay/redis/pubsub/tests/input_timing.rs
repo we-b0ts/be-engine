@@ -264,6 +264,7 @@ async fn redis_response_delivery_is_distinct_from_a_later_rpc_callback() {
             .state
             .lock()
             .await
+            .protocols
             .redis
             .exchanges
             .iter()

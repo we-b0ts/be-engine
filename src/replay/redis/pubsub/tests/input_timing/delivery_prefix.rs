@@ -200,6 +200,7 @@ async fn response_started_before_timing_admission_is_recorded_only_after_actual_
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .exchanges
                 .iter()
@@ -354,6 +355,7 @@ async fn shared_subscription_write_survives_startup_but_business_receipt_remains
             let mut state = runtime.state.lock().await;
             assert!(
                 state
+                    .protocols
                     .redis
                     .exchanges
                     .iter()

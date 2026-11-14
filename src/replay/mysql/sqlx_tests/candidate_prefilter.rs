@@ -24,7 +24,14 @@ async fn assert_recorded_control_failure(sql: &str) {
                 .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
             let mut client = connect(address, &ca).await;
             assert_eq!(
-                runtime.state.lock().await.mysql.events.matched_query_count,
+                runtime
+                    .state
+                    .lock()
+                    .await
+                    .protocols
+                    .mysql
+                    .events
+                    .matched_query_count,
                 0
             );
 
@@ -38,13 +45,21 @@ async fn assert_recorded_control_failure(sql: &str) {
             client.close().await.unwrap();
 
             let state = runtime.state.lock().await;
-            assert!(state.mysql.exchanges[1].status.is_consumed());
-            assert!(state.mysql.exchanges[0].status.is_available());
-            assert_eq!(state.mysql.events.matched_query_count, 1);
-            assert!(state.mysql.events.unmatched_queries.is_empty());
-            assert!(state.mysql.events.builtin_queries.iter().all(|query| {
-                query.sql.as_deref().map(normalize_sql) != Some(normalize_sql(sql))
-            }));
+            assert!(state.protocols.mysql.exchanges[1].status.is_consumed());
+            assert!(state.protocols.mysql.exchanges[0].status.is_available());
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+            assert!(
+                state
+                    .protocols
+                    .mysql
+                    .events
+                    .builtin_queries
+                    .iter()
+                    .all(|query| {
+                        query.sql.as_deref().map(normalize_sql) != Some(normalize_sql(sql))
+                    })
+            );
             task.abort();
         }
     })
@@ -82,8 +97,8 @@ async fn ordinary_commit_only_associates_same_end_evidence() {
     sqlx::raw_sql("COMMIT").execute(&mut client).await.unwrap();
     client.close().await.unwrap();
     let state = runtime.state.lock().await;
-    assert!(state.mysql.exchanges[0].status.is_available());
-    assert!(state.mysql.exchanges[1].status.is_consumed());
+    assert!(state.protocols.mysql.exchanges[0].status.is_available());
+    assert!(state.protocols.mysql.exchanges[1].status.is_consumed());
     let owner = &state.replay_policy.as_ref().unwrap().request_contracts;
     owner.seal_witnesses().unwrap();
     let witnesses = owner.witness_manifest().unwrap().witnesses().unwrap();
@@ -125,7 +140,7 @@ async fn recorded_prepare_failure_takes_precedence_over_cached_metadata() {
         .downcast_ref::<sqlx::mysql::MySqlDatabaseError>();
     assert_eq!(database.number(), 1644);
     assert!(
-        runtime.state.lock().await.mysql.exchanges[0]
+        runtime.state.lock().await.protocols.mysql.exchanges[0]
             .status
             .is_consumed()
     );
@@ -169,9 +184,9 @@ async fn first_pass_accepts_in_list_order_without_reordering_boolean_terms() {
     assert_eq!(row.get::<i32, _>(0), 1);
     client.close().await.unwrap();
     let state = runtime.state.lock().await;
-    assert!(state.mysql.exchanges[0].status.is_available());
-    assert!(state.mysql.exchanges[1].status.is_consumed());
-    assert!(state.mysql.exchanges[2].status.is_available());
+    assert!(state.protocols.mysql.exchanges[0].status.is_available());
+    assert!(state.protocols.mysql.exchanges[1].status.is_consumed());
+    assert!(state.protocols.mysql.exchanges[2].status.is_available());
     task.abort();
 }
 
@@ -213,7 +228,7 @@ async fn proven_cross_table_select_is_filtered_before_request_evidence() {
 
     let state = runtime.state.lock().await;
     assert_eq!(
-        state.mysql.events.matched_queries[0].source_query_sequence,
+        state.protocols.mysql.events.matched_queries[0].source_query_sequence,
         Some(3)
     );
     let owner = &state.replay_policy.as_ref().unwrap().request_contracts;

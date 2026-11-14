@@ -184,6 +184,7 @@ async fn actual_namespace_sid_admits_only_its_original_publish_and_keeps_busines
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .snapshot()
                 .unused_case

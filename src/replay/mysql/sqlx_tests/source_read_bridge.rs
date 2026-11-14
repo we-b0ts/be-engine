@@ -52,12 +52,18 @@ async fn a_global_prewrite_read_proves_single_write_commit_without_consuming_the
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
             assert_eq!(state.unused_exchanges(ReplaySource::Startup).len(), 1);
             let end = state
+                .protocols
                 .mysql
                 .exchanges
                 .iter()
                 .position(|exchange| exchange.record.sql.as_deref() == Some("COMMIT"))
                 .unwrap();
-            let diagnostic = state.mysql.transaction_equivalence.diagnostic(end).unwrap();
+            let diagnostic = state
+                .protocols
+                .mysql
+                .transaction_equivalence
+                .diagnostic(end)
+                .unwrap();
             assert_eq!(diagnostic["source_transactions"][0]["write_count"], 1);
             assert_eq!(
                 diagnostic["source_transactions"][0]["target_status_before"],

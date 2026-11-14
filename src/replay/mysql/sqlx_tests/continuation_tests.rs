@@ -54,9 +54,9 @@ async fn sqlx_tls_reads_large_text_and_prepared_rows_and_the_following_row() {
         }
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 6);
-        assert!(state.mysql.events.unmatched_queries.is_empty());
-        assert!(state.mysql.events.metadata_warnings.is_empty());
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 6);
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+        assert!(state.protocols.mysql.events.metadata_warnings.is_empty());
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         task.abort();
     })

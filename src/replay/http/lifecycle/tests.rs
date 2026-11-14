@@ -102,13 +102,13 @@ async fn exercise(prefix: bool, early: bool) {
     );
     {
         let mut state = runtime.state.lock().await;
-        assert_eq!(state.http_events.matched_count, 0);
+        assert_eq!(state.protocols.http_events.matched_count, 0);
         assert_eq!(
-            state.http_exchanges[0].record.outcome,
+            state.protocols.http_exchanges[0].record.outcome,
             crate::DependencyExchangeOutcome::Response
         );
         assert_eq!(
-            state.http_exchanges[0].record.error.as_deref(),
+            state.protocols.http_exchanges[0].record.error.as_deref(),
             original["error"].as_str()
         );
         if !early {
@@ -125,11 +125,20 @@ async fn exercise(prefix: bool, early: bool) {
         }
     }
     // The lifecycle gate alone does not consume the request: real Target IO ends it.
-    assert_eq!(runtime.state.lock().await.http_events.matched_count, 0);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched_count,
+        0
+    );
     client.shutdown().await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            let status = runtime.state.lock().await.http_exchanges[0].status;
+            let status = runtime.state.lock().await.protocols.http_exchanges[0].status;
             if matches!(
                 status,
                 ReplayExchangeStatus::Consumed | ReplayExchangeStatus::Failed
@@ -143,14 +152,17 @@ async fn exercise(prefix: bool, early: bool) {
     .unwrap();
     let state = runtime.state.lock().await;
     assert_eq!(
-        state.http_exchanges[0].status,
+        state.protocols.http_exchanges[0].status,
         if early {
             ReplayExchangeStatus::Failed
         } else {
             ReplayExchangeStatus::Consumed
         }
     );
-    assert_eq!(state.http_events.matched_count, usize::from(!early));
+    assert_eq!(
+        state.protocols.http_events.matched_count,
+        usize::from(!early)
+    );
     drop(state);
     task.abort();
 }
@@ -235,9 +247,9 @@ async fn cleanup_prefix_reuses_staged_request_identity_and_keeps_incomplete_sour
     .unwrap();
     assert!(!String::from_utf8_lossy(&received).contains(source_id));
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched_count, 0);
+    assert_eq!(state.protocols.http_events.matched_count, 0);
     assert!(
-        !state.http_exchanges[0]
+        !state.protocols.http_exchanges[0]
             .record
             .response_stream
             .as_ref()
@@ -246,7 +258,7 @@ async fn cleanup_prefix_reuses_staged_request_identity_and_keeps_incomplete_sour
     );
     assert_eq!(
         decode_body(
-            state.http_exchanges[0]
+            state.protocols.http_exchanges[0]
                 .record
                 .response_body
                 .as_ref()
@@ -348,7 +360,7 @@ async fn natural_failure_eof(unconsumed: bool) {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if matches!(
-                runtime.state.lock().await.http_exchanges[0].status,
+                runtime.state.lock().await.protocols.http_exchanges[0].status,
                 ReplayExchangeStatus::Consumed | ReplayExchangeStatus::Failed
             ) {
                 break;
@@ -360,7 +372,7 @@ async fn natural_failure_eof(unconsumed: bool) {
     .unwrap();
     let state = runtime.state.lock().await;
     assert_eq!(
-        state.http_exchanges[0].status,
+        state.protocols.http_exchanges[0].status,
         if unconsumed {
             ReplayExchangeStatus::Failed
         } else {
@@ -375,7 +387,7 @@ async fn natural_failure_eof(unconsumed: bool) {
     assert_eq!(state.active_case_id.as_deref(), Some("failure-eof"));
     if unconsumed {
         assert_eq!(
-            state.http_exchanges[2].status,
+            state.protocols.http_exchanges[2].status,
             ReplayExchangeStatus::Available
         );
     }

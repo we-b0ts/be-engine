@@ -291,8 +291,8 @@ async fn replays_http_exchange_with_stable_query_matching() {
     );
 
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched.len(), 1);
-    assert!(state.http_events.unmatched.is_empty());
+    assert_eq!(state.protocols.http_events.matched.len(), 1);
+    assert!(state.protocols.http_events.unmatched.is_empty());
     assert!(
         state
             .unused_http_exchanges(ReplaySource::Case, false)
@@ -445,8 +445,8 @@ async fn replays_https_exchange_with_generated_mitm_certificate() {
     );
 
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched.len(), 1);
-    assert!(state.http_events.unmatched.is_empty());
+    assert_eq!(state.protocols.http_events.matched.len(), 1);
+    assert!(state.protocols.http_events.unmatched.is_empty());
     task.abort();
 }
 
@@ -483,9 +483,12 @@ async fn searches_past_same_target_global_exchange_for_active_case_match() {
     );
 
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched.len(), 1);
-    assert_eq!(state.http_events.matched[0].source, ReplaySource::Case);
-    assert!(state.http_events.unmatched.is_empty());
+    assert_eq!(state.protocols.http_events.matched.len(), 1);
+    assert_eq!(
+        state.protocols.http_events.matched[0].source,
+        ReplaySource::Case
+    );
+    assert!(state.protocols.http_events.unmatched.is_empty());
     assert_eq!(
         state
             .unused_http_exchanges(ReplaySource::Startup, false)
@@ -555,8 +558,8 @@ async fn preflight_probe_global_exchange_is_repeatable_for_system_and_target_che
     }
 
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched.len(), 2);
-    assert!(state.http_events.unmatched.is_empty());
+    assert_eq!(state.protocols.http_events.matched.len(), 2);
+    assert!(state.protocols.http_events.unmatched.is_empty());
     assert!(
         state
             .unused_http_exchanges(ReplaySource::Startup, false)

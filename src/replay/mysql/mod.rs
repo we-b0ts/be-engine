@@ -10,6 +10,7 @@ mod matcher;
 mod model;
 pub(in crate::replay) mod optional_session;
 pub(in crate::replay) mod ownership;
+mod preparation;
 mod projection;
 mod report_inventory;
 mod response;
@@ -32,8 +33,8 @@ mod transaction_scope;
 mod values;
 mod wire_diagnostics;
 
-pub(super) use broker::handle_connection;
-pub(super) use matcher::MysqlReplayState;
+pub(crate) use broker::handle_connection;
+pub(crate) use matcher::MysqlReplayState;
 pub(super) use model::*;
 pub(super) use response::*;
 pub(super) use session::*;

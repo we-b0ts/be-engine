@@ -452,6 +452,7 @@ async fn explicit_dependency_failure_finishes_dirty_after_actual_cleanup() {
     state
         .lock()
         .await
+        .protocols
         .mysql
         .events
         .dirty_case_ids

@@ -87,9 +87,18 @@ redis:
             original
         );
         let replay = runtime.state.lock().await;
-        assert!(replay.redis.snapshot().unmatched.is_empty());
-        assert!(replay.redis.snapshot().unused_case.is_empty());
-        assert_eq!(replay.redis.pubsub.report().unwrap().delivered_pushes, 1);
+        assert!(replay.protocols.redis.snapshot().unmatched.is_empty());
+        assert!(replay.protocols.redis.snapshot().unused_case.is_empty());
+        assert_eq!(
+            replay
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
         task.abort();
     }
 }

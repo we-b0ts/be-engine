@@ -8,12 +8,12 @@ pub(super) fn failed(state: &ReplayState, case: &str) -> bool {
     state.dependency_tails.failure(case).is_some()
         || state.native.case_has_runtime_failure(case)
         || state.unrecorded_case_ids.contains(case)
-        || state.mysql.events.dirty_case_ids.contains(case)
-        || state.redis.case_has_runtime_failure(case)
-        || state.http_events.case_has_runtime_failure(case)
-        || state.kafka.case_has_runtime_failure(case)
-        || state.memcached.case_has_runtime_failure(case)
-        || state.motan.case_has_runtime_failure(case)
+        || state.protocols.mysql.events.dirty_case_ids.contains(case)
+        || state.protocols.redis.case_has_runtime_failure(case)
+        || state.protocols.http_events.case_has_runtime_failure(case)
+        || state.protocols.kafka.case_has_runtime_failure(case)
+        || state.protocols.memcached.case_has_runtime_failure(case)
+        || state.protocols.motan.case_has_runtime_failure(case)
 }
 
 pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
@@ -51,18 +51,18 @@ pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
         };
     }
     project!("mysql",
-        "unmatched_queries" => state.mysql.events.unmatched_queries,
-        "unsupported_commands" => state.mysql.events.unsupported_commands,
+        "unmatched_queries" => state.protocols.mysql.events.unmatched_queries,
+        "unsupported_commands" => state.protocols.mysql.events.unsupported_commands,
     );
     project!("http",
-        "unmatched_http_requests" => state.http_events.unmatched,
-        "unsupported_http_exchanges" => state.http_events.unsupported,
+        "unmatched_http_requests" => state.protocols.http_events.unmatched,
+        "unsupported_http_exchanges" => state.protocols.http_events.unsupported,
     );
     project!("network", "unrecorded_targets" => state.unrecorded_targets);
     project!("redis",
-        "unmatched" => state.redis.events.unmatched,
-        "unsupported" => state.redis.events.unsupported,
-        "unsafe_events" => state.redis.events.unsafe_events,
+        "unmatched" => state.protocols.redis.events.unmatched,
+        "unsupported" => state.protocols.redis.events.unsupported,
+        "unsafe_events" => state.protocols.redis.events.unsafe_events,
     );
     if failures.len() < MAX_FAILURES {
         append_failures(
@@ -70,25 +70,26 @@ pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
             "redis",
             "unsafe_events",
             state
+                .protocols
                 .redis
                 .derived_unsafe_events()
                 .filter(|entry| entry.case_id.as_deref() == Some(case)),
         );
     }
     project!("kafka",
-        "unmatched" => state.kafka.events.unmatched,
-        "unsupported" => state.kafka.events.unsupported,
-        "unsafe_events" => state.kafka.events.unsafe_events,
+        "unmatched" => state.protocols.kafka.events.unmatched,
+        "unsupported" => state.protocols.kafka.events.unsupported,
+        "unsafe_events" => state.protocols.kafka.events.unsafe_events,
     );
     project!("memcached",
-        "unmatched" => state.memcached.events.unmatched,
-        "unsupported" => state.memcached.events.unsupported,
-        "unsafe_events" => state.memcached.events.unsafe_events,
+        "unmatched" => state.protocols.memcached.events.unmatched,
+        "unsupported" => state.protocols.memcached.events.unsupported,
+        "unsafe_events" => state.protocols.memcached.events.unsafe_events,
     );
     project!("motan",
-        "unmatched" => state.motan.events.unmatched,
-        "unsupported" => state.motan.events.unsupported,
-        "unsafe_events" => state.motan.events.unsafe_events,
+        "unmatched" => state.protocols.motan.events.unmatched,
+        "unsupported" => state.protocols.motan.events.unsupported,
+        "unsafe_events" => state.protocols.motan.events.unsafe_events,
     );
     serde_json::json!({"ok":true,"case_id":case,"failed":true,"failures":failures,
         "has_response_time_copies":has_response_time_copies})

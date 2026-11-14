@@ -51,19 +51,40 @@ pub(in crate::replay::control) fn counts(state: &ReplayState, case: &str) -> Vec
     let case = Some(case);
     let mut counts = vec![
         state
+            .protocols
             .mysql
             .events
             .matched_query_details
             .next_event_index(case),
-        state.http_events.matched_details.next_event_index(case),
-        state.redis.events.matched_details.next_event_index(case),
         state
+            .protocols
+            .http_events
+            .matched_details
+            .next_event_index(case),
+        state
+            .protocols
+            .redis
+            .events
+            .matched_details
+            .next_event_index(case),
+        state
+            .protocols
             .memcached
             .events
             .matched_details
             .next_event_index(case),
-        state.motan.events.matched_details.next_event_index(case),
-        state.kafka.events.matched_details.next_event_index(case),
+        state
+            .protocols
+            .motan
+            .events
+            .matched_details
+            .next_event_index(case),
+        state
+            .protocols
+            .kafka
+            .events
+            .matched_details
+            .next_event_index(case),
     ];
     if !state.native.core.exchanges.is_empty() {
         counts.push(
@@ -140,7 +161,7 @@ mod tests {
             crate::replay::push_success_detail(
                 &mut total,
                 &mut details,
-                &mut state.redis.events.matched_details,
+                &mut state.protocols.redis.events.matched_details,
                 Some("case-a"),
                 |_| (),
             );
@@ -152,7 +173,7 @@ mod tests {
             crate::replay::push_success_detail(
                 &mut total,
                 &mut details,
-                &mut state.redis.events.matched_details,
+                &mut state.protocols.redis.events.matched_details,
                 None,
                 |_| (),
             );

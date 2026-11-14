@@ -112,12 +112,31 @@ async fn delivers_timed_binary_prefix_with_live_opaque_then_eof() {
         0
     );
     for _ in 0..20 {
-        if runtime.state.lock().await.memcached.events.matched_count == 1 {
+        if runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .memcached
+            .events
+            .matched_count
+            == 1
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert_eq!(runtime.state.lock().await.memcached.events.matched_count, 1);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .memcached
+            .events
+            .matched_count,
+        1
+    );
     drop(client);
     task.abort();
 }
@@ -131,6 +150,7 @@ async fn target_fin_before_server_termination_stays_dirty_and_unconsumed() {
             .state
             .lock()
             .await
+            .protocols
             .memcached
             .events
             .unsafe_events
@@ -141,10 +161,10 @@ async fn target_fin_before_server_termination_stays_dirty_and_unconsumed() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     let state = runtime.state.lock().await;
-    assert_eq!(state.memcached.events.matched_count, 0);
-    assert!(!state.memcached.events.unsafe_events.is_empty());
+    assert_eq!(state.protocols.memcached.events.matched_count, 0);
+    assert!(!state.protocols.memcached.events.unsafe_events.is_empty());
     assert_eq!(
-        state.memcached.exchanges[0].status,
+        state.protocols.memcached.exchanges[0].status,
         ReplayExchangeStatus::Failed
     );
     task.abort();

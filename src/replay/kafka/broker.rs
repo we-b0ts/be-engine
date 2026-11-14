@@ -85,10 +85,10 @@ impl KafkaReplayPlan {
         let mut state = state.lock().await;
         match self.reservation {
             Some(KafkaReservation::Produce(reservation)) => {
-                state.kafka.commit_produce(reservation);
+                state.protocols.kafka.commit_produce(reservation);
             }
             Some(KafkaReservation::Fetch(reservation)) => {
-                state.kafka.commit_fetch(reservation);
+                state.protocols.kafka.commit_fetch(reservation);
             }
             None => {}
         }
@@ -103,10 +103,16 @@ impl KafkaReplayPlan {
         let mut state = state.lock().await;
         match self.reservation {
             Some(KafkaReservation::Produce(reservation)) => {
-                state.kafka.fail_produce(reservation, target, reason);
+                state
+                    .protocols
+                    .kafka
+                    .fail_produce(reservation, target, reason);
             }
             Some(KafkaReservation::Fetch(reservation)) => {
-                state.kafka.fail_fetch(reservation, target, reason);
+                state
+                    .protocols
+                    .kafka
+                    .fail_fetch(reservation, target, reason);
             }
             None => {}
         }
@@ -121,7 +127,7 @@ pub(super) async fn response_for(
     match &decoded.request {
         RequestKind::ApiVersions(_) => Ok(KafkaReplayPlan::response(api_versions_response())),
         RequestKind::Metadata(request) => {
-            let topics = state.lock().await.kafka.topics();
+            let topics = state.lock().await.protocols.kafka.topics();
             Ok(KafkaReplayPlan::response(metadata_response(
                 request, target, topics,
             )))
@@ -220,7 +226,7 @@ async fn produce_response(
     let RequestKind::Produce(request) = &decoded.request else {
         unreachable!();
     };
-    let reservation = state.lock().await.kafka.reserve_produce(
+    let reservation = state.lock().await.protocols.kafka.reserve_produce(
         active_case_id.as_deref(),
         target,
         &records,
@@ -284,7 +290,7 @@ async fn fetch_response(
         .map(|topic| topic.topic.to_string())
         .collect::<BTreeSet<_>>();
     let active_case_id = state.lock().await.active_case_id.clone();
-    let reservation = state.lock().await.kafka.reserve_fetch(
+    let reservation = state.lock().await.protocols.kafka.reserve_fetch(
         active_case_id.as_deref(),
         target,
         &requested_topics,

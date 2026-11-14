@@ -92,7 +92,7 @@ async fn subquery_reads_bind_identical_values_across_all_wire_forms_without_rule
                     .await;
                     client.close().await.unwrap();
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.matched_query_count, 1);
+                    assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
                     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                     assert_eq!(std::fs::read(path).unwrap(), immutable);
                     task.abort();
@@ -149,7 +149,14 @@ async fn subquery_prepared_rebinding_preserves_types_predicates_and_recorded_err
         1213
     );
     assert_eq!(
-        runtime.state.lock().await.mysql.events.matched_query_count,
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .matched_query_count,
         1
     );
     task.abort();

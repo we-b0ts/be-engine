@@ -76,9 +76,18 @@ async fn ordinary_json_push_derives_only_selected_committed_identities_over_real
                 unchanged
             );
             let state = runtime.state.lock().await;
-            assert!(state.redis.snapshot().unmatched.is_empty());
-            assert!(state.redis.snapshot().unused_case.is_empty());
-            assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+            assert!(state.protocols.redis.snapshot().unmatched.is_empty());
+            assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+            assert_eq!(
+                state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .report()
+                    .unwrap()
+                    .delivered_pushes,
+                1
+            );
             publisher_task.abort();
             input_task.abort();
         }
@@ -106,7 +115,7 @@ async fn an_unknown_selected_notification_identity_stays_an_exact_input_anchor()
     assert_eq!(send(&mut input, &[b"SUBSCRIBE", b"jobs"]).await, ACK);
     assert_eq!(read(&mut input).await, original);
     let state = runtime.state.lock().await;
-    let owner = &state.redis.request_contracts;
+    let owner = &state.protocols.redis.request_contracts;
     assert!(
         owner
             .knows_identity_value(
@@ -176,8 +185,14 @@ async fn an_early_notification_waits_for_its_source_identity_producer() {
         );
         {
             let replay = runtime.state.lock().await;
-            assert!(!replay.redis.pubsub.has_case_delivery());
-            assert!(!replay.redis.request_contracts.has_identities("case"));
+            assert!(!replay.protocols.redis.pubsub.has_case_delivery());
+            assert!(
+                !replay
+                    .protocols
+                    .redis
+                    .request_contracts
+                    .has_identities("case")
+            );
         }
         let (mut publisher, publisher_task) = connect(&runtime).await;
         assert_eq!(
@@ -190,9 +205,18 @@ async fn an_early_notification_waits_for_its_source_identity_producer() {
             crate::redis::encode_array(&[b"message", b"jobs", expected])
         );
         let replay = runtime.state.lock().await;
-        assert!(replay.redis.snapshot().unmatched.is_empty());
-        assert!(replay.redis.snapshot().unused_case.is_empty());
-        assert_eq!(replay.redis.pubsub.report().unwrap().delivered_pushes, 1);
+        assert!(replay.protocols.redis.snapshot().unmatched.is_empty());
+        assert!(replay.protocols.redis.snapshot().unused_case.is_empty());
+        assert_eq!(
+            replay
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_pushes,
+            1
+        );
         publisher_task.abort();
         input_task.abort();
     }
@@ -211,6 +235,7 @@ async fn a_later_source_request_does_not_gate_an_unknown_external_input() {
     let replay = runtime.state.lock().await;
     assert!(
         replay
+            .protocols
             .redis
             .request_contracts
             .knows_identity_value(
@@ -240,6 +265,7 @@ async fn causal_notification_wakes_on_admission_before_the_publish_response() {
     let matched = {
         let mut replay = runtime.state.lock().await;
         replay
+            .protocols
             .redis
             .match_redis(
                 Some("case"),
@@ -263,10 +289,19 @@ async fn causal_notification_wakes_on_admission_before_the_publish_response() {
     );
     let replay = runtime.state.lock().await;
     assert_eq!(
-        replay.redis.exchange_status(matched.index),
+        replay.protocols.redis.exchange_status(matched.index),
         Some(ReplayExchangeStatus::Responding)
     );
-    assert_eq!(replay.redis.pubsub.report().unwrap().delivered_pushes, 1);
+    assert_eq!(
+        replay
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        1
+    );
     task.abort();
 }
 
@@ -291,9 +326,15 @@ async fn closing_a_causal_wait_leaves_the_input_unclaimed() {
         .unwrap()
         .unwrap();
     let replay = runtime.state.lock().await;
-    assert!(!replay.redis.pubsub.has_case_delivery());
-    assert!(!replay.redis.request_contracts.has_identities("case"));
-    assert!(replay.redis.pubsub.case_is_dirty("case"));
-    let report = replay.redis.pubsub.report().unwrap();
+    assert!(!replay.protocols.redis.pubsub.has_case_delivery());
+    assert!(
+        !replay
+            .protocols
+            .redis
+            .request_contracts
+            .has_identities("case")
+    );
+    assert!(replay.protocols.redis.pubsub.case_is_dirty("case"));
+    let report = replay.protocols.redis.pubsub.report().unwrap();
     assert_eq!((report.delivered_pushes, report.failed_pushes), (0, 0));
 }

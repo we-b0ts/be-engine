@@ -11,7 +11,7 @@ fn command(name: &str, case: &str) -> ReplayControlRequest {
 async fn wait_pending(state: &Arc<Mutex<ReplayState>>, pending: bool) {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if state.lock().await.http_ingress.has_pending() == pending {
+            if state.lock().await.protocols.http_ingress.has_pending() == pending {
                 break;
             }
             tokio::task::yield_now().await;
@@ -70,12 +70,13 @@ async fn streamed_request_body_is_actual_case_io_before_any_source_claim() {
         let locked = state.lock().await;
         assert!(
             locked
+                .protocols
                 .http_exchanges
                 .iter()
                 .all(|e| e.status.is_available())
         );
         assert_eq!(
-            locked.http_ingress.report().observations[0].status,
+            locked.protocols.http_ingress.report().observations[0].status,
             "reading_body"
         );
     }
@@ -103,9 +104,15 @@ async fn streamed_request_body_is_actual_case_io_before_any_source_claim() {
         true
     );
     let locked = state.lock().await;
-    assert_eq!(locked.http_ingress.report().pending, 0);
-    assert!(locked.http_exchanges.iter().all(|e| e.status.is_consumed()));
-    let observations = locked.http_ingress.report().observations;
+    assert_eq!(locked.protocols.http_ingress.report().pending, 0);
+    assert!(
+        locked
+            .protocols
+            .http_exchanges
+            .iter()
+            .all(|e| e.status.is_consumed())
+    );
+    let observations = locked.protocols.http_ingress.report().observations;
     assert_eq!(observations[0].observed_case_id.as_deref(), Some("case-a"));
     assert_eq!(observations[1].observed_case_id.as_deref(), Some("case-b"));
     serving.abort();
@@ -127,15 +134,16 @@ async fn cancelled_stream_body_releases_actual_io_and_remains_dirty_without_cons
     let ended = end_case(&command("end", "case-a"), state.clone()).await;
     assert_eq!(ended["dirty"], true, "{ended}");
     let locked = state.lock().await;
-    assert!(locked.http_ingress.case_failed("case-a"));
+    assert!(locked.protocols.http_ingress.case_failed("case-a"));
     assert!(
         locked
+            .protocols
             .http_exchanges
             .iter()
             .all(|e| e.status.is_available())
     );
     assert!(matches!(
-        locked.http_ingress.report().observations[0].status,
+        locked.protocols.http_ingress.report().observations[0].status,
         "body_error" | "cancelled"
     ));
     serving.abort();
@@ -164,7 +172,7 @@ async fn uniquely_proven_process_head_does_not_hold_case_ownership_for_its_body(
     wait_pending(&state, true).await;
     {
         let locked = state.lock().await;
-        assert!(locked.http_ingress.report().observations[0].process_head_unique);
+        assert!(locked.protocols.http_ingress.report().observations[0].process_head_unique);
         assert!(!locked.http_has_case_in_flight());
     }
     let ended = tokio::time::timeout(
@@ -179,11 +187,12 @@ async fn uniquely_proven_process_head_does_not_hold_case_ownership_for_its_body(
     let locked = state.lock().await;
     assert!(
         locked
+            .protocols
             .http_exchanges
             .iter()
             .all(|e| e.source == ReplaySource::Process && e.status.is_consumed())
     );
-    assert!(!locked.http_ingress.case_failed(case_id));
+    assert!(!locked.protocols.http_ingress.case_failed(case_id));
     serving.abort();
 }
 
@@ -240,7 +249,7 @@ async fn startup_uses_real_header_admission_across_primary_boundary_only() {
             usize::from(!admitted_before)
         );
         assert_eq!(
-            locked.http_exchanges[0].status.is_consumed(),
+            locked.protocols.http_exchanges[0].status.is_consumed(),
             admitted_before
         );
         serving.abort();
@@ -324,18 +333,23 @@ async fn headers_queued_for_replay_mutex_already_hold_the_observed_case() {
     let locked = state.lock().await;
     client.write_all(b"POST /case-a HTTP/1.1\r\nHost: ingress.test\r\nContent-Length: 4\r\nConnection: close\r\n\r\na").await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !locked.http_ingress.has_case_pending(Some("case-a")) {
+        while !locked
+            .protocols
+            .http_ingress
+            .has_case_pending(Some("case-a"))
+        {
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
     assert!(
-        !locked.http_ingress.try_close_case("case-a"),
+        !locked.protocols.http_ingress.try_close_case("case-a"),
         "the final empty check cannot outrun a parsed header waiting for Replay state"
     );
     assert_eq!(
         locked
+            .protocols
             .http_ingress
             .report()
             .observations
@@ -382,7 +396,11 @@ async fn headers_waiting_for_replay_mutex_keep_their_real_startup_phase_token() 
     let mut locked = state.lock().await;
     client.write_all(b"POST /run HTTP/1.1\r\nHost: ingress.test\r\nContent-Length: 4\r\nConnection: close\r\n\r\na").await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !locked.http_ingress.has_case_pending(Some(case_id)) {
+        while !locked
+            .protocols
+            .http_ingress
+            .has_case_pending(Some(case_id))
+        {
             tokio::task::yield_now().await;
         }
     })
@@ -398,6 +416,7 @@ async fn headers_waiting_for_replay_mutex_keep_their_real_startup_phase_token() 
     );
     assert!(
         locked
+            .protocols
             .http_ingress
             .report()
             .observations

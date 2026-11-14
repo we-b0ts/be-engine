@@ -210,7 +210,7 @@ async fn body_contract_keeps_native_business_header_differences_dirty() {
     let state = runtime.state.lock().await;
     assert!(state.http_case_is_dirty("case-http"));
     assert!(
-        serde_json::to_value(&state.http_events.header_mismatches)
+        serde_json::to_value(&state.protocols.http_events.header_mismatches)
             .unwrap()
             .as_array()
             .unwrap()
@@ -487,8 +487,14 @@ async fn target_observation_io_failure_preserves_global_matching_and_rejects_cas
         );
         response.into_body().collect().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.http_events.matched_count, usize::from(global));
-        assert_eq!(state.http_events.unmatched.len(), usize::from(!global));
+        assert_eq!(
+            state.protocols.http_events.matched_count,
+            usize::from(global)
+        );
+        assert_eq!(
+            state.protocols.http_events.unmatched.len(),
+            usize::from(!global)
+        );
         let manifest = state
             .replay_policy
             .as_ref()
@@ -499,7 +505,10 @@ async fn target_observation_io_failure_preserves_global_matching_and_rejects_cas
         assert!(!manifest.complete);
         assert!(manifest.omitted > 0);
         assert!(manifest.graph().unwrap().targets.is_empty());
-        assert_eq!(state.http_exchanges[0].status.is_consumed(), global);
+        assert_eq!(
+            state.protocols.http_exchanges[0].status.is_consumed(),
+            global
+        );
         task.abort();
     }
 }

@@ -55,6 +55,7 @@ async fn callback_admission_waits_for_real_ingress_wire_delivery() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .pending_ingress_reply(Some("case"), &endpoint, "PUBLISH", &args)
@@ -83,8 +84,17 @@ async fn callback_admission_waits_for_real_ingress_wire_delivery() {
     );
     assert_eq!(callback.await.unwrap(), b":1\r\n");
     let state = runtime.state.lock().await;
-    assert!(state.redis.snapshot().unused_case.is_empty());
-    assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+    assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+    assert_eq!(
+        state
+            .protocols
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        1
+    );
     drop(state);
     sub_task.abort();
     client_task.abort();

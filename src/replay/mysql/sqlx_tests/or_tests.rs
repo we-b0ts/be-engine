@@ -44,7 +44,7 @@ async fn sqlx_or_groups_match_all_protocol_pairs_with_aliases_tuples_and_cached_
                         } else {
                             assert_eq!(response.unwrap()[0].get::<i64, _>("id"), tenant as i64);
                         }
-                        let now = runtime.state.lock().await.mysql.sql_cache.compilations;
+                        let now = runtime.state.lock().await.protocols.mysql.sql_cache.compilations;
                         // The failed lookup also warms remaining source SQL.
                         if target_prepared && attempt > 1 {
                             assert_eq!(now, compiled, "cached template must rebind every execution");
@@ -53,9 +53,9 @@ async fn sqlx_or_groups_match_all_protocol_pairs_with_aliases_tuples_and_cached_
                     }
                     client.close().await.unwrap();
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.matched_query_count, 2);
-                    assert_eq!(state.mysql.events.unmatched_queries.len(), 2);
-                    assert!(state.mysql.events.metadata_warnings.is_empty(), "{:?}", state.mysql.events.metadata_warnings);
+                    assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 2);
+                    assert!(state.protocols.mysql.events.metadata_warnings.is_empty(), "{:?}", state.protocols.mysql.events.metadata_warnings);
                     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                     assert_eq!(std::fs::read(path).unwrap(), original);
                     task.abort();
@@ -115,8 +115,8 @@ async fn sqlx_nested_exists_in_lists_match_text_recording_with_prepared_target()
         assert_eq!(rows[0].get::<i64, _>("kinds_id"), 77);
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         task.abort();
     })

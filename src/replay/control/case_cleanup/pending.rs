@@ -1,44 +1,16 @@
 //! Capture actual cleanup blockers while the Case ownership lock is still held.
 use super::*;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-const MAX_REFERENCES: usize = 4;
-
-pub(super) fn snapshot(state: &ReplayState) -> Value {
-    let mysql = state
-        .mysql
-        .exchanges
-        .iter()
-        .enumerate()
-        .filter(|(index, e)| {
-            e.source == ReplaySource::Case
-                && matches!(
-                    state.mysql.exchange_status(*index),
-                    Some(
-                        ReplayExchangeStatus::Responding
-                            | ReplayExchangeStatus::AwaitingClientTermination
-                    )
-                )
-        });
-    let mysql_count = mysql.clone().count();
-    let mysql_references = mysql
-        .take(MAX_REFERENCES)
-        .map(|(index, e)| {
-            json!({"index":index, "case_id":e.case_id,
-            "connection_id":e.record.connection_id, "query_sequence":e.record.query_sequence,
-            "status":format!("{:?}", e.status)})
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "mysql":{"count":mysql_count, "references":mysql_references,
-            "omitted":mysql_count.saturating_sub(MAX_REFERENCES)},
-        "dependency_protocols":state.native.in_flight_diagnostic(),
-        "redis":state.redis.case_in_flight_diagnostic(),
-        "http":state.http_case_in_flight_diagnostic(),
-        "http_ingress":state.http_ingress.pending_diagnostic(),
-        "kafka":state.kafka.has_case_in_flight(),
-        "connect_failures":state.connect_failures.has_in_flight(),
-        "memcached":state.memcached.has_case_in_flight(),
-        "motan":state.motan.has_case_in_flight(),
-    })
+pub(super) fn snapshot<P: ReplayProtocolSet>(state: &RuntimeState<P>) -> Value {
+    let mut pending = state.protocols.pending_diagnostic();
+    pending.insert(
+        "dependency_protocols".into(),
+        state.native.in_flight_diagnostic(),
+    );
+    pending.insert(
+        "connect_failures".into(),
+        state.connect_failures.has_in_flight().into(),
+    );
+    serde_json::to_value(pending).expect("pending diagnostics serialize")
 }

@@ -1,23 +1,21 @@
-//! Session-wide finite dependencies keep their cursor across Case transitions.
+//! Session-wide finite dependencies keep their cursors across Case transitions.
 use super::*;
+use crate::replay::{ReplayProtocolSet, RuntimeState};
+use std::collections::BTreeMap;
+use traffic_protocol::ProtocolId;
 
 #[derive(Debug)]
 pub(in crate::replay) struct RunBindings {
     pub(in crate::replay) runtimes: Vec<Arc<SequenceRuntime>>,
-    http: Binding,
-    redis: Binding,
-    mysql: Binding,
+    protocols: BTreeMap<ProtocolId, Binding>,
     registered: Binding,
 }
 
 #[derive(Default)]
 struct ScopeRefs {
-    http: Vec<(usize, u64)>,
-    redis: Vec<(usize, u64)>,
-    mysql: Vec<(usize, u64)>,
+    protocols: BTreeMap<ProtocolId, Vec<(usize, u64)>>,
     registered: Vec<(usize, u64)>,
 }
-
 fn task_scope(
     mut owner: traffic_model::attribution::DependencyOwner,
 ) -> traffic_model::attribution::DependencyOwner {
@@ -27,79 +25,23 @@ fn task_scope(
     owner
 }
 
-impl super::super::ReplayState {
+impl<P: ReplayProtocolSet> RuntimeState<P> {
     pub(in crate::replay) fn prepare_run_sequence(&mut self) -> Result<()> {
         let Some(catalog) = &self.sequence_catalog else {
             return Ok(());
         };
-        self.http_candidates.register_exempt(
-            &self.http_exchanges,
-            self.http_exchanges
-                .iter()
-                .enumerate()
-                .filter(|(_, exchange)| {
-                    exchange.run_owned() && exchange.recorded_sequence().is_none()
-                })
-                .map(|(index, _)| index),
-        );
-        self.redis.prepare_run_sequence_exempt();
-        let mysql_exempt: Vec<_> = self
-            .mysql
-            .exchanges
-            .iter()
-            .enumerate()
-            .filter(|(index, exchange)| {
-                exchange.source.is_run_owned() && self.mysql.recorded_sequence(*index).is_none()
-            })
-            .map(|(index, _)| index)
-            .collect();
-        self.mysql.prepare_sequence_exempt(mysql_exempt.into_iter());
-        let mut scopes = std::collections::BTreeMap::<
-            traffic_model::attribution::DependencyOwner,
-            ScopeRefs,
-        >::new();
-        for (index, exchange) in self.http_exchanges.iter().enumerate() {
-            if let Some(sequence) = exchange.run_sequence() {
-                let owner = exchange
-                    .recorded_owner()
-                    .context("HTTP run dependency owner absent")?;
+        let mut scopes = BTreeMap::<traffic_model::attribution::DependencyOwner, ScopeRefs>::new();
+        for (protocol, references) in self.protocols.run_sequence_refs()? {
+            for reference in references {
                 scopes
-                    .entry(task_scope(owner))
+                    .entry(task_scope(reference.owner))
                     .or_default()
-                    .http
-                    .push((index, sequence));
+                    .protocols
+                    .entry(protocol)
+                    .or_default()
+                    .push((reference.index, reference.sequence));
             }
         }
-        for (index, sequence, owner) in self.redis.run_sequence_refs() {
-            scopes
-                .entry(task_scope(owner))
-                .or_default()
-                .redis
-                .push((index, sequence));
-        }
-        for (index, exchange) in self
-            .mysql
-            .exchanges
-            .iter()
-            .enumerate()
-            .filter(|(_, exchange)| exchange.source.is_run_owned())
-        {
-            if let Some(sequence) = self.mysql.recorded_sequence(index) {
-                let owner = exchange
-                    .record
-                    .capture
-                    .as_ref()
-                    .context("MySQL run dependency owner absent")?
-                    .attribution
-                    .clone();
-                scopes
-                    .entry(task_scope(owner))
-                    .or_default()
-                    .mysql
-                    .push((index, sequence));
-            }
-        }
-        let mut runtimes = Vec::new();
         for exchange in &self.native.core.exchanges {
             if exchange.source.source.is_run_owned()
                 && let Some(capture) = &exchange.source.capture
@@ -111,32 +53,32 @@ impl super::super::ReplayState {
                     .push((exchange.index, capture.sequence));
             }
         }
-        let mut http = Vec::new();
-        let mut redis = Vec::new();
-        let mut mysql = Vec::new();
+        let mut runtimes = Vec::new();
+        let mut bindings = BTreeMap::<ProtocolId, Vec<Binding>>::new();
         let mut registered = Vec::new();
         for scope in scopes.into_values() {
-            let plan = catalog.scope(
-                scope
-                    .http
-                    .iter()
-                    .chain(&scope.redis)
-                    .chain(&scope.mysql)
-                    .chain(&scope.registered)
-                    .map(|(_, sequence)| *sequence),
-            )?;
-            let runtime = SequenceRuntime::new(plan);
-            http.push(Binding::new(runtime.clone(), scope.http.into_iter()));
-            redis.push(Binding::new(runtime.clone(), scope.redis.into_iter()));
-            mysql.push(Binding::new(runtime.clone(), scope.mysql.into_iter()));
+            let sequence = scope
+                .protocols
+                .values()
+                .flatten()
+                .chain(&scope.registered)
+                .map(|(_, sequence)| *sequence);
+            let runtime = SequenceRuntime::new(catalog.scope(sequence)?);
+            for (protocol, references) in scope.protocols {
+                bindings
+                    .entry(protocol)
+                    .or_default()
+                    .push(Binding::new(runtime.clone(), references.into_iter()));
+            }
             registered.push(Binding::new(runtime.clone(), scope.registered.into_iter()));
             runtimes.push(runtime);
         }
         self.run_sequence = Some(RunBindings {
             runtimes,
-            http: Binding::merge(http),
-            redis: Binding::merge(redis),
-            mysql: Binding::merge(mysql),
+            protocols: bindings
+                .into_iter()
+                .map(|(protocol, bindings)| (protocol, Binding::merge(bindings)))
+                .collect(),
             registered: Binding::merge(registered),
         });
         Ok(())
@@ -144,9 +86,7 @@ impl super::super::ReplayState {
 
     pub(in crate::replay) fn attach_run_sequence(&mut self) {
         if let Some(run) = &self.run_sequence {
-            self.http_sequence.attach_run(run.http.clone());
-            self.redis.lifecycle.sequence.attach_run(run.redis.clone());
-            self.mysql.lifecycle.sequence.attach_run(run.mysql.clone());
+            self.protocols.attach_run_sequence(&run.protocols);
             self.native
                 .core
                 .lifecycle

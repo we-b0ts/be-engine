@@ -51,7 +51,12 @@ async fn two_dependency_differences_continue_dirty_then_formal_rule_replay_is_cl
             assert_eq!(response.status(), StatusCode::OK);
             response.into_body().collect().await.unwrap();
             let state = runtime.state.lock().await;
-            assert!(!state.http_events.case_has_runtime_failure("case-http"));
+            assert!(
+                !state
+                    .protocols
+                    .http_events
+                    .case_has_runtime_failure("case-http")
+            );
         }
         let report = runtime.state.lock().await.snapshot_report();
         assert_eq!(report.matched_http_exchange_count, 2);
@@ -92,8 +97,13 @@ async fn sdk_header_dirty_stays_an_observation_after_a_later_dependency_rejectio
     response.into_body().collect().await.unwrap();
     {
         let state = runtime.state.lock().await;
-        assert!(!state.http_events.header_mismatches.is_empty());
-        assert!(!state.http_events.case_has_runtime_failure("case-http"));
+        assert!(!state.protocols.http_events.header_mismatches.is_empty());
+        assert!(
+            !state
+                .protocols
+                .http_events
+                .case_has_runtime_failure("case-http")
+        );
         assert!(state.snapshot_report().is_dirty());
     }
     let command = || {

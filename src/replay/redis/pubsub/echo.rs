@@ -314,7 +314,7 @@ pub(in crate::replay::redis) async fn deliver(
     };
     let jobs = {
         let replay = state.lock().await;
-        replay.redis.pubsub.echo_jobs(matched, prepared)
+        replay.protocols.redis.pubsub.echo_jobs(matched, prepared)
     };
     for job in jobs {
         let prepared = prepared.clone();
@@ -335,26 +335,33 @@ pub(in crate::replay::redis) async fn deliver(
             "deferred adapter self-echo lost its Case"
         );
         let case_id = serial_scope.and(matched.report.case_id.as_deref());
-        let request_epoch = case_id.and_then(|case| replay.redis.native_request_epoch(case));
+        let request_epoch =
+            case_id.and_then(|case| replay.protocols.redis.native_request_epoch(case));
         for (id, bytes) in candidates {
             ensure!(
-                replay.redis.pubsub.is_subscribed(client, id),
+                replay.protocols.redis.pubsub.is_subscribed(client, id),
                 "adapter echo subscriber closed"
             );
             let available = match id {
-                PushId::Inline(index) => replay.redis.pubsub.pushes[index].status.is_available(),
+                PushId::Inline(index) => replay.protocols.redis.pubsub.pushes[index]
+                    .status
+                    .is_available(),
                 PushId::Indexed { lane, index } => {
-                    replay.redis.pubsub.indexed.available(lane, index)
+                    replay.protocols.redis.pubsub.indexed.available(lane, index)
                 }
             };
             ensure!(available, "recorded adapter self-echo already claimed");
             match id {
                 PushId::Inline(index) => {
-                    replay.redis.pubsub.pushes[index].status = ReplayExchangeStatus::Responding
+                    replay.protocols.redis.pubsub.pushes[index].status =
+                        ReplayExchangeStatus::Responding
                 }
-                PushId::Indexed { lane, index } => {
-                    replay.redis.pubsub.indexed.responding(lane, index)
-                }
+                PushId::Indexed { lane, index } => replay
+                    .protocols
+                    .redis
+                    .pubsub
+                    .indexed
+                    .responding(lane, index),
             }
             if sender
                 .try_send(Delivery {
@@ -367,7 +374,7 @@ pub(in crate::replay::redis) async fn deliver(
                 })
                 .is_err()
             {
-                replay.redis.pubsub.fail(id);
+                replay.protocols.redis.pubsub.fail(id);
                 anyhow::bail!("adapter echo delivery queue unavailable");
             }
         }

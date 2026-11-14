@@ -26,7 +26,13 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             let mut replay = state.lock().await;
             if replay.finalized_at.is_some()
                 || replay.target_session_stopped
-                || replay.redis.pubsub.native_clock.entries.is_empty()
+                || replay
+                    .protocols
+                    .redis
+                    .pubsub
+                    .native_clock
+                    .entries
+                    .is_empty()
             {
                 return;
             }
@@ -36,13 +42,20 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             let retry = replay
                 .active_case_id
                 .as_deref()
-                .and_then(|case| replay.redis.pubsub.native_clock.fast_deadline(case))
+                .and_then(|case| {
+                    replay
+                        .protocols
+                        .redis
+                        .pubsub
+                        .native_clock
+                        .fast_deadline(case)
+                })
                 .or(dispatch_due)
                 .filter(|due| *due > now)
                 .unwrap_or(now + Duration::from_millis(5));
             (
                 ready(&replay, dispatch_due, now),
-                replay.redis.lifecycle.subscribe(),
+                replay.protocols.redis.lifecycle.subscribe(),
                 retry,
             )
         };
@@ -57,12 +70,13 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
         let source = job.source.clone();
         let loaded = tokio::task::spawn_blocking(move || source.bytes()).await;
         let mut replay = state.lock().await;
-        let slot = replay.redis.pubsub.native_clock.entries[job.entry].slot;
+        let slot = replay.protocols.redis.pubsub.native_clock.entries[job.entry].slot;
         if replay.finalized_at.is_some()
             || replay.target_session_stopped
             || replay.active_case_id.as_deref() != Some(&job.case)
-            || replay.redis.pubsub.native_clock.epoch(&job.case) != Some(job.epoch)
+            || replay.protocols.redis.pubsub.native_clock.epoch(&job.case) != Some(job.epoch)
             || replay
+                .protocols
                 .redis
                 .pubsub
                 .native_clock
@@ -71,8 +85,12 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 .is_none_or(|live| !live.observer || live.closed)
             || expired(&replay, &job.case, job.epoch, job.source.lifetime)
             || job.sender.is_closed()
-            || !replay.redis.pubsub.is_subscribed(job.client, slot)
-            || !replay.redis.pubsub.push_available(slot)
+            || !replay
+                .protocols
+                .redis
+                .pubsub
+                .is_subscribed(job.client, slot)
+            || !replay.protocols.redis.pubsub.push_available(slot)
         {
             continue;
         }
@@ -88,7 +106,7 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 continue;
             }
         };
-        let entry = &replay.redis.pubsub.native_clock.entries[job.entry];
+        let entry = &replay.protocols.redis.pubsub.native_clock.entries[job.entry];
         let valid = parse_pubsub_push(&bytes)
             .ok()
             .flatten()
@@ -107,10 +125,11 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             continue;
         }
         replay
+            .protocols
             .redis
             .pubsub
             .reserve_case_push(slot, &job.case, job.client);
-        let native = &mut replay.redis.pubsub.native_clock;
+        let native = &mut replay.protocols.redis.pubsub.native_clock;
         if let Some(live) = native.live.get_mut(&job.case) {
             if let Some(pace) = &mut live.fast {
                 pace.queued(job.entry);
@@ -134,7 +153,7 @@ fn retire_expired_prefix(replay: &mut ReplayState) {
     let Some(case) = replay.active_case_id.as_deref() else {
         return;
     };
-    let native = &replay.redis.pubsub.native_clock;
+    let native = &replay.protocols.redis.pubsub.native_clock;
     let Some(live) = native
         .live
         .get(case)
@@ -153,6 +172,7 @@ fn retire_expired_prefix(replay: &mut ReplayState) {
         // Expired slots stay unused in the Source inventory. They cannot hold
         // the queue head after a later, independently proven input interval.
         replay
+            .protocols
             .redis
             .pubsub
             .native_clock
@@ -165,7 +185,7 @@ fn retire_expired_prefix(replay: &mut ReplayState) {
 
 fn dispatch_deadline(replay: &ReplayState, now: Instant) -> Option<Instant> {
     let case = replay.active_case_id.as_deref()?;
-    let native = &replay.redis.pubsub.native_clock;
+    let native = &replay.protocols.redis.pubsub.native_clock;
     let live = native.live.get(case)?;
     if live.fast.is_some() || live.dispatch_pace.inflight.is_some() {
         return None;
@@ -185,7 +205,7 @@ fn dispatch_deadline(replay: &ReplayState, now: Instant) -> Option<Instant> {
 
 fn ready(replay: &ReplayState, dispatch_due: Option<Instant>, now: Instant) -> Option<Job> {
     let case = replay.active_case_id.as_deref()?;
-    let native = &replay.redis.pubsub.native_clock;
+    let native = &replay.protocols.redis.pubsub.native_clock;
     let live = native
         .live
         .get(case)
@@ -215,14 +235,24 @@ fn ready(replay: &ReplayState, dispatch_due: Option<Instant>, now: Instant) -> O
     {
         return None;
     }
-    let mut subscribers = replay.redis.pubsub.subscriptions.iter().filter(|sub| {
-        !sub.sender.is_closed()
-            && sub.target == entry.endpoint
-            && sub.database == entry.database
-            && sub.username == entry.username
-            && (sub.source_connection, sub.sequence) == entry.anchor
-            && replay.redis.pubsub.is_subscribed(sub.client, entry.slot)
-    });
+    let mut subscribers = replay
+        .protocols
+        .redis
+        .pubsub
+        .subscriptions
+        .iter()
+        .filter(|sub| {
+            !sub.sender.is_closed()
+                && sub.target == entry.endpoint
+                && sub.database == entry.database
+                && sub.username == entry.username
+                && (sub.source_connection, sub.sequence) == entry.anchor
+                && replay
+                    .protocols
+                    .redis
+                    .pubsub
+                    .is_subscribed(sub.client, entry.slot)
+        });
     let sub = subscribers.next()?;
     if subscribers.next().is_some() {
         return None;
@@ -249,6 +279,7 @@ fn expired(
     lifetime: chrono::TimeDelta,
 ) -> bool {
     replay
+        .protocols
         .redis
         .pubsub
         .native_clock
@@ -276,8 +307,9 @@ fn reached(
 }
 
 fn fail(replay: &mut ReplayState, job: &Job, slot: PushId, reason: &str) {
-    replay.redis.pubsub.native_clock.retire(job.entry);
+    replay.protocols.redis.pubsub.native_clock.retire(job.entry);
     replay
+        .protocols
         .redis
         .fail_pubsub_input(slot, Some(&job.case), reason);
 }

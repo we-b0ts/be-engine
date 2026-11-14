@@ -41,9 +41,9 @@ impl Request<'_> {
         {
             let mut state = self.state.lock().await;
             let reason = "hypothesis evidence persistence failed";
-            state.redis.fail_exchange(&matched, reason.into());
+            state.protocols.redis.fail_exchange(&matched, reason.into());
             if let Some((earlier, _)) = predecessor {
-                state.redis.fail_exchange(&earlier, reason.into());
+                state.protocols.redis.fail_exchange(&earlier, reason.into());
             }
             return Err(error);
         }
@@ -77,15 +77,22 @@ impl Request<'_> {
         push_tx: &mpsc::Sender<pubsub::Delivery>,
         matched: &MatchedRedisExchange,
     ) -> Result<bool> {
-        let deliveries = self.state.lock().await.redis.pubsub.subscription(
-            self.client_id,
-            self.target,
-            self.database,
-            self.username,
-            self.command,
-            matched,
-            push_tx.clone(),
-        )?;
+        let deliveries = self
+            .state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .pubsub
+            .subscription(
+                self.client_id,
+                self.target,
+                self.database,
+                self.username,
+                self.command,
+                matched,
+                push_tx.clone(),
+            )?;
         if deliver_redis_exchange(
             reader,
             self.state,
@@ -192,9 +199,12 @@ impl Request<'_> {
             if !matches!(&response, Ok(matched) if matched.index == pair.later()) {
                 let mut state = self.state.lock().await;
                 let reason = "pipelined Redis successor changed";
-                state.redis.fail_exchange(&predecessor, reason.into());
+                state
+                    .protocols
+                    .redis
+                    .fail_exchange(&predecessor, reason.into());
                 if let Ok(matched) = response {
-                    state.redis.fail_exchange(&matched, reason.into());
+                    state.protocols.redis.fail_exchange(&matched, reason.into());
                 }
                 return (Err(reason), None);
             }

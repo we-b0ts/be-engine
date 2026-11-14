@@ -190,6 +190,7 @@ impl Source {
                 (completed >= request.started_us / 1_000).then_some(latest.max(completed))
             })
             && state
+                .protocols
                 .redis
                 .pubsub
                 .native_clock
@@ -412,8 +413,12 @@ impl Plan {
                 }
             } else if !Self::request_ready(state, case, request, handle, false) {
                 if let ExchangeHandle::Native(DependencyAdapter::Mysql(index)) = *handle
-                    && input_at
-                        .is_some_and(|at| state.mysql.can_defer_autocommit_for_dispatch(index, at))
+                    && input_at.is_some_and(|at| {
+                        state
+                            .protocols
+                            .mysql
+                            .can_defer_autocommit_for_dispatch(index, at)
+                    })
                 {
                     continue;
                 }
@@ -466,6 +471,7 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
         let case = live.case.clone();
         let ready = plan.native_fast_setup_ready(state, &case)
             && state
+                .protocols
                 .redis
                 .pubsub
                 .native_clock
@@ -564,12 +570,17 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
     let NativeDispatch { from, to, .. } = window;
     let cap = plan.source.cap;
     if live.native_dispatch != Some(window) {
-        state.redis.pubsub.native_clock.plan_dispatch_pace(
-            &live.case,
-            live.epoch,
-            Duration::from_micros(from.latest_us())..Duration::from_micros(to.earliest_us()),
-            Duration::from_millis(cap),
-        );
+        state
+            .protocols
+            .redis
+            .pubsub
+            .native_clock
+            .plan_dispatch_pace(
+                &live.case,
+                live.epoch,
+                Duration::from_micros(from.latest_us())..Duration::from_micros(to.earliest_us()),
+                Duration::from_millis(cap),
+            );
     }
     let live = state.input_timing.as_mut().expect("validated timeline");
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);

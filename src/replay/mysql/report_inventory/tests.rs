@@ -141,6 +141,7 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
         assert!(state.complete_exchange(&first));
         assert_eq!(
             state
+                .protocols
                 .mysql
                 .events
                 .matched_queries
@@ -175,6 +176,7 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
     let mut state = runtime.state.lock().await;
     assert_eq!(
         state
+            .protocols
             .mysql
             .events
             .request_order
@@ -193,9 +195,9 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
         3
     );
     let before = (
-        state.mysql.events.matched_query_count,
-        state.mysql.events.builtin_query_count,
-        state.mysql.events.unmatched_queries.len(),
+        state.protocols.mysql.events.matched_query_count,
+        state.protocols.mysql.events.builtin_query_count,
+        state.protocols.mysql.events.unmatched_queries.len(),
     );
     state.finalized_at = Some(Utc::now());
     drop(state);
@@ -208,13 +210,14 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
     assert_eq!(
         before,
         (
-            state.mysql.events.matched_query_count,
-            state.mysql.events.builtin_query_count,
-            state.mysql.events.unmatched_queries.len()
+            state.protocols.mysql.events.matched_query_count,
+            state.protocols.mysql.events.builtin_query_count,
+            state.protocols.mysql.events.unmatched_queries.len()
         )
     );
     assert_eq!(
         state
+            .protocols
             .mysql
             .events
             .request_order
@@ -248,7 +251,7 @@ async fn finite_delivery_requires_wire_and_commits_each_native_hook_once() {
         )
         .unwrap();
     assert!(!state.complete_exchange(&matched));
-    assert_eq!(state.mysql.events.matched_query_count, 0);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 0);
     assert!(matched.claim.publish_wire());
     let hooks = std::cell::Cell::new(0);
     assert!(
@@ -268,14 +271,18 @@ async fn finite_delivery_requires_wire_and_commits_each_native_hook_once() {
             .unwrap()
     );
     assert_eq!(hooks.get(), 1);
-    assert_eq!(state.mysql.events.matched_query_count, 1);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
     state.fail_exchange(
         &matched,
         &identity(),
         "a consumed claim cannot be rolled back",
     );
-    assert!(state.mysql.exchanges[matched.index].status.is_consumed());
-    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert!(
+        state.protocols.mysql.exchanges[matched.index]
+            .status
+            .is_consumed()
+    );
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
 }
 
 #[tokio::test]
@@ -300,11 +307,11 @@ async fn wire_success_with_native_commit_failure_remains_unconsumed_and_dirty() 
             .is_err()
     );
     assert_eq!(
-        state.mysql.exchange_status(matched.index),
+        state.protocols.mysql.exchange_status(matched.index),
         Some(ReplayExchangeStatus::Failed)
     );
-    assert_eq!(state.mysql.events.matched_query_count, 0);
-    assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 0);
+    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
     assert!(!state.complete_exchange(&matched));
 }
 
@@ -320,11 +327,16 @@ async fn cancelled_optional_delivery_is_required_in_native_and_sparse_global_vie
     assert_eq!(state.global_mysql_unused_count(), before);
     drop(matched.claim.guard());
     assert_eq!(
-        state.mysql.exchange_status(matched.index),
+        state.protocols.mysql.exchange_status(matched.index),
         Some(ReplayExchangeStatus::Failed)
     );
     assert_eq!(state.global_mysql_unused_count(), before + 1);
-    assert!(!state.mysql.permits_unstarted_omission(matched.index));
+    assert!(
+        !state
+            .protocols
+            .mysql
+            .permits_unstarted_omission(matched.index)
+    );
     assert!(!state.complete_exchange(&matched));
 }
 
@@ -352,6 +364,7 @@ async fn unused_empty_history_query_retains_its_selection_in_ai_evidence() {
     let runtime = fixture_with_case(temp.path(), &record.to_string()).await;
     let state = runtime.state.lock().await;
     let (index, exchange) = state
+        .protocols
         .mysql
         .exchanges
         .iter()
@@ -387,8 +400,8 @@ async fn unused_empty_history_query_retains_its_selection_in_ai_evidence() {
         signature["sql_summary"]["fingerprint"],
         summary["sql_summary"]["fingerprint"]
     );
-    assert_eq!(state.mysql.events.matched_query_count, 0);
-    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 0);
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
 }
 
 fn rows(state: &ReplayState) -> Vec<Row> {
@@ -401,7 +414,7 @@ fn rows(state: &ReplayState) -> Vec<Row> {
         .unwrap();
     assert_eq!(rows.len(), 10);
     assert_eq!(rows.iter().filter(|row| row.visible).count(), 5);
-    assert_eq!(state.mysql.global_report_usage().count(), Some(5));
+    assert_eq!(state.protocols.mysql.global_report_usage().count(), Some(5));
     rows
 }
 
@@ -413,7 +426,7 @@ fn equivalent(state: &ReplayState, report: &Path, rows: &[Row]) -> usize {
             Ok(())
         })
         .unwrap();
-    let usage = state.mysql.global_report_usage();
+    let usage = state.protocols.mysql.global_report_usage();
     let (count, actual) = crate::replay::report::global_evidence::regular::tests::protocol_snapshot(
         report,
         "mysql",
@@ -452,11 +465,11 @@ async fn cleanup_visibility_follows_real_reservations_and_delivery_outcomes() {
                 .match_exchange(&identity(), "COM_QUERY", Some(end), None)
                 .unwrap();
             assert_eq!(
-                state.mysql.exchanges[matched.index].optional_session,
+                state.protocols.mysql.exchanges[matched.index].optional_session,
                 Some(kind)
             );
             assert_eq!(
-                state.mysql.exchanges[matched.index].status,
+                state.protocols.mysql.exchanges[matched.index].status,
                 ReplayExchangeStatus::Responding
             );
             // Optional cleanup stays hidden while its recorded response is in flight.
@@ -485,7 +498,7 @@ async fn autocommit_and_required_sql_use_their_native_visibility_transitions() {
         .match_exchange(&identity(), "COM_QUERY", Some("SET AUTOCOMMIT=0"), None)
         .unwrap();
     assert_eq!(
-        state.mysql.exchanges[setup.index].optional_session,
+        state.protocols.mysql.exchanges[setup.index].optional_session,
         Some(OptionalSessionExchange::Autocommit)
     );
     assert_eq!(equivalent(&state, &report, &baseline), 6);
@@ -497,7 +510,7 @@ async fn autocommit_and_required_sql_use_their_native_visibility_transitions() {
         .match_exchange(&identity(), "COM_QUERY", Some("SET AUTOCOMMIT=1"), None)
         .unwrap();
     assert_eq!(
-        state.mysql.exchanges[setup.index].optional_session,
+        state.protocols.mysql.exchanges[setup.index].optional_session,
         Some(OptionalSessionExchange::Autocommit)
     );
     assert_eq!(equivalent(&state, &report, &baseline), 6);
@@ -513,7 +526,7 @@ async fn autocommit_and_required_sql_use_their_native_visibility_transitions() {
         )
         .unwrap();
     assert!(
-        state.mysql.exchanges[required.index]
+        state.protocols.mysql.exchanges[required.index]
             .optional_session
             .is_none()
     );
@@ -526,9 +539,13 @@ async fn autocommit_and_required_sql_use_their_native_visibility_transitions() {
         .consume_builtin_exchange(&identity(), "COM_QUERY", Some("SET NAMES utf8mb4"))
         .unwrap();
     assert_eq!(source, ReplaySource::Startup);
-    assert!(state.mysql.exchanges[index].optional_session.is_none());
+    assert!(
+        state.protocols.mysql.exchanges[index]
+            .optional_session
+            .is_none()
+    );
     assert_eq!(
-        state.mysql.exchanges[index].status,
+        state.protocols.mysql.exchanges[index].status,
         ReplayExchangeStatus::Consumed
     );
     assert_eq!(equivalent(&state, &report, &baseline), 4);

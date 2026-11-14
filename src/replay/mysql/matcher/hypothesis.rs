@@ -26,7 +26,7 @@ impl ReplayState {
         let candidates = if let Some(window) = window {
             window
         } else {
-            fallback = self.mysql.candidates.lookup(
+            fallback = self.protocols.mysql.candidates.lookup(
                 ReplaySource::Case,
                 Some(case),
                 identity,
@@ -38,18 +38,23 @@ impl ReplayState {
         let sql_family = candidates::sql_family(sql);
         let normalized_sql = sql.map(normalize_sql);
         let mut blocked = self
+            .protocols
             .mysql
             .candidates
-            .blocked_candidates(&self.mysql.exchanges);
+            .blocked_candidates(&self.protocols.mysql.exchanges);
         for index in candidates.iter().copied() {
-            let exchange = &self.mysql.exchanges[index];
-            if !self.mysql.candidates.permits_sql(index, sql_family)
+            let exchange = &self.protocols.mysql.exchanges[index];
+            if !self
+                .protocols
+                .mysql
+                .candidates
+                .permits_sql(index, sql_family)
                 || !exchange.status.is_available()
                 || !exchange.record.parse_warnings.is_empty()
                 || exchange.record.response.rows_truncated
                 || exchange.optional_session.is_some()
-                || self.mysql.foreign.contains_key(&index)
-                || transaction.is_some_and(|context| !context.permits(&self.mysql, index))
+                || self.protocols.mysql.foreign.contains_key(&index)
+                || transaction.is_some_and(|context| !context.permits(&self.protocols.mysql, index))
             {
                 continue;
             }
@@ -57,7 +62,8 @@ impl ReplayState {
                 continue;
             }
             if search.inspect().is_err() {
-                self.mysql
+                self.protocols
+                    .mysql
                     .events
                     .metadata_warnings
                     .push("MySQL hypothesis candidate budget exhausted".into());
@@ -78,7 +84,7 @@ impl ReplayState {
             };
             if transaction.is_some_and(|context| {
                 context.missing_for_member(
-                    &self.mysql.transaction_equivalence,
+                    &self.protocols.mysql.transaction_equivalence,
                     index,
                     exchange,
                     normalized_sql.as_deref(),
@@ -88,7 +94,8 @@ impl ReplayState {
                 continue;
             }
             if search.accept(index, decision).is_err() {
-                self.mysql
+                self.protocols
+                    .mysql
                     .events
                     .metadata_warnings
                     .push("MySQL hypothesis has multiple eligible Source exchanges".into());

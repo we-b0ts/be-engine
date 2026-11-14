@@ -55,7 +55,7 @@ async fn a_native_plan_keeps_more_than_65536_original_slots_without_materializin
         .await
         .expect("a complete finite Source inventory must not hit a fixed projection-count cap");
     let state = runtime.state.lock().await;
-    let pubsub = &state.redis.pubsub;
+    let pubsub = &state.protocols.redis.pubsub;
     assert!(
         pubsub.pushes.is_empty(),
         "original notifications stay paged"
@@ -95,11 +95,11 @@ async fn a_native_burst_exceeds_two_hundred_messages_per_second_without_dropping
     .expect("finite original burst was throttled past its Source lifecycle");
     guards::silent(&mut subscriber).await;
     let state = runtime.state.lock().await;
-    let report = state.redis.pubsub.report().unwrap();
+    let report = state.protocols.redis.pubsub.report().unwrap();
     assert_eq!(report.recorded_pushes, 600);
     assert_eq!(report.delivered_pushes, 600);
     assert_eq!(report.failed_pushes, 0);
-    assert!(!state.redis.has_case_in_flight());
+    assert!(!state.protocols.redis.has_case_in_flight());
     task.abort();
 }
 
@@ -127,6 +127,7 @@ async fn a_full_native_delivery_queue_applies_backpressure_without_failing_sourc
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .case_delivery_diagnostic()["count"]
@@ -142,11 +143,14 @@ async fn a_full_native_delivery_queue_applies_backpressure_without_failing_sourc
     tokio::time::sleep(Duration::from_millis(35)).await;
     {
         let state = runtime.state.lock().await;
-        let report = state.redis.pubsub.report().unwrap();
+        let report = state.protocols.redis.pubsub.report().unwrap();
         assert_eq!(report.delivered_pushes, 0);
         assert_eq!(report.failed_pushes, 0);
-        assert!(state.redis.events.unsafe_events.is_empty());
-        assert_eq!(state.redis.pubsub.case_delivery_diagnostic()["count"], 257);
+        assert!(state.protocols.redis.events.unsafe_events.is_empty());
+        assert_eq!(
+            state.protocols.redis.pubsub.case_delivery_diagnostic()["count"],
+            257
+        );
     }
     tokio::time::timeout(Duration::from_secs(3), async {
         for original in &originals {
@@ -157,9 +161,9 @@ async fn a_full_native_delivery_queue_applies_backpressure_without_failing_sourc
     .unwrap();
     guards::silent(&mut subscriber).await;
     let state = runtime.state.lock().await;
-    let report = state.redis.pubsub.report().unwrap();
+    let report = state.protocols.redis.pubsub.report().unwrap();
     assert_eq!(report.delivered_pushes, 300);
     assert_eq!(report.failed_pushes, 0);
-    assert!(!state.redis.has_case_in_flight());
+    assert!(!state.protocols.redis.has_case_in_flight());
     task.abort();
 }

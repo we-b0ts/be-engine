@@ -13,46 +13,51 @@ impl ReplayState {
         // Cross-case sharing may reclassify and reorder original Global rows.
         // Those native indexes belong to this session; preserve them through
         // the existing complete visitor instead of reusing an unmodified core.
-        !self.http_exchanges.iter().any(|exchange| {
+        !self.protocols.http_exchanges.iter().any(|exchange| {
             exchange.available_in_run_pool()
                 && exchange.case_id.is_none()
                 && exchange.shared_origin.is_some()
         })
     }
     pub(in crate::replay) fn global_http_extra_unused_count(&self) -> usize {
-        self.http_events
+        self.protocols
+            .http_events
             .global_report
-            .rows(0, &self.http_exchanges, true)
+            .rows(0, &self.protocols.http_exchanges, true)
             .filter(|(_, exchange)| {
                 exchange.available_in_run_pool() && !exchange.status.is_consumed()
             })
             .count()
     }
     pub(in crate::replay) fn http_global_report_usage(&self) -> &Usage {
-        &self.http_events.global_report
+        &self.protocols.http_events.global_report
     }
     pub(in crate::replay) fn initialize_http_global_report_usage(&mut self, count: usize) {
-        self.http_events.global_report.initialize(count);
+        self.protocols.http_events.global_report.initialize(count);
     }
     pub(in crate::replay) fn refresh_http_global_report(&mut self, index: usize) {
         let Some(exchange) = self
+            .protocols
             .http_exchanges
             .get(index)
             .filter(|exchange| exchange.available_in_run_pool())
         else {
             return;
         };
-        self.http_events
-            .global_report
-            .observe(0, index, true, !exchange.status.is_consumed());
+        self.protocols.http_events.global_report.observe(
+            0,
+            index,
+            true,
+            !exchange.status.is_consumed(),
+        );
     }
     pub(in crate::replay) fn visit_http_global_report_extras(
         &self,
         visitor: &mut dyn FnMut(Row) -> Result<()>,
     ) -> Result<()> {
         visit_global_report_range(
-            &self.http_exchanges,
-            &self.http_events.global_report,
+            &self.protocols.http_exchanges,
+            &self.protocols.http_events.global_report,
             true,
             visitor,
         )

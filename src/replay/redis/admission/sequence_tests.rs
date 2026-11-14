@@ -45,7 +45,7 @@ async fn fixture() -> (
     {
         let mut state = runtime.state.lock().await;
         state.active_sequence = Some(sequence.clone());
-        state.redis.lifecycle.sequence =
+        state.protocols.redis.lifecycle.sequence =
             crate::replay::sequence::Binding::new(sequence.clone(), [(0, 1), (1, 2)].into_iter());
     }
     (directory, runtime, sequence)
@@ -63,7 +63,15 @@ async fn delivered(runtime: &crate::replay::ReplayRuntime, matched: &MatchedRedi
     reader.read_exact(&mut actual).await.unwrap();
     assert_eq!(actual, matched.response);
     matched.publish_wire();
-    assert!(runtime.state.lock().await.redis.complete_exchange(matched));
+    assert!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .complete_exchange(matched)
+    );
 }
 
 #[tokio::test]
@@ -113,7 +121,7 @@ async fn early_native_request_waits_for_the_exact_recorded_predecessor_and_real_
     delivered(&runtime, &second).await;
     assert!(sequence.complete());
     let state = runtime.state.lock().await;
-    assert!(state.redis.events.unmatched.is_empty());
+    assert!(state.protocols.redis.events.unmatched.is_empty());
     assert!(state.sequence_missing.is_empty());
 }
 
@@ -180,7 +188,7 @@ async fn pipelined_requests_are_admitted_before_the_first_response_on_one_socket
     {
         let mut state = runtime.state.lock().await;
         state.active_sequence = Some(sequence.clone());
-        state.redis.lifecycle.sequence =
+        state.protocols.redis.lifecycle.sequence =
             crate::replay::sequence::Binding::new(sequence.clone(), [(0, 1), (1, 2)].into_iter());
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

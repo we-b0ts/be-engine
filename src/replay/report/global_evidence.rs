@@ -61,7 +61,7 @@ pub(in crate::replay) async fn prepare(
                 let notifications = if protocol == "redis" {
                     notifications::NotificationEvidence::prepare(
                         &report_path,
-                        state.redis.global_notification_evidence()?,
+                        state.protocols.redis.global_notification_evidence()?,
                     )?
                 } else {
                     None
@@ -76,11 +76,14 @@ pub(in crate::replay) async fn prepare(
             let mut visit = |item| writer.push(item);
             match protocol {
                 "mysql" => state.visit_global_mysql_unused(&mut visit)?,
-                "redis" => state.redis.visit_global_regular_unused(&mut visit)?,
-                "memcached" => state.memcached.visit_global_unused(&mut visit)?,
+                "redis" => state
+                    .protocols
+                    .redis
+                    .visit_global_regular_unused(&mut visit)?,
+                "memcached" => state.protocols.memcached.visit_global_unused(&mut visit)?,
                 "http" => state.visit_global_http_unused(&mut visit)?,
-                "kafka" => state.kafka.visit_global_unused(&mut visit)?,
-                "motan" => state.motan.visit_global_unused(&mut visit)?,
+                "kafka" => state.protocols.kafka.visit_global_unused(&mut visit)?,
+                "motan" => state.protocols.motan.visit_global_unused(&mut visit)?,
                 _ => unreachable!(),
             }
             let inventory = writer.finish()?;
@@ -89,7 +92,7 @@ pub(in crate::replay) async fn prepare(
                 match RedisEvidence::prepare(
                     &report_path,
                     manifest.clone(),
-                    state.redis.global_notification_evidence()?,
+                    state.protocols.redis.global_notification_evidence()?,
                 )? {
                     Some(compact) => serde_json::to_value(compact)?,
                     None => serde_json::to_value(manifest)?,

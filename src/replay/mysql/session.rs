@@ -347,6 +347,7 @@ pub(in crate::replay) async fn handle_query(
                 let mut state = state.lock().await;
                 let identity = session.identity();
                 state
+                    .protocols
                     .mysql
                     .isolation
                     .reject_connection(session.transaction_witness.connection());
@@ -358,7 +359,7 @@ pub(in crate::replay) async fn handle_query(
                     None,
                     "no recorded semantic dependency matched this SQL",
                 );
-                if let Some(report) = state.mysql.events.unmatched_queries.last_mut() {
+                if let Some(report) = state.protocols.mysql.events.unmatched_queries.last_mut() {
                     report.target_observation_id = observation_id.clone();
                     report.target_event_index = event_index;
                 }
@@ -530,6 +531,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                 let mut state = state.lock().await;
                 let identity = session.identity();
                 state
+                    .protocols
                     .mysql
                     .isolation
                     .reject_connection(session.transaction_witness.connection());
@@ -541,7 +543,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                     parsed.params.as_deref(),
                     "no recorded semantic dependency matched this prepared SQL and params",
                 );
-                if let Some(report) = state.mysql.events.unmatched_queries.last_mut() {
+                if let Some(report) = state.protocols.mysql.events.unmatched_queries.last_mut() {
                     report.target_observation_id = observation_id.clone();
                     report.target_event_index = event_index;
                 }

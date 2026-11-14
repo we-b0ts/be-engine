@@ -11,7 +11,7 @@ impl ReplayState {
             dependency_sequence_missing: self.sequence_missing.clone(),
             batch_reconciliation: None,
             startup_phase: self.startup_phase.report(),
-            http_ingress: self.http_ingress.report(),
+            http_ingress: self.protocols.http_ingress.report(),
             dependency_attribution_snapshot: self.dependency_attribution_snapshot.clone(),
             dependency_hypothesis_attempts: self
                 .replay_policy
@@ -72,15 +72,15 @@ impl ReplayState {
             unrecorded_targets: self.unrecorded_targets.clone(),
             success_detail_limit: SUCCESS_DETAIL_LIMIT,
             success_detail_scope: SUCCESS_DETAIL_SCOPE,
-            connections: self.mysql.events.connections,
-            connection_events: self.mysql.events.connection_events.clone(),
-            builtin_query_count: self.mysql.events.builtin_query_count,
-            builtin_queries: self.mysql.events.builtin_queries.clone(),
-            matched_query_count: self.mysql.events.matched_query_count,
-            matched_queries: self.mysql.events.matched_queries.clone(),
-            unmatched_queries: self.mysql.events.unmatched_queries.clone(),
-            unsupported_commands: self.mysql.events.unsupported_commands.clone(),
-            metadata_warnings: self.mysql.events.metadata_warnings.clone(),
+            connections: self.protocols.mysql.events.connections,
+            connection_events: self.protocols.mysql.events.connection_events.clone(),
+            builtin_query_count: self.protocols.mysql.events.builtin_query_count,
+            builtin_queries: self.protocols.mysql.events.builtin_queries.clone(),
+            matched_query_count: self.protocols.mysql.events.matched_query_count,
+            matched_queries: self.protocols.mysql.events.matched_queries.clone(),
+            unmatched_queries: self.protocols.mysql.events.unmatched_queries.clone(),
+            unsupported_commands: self.protocols.mysql.events.unsupported_commands.clone(),
+            metadata_warnings: self.protocols.mysql.events.metadata_warnings.clone(),
             unused_global_exchanges: self.unused_exchanges(ReplaySource::Startup),
             unused_global_exchange_count: self.global_mysql_unused_count(),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
@@ -93,29 +93,42 @@ impl ReplayState {
                 .allowed_unused_connection_read_committed(),
             transaction_equivalent_mysql_autocommit_exchanges: self
                 .transaction_equivalent_autocommit(),
-            mysql_isolation_equivalence: self.mysql.isolation.audit(),
-            matched_http_exchange_count: self.http_events.matched_count,
-            cancelled_http_streams: self.http_events.cancelled.values().cloned().collect(),
-            matched_http_exchanges: self.http_events.matched.clone(),
-            unmatched_http_requests: self.http_events.unmatched.clone(),
-            unsupported_http_exchanges: self.http_events.unsupported.clone(),
-            http_request_header_mismatches: self.http_events.header_mismatches.clone(),
-            http_request_header_observations: self.http_events.header_observations.clone(),
-            http_request_header_observation_count: self.http_events.header_observation_count,
+            mysql_isolation_equivalence: self.protocols.mysql.isolation.audit(),
+            matched_http_exchange_count: self.protocols.http_events.matched_count,
+            cancelled_http_streams: self
+                .protocols
+                .http_events
+                .cancelled
+                .values()
+                .cloned()
+                .collect(),
+            matched_http_exchanges: self.protocols.http_events.matched.clone(),
+            unmatched_http_requests: self.protocols.http_events.unmatched.clone(),
+            unsupported_http_exchanges: self.protocols.http_events.unsupported.clone(),
+            http_request_header_mismatches: self.protocols.http_events.header_mismatches.clone(),
+            http_request_header_observations: self
+                .protocols
+                .http_events
+                .header_observations
+                .clone(),
+            http_request_header_observation_count: self
+                .protocols
+                .http_events
+                .header_observation_count,
             unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Startup, false),
             unused_global_http_exchange_count: self.global_http_unused_count(),
             unused_case_http_exchanges,
             allowed_unused_case_http_exchanges,
             protocols: ProtocolsReport {
-                redis: self.redis.snapshot(),
-                memcached: self.memcached.snapshot(),
-                kafka: self.kafka.snapshot(),
-                motan: self.motan.snapshot(),
+                redis: self.protocols.redis.snapshot(),
+                memcached: self.protocols.memcached.snapshot(),
+                kafka: self.protocols.kafka.snapshot(),
+                motan: self.protocols.motan.snapshot(),
             },
             ca_cert_path: self.ca_cert_path.display().to_string(),
             replay_policy: self.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
-            http_ignored_query_params: self.http_ignore_query_params.clone(),
-            allowed_unused_http: self.allowed_unused_http.as_ref().map(|config| {
+            http_ignored_query_params: self.protocols.http_ignore_query_params.clone(),
+            allowed_unused_http: self.protocols.allowed_unused_http.as_ref().map(|config| {
                 ReplayAllowedUnusedHttpReport {
                     config: config.config_path.display().to_string(),
                     hosts: config.hosts.iter().cloned().collect(),

@@ -194,10 +194,10 @@ async fn sqlx_defaults_tls_prepared_queries_and_policy_use_text_evidence() {
         assert_eq!(row.get::<sqlx::types::BigDecimal,_>("amount").to_string(), "12.3400");
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
-        assert!(state.mysql.events.builtin_queries.iter().any(|q| q.sql.as_deref().is_some_and(|sql| sql.contains("PIPES_AS_CONCAT"))));
-        assert!(state.mysql.events.unmatched_queries.is_empty());
-        assert!(state.mysql.events.metadata_warnings.is_empty(), "{:?}", state.mysql.events.metadata_warnings);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+        assert!(state.protocols.mysql.events.builtin_queries.iter().any(|q| q.sql.as_deref().is_some_and(|sql| sql.contains("PIPES_AS_CONCAT"))));
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+        assert!(state.protocols.mysql.events.metadata_warnings.is_empty(), "{:?}", state.protocols.mysql.events.metadata_warnings);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         task.abort();
     }).await.expect("SQLx replay test timed out");
@@ -287,8 +287,11 @@ async fn sqlx_cached_statement_rebinds_params_and_replays_writes_transactions_an
         tx.rollback().await.unwrap();
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, records.len());
-        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert_eq!(
+            state.protocols.mysql.events.matched_query_count,
+            records.len()
+        );
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         task.abort();
     })

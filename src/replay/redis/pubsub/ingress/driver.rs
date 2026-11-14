@@ -28,7 +28,7 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             let mut replay = state.lock().await;
             if replay.finalized_at.is_some()
                 || replay.target_session_stopped
-                || replay.redis.pubsub.ingress.entries.is_empty()
+                || replay.protocols.redis.pubsub.ingress.entries.is_empty()
             {
                 return;
             }
@@ -48,25 +48,29 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
         let frame = job.frame.clone();
         let bytes = tokio::task::spawn_blocking(move || frame.bytes()).await;
         let mut replay = state.lock().await;
-        let entry = &replay.redis.pubsub.ingress.entries[job.index];
+        let entry = &replay.protocols.redis.pubsub.ingress.entries[job.index];
         if replay.finalized_at.is_some()
             || replay.target_session_stopped
             || replay.active_case_id.as_deref() != Some(&job.case)
-            || replay.redis.native_request_epoch(&job.case) != Some(job.started)
+            || replay.protocols.redis.native_request_epoch(&job.case) != Some(job.started)
             || entry.reply.is_none()
-                && replay.redis.pubsub.namespace_sessions.target_sid(
+                && replay.protocols.redis.pubsub.namespace_sessions.target_sid(
                     &job.case,
                     job.started,
                     &entry.source.namespace,
                 ) != Some(job.sid.as_str())
-            || !replay.redis.pubsub.is_subscribed(job.client, entry.slot)
+            || !replay
+                .protocols
+                .redis
+                .pubsub
+                .is_subscribed(job.client, entry.slot)
         {
             continue;
         }
         let bytes = match bytes {
             Ok(Ok(raw)) => render(
                 &raw,
-                &replay.redis.pubsub.ingress.entries[job.index],
+                &replay.protocols.redis.pubsub.ingress.entries[job.index],
                 &job.sid,
             ),
             _ => Err(anyhow!("notification evidence unavailable")),
@@ -82,15 +86,16 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 continue;
             }
         };
-        let slot = replay.redis.pubsub.ingress.entries[job.index].slot;
-        if !replay.redis.pubsub.push_available(slot) {
+        let slot = replay.protocols.redis.pubsub.ingress.entries[job.index].slot;
+        if !replay.protocols.redis.pubsub.push_available(slot) {
             continue;
         }
         replay
+            .protocols
             .redis
             .pubsub
             .reserve_case_push(slot, &job.case, job.client);
-        let entry = &mut replay.redis.pubsub.ingress.entries[job.index];
+        let entry = &mut replay.protocols.redis.pubsub.ingress.entries[job.index];
         entry.reserved = true;
         entry.target_sid = Some(job.sid);
         if job
@@ -118,11 +123,12 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
     let Some(case) = replay.active_case_id.as_deref() else {
         return Ok(None);
     };
-    let contracts = &replay.redis.request_contracts;
-    let Some(started) = replay.redis.native_request_epoch(case) else {
+    let contracts = &replay.protocols.redis.request_contracts;
+    let Some(started) = replay.protocols.redis.native_request_epoch(case) else {
         return Ok(None);
     };
     if let Some((index, entry)) = replay
+        .protocols
         .redis
         .pubsub
         .ingress
@@ -141,12 +147,11 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         if !reached && !fast_dispatch_reached(replay, entry, started, Instant::now()) {
             return Ok(None);
         }
-        if !replay
-            .redis
-            .pubsub
-            .ingress
-            .causal_ready(entry, started, &replay.redis.exchanges)
-        {
+        if !replay.protocols.redis.pubsub.ingress.causal_ready(
+            entry,
+            started,
+            &replay.protocols.redis.exchanges,
+        ) {
             return Ok(None);
         }
         let sid = if entry.reply.is_some() {
@@ -155,6 +160,7 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
                 .map_err(|_| index)?
         } else {
             replay
+                .protocols
                 .redis
                 .pubsub
                 .namespace_sessions
@@ -164,12 +170,22 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         let Some(sid) = sid else {
             return Ok(None);
         };
-        let mut subscriptions = replay.redis.pubsub.subscriptions.iter().filter(|sub| {
-            !sub.sender.is_closed()
-                && sub.target == entry.endpoint
-                && (sub.source_connection, sub.sequence) == entry.anchor
-                && replay.redis.pubsub.is_subscribed(sub.client, entry.slot)
-        });
+        let mut subscriptions = replay
+            .protocols
+            .redis
+            .pubsub
+            .subscriptions
+            .iter()
+            .filter(|sub| {
+                !sub.sender.is_closed()
+                    && sub.target == entry.endpoint
+                    && (sub.source_connection, sub.sequence) == entry.anchor
+                    && replay
+                        .protocols
+                        .redis
+                        .pubsub
+                        .is_subscribed(sub.client, entry.slot)
+            });
         let Some(sub) = subscriptions.next() else {
             return Ok(None);
         };
@@ -204,6 +220,7 @@ fn fast_dispatch_reached(
     // Its predecessor in the ingress stream must have finished writing
     // before an accelerated gap starts.
     let previous = replay
+        .protocols
         .redis
         .pubsub
         .ingress
@@ -249,10 +266,13 @@ fn render(raw: &[u8], entry: &Entry, sid: &str) -> Result<Vec<u8>> {
 }
 
 fn fail(replay: &mut ReplayState, index: usize, reason: &str) {
-    let entry = &mut replay.redis.pubsub.ingress.entries[index];
+    let entry = &mut replay.protocols.redis.pubsub.ingress.entries[index];
     entry.reserved = true;
     entry.target_sid = None;
     let case_id = entry.case.clone();
     let push = entry.slot;
-    replay.redis.fail_pubsub_input(push, Some(&case_id), reason);
+    replay
+        .protocols
+        .redis
+        .fail_pubsub_input(push, Some(&case_id), reason);
 }

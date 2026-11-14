@@ -91,7 +91,7 @@ impl Section {
         let index = usize::try_from(row["index"].as_u64()?).ok()?;
         match self {
             Self::Mysql => {
-                let exchange = state.mysql.exchanges.get(index)?;
+                let exchange = state.protocols.mysql.exchanges.get(index)?;
                 if !exchange.source.matches_scope(ReplaySource::Case)
                     || exchange.case_id.as_deref() != Some(case)
                 {
@@ -99,7 +99,7 @@ impl Section {
                 }
                 Some(exchange.record.capture.as_ref()?.exchange_id)
             }
-            Self::Redis => state.redis.case_exchange_id(case, index),
+            Self::Redis => state.protocols.redis.case_exchange_id(case, index),
         }
     }
 }

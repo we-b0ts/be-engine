@@ -149,7 +149,16 @@ async fn unordered_keeps_query_presence_multiplicity_other_fields_and_array_cont
             StatusCode::BAD_GATEWAY
         );
     }
-    assert_eq!(runtime.state.lock().await.http_events.matched_count, 0);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched_count,
+        0
+    );
     assert_eq!(
         call(addr, "/membership?scope=two&scope=one", TARGET)
             .await

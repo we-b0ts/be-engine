@@ -47,6 +47,7 @@ async fn target_observation_io_failure_preserves_global_matching_and_rejects_cas
         assert_eq!(matched.is_some(), global);
         assert!(
             state
+                .protocols
                 .mysql
                 .events
                 .metadata_warnings
@@ -64,7 +65,7 @@ async fn target_observation_io_failure_preserves_global_matching_and_rejects_cas
         assert!(manifest.omitted > 0);
         assert!(manifest.graph().unwrap().targets.is_empty());
         assert_eq!(
-            state.mysql.exchanges[0].status,
+            state.protocols.mysql.exchanges[0].status,
             if global {
                 ReplayExchangeStatus::Responding
             } else {
@@ -179,8 +180,8 @@ dependency_rules:
                 }
                 client.close().await.unwrap();
                 let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count, 1);
-                assert_eq!(state.mysql.events.unmatched_queries.len(), 4);
+                assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+                assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 4);
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                 let report = state.replay_policy.as_ref().unwrap().report();
                 assert_eq!(report.dependency_rules[0].time_validations, 2);
@@ -221,7 +222,7 @@ async fn payload_evidence_budget_does_not_reject_a_valid_large_native_sql_match(
         );
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         let owner = &state.replay_policy.as_ref().unwrap().request_contracts;
         owner.seal_witnesses().unwrap();
         let manifest = owner.witness_manifest().unwrap();

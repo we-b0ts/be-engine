@@ -128,7 +128,7 @@ async fn header_and_body_identity_conflicts_leave_the_shared_case_map_uncommitte
             .preview_identity_pairs("case-headers", &[pair(C)])
             .is_err()
     );
-    assert!(state.http_events.header_mismatches.is_empty());
+    assert!(state.protocols.http_events.header_mismatches.is_empty());
     task.abort();
 }
 

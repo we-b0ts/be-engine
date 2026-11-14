@@ -52,12 +52,12 @@ impl DependencyRequestAdapter<ReplayState> for HttpRequest<'_> {
         if state.async_case_quiescing() {
             return Ok(Err(HttpReplayMatchError::Blackhole));
         }
-        self.unmatched_before = state.http_events.unmatched.len();
-        self.unsupported_before = state.http_events.unsupported.len();
+        self.unmatched_before = state.protocols.http_events.unmatched.len();
+        self.unsupported_before = state.protocols.http_events.unsupported.len();
         self.dirty_before = self
             .admission
             .case_id()
-            .is_some_and(|case| state.http_events.dirty_case_ids.contains(case));
+            .is_some_and(|case| state.protocols.http_events.dirty_case_ids.contains(case));
         let result = state.match_http_request_admitted(
             self.request.scheme,
             self.request.target,
@@ -69,8 +69,8 @@ impl DependencyRequestAdapter<ReplayState> for HttpRequest<'_> {
             self.request.started_at,
             Some(self.admission),
         );
-        self.waitable = state.http_events.unmatched.len() > self.unmatched_before
-            && state.http_events.unsupported.len() == self.unsupported_before;
+        self.waitable = state.protocols.http_events.unmatched.len() > self.unmatched_before
+            && state.protocols.http_events.unsupported.len() == self.unsupported_before;
         match result {
             Err(error @ HttpReplayMatchError::BadGateway(_)) => Err(error),
             result => Ok(result),
@@ -86,11 +86,15 @@ impl DependencyRequestAdapter<ReplayState> for HttpRequest<'_> {
     }
 
     fn on_sequence_wait(&mut self, state: &mut ReplayState) {
-        state.http_events.unmatched.truncate(self.unmatched_before);
+        state
+            .protocols
+            .http_events
+            .unmatched
+            .truncate(self.unmatched_before);
         if !self.dirty_before
             && let Some(case) = self.admission.case_id()
         {
-            state.http_events.dirty_case_ids.remove(case);
+            state.protocols.http_events.dirty_case_ids.remove(case);
         }
     }
 
@@ -112,7 +116,7 @@ impl DependencyRequestAdapter<ReplayState> for HttpRequest<'_> {
     ) {
         self.admission.complete();
         if let HttpReplayMatchError::BadGateway(reason) = error {
-            if state.http_events.unmatched.len() == self.unmatched_before {
+            if state.protocols.http_events.unmatched.len() == self.unmatched_before {
                 state.record_unmatched_http_for(
                     self.admission.case_id().map(str::to_owned),
                     self.request.scheme,
@@ -122,7 +126,7 @@ impl DependencyRequestAdapter<ReplayState> for HttpRequest<'_> {
                     reason.clone(),
                 );
             }
-            if let Some(event) = state.http_events.unmatched.last_mut() {
+            if let Some(event) = state.protocols.http_events.unmatched.last_mut() {
                 event.reason = reason.clone();
                 event.request_fingerprint = Some(cross_case::request_fingerprint(
                     &self.request.uri.to_string(),
@@ -158,7 +162,13 @@ pub(super) async fn select<'a>(
 }
 
 pub(super) async fn wait_output(state: &Arc<Mutex<ReplayState>>, index: usize) -> Result<()> {
-    let claim = state.lock().await.http_sequence_claims.get(&index).cloned();
+    let claim = state
+        .lock()
+        .await
+        .protocols
+        .http_sequence_claims
+        .get(&index)
+        .cloned();
     if let Some(claim) = claim {
         claim
             .wait_delivery(tokio::time::Instant::now() + std::time::Duration::from_secs(30))

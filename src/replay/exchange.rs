@@ -24,8 +24,12 @@ pub(super) struct ReplayExchangeTiming {
 
 impl ReplayExchangeTiming {
     pub(super) fn from_recorded(duration_ms: u64, outcome: DependencyExchangeOutcome) -> Self {
+        Self::from_duration(Duration::from_millis(duration_ms), outcome)
+    }
+
+    pub(super) fn from_duration(duration: Duration, outcome: DependencyExchangeOutcome) -> Self {
         Self {
-            duration: Duration::from_millis(duration_ms),
+            duration,
             outcome,
             fast_server: false,
         }

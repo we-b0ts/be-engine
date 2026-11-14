@@ -100,9 +100,9 @@ async fn concurrent_next_isolation_uses_the_first_business_request_to_select_its
             a_tx.commit().await.unwrap();
 
             let state = runtime.state.lock().await;
-            assert!(state.mysql.events.unmatched_queries.is_empty());
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-            let audit = state.mysql.isolation.audit();
+            let audit = state.protocols.mysql.isolation.audit();
             assert_eq!(audit.len(), 2);
             assert!(audit.iter().all(|profile| profile["phase"] == "covered"));
             assert_ne!(
@@ -175,8 +175,8 @@ async fn first_isolation_request_waits_for_the_active_source_predecessor() {
         successor.commit().await.unwrap();
 
         let state = runtime.state.lock().await;
-        assert!(state.mysql.events.unmatched_queries.is_empty());
-        let audit = state.mysql.isolation.audit();
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+        let audit = state.protocols.mysql.isolation.audit();
         assert_eq!(audit.len(), 2);
         assert!(audit.iter().all(|profile| profile["phase"] == "covered"));
         assert_ne!(
@@ -209,9 +209,9 @@ async fn read_committed_default_can_be_omitted_without_a_transaction_reset() {
         client.execute("ROLLBACK").await.unwrap();
 
         let state = runtime.state.lock().await;
-        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-        assert!(state.mysql.isolation.audit().is_empty());
+        assert!(state.protocols.mysql.isolation.audit().is_empty());
         let report = serde_json::to_value(state.snapshot_report()).unwrap();
         let omitted = report["allowed_unused_mysql_connection_read_committed_exchanges"]
             .as_array()
@@ -219,7 +219,7 @@ async fn read_committed_default_can_be_omitted_without_a_transaction_reset() {
         assert_eq!(omitted.len(), 1);
         assert_eq!(omitted[0]["query_sequence"], 5);
         assert_eq!(
-            state.mysql.exchanges[omitted[0]["index"].as_u64().unwrap() as usize].status,
+            state.protocols.mysql.exchanges[omitted[0]["index"].as_u64().unwrap() as usize].status,
             ReplayExchangeStatus::Available
         );
         task.abort();
@@ -257,9 +257,12 @@ async fn ordinary_read_does_not_consume_a_future_isolation_transaction_member() 
         body(&mut writer).await;
 
         let state = runtime.state.lock().await;
-        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-        assert_eq!(state.mysql.isolation.audit()[0]["phase"], "covered");
+        assert_eq!(
+            state.protocols.mysql.isolation.audit()[0]["phase"],
+            "covered"
+        );
         task.abort();
     })
     .await
@@ -308,13 +311,13 @@ async fn next_isolation_uses_real_transaction_delivery_and_omits_only_the_source
             }
             let state = runtime.state.lock().await;
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty(), "{:?}", state.unused_exchanges(ReplaySource::Case));
-            assert!(state.mysql.events.unmatched_queries.is_empty(), "{:?}", state.mysql.events.unmatched_queries);
-            let audit = state.mysql.isolation.audit();
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty(), "{:?}", state.protocols.mysql.events.unmatched_queries);
+            let audit = state.protocols.mysql.isolation.audit();
             assert_eq!(audit.len(), 2);
             assert!(audit.iter().all(|v| v["reset_omission_proven"] == true));
             assert!(audit.iter().all(|v| v["source_reassertion_indices"].as_array().unwrap().len()
                 == usize::from(reasserted)));
-            assert_eq!(state.mysql.exchanges.iter().filter(|e|
+            assert_eq!(state.protocols.mysql.exchanges.iter().filter(|e|
                 e.optional_session == Some(OptionalSessionExchange::TransactionIsolation)
                 && e.status == ReplayExchangeStatus::Available).count(), if reasserted { 4 } else { 2 });
             task.abort();
@@ -359,8 +362,8 @@ async fn next_isolation_matches_the_earlier_transaction_with_a_savepoint() {
     nested.commit().await.unwrap();
     transaction.commit().await.unwrap();
     let state = runtime.state.lock().await;
-    assert!(state.mysql.events.unmatched_queries.is_empty());
-    let audit = state.mysql.isolation.audit();
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
+    let audit = state.protocols.mysql.isolation.audit();
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0]["source_setup_sequence"], 8);
     assert_eq!(audit[0]["phase"], "covered");
@@ -491,6 +494,7 @@ async fn isolation_rejects_unproven_modes_active_settings_cross_socket_and_missi
             let state = runtime.state.lock().await;
             assert!(
                 !state
+                    .protocols
                     .mysql
                     .isolation
                     .audit()

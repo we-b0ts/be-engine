@@ -88,6 +88,7 @@ async fn original_slot_waits_for_actual_namespace_and_rejects_wrong_epochs() {
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()
@@ -230,6 +231,7 @@ async fn ambiguous_unselected_windows_and_unsupported_programs_keep_slots_unused
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .report()
@@ -292,6 +294,7 @@ async fn unrelated_timers_and_original_self_echoes_retain_their_owners() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .report()
@@ -320,8 +323,9 @@ async fn queued_delivery_cannot_cross_a_case_or_request_epoch() {
         value: None,
     };
     assert!(delivery.case_is_current(&state));
-    state.redis.pubsub.native_clock.begin_case(CASE);
+    state.protocols.redis.pubsub.native_clock.begin_case(CASE);
     state
+        .protocols
         .redis
         .pubsub
         .native_clock

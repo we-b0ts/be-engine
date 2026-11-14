@@ -104,6 +104,7 @@ async fn slow_native_namespace_admission_precedes_real_redis_input_and_ws_output
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()

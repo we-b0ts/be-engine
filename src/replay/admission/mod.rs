@@ -4,4 +4,4 @@ mod waiting;
 pub(super) use traffic_replay::{
     Barrier, ClaimKind, ClaimTicket, DeliveryGuard, Finish, Lifecycle, RequestOrder, WaitOutcome,
 };
-pub(super) use waiting::RequestAdmission;
+pub(crate) use waiting::RequestAdmission;

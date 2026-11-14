@@ -339,9 +339,9 @@ async fn redis_time_shift_scope_shares_multiple_reads_in_capture_order_with_fini
         if case == root {
             // Sorting shared reads must rebuild the ordinary case gate index.
             let replay = state.lock().await;
-            assert!(replay.redis.case_is_dirty("zz-ordinary"));
-            assert!(!replay.redis.case_is_dirty("origin-0"));
-            assert!(!replay.redis.case_is_dirty("origin-1"));
+            assert!(replay.protocols.redis.case_is_dirty("zz-ordinary"));
+            assert!(!replay.protocols.redis.case_is_dirty("origin-0"));
+            assert!(!replay.protocols.redis.case_is_dirty("origin-1"));
         }
         assert_eq!(
             begin_case(&control("begin", "consumer"), state.clone()).await["ok"],

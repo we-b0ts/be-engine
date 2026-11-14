@@ -52,7 +52,7 @@ async fn full_redis_tcp_buffer_prevents_fast_input_until_response_is_written() {
                 .is_err()
         );
         assert_eq!(
-            target_runtime.state.lock().await.redis.exchanges[0].status,
+            target_runtime.state.lock().await.protocols.redis.exchanges[0].status,
             ReplayExchangeStatus::Responding
         );
         assert_eq!(read(&mut redis).await, response);

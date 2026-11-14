@@ -35,7 +35,7 @@ pub(super) async fn deliver(
     matched.claim.wait_sequence_delivery().await?;
     {
         let mut replay = state.lock().await;
-        let mysql = &mut replay.mysql;
+        let mysql = &mut replay.protocols.mysql;
         ensure!(
             mysql
                 .lifecycle

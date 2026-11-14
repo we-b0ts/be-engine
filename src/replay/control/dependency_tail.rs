@@ -346,14 +346,6 @@ impl ReplayState {
         self.failure_cleanup_readiness(case) == Some(false)
     }
 
-    pub(in crate::replay) fn async_case_quiescing(&self) -> bool {
-        self.active_case_id
-            .as_deref()
-            .and_then(|case| self.dependency_tails.cases.get(case))
-            .and_then(Option::as_ref)
-            .is_some_and(|tail| tail.quiescing.load(Ordering::Acquire))
-    }
-
     /// None means the scope is incomplete/dirty; false only waits for an
     /// already started ordinary delivery transaction to publish its result.
     fn failure_cleanup_readiness(&self, case: &str) -> Option<bool> {
@@ -365,10 +357,10 @@ impl ReplayState {
             || self.active_case_id.as_deref() != Some(case)
             || self.finalized_at.is_some()
             || self.unrecorded_case_ids.contains(case)
-            || self.mysql.events.dirty_case_ids.contains(case)
+            || self.protocols.mysql.events.dirty_case_ids.contains(case)
             || self.native.case_has_runtime_failure(case)
-            || self.redis.case_has_runtime_failure(case)
-            || self.http_events.case_has_runtime_failure(case)
+            || self.protocols.redis.case_has_runtime_failure(case)
+            || self.protocols.http_events.case_has_runtime_failure(case)
             || !tail
                 .selected
                 .iter()
@@ -505,10 +497,18 @@ async fn drain_selected(
             "Replay finalized while dependency-tail dependencies were pending"
         );
         if state.unrecorded_case_ids.contains(case_id)
-            || state.mysql.events.dirty_case_ids.contains(case_id)
+            || state
+                .protocols
+                .mysql
+                .events
+                .dirty_case_ids
+                .contains(case_id)
             || state.native.case_has_runtime_failure(case_id)
-            || state.redis.case_has_runtime_failure(case_id)
-            || state.http_events.case_has_runtime_failure(case_id)
+            || state.protocols.redis.case_has_runtime_failure(case_id)
+            || state
+                .protocols
+                .http_events
+                .case_has_runtime_failure(case_id)
         {
             super::case_cleanup::mark_failed(&mut state, case_id)?;
         }
@@ -636,3 +636,13 @@ mod interaction_tests;
 mod no_progress_tests;
 #[cfg(test)]
 mod tests;
+
+impl<P: crate::replay::ReplayProtocolSet> crate::replay::RuntimeState<P> {
+    pub(in crate::replay) fn async_case_quiescing(&self) -> bool {
+        self.active_case_id
+            .as_deref()
+            .and_then(|case| self.dependency_tails.cases.get(case))
+            .and_then(Option::as_ref)
+            .is_some_and(|tail| tail.quiescing.load(Ordering::Acquire))
+    }
+}

@@ -143,13 +143,13 @@ pub(super) struct ProjectionView<'a> {
 impl<'a> From<&'a ReplayState> for ProjectionView<'a> {
     fn from(state: &'a ReplayState) -> Self {
         Self {
-            mysql: &state.mysql,
-            http: &state.http_exchanges,
-            http_events: &state.http_events,
-            redis: &state.redis,
-            memcached: &state.memcached,
-            kafka: &state.kafka,
-            motan: &state.motan,
+            mysql: &state.protocols.mysql,
+            http: &state.protocols.http_exchanges,
+            http_events: &state.protocols.http_events,
+            redis: &state.protocols.redis,
+            memcached: &state.protocols.memcached,
+            kafka: &state.protocols.kafka,
+            motan: &state.protocols.motan,
         }
     }
 }

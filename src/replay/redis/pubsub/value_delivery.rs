@@ -30,11 +30,11 @@ pub(super) fn prepare(replay: &mut ReplayState, delivery: &Delivery) -> Result<O
     let PushId::Inline(index) = delivery.push else {
         return Ok(None);
     };
-    let push = &replay.redis.pubsub.pushes[index];
+    let push = &replay.protocols.redis.pubsub.pushes[index];
     if push.source != ReplaySource::Case || push.case_id.as_deref() != Some(case) {
         return Ok(None);
     }
-    let owner = &replay.redis.request_contracts;
+    let owner = &replay.protocols.redis.request_contracts;
     if owner
         .global_json()
         .is_none_or(|global| global.fields.is_empty())
@@ -63,8 +63,12 @@ pub(super) fn prepare(replay: &mut ReplayState, delivery: &Delivery) -> Result<O
         return Ok(None);
     }
     let timestamp = push.record.timestamp;
-    let predecessors =
-        causality::predecessors(&mut replay.redis, case, timestamp, &decoded.logical)?;
+    let predecessors = causality::predecessors(
+        &mut replay.protocols.redis,
+        case,
+        timestamp,
+        &decoded.logical,
+    )?;
     Ok(Some(Prepared {
         decoded,
         predecessors,
@@ -83,7 +87,7 @@ pub(super) fn ready(replay: &ReplayState, delivery: &Delivery) -> Result<bool> {
         .predecessors
         .iter()
         .try_fold(true, |ready, predecessor| {
-            Ok(predecessor.ready(&replay.redis, case)? && ready)
+            Ok(predecessor.ready(&replay.protocols.redis, case)? && ready)
         })
 }
 
@@ -102,8 +106,8 @@ pub(super) fn render<'a>(
     let PushId::Inline(index) = delivery.push else {
         anyhow::bail!("ordinary notification has no inline Source");
     };
-    let push = &replay.redis.pubsub.pushes[index];
-    let owner = &replay.redis.request_contracts;
+    let push = &replay.protocols.redis.pubsub.pushes[index];
+    let owner = &replay.protocols.redis.request_contracts;
     let global = owner
         .global_json()
         .context("notification contract disappeared")?;

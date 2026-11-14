@@ -1,10 +1,7 @@
 //! Native control proof stays separate from restart business admission.
 use super::*;
 impl MysqlReplayState {
-    pub(in crate::replay) fn startup_counts(
-        &mut self,
-        close: bool,
-    ) -> crate::replay::startup::Counts {
+    pub(crate) fn startup_counts(&mut self, close: bool) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
         for (index, exchange) in self.exchanges.iter_mut().enumerate() {
             self.lifecycle.synchronize(index, &mut exchange.status);

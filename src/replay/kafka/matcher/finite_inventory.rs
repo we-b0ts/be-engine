@@ -78,10 +78,7 @@ impl KafkaReplayState {
 }
 
 impl KafkaReplayState {
-    pub(in crate::replay) fn startup_counts(
-        &mut self,
-        close: bool,
-    ) -> crate::replay::startup::Counts {
+    pub(crate) fn startup_counts(&mut self, close: bool) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
         for e in &mut self.produces {
             counts.observe(e.source, &mut e.status, true, close);

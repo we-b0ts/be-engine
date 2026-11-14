@@ -263,8 +263,8 @@ fn install(
     raw: &[u8],
     records: Vec<(usize, dependencies::DependencyRecord)>,
 ) -> Result<()> {
-    let mysql_start = state.mysql.exchanges.len();
-    let http_start = state.http_exchanges.len();
+    let mysql_start = state.protocols.mysql.exchanges.len();
+    let http_start = state.protocols.http_exchanges.len();
     // Preserve assigned addresses and validate every late target against startup inventory.
     let mut targets = deferred.known_targets.clone();
     let mut identities = deferred.identities.clone();
@@ -274,13 +274,13 @@ fn install(
         &inventory.skip,
         ReplaySource::Case,
         Some(case_id),
-        &mut state.mysql,
-        &mut state.http_exchanges,
-        &mut state.http_blackholes,
-        &mut state.redis,
-        &mut state.memcached,
-        &mut state.kafka,
-        &mut state.motan,
+        &mut state.protocols.mysql,
+        &mut state.protocols.http_exchanges,
+        &mut state.protocols.http_blackholes,
+        &mut state.protocols.redis,
+        &mut state.protocols.memcached,
+        &mut state.protocols.kafka,
+        &mut state.protocols.motan,
         &mut targets,
         &mut identities,
         &deferred.process_rules,
@@ -292,13 +292,14 @@ fn install(
         "case preparation found an endpoint absent from its dependency index"
     );
     http::extend_case_exchange_index(
-        &mut state.http_case_exchange_index,
-        &state.http_exchanges,
+        &mut state.protocols.http_case_exchange_index,
+        &state.protocols.http_exchanges,
         http_start,
     );
     state
+        .protocols
         .http_ingress
-        .register(&state.http_exchanges[http_start..]);
+        .register(&state.protocols.http_exchanges[http_start..]);
     if let Some(policy) = &mut state.replay_policy {
         policy
             .request_contracts
@@ -306,7 +307,10 @@ fn install(
         if policy.dynamic_values.enabled() {
             policy.dynamic_values.observe_source(case_id, raw)?;
         }
-        for (offset, exchange) in state.mysql.exchanges[mysql_start..].iter().enumerate() {
+        for (offset, exchange) in state.protocols.mysql.exchanges[mysql_start..]
+            .iter()
+            .enumerate()
+        {
             policy.observe_recorded_mysql_exchange(
                 exchange.case_id.as_deref(),
                 &ReplaySessionIdentity {
@@ -319,8 +323,11 @@ fn install(
                 Some(mysql_start + offset),
             );
         }
-        http::observe_recorded_policy_exchanges(policy, &state.http_exchanges[http_start..]);
-        memcached::observe_recorded_policy_exchanges(policy, &state.memcached);
+        http::observe_recorded_policy_exchanges(
+            policy,
+            &state.protocols.http_exchanges[http_start..],
+        );
+        memcached::observe_recorded_policy_exchanges(policy, &state.protocols.memcached);
     }
     state.prepare_native_candidates();
     state.install_case_execution_plan(
@@ -339,7 +346,7 @@ pub(super) fn release_consumed_payloads(state: &mut ReplayState) {
     if state.deferred.is_none() {
         return;
     }
-    for exchange in &mut state.mysql.exchanges {
+    for exchange in &mut state.protocols.mysql.exchanges {
         if exchange.source == ReplaySource::Case
             && exchange.status.is_consumed()
             && exchange.case_id.as_ref().is_some_and(|id| {
@@ -352,8 +359,17 @@ pub(super) fn release_consumed_payloads(state: &mut ReplayState) {
             exchange.record.response.rows = Vec::new();
         }
     }
-    http::release_consumed_payloads(&mut state.http_exchanges, &state.cases);
-    state.memcached.release_consumed_payloads(&state.cases);
-    state.motan.release_consumed_payloads(&state.cases);
-    state.kafka.release_consumed_payloads(&state.cases);
+    http::release_consumed_payloads(&mut state.protocols.http_exchanges, &state.cases);
+    state
+        .protocols
+        .memcached
+        .release_consumed_payloads(&state.cases);
+    state
+        .protocols
+        .motan
+        .release_consumed_payloads(&state.cases);
+    state
+        .protocols
+        .kafka
+        .release_consumed_payloads(&state.cases);
 }

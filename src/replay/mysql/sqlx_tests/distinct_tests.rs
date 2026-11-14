@@ -67,9 +67,10 @@ async fn sqlx_distinct_real_query_shape_matches_without_text_protocol_emulation(
             .await;
             client.close().await.unwrap();
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.matched_query_count, 2);
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
             assert!(
                 state
+                    .protocols
                     .mysql
                     .events
                     .matched_queries
@@ -77,9 +78,9 @@ async fn sqlx_distinct_real_query_shape_matches_without_text_protocol_emulation(
                     .all(|q| q.command == "COM_STMT_EXECUTE")
             );
             assert!(
-                state.mysql.events.metadata_warnings.is_empty(),
+                state.protocols.mysql.events.metadata_warnings.is_empty(),
                 "{:?}",
-                state.mysql.events.metadata_warnings
+                state.protocols.mysql.events.metadata_warnings
             );
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
             assert_eq!(std::fs::read(capture).unwrap(), before);
@@ -125,16 +126,16 @@ async fn sqlx_distinct_protocol_pairs_rebind_cached_values_and_reorder_predicate
                     if i == 1 { assert!(rows.is_err());
         client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
                     else { assert_eq!(rows.unwrap()[0].get::<String, _>("entity_id"), resource_type); }
-                    let count = runtime.state.lock().await.mysql.sql_cache.compilations;
+                    let count = runtime.state.lock().await.protocols.mysql.sql_cache.compilations;
                     // The failed lookup warms any remaining source templates.
                     if target_prepared && i == 2 { assert_eq!(count, compilations, "bind new values without reparsing"); }
                     compilations = count;
                 }
                 client.close().await.unwrap();
                 let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count, 2);
-                assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-                assert!(state.mysql.events.metadata_warnings.is_empty(), "{:?}", state.mysql.events.metadata_warnings);
+                assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
+                assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+                assert!(state.protocols.mysql.events.metadata_warnings.is_empty(), "{:?}", state.protocols.mysql.events.metadata_warnings);
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                 task.abort();
             }

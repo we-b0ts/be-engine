@@ -79,6 +79,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
         }
         if self.command == "COM_STMT_PREPARE"
             && !state
+                .protocols
                 .mysql
                 .has_finite_prepare(self.case.as_deref(), &identity)
         {
@@ -89,6 +90,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
                 savepoints: &self.session.savepoints,
                 preferred_end: self.sql.and_then(|sql| {
                     state
+                        .protocols
                         .mysql
                         .transaction_equivalence
                         .preferred_end(&self.session.transaction_witness, sql)
@@ -98,7 +100,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
                 witness: &self.session.transaction_witness,
             }
         });
-        let unmatched_before = state.mysql.events.unmatched_queries.len();
+        let unmatched_before = state.protocols.mysql.events.unmatched_queries.len();
         let selected = state.select_mysql_exchange(
             self.case.as_deref(),
             &identity,
@@ -109,6 +111,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
             observation,
         );
         self.recorded_rejection = state
+            .protocols
             .mysql
             .events
             .unmatched_queries
@@ -152,14 +155,16 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
     ) -> Option<WaitDependency<'a>> {
         (self.recorded_rejection.is_none()
             && matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE")
-            && state.mysql.isolation.waiting_for_prior(
+            && state.protocols.mysql.isolation.waiting_for_prior(
                 self.session.transaction_witness.connection(),
-                &SessionContext(&state.mysql.exchanges),
+                &SessionContext(&state.protocols.mysql.exchanges),
             )
             && self
                 .sql
                 .is_some_and(|sql| super::transaction_scope::is_business(&normalize_sql(sql))))
-        .then(|| WaitDependency::changed(&state.mysql.lifecycle).until(self.isolation_deadline))
+        .then(|| {
+            WaitDependency::changed(&state.protocols.mysql.lifecycle).until(self.isolation_deadline)
+        })
     }
 }
 

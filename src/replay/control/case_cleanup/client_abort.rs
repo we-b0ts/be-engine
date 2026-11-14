@@ -54,7 +54,7 @@ pub(in crate::replay::control) async fn lock_for_abort_release<'a>(
         }
         if !in_flight
             && now.saturating_duration_since(quiet_from) >= CLIENT_ABORT_QUIET
-            && state.http_ingress.try_close_case(case)
+            && state.protocols.try_close_case(case)
         {
             return Ok(state);
         }

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::replay) async fn handle_connection(
+pub(crate) async fn handle_connection(
     tcp_stream: TcpStream,
     peer_addr: SocketAddr,
     target: Option<TargetKey>,

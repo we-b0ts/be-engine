@@ -1,9 +1,9 @@
 //! Preserve the original Target observation across framework-owned retries.
-use super::super::ReplayState;
+use super::super::{ReplayProtocolSet, RuntimeState};
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
-pub(in crate::replay) struct RequestAdmission {
+pub(crate) struct RequestAdmission {
     pub(in crate::replay) case: Option<String>,
     pub(in crate::replay) event_index: Option<usize>,
     pub(in crate::replay) observed_at: Option<DateTime<Utc>>,
@@ -12,8 +12,8 @@ pub(in crate::replay) struct RequestAdmission {
     epoch: u64,
 }
 impl RequestAdmission {
-    pub(in crate::replay) fn capture(
-        state: &ReplayState,
+    pub(in crate::replay) fn capture<P: ReplayProtocolSet>(
+        state: &RuntimeState<P>,
         event_index: Option<usize>,
         observed_at: Option<DateTime<Utc>>,
         observation_id: Option<uuid::Uuid>,
@@ -28,7 +28,10 @@ impl RequestAdmission {
             epoch: state.admission_epoch,
         }
     }
-    pub(in crate::replay) fn cancel_reason(&self, state: &ReplayState) -> Option<&'static str> {
+    pub(in crate::replay) fn cancel_reason<P: ReplayProtocolSet>(
+        &self,
+        state: &RuntimeState<P>,
+    ) -> Option<&'static str> {
         (state.active_case_id != self.case
             || state.finalized_at.is_some()
             || state.target_session_stopped
@@ -42,7 +45,7 @@ impl RequestAdmission {
     }
 }
 
-impl ReplayState {
+impl<P: ReplayProtocolSet> RuntimeState<P> {
     pub(in crate::replay) fn advance_admission_epoch(&mut self) {
         if let Some(run) = &self.run_sequence {
             for runtime in &run.runtimes {

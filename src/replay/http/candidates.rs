@@ -4,7 +4,7 @@ use crate::replay::execution_plan::CaseMembership;
 use crate::replay::native_index::{CandidateCursor, CandidateIndex, HttpKey, ScopePartition};
 
 #[derive(Debug, Default)]
-pub(in crate::replay) struct Candidates {
+pub(crate) struct Candidates {
     count: usize,
     index: CandidateIndex<HttpKey>,
     exempt: CandidateIndex<HttpKey>,
@@ -55,7 +55,7 @@ impl Candidates {
         key.scope = ScopePartition::Shared;
         scoped.merge(self.exempt.lookup(&key))
     }
-    pub(in crate::replay) fn register(&mut self, exchanges: &[ReplayHttpExchange]) {
+    pub(crate) fn register(&mut self, exchanges: &[ReplayHttpExchange]) {
         if self.count > exchanges.len() {
             *self = Self::default();
         }

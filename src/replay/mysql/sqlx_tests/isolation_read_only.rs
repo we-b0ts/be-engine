@@ -47,7 +47,7 @@ async fn read_only_isolation_reset_requires_all_reads_and_a_real_transaction_end
                     assert_eq!(actual, id);
                     let state = runtime.state.lock().await;
                     assert!(
-                        !state.mysql.isolation.audit()[0]["reset_omission_proven"]
+                        !state.protocols.mysql.isolation.audit()[0]["reset_omission_proven"]
                             .as_bool()
                             .unwrap()
                     );
@@ -58,13 +58,13 @@ async fn read_only_isolation_reset_requires_all_reads_and_a_real_transaction_end
                     transaction.rollback().await.unwrap();
                 }
                 let state = runtime.state.lock().await;
-                let audit = state.mysql.isolation.audit();
+                let audit = state.protocols.mysql.isolation.audit();
                 assert_eq!(
                     audit[0]["reset_omission_proven"], true,
                     "{source_end}, {target_commit}: {audit:?}"
                 );
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-                assert!(state.mysql.events.unmatched_queries.is_empty());
+                assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
                 task.abort();
             }
         }
@@ -110,7 +110,7 @@ async fn read_only_end_cannot_cover_a_missing_read_or_a_state_changing_source_tr
             let _ = transaction.commit().await;
             let state = runtime.state.lock().await;
             assert_eq!(
-                state.mysql.isolation.audit()[0]["reset_omission_proven"],
+                state.protocols.mysql.isolation.audit()[0]["reset_omission_proven"],
                 false,
                 "{scenario}"
             );

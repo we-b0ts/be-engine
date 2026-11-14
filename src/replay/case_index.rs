@@ -8,7 +8,7 @@ use super::ReplaySource;
 /// Keeping their positions by case makes end-of-case verification proportional
 /// to that case's dependencies instead of the complete recording inventory.
 #[derive(Debug, Default)]
-pub(super) struct CaseExchangeIndex {
+pub(crate) struct CaseExchangeIndex {
     by_case: HashMap<String, Vec<usize>>,
 }
 

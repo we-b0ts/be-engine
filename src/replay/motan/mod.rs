@@ -154,7 +154,7 @@ struct MatchedExchange {
 }
 
 #[derive(Debug)]
-pub(super) struct MotanReplayState {
+pub(crate) struct MotanReplayState {
     exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
     heartbeats: Vec<HeartbeatTemplate>,
@@ -189,7 +189,7 @@ impl Default for MotanReplayState {
 }
 
 impl MotanReplayState {
-    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
+    pub(crate) fn has_case_in_flight(&self) -> bool {
         self.exchanges.iter().any(|e| {
             e.source == ReplaySource::Case
                 && matches!(
@@ -200,7 +200,7 @@ impl MotanReplayState {
         })
     }
 
-    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+    pub(crate) fn has_in_flight(&self) -> bool {
         self.exchanges.iter().any(|e| {
             matches!(
                 e.status,
@@ -474,7 +474,7 @@ impl MotanReplayState {
         });
     }
 
-    pub(super) fn snapshot(&self) -> CommandProtocolReport {
+    pub(crate) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
             connections: self.events.connections,
             matched_count: self.events.matched_count,
@@ -493,7 +493,7 @@ impl MotanReplayState {
         self.events.dirty_case_ids.contains(case)
     }
 
-    pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
+    pub(crate) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.events.dirty_case_ids.contains(case_id)
             || self.case_exchange_index.any(case_id, |index| {
                 self.exchanges
@@ -503,7 +503,7 @@ impl MotanReplayState {
     }
 }
 
-pub(super) async fn handle_connection(
+pub(crate) async fn handle_connection(
     stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
@@ -512,7 +512,7 @@ pub(super) async fn handle_connection(
         host: target.host,
         port: target.port,
     };
-    state.lock().await.motan.events.connections += 1;
+    state.lock().await.protocols.motan.events.connections += 1;
     let control = crate::dependency::termination::ConnectionControl::new(&stream)?;
     let (reader, mut writer) = stream.into_split();
     let (incoming_sender, mut incoming) = mpsc::channel(INCOMING_FRAME_QUEUE_CAPACITY);
@@ -531,7 +531,7 @@ async fn drive_connection(
     control: &crate::dependency::termination::ConnectionControl,
 ) -> Result<()> {
     let mut connection_binding = CaseConnectionBinding::default();
-    let mut lane_progress = state.lock().await.motan.lane_progress.subscribe();
+    let mut lane_progress = state.lock().await.protocols.motan.lane_progress.subscribe();
     let mut pending = VecDeque::<PendingRequest>::new();
     let mut read_closed = false;
     while !read_closed || !pending.is_empty() {
@@ -552,6 +552,7 @@ async fn drive_connection(
                 let active_case_id = replay.active_case_id.clone();
                 let bound_connection = connection_binding.connection(active_case_id.as_deref());
                 replay
+                    .protocols
                     .motan
                     .match_exchange(
                         active_case_id.as_deref(),
@@ -608,7 +609,12 @@ async fn drive_connection(
                     ))
                 };
                 if let Err(error) = ready {
-                    state.lock().await.motan.fail(&matched, error.to_string());
+                    state
+                        .lock()
+                        .await
+                        .protocols
+                        .motan
+                        .fail(&matched, error.to_string());
                     termination::retain(incoming).await;
                     return Err(error);
                 }
@@ -618,15 +624,25 @@ async fn drive_connection(
                     .await
                 {
                     Ok(()) => {
-                        state.lock().await.motan.complete(&matched);
+                        state.lock().await.protocols.motan.complete(&matched);
                         if let Err(error) = wait_for_connection_close(incoming, None).await {
-                            state.lock().await.motan.fail(&matched, error.to_string());
+                            state
+                                .lock()
+                                .await
+                                .protocols
+                                .motan
+                                .fail(&matched, error.to_string());
                             termination::retain(incoming).await;
                         }
                         return Ok(());
                     }
                     Err(error) => {
-                        state.lock().await.motan.fail(&matched, error.to_string());
+                        state
+                            .lock()
+                            .await
+                            .protocols
+                            .motan
+                            .fail(&matched, error.to_string());
                         return Err(error);
                     }
                 }
@@ -636,7 +652,12 @@ async fn drive_connection(
                     let error = anyhow!(
                         "client sent another dependency request instead of terminating the connection"
                     );
-                    state.lock().await.motan.fail(&matched, error.to_string());
+                    state
+                        .lock()
+                        .await
+                        .protocols
+                        .motan
+                        .fail(&matched, error.to_string());
                     termination::retain(incoming).await;
                     return Err(error);
                 }
@@ -649,11 +670,16 @@ async fn drive_connection(
                     .await
                 {
                     Ok(_) => {
-                        state.lock().await.motan.complete(&matched);
+                        state.lock().await.protocols.motan.complete(&matched);
                         return Ok(());
                     }
                     Err(error) => {
-                        state.lock().await.motan.fail(&matched, error.to_string());
+                        state
+                            .lock()
+                            .await
+                            .protocols
+                            .motan
+                            .fail(&matched, error.to_string());
                         termination::retain(incoming).await;
                         return Err(error);
                     }
@@ -662,13 +688,13 @@ async fn drive_connection(
             matched.timing.delay_response().await;
             patch_request_id(&mut matched.response, request.frame.request_id)?;
             if let Err(error) = writer.write_all(&matched.response).await {
-                state.lock().await.motan.fail(
+                state.lock().await.protocols.motan.fail(
                     &matched,
                     format!("failed to deliver recorded Motan response: {error}"),
                 );
                 return Err(error.into());
             }
-            state.lock().await.motan.complete(&matched);
+            state.lock().await.protocols.motan.complete(&matched);
             refresh_lane_wait_deadlines(&mut pending);
             continue;
         }
@@ -721,24 +747,35 @@ async fn enqueue_request(
         let template = state
             .lock()
             .await
+            .protocols
             .motan
             .heartbeat(target, frame.codec_version);
         let Some(mut template) = template else {
             let mut replay = state.lock().await;
             let case_id = replay.active_case_id.clone();
             if let Some(case_id) = &case_id {
-                replay.motan.events.dirty_case_ids.insert(case_id.clone());
+                replay
+                    .protocols
+                    .motan
+                    .events
+                    .dirty_case_ids
+                    .insert(case_id.clone());
             }
-            replay.motan.events.unsupported.push(CommandRequestReport {
-                target_observation_id: None,
-                case_id,
-                target: target.clone(),
-                command: identity.command(),
-                target_event_index: None,
-                request_fingerprint: None,
-                reason: "no recorded Motan heartbeat response template".to_string(),
-                diagnostic: None,
-            });
+            replay
+                .protocols
+                .motan
+                .events
+                .unsupported
+                .push(CommandRequestReport {
+                    target_observation_id: None,
+                    case_id,
+                    target: target.clone(),
+                    command: identity.command(),
+                    target_event_index: None,
+                    request_fingerprint: None,
+                    reason: "no recorded Motan heartbeat response template".to_string(),
+                    diagnostic: None,
+                });
             return Err(anyhow!("no recorded Motan heartbeat response template"));
         };
         template.timing.delay_response().await;
@@ -786,18 +823,28 @@ async fn record_unmatched_request(
     let reason = motan_unmatched_reason(&diagnostic);
     let mut state = state.lock().await;
     if let Some(case_id) = &active_case_id {
-        state.motan.events.dirty_case_ids.insert(case_id.clone());
+        state
+            .protocols
+            .motan
+            .events
+            .dirty_case_ids
+            .insert(case_id.clone());
     }
-    state.motan.events.unmatched.push(CommandRequestReport {
-        target_observation_id: None,
-        case_id: active_case_id,
-        target: target.clone(),
-        command: identity.command(),
-        target_event_index: None,
-        request_fingerprint: None,
-        reason,
-        diagnostic: Some(diagnostic),
-    });
+    state
+        .protocols
+        .motan
+        .events
+        .unmatched
+        .push(CommandRequestReport {
+            target_observation_id: None,
+            case_id: active_case_id,
+            target: target.clone(),
+            command: identity.command(),
+            target_event_index: None,
+            request_fingerprint: None,
+            reason,
+            diagnostic: Some(diagnostic),
+        });
 }
 
 impl RecordedCapture {
@@ -949,24 +996,4 @@ fn request_mismatch_fields(
 #[cfg(test)]
 mod tests;
 
-impl MotanReplayState {
-    pub(super) fn release_consumed_payloads(
-        &mut self,
-        cases: &BTreeMap<String, super::ReplayCase>,
-    ) {
-        for exchange in &mut self.exchanges {
-            if exchange.source == ReplaySource::Case
-                && exchange.status.is_consumed()
-                && exchange.case_id.as_ref().is_some_and(|id| {
-                    cases
-                        .get(id)
-                        .is_some_and(|case| case.status == super::ReplayCaseStatus::Ended)
-                })
-            {
-                exchange.response = Vec::new();
-                exchange.record.response.data = String::new();
-                exchange.record.request.data = String::new();
-            }
-        }
-    }
-}
+mod payload_release;

@@ -147,6 +147,7 @@ async fn external_broadcast_uses_native_request_clock_instead_of_subscription_ag
                     .state
                     .lock()
                     .await
+                    .protocols
                     .redis
                     .pubsub
                     .report()

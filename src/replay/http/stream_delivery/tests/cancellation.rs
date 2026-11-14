@@ -75,7 +75,16 @@ async fn exercise_cancelled_stream(
     if full_prefix {
         assert_eq!(chunk(&mut client).await, b"two");
     }
-    assert_eq!(runtime.state.lock().await.http_events.matched_count, 0);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched_count,
+        0
+    );
     if let Some(at) = close_at {
         let mut byte = [0];
         let deadline = started + Duration::from_millis(at);
@@ -94,7 +103,7 @@ async fn exercise_cancelled_stream(
         loop {
             let state = runtime.state.lock().await;
             if matches!(
-                state.http_exchanges[0].status,
+                state.protocols.http_exchanges[0].status,
                 ReplayExchangeStatus::Consumed | ReplayExchangeStatus::Failed
             ) {
                 break;
@@ -106,9 +115,15 @@ async fn exercise_cancelled_stream(
     .await
     .unwrap();
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_exchanges[0].status.is_consumed(), passes);
-    assert_eq!(state.http_events.matched_count, usize::from(passes));
-    assert_eq!(state.http_events.unsupported.is_empty(), passes);
+    assert_eq!(
+        state.protocols.http_exchanges[0].status.is_consumed(),
+        passes
+    );
+    assert_eq!(
+        state.protocols.http_events.matched_count,
+        usize::from(passes)
+    );
+    assert_eq!(state.protocols.http_events.unsupported.is_empty(), passes);
     if close_at.is_none() {
         let mut byte = [0];
         assert!(
@@ -119,7 +134,11 @@ async fn exercise_cancelled_stream(
         );
     }
     if !full_prefix {
-        assert!(state.http_events.unsupported[0].reason.contains("prefix"));
+        assert!(
+            state.protocols.http_events.unsupported[0]
+                .reason
+                .contains("prefix")
+        );
     }
     task.abort();
 }

@@ -73,6 +73,7 @@ async fn merged_append_delivers_every_covered_source_reference_after_wire() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .exchanges
                 .iter()
@@ -102,6 +103,7 @@ async fn merged_append_delivers_every_covered_source_reference_after_wire() {
     let state = runtime.state.lock().await;
     assert!(
         state
+            .protocols
             .redis
             .exchanges
             .iter()
@@ -109,7 +111,7 @@ async fn merged_append_delivers_every_covered_source_reference_after_wire() {
             .all(|exchange| exchange.status.is_consumed())
     );
     assert!(
-        state.redis.exchanges[2].status.is_available(),
+        state.protocols.redis.exchanges[2].status.is_available(),
         "future read must not gate the earlier input"
     );
     redis_task.abort();
@@ -139,7 +141,7 @@ async fn partial_append_does_not_authorize_compression_until_source_piece_is_cov
             .is_err()
     );
     assert_eq!(
-        runtime.state.lock().await.redis.exchanges[0].status,
+        runtime.state.lock().await.protocols.redis.exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
     assert_eq!(
@@ -181,7 +183,7 @@ async fn partial_append_keeps_original_input_deadline_available_for_its_continua
         "partial Source coverage cannot authorize compression"
     );
     assert_eq!(
-        runtime.state.lock().await.redis.exchanges[0].status,
+        runtime.state.lock().await.protocols.redis.exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
     assert_eq!(
@@ -234,13 +236,14 @@ async fn coalesced_absent_reads_deliver_the_entire_native_observation_epoch() {
     let state = runtime.state.lock().await;
     assert!(
         state
+            .protocols
             .redis
             .exchanges
             .iter()
             .take(3)
             .all(|exchange| exchange.status.is_consumed())
     );
-    assert!(state.redis.exchanges[3].status.is_available());
+    assert!(state.protocols.redis.exchanges[3].status.is_available());
     redis_task.abort();
     control.abort();
 }

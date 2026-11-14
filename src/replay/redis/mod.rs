@@ -47,6 +47,7 @@ mod lane_tests;
 mod matching;
 mod native_source;
 pub(in crate::replay) mod observations;
+mod preparation;
 mod process_owned;
 pub(in crate::replay) mod pubsub;
 #[cfg(test)]
@@ -206,9 +207,9 @@ struct MatchedRedisExchange {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct RedisReplayState {
+pub(crate) struct RedisReplayState {
     pub(in crate::replay) run_value_scopes: BTreeMap<Uuid, Arc<str>>,
-    pub(in crate::replay) lifecycle: Lifecycle,
+    pub(crate) lifecycle: Lifecycle,
     timing_deliveries: input_timing::Deliveries,
     activity_refresh: activity::ActivityRefreshes,
     pub(super) shared_source_directories: BTreeMap<String, PathBuf>,
@@ -272,7 +273,7 @@ pub(super) struct RedisReplayEvents {
 }
 
 impl RedisReplayState {
-    pub(in crate::replay) fn prepare_candidates(&mut self) {
+    pub(crate) fn prepare_candidates(&mut self) {
         self.candidates.register(&self.exchanges);
     }
 
@@ -315,7 +316,7 @@ impl RedisReplayState {
         self.events.dirty_case_ids.contains(case_id)
     }
 
-    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
+    pub(crate) fn has_case_in_flight(&self) -> bool {
         self.observations.has_in_flight()
             || self.append_streams.has_in_flight()
             || self.pubsub.has_case_delivery()
@@ -331,7 +332,7 @@ impl RedisReplayState {
             })
     }
 
-    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+    pub(crate) fn has_in_flight(&self) -> bool {
         self.observations.has_in_flight()
             || self.append_streams.has_in_flight()
             || self.pubsub.has_case_delivery()
@@ -505,7 +506,7 @@ impl RedisReplayState {
         Ok(())
     }
 
-    pub(super) fn snapshot(&self) -> CommandProtocolReport {
+    pub(crate) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
             target_event_index_scope: Some("case_request_admission"),
             append_streams: self.append_streams.reports(),
@@ -555,7 +556,7 @@ impl RedisReplayState {
             .chain(self.append_streams.unconfirmed_extensions())
     }
 
-    pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
+    pub(crate) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.pubsub.case_is_dirty(case_id)
             || self.unsettled_initial_expiry(case_id)
             || self.events.dirty_case_ids.contains(case_id)
@@ -578,14 +579,19 @@ impl RedisReplayState {
     }
 }
 
-pub(super) async fn handle_connection(
+pub(crate) async fn handle_connection(
     stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
 ) -> Result<()> {
     let client_id = Uuid::new_v4();
     let result = serve_connection(stream, target, state.clone(), client_id).await;
-    state.lock().await.redis.finish_pubsub_client(client_id);
+    state
+        .lock()
+        .await
+        .protocols
+        .redis
+        .finish_pubsub_client(client_id);
     result
 }
 
@@ -599,7 +605,7 @@ async fn serve_connection(
         host: target.host,
         port: target.port,
     };
-    state.lock().await.redis.events.connections += 1;
+    state.lock().await.protocols.redis.events.connections += 1;
     let control = crate::dependency::termination::ConnectionControl::new(&stream)?;
     let providers = state.lock().await.providers.clone();
     let decoder = crate::protocols::redis_session(&providers)?;
@@ -696,11 +702,13 @@ async fn serve_connection(
             let mut replay_state = state.lock().await;
             let case_id = replay_state.active_case_id.clone();
             let target_event_index = replay_state
+                .protocols
                 .redis
                 .events
                 .request_order
                 .reserve(case_id.as_deref());
             replay_state
+                .protocols
                 .redis
                 .events
                 .unsupported
@@ -725,7 +733,7 @@ async fn serve_connection(
             let mut state = state.lock().await;
             let active_case_id = state.active_case_id.clone();
             let bound_connection = connection_binding.connection(active_case_id.as_deref());
-            let matched = state.redis.match_redis_builtin_failure(
+            let matched = state.protocols.redis.match_redis_builtin_failure(
                 active_case_id.as_deref(),
                 &target_key,
                 TargetConnection {
@@ -813,9 +821,14 @@ async fn record_runtime_unsafe(
         diagnostic: None,
     };
     if let Some(case_id) = &request.case_id {
-        state.redis.events.dirty_case_ids.insert(case_id.clone());
+        state
+            .protocols
+            .redis
+            .events
+            .dirty_case_ids
+            .insert(case_id.clone());
     }
-    state.redis.events.unsafe_events.push(request);
+    state.protocols.redis.events.unsafe_events.push(request);
 }
 
 impl RecordedCapture {

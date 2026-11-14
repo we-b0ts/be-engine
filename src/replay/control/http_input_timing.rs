@@ -14,7 +14,7 @@ pub(crate) use client::connect;
 pub(in crate::replay) use source::SourceStream;
 
 #[derive(Debug)]
-pub(in crate::replay) struct Timeline {
+pub(crate) struct Timeline {
     case: String,
     epoch: DateTime<Utc>,
     admission_epoch: u64,
@@ -62,7 +62,7 @@ impl Timeline {
             }
         }
     }
-    pub(in crate::replay) fn abort(&self) {
+    pub(crate) fn abort(&self) {
         self.stage.send_replace(2);
     }
 
@@ -208,11 +208,15 @@ pub(super) async fn accept(
             let mut state = shared.lock().await;
             ensure_live(&state, case)?;
             ensure!(
-                state.admission_epoch == admission_epoch && state.http_input_timing.is_none(),
+                state.admission_epoch == admission_epoch
+                    && state.protocols.http_input_timing.is_none(),
                 "HTTP timing Case admission changed"
             );
             let epoch = Utc::now();
-            state.redis.prepare_cancelled_caches(case, caches)?;
+            state
+                .protocols
+                .redis
+                .prepare_cancelled_caches(case, caches)?;
             tracing::info!(
                 case_id = case,
                 source_close_ms = plan.source_close_ms,
@@ -220,7 +224,7 @@ pub(super) async fn accept(
                 streams = plan.streams.len(),
                 "prepared shared HTTP input timeline"
             );
-            state.http_input_timing = Some(Arc::new(Timeline {
+            state.protocols.http_input_timing = Some(Arc::new(Timeline {
                 case: case.into(),
                 epoch,
                 admission_epoch,
@@ -239,6 +243,7 @@ pub(super) async fn accept(
         let mut state = shared.lock().await;
         ensure_live(&state, case)?;
         let live = state
+            .protocols
             .http_input_timing
             .as_ref()
             .context("HTTP timing not admitted")?;
@@ -282,7 +287,7 @@ pub(super) async fn accept(
             *primary = Some(at);
             drop(primary);
             live.stage.send_replace(1);
-            state.redis.confirm_cancelled_caches(case);
+            state.protocols.redis.confirm_cancelled_caches(case);
         }
         Ok(serde_json::json!({"ok":true,"ready":ready,"wait_ms":5,"advance":{"removed_ms":0}}))
     }

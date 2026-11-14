@@ -40,7 +40,9 @@ impl ReplayState {
         request_started_at: chrono::DateTime<Utc>,
         admission: Option<&ingress::Admission>,
     ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
-        self.http_candidates.register(&self.http_exchanges);
+        self.protocols
+            .http_candidates
+            .register(&self.protocols.http_exchanges);
         let active_case_id = admission.map_or_else(
             || self.active_case_id.clone(),
             |a| a.case_id().map(str::to_owned),
@@ -139,7 +141,7 @@ impl ReplayState {
             {
                 break;
             }
-            let exact = self.http_candidates.select(
+            let exact = self.protocols.http_candidates.select(
                 source,
                 active_case_id.as_deref(),
                 scheme,
@@ -151,10 +153,10 @@ impl ReplayState {
                 .replay_policy
                 .as_ref()
                 .is_some_and(|policy| policy.dynamic_values.enabled());
-            let sequence_index = self.http_sequence.expected_in(source);
+            let sequence_index = self.protocols.http_sequence.expected_in(source);
             let candidates = if let Some(expected) = sequence_index {
                 crate::replay::native_index::CandidateCursor::new(expected).merge(
-                    self.http_candidates.select_exempt(
+                    self.protocols.http_candidates.select_exempt(
                         source,
                         active_case_id.as_deref(),
                         scheme,
@@ -164,7 +166,7 @@ impl ReplayState {
                     ),
                 )
             } else if variable_path || exact.clone().next().is_none() {
-                self.http_candidates.select_coarse(
+                self.protocols.http_candidates.select_coarse(
                     source,
                     active_case_id.as_deref(),
                     scheme,
@@ -175,7 +177,7 @@ impl ReplayState {
                 exact
             };
             for index in candidates {
-                let exchange = &self.http_exchanges[index];
+                let exchange = &self.protocols.http_exchanges[index];
                 if !(exchange.status.is_available()
                     || exchange.is_repeatable_preflight_probe()
                     || exchange.source == ReplaySource::Startup
@@ -304,7 +306,7 @@ impl ReplayState {
                     DependencyRuleDecision::default()
                 };
 
-                let mut ignored_query_params = self.http_ignore_query_params.clone();
+                let mut ignored_query_params = self.protocols.http_ignore_query_params.clone();
                 ignored_query_params.extend(policy_decision.dynamic_query_params.iter().cloned());
                 if exchange.shared_origin.is_some() {
                     ignored_query_params.clear();
@@ -588,12 +590,14 @@ impl ReplayState {
                 reason.clone(),
             );
             self.bind_last_unmatched_http_observation(report_observation_id);
-            self.http_events
+            self.protocols
+                .http_events
                 .unmatched
                 .last_mut()
                 .unwrap()
                 .unordered_json = Some(evidence);
-            self.http_events
+            self.protocols
+                .http_events
                 .unmatched
                 .last_mut()
                 .unwrap()
@@ -604,19 +608,21 @@ impl ReplayState {
                     crate::policy_evidence::TargetRole::IndependentTargetObservation,
                 )
             });
-            self.http_events
+            self.protocols
+                .http_events
                 .unmatched
                 .last_mut()
                 .unwrap()
                 .body_comparisons = body_comparisons;
-            self.http_events
+            self.protocols
+                .http_events
                 .unmatched
                 .last_mut()
                 .unwrap()
                 .omitted_body_comparisons = omitted_body_comparisons;
             return Err(HttpReplayMatchError::BadGateway(reason));
         };
-        let mut exchange = self.http_exchanges[index].clone();
+        let mut exchange = self.protocols.http_exchanges[index].clone();
         if let Err(error) = exchange.record.materialize_response() {
             let reason = format!("HTTP response evidence unavailable: {error:#}");
             self.record_unmatched_http_for(
@@ -651,21 +657,27 @@ impl ReplayState {
             let reason = "recorded HTTP exchange contains an upstream error that replay v1 cannot synthesize"
                 .to_string();
             if let Some(case_id) = &exchange.case_id {
-                self.http_events.dirty_case_ids.insert(case_id.clone());
+                self.protocols
+                    .http_events
+                    .dirty_case_ids
+                    .insert(case_id.clone());
             }
-            self.http_events.unsupported.push(HttpRequestReport {
-                case_id: exchange.case_id,
-                scheme,
-                target: target.clone(),
-                method: method.to_string(),
-                uri: uri_path_only(&uri.to_string()),
-                reason: reason.clone(),
-                target_observation_id: None,
-                body_comparisons: Vec::new(),
-                omitted_body_comparisons: 0,
-                request_fingerprint: None,
-                unordered_json: None,
-            });
+            self.protocols
+                .http_events
+                .unsupported
+                .push(HttpRequestReport {
+                    case_id: exchange.case_id,
+                    scheme,
+                    target: target.clone(),
+                    method: method.to_string(),
+                    uri: uri_path_only(&uri.to_string()),
+                    reason: reason.clone(),
+                    target_observation_id: None,
+                    body_comparisons: Vec::new(),
+                    omitted_body_comparisons: 0,
+                    request_fingerprint: None,
+                    unordered_json: None,
+                });
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
@@ -747,7 +759,8 @@ impl ReplayState {
             }
         }
         self.audit_http_request_headers(&exchange, index, &audited_headers, request_started_at);
-        self.http_exchanges[index].time_copy_delivery = exchange.time_copy_delivery.take();
+        self.protocols.http_exchanges[index].time_copy_delivery =
+            exchange.time_copy_delivery.take();
         let detail = MatchedHttpExchangeReport {
             case_id: active_case_id.clone(),
             shared_origin: exchange.shared_origin.clone(),

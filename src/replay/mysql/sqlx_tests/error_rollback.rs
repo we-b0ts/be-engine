@@ -96,6 +96,7 @@ async fn native_failed_insert_rollback_precedes_unrelated_optional_auth_reset() 
         transaction.rollback().await.unwrap();
         let state = runtime.state.lock().await;
         let end = state
+            .protocols
             .mysql
             .exchanges
             .iter()
@@ -106,6 +107,7 @@ async fn native_failed_insert_rollback_precedes_unrelated_optional_auth_reset() 
             "the real same-connection ROLLBACK was assigned to old auth cleanup instead"
         );
         let auth_reset = state
+            .protocols
             .mysql
             .exchanges
             .iter()
@@ -118,7 +120,7 @@ async fn native_failed_insert_rollback_precedes_unrelated_optional_auth_reset() 
             "{:?}",
             state.unused_exchanges(ReplaySource::Case)
         );
-        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
         task.abort();
     }
 }

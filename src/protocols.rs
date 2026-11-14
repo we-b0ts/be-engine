@@ -23,6 +23,12 @@ impl DependencyProtocol {
     }
 }
 
+impl From<DependencyProtocol> for traffic_protocol::ProtocolId {
+    fn from(protocol: DependencyProtocol) -> Self {
+        protocol.id()
+    }
+}
+
 // Preserve the application assembly names used by existing callers.
 #[allow(non_upper_case_globals)]
 impl DependencyProtocol {
@@ -60,6 +66,7 @@ impl DependencyProviders {
 mod capture;
 pub(crate) mod evidence;
 pub(crate) mod mysql;
+pub(crate) mod replay;
 
 pub(crate) type RecordingDriver = fn(
     tokio::net::TcpStream,

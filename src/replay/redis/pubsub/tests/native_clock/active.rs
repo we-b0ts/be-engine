@@ -108,7 +108,13 @@ async fn completion_feedback_keeps_original_scope_and_request_epoch() {
         if disconnect {
             let state = runtime.state.lock().await;
             assert_eq!(
-                state.redis.pubsub.native_clock.timing_evidence(CASE).len(),
+                state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .native_clock
+                    .timing_evidence(CASE)
+                    .len(),
                 1
             );
         }

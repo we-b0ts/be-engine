@@ -178,7 +178,7 @@ async fn rpc_request_contracts_compose_with_ack_identity_and_preserve_all_other_
         assert_eq!(result["args"][0]["stdout"], "example result");
         send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &actual]).await;
         let state = runtime.state.lock().await;
-        let snapshot = state.redis.snapshot();
+        let snapshot = state.protocols.redis.snapshot();
         assert!(snapshot.unused_case.is_empty());
         assert_eq!(snapshot.pubsub.unwrap().delivered_rpc_callbacks, 1);
         assert!(

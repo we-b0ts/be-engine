@@ -103,19 +103,22 @@ impl ReplayState {
             case,
             identity,
             admission_epoch: self.admission_epoch,
-            inventory_len: self.mysql.exchanges.len(),
+            inventory_len: self.protocols.mysql.exchanges.len(),
             policy: self
                 .replay_policy
                 .as_ref()
                 .map(|policy| policy.fingerprint()),
         };
-        let cache = &mut self.mysql.statement_metadata;
+        let cache = &mut self.protocols.mysql.statement_metadata;
         cache.prepare_scope(scope);
         if let Some(metadata) = cache.entries.get(sql) {
             return Arc::clone(metadata);
         }
         let metadata = Arc::new(self.resolve_statement_metadata(case, identity, sql));
-        self.mysql.statement_metadata.insert(sql, &metadata);
+        self.protocols
+            .mysql
+            .statement_metadata
+            .insert(sql, &metadata);
         metadata
     }
 
@@ -131,17 +134,20 @@ impl ReplayState {
         let mut semantic_target = None;
         let mut direct_projection = None;
         for source in [ReplaySource::Case, ReplaySource::Startup] {
-            let candidates =
-                self.mysql
-                    .candidates
-                    .select(&self.mysql.exchanges, source, case, identity, None);
+            let candidates = self.protocols.mysql.candidates.select(
+                &self.protocols.mysql.exchanges,
+                source,
+                case,
+                identity,
+                None,
+            );
             for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
                 for index in candidates.iter().copied() {
-                    let exchange = &self.mysql.exchanges[index];
+                    let exchange = &self.protocols.mysql.exchanges[index];
                     if !exchange.source.matches_scope(source)
                         || !active_case_matches(case, exchange)
                         || !identity_matches_exchange(identity, &exchange.identity)
-                        || !self.mysql.candidates.permits_select(
+                        || !self.protocols.mysql.candidates.permits_select(
                             index,
                             select_hint.as_ref(),
                             !project_columns && !semantic,
@@ -183,7 +189,9 @@ impl ReplayState {
                     }
                     if semantic {
                         let Some(actual) = semantic_target
-                            .get_or_insert_with(|| self.mysql.sql_cache.get(sql).metadata())
+                            .get_or_insert_with(|| {
+                                self.protocols.mysql.sql_cache.get(sql).metadata()
+                            })
                             .as_ref()
                         else {
                             continue;
@@ -192,6 +200,7 @@ impl ReplayState {
                             continue;
                         };
                         let Some(recorded) = self
+                            .protocols
                             .mysql
                             .sql_cache
                             .get(recorded_sql)

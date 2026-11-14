@@ -64,9 +64,7 @@ pub(in crate::replay) struct SourceScopeIdentity {
 #[derive(Debug, Clone, Default)]
 pub(in crate::replay) struct NativeCaseRefs {
     pub registered: Arc<[usize]>,
-    pub http: Arc<[usize]>,
-    pub redis: Arc<[usize]>,
-    pub mysql: Arc<[usize]>,
+    pub protocols: traffic_replay::preparation::PreparedProtocols,
 }
 
 #[derive(Debug, Clone)]
@@ -114,7 +112,13 @@ mod tests {
                 source_bytes: 123,
             },
             NativeCaseRefs {
-                http: members.for_case("active"),
+                protocols: std::collections::BTreeMap::from([(
+                    traffic_protocol::ProtocolId::new("fixture"),
+                    traffic_replay::preparation::PreparedProtocol {
+                        members: members.for_case("active"),
+                        ..Default::default()
+                    },
+                )]),
                 ..Default::default()
             },
         );
@@ -123,9 +127,9 @@ mod tests {
         assert_eq!(plan.case_id, "active");
         assert_eq!(plan.source.source_bytes, 123);
         assert_eq!(plan.source.sha256, "scope-hash");
-        assert_eq!(plan.native.http.as_ref(), [0, 2]);
-        assert!(plan.native.redis.is_empty() && plan.native.mysql.is_empty());
-        assert!(Arc::ptr_eq(&plan.native.http, &members.for_case("active")));
+        let native = &plan.native.protocols[&traffic_protocol::ProtocolId::new("fixture")];
+        assert_eq!(native.members.as_ref(), [0, 2]);
+        assert!(Arc::ptr_eq(&native.members, &members.for_case("active")));
         assert_eq!(members.for_case("next").as_ref(), [3]);
     }
 }

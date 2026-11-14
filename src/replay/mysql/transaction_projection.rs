@@ -59,7 +59,8 @@ impl MysqlReplayState {
 
 impl ReplayState {
     pub(in crate::replay) fn global_mysql_transactions(&self) -> Vec<GlobalTransactionExchange> {
-        self.mysql
+        self.protocols
+            .mysql
             .transaction_provenance
             .iter()
             .map(|(index, provenance)| GlobalTransactionExchange {

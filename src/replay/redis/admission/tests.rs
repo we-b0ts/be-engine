@@ -116,9 +116,19 @@ fn expire() -> RedisCommand {
 
 async fn prefix(runtime: &ReplayRuntime) -> MatchedRedisExchange {
     let mut state = runtime.state.lock().await;
-    let read = request(&mut state.redis, "LRANGE", &[b"content:1", b"0", b"-1"]).unwrap();
-    let write = request(&mut state.redis, "LSET", &[b"content:1", b"0", b"new"]).unwrap();
-    state.redis.complete_exchange(&write);
+    let read = request(
+        &mut state.protocols.redis,
+        "LRANGE",
+        &[b"content:1", b"0", b"-1"],
+    )
+    .unwrap();
+    let write = request(
+        &mut state.protocols.redis,
+        "LSET",
+        &[b"content:1", b"0", b"new"],
+    )
+    .unwrap();
+    state.protocols.redis.complete_exchange(&write);
     read
 }
 
@@ -149,17 +159,22 @@ async fn refresh_waits_for_read_bookkeeping_and_keeps_its_original_event_and_obs
     {
         let mut state = runtime.state.lock().await;
         assert_eq!(
-            state.redis.events.request_order.latest(Some("case")),
+            state
+                .protocols
+                .redis
+                .events
+                .request_order
+                .latest(Some("case")),
             Some(2)
         );
-        assert!(state.redis.events.unmatched.is_empty());
-        clock = state.redis.request_observed_at;
-        observation = state.redis.request_observation_id;
+        assert!(state.protocols.redis.events.unmatched.is_empty());
+        clock = state.protocols.redis.request_observed_at;
+        observation = state.protocols.redis.request_observation_id;
         // A different connection may advance the counter while EXPIRE waits.
-        let other = request(&mut state.redis, "GET", &[b"other"]).unwrap();
+        let other = request(&mut state.protocols.redis, "GET", &[b"other"]).unwrap();
         assert_eq!(other.report.target_event_index, Some(3));
-        state.redis.complete_exchange(&other);
-        state.redis.complete_exchange(&read);
+        state.protocols.redis.complete_exchange(&other);
+        state.protocols.redis.complete_exchange(&read);
     }
     let matched = tokio::time::timeout(Duration::from_secs(1), &mut refresh)
         .await
@@ -167,17 +182,22 @@ async fn refresh_waits_for_read_bookkeeping_and_keeps_its_original_event_and_obs
         .unwrap();
     assert_eq!(matched.report.target_event_index, Some(2));
     let mut state = runtime.state.lock().await;
-    assert_eq!(state.redis.request_observed_at, clock);
-    assert_eq!(state.redis.request_observation_id, observation);
+    assert_eq!(state.protocols.redis.request_observed_at, clock);
+    assert_eq!(state.protocols.redis.request_observation_id, observation);
     assert_eq!(
-        state.redis.events.request_order.latest(Some("case")),
+        state
+            .protocols
+            .redis
+            .events
+            .request_order
+            .latest(Some("case")),
         Some(3)
     );
-    state.redis.complete_exchange(&matched);
-    let report = serde_json::to_value(state.redis.snapshot()).unwrap();
+    state.protocols.redis.complete_exchange(&matched);
+    let report = serde_json::to_value(state.protocols.redis.snapshot()).unwrap();
     assert_eq!(report["state_observations"][0]["target_event_index"], 2);
-    assert!(!state.redis.snapshot().is_dirty());
-    assert!(state.redis.snapshot().unused_case.is_empty());
+    assert!(!state.protocols.redis.snapshot().is_dirty());
+    assert!(state.protocols.redis.snapshot().unused_case.is_empty());
 }
 
 #[tokio::test]
@@ -216,9 +236,12 @@ async fn exercise_stopped_wait(change_case: bool) {
         let mut state = runtime.state.lock().await;
         if change_case {
             state.active_case_id = Some("next".into());
-            state.redis.complete_exchange(&read);
+            state.protocols.redis.complete_exchange(&read);
         } else {
-            state.redis.fail_exchange(&read, "transport failed".into());
+            state
+                .protocols
+                .redis
+                .fail_exchange(&read, "transport failed".into());
         }
     }
     assert!(
@@ -228,13 +251,16 @@ async fn exercise_stopped_wait(change_case: bool) {
             .is_err()
     );
     let state = runtime.state.lock().await;
-    assert_eq!(state.redis.events.unmatched.len(), 1);
+    assert_eq!(state.protocols.redis.events.unmatched.len(), 1);
     assert_eq!(
-        state.redis.events.unmatched[0].case_id.as_deref(),
+        state.protocols.redis.events.unmatched[0].case_id.as_deref(),
         Some("case")
     );
-    assert_eq!(state.redis.events.unmatched[0].target_event_index, Some(2));
-    assert!(state.redis.case_is_dirty("case"));
+    assert_eq!(
+        state.protocols.redis.events.unmatched[0].target_event_index,
+        Some(2)
+    );
+    assert!(state.protocols.redis.case_is_dirty("case"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -258,11 +284,11 @@ async fn stalled_predecessor_wait_is_bounded() {
     );
     let state = runtime.state.lock().await;
     assert!(
-        matches!(state.redis.events.unmatched[0].diagnostic.as_ref(),
+        matches!(state.protocols.redis.events.unmatched[0].diagnostic.as_ref(),
         Some(CommandMatchDiagnostic::EvidenceUnavailable { reason }) if reason.contains("timed out"))
     );
     assert_eq!(
-        state.redis.exchanges[0].status,
+        state.protocols.redis.exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
 }
@@ -300,7 +326,7 @@ async fn responding_read_does_not_hide_an_unclaimed_failed_or_terminating_write(
     ] {
         let (_root, runtime) = runtime().await;
         let _read = prefix(&runtime).await;
-        runtime.state.lock().await.redis.exchanges[1].status = status;
+        runtime.state.lock().await.protocols.redis.exchanges[1].status = status;
         let mut binding = CaseConnectionBinding::default();
         assert!(
             tokio::time::timeout(
@@ -358,6 +384,7 @@ async fn refresh_over_tcp_waits_for_read_completion_then_delivers_the_recorded_r
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .events
                 .request_order
@@ -373,9 +400,9 @@ async fn refresh_over_tcp_waits_for_read_completion_then_delivers_the_recorded_r
     .unwrap();
     {
         let mut state = runtime.state.lock().await;
-        assert!(state.redis.events.unmatched.is_empty());
-        assert_eq!(state.redis.events.matched_count, 1);
-        state.redis.complete_exchange(&read);
+        assert!(state.protocols.redis.events.unmatched.is_empty());
+        assert_eq!(state.protocols.redis.events.matched_count, 1);
+        state.protocols.redis.complete_exchange(&read);
     }
     let response = tokio::time::timeout(Duration::from_secs(1), read_redis_frame(&mut client))
         .await
@@ -390,9 +417,9 @@ async fn refresh_over_tcp_waits_for_read_completion_then_delivers_the_recorded_r
         .unwrap()
         .unwrap();
     let mut state = runtime.state.lock().await;
-    let other = request(&mut state.redis, "GET", &[b"other"]).unwrap();
-    state.redis.complete_exchange(&other);
-    let report = state.redis.snapshot();
+    let other = request(&mut state.protocols.redis, "GET", &[b"other"]).unwrap();
+    state.protocols.redis.complete_exchange(&other);
+    let report = state.protocols.redis.snapshot();
     assert!(!report.is_dirty());
     assert!(report.unused_case.is_empty());
 }

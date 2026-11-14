@@ -171,8 +171,17 @@ async fn remote_rpc_uses_case_clock_observed_sid_and_one_original_notification()
                     .is_err()
             );
             let state = runtime.state.lock().await;
-            assert!(state.redis.snapshot().unused_case.is_empty());
-            assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 2);
+            assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+            assert_eq!(
+                state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .report()
+                    .unwrap()
+                    .delivered_pushes,
+                2
+            );
             drop(state);
             sub_task.abort();
             client_task.abort();
@@ -223,6 +232,7 @@ async fn a_remote_callback_and_a_local_call_share_one_redis_pipeline() {
         .state
         .lock()
         .await
+        .protocols
         .redis
         .request_contracts
         .request_begin("case")
@@ -265,7 +275,7 @@ async fn a_remote_callback_and_a_local_call_share_one_redis_pipeline() {
     drop(client);
     client_task.await.unwrap().unwrap();
     let state = runtime.state.lock().await;
-    let report = state.redis.snapshot();
+    let report = state.protocols.redis.snapshot();
     assert!(!report.is_dirty());
     assert_eq!(
         report
@@ -355,6 +365,7 @@ async fn delayed_sid_observation_preserves_ingress_order_when_replies_were_out_o
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .snapshot()
                 .unused_case

@@ -242,7 +242,7 @@ async fn global_http_jwt_verification_preserves_full_identity_and_finite_consump
     }
     {
         let state = runtime.state.lock().await;
-        assert!(state.http_events.matched.is_empty());
+        assert!(state.protocols.http_events.matched.is_empty());
         assert_eq!(
             state.unused_http_exchanges(ReplaySource::Case, false).len(),
             1
@@ -266,7 +266,17 @@ async fn global_http_jwt_verification_preserves_full_identity_and_finite_consump
         send(addr, HOST, URI, &valid.to_string()).await.0,
         StatusCode::BAD_GATEWAY
     );
-    assert_eq!(runtime.state.lock().await.http_events.matched.len(), 1);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched
+            .len(),
+        1
+    );
     task.abort();
     fixture.assert_immutable();
 }

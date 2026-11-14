@@ -157,7 +157,7 @@ pub(super) fn materialize_response(
             DependencyRuleDecision::default(),
         ));
     };
-    let exchange = &state.memcached.exchanges[matched.index];
+    let exchange = &state.protocols.memcached.exchanges[matched.index];
     let source_key = exchange.key.as_deref();
     let Some(global) = policy.request_contracts.global_json() else {
         return Ok((

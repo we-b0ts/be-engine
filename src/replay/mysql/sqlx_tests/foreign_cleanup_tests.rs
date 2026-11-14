@@ -73,7 +73,7 @@ async fn foreign_rollback_can_be_omitted_while_current_business_rollback_stays_r
                 tx.commit().await.unwrap();
             }
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.case_is_dirty("case-id"), !correct_end);
+            assert_eq!(state.protocols.mysql.case_is_dirty("case-id"), !correct_end);
             assert_eq!(
                 state.unused_exchanges(ReplaySource::Case).len(),
                 usize::from(!correct_end)
@@ -127,11 +127,11 @@ async fn business_commit_takes_precedence_only_after_its_recorded_prefix_is_cons
                 sqlx::raw_sql("COMMIT").execute(&mut client).await.unwrap();
                 let state = runtime.state.lock().await;
                 assert!(
-                    state.mysql.exchanges[2].status.is_consumed(),
+                    state.protocols.mysql.exchanges[2].status.is_consumed(),
                     "startup cleanup consumes the foreign end"
                 );
                 assert!(
-                    !state.mysql.exchanges[5].status.is_consumed(),
+                    !state.protocols.mysql.exchanges[5].status.is_consumed(),
                     "the business end remains required"
                 );
             }
@@ -142,12 +142,12 @@ async fn business_commit_takes_precedence_only_after_its_recorded_prefix_is_cons
                 .unwrap();
             tx.commit().await.unwrap();
             let state = runtime.state.lock().await;
-            assert!(!state.mysql.case_is_dirty("case-id"));
+            assert!(!state.protocols.mysql.case_is_dirty("case-id"));
             assert_eq!(
                 state.allowed_unused_commits().len(),
                 usize::from(!consume_foreign_first)
             );
-            assert!(state.mysql.exchanges[5].status.is_consumed());
+            assert!(state.protocols.mysql.exchanges[5].status.is_consumed());
             task.abort();
         }
     })
@@ -175,7 +175,7 @@ async fn global_read_commit_is_optional_and_still_finitely_consumed_by_real_driv
         assert_eq!(row.get::<i32, _>("id"), 2);
         {
             let state = runtime.state.lock().await;
-            assert!(!state.mysql.case_is_dirty("case-id"));
+            assert!(!state.protocols.mysql.case_is_dirty("case-id"));
             let report = serde_json::to_value(state.snapshot_report()).unwrap();
             assert_eq!(
                 report["allowed_unused_mysql_commit_exchanges"][0]["query_sequence"],
@@ -189,6 +189,7 @@ async fn global_read_commit_is_optional_and_still_finitely_consumed_by_real_driv
         assert!(state.allowed_unused_commits().is_empty());
         assert_eq!(
             state
+                .protocols
                 .mysql
                 .exchanges
                 .iter()
@@ -207,7 +208,7 @@ async fn optional_commit_delivery_failure_still_marks_case_dirty() {
     let records = [read(100, 0, 1), control(101, "COMMIT", 1, 0)];
     let (_temp, _addr, runtime, task) = fixture(&records, false).await;
     let mut state = runtime.state.lock().await;
-    let source = &state.mysql.exchanges[0].identity;
+    let source = &state.protocols.mysql.exchanges[0].identity;
     let identity = ReplaySessionIdentity {
         target: Some(source.target.clone()),
         database: source.database.clone(),
@@ -221,11 +222,11 @@ async fn optional_commit_delivery_failure_still_marks_case_dirty() {
     let commit = state
         .match_exchange(&identity, "COM_QUERY", Some("COMMIT"), None)
         .unwrap();
-    assert!(!state.mysql.case_is_dirty("case-id"));
+    assert!(!state.protocols.mysql.case_is_dirty("case-id"));
     assert_eq!(state.allowed_unused_commits().len(), 1);
-    assert_eq!(state.mysql.events.matched_query_count, 1);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
     state.fail_exchange(&commit, &identity, "test delivery failure");
-    assert!(state.mysql.case_is_dirty("case-id"));
+    assert!(state.protocols.mysql.case_is_dirty("case-id"));
     assert!(state.allowed_unused_commits().is_empty());
     assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), 1);
     task.abort();

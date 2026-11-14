@@ -47,7 +47,17 @@ async fn two_second_idle_reports_unconsumed_dependencies_and_preserves_session()
     assert_eq!(waiting["pending_source_dependencies"], 1);
     assert_eq!(waiting["actual_io_in_flight"], false);
     assert_eq!(waiting["references"][0]["reference"]["protocol"], "redis");
-    assert_eq!(state.lock().await.redis.snapshot().unused_case.len(), 1);
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .snapshot()
+            .unused_case
+            .len(),
+        1
+    );
     let mut next = command("begin");
     next.case_id = Some("case-b".into());
     assert_eq!(begin_case(&next, state.clone()).await["ok"], true);

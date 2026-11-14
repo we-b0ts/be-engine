@@ -12,11 +12,11 @@ const SNIFF_TIMEOUT: Duration = Duration::from_secs(1);
 const RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 #[cfg(test)]
-pub(super) async fn detect(stream: &TcpStream) -> Result<Option<ReplayProtocol>> {
+pub(crate) async fn detect(stream: &TcpStream) -> Result<Option<ReplayProtocol>> {
     detect_with_providers(stream, &crate::protocols::default_providers()).await
 }
 
-pub(super) async fn detect_with_providers(
+pub(crate) async fn detect_with_providers(
     stream: &TcpStream,
     providers: &crate::protocols::DependencyProviders,
 ) -> Result<Option<ReplayProtocol>> {

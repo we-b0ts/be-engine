@@ -53,8 +53,8 @@ async fn derived_counts_and_joined_exists_match_normal_prepared_clients() {
                     .unwrap();
                 assert_eq!(row.get::<i32, _>("value"), 3);
                 let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count, 1);
-                assert!(state.mysql.events.unmatched_queries.is_empty());
+                assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+                assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                 assert_eq!(std::fs::read(capture).unwrap(), original);
                 task.abort();

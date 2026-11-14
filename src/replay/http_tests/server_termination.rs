@@ -144,7 +144,15 @@ async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool, fast: 
     }
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if runtime.state.lock().await.http_events.matched_count == 1 {
+            if runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .http_events
+                .matched_count
+                == 1
+            {
                 break;
             }
             tokio::task::yield_now().await;
@@ -159,7 +167,7 @@ async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool, fast: 
             .unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if runtime.state.lock().await.http_exchanges[0].status
+                if runtime.state.lock().await.protocols.http_exchanges[0].status
                     == crate::replay::ReplayExchangeStatus::Failed
                 {
                     break;
@@ -172,6 +180,7 @@ async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool, fast: 
         let state = runtime.state.lock().await;
         assert!(
             state
+                .protocols
                 .http_events
                 .unsupported
                 .iter()
@@ -181,8 +190,8 @@ async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool, fast: 
         return;
     }
     let state = runtime.state.lock().await;
-    assert!(state.http_events.unsupported.is_empty());
-    assert!(state.http_exchanges[0].status.is_consumed());
+    assert!(state.protocols.http_events.unsupported.is_empty());
+    assert!(state.protocols.http_exchanges[0].status.is_consumed());
     replay.abort();
 }
 

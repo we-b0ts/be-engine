@@ -381,33 +381,36 @@ impl ReplayState {
         match protocol {
             "mysql" => self.visit_mysql_global_report_extras(visitor),
             "http" => self.visit_http_global_report_extras(visitor),
-            "redis" => self.redis.visit_global_report_extras(visitor),
-            "memcached" => self.memcached.visit_global_report_extras(visitor),
-            "motan" => self.motan.visit_global_report_extras(visitor),
-            "kafka" => self.kafka.visit_global_report_extras(visitor),
+            "redis" => self.protocols.redis.visit_global_report_extras(visitor),
+            "memcached" => self.protocols.memcached.visit_global_report_extras(visitor),
+            "motan" => self.protocols.motan.visit_global_report_extras(visitor),
+            "kafka" => self.protocols.kafka.visit_global_report_extras(visitor),
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
     }
     fn regular_report_snapshot(&self, protocol: &str) -> Result<(usize, Vec<Change>)> {
         match protocol {
-            "mysql" => self.mysql.global_report_snapshot(),
+            "mysql" => self.protocols.mysql.global_report_snapshot(),
             "http" => self.http_global_report_usage().snapshot(),
-            "redis" => self.redis.global_report_snapshot(),
-            "memcached" => self.memcached.global_report_usage().snapshot(),
-            "motan" => self.motan.global_report_usage().snapshot(),
-            "kafka" => self.kafka.global_report_usage().snapshot(),
+            "redis" => self.protocols.redis.global_report_snapshot(),
+            "memcached" => self.protocols.memcached.global_report_usage().snapshot(),
+            "motan" => self.protocols.motan.global_report_usage().snapshot(),
+            "kafka" => self.protocols.kafka.global_report_usage().snapshot(),
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
     }
 
     fn initialize_regular_report_usage(&mut self, protocol: &str, visible: usize) -> Result<()> {
         match protocol {
-            "mysql" => self.mysql.initialize_global_report_usage(visible),
+            "mysql" => self.protocols.mysql.initialize_global_report_usage(visible),
             "http" => self.initialize_http_global_report_usage(visible),
-            "redis" => self.redis.initialize_global_report_usage(visible),
-            "memcached" => self.memcached.initialize_global_report_usage(visible),
-            "motan" => self.motan.initialize_global_report_usage(visible),
-            "kafka" => self.kafka.initialize_global_report_usage(visible),
+            "redis" => self.protocols.redis.initialize_global_report_usage(visible),
+            "memcached" => self
+                .protocols
+                .memcached
+                .initialize_global_report_usage(visible),
+            "motan" => self.protocols.motan.initialize_global_report_usage(visible),
+            "kafka" => self.protocols.kafka.initialize_global_report_usage(visible),
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
         Ok(())

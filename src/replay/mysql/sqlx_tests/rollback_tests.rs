@@ -18,7 +18,7 @@ async fn count_distinct_union_query_allows_only_proven_session_cleanup() {
         assert_eq!(sqlx::query(sql).fetch_one(&mut client).await.unwrap().get::<i64,_>("total"),12);
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,1);
         assert_eq!(state.allowed_unused_rollbacks().len(),2);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         task.abort();
@@ -59,7 +59,7 @@ async fn ranked_union_admits_only_effect_free_reads_without_a_transaction() {
                 assert!(row.is_err());
             }
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.matched_query_count, usize::from(pure));
+            assert_eq!(state.protocols.mysql.events.matched_query_count, usize::from(pure));
             assert_eq!(state.allowed_unused_rollbacks().len(), if pure { 2 } else { 1 });
             assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), if pure { 0 } else { 2 });
             task.abort();
@@ -100,7 +100,7 @@ async fn json_case_and_subquery_reads_need_no_target_rollback_or_rule() {
         }
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,sqls.len());
+        assert_eq!(state.protocols.mysql.events.matched_query_count,sqls.len());
         assert_eq!(state.allowed_unused_rollbacks().len(),2);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         assert_eq!(std::fs::read(path).unwrap(),original);
@@ -124,7 +124,7 @@ async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirt
     }
     let (_temp, _addr, runtime, task) = fixture(&records, false).await;
     let mut state = runtime.state.lock().await;
-    let source = &state.mysql.exchanges[0].identity;
+    let source = &state.protocols.mysql.exchanges[0].identity;
     let identity = ReplaySessionIdentity {
         target: Some(source.target.clone()),
         database: source.database.clone(),
@@ -134,7 +134,7 @@ async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirt
         .match_exchange(&identity, "COM_QUERY", records[0]["sql"].as_str(), None)
         .unwrap();
     assert_eq!(
-        state.mysql.exchanges[0].status,
+        state.protocols.mysql.exchanges[0].status,
         ReplayExchangeStatus::Responding
     );
     assert_eq!(
@@ -148,7 +148,7 @@ async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirt
         .match_exchange(&identity, "COM_QUERY", Some("ROLLBACK"), None)
         .unwrap();
     assert_eq!(
-        state.mysql.exchanges[rollback.index].status,
+        state.protocols.mysql.exchanges[rollback.index].status,
         ReplayExchangeStatus::Responding
     );
     assert!(
@@ -157,7 +157,7 @@ async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirt
     );
     assert_eq!(state.allowed_unused_rollbacks().len(), 2);
     assert_eq!(
-        state.mysql.events.matched_query_count, 1,
+        state.protocols.mysql.events.matched_query_count, 1,
         "in-flight cleanup is not a completed call"
     );
     state.fail_exchange(&rollback, &identity, "test delivery failure");
@@ -166,7 +166,7 @@ async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirt
         rollback.index
     );
     assert_eq!(state.allowed_unused_rollbacks().len(), 1);
-    assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
     let last = state
         .match_exchange(&identity, "COM_QUERY", Some("ROLLBACK"), None)
         .unwrap();
@@ -233,7 +233,7 @@ async fn changing_business_rollback_to_commit_stays_dirty() {
             assert_eq!(unused[0].index, 2);
             assert_eq!(state.allowed_unused_rollbacks()[0].index, 3);
             assert_eq!(
-                state.mysql.exchanges.len(),
+                state.protocols.mysql.exchanges.len(),
                 4,
                 "cleanup evidence must not be discarded"
             );
@@ -348,7 +348,7 @@ async fn implicit_read_cleanup_can_be_omitted_or_consumed_without_discarding_rea
             let state = runtime.state.lock().await;
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
             assert_eq!(state.allowed_unused_rollbacks().len(), 2);
-            assert_eq!(state.mysql.events.matched_query_count, 1);
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         }
         sqlx::raw_sql("ROLLBACK")
             .execute(&mut client)

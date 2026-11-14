@@ -188,8 +188,8 @@ async fn mysql_field_ids_survive_reads_and_response_control_without_sql_template
         client.close().await.unwrap();
         assert_eq!(std::fs::read(capture).unwrap(), original);
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 5);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 5);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 3);
         task.abort();
     })
     .await

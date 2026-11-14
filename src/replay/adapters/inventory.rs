@@ -23,6 +23,7 @@ pub(in crate::replay) fn resolve_case<T>(
         })
         .collect();
     let redis = state
+        .protocols
         .redis
         .case_wire_exchange_indices(case_id, &redis_keys)?;
     let mysql_keys: BTreeSet<_> = references
@@ -44,7 +45,7 @@ pub(in crate::replay) fn resolve_case<T>(
         .collect();
     let http = state.http_case_exchange_indices(case_id, &http_keys)?;
     let mut mysql = BTreeMap::new();
-    for (index, exchange) in state.mysql.exchanges.iter().enumerate() {
+    for (index, exchange) in state.protocols.mysql.exchanges.iter().enumerate() {
         let Some(key) = exchange
             .record
             .connection_id
@@ -66,10 +67,10 @@ pub(in crate::replay) fn resolve_case<T>(
         mysql.len() == mysql_keys.len(),
         "dependency-tail MySQL reference is absent from its Case semantic dependencies"
     );
-    let rpc_pushes = state.redis.pubsub.finite_rpc_pushes(case_id)?;
-    let memcached = state.memcached.finite_exchanges(case_id)?;
-    let motan = state.motan.finite_exchanges(case_id)?;
-    let kafka = state.kafka.finite_exchanges(case_id)?;
+    let rpc_pushes = state.protocols.redis.pubsub.finite_rpc_pushes(case_id)?;
+    let memcached = state.protocols.memcached.finite_exchanges(case_id)?;
+    let motan = state.protocols.motan.finite_exchanges(case_id)?;
+    let kafka = state.protocols.kafka.finite_exchanges(case_id)?;
     references
         .iter()
         .map(|reference| {

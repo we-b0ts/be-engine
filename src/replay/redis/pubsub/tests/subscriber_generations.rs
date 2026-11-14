@@ -46,8 +46,11 @@ async fn rpc_subscriber_generation_uses_callback_anchor_before_first_or_last_sub
         );
         {
             let mut state = runtime.state.lock().await;
-            assert_eq!(state.redis.events.matched[0].connection_id, required);
-            assert_eq!(state.redis.events.matched[0].sequence, 4);
+            assert_eq!(
+                state.protocols.redis.events.matched[0].connection_id,
+                required
+            );
+            assert_eq!(state.protocols.redis.events.matched[0].sequence, 4);
             state.active_case_id = Some("case".into());
         }
         let (mut client, task) = connect(&runtime).await;
@@ -67,12 +70,18 @@ async fn rpc_subscriber_generation_uses_callback_anchor_before_first_or_last_sub
             .is_err()
         );
         let state = runtime.state.lock().await;
-        assert!(state.redis.snapshot().unsafe_events.is_empty());
-        assert!(state.redis.snapshot().unmatched.is_empty());
-        assert!(state.redis.snapshot().unused_case.is_empty());
-        assert_eq!(state.redis.snapshot().unused_global.len(), 2);
+        assert!(state.protocols.redis.snapshot().unsafe_events.is_empty());
+        assert!(state.protocols.redis.snapshot().unmatched.is_empty());
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+        assert_eq!(state.protocols.redis.snapshot().unused_global.len(), 2);
         assert_eq!(
-            state.redis.pubsub.report().unwrap().delivered_rpc_callbacks,
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_rpc_callbacks,
             1
         );
         task.abort();
@@ -97,8 +106,14 @@ async fn rpc_subscriber_generation_priority_preserves_active_case_scope() {
             CONFIRMED
         );
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.events.matched[0].connection_id, case_subscriber);
-        assert_eq!(state.redis.events.matched[0].source, ReplaySource::Case);
+        assert_eq!(
+            state.protocols.redis.events.matched[0].connection_id,
+            case_subscriber
+        );
+        assert_eq!(
+            state.protocols.redis.events.matched[0].source,
+            ReplaySource::Case
+        );
         task.abort();
     }
 }
@@ -155,13 +170,19 @@ async fn rpc_subscriber_generations_keep_distinct_live_connections_and_finite_ca
             );
         }
         let state = runtime.state.lock().await;
-        assert!(state.redis.snapshot().unsafe_events.is_empty());
-        assert!(state.redis.snapshot().unused_case.is_empty());
+        assert!(state.protocols.redis.snapshot().unsafe_events.is_empty());
+        assert!(state.protocols.redis.snapshot().unused_case.is_empty());
         assert_eq!(
-            state.redis.pubsub.report().unwrap().delivered_rpc_callbacks,
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_rpc_callbacks,
             2
         );
-        assert!(state.redis.exchanges.iter().any(|e| {
+        assert!(state.protocols.redis.exchanges.iter().any(|e| {
             e.record.connection_id == older && e.status == ReplayExchangeStatus::Available
         }));
         pub_task.abort();
@@ -190,7 +211,17 @@ async fn rpc_subscriber_generation_priority_keeps_recorded_lane_predecessors() {
         let (mut subscriber, mut task) = connect(&runtime).await;
         send_unmatched(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await;
         reconnect(&runtime, &mut subscriber, &mut task).await;
-        assert_eq!(runtime.state.lock().await.redis.events.matched_count, 0);
+        assert_eq!(
+            runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .redis
+                .events
+                .matched_count,
+            0
+        );
         assert_eq!(
             send(&mut subscriber, &[b"GET", b"before"]).await,
             b"$1\r\nv\r\n"
@@ -200,7 +231,10 @@ async fn rpc_subscriber_generation_priority_keeps_recorded_lane_predecessors() {
             CONFIRMED
         );
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.events.matched[1].connection_id, required);
+        assert_eq!(
+            state.protocols.redis.events.matched[1].connection_id,
+            required
+        );
         task.abort();
     }
 }

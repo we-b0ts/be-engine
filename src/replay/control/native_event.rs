@@ -147,21 +147,24 @@ pub(super) async fn accept(
                 && !state.target_session_stopped,
             "native event feedback requires the active live case"
         );
-        if request.command == "native_event_begin" && !state.redis.needs_native_events(case) {
+        if request.command == "native_event_begin"
+            && !state.protocols.redis.needs_native_events(case)
+        {
             return Ok(serde_json::json!({"ok":true,"enabled":false}));
         }
         let epoch = state
+            .protocols
             .redis
             .native_request_epoch(case)
             .context("native event feedback requires request admission")?;
         if request.command == "native_event_begin" {
-            let enabled = state.redis.native_events_begin(case, epoch);
+            let enabled = state.protocols.redis.native_events_begin(case, epoch);
             return Ok(serde_json::json!({
                 "ok":true,
                 "enabled":enabled,
                 "epoch":epoch,
-                "events":state.redis.needs_ingress_events(case),
-                "input_acks":state.redis.pubsub.native_clock.needs_input_acks(case),
+                "events":state.protocols.redis.needs_ingress_events(case),
+                "input_acks":state.protocols.redis.pubsub.native_clock.needs_input_acks(case),
             }));
         }
         let observation = request
@@ -183,6 +186,7 @@ pub(super) async fn accept(
                 .acknowledged
                 .context("native input ACK missing")?;
             state
+                .protocols
                 .redis
                 .pubsub
                 .native_clock
@@ -203,11 +207,12 @@ pub(super) async fn accept(
                 .as_deref()
                 .context("native namespace missing")?;
             state
+                .protocols
                 .redis
                 .pubsub
                 .native_clock
                 .connected(case, epoch, namespace)?;
-            state.redis.pubsub.namespace_sessions.connected(
+            state.protocols.redis.pubsub.namespace_sessions.connected(
                 case,
                 epoch,
                 namespace,
@@ -223,7 +228,10 @@ pub(super) async fn accept(
             .event
             .as_ref()
             .context("native event metadata missing")?;
-        state.redis.observe_native_event(case, epoch, event)?;
+        state
+            .protocols
+            .redis
+            .observe_native_event(case, epoch, event)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok":true}))
     }
     .await;

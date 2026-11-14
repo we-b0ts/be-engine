@@ -70,7 +70,7 @@ async fn mysql_identity_read_back_composes_json_time_delivery_and_finite_writes_
         client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,3);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         let report = state.replay_policy.as_ref().unwrap().report();
         assert!(report.dynamic_bindings.is_empty());

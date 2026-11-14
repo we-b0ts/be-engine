@@ -40,6 +40,7 @@ async fn finite_rpc_and_self_echo_publish_cancel_during_the_real_pre_delivery_du
         let matched = {
             let mut state = runtime.state.lock().await;
             state
+                .protocols
                 .redis
                 .match_redis(
                     Some("case"),
@@ -59,7 +60,7 @@ async fn finite_rpc_and_self_echo_publish_cancel_during_the_real_pre_delivery_du
         let index = matched.index;
         let state_ref = runtime.state.clone();
         let state = runtime.state.lock().await;
-        let before = state.redis.events.matched_count;
+        let before = state.protocols.redis.events.matched_count;
         let wait = async move {
             crate::replay::policy::request_contract::hypotheses::await_durable(&state_ref)
                 .await
@@ -70,14 +71,15 @@ async fn finite_rpc_and_self_echo_publish_cancel_during_the_real_pre_delivery_du
         tokio::select! {biased; ()=&mut wait=>panic!("real durable wait must park before delivery guard"),_=std::future::ready(())=>{}}
         drop(wait);
         assert_eq!(
-            state.redis.exchange_status(index),
+            state.protocols.redis.exchange_status(index),
             Some(ReplayExchangeStatus::Failed)
         );
-        assert_eq!(state.redis.lifecycle.cancelled_indices(), [index]);
-        assert_eq!(state.redis.events.matched_count, before);
-        assert!(!state.redis.has_case_in_flight());
+        assert_eq!(state.protocols.redis.lifecycle.cancelled_indices(), [index]);
+        assert_eq!(state.protocols.redis.events.matched_count, before);
+        assert!(!state.protocols.redis.has_case_in_flight());
         assert!(
             state
+                .protocols
                 .redis
                 .snapshot()
                 .unused_case

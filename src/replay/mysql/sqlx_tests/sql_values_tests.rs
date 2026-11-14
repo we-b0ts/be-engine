@@ -42,8 +42,8 @@ async fn table_time_templates_replay_shards_without_consuming_a_wrong_shard() {
                 }
                 client.close().await.unwrap();
                 let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count,1);
-                assert_eq!(state.mysql.events.unmatched_queries.len(),2);
+                assert_eq!(state.protocols.mysql.events.matched_query_count,1);
+                assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),2);
                 assert_eq!(std::fs::read(path).unwrap(),original);
                 task.abort();
             }
@@ -80,7 +80,7 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
                     if attempt == 2 {
                         if let Err(error) = &result {
                             let state = runtime.state.lock().await;
-                            panic!("valid time failed: source_prepared={source_prepared}, target_mode={target_mode}, attempt={attempt}, error={error:?}, source={:?}, target={:?}, warnings={:?}", state.mysql.exchanges[0].record, state.mysql.events.unmatched_queries.last(), state.mysql.events.metadata_warnings);
+                            panic!("valid time failed: source_prepared={source_prepared}, target_mode={target_mode}, attempt={attempt}, error={error:?}, source={:?}, target={:?}, warnings={:?}", state.protocols.mysql.exchanges[0].record, state.protocols.mysql.events.unmatched_queries.last(), state.protocols.mysql.events.metadata_warnings);
                         }
                         assert_eq!(result.unwrap().rows_affected(),1);
                     }
@@ -90,8 +90,8 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
                 (&mut client).execute("COMMIT").await.unwrap();
                 client.close().await.unwrap();
                 let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count,2);
-                assert_eq!(state.mysql.events.unmatched_queries.len(),3);
+                assert_eq!(state.protocols.mysql.events.matched_query_count,2);
+                assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),3);
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                 let report = state.replay_policy.as_ref().unwrap().report();
                 assert_eq!(report.dependency_rules[0].time_validations,1);
@@ -119,8 +119,8 @@ async fn dynamic_sql_time_preserves_recorded_errors_and_stable_sql() {
         assert_eq!(error.as_database_error().unwrap().downcast_ref::<sqlx::mysql::MySqlDatabaseError>().number(),1213);
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(),3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),3);
         task.abort();
     }).await.unwrap();
 }
@@ -186,8 +186,8 @@ async fn dynamic_sql_time_matches_scalar_and_nested_json_fields_atomically() {
         client.close().await.unwrap();
 
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
         let report = state.replay_policy.as_ref().unwrap().report();
         assert_eq!(report.dependency_rules[0].time_validations, 2);
         assert_eq!(report.dependency_rules[0].matches, 1);

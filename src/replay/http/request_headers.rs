@@ -101,6 +101,7 @@ impl ReplayState {
             .chain(actual.keys())
             .collect::<BTreeSet<_>>();
         let target_event_index = self
+            .protocols
             .http_events
             .matched_details
             .next_event_index(self.active_case_id.as_deref());
@@ -125,7 +126,7 @@ impl ReplayState {
                     || mode == Mode::Presence && presence_differs
                     || mode == Mode::SourcePresence && recorded.is_some() && sent.is_none());
             if !dirty {
-                self.http_events.header_observation_count += 1;
+                self.protocols.http_events.header_observation_count += 1;
                 if target_event_index >= crate::replay::report::SUCCESS_DETAIL_LIMIT {
                     continue;
                 }
@@ -180,11 +181,14 @@ impl ReplayState {
             };
             if dirty {
                 if let Some(case_id) = &self.active_case_id {
-                    self.http_events.dirty_case_ids.insert(case_id.clone());
+                    self.protocols
+                        .http_events
+                        .dirty_case_ids
+                        .insert(case_id.clone());
                 }
-                self.http_events.header_mismatches.push(report);
+                self.protocols.http_events.header_mismatches.push(report);
             } else {
-                self.http_events.header_observations.push(report);
+                self.protocols.http_events.header_observations.push(report);
             }
         }
     }

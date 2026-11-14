@@ -143,7 +143,7 @@ struct MemcachedMatchContext<'a> {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct MemcachedReplayState {
+pub(crate) struct MemcachedReplayState {
     exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
     lifecycle: Lifecycle,
@@ -283,7 +283,7 @@ impl MemcachedReplayState {
         Ok(())
     }
 
-    pub(super) fn snapshot(&self) -> CommandProtocolReport {
+    pub(crate) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
             connections: self.events.connections,
             matched_count: self.events.matched_count,
@@ -299,7 +299,7 @@ impl MemcachedReplayState {
     }
 }
 
-pub(super) async fn handle_connection(
+pub(crate) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
@@ -308,7 +308,7 @@ pub(super) async fn handle_connection(
         host: target.host,
         port: target.port,
     };
-    state.lock().await.memcached.events.connections += 1;
+    state.lock().await.protocols.memcached.events.connections += 1;
     let mut prefix = [0_u8; 1];
     let len = stream.peek(&mut prefix).await?;
     if len == 0 {
@@ -403,6 +403,7 @@ pub(super) async fn handle_connection(
                             state
                                 .lock()
                                 .await
+                                .protocols
                                 .memcached
                                 .fail_exchange(&matched, reason.to_string());
                             return Err(anyhow!(reason));
@@ -447,12 +448,13 @@ async fn record_runtime_unsafe(
     let _ = protocol;
     if let Some(case_id) = &request.case_id {
         state
+            .protocols
             .memcached
             .events
             .dirty_case_ids
             .insert(case_id.clone());
     }
-    state.memcached.events.unsafe_events.push(request);
+    state.protocols.memcached.events.unsafe_events.push(request);
 }
 
 pub(super) fn observe_recorded_policy_exchanges(

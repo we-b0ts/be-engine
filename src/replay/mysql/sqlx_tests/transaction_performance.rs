@@ -151,16 +151,16 @@ async fn measure(root: &Path, artifacts: &Path, lazy: bool) -> Measurement {
         observations.push((metadata, matched.record));
     }
     let matching_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let matched = state.mysql.events.matched_query_count;
+    let matched = state.protocols.mysql.events.matched_query_count;
     assert_eq!(matched, CALLS);
-    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
     assert!(
         state
             .unused_exchanges(ReplaySource::Case)
             .iter()
             .all(|exchange| exchange.case_id.as_deref() != Some(selected.as_str()))
     );
-    assert!(!state.mysql.case_is_dirty(&selected));
+    assert!(!state.protocols.mysql.case_is_dirty(&selected));
     let mut digest = Sha256::new();
     for (metadata, record) in observations {
         digest.update(

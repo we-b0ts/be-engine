@@ -32,10 +32,7 @@ impl PubSubState {
 }
 
 impl PubSubState {
-    pub(in crate::replay) fn startup_counts(
-        &mut self,
-        close: bool,
-    ) -> crate::replay::startup::Counts {
+    pub(crate) fn startup_counts(&mut self, close: bool) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
         for push in &mut self.pushes {
             counts.observe(push.source, &mut push.status, true, close);

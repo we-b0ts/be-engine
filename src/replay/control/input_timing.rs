@@ -238,7 +238,7 @@ pub(super) async fn accept(
                 .plan
                 .context(SourcePlanUnavailable)?;
             let epoch = state
-                .redis
+                .protocols.redis
                 .native_request_epoch(case)
                 .unwrap_or_else(Utc::now);
             let fast = plan
@@ -249,7 +249,7 @@ pub(super) async fn accept(
             let fast_tail = fast.as_ref().and_then(fast::Plan::tail);
             let ordered_fast = fast.is_some();
             let native_push_times = plan.source_start.filter(|_| ordered_fast).and_then(|start| {
-                let (pushes, covered) = state.redis.pubsub.timing_evidence(case, start);
+                let (pushes, covered) = state.protocols.redis.pubsub.timing_evidence(case, start);
                 covered.then(|| {
                     let mut times: Vec<_> = pushes.into_iter().map(|push| push.completed_at).collect();
                     times.sort_unstable();
@@ -258,7 +258,7 @@ pub(super) async fn accept(
             });
             let (mut evidence, covered) = match (fast.is_some(), plan.source_start) {
                 (true, _) => (Vec::new(), false),
-                (false, Some(start)) => state.redis.timing_evidence(case, start)?,
+                (false, Some(start)) => state.protocols.redis.timing_evidence(case, start)?,
                 (false, None) => (Vec::new(), false),
             };
             evidence.sort_unstable_by_key(|entry| entry.completed_at);
@@ -324,7 +324,7 @@ pub(super) async fn accept(
             "input timing request epoch changed"
         );
         if request.command == "input_timing_native_prefix" {
-            let active = state.redis.pubsub.native_clock.fast_prefix_active(
+            let active = state.protocols.redis.pubsub.native_clock.fast_prefix_active(
                 case,
                 live.epoch,
                 MonoInstant::now(),
@@ -354,7 +354,7 @@ pub(super) async fn accept(
         });
         let delivered = |e: &Evidence| {
             state
-                .redis
+                .protocols.redis
                 .timing_delivered(case, live.admission_epoch, e.reference)
                 || match e.reference {
                     DeliveryReference::RedisResponse(reference) => {

@@ -77,12 +77,18 @@ async fn single_write_autocommit_omits_commit_and_keeps_witness_flags_on_its_soc
             read(&mut read_tx, 103).await;
             let state = runtime.state.lock().await;
             let end = state
+                .protocols
                 .mysql
                 .exchanges
                 .iter()
                 .position(|e| e.record.sql.as_deref() == Some("COMMIT"))
                 .unwrap();
-            let proof = state.mysql.transaction_equivalence.diagnostic(end).unwrap();
+            let proof = state
+                .protocols
+                .mysql
+                .transaction_equivalence
+                .diagnostic(end)
+                .unwrap();
             assert_eq!(proof["reason"], "target_autocommit_single_write");
             assert_eq!(proof["source_transactions"][0]["target_status_before"], 2);
             assert_eq!(proof["source_transactions"][0]["target_status_after"], 2);
@@ -120,7 +126,7 @@ async fn write_spans_allow_prefix_reads_on_another_socket_and_require_trailing_r
                 assert!(
                     !state.snapshot_report().is_dirty(),
                     "{end}: {:?}",
-                    state.mysql.events.unmatched_queries
+                    state.protocols.mysql.events.unmatched_queries
                 );
                 task.abort();
             }
@@ -151,6 +157,7 @@ async fn transaction_ending_before_a_trailing_read_is_dirty_without_a_source_set
         let state = runtime.state.lock().await;
         assert!(state.snapshot_report().is_dirty());
         let failure = state
+            .protocols
             .mysql
             .events
             .unmatched_queries
@@ -189,8 +196,9 @@ async fn a_single_write_rollback_cannot_be_replaced_by_autocommit() {
         let state = runtime.state.lock().await;
         assert!(state.snapshot_report().is_dirty());
         assert!(state.allowed_unused_rollbacks().is_empty());
-        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         let failure = state
+            .protocols
             .mysql
             .events
             .unmatched_queries
@@ -334,15 +342,21 @@ async fn only_observed_zero_row_or_failed_single_update_can_omit_rollback() {
                 assert!(
                     !state.snapshot_report().is_dirty(),
                     "{:?}",
-                    state.mysql.events.unmatched_queries
+                    state.protocols.mysql.events.unmatched_queries
                 );
                 let end = state
+                    .protocols
                     .mysql
                     .exchanges
                     .iter()
                     .position(|e| e.record.sql.as_deref() == Some("ROLLBACK"))
                     .unwrap();
-                let proof = state.mysql.transaction_equivalence.diagnostic(end).unwrap();
+                let proof = state
+                    .protocols
+                    .mysql
+                    .transaction_equivalence
+                    .diagnostic(end)
+                    .unwrap();
                 let interval = &proof["source_transactions"][0];
                 assert_eq!(interval["write_count"], 1);
                 assert_eq!(
@@ -385,7 +399,7 @@ async fn a_failed_update_still_works_inside_an_explicit_target_rollback() {
         assert!(
             !state.snapshot_report().is_dirty(),
             "{:?}",
-            state.mysql.events.unmatched_queries
+            state.protocols.mysql.events.unmatched_queries
         );
         task.abort();
     })

@@ -177,9 +177,9 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
         redis_task.await.unwrap().unwrap();
         {
             let state = state.lock().await;
-            assert!(state.redis.snapshot().unused_case.is_empty());
-            assert!(!state.redis.case_has_runtime_failure("case-a"));
-            assert!(!state.redis.case_has_runtime_failure("case-b"));
+            assert!(state.protocols.redis.snapshot().unused_case.is_empty());
+            assert!(!state.protocols.redis.case_has_runtime_failure("case-a"));
+            assert!(!state.protocols.redis.case_has_runtime_failure("case-b"));
         }
         assert_eq!(begin_case(&next, state.clone()).await["ok"], true);
         next.command = "end".into();
@@ -226,9 +226,9 @@ async fn rejected_native_dependency_preserves_failure_then_releases_after_actual
         {
             let state = state.lock().await;
             assert!(state.active_case_id.is_none());
-            assert!(state.redis.case_has_runtime_failure("case-a"));
+            assert!(state.protocols.redis.case_has_runtime_failure("case-a"));
             assert_eq!(
-                state.redis.snapshot().unused_case.len(),
+                state.protocols.redis.snapshot().unused_case.len(),
                 usize::from(!consumed)
             );
         }
@@ -261,8 +261,24 @@ async fn recorded_native_dependency_error_is_consumed_without_a_replay_rejection
     end.fail_on_dirty = true;
     let ended = end_case(&end, state.clone()).await;
     assert_eq!(ended["ok"], true, "{ended}");
-    assert!(state.lock().await.redis.snapshot().unused_case.is_empty());
-    assert!(!state.lock().await.redis.case_has_runtime_failure("case-a"));
+    assert!(
+        state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .snapshot()
+            .unused_case
+            .is_empty()
+    );
+    assert!(
+        !state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .case_has_runtime_failure("case-a")
+    );
     peer.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
 }
@@ -298,7 +314,7 @@ async fn missing_interaction_call_after_source_idle_allowance_fails_case_and_all
     let failure = state_guard.dependency_tails.failure("case-a").unwrap();
     assert_eq!(failure["kind"], "case_no_progress");
     assert_eq!(failure["waiting"]["no_progress_timeout_ms"], 250);
-    assert_eq!(state_guard.redis.snapshot().unused_case.len(), 1);
+    assert_eq!(state_guard.protocols.redis.snapshot().unused_case.len(), 1);
     assert!(state_guard.active_case_id.is_none());
     drop(state_guard);
     let mut next = command("begin");
@@ -358,7 +374,17 @@ async fn missing_interaction_tail_preserves_original_budget_failure_and_allows_n
     assert_eq!(ended["dirty"], true);
     assert!(ended["error"].as_str().unwrap().contains("budget"));
     assert!(state.lock().await.active_case_id.is_none());
-    assert_eq!(state.lock().await.redis.snapshot().unused_case.len(), 1);
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .snapshot()
+            .unused_case
+            .len(),
+        1
+    );
     assert!(
         state
             .lock()

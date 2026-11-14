@@ -207,7 +207,7 @@ json:
     client.inner.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
     let state = runtime.state.lock().await;
-    let report = state.redis.snapshot();
+    let report = state.protocols.redis.snapshot();
     assert!(report.unused_case.is_empty(), "{report:?}");
     assert!(report.unsafe_events.is_empty(), "{report:?}");
     assert_eq!(report.matched.len(), 5);

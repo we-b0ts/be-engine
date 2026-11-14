@@ -80,6 +80,7 @@ async fn bounded_window_without_callback_consumes_only_the_publish_and_preserves
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .snapshot()
                 .unused_case
@@ -124,7 +125,7 @@ async fn late_global_callback_links_only_its_original_publish_and_is_delivered_o
         {
             let mut state = runtime.state.lock().await;
             assert!(
-                state.redis.snapshot().unused_case.is_empty(),
+                state.protocols.redis.snapshot().unused_case.is_empty(),
                 "completed PUBLISH must not wait for a late callback"
             );
             state.active_case_id = None;
@@ -145,12 +146,25 @@ async fn late_global_callback_links_only_its_original_publish_and_is_delivered_o
         );
         let state = runtime.state.lock().await;
         assert_eq!(
-            state.redis.pubsub.report().unwrap().delivered_rpc_callbacks,
+            state
+                .protocols
+                .redis
+                .pubsub
+                .report()
+                .unwrap()
+                .delivered_rpc_callbacks,
             1
         );
-        assert!(state.redis.pubsub.unused(ReplaySource::Startup).is_empty());
+        assert!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .unused(ReplaySource::Startup)
+                .is_empty()
+        );
         assert_eq!(
-            state.redis.snapshot().matched_count,
+            state.protocols.redis.snapshot().matched_count,
             2,
             "callback must not consume its publisher twice"
         );
@@ -250,6 +264,7 @@ async fn global_rpc_started_during_an_api_delivers_once_after_the_active_case_ch
             let mut state = runtime.state.lock().await;
             assert_eq!(
                 state
+                    .protocols
                     .redis
                     .exchanges
                     .iter()
@@ -272,9 +287,16 @@ async fn global_rpc_started_during_an_api_delivers_once_after_the_active_case_ch
             .is_err()
         );
         let state = runtime.state.lock().await;
-        assert!(state.redis.snapshot().unsafe_events.is_empty());
-        assert!(state.redis.pubsub.unused(ReplaySource::Startup).is_empty());
-        assert_eq!(state.redis.snapshot().matched_count, 2);
+        assert!(state.protocols.redis.snapshot().unsafe_events.is_empty());
+        assert!(
+            state
+                .protocols
+                .redis
+                .pubsub
+                .unused(ReplaySource::Startup)
+                .is_empty()
+        );
+        assert_eq!(state.protocols.redis.snapshot().matched_count, 2);
         pub_task.abort();
         sub_task.abort();
     }

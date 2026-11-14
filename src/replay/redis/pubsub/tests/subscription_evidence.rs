@@ -87,19 +87,29 @@ async fn selected_subscription_mirror_and_startup_alias_share_one_case_slot() {
             );
             send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
             let state = runtime.state.lock().await;
-            assert_eq!(state.redis.exchanges.len(), 2, "mirror added no slot");
-            assert_eq!(state.redis.exchanges[0].source, ReplaySource::Case);
-            assert_eq!(state.redis.exchanges[0].case_id.as_deref(), Some("case"));
-            assert!(state.redis.exchanges[0].status.is_consumed());
-            let report = &state.redis.events.matched[0];
+            assert_eq!(
+                state.protocols.redis.exchanges.len(),
+                2,
+                "mirror added no slot"
+            );
+            assert_eq!(
+                state.protocols.redis.exchanges[0].source,
+                ReplaySource::Case
+            );
+            assert_eq!(
+                state.protocols.redis.exchanges[0].case_id.as_deref(),
+                Some("case")
+            );
+            assert!(state.protocols.redis.exchanges[0].status.is_consumed());
+            let report = &state.protocols.redis.events.matched[0];
             assert_eq!(report.source, ReplaySource::Case);
             assert_eq!(report.case_id.as_deref(), Some("case"));
             assert_eq!(
-                state.redis.snapshot().unused_case.len(),
+                state.protocols.redis.snapshot().unused_case.len(),
                 1,
                 "business GET remains finite and private"
             );
-            assert_eq!(state.redis.events.matched_count, 1);
+            assert_eq!(state.protocols.redis.events.matched_count, 1);
             task.abort();
         }
     }
@@ -137,9 +147,12 @@ async fn foreign_case_lookup_loads_only_exact_referenced_control_evidence() {
         runtime.state.lock().await.active_case_id = None;
         {
             let state = runtime.state.lock().await;
-            assert_eq!(state.redis.exchanges.len(), 1);
-            assert_eq!(state.redis.exchanges[0].record.command, "SUBSCRIBE");
-            assert_eq!(state.redis.exchanges[0].record.sequence, 4);
+            assert_eq!(state.protocols.redis.exchanges.len(), 1);
+            assert_eq!(
+                state.protocols.redis.exchanges[0].record.command,
+                "SUBSCRIBE"
+            );
+            assert_eq!(state.protocols.redis.exchanges[0].record.sequence, 4);
         }
         let (mut client, task) = connect(&runtime).await;
         assert!(
@@ -176,7 +189,10 @@ async fn mirror_without_selected_original_provides_one_exact_global_control_slot
         );
         read(&mut client).await;
         send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
-        assert_eq!(runtime.state.lock().await.redis.exchanges.len(), 1);
+        assert_eq!(
+            runtime.state.lock().await.protocols.redis.exchanges.len(),
+            1
+        );
         task.abort();
     }
 }
@@ -191,7 +207,7 @@ async fn unreferenced_mirror_does_not_promote_a_case_command_to_global() {
     runtime.state.lock().await.active_case_id = None;
     let (mut client, task) = connect(&runtime).await;
     send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
-    assert!(!runtime.state.lock().await.redis.exchanges[0].subscription_alias);
+    assert!(!runtime.state.lock().await.protocols.redis.exchanges[0].subscription_alias);
     task.abort();
 }
 
@@ -419,9 +435,10 @@ async fn rpc_only_reconnect_uses_confirmed_mirror_without_promoting_publish() {
             assert_eq!(identity.id, 9);
             send_unmatched(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await;
             let state = runtime.state.lock().await;
-            assert_eq!(state.redis.exchanges.len(), 2);
+            assert_eq!(state.protocols.redis.exchanges.len(), 2);
             assert_eq!(
                 state
+                    .protocols
                     .redis
                     .exchanges
                     .iter()
@@ -430,7 +447,13 @@ async fn rpc_only_reconnect_uses_confirmed_mirror_without_promoting_publish() {
                 1
             );
             assert_eq!(
-                state.redis.pubsub.report().unwrap().delivered_rpc_callbacks,
+                state
+                    .protocols
+                    .redis
+                    .pubsub
+                    .report()
+                    .unwrap()
+                    .delivered_rpc_callbacks,
                 1
             );
             client_task.abort();
@@ -477,8 +500,8 @@ async fn retained_mirror_survives_failed_or_unpublished_original_case() {
         read(&mut client).await;
         send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
         let state = runtime.state.lock().await;
-        assert_eq!(state.redis.events.matched_count, 1);
-        assert_eq!(state.redis.global_unused_count(), 0);
+        assert_eq!(state.protocols.redis.events.matched_count, 1);
+        assert_eq!(state.protocols.redis.global_unused_count(), 0);
         task.abort();
     }
 }
@@ -517,7 +540,16 @@ async fn indexed_foreign_lookup_preserves_pattern_and_shard_subscription_kinds()
             confirmation
         );
         assert_eq!(read(&mut client).await, raw);
-        assert_eq!(runtime.state.lock().await.redis.global_unused_count(), 0);
+        assert_eq!(
+            runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .redis
+                .global_unused_count(),
+            0
+        );
         task.abort();
     }
 }

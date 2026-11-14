@@ -43,7 +43,7 @@ pub(in crate::replay::http) fn capture(
     let Ok(actual) = serde_json::from_slice::<Value>(body) else {
         return evidence;
     };
-    for exchange in &state.http_exchanges {
+    for exchange in &state.protocols.http_exchanges {
         if !exchange.status.is_available()
             || exchange.shared_origin.is_some()
             || !active_http_case_matches(state.active_case_id.as_deref(), exchange)

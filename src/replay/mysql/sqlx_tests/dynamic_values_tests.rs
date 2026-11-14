@@ -74,8 +74,8 @@ async fn capture_then_sql_json_and_redis_key_preserve_fixed_values_times_and_con
             }
         }
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,2);
-        assert_eq!(state.mysql.events.unmatched_queries.len(),3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,2);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),3);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         assert_eq!(state.replay_policy.as_ref().unwrap().report().dependency_rules[0].time_validations,1);
         assert_eq!(std::fs::read(dependencies).unwrap(),immutable);

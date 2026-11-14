@@ -53,15 +53,15 @@ async fn sqlx_tuple_in_matches_all_protocol_pairs_with_projection_and_fresh_bind
                             assert_eq!(response[0].get::<String,_>("title"), "标题");
                             assert_eq!(response[0].get::<i64,_>("id"), tenant);
                         }
-                        let count = runtime.state.lock().await.mysql.sql_cache.compilations;
+                        let count = runtime.state.lock().await.protocols.mysql.sql_cache.compilations;
                         if target_prepared && attempt == 2 { assert_eq!(count, compilations); }
                         compilations = count;
                     }
                     client.close().await.unwrap();
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.matched_query_count, 2);
-                    assert_eq!(state.mysql.events.unmatched_queries.len(), 2);
-                    assert!(state.mysql.events.metadata_warnings.is_empty(), "{:?}", state.mysql.events.metadata_warnings);
+                    assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 2);
+                    assert!(state.protocols.mysql.events.metadata_warnings.is_empty(), "{:?}", state.protocols.mysql.events.metadata_warnings);
                     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                     assert_eq!(std::fs::read(capture).unwrap(), original);
                     task.abort();
@@ -116,9 +116,9 @@ async fn sqlx_tuple_prepare_is_injective_and_execute_checks_row_pairing() {
             .unwrap();
         assert_eq!(row.get::<i32, _>(0), 1);
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-        assert!(state.mysql.events.metadata_warnings.is_empty());
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+        assert!(state.protocols.mysql.events.metadata_warnings.is_empty());
         task.abort();
     })
     .await
@@ -145,7 +145,7 @@ async fn sqlx_workspace_reference_tuples_match_nine_and_eighteen_row_permutation
             assert_eq!(row.get::<i32,_>(0), 42);
             let state = runtime.state.lock().await;
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-            assert!(state.mysql.events.metadata_warnings.is_empty());
+            assert!(state.protocols.mysql.events.metadata_warnings.is_empty());
             task.abort();
         }
     }).await.unwrap();

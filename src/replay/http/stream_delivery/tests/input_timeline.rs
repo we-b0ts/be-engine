@@ -232,7 +232,9 @@ async fn exercise_shared_close(
         drop(client);
         for _ in 0..200 {
             let state = runtime.state.lock().await;
-            if state.http_exchanges[0].status != crate::replay::ReplayExchangeStatus::Responding {
+            if state.protocols.http_exchanges[0].status
+                != crate::replay::ReplayExchangeStatus::Responding
+            {
                 break;
             }
             drop(state);
@@ -240,9 +242,12 @@ async fn exercise_shared_close(
         }
         let state = runtime.state.lock().await;
         assert_eq!(state.http_case_is_dirty(&id), early);
-        assert_eq!(state.http_events.cancelled.len(), usize::from(!early));
+        assert_eq!(
+            state.protocols.http_events.cancelled.len(),
+            usize::from(!early)
+        );
         assert!(
-            !state.http_exchanges[0].status.is_consumed(),
+            !state.protocols.http_exchanges[0].status.is_consumed(),
             "cancellation is not complete recorded EOF"
         );
         let report = state.snapshot_report();
@@ -266,7 +271,14 @@ async fn exercise_shared_close(
             assert_eq!(ended["dirty"], false, "{ended}");
             let state = runtime.state.lock().await;
             assert!(state.snapshot_report().case_execution_failures.is_empty());
-            assert!(!state.redis.exchange_status(1).unwrap().is_consumed());
+            assert!(
+                !state
+                    .protocols
+                    .redis
+                    .exchange_status(1)
+                    .unwrap()
+                    .is_consumed()
+            );
             drop(state);
             redis_peer.take().unwrap().shutdown().await.unwrap();
         }
@@ -283,6 +295,7 @@ async fn exercise_shared_close(
             .state
             .lock()
             .await
+            .protocols
             .http_input_timing
             .as_ref()
             .unwrap()

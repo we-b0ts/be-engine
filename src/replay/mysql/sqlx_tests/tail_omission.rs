@@ -62,12 +62,13 @@ async fn finite_inventory_can_consume_native_setup_and_readonly_cleanup() {
     assert_eq!(ended["ok"], true, "{ended}");
     let state = runtime.state.lock().await;
     assert!(state.dependency_tails.failures().is_empty());
-    assert_eq!(state.mysql.events.matched_query_count, 4);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 4);
     assert_eq!(state.allowed_unused_autocommit().len(), 0);
     assert_eq!(state.allowed_unused_rollbacks().len(), 0);
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     assert_eq!(
         state
+            .protocols
             .mysql
             .exchanges
             .iter()
@@ -132,11 +133,12 @@ async fn finite_inventory_accepts_native_readonly_equivalence_without_fabricated
     assert_eq!(ended["ok"], true, "{ended}");
     let state = runtime.state.lock().await;
     assert!(state.dependency_tails.failures().is_empty());
-    assert_eq!(state.mysql.events.matched_query_count, 1);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
     assert_eq!(state.allowed_unused_autocommit().len(), 1);
     assert_eq!(state.allowed_unused_rollbacks().len(), 2);
     assert_eq!(
         state
+            .protocols
             .mysql
             .exchanges
             .iter()
@@ -177,9 +179,10 @@ async fn finite_inventory_accepts_a_proven_native_autocommit_write_and_its_sessi
     assert!(state.dependency_tails.failures().is_empty());
     assert_eq!(state.transaction_equivalent_autocommit().len(), 1);
     assert_eq!(state.allowed_unused_commits().len(), 1);
-    assert_eq!(state.mysql.events.matched_query_count, 2);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
     assert_eq!(
         state
+            .protocols
             .mysql
             .exchanges
             .iter()
@@ -218,9 +221,10 @@ async fn finite_inventory_accepts_setup_equivalence_after_real_row_lock_and_comm
     assert!(state.dependency_tails.failures().is_empty());
     assert_eq!(state.transaction_equivalent_autocommit().len(), 1);
     assert_eq!(state.allowed_unused_rollbacks().len(), 1);
-    assert_eq!(state.mysql.events.matched_query_count, 2);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
     assert_eq!(
         state
+            .protocols
             .mysql
             .exchanges
             .iter()
@@ -260,6 +264,7 @@ async fn a_started_optional_rollback_retains_real_io_until_delivery_finishes() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .mysql
                 .exchanges
                 .iter()
@@ -324,12 +329,13 @@ async fn finite_inventory_requires_the_actual_write_and_commit_delivery() {
     {
         let state = runtime.state.lock().await;
         let commit = state
+            .protocols
             .mysql
             .exchanges
             .iter()
             .position(|exchange| exchange.record.query_sequence == Some(7))
             .unwrap();
-        assert!(!state.mysql.permits_unstarted_omission(commit));
+        assert!(!state.protocols.mysql.permits_unstarted_omission(commit));
     }
     sqlx::query("UPDATE users SET active=? WHERE id=?")
         .bind(1_i32)
@@ -343,6 +349,7 @@ async fn finite_inventory_requires_the_actual_write_and_commit_delivery() {
         let state = runtime.state.lock().await;
         (
             state
+                .protocols
                 .mysql
                 .exchanges
                 .iter()
@@ -355,7 +362,7 @@ async fn finite_inventory_requires_the_actual_write_and_commit_delivery() {
     let state = runtime.state.lock().await;
     assert_eq!(state.allowed_unused_commits().len(), 0);
     assert_eq!(state.transaction_equivalent_autocommit().len(), 0);
-    assert_eq!(state.mysql.events.matched_query_count, 4);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 4);
     assert!(state.dependency_tails.failures().is_empty());
     serving.abort();
 }

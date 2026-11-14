@@ -59,7 +59,15 @@ async fn recorded_proxy_failure_replays_the_same_502_and_consumes_one_exact_requ
         error.as_bytes()
     );
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while runtime.state.lock().await.http_events.matched_count == 0 {
+        while runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched_count
+            == 0
+        {
             tokio::task::yield_now().await;
         }
     })
@@ -67,9 +75,9 @@ async fn recorded_proxy_failure_replays_the_same_502_and_consumes_one_exact_requ
     .unwrap();
     {
         let state = runtime.state.lock().await;
-        assert_eq!(state.http_events.matched_count, 1);
+        assert_eq!(state.protocols.http_events.matched_count, 1);
         assert!(!state.http_case_is_dirty("case"));
-        assert!(state.http_events.unsupported.is_empty());
+        assert!(state.protocols.http_events.unsupported.is_empty());
     }
     let response = sender.send_request(send("/dependency")).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);

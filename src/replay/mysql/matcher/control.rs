@@ -13,7 +13,7 @@ impl ReplayState {
             return None;
         }
         for source in [ReplaySource::Case, ReplaySource::Startup] {
-            let index = self.mysql.exchanges.iter().position(|exchange| {
+            let index = self.protocols.mysql.exchanges.iter().position(|exchange| {
                 exchange.source.matches_scope(source)
                     && exchange.status.is_available()
                     && exchange.record.command == command
@@ -24,7 +24,7 @@ impl ReplayState {
             let Some(index) = index else {
                 continue;
             };
-            let exchange = &mut self.mysql.exchanges[index];
+            let exchange = &mut self.protocols.mysql.exchanges[index];
             let kind = if exchange.record.outcome.is_client_terminated()
                 && !exchange.record.lifecycle_cleanup
             {
@@ -33,12 +33,13 @@ impl ReplayState {
                 crate::replay::admission::ClaimKind::Response
             };
             let claim = self
+                .protocols
                 .mysql
                 .lifecycle
                 .claim(index, &mut exchange.status, kind)?;
             let matched = MatchedExchange {
                 request_observed_at: None,
-                target_observation_id: self.mysql.request_observation_id.clone(),
+                target_observation_id: self.protocols.mysql.request_observation_id.clone(),
                 claim,
                 hypothesis_owner: self
                     .replay_policy
@@ -64,7 +65,7 @@ impl ReplayState {
                     sql: argument.map(str::to_owned),
                     params: None,
                     status: exchange.record.response.status.clone(),
-                    target_event_index: self.mysql.events.request_order.latest(case),
+                    target_event_index: self.protocols.mysql.events.request_order.latest(case),
                 },
             };
             self.refresh_mysql_global_report(index);

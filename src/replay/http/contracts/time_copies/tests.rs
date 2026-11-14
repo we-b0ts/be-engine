@@ -113,7 +113,15 @@ async fn check_time_provenance(implicit: bool) {
     assert_eq!(&tail, b"0\r\n\r\n");
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
-            if runtime.state.lock().await.http_events.matched_count == 1 {
+            if runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .http_events
+                .matched_count
+                == 1
+            {
                 break;
             }
             tokio::task::yield_now().await;

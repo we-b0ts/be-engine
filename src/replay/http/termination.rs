@@ -278,9 +278,9 @@ impl ReplayState {
     pub(super) fn complete_http_exchange(&mut self, mut detail: MatchedHttpExchangeReport) {
         let budget_case_id = detail.case_id.clone();
         push_success_detail(
-            &mut self.http_events.matched_count,
-            &mut self.http_events.matched,
-            &mut self.http_events.matched_details,
+            &mut self.protocols.http_events.matched_count,
+            &mut self.protocols.http_events.matched,
+            &mut self.protocols.http_events.matched_details,
             budget_case_id.as_deref(),
             |target_event_index| {
                 detail.target_event_index = target_event_index;
@@ -302,7 +302,7 @@ impl ReplayState {
         detail: MatchedHttpExchangeReport,
         result: Result<()>,
     ) {
-        let sequence = self.http_sequence_claims.remove(&detail.index);
+        let sequence = self.protocols.http_sequence_claims.remove(&detail.index);
         let result = result.and_then(|()| {
             if let Some(sequence) = &sequence {
                 if sequence.reserved_kind().is_some_and(|kind| {
@@ -322,12 +322,12 @@ impl ReplayState {
             }
             contracts::time_copies::commit(
                 self.replay_policy.as_ref(),
-                &mut self.http_exchanges[detail.index],
+                &mut self.protocols.http_exchanges[detail.index],
             )
         });
         match result {
             Ok(()) => {
-                self.http_exchanges[detail.index].status = ReplayExchangeStatus::Consumed;
+                self.protocols.http_exchanges[detail.index].status = ReplayExchangeStatus::Consumed;
                 self.refresh_http_global_report(detail.index);
                 self.complete_http_exchange(detail);
             }
@@ -335,25 +335,31 @@ impl ReplayState {
                 if let Some(sequence) = &sequence {
                     sequence.fail();
                 }
-                self.http_exchanges[detail.index].time_copy_delivery = None;
-                self.http_exchanges[detail.index].status = ReplayExchangeStatus::Failed;
+                self.protocols.http_exchanges[detail.index].time_copy_delivery = None;
+                self.protocols.http_exchanges[detail.index].status = ReplayExchangeStatus::Failed;
                 self.refresh_http_global_report(detail.index);
                 if let Some(case_id) = &detail.case_id {
-                    self.http_events.dirty_case_ids.insert(case_id.clone());
+                    self.protocols
+                        .http_events
+                        .dirty_case_ids
+                        .insert(case_id.clone());
                 }
-                self.http_events.unsupported.push(HttpRequestReport {
-                    case_id: detail.case_id,
-                    scheme: detail.scheme,
-                    target: detail.target,
-                    method: detail.method,
-                    uri: detail.uri,
-                    reason: error.to_string(),
-                    target_observation_id: None,
-                    body_comparisons: Vec::new(),
-                    omitted_body_comparisons: 0,
-                    request_fingerprint: None,
-                    unordered_json: None,
-                });
+                self.protocols
+                    .http_events
+                    .unsupported
+                    .push(HttpRequestReport {
+                        case_id: detail.case_id,
+                        scheme: detail.scheme,
+                        target: detail.target,
+                        method: detail.method,
+                        uri: detail.uri,
+                        reason: error.to_string(),
+                        target_observation_id: None,
+                        body_comparisons: Vec::new(),
+                        omitted_body_comparisons: 0,
+                        request_fingerprint: None,
+                        unordered_json: None,
+                    });
             }
         }
     }

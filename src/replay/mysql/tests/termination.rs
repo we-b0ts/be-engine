@@ -57,7 +57,16 @@ async fn fast_compresses_mysql_server_prefix_and_termination_delay() {
             client.shutdown().await.unwrap();
         }
         tokio::time::timeout(Duration::from_secs(1), async {
-            while runtime.state.lock().await.mysql.events.matched_query_count != 1 {
+            while runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .mysql
+                .events
+                .matched_query_count
+                != 1
+            {
                 tokio::task::yield_now().await;
             }
         })
@@ -68,6 +77,7 @@ async fn fast_compresses_mysql_server_prefix_and_termination_delay() {
                 .state
                 .lock()
                 .await
+                .protocols
                 .mysql
                 .events
                 .unsupported_commands
@@ -143,14 +153,23 @@ async fn delivers_mysql_prefix_at_its_offset_then_server_eof() {
     );
     assert!(started.elapsed() >= std::time::Duration::from_millis(75));
     for _ in 0..20 {
-        if runtime.state.lock().await.mysql.events.matched_query_count == 1 {
+        if runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .matched_query_count
+            == 1
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.events.matched_query_count, 1);
-    assert!(state.mysql.events.unsupported_commands.is_empty());
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+    assert!(state.protocols.mysql.events.unsupported_commands.is_empty());
     drop(state);
     drop(client);
     task.abort();
@@ -192,13 +211,29 @@ async fn replays_server_reset_instead_of_orderly_eof() {
     .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
     for _ in 0..20 {
-        if runtime.state.lock().await.mysql.events.matched_query_count == 1 {
+        if runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .matched_query_count
+            == 1
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     assert_eq!(
-        runtime.state.lock().await.mysql.events.matched_query_count,
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .matched_query_count,
         1
     );
     task.abort();
@@ -238,6 +273,7 @@ async fn a_target_fin_before_server_deadline_is_dirty_and_unconsumed() {
             .state
             .lock()
             .await
+            .protocols
             .mysql
             .events
             .unmatched_queries
@@ -248,8 +284,8 @@ async fn a_target_fin_before_server_deadline_is_dirty_and_unconsumed() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.events.matched_query_count, 0);
-    assert!(!state.mysql.events.unmatched_queries.is_empty());
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 0);
+    assert!(!state.protocols.mysql.events.unmatched_queries.is_empty());
     assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), 1);
     drop(state);
     drop(client);
@@ -293,14 +329,23 @@ async fn ping_returns_builtin_ok_even_when_source_reset() {
     .unwrap();
     assert_eq!(packet.payload.first(), Some(&0x00));
     for _ in 0..20 {
-        if runtime.state.lock().await.mysql.events.builtin_query_count == 1 {
+        if runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .builtin_query_count
+            == 1
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.events.matched_query_count, 0);
-    assert_eq!(state.mysql.events.builtin_query_count, 1);
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 0);
+    assert_eq!(state.protocols.mysql.events.builtin_query_count, 1);
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     task.abort();
 }

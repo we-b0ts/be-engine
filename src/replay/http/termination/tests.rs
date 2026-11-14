@@ -82,15 +82,17 @@ async fn replay_timeout(tls: bool, recorded: u64, observed: u64, fin_first: bool
     );
     {
         let state = runtime.state.lock().await;
-        assert_eq!(state.http_events.matched_count, 0);
-        assert!(!state.http_exchanges[0].status.is_consumed());
+        assert_eq!(state.protocols.http_events.matched_count, 0);
+        assert!(!state.protocols.http_exchanges[0].status.is_consumed());
     }
     control.reset().unwrap();
     drop(client);
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let state = runtime.state.lock().await;
-            if state.http_exchanges[0].status != ReplayExchangeStatus::AwaitingClientTermination {
+            if state.protocols.http_exchanges[0].status
+                != ReplayExchangeStatus::AwaitingClientTermination
+            {
                 break;
             }
             drop(state);
@@ -100,27 +102,30 @@ async fn replay_timeout(tls: bool, recorded: u64, observed: u64, fin_first: bool
     .await
     .unwrap();
     let state = runtime.state.lock().await;
-    assert!(state.http_events.unmatched.is_empty());
+    assert!(state.protocols.http_events.unmatched.is_empty());
     if recorded == observed && !fin_first {
-        assert_eq!(state.http_events.matched_count, 1);
-        assert!(state.http_events.unsupported.is_empty());
-        assert!(state.http_exchanges[0].status.is_consumed());
+        assert_eq!(state.protocols.http_events.matched_count, 1);
+        assert!(state.protocols.http_events.unsupported.is_empty());
+        assert!(state.protocols.http_exchanges[0].status.is_consumed());
     } else {
-        assert_eq!(state.http_events.matched_count, 0);
+        assert_eq!(state.protocols.http_events.matched_count, 0);
         if fin_first {
             assert!(
-                state.http_events.unsupported[0]
+                state.protocols.http_events.unsupported[0]
                     .reason
                     .contains("timing window")
             );
         } else {
             assert!(
-                state.http_events.unsupported[0]
+                state.protocols.http_events.unsupported[0]
                     .reason
                     .contains("too early")
             );
         }
-        assert_eq!(state.http_exchanges[0].status, ReplayExchangeStatus::Failed);
+        assert_eq!(
+            state.protocols.http_exchanges[0].status,
+            ReplayExchangeStatus::Failed
+        );
     }
     task.abort();
 }
@@ -157,9 +162,12 @@ async fn http_client_that_never_closes_remains_dirty() {
     );
     assert!(response.is_empty());
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched_count, 0);
-    assert_eq!(state.http_exchanges[0].status, ReplayExchangeStatus::Failed);
-    assert!(!state.http_events.unsupported.is_empty());
+    assert_eq!(state.protocols.http_events.matched_count, 0);
+    assert_eq!(
+        state.protocols.http_exchanges[0].status,
+        ReplayExchangeStatus::Failed
+    );
+    assert!(!state.protocols.http_events.unsupported.is_empty());
     task.abort();
 }
 
@@ -214,7 +222,15 @@ async fn identical_http_retries_consume_separate_timeout_exchanges() {
     }
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if runtime.state.lock().await.http_events.matched_count == 2 {
+            if runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .http_events
+                .matched_count
+                == 2
+            {
                 break;
             }
             tokio::task::yield_now().await;
@@ -231,10 +247,11 @@ async fn identical_http_retries_consume_separate_timeout_exchanges() {
         .unwrap();
     assert!(String::from_utf8_lossy(&response).contains("502"));
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched_count, 2);
-    assert_eq!(state.http_events.unmatched.len(), 1);
+    assert_eq!(state.protocols.http_events.matched_count, 2);
+    assert_eq!(state.protocols.http_events.unmatched.len(), 1);
     assert!(
         state
+            .protocols
             .http_exchanges
             .iter()
             .all(|exchange| exchange.status.is_consumed())
@@ -309,7 +326,7 @@ async fn replay_half_close(tls: bool) {
     assert!(response.starts_with(b"HTTP/1.1 200"));
     assert!(response.ends_with(b"2\r\nok\r\n0\r\n\r\n"));
     let state = runtime.state.lock().await;
-    assert_eq!(state.http_events.matched_count, 1);
-    assert!(state.http_events.unsupported.is_empty());
+    assert_eq!(state.protocols.http_events.matched_count, 1);
+    assert!(state.protocols.http_events.unsupported.is_empty());
     task.abort();
 }

@@ -18,7 +18,11 @@ pub(in crate::replay::redis) async fn deliver_input(
     let mut replay = state.lock().await;
     if !delivery.case_is_current(&replay)
         || replay.finalized_at.is_some()
-        || !replay.redis.pubsub.is_subscribed(client, delivery.push)
+        || !replay
+            .protocols
+            .redis
+            .pubsub
+            .is_subscribed(client, delivery.push)
     {
         reject(
             &mut replay,
@@ -39,18 +43,22 @@ pub(in crate::replay::redis) async fn deliver_input(
             return Err(error.context("Pub/Sub input value contract failed"));
         }
     };
-    let bytes =
-        match super::subject_delivery::render(&replay.redis.pubsub, client, push, &value_bytes) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                reject(
-                    &mut replay,
-                    &delivery,
-                    "Pub/Sub input subject translation failed",
-                );
-                return Err(error.context("Pub/Sub input subject translation failed"));
-            }
-        };
+    let bytes = match super::subject_delivery::render(
+        &replay.protocols.redis.pubsub,
+        client,
+        push,
+        &value_bytes,
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            reject(
+                &mut replay,
+                &delivery,
+                "Pub/Sub input subject translation failed",
+            );
+            return Err(error.context("Pub/Sub input subject translation failed"));
+        }
+    };
     let timing_scope = super::super::input_timing::scope(&replay);
     drop(replay);
     let sent = tokio::time::timeout(std::time::Duration::from_secs(5), writer.write_all(&bytes))
@@ -73,9 +81,9 @@ pub(in crate::replay::redis) async fn deliver_input(
             );
         }
         Ok(()) => {
-            replay.redis.pubsub.complete(delivery.push);
+            replay.protocols.redis.pubsub.complete(delivery.push);
             if let (Some(case), Some(epoch)) = (&delivery.case_id, delivery.request_epoch) {
-                replay.redis.pubsub.native_clock.fast_written(
+                replay.protocols.redis.pubsub.native_clock.fast_written(
                     case,
                     epoch,
                     delivery.push,
@@ -87,9 +95,9 @@ pub(in crate::replay::redis) async fn deliver_input(
                 timing_scope.as_ref(),
                 crate::replay::control::input_timing::DeliveryReference::NativePush(delivery.push),
             );
-            replay.redis.lifecycle.notify_waiters();
+            replay.protocols.redis.lifecycle.notify_waiters();
             if let Some(matched) = &delivery.matched {
-                replay.redis.complete_exchange(matched);
+                replay.protocols.redis.complete_exchange(matched);
             }
         }
         Err(error) => {
@@ -102,10 +110,11 @@ pub(in crate::replay::redis) async fn deliver_input(
 
 fn reject(replay: &mut ReplayState, delivery: &Delivery, reason: &str) {
     replay
+        .protocols
         .redis
         .fail_pubsub_input(delivery.push, delivery.case_id.as_deref(), reason);
     if let Some(matched) = &delivery.matched {
-        replay.redis.fail_exchange(matched, reason.into());
+        replay.protocols.redis.fail_exchange(matched, reason.into());
     }
 }
 

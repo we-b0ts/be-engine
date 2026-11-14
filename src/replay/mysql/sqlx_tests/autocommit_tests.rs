@@ -69,7 +69,7 @@ async fn cold_source_setup_can_be_omitted_or_consumed_by_normal_sqlx_clients() {
                         usize::from(!send_setup)
                     );
                     assert_eq!(state.allowed_unused_rollbacks().len(), 2);
-                    assert!(state.mysql.events.unmatched_queries.is_empty());
+                    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
                     let report = serde_json::to_value(state.snapshot_report()).unwrap();
                     assert_eq!(
                         report["allowed_unused_mysql_autocommit_exchanges"]
@@ -78,7 +78,7 @@ async fn cold_source_setup_can_be_omitted_or_consumed_by_normal_sqlx_clients() {
                             .unwrap_or_default(),
                         usize::from(!send_setup)
                     );
-                    assert_eq!(state.mysql.exchanges.len(), 4);
+                    assert_eq!(state.protocols.mysql.exchanges.len(), 4);
                 }
                 assert_eq!(std::fs::read(path).unwrap(), original);
                 task.abort();
@@ -121,9 +121,9 @@ async fn autocommit_failures_and_multi_write_session_omissions_stay_visible() {
             let state = runtime.state.lock().await;
             assert!(state.allowed_unused_autocommit().is_empty());
             assert!(state.transaction_equivalent_autocommit().is_empty());
-            assert!(state.mysql.case_is_dirty("case-id"));
-            assert!(!state.mysql.events.unmatched_queries.is_empty());
-            assert_eq!(state.mysql.events.matched_query_count, 0);
+            assert!(state.protocols.mysql.case_is_dirty("case-id"));
+            assert!(!state.protocols.mysql.events.unmatched_queries.is_empty());
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 0);
             assert_eq!(
                 state
                     .unused_exchanges(ReplaySource::Case)
@@ -153,7 +153,14 @@ async fn autocommit_failures_and_multi_write_session_omissions_stay_visible() {
             .unwrap_err();
         assert!(error.to_string().contains("recorded failure"));
         assert_eq!(
-            runtime.state.lock().await.mysql.events.matched_query_count,
+            runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .mysql
+                .events
+                .matched_query_count,
             1
         );
         task.abort();
@@ -203,11 +210,11 @@ async fn recorded_ping_continuity_allows_multiple_normal_driver_read_sessions() 
         assert_eq!(state.allowed_unused_autocommit().len(), 1);
         assert_eq!(state.allowed_unused_rollbacks().len(), 4);
         assert_eq!(
-            state.mysql.exchanges.len(),
+            state.protocols.mysql.exchanges.len(),
             7,
             "PING is proof, not a required business call"
         );
-        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
         assert_eq!(std::fs::read(capture).unwrap(), original);
         task.abort();
     })
@@ -252,9 +259,9 @@ async fn case_local_inactive_gaps_allow_cold_setup_omission_across_seven_read_se
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
             assert_eq!(state.allowed_unused_autocommit().len(), 1);
             assert_eq!(state.allowed_unused_rollbacks().len(), 14);
-            assert_eq!(state.mysql.exchanges.len(), 22);
-            assert_eq!(state.mysql.events.matched_query_count, 7);
-            assert!(state.mysql.events.unmatched_queries.is_empty());
+            assert_eq!(state.protocols.mysql.exchanges.len(), 22);
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 7);
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
             let report = serde_json::to_value(state.snapshot_report()).unwrap();
             assert_eq!(
                 report["allowed_unused_mysql_autocommit_exchanges"]

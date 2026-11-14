@@ -194,6 +194,7 @@ async fn control(runtime: &ReplayRuntime, command: &str, case: &str) -> Value {
 
 fn wire_index(state: &ReplayState, connection: Uuid, sequence: u64) -> usize {
     let matches = state
+        .protocols
         .mysql
         .exchanges
         .iter()
@@ -249,7 +250,7 @@ async fn unselected_case_members_are_global_once_and_cannot_steal_business_commi
                 for sequence in [10, 11, 12] {
                     let index = wire_index(&state, fixture.background, sequence);
                     assert_eq!(
-                        state.mysql.exchanges[index].source,
+                        state.protocols.mysql.exchanges[index].source,
                         if sequence == 10 {
                             ReplaySource::Startup
                         } else {
@@ -288,9 +289,17 @@ async fn unselected_case_members_are_global_once_and_cannot_steal_business_commi
                 let state = runtime.state.lock().await;
                 let global_end = wire_index(&state, fixture.background, 12);
                 let business_end = wire_index(&state, fixture.business, 22);
-                assert!(state.mysql.exchanges[global_end].status.is_available());
-                assert!(state.mysql.exchanges[business_end].status.is_consumed());
-                assert!(!state.mysql.case_is_dirty("case-b"));
+                assert!(
+                    state.protocols.mysql.exchanges[global_end]
+                        .status
+                        .is_available()
+                );
+                assert!(
+                    state.protocols.mysql.exchanges[business_end]
+                        .status
+                        .is_consumed()
+                );
+                assert!(!state.protocols.mysql.case_is_dirty("case-b"));
             }
             sqlx::raw_sql("COMMIT")
                 .execute(&mut background)
@@ -310,14 +319,18 @@ async fn unselected_case_members_are_global_once_and_cannot_steal_business_commi
             );
             {
                 let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count, 6);
-                assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-                assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
+                assert_eq!(state.protocols.mysql.events.matched_query_count, 6);
+                assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+                assert!(
+                    state.protocols.mysql.events.unmatched_queries[0]
+                        .case_id
+                        .is_none()
+                );
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                 assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
                 for sequence in [10, 11, 12] {
                     let index = wire_index(&state, fixture.background, sequence);
-                    assert!(state.mysql.exchanges[index].status.is_consumed());
+                    assert!(state.protocols.mysql.exchanges[index].status.is_consumed());
                 }
                 assert_provenance(&state, &fixture);
             }
@@ -353,30 +366,30 @@ async fn global_transaction_errors_stay_global_and_pool_reuse_restores_case_owne
                     };
                     assert!(error.as_database_error().is_none());
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-                    assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
-                    assert!(!state.mysql.case_is_dirty("case-b"));
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+                    assert!(state.protocols.mysql.events.unmatched_queries[0].case_id.is_none());
+                    assert!(!state.protocols.mysql.case_is_dirty("case-b"));
                     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                     let end = wire_index(&state, fixture.background, 12);
-                    assert!(state.mysql.exchanges[end].status.is_available(), "EOF cannot consume the unexecuted Source COMMIT");
+                    assert!(state.protocols.mysql.exchanges[end].status.is_available(), "EOF cannot consume the unexecuted Source COMMIT");
                     drop(state);
                     assert!(sqlx::raw_sql("COMMIT").execute(&mut background).await.is_err());
                     let mut business = connect(addr, &fixture.ca_path()).await;
                     assert!(sqlx::query(BUSINESS_UPDATE).execute(&mut business).await.is_err());
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.unmatched_queries.len(), 2);
-                    assert_eq!(state.mysql.events.unmatched_queries[1].case_id.as_deref(), Some("case-b"));
-                    assert!(state.mysql.case_is_dirty("case-b"));
-                    assert!(state.mysql.exchanges[end].status.is_available());
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 2);
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries[1].case_id.as_deref(), Some("case-b"));
+                    assert!(state.protocols.mysql.case_is_dirty("case-b"));
+                    assert!(state.protocols.mysql.exchanges[end].status.is_available());
                 } else {
                     sqlx::raw_sql("COMMIT").execute(&mut background).await.unwrap();
                     assert!(sqlx::query(BACKGROUND_UPDATE).execute(&mut background).await.is_err());
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-                    assert_eq!(state.mysql.events.unmatched_queries[0].case_id.as_deref(), Some("case-b"),
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries[0].case_id.as_deref(), Some("case-b"),
                         "after a successful Global COMMIT the pooled connection uses the active Case");
                     assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
-                    assert_eq!(state.mysql.events.matched_query_count, 3);
+                    assert_eq!(state.protocols.mysql.events.matched_query_count, 3);
                     assert_provenance(&state, &fixture);
                 }
                 fixture.assert_immutable();
@@ -413,10 +426,13 @@ async fn missing_recording_run_boundary_does_not_promote_case_members() {
             let state = runtime.state.lock().await;
             assert!(state.global_mysql_transactions().is_empty());
             let end = wire_index(&state, fixture.background, 12);
-            assert_eq!(state.mysql.exchanges[end].source, ReplaySource::Case);
-            assert!(state.mysql.exchanges[end].status.is_available());
-            assert!(state.mysql.case_is_dirty("case-b"));
-            assert_eq!(state.mysql.events.matched_query_count, 1);
+            assert_eq!(
+                state.protocols.mysql.exchanges[end].source,
+                ReplaySource::Case
+            );
+            assert!(state.protocols.mysql.exchanges[end].status.is_available());
+            assert!(state.protocols.mysql.case_is_dirty("case-b"));
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
             fixture.assert_immutable();
             task.abort();
         }
@@ -456,22 +472,26 @@ async fn global_business_member_corrects_a_transaction_started_during_active_cas
                 }
                 let state = runtime.state.lock().await;
                 assert_eq!(
-                    state.mysql.events.unmatched_queries.len(),
+                    state.protocols.mysql.events.unmatched_queries.len(),
                     usize::from(reject)
                 );
                 if reject {
-                    assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
+                    assert!(
+                        state.protocols.mysql.events.unmatched_queries[0]
+                            .case_id
+                            .is_none()
+                    );
                     let end = wire_index(&state, fixture.background, 12);
                     assert!(
-                        state.mysql.exchanges[end].status.is_available(),
+                        state.protocols.mysql.exchanges[end].status.is_available(),
                         "rejected transaction leaves its Source COMMIT unused"
                     );
                 } else {
                     assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
                 }
-                assert!(!state.mysql.case_is_dirty("case-b"));
+                assert!(!state.protocols.mysql.case_is_dirty("case-b"));
                 assert_eq!(
-                    state.mysql.events.matched_query_count,
+                    state.protocols.mysql.events.matched_query_count,
                     if reject { 2 } else { 3 }
                 );
                 fixture.assert_immutable();
@@ -502,8 +522,11 @@ async fn native_global_implicit_commit_ends_transaction_owner_before_connection_
             {
                 let state = runtime.state.lock().await;
                 let index = wire_index(&state, ddl_connection, 1);
-                assert_eq!(state.mysql.exchanges[index].source, ReplaySource::Startup);
-                assert!(state.mysql.exchanges[index].status.is_consumed());
+                assert_eq!(
+                    state.protocols.mysql.exchanges[index].source,
+                    ReplaySource::Startup
+                );
+                assert!(state.protocols.mysql.exchanges[index].status.is_consumed());
                 assert!(
                     state
                         .global_mysql_transactions()
@@ -511,7 +534,7 @@ async fn native_global_implicit_commit_ends_transaction_owner_before_connection_
                         .all(|row| row.exchange.index != index),
                     "the DDL is native Global evidence, outside the promoted transaction"
                 );
-                assert!(!state.mysql.case_is_dirty("case-b"));
+                assert!(!state.protocols.mysql.case_is_dirty("case-b"));
             }
             assert!(
                 sqlx::query("UPDATE missing_jobs SET status='DONE' WHERE id=99")
@@ -520,12 +543,14 @@ async fn native_global_implicit_commit_ends_transaction_owner_before_connection_
                     .is_err()
             );
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+            assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
             assert_eq!(
-                state.mysql.events.unmatched_queries[0].case_id.as_deref(),
+                state.protocols.mysql.events.unmatched_queries[0]
+                    .case_id
+                    .as_deref(),
                 Some("case-b")
             );
-            assert!(state.mysql.case_is_dirty("case-b"));
+            assert!(state.protocols.mysql.case_is_dirty("case-b"));
             fixture.assert_immutable();
             task.abort();
         }
@@ -558,15 +583,20 @@ async fn conflicting_case_and_global_business_members_cannot_silently_change_own
             let state = runtime.state.lock().await;
             for sequence in [20, 21] {
                 let index = wire_index(&state, fixture.business, sequence);
-                assert!(state.mysql.exchanges[index].status.is_consumed());
+                assert!(state.protocols.mysql.exchanges[index].status.is_consumed());
             }
-            assert!(state.mysql.case_is_dirty("case-b"));
+            assert!(state.protocols.mysql.case_is_dirty("case-b"));
             assert!(
-                state.mysql.events.dirty_case_ids.contains("case-b"),
+                state
+                    .protocols
+                    .mysql
+                    .events
+                    .dirty_case_ids
+                    .contains("case-b"),
                 "ownership conflict is attributed to the established business Case"
             );
-            assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-            let conflict = &state.mysql.events.unmatched_queries[0];
+            assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+            let conflict = &state.protocols.mysql.events.unmatched_queries[0];
             assert_eq!(conflict.case_id.as_deref(), Some("case-b"));
             assert!(
                 conflict
@@ -634,7 +664,7 @@ async fn ordinary_global_reads_skip_transaction_proof_preparation_and_preserve_c
             }
             {
                 let state = runtime.state.lock().await;
-                assert!(!state.mysql.has_global_transaction_start);
+                assert!(!state.protocols.mysql.has_global_transaction_start);
                 assert!(state.global_mysql_transactions().is_empty());
             }
             control(&runtime, "begin", "case-b").await;
@@ -651,8 +681,8 @@ async fn ordinary_global_reads_skip_transaction_proof_preparation_and_preserve_c
                 .unwrap();
             assert_eq!(row.get::<i32, _>("id"), 7);
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.matched_query_count, 4);
-            assert!(!state.mysql.case_is_dirty("case-b"));
+            assert_eq!(state.protocols.mysql.events.matched_query_count, 4);
+            assert!(!state.protocols.mysql.case_is_dirty("case-b"));
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
             assert!(state.global_mysql_transactions().is_empty());
             fixture.assert_immutable();

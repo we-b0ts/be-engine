@@ -142,7 +142,7 @@ struct Sequence {
     times: Vec<time::ComparedTime>,
 }
 #[derive(Clone, Default)]
-pub(in crate::replay) struct RequestContracts {
+pub(crate) struct RequestContracts {
     hypothesis_context: Option<Arc<HypothesisContext>>,
     hypothesis_journal: Option<crate::policy_evidence::hypotheses::Journal>,
     mysql_hypothesis_projections: Arc<Mutex<mysql_hypothesis::ProjectionCache>>,

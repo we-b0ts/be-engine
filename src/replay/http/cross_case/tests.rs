@@ -182,7 +182,7 @@ async fn source_target_stream(
     let ca = runtime.ca.clone();
     tokio::spawn(async move {
         if target.protocol == ReplayProtocol::Auto {
-            target.protocol = super::super::auto_protocol::detect(&server)
+            target.protocol = crate::protocols::replay::auto_protocol::detect(&server)
                 .await
                 .unwrap()
                 .expect("Target sends a detectable HTTP request");
@@ -325,7 +325,16 @@ rules:
         StatusCode::BAD_GATEWAY,
         "a missing Source credential is an exact absence, not an optional identity header"
     );
-    assert_eq!(runtime.state.lock().await.http_events.matched_count, 0);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched_count,
+        0
+    );
     assert_eq!(
         call_source_target(&runtime, HOST, 80, "/token?audience=erp", BODY)
             .await
@@ -348,7 +357,16 @@ rules:
     )
     .await;
     assert_eq!(other.status(), StatusCode::OK);
-    assert_eq!(runtime.state.lock().await.http_events.matched_count, 2);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched_count,
+        2
+    );
     task.abort();
 }
 
@@ -386,6 +404,7 @@ async fn a_host_only_http_cache_uses_source_ports_and_excludes_other_hosts() {
             .state
             .lock()
             .await
+            .protocols
             .http_exchanges
             .iter()
             .filter(|exchange| exchange.shared_origin.is_some())
@@ -487,7 +506,16 @@ async fn scope_keeps_query_body_and_identity_headers_exact_despite_global_ignore
         call(addr, "/token?audience=erp", BODY).await.status(),
         StatusCode::OK
     );
-    assert_eq!(runtime.state.lock().await.http_events.matched_count, 1);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_events
+            .matched_count,
+        1
+    );
     task.abort();
 }
 
@@ -515,6 +543,7 @@ async fn full_run_loads_shared_exchange_once_and_original_case_does_not_require_
     );
     assert_eq!(
         state
+            .protocols
             .http_exchanges
             .iter()
             .filter(|e| e.shared_origin.is_some())
@@ -657,6 +686,7 @@ async fn shared_rule_rejects_truncated_evidence_and_scope_cannot_escape_its_run(
             .state
             .lock()
             .await
+            .protocols
             .http_exchanges
             .iter()
             .filter(|e| e.shared_origin.is_some())

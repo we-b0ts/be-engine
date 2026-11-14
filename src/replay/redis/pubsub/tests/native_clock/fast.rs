@@ -233,6 +233,7 @@ async fn replay_passive_prefix(setup: bool) {
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .report()
@@ -299,6 +300,7 @@ async fn ordered_fast_push_arrives_before_the_input_that_awaits_its_output() {
             .state
             .lock()
             .await
+            .protocols
             .redis
             .pubsub
             .native_clock

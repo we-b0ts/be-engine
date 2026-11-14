@@ -18,6 +18,7 @@ pub(super) async fn deliver_memcached_exchange(
                 state
                     .lock()
                     .await
+                    .protocols
                     .memcached
                     .finish_exchange(matched, || Ok(()))?;
                 if matched.timing.outcome().termination().is_some_and(|end| {
@@ -28,7 +29,7 @@ pub(super) async fn deliver_memcached_exchange(
                     if !reader.buffer.is_empty()
                         || matches!(tokio::io::AsyncReadExt::read(reader.inner, &mut probe).await, Ok(count) if count > 0)
                     {
-                        state.lock().await.memcached.fail_exchange(
+                        state.lock().await.protocols.memcached.fail_exchange(
                             matched,
                             "client sent another Memcached request after recorded server EOF"
                                 .into(),
@@ -42,6 +43,7 @@ pub(super) async fn deliver_memcached_exchange(
                 state
                     .lock()
                     .await
+                    .protocols
                     .memcached
                     .fail_exchange(matched, error.to_string());
                 super::super::exchange::retain_connection(reader.inner).await;
@@ -61,6 +63,7 @@ pub(super) async fn deliver_memcached_exchange(
             state
                 .lock()
                 .await
+                .protocols
                 .memcached
                 .fail_exchange(matched, format!("response contract failed: {error:#}"));
             return Err(error);
@@ -68,7 +71,7 @@ pub(super) async fn deliver_memcached_exchange(
     };
     for response in &frames {
         if let Err(error) = reader.inner.write_all(response).await {
-            state.lock().await.memcached.fail_exchange(
+            state.lock().await.protocols.memcached.fail_exchange(
                 matched,
                 format!("failed to deliver recorded Memcached response: {error}"),
             );
@@ -80,11 +83,11 @@ pub(super) async fn deliver_memcached_exchange(
     matched.claim.publish_wire();
     let mut replay = state.lock().await;
     let ReplayState {
-        memcached,
+        protocols,
         replay_policy,
         ..
     } = &mut *replay;
-    memcached.finish_exchange(matched, || {
+    protocols.memcached.finish_exchange(matched, || {
         if let Some(policy) = replay_policy {
             policy.commit(matched.report.case_id.as_deref(), decision)?;
         }

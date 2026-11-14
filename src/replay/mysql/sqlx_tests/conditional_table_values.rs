@@ -35,7 +35,7 @@ rules:
 "#;
         let (temp,addr,runtime,task) = fixture_with_policy(&events,Some(policy)).await;
         let recording = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");let original=std::fs::read(&recording).unwrap();
-        runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
+        runtime.state.lock().await.protocols.mysql.observed_at_for_test = Some(observed);
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let invalid_running = body("RUNNING",json!("2026-10-16T00:01:00"));
         assert!(sqlx::query(&sql("tasks_0001")).bind(invalid_running.to_string()).bind("2026-10-16 00:01:00").bind(7_i64).execute(&mut client).await.is_err());
@@ -57,7 +57,7 @@ rules:
         assert!(sqlx::query(&sql("tasks_0001")).bind(good.to_string()).bind("2026-10-16 00:01:00").bind(7_i64).execute(&mut client).await.is_err());
         client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();let state=runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,3);assert_eq!(state.mysql.events.unmatched_queries.len(),8);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,3);assert_eq!(state.protocols.mysql.events.unmatched_queries.len(),8);
         assert_eq!(std::fs::read(recording).unwrap(),original);task.abort();
     }).await.unwrap();
 }

@@ -42,7 +42,7 @@ pub(super) fn delivered(
     if scope(state).as_ref() != Some(captured) {
         return;
     }
-    let receipts = &mut state.redis.timing_deliveries;
+    let receipts = &mut state.protocols.redis.timing_deliveries;
     if receipts.scope.as_ref() != Some(captured) {
         receipts.scope = Some(captured.clone());
         receipts.written.clear();
@@ -130,7 +130,7 @@ pub(super) fn response_delivered(
     matched: &MatchedRedisExchange,
     scope: Option<&DeliveryScope>,
 ) {
-    let exchange = &state.redis.exchanges[matched.index];
+    let exchange = &state.protocols.redis.exchanges[matched.index];
     if exchange.source != ReplaySource::Case {
         return;
     }
@@ -150,6 +150,7 @@ pub(super) fn response_delivered(
         // successful original confirmation and its exact Global subscription
         // requirement/mirror. This hook adds the independent actual TCP write.
         state
+            .protocols
             .redis
             .timing_deliveries
             .shared_subscriptions
@@ -171,7 +172,7 @@ pub(super) fn response_indices_delivered(
         return;
     };
     for index in indices {
-        let exchange = &state.redis.exchanges[*index];
+        let exchange = &state.protocols.redis.exchanges[*index];
         if exchange.source == ReplaySource::Case
             && exchange.case_id.as_deref() == Some(captured.case.as_str())
         {

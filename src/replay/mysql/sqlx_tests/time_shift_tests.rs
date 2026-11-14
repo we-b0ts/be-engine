@@ -36,12 +36,12 @@ mysql:
         let projected = client.fetch_one("SELECT owner FROM leases WHERE id=7").await.unwrap();
         assert_eq!(projected.get::<String,_>("owner"), "stable");
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,3);
         let report = state.replay_policy.as_ref().unwrap().report();
         let usage = report.global_formats.iter().find(|format| format.id == "global.mysql").unwrap();
         assert_eq!(usage.validations, 2);
         assert_eq!(usage.time_validations, 2);
-        assert!(state.mysql.exchanges.iter().all(|exchange| exchange.record.response.rows[0][0].value == Some(json!("2020-01-01 00:05:00.123456"))));
+        assert!(state.protocols.mysql.exchanges.iter().all(|exchange| exchange.record.response.rows[0][0].value == Some(json!("2020-01-01 00:05:00.123456"))));
         drop(state);
         client.close().await.unwrap();
         task.abort();

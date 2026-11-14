@@ -35,10 +35,7 @@ impl MemcachedReplayState {
 }
 
 impl MemcachedReplayState {
-    pub(in crate::replay) fn startup_counts(
-        &mut self,
-        close: bool,
-    ) -> crate::replay::startup::Counts {
+    pub(crate) fn startup_counts(&mut self, close: bool) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
         for exchange in &mut self.exchanges {
             counts.observe(

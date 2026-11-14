@@ -62,6 +62,7 @@ async fn reordered_transaction_reports_source_references_through_real_sqlx_deliv
         let _ = tx.commit().await;
         let state = runtime.state.lock().await;
         let diagnostic = state
+            .protocols
             .mysql
             .events
             .unmatched_queries
@@ -120,7 +121,7 @@ async fn sqlx_explicit_transactions_cover_one_persistent_source_autocommit_setti
             tx.commit().await.unwrap();
             let state = runtime.state.lock().await;
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty(), "{:?}", state.unused_exchanges(ReplaySource::Case));
-            assert!(state.mysql.events.unmatched_queries.is_empty());
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
             let covered = state.transaction_equivalent_autocommit();
             assert_eq!(covered.len(), 1);
             assert_eq!(covered[0].diagnostic.as_ref().unwrap()["covered_transaction_count"], 2);
@@ -157,7 +158,7 @@ async fn pooled_autocommit_rejects_a_required_write_before_delivery() {
                 .is_err()
         );
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         assert!(state.transaction_equivalent_autocommit().is_empty());
         let unused = state.unused_exchanges(ReplaySource::Case);
         for sequence in [3, 6, 7, 8] {
@@ -167,7 +168,13 @@ async fn pooled_autocommit_rejects_a_required_write_before_delivery() {
                     .any(|exchange| exchange.query_sequence == Some(sequence))
             );
         }
-        let unmatched = state.mysql.events.unmatched_queries.last().unwrap();
+        let unmatched = state
+            .protocols
+            .mysql
+            .events
+            .unmatched_queries
+            .last()
+            .unwrap();
         let diagnostic = unmatched.diagnostic.as_ref().unwrap();
         assert_eq!(diagnostic["reason"], "target_transaction_missing");
         assert_eq!(diagnostic["stage"], "candidate_admission");
@@ -177,7 +184,10 @@ async fn pooled_autocommit_rejects_a_required_write_before_delivery() {
         );
         assert!(diagnostic["source_transactions"][0]["target_status_after"].is_null());
         let index = unmatched.recorded_index.unwrap();
-        assert_eq!(state.mysql.exchanges[index].record.query_sequence, Some(6));
+        assert_eq!(
+            state.protocols.mysql.exchanges[index].record.query_sequence,
+            Some(6)
+        );
         assert!(unmatched.target_event_index.is_some());
         task.abort();
     })
@@ -225,23 +235,29 @@ async fn autocommit_read_skips_an_identical_member_of_a_required_transaction() {
         );
         {
             let state = runtime.state.lock().await;
-            assert!(state.mysql.events.unmatched_queries.is_empty());
+            assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
             assert_eq!(
-                state.mysql.events.matched_queries[0].source_connection_id,
+                state.protocols.mysql.events.matched_queries[0].source_connection_id,
                 Some(ordinary_connection)
             );
         }
         assert!(read().fetch_one(&mut client).await.is_err());
         let state = runtime.state.lock().await;
-        let unmatched = state.mysql.events.unmatched_queries.last().unwrap();
-        let candidate = &state.mysql.exchanges[unmatched.recorded_index.unwrap()];
+        let unmatched = state
+            .protocols
+            .mysql
+            .events
+            .unmatched_queries
+            .last()
+            .unwrap();
+        let candidate = &state.protocols.mysql.exchanges[unmatched.recorded_index.unwrap()];
         assert_eq!(candidate.record.query_sequence, Some(5));
         assert!(candidate.status.is_available());
         assert_eq!(
             unmatched.diagnostic.as_ref().unwrap()["stage"],
             "candidate_admission"
         );
-        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         task.abort();
     })
     .await
@@ -301,7 +317,7 @@ async fn matching_all_business_sql_without_commit_does_not_match_the_transaction
                 .unwrap();
         }
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 3);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 3);
         assert!(state.transaction_equivalent_autocommit().is_empty());
         let unused = state.unused_exchanges(ReplaySource::Case);
         assert_eq!(unused.len(), 2, "SET and COMMIT must both remain required");

@@ -83,7 +83,7 @@ async fn lazy_inventory_matches_eager_and_never_replenishes_consumption() {
         let before = serde_json::to_value(runtime.state.lock().await.snapshot_report()).unwrap();
         assert_eq!(before["selected_case_ids"], json!(["a", "b"]));
         assert_eq!(
-            runtime.state.lock().await.http_exchanges.len(),
+            runtime.state.lock().await.protocols.http_exchanges.len(),
             if lazy { 0 } else { 2 }
         );
         let server = runtime.clone();
@@ -108,8 +108,8 @@ async fn lazy_inventory_matches_eager_and_never_replenishes_consumption() {
             );
         }
         let state = runtime.state.lock().await;
-        assert_eq!(state.http_exchanges.len(), 2);
-        assert_eq!(state.http_events.matched_count, 2);
+        assert_eq!(state.protocols.http_exchanges.len(), 2);
+        assert_eq!(state.protocols.http_events.matched_count, 2);
         assert!(
             state
                 .unused_http_exchanges(ReplaySource::Case, false)
@@ -128,7 +128,10 @@ async fn lazy_inventory_matches_eager_and_never_replenishes_consumption() {
             begin_case(&request("begin", "a"), fresh.state.clone()).await["ok"],
             true
         );
-        assert_eq!(fresh.state.lock().await.http_events.matched_count, 0);
+        assert_eq!(
+            fresh.state.lock().await.protocols.http_events.matched_count,
+            0
+        );
     }
 }
 
@@ -144,7 +147,7 @@ async fn modified_source_fails_preparation_without_activating_case() {
     );
     let state = runtime.state.lock().await;
     assert!(state.active_case_id.is_none());
-    assert!(state.http_exchanges.is_empty());
+    assert!(state.protocols.http_exchanges.is_empty());
 }
 
 #[tokio::test]
@@ -163,7 +166,10 @@ async fn lazy_startup_indexes_preloaded_redis_before_any_case_begins() {
     let (runtime, _) = load(temp.path(), true).await;
     let state = runtime.state.lock().await;
     assert!(state.active_case_id.is_none());
-    assert_eq!(state.redis.prepared_case_members("a").as_ref(), &[0]);
+    assert_eq!(
+        state.protocols.redis.prepared_case_members("a").as_ref(),
+        &[0]
+    );
 }
 
 #[tokio::test]
@@ -177,13 +183,22 @@ async fn complete_mysql_connection_is_classified_at_case_preparation() {
     }).to_string()).collect::<Vec<_>>().join("\n");
     std::fs::write(temp.path().join("a/dependencies.jsonl"), records).unwrap();
     let (runtime, _) = load(temp.path(), true).await;
-    assert!(runtime.state.lock().await.mysql.exchanges.is_empty());
+    assert!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .exchanges
+            .is_empty()
+    );
     let begin = begin_case(&request("begin", "a"), runtime.state.clone()).await;
     assert_eq!(begin["ok"], true, "{begin}");
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.exchanges.len(), 2);
+    assert_eq!(state.protocols.mysql.exchanges.len(), 2);
     assert_eq!(
-        state.mysql.exchanges[1].optional_session,
+        state.protocols.mysql.exchanges[1].optional_session,
         Some(mysql::OptionalSessionExchange::Rollback)
     );
 }
@@ -269,7 +284,15 @@ async fn read_ahead_warms_bytes_without_installing_exchanges() {
     })
     .await
     .unwrap();
-    assert!(runtime.state.lock().await.http_exchanges.is_empty());
+    assert!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .http_exchanges
+            .is_empty()
+    );
     assert!(runtime.state.lock().await.active_case_id.is_none());
     let begin = begin_case(&request("begin", "a"), runtime.state.clone()).await;
     assert_eq!(begin["ok"], true, "{begin}");
@@ -290,7 +313,8 @@ async fn reclamation_keeps_inflight_rows_and_stable_report_positions() {
         begin_case(&request("begin", "a"), runtime.state.clone()).await["ok"],
         true
     );
-    runtime.state.lock().await.mysql.exchanges[0].status = ReplayExchangeStatus::Responding;
+    runtime.state.lock().await.protocols.mysql.exchanges[0].status =
+        ReplayExchangeStatus::Responding;
     let end_state = runtime.state.clone();
     let ending = tokio::spawn(async move { end_case(&request("end", "a"), end_state).await });
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -301,9 +325,16 @@ async fn reclamation_keeps_inflight_rows_and_stable_report_positions() {
     );
     {
         let mut state = runtime.state.lock().await;
-        assert_eq!(state.mysql.exchanges[0].record.response.rows.len(), 1);
+        assert_eq!(
+            state.protocols.mysql.exchanges[0]
+                .record
+                .response
+                .rows
+                .len(),
+            1
+        );
         assert_eq!(state.unused_exchanges(ReplaySource::Case)[0].index, 0);
-        state.mysql.exchanges[0].status = ReplayExchangeStatus::Consumed;
+        state.protocols.mysql.exchanges[0].status = ReplayExchangeStatus::Consumed;
     }
     let ended = ending.await.unwrap();
     assert_eq!(ended["ok"], true);
@@ -312,8 +343,17 @@ async fn reclamation_keeps_inflight_rows_and_stable_report_positions() {
         true
     );
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.exchanges.len(), 1);
-    assert!(state.mysql.exchanges[0].record.response.rows.is_empty());
+    assert_eq!(state.protocols.mysql.exchanges.len(), 1);
+    assert!(
+        state.protocols.mysql.exchanges[0]
+            .record
+            .response
+            .rows
+            .is_empty()
+    );
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-    assert_eq!(state.mysql.exchanges[0].case_id.as_deref(), Some("a"));
+    assert_eq!(
+        state.protocols.mysql.exchanges[0].case_id.as_deref(),
+        Some("a")
+    );
 }

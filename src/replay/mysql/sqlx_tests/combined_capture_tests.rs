@@ -45,7 +45,7 @@ async fn combined_capture_from_real_unmatched_insert_then_fresh_replay_is_finite
         client = connect(addr, &fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,1);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         let report = state.replay_policy.as_ref().unwrap().report();
         assert_eq!(report.dynamic_bindings.len(),1);
@@ -100,7 +100,7 @@ async fn combined_table_capture_replays_two_shards_without_cross_table_consumpti
         client = connect(addr, &fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count,2);
+        assert_eq!(state.protocols.mysql.events.matched_query_count,2);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         let report = state.replay_policy.as_ref().unwrap().report();
         assert_eq!(report.dynamic_bindings.len(),2);

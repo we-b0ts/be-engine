@@ -3,35 +3,7 @@ use super::*;
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub(in crate::replay) struct Counts {
-    pub required: usize,
-    pub unstarted: usize,
-}
-impl Counts {
-    pub(in crate::replay) fn observe(
-        &mut self,
-        source: ReplaySource,
-        status: &mut ReplayExchangeStatus,
-        mandatory: bool,
-        close: bool,
-    ) {
-        if source != ReplaySource::Startup || !mandatory {
-            return;
-        }
-        self.required += 1;
-        if status.is_available() {
-            self.unstarted += 1;
-            if close {
-                *status = ReplayExchangeStatus::StartupBlocked;
-            }
-        }
-    }
-    pub(in crate::replay) fn merge(&mut self, other: Self) {
-        self.required += other.required;
-        self.unstarted += other.unstarted;
-    }
-}
+pub(in crate::replay) use traffic_replay::StartupCounts as Counts;
 #[derive(Debug, Default)]
 pub(super) struct StartupPhase {
     inventory: BTreeMap<String, usize>,
@@ -75,19 +47,9 @@ impl StartupPhase {
         }
     }
 }
-impl ReplayState {
+impl<P: ReplayProtocolSet> RuntimeState<P> {
     fn startup_counts(&mut self, close: bool) -> BTreeMap<String, Counts> {
-        let mut counts = BTreeMap::from([
-            ("mysql".into(), self.mysql.startup_counts(close)),
-            (
-                "http".into(),
-                http::startup_counts(&mut self.http_exchanges, close),
-            ),
-            ("redis".into(), self.redis.startup_counts(close)),
-            ("memcached".into(), self.memcached.startup_counts(close)),
-            ("motan".into(), self.motan.startup_counts(close)),
-            ("kafka".into(), self.kafka.startup_counts(close)),
-        ]);
+        let mut counts = self.protocols.startup_counts(close);
         for (protocol, native) in self.native.startup_counts(close) {
             counts.entry(protocol).or_default().merge(native);
         }
@@ -104,7 +66,7 @@ impl ReplayState {
         if self.startup_phase.boundary_case_id.is_some() {
             return;
         }
-        self.http_ingress.close_startup();
+        self.protocols.close_startup();
         let counts = self.startup_counts(true);
         self.startup_phase.inventory = counts
             .iter()

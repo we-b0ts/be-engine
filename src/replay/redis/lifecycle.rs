@@ -45,7 +45,7 @@ pub(super) async fn deliver(
 ) -> Result<()> {
     let (case, gate) = {
         let state = state.lock().await;
-        let exchange = &state.redis.exchanges[matched.index];
+        let exchange = &state.protocols.redis.exchanges[matched.index];
         let case = exchange
             .case_id
             .clone()
@@ -63,10 +63,10 @@ pub(super) async fn deliver(
     reader.inner.flush().await?;
     {
         let mut state = state.lock().await;
-        state.redis.exchanges[matched.index].status =
+        state.protocols.redis.exchanges[matched.index].status =
             ReplayExchangeStatus::AwaitingClientTermination;
         for exchange in &additional {
-            state.redis.exchanges[exchange.index].status =
+            state.protocols.redis.exchanges[exchange.index].status =
                 ReplayExchangeStatus::AwaitingClientTermination;
         }
     }
@@ -76,9 +76,12 @@ pub(super) async fn deliver(
     let mut state = state.lock().await;
     for exchange in &additional {
         if let Err(error) = &result {
-            state.redis.fail_exchange(exchange, error.to_string());
+            state
+                .protocols
+                .redis
+                .fail_exchange(exchange, error.to_string());
         } else {
-            state.redis.complete_exchange(exchange);
+            state.protocols.redis.complete_exchange(exchange);
         }
     }
     result
@@ -93,13 +96,20 @@ async fn claim_pipeline(
 ) -> Result<Vec<MatchedRedisExchange>> {
     let mut pipeline = Vec::new();
     loop {
-        let pending = state.lock().await.redis.exchanges.iter().any(|exchange| {
-            exchange.case_id.as_deref() == Some(case)
-                && exchange.source == ReplaySource::Case
-                && exchange.record.connection_id == first.connection_id
-                && exchange.record.lifecycle_cleanup
-                && exchange.status.is_available()
-        });
+        let pending = state
+            .lock()
+            .await
+            .protocols
+            .redis
+            .exchanges
+            .iter()
+            .any(|exchange| {
+                exchange.case_id.as_deref() == Some(case)
+                    && exchange.source == ReplaySource::Case
+                    && exchange.record.connection_id == first.connection_id
+                    && exchange.record.lifecycle_cleanup
+                    && exchange.status.is_available()
+            });
         if !pending {
             break;
         }
@@ -108,13 +118,14 @@ async fn claim_pipeline(
             .context("Target closed before its admitted Redis pipeline was complete")?;
         let command = redis_command(&frame.raw)?;
         let mut state = state.lock().await;
-        let record = state.redis.exchanges[first.index].record.clone();
+        let record = state.protocols.redis.exchanges[first.index].record.clone();
         let connection = TargetConnection {
             id: client_id,
             bound: Some(first.connection_id),
         };
         let matched = if redis_is_builtin(&command.name) {
             state
+                .protocols
                 .redis
                 .match_redis_builtin_failure(
                     Some(case),
@@ -128,6 +139,7 @@ async fn claim_pipeline(
                 .context("no admitted Redis cleanup request matched the pipeline")?
         } else {
             state
+                .protocols
                 .redis
                 .match_redis(
                     Some(case),
@@ -143,7 +155,7 @@ async fn claim_pipeline(
         };
         ensure!(
             matched.connection_id == first.connection_id
-                && state.redis.exchanges[matched.index]
+                && state.protocols.redis.exchanges[matched.index]
                     .record
                     .lifecycle_cleanup,
             "Redis cleanup pipeline cannot claim an ordinary response"

@@ -49,6 +49,7 @@ async fn protected_native_connect_uses_managed_input_without_rewriting_evidence(
                 .state
                 .lock()
                 .await
+                .protocols
                 .redis
                 .pubsub
                 .report()

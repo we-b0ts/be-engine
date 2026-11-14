@@ -103,7 +103,17 @@ async fn accepts_tls_login_with_replay_ca() {
     let response = read_packet(&mut client).await.unwrap().unwrap();
     assert_eq!(response.sequence_id, 3);
     assert_eq!(response.payload[0], 0x00);
-    assert_eq!(runtime.state.lock().await.mysql.events.connections, 1);
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .connections,
+        1
+    );
     assert_eq!(
         counts
             .mysql
@@ -216,21 +226,37 @@ async fn consumes_timeout_only_after_client_close() {
         .is_err()
     );
     assert_eq!(
-        runtime.state.lock().await.mysql.events.matched_query_count,
+        runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .matched_query_count,
         0
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     client.shutdown().await.unwrap();
     for _ in 0..50 {
-        if runtime.state.lock().await.mysql.events.matched_query_count == 1 {
+        if runtime
+            .state
+            .lock()
+            .await
+            .protocols
+            .mysql
+            .events
+            .matched_query_count
+            == 1
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.events.matched_query_count, 1);
-    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     drop(state);
     task.abort();
@@ -305,8 +331,8 @@ async fn maintenance_queries_use_builtin_responses_without_recorded_exchanges() 
     assert_eq!(read_u16_le(&error.payload, 1), Some(1102));
 
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.events.builtin_query_count, 3);
-    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert_eq!(state.protocols.mysql.events.builtin_query_count, 3);
+    assert!(state.protocols.mysql.events.unmatched_queries.is_empty());
     assert!(!super::super::report_is_dirty(&state.snapshot_report()));
     drop(state);
     task.abort();
@@ -391,11 +417,11 @@ async fn active_case_exchanges_precede_identical_global_exchanges() {
 
     let state = runtime.state.lock().await;
     assert_eq!(
-        state.mysql.events.matched_queries[0].source,
+        state.protocols.mysql.events.matched_queries[0].source,
         ReplaySource::Case
     );
     assert_eq!(
-        state.mysql.events.matched_queries[1].source,
+        state.protocols.mysql.events.matched_queries[1].source,
         ReplaySource::Case
     );
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
@@ -458,7 +484,7 @@ async fn stmt_close_ignores_legacy_exchange_and_keeps_protocol_aligned() {
     );
 
     let state = runtime.state.lock().await;
-    assert!(state.mysql.events.unsupported_commands.is_empty());
+    assert!(state.protocols.mysql.events.unsupported_commands.is_empty());
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     assert!(!super::super::report_is_dirty(&state.snapshot_report()));
     drop(state);
@@ -703,14 +729,14 @@ async fn prepared_execute_matches_com_query_recording_with_inlined_literal() {
         let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
 
         let state = runtime.state.lock().await;
-        for query in &state.mysql.events.unmatched_queries {
+        for query in &state.protocols.mysql.events.unmatched_queries {
             eprintln!(
                 "unmatched: command={} sql={:?} params={:?} reason={}",
                 query.command, query.sql, query.params, query.reason
             );
         }
         assert_eq!(
-            state.mysql.events.matched_queries.len(),
+            state.protocols.mysql.events.matched_queries.len(),
             1,
             "prepared COM_STMT_EXECUTE must match the COM_QUERY recording"
         );

@@ -61,14 +61,16 @@ fn identity(
     }
 }
 
-impl admission::request::DependencyRequestAdapter<ReplayState> for Request {
+impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeState<P>>
+    for Request
+{
     type Matched = Matched;
     type Error = Rejected;
     fn sequence_request_bytes(&self) -> Option<usize> {
         Some(self.bytes)
     }
 
-    fn observe_once(&mut self, state: &mut ReplayState) -> admission::RequestAdmission {
+    fn observe_once(&mut self, state: &mut RuntimeState<P>) -> admission::RequestAdmission {
         let case = state.active_case_id.as_deref();
         let event = state.native.order.reserve(case);
         let id = Uuid::new_v4();
@@ -98,11 +100,14 @@ impl admission::request::DependencyRequestAdapter<ReplayState> for Request {
 
     fn try_select(
         &mut self,
-        state: &mut ReplayState,
+        state: &mut RuntimeState<P>,
         observation: &admission::RequestAdmission,
     ) -> Result<Matched, Rejected> {
         if let Some(reason) = observation.cancel_reason(state) {
-            return Err(self.interrupted(reason));
+            return Err(Rejected {
+                reason: reason.into(),
+                blocker: None,
+            });
         }
         let native = &state.native;
         let selected = native.core.select(
@@ -128,9 +133,10 @@ impl admission::request::DependencyRequestAdapter<ReplayState> for Request {
                 });
             }
             Selection::NotFound => {
-                return Err(
-                    self.interrupted("no recorded native request matched the active Source scope")
-                );
+                return Err(Rejected {
+                    reason: "no recorded native request matched the active Source scope".into(),
+                    blocker: None,
+                });
             }
         };
         let index = selected.index;
@@ -158,7 +164,7 @@ impl admission::request::DependencyRequestAdapter<ReplayState> for Request {
 
     fn wait_dependency<'a>(
         &self,
-        state: &'a ReplayState,
+        state: &'a RuntimeState<P>,
         _: &admission::RequestAdmission,
         error: &Rejected,
     ) -> Option<admission::request::WaitDependency<'a>> {
@@ -184,7 +190,7 @@ impl admission::request::DependencyRequestAdapter<ReplayState> for Request {
 
     fn on_rejected(
         &mut self,
-        state: &mut ReplayState,
+        state: &mut RuntimeState<P>,
         observation: &admission::RequestAdmission,
         error: &Rejected,
     ) {

@@ -116,6 +116,7 @@ impl MysqlReplayState {
 impl ReplayState {
     pub(in crate::replay) fn process_owned_mysql(&self) -> Vec<OwnedExchange> {
         let mut exchanges: Vec<_> = self
+            .protocols
             .mysql
             .foreign
             .iter()

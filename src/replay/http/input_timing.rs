@@ -12,8 +12,11 @@ pub(in crate::replay) fn source_streams(
         .get(case)
         .context("HTTP timing execution plan missing")?;
     let mut streams = Vec::new();
-    for &index in plan.native.http.iter() {
-        let exchange = &state.http_exchanges[index];
+    for &index in plan.native.protocols[&traffic_protocol::ProtocolId::new("http")]
+        .members
+        .iter()
+    {
+        let exchange = &state.protocols.http_exchanges[index];
         let record = &exchange.record;
         let Some(stream) = &record.response_stream else {
             continue;
@@ -44,7 +47,7 @@ pub(super) async fn bind(
     progress: crate::http::termination::DeliveryProgress,
 ) -> Result<Option<BoundStream>> {
     let state = state.lock().await;
-    match (state.http_input_timing.as_ref(), detail) {
+    match (state.protocols.http_input_timing.as_ref(), detail) {
         (Some(timeline), Some(detail))
             if detail.case_id.as_deref() == state.active_case_id.as_deref() =>
         {

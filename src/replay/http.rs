@@ -1,6 +1,11 @@
+mod activity;
+pub(crate) mod preparation;
+pub(crate) use activity::{
+    case_in_flight_diagnostic, case_is_dirty, has_in_flight, startup_counts,
+};
 mod admission;
 pub(in crate::replay) mod cancelled;
-pub(in crate::replay) mod candidates;
+pub(crate) mod candidates;
 pub(in crate::replay) mod contracts;
 pub(crate) mod diagnosis;
 mod matching;
@@ -45,7 +50,7 @@ use crate::DiscoveredTcpTarget;
 pub(crate) mod cross_case;
 mod evidence;
 mod identity;
-pub(in crate::replay) mod ingress;
+pub(crate) mod ingress;
 pub(in crate::replay) mod input_timing;
 mod lifecycle;
 mod recording;
@@ -57,7 +62,7 @@ mod tail;
 mod termination;
 mod transport;
 pub(crate) mod unordered;
-pub(super) use transport::handle_http_replay_connection;
+pub(crate) use transport::handle_http_replay_connection;
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 pub(super) use request_headers::HeaderDifferenceReport;
@@ -129,7 +134,7 @@ struct HttpDependencyIdentity {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ReplayHttpExchange {
+pub(crate) struct ReplayHttpExchange {
     source: ReplaySource,
     case_id: Option<String>,
     identity: HttpDependencyIdentity,
@@ -150,7 +155,7 @@ pub(super) struct RecordedTcpGatewayConnection {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ReplayHttpBlackhole {
+pub(crate) struct ReplayHttpBlackhole {
     case_id: String,
     target: TargetKey,
     consumed: bool,
@@ -166,7 +171,7 @@ enum HttpReplayMatchError {
 mod upstream_failure;
 
 #[derive(Debug, Default)]
-pub(super) struct HttpReplayEvents {
+pub(crate) struct HttpReplayEvents {
     pub(super) cancelled: BTreeMap<usize, cancelled::Audit>,
     pub(super) global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     pub(super) dirty_case_ids: BTreeSet<String>,
@@ -462,26 +467,23 @@ fn normalize_scheme(value: &str) -> Result<HttpReplayScheme> {
 }
 
 impl ReplayState {
-    pub(super) fn http_case_is_dirty(&self, case_id: &str) -> bool {
-        self.http_ingress.case_failed(case_id)
-            || self.http_events.dirty_case_ids.contains(case_id)
-            || self.http_case_exchange_index.any(case_id, |index| {
-                self.http_exchanges.get(index).is_some_and(|exchange| {
-                    let allowed = self.allowed_unused_http.as_ref().is_some_and(|config| {
-                        config.hosts.contains(&exchange.identity.target.host)
-                    });
-                    !exchange.status.is_covered()
-                        && !allowed
-                        && !self.permits_cancelled_http_omission(index)
-                })
-            })
+    #[cfg(test)]
+    pub(super) fn http_case_is_dirty(&self, case: &str) -> bool {
+        case_is_dirty(
+            &self.protocols.http_exchanges,
+            &self.protocols.http_case_exchange_index,
+            &self.protocols.http_ingress,
+            &self.protocols.http_events,
+            self.protocols.allowed_unused_http.as_ref(),
+            case,
+        )
     }
 
     fn claim_http_blackhole(&mut self, target: &TargetKey, method: &Method, uri: &Uri) -> bool {
         let Some(active_case_id) = self.active_case_id.as_deref() else {
             return false;
         };
-        let Some(blackhole) = self.http_blackholes.iter_mut().find(|blackhole| {
+        let Some(blackhole) = self.protocols.http_blackholes.iter_mut().find(|blackhole| {
             !blackhole.consumed
                 && blackhole.case_id == active_case_id
                 && blackhole.target == *target
@@ -501,7 +503,7 @@ impl ReplayState {
     }
 
     fn bind_last_unmatched_http_observation(&mut self, id: Option<uuid::Uuid>) {
-        if let Some(report) = self.http_events.unmatched.last_mut() {
+        if let Some(report) = self.protocols.http_events.unmatched.last_mut() {
             report.target_observation_id = id.map(|id| {
                 crate::policy_evidence::target_observation_id(
                     &id.to_string(),
@@ -540,21 +542,27 @@ impl ReplayState {
         reason: String,
     ) {
         if let Some(case_id) = &case_id {
-            self.http_events.dirty_case_ids.insert(case_id.clone());
+            self.protocols
+                .http_events
+                .dirty_case_ids
+                .insert(case_id.clone());
         }
-        self.http_events.unmatched.push(HttpRequestReport {
-            case_id,
-            scheme,
-            target: target.clone(),
-            method: method.to_string(),
-            uri: uri_path_only(&uri.to_string()),
-            reason,
-            target_observation_id: None,
-            body_comparisons: Vec::new(),
-            omitted_body_comparisons: 0,
-            request_fingerprint: None,
-            unordered_json: Some(Default::default()),
-        });
+        self.protocols
+            .http_events
+            .unmatched
+            .push(HttpRequestReport {
+                case_id,
+                scheme,
+                target: target.clone(),
+                method: method.to_string(),
+                uri: uri_path_only(&uri.to_string()),
+                reason,
+                target_observation_id: None,
+                body_comparisons: Vec::new(),
+                omitted_body_comparisons: 0,
+                request_fingerprint: None,
+                unordered_json: Some(Default::default()),
+            });
     }
 
     pub(super) fn unused_http_iter(
@@ -562,7 +570,8 @@ impl ReplayState {
         source: ReplaySource,
         allowed: bool,
     ) -> impl Iterator<Item = RecordedHttpExchangeSummary> + '_ {
-        self.http_exchanges
+        self.protocols
+            .http_exchanges
             .iter()
             .enumerate()
             .filter(move |(index, exchange)| {
@@ -579,10 +588,14 @@ impl ReplayState {
                     return false;
                 }
                 let is_allowed = source == ReplaySource::Case
-                    && (self.http_events.cancelled.contains_key(index)
-                        || self.allowed_unused_http.as_ref().is_some_and(|config| {
-                            config.hosts.contains(&exchange.identity.target.host)
-                        }));
+                    && (self.protocols.http_events.cancelled.contains_key(index)
+                        || self
+                            .protocols
+                            .allowed_unused_http
+                            .as_ref()
+                            .is_some_and(|config| {
+                                config.hosts.contains(&exchange.identity.target.host)
+                            }));
                 is_allowed == allowed
             })
             .map(move |(index, exchange)| RecordedHttpExchangeSummary {
@@ -927,64 +940,4 @@ pub(super) fn release_consumed_payloads(
             }
         }
     }
-}
-
-impl ReplayState {
-    pub(in crate::replay) fn http_case_in_flight_diagnostic(&self) -> serde_json::Value {
-        let pending = self.http_exchanges.iter().enumerate().filter(|(_, e)| {
-            e.source == ReplaySource::Case
-                && matches!(
-                    e.status,
-                    super::ReplayExchangeStatus::Responding
-                        | super::ReplayExchangeStatus::AwaitingClientTermination
-                )
-        });
-        let count = pending.clone().count();
-        let references = pending
-            .take(4)
-            .map(|(index, e)| {
-                serde_json::json!({"index":index, "case_id":e.case_id,
-                "exchange_id":e.record.id, "status":format!("{:?}", e.status)})
-            })
-            .collect::<Vec<_>>();
-        serde_json::json!({"count":count, "references":references,
-            "omitted":count.saturating_sub(4)})
-    }
-
-    pub(in crate::replay) fn http_has_case_in_flight(&self) -> bool {
-        self.http_ingress
-            .has_case_pending(self.active_case_id.as_deref())
-            || self.http_exchanges.iter().any(|e| {
-                e.source == ReplaySource::Case
-                    && matches!(
-                        e.status,
-                        super::ReplayExchangeStatus::Responding
-                            | super::ReplayExchangeStatus::AwaitingClientTermination
-                    )
-            })
-    }
-
-    pub(in crate::replay) fn http_has_in_flight(&self) -> bool {
-        self.http_ingress.has_pending()
-            || self.http_exchanges.iter().any(|e| {
-                matches!(
-                    e.status,
-                    super::ReplayExchangeStatus::Responding
-                        | super::ReplayExchangeStatus::AwaitingClientTermination
-                )
-            })
-    }
-}
-
-/// Native protocol probes remain available; business initialization closes once.
-pub(in crate::replay) fn startup_counts(
-    exchanges: &mut [ReplayHttpExchange],
-    close: bool,
-) -> super::startup::Counts {
-    let mut counts = super::startup::Counts::default();
-    for exchange in exchanges {
-        let mandatory = !exchange.is_repeatable_preflight_probe();
-        counts.observe(exchange.source, &mut exchange.status, mandatory, close);
-    }
-    counts
 }

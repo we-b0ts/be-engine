@@ -53,7 +53,10 @@ pub(in crate::replay) trait NativeDependencyAdapter {
 impl NativeDependencyAdapter for DependencyAdapter {
     fn permits_cancelled_omission(self, state: &ReplayState) -> bool {
         match self {
-            Self::Redis(index) => state.redis.permits_cancelled_append_omission(index),
+            Self::Redis(index) => state
+                .protocols
+                .redis
+                .permits_cancelled_append_omission(index),
             Self::Http(index) => state.permits_cancelled_http_omission(index),
             _ => false,
         }
@@ -71,13 +74,13 @@ impl NativeDependencyAdapter for DependencyAdapter {
 
     fn delivery_state(self, state: &ReplayState) -> Option<ReplayExchangeStatus> {
         match self {
-            Self::Redis(index) => state.redis.exchange_status(index),
-            Self::RedisRpcPush(index) => state.redis.pubsub.finite_rpc_push_status(index),
-            Self::Mysql(index) => state.mysql.exchange_status(index),
+            Self::Redis(index) => state.protocols.redis.exchange_status(index),
+            Self::RedisRpcPush(index) => state.protocols.redis.pubsub.finite_rpc_push_status(index),
+            Self::Mysql(index) => state.protocols.mysql.exchange_status(index),
             Self::Http(index) => state.http_exchange_status(index),
-            Self::Memcached(index) => state.memcached.finite_exchange_status(index),
-            Self::Motan(index) => state.motan.finite_exchange_status(index),
-            Self::Kafka(exchange) => state.kafka.finite_exchange_status(exchange),
+            Self::Memcached(index) => state.protocols.memcached.finite_exchange_status(index),
+            Self::Motan(index) => state.protocols.motan.finite_exchange_status(index),
+            Self::Kafka(exchange) => state.protocols.kafka.finite_exchange_status(exchange),
         }
     }
 
@@ -91,7 +94,7 @@ impl NativeDependencyAdapter for DependencyAdapter {
             // MySQL proves native setup/cleanup and transaction equivalence
             // independently of the finite async inventory. It never permits an
             // unobserved business statement or an already started delivery.
-            Self::Mysql(index) => state.mysql.permits_unstarted_omission(index),
+            Self::Mysql(index) => state.protocols.mysql.permits_unstarted_omission(index),
             Self::Http(index) => {
                 !strict_reference
                     && shared_initialization

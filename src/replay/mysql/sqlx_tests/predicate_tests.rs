@@ -12,7 +12,7 @@ async fn prepare_metadata_reuses_exact_sql_and_refreshes_after_source_registrati
     )
     .await;
     let mut state = runtime.state.lock().await;
-    let mut source = state.mysql.exchanges[0].clone();
+    let mut source = state.protocols.mysql.exchanges[0].clone();
     let identity = ReplaySessionIdentity {
         target: Some(source.identity.target.clone()),
         database: source.identity.database.clone(),
@@ -26,7 +26,7 @@ async fn prepare_metadata_reuses_exact_sql_and_refreshes_after_source_registrati
     assert!(Arc::ptr_eq(&first, &repeated));
 
     source.record.sql = Some("SELECT id FROM tasks WHERE uid=1".into());
-    state.mysql.register_exchange(source);
+    state.protocols.mysql.register_exchange(source);
     let refreshed = state.statement_metadata_in_case(Some("case-id"), &identity, sql);
     assert_eq!(refreshed.columns.len(), 1);
     assert!(!Arc::ptr_eq(&first, &refreshed));
@@ -53,7 +53,7 @@ async fn global_formats_preserve_numeric_string_in_permutations() {
         client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
         }
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         assert_eq!(std::fs::read(&path).unwrap(), original);
         task.abort();
@@ -111,7 +111,14 @@ async fn global_formats_preserve_unordered_predicates_without_selected_sql_field
         .await;
         client.close().await.unwrap();
         assert_eq!(
-            runtime.state.lock().await.mysql.events.matched_query_count,
+            runtime
+                .state
+                .lock()
+                .await
+                .protocols
+                .mysql
+                .events
+                .matched_query_count,
             1
         );
         task.abort();
@@ -178,15 +185,15 @@ async fn sqlx_predicate_orders_match_all_protocol_pairs_and_cached_parameter_reb
                             assert_eq!(response[0].get::<i64, _>("id"), tenant);
                         }
                         let state = runtime.state.lock().await;
-                        let now = state.mysql.sql_cache.compilations;
+                        let now = state.protocols.mysql.sql_cache.compilations;
                         if target_prepared && attempt == 2 { assert_eq!(compiled, now, "cached SQL must be rebound without recompilation"); }
                         compiled = now;
                     }
                     client.close().await.unwrap();
                     let state = runtime.state.lock().await;
-                    assert_eq!(state.mysql.events.matched_query_count, 2);
-                    assert_eq!(state.mysql.events.unmatched_queries.len(), 2);
-                    assert!(state.mysql.events.metadata_warnings.is_empty(), "{:?}", state.mysql.events.metadata_warnings);
+                    assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
+                    assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 2);
+                    assert!(state.protocols.mysql.events.metadata_warnings.is_empty(), "{:?}", state.protocols.mysql.events.metadata_warnings);
                     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                     assert_eq!(std::fs::read(capture).unwrap(), original);
                     task.abort();
@@ -206,7 +213,7 @@ async fn predicate_cache_preserves_identity_case_precedence_and_finite_consumpti
     )
     .await;
     let mut state = runtime.state.lock().await;
-    let source = &state.mysql.exchanges[0].identity;
+    let source = &state.protocols.mysql.exchanges[0].identity;
     let identity = ReplaySessionIdentity {
         target: Some(source.target.clone()),
         database: source.database.clone(),
@@ -247,10 +254,10 @@ async fn predicate_cache_preserves_identity_case_precedence_and_finite_consumpti
     assert!(matched.claim.publish_wire());
     assert!(state.complete_exchange(&matched));
     // Global exact matching must not outrank Case semantic matching.
-    state.mysql.exchanges[1].source = ReplaySource::Startup;
-    state.mysql.exchanges[1].case_id = None;
-    state.mysql.invalidate_scope_index();
-    state.mysql.exchanges[1].status = ReplayExchangeStatus::Available;
+    state.protocols.mysql.exchanges[1].source = ReplaySource::Startup;
+    state.protocols.mysql.exchanges[1].case_id = None;
+    state.protocols.mysql.invalidate_scope_index();
+    state.protocols.mysql.exchanges[1].status = ReplayExchangeStatus::Available;
     let matched = state
         .match_exchange(&identity, "COM_QUERY", Some(exact), None)
         .unwrap();
@@ -312,9 +319,9 @@ async fn sqlx_predicate_prepare_keeps_fixed_values_and_execute_checks_remaining_
         assert_eq!(row.get::<i64, _>(0), 1);
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 1);
-        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-        assert!(state.mysql.events.metadata_warnings.is_empty());
+        assert_eq!(state.protocols.mysql.events.matched_query_count, 1);
+        assert_eq!(state.protocols.mysql.events.unmatched_queries.len(), 1);
+        assert!(state.protocols.mysql.events.metadata_warnings.is_empty());
         task.abort();
     })
     .await
@@ -361,7 +368,7 @@ dependency_rules:
     let mut state = runtime.state.lock().await;
     state.replay_policy =
         Some(crate::replay::policy::ReplayPolicyRuntime::load(&policy_path, &state.cases).unwrap());
-    let source = &state.mysql.exchanges[0].identity;
+    let source = &state.protocols.mysql.exchanges[0].identity;
     let identity = ReplaySessionIdentity {
         target: Some(source.target.clone()),
         database: source.database.clone(),
@@ -377,7 +384,7 @@ dependency_rules:
             .match_exchange(&identity, "COM_STMT_EXECUTE", Some(sql), Some(&params))
             .is_none()
     );
-    assert!(state.mysql.exchanges[0].status.is_available());
+    assert!(state.protocols.mysql.exchanges[0].status.is_available());
     state.replay_policy = None;
     assert!(
         state

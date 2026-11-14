@@ -86,7 +86,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                         if attempt == 2 {
                             if let Err(error) = &rows {
                                 let state = runtime.state.lock().await;
-                                panic!("valid cutoff failed: source_prepared={source_prepared}, target_mode={target_mode}, template={template}, error={error:?}, source={:?}, target={:?}, warnings={:?}", state.mysql.exchanges[0].record, state.mysql.events.unmatched_queries.last(), state.mysql.events.metadata_warnings);
+                                panic!("valid cutoff failed: source_prepared={source_prepared}, target_mode={target_mode}, template={template}, error={error:?}, source={:?}, target={:?}, warnings={:?}", state.protocols.mysql.exchanges[0].record, state.protocols.mysql.events.unmatched_queries.last(), state.protocols.mysql.events.metadata_warnings);
                             }
                             let rows = rows.unwrap();
                             assert_eq!(rows.len(), 1);
@@ -106,7 +106,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                 }
                 client.close().await.unwrap();
                 let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.matched_query_count, 2);
+                assert_eq!(state.protocols.mysql.events.matched_query_count, 2);
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
                 let report = state.replay_policy.as_ref().unwrap().report();
                 assert!(

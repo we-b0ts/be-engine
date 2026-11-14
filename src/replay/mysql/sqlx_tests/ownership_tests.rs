@@ -160,6 +160,7 @@ async fn verify_business_commit(lazy: bool, commit_business: bool, known_global_
     }
     let state = runtime.state.lock().await;
     let background = state
+        .protocols
         .mysql
         .exchanges
         .iter()
@@ -168,6 +169,7 @@ async fn verify_business_commit(lazy: bool, commit_business: bool, known_global_
         })
         .unwrap();
     let own = state
+        .protocols
         .mysql
         .exchanges
         .iter()
@@ -175,9 +177,13 @@ async fn verify_business_commit(lazy: bool, commit_business: bool, known_global_
             e.record.connection_id == Some(business) && e.record.query_sequence == Some(313)
         })
         .unwrap();
-    assert!(state.mysql.exchanges[background].status.is_available());
+    assert!(
+        state.protocols.mysql.exchanges[background]
+            .status
+            .is_available()
+    );
     assert_eq!(
-        state.mysql.exchanges[own].status.is_consumed(),
+        state.protocols.mysql.exchanges[own].status.is_consumed(),
         commit_business
     );
     assert!(
@@ -188,9 +194,14 @@ async fn verify_business_commit(lazy: bool, commit_business: bool, known_global_
         state.global_mysql_transactions().is_empty(),
         "a raw global filename cannot prove a run owner kind"
     );
-    assert_eq!(state.mysql.exchanges[background].source, ReplaySource::Case);
     assert_eq!(
-        state.mysql.exchanges[background].case_id.as_deref(),
+        state.protocols.mysql.exchanges[background].source,
+        ReplaySource::Case
+    );
+    assert_eq!(
+        state.protocols.mysql.exchanges[background]
+            .case_id
+            .as_deref(),
         Some("case-id")
     );
     task.abort();

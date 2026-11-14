@@ -323,6 +323,7 @@ impl DeliveryCompletion {
         let claim = state
             .lock()
             .await
+            .protocols
             .http_sequence_claims
             .get(&detail.index)
             .cloned();

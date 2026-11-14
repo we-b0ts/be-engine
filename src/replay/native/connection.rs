@@ -8,11 +8,11 @@ use traffic_protocol::{
     message::ProtocolMessage,
 };
 
-pub(in crate::replay) async fn handle_connection(
+pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
     stream: TcpStream,
     peer: SocketAddr,
     target: ReplayTarget,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
 ) -> Result<()> {
     let protocol = target.protocol.id();
     let endpoint = Endpoint {
@@ -59,14 +59,14 @@ pub(in crate::replay) async fn handle_connection(
     result
 }
 
-struct Host {
-    state: Arc<Mutex<ReplayState>>,
+struct Host<P: ReplayProtocolSet> {
+    state: Arc<Mutex<RuntimeState<P>>>,
     protocol: ProtocolId,
     endpoint: Endpoint,
     reported: Arc<AtomicBool>,
 }
 
-impl RequestHost for Host {
+impl<P: ReplayProtocolSet> RequestHost for Host<P> {
     fn execute(
         &self,
         message: Arc<dyn ProtocolMessage>,
@@ -120,17 +120,17 @@ impl RequestHost for Host {
     }
 }
 
-struct Delivery {
+struct Delivery<P: ReplayProtocolSet> {
     matched: request::Matched,
     started: tokio::time::Instant,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
     protocol: ProtocolId,
     endpoint: Endpoint,
     reported: Arc<AtomicBool>,
     _guard: admission::DeliveryGuard,
 }
 
-impl ResponseDelivery for Delivery {
+impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
     fn write<'a>(
         self: Box<Self>,
         io: &'a mut dyn ConnectionIo,
@@ -140,8 +140,13 @@ impl ResponseDelivery for Delivery {
             let matched = &self.matched;
             let result = async {
                 matched.ticket.wait_sequence_delivery().await?;
-                let remaining = matched.delay.saturating_sub(self.started.elapsed());
-                tokio::time::sleep(remaining).await;
+                let fast = self.state.lock().await.stream_timing == Some(ReplayStreamTiming::Fast);
+                super::super::exchange::ReplayExchangeTiming::from_duration(
+                    matched.delay,
+                    crate::DependencyExchangeOutcome::Response,
+                )
+                .delay_response_from_request(self.started, fast)
+                .await;
                 let response = {
                     let state = self.state.lock().await;
                     ensure!(
