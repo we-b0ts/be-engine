@@ -2,7 +2,8 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use super::*;
-use crate::recorder::{RedisExchangeEvent, capture_body};
+use crate::DependencyExchangeOutcome;
+use crate::recorder::{RecorderEvent, RedisExchangeEvent, capture_body};
 
 #[test]
 fn separates_bootstrap_and_background_and_counts_snapshot_reuse() {
@@ -12,15 +13,38 @@ fn separates_bootstrap_and_background_and_counts_snapshot_reuse() {
     let failed_fill = redis_exchange(false, "error", DependencyExchangeOutcome::Response);
     let ping = redis_ping();
 
-    builder.observe(&seed, "background_rule", "bootstrap", "startup-cache-warm");
-    builder.observe(&reuse, "background_rule", "runtime", "startup-cache-warm");
-    builder.observe(
-        &failed_fill,
-        "background_rule",
-        "runtime",
-        "startup-cache-warm",
-    );
-    builder.observe(&ping, "bootstrap_window", "bootstrap", "bootstrap_window");
+    builder
+        .observe(
+            &CapturedEvent::capture(&seed).unwrap(),
+            "background_rule",
+            "bootstrap",
+            "startup-cache-warm",
+        )
+        .unwrap();
+    builder
+        .observe(
+            &CapturedEvent::capture(&reuse).unwrap(),
+            "background_rule",
+            "runtime",
+            "startup-cache-warm",
+        )
+        .unwrap();
+    builder
+        .observe(
+            &CapturedEvent::capture(&failed_fill).unwrap(),
+            "background_rule",
+            "runtime",
+            "startup-cache-warm",
+        )
+        .unwrap();
+    builder
+        .observe(
+            &CapturedEvent::capture(&ping).unwrap(),
+            "bootstrap_window",
+            "bootstrap",
+            "bootstrap_window",
+        )
+        .unwrap();
 
     let summary = builder.summary();
     assert_eq!(summary.bootstrap.events, 2);
@@ -34,7 +58,8 @@ fn separates_bootstrap_and_background_and_counts_snapshot_reuse() {
     assert_eq!(rule.bootstrap_interactions, 1);
     assert_eq!(rule.runtime_interactions, 2);
     assert_eq!(rule.observations[0].interactions, 3);
-    let snapshot = rule.redis_snapshot.as_ref().unwrap();
+    let snapshot: traffic_protocol_redis::process_summary::SnapshotSummary =
+        serde_json::from_value(rule.native["redis_snapshot"].clone()).unwrap();
     assert_eq!(snapshot.seeds, 1);
     assert_eq!(snapshot.reuses, 1);
     assert_eq!(snapshot.fill_failures, 1);

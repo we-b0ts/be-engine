@@ -50,6 +50,10 @@ MySQL and Redis libraries. Protocol references retain open identity fields, and
 semantic evidence support is supplied by the registered native evidence owner.
 `CaptureEvidence` supplies native completeness, references and control facts.
 The ledger owns capture lifetime and sealed persistence through that interface.
+The recording queue holds protocol-independent `CapturedEvent` snapshots.
+Native evidence adapters project process-traffic observations and aggregate
+their own summary formats. Shared process aggregation retains attribution,
+bounded observation counts and publication.
 `traffic-response-rewrite` owns pure document selection, decoding,
 address discovery and materialization. The root HTTP adapter owns route
 registration, managed processes and provenance. See

@@ -11,13 +11,15 @@ use traffic_recording::RecordingClock;
 use uuid::Uuid;
 
 use super::jsonl::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
-use super::summary::{SourceProcessTrafficSummaryBuilder, should_append_case_dependency};
+use super::summary::SourceProcessTrafficSummaryBuilder;
 use crate::active_case::DependencyTargets;
 use crate::config::TrafficJsonlMode;
 use crate::dependency::attribution::DependencyOwner;
 use crate::dependency::observation::{CaptureCoverage, SourceArtifactIdentity};
 
-use super::{CaseContext, RecorderEvent, should_write_traffic_event};
+use super::{CaseContext, should_write_traffic_event};
+use traffic_protocol::capture::CaptureEvidence;
+use traffic_recording::CapturedEvent;
 
 type WriterAck = oneshot::Sender<std::result::Result<(), String>>;
 
@@ -28,7 +30,7 @@ pub(super) struct CaptureOptions {
 }
 
 pub(super) struct RecordEnvelope {
-    pub(super) event: RecorderEvent,
+    pub(super) event: CapturedEvent,
     pub(super) targets: DependencyTargets,
     pub(super) global_attribution: Option<super::GlobalDependencyAttribution>,
     pub(super) suppress_default_global: bool,
@@ -56,15 +58,15 @@ enum WriterCommand {
         ack: WriterAck,
     },
     Record(RecordEnvelope),
-    RecordTraffic(RecorderEvent),
+    RecordTraffic(CapturedEvent),
     AppendCase {
         case: CaseContext,
-        event: RecorderEvent,
+        event: CapturedEvent,
         matched_by: String,
         ack: WriterAck,
     },
     AppendGlobal {
-        event: RecorderEvent,
+        event: CapturedEvent,
         reason: String,
         phase: String,
         matched_by: String,
@@ -127,7 +129,9 @@ impl RecorderWriter {
             dependency_files: JsonlWriterPool::new(settings),
             run_dir: run_dir.clone(),
             finalized_cases,
-            source_process_traffic: SourceProcessTrafficSummaryBuilder::default(),
+            source_process_traffic: SourceProcessTrafficSummaryBuilder::new(
+                capture.evidence.clone(),
+            ),
             ledger: super::ledger::persistence::LedgerWriter::new(
                 &run_dir,
                 capture.process_epoch,
@@ -229,7 +233,8 @@ impl RecorderWriter {
             .map_err(anyhow::Error::msg)
     }
 
-    pub(super) fn try_record_traffic(&self, event: RecorderEvent) -> Result<()> {
+    pub(super) fn try_record_traffic(&self, event: impl CaptureEvidence) -> Result<()> {
+        let event = CapturedEvent::capture(&event)?;
         self.try_send(
             WriterCommand::RecordTraffic(event),
             "recording writer queue is full",
@@ -254,9 +259,10 @@ impl RecorderWriter {
     pub(super) async fn append_case(
         &self,
         case: CaseContext,
-        event: RecorderEvent,
+        event: impl CaptureEvidence,
         matched_by: &str,
     ) -> Result<()> {
+        let event = CapturedEvent::capture(&event)?;
         self.request(|ack| WriterCommand::AppendCase {
             case,
             event,
@@ -268,11 +274,12 @@ impl RecorderWriter {
 
     pub(super) async fn append_global(
         &self,
-        event: RecorderEvent,
+        event: impl CaptureEvidence,
         reason: &str,
         phase: &str,
         matched_by: &str,
     ) -> Result<()> {
+        let event = CapturedEvent::capture(&event)?;
         self.request(|ack| WriterCommand::AppendGlobal {
             event,
             reason: reason.to_string(),
@@ -511,21 +518,21 @@ impl WriterState {
                 global_attribution.as_ref(),
             )
             .await?;
-        if !should_append_case_dependency(&event) {
+        if !event.facts().case_dependency {
             if let Some(attribution) = global_attribution.as_ref() {
                 self.source_process_traffic.observe(
                     &event,
                     attribution.reason,
                     attribution.phase,
                     &attribution.matched_by,
-                );
+                )?;
             } else if targets.bootstrap_open && !suppress_default_global {
                 self.source_process_traffic.observe(
                     &event,
                     "bootstrap_window",
                     "bootstrap",
                     "bootstrap_window",
-                );
+                )?;
             }
             return Ok(());
         }
@@ -535,7 +542,7 @@ impl WriterState {
                 attribution.reason,
                 attribution.phase,
                 &attribution.matched_by,
-            );
+            )?;
             return Ok(());
         }
         if targets.bootstrap_open && !suppress_default_global {
@@ -544,7 +551,7 @@ impl WriterState {
                 "bootstrap_window",
                 "bootstrap",
                 "bootstrap_window",
-            );
+            )?;
         }
         if targets.ambiguous_active_cases > 0 {
             warn!(
@@ -556,7 +563,7 @@ impl WriterState {
         Ok(())
     }
 
-    async fn append_traffic(&mut self, event: &RecorderEvent) -> Result<()> {
+    async fn append_traffic(&mut self, event: &CapturedEvent) -> Result<()> {
         if !should_write_traffic_event(self.traffic_jsonl, event) {
             return Ok(());
         }
@@ -571,7 +578,7 @@ impl WriterState {
     async fn append_case(
         &mut self,
         case: &CaseContext,
-        event: &RecorderEvent,
+        event: &CapturedEvent,
         _matched_by: &str,
     ) -> Result<()> {
         if self.finalized_cases.lock().await.contains(&case.id) {
@@ -593,13 +600,13 @@ impl WriterState {
 
     async fn append_global(
         &mut self,
-        event: &RecorderEvent,
+        event: &CapturedEvent,
         reason: &str,
         phase: &str,
         matched_by: &str,
     ) -> Result<()> {
         self.source_process_traffic
-            .observe(event, reason, phase, matched_by);
+            .observe(event, reason, phase, matched_by)?;
         self.ledger
             .append(
                 &mut self.dependency_files,

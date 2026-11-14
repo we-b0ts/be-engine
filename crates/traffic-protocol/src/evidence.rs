@@ -1,6 +1,7 @@
 //! Native evidence capabilities installed by application composition.
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::observation::{NativeSummaries, NativeSummary, TrafficInteraction};
 use anyhow::{Result, ensure};
 use serde_json::Value;
 
@@ -8,6 +9,18 @@ pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
     fn event_types(&self) -> &'static [&'static str];
     fn supports_replay(&self, event: &Value) -> bool;
+    fn interaction(&self, _event: &Value) -> Option<TrafficInteraction> {
+        None
+    }
+    fn process_summary_types(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn process_summary_key(&self, _event: &Value) -> Option<&'static str> {
+        None
+    }
+    fn process_summary(&self, _name: &str) -> Option<Box<dyn NativeSummary>> {
+        None
+    }
 }
 
 #[derive(Clone)]
@@ -22,6 +35,7 @@ struct Registration {
 pub struct EvidenceRegistry {
     registrations: Vec<Registration>,
     events: BTreeMap<&'static str, usize>,
+    summaries: BTreeMap<&'static str, usize>,
 }
 
 impl std::fmt::Debug for EvidenceRegistry {
@@ -42,6 +56,7 @@ impl EvidenceRegistry {
             "evidence adapter is already registered"
         );
         let mut events = self.events.clone();
+        let mut summaries = self.summaries.clone();
         let index = self.registrations.len();
         for kind in adapter.event_types() {
             ensure!(!kind.is_empty(), "native event type is empty");
@@ -50,11 +65,33 @@ impl EvidenceRegistry {
                 "native event type is already registered"
             );
         }
+        for name in adapter.process_summary_types() {
+            ensure!(
+                ![
+                    "name",
+                    "interactions",
+                    "bootstrap_interactions",
+                    "runtime_interactions",
+                    "other_phase_interactions",
+                    "unresolved_interactions",
+                    "observations",
+                    "omitted_interactions",
+                    "truncated"
+                ]
+                .contains(name),
+                "native summary shadows framework process counters"
+            );
+            ensure!(
+                !name.is_empty() && summaries.insert(name, index).is_none(),
+                "native summary type is empty or already registered"
+            );
+        }
         self.registrations.push(Registration {
             name: name.into(),
             adapter,
         });
         self.events = events;
+        self.summaries = summaries;
         Ok(())
     }
 
@@ -99,6 +136,45 @@ impl EvidenceRegistry {
             .iter()
             .map(|entry| (entry.name.as_str(), entry.adapter.schema()))
             .collect()
+    }
+
+    pub fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
+        let index = self.events.get(event["event_type"].as_str()?)?;
+        self.registrations[*index].adapter.interaction(event)
+    }
+
+    pub fn observe_process(
+        &self,
+        summaries: &mut NativeSummaries,
+        event: &Value,
+        endpoint: Option<&str>,
+    ) -> Result<()> {
+        let Some(index) = event["event_type"]
+            .as_str()
+            .and_then(|kind| self.events.get(kind))
+        else {
+            return Ok(());
+        };
+        let adapter = &self.registrations[*index].adapter;
+        let Some(name) = adapter.process_summary_key(event) else {
+            return Ok(());
+        };
+        ensure!(
+            self.summaries.get(name) == Some(index),
+            "native process summary has no registered owner"
+        );
+        if !summaries.values.contains_key(name) {
+            let summary = adapter
+                .process_summary(name)
+                .ok_or_else(|| anyhow::anyhow!("native process summary has no accumulator"))?;
+            summaries.values.insert(name.into(), summary);
+        }
+        summaries
+            .values
+            .get_mut(name)
+            .expect("native summary was initialized")
+            .observe(event, endpoint);
+        Ok(())
     }
 }
 

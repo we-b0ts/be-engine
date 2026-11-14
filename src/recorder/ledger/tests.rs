@@ -24,6 +24,12 @@ fn failure() -> RecorderEvent {
 }
 
 async fn state() -> (tempfile::TempDir, AppState) {
+    state_with_providers(crate::protocols::default_providers()).await
+}
+
+async fn state_with_providers(
+    providers: Arc<crate::protocols::DependencyProviders>,
+) -> (tempfile::TempDir, AppState) {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();
     config
@@ -34,7 +40,9 @@ async fn state() -> (tempfile::TempDir, AppState) {
     config.http_gateway.enabled = false;
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
-    let state = AppState::new(config).await.unwrap();
+    let state = AppState::new_with_providers(config, providers)
+        .await
+        .unwrap();
     state
         .close_bootstrap("test initialization completed")
         .await

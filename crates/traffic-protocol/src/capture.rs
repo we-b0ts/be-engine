@@ -11,6 +11,7 @@ pub enum SemanticRequirement {
     Mandatory,
 }
 
+#[derive(Clone)]
 pub struct CaptureFacts {
     pub reference: ProtocolRef,
     pub terminal: String,

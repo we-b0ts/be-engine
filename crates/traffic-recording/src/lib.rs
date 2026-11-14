@@ -5,6 +5,8 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use traffic_model::trace::RecordedEvent;
 use uuid::Uuid;
+mod event;
+pub use event::CapturedEvent;
 
 #[derive(Clone)]
 pub struct RecordingClock(Arc<Clock>);

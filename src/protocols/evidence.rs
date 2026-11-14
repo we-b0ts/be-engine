@@ -2,6 +2,7 @@
 use crate::dependency::attribution::DependencyOwner;
 use serde_json::Value;
 use traffic_protocol::evidence::{EvidenceAdapter, EvidenceRegistry};
+use traffic_protocol::observation::{TrafficInteraction, format_endpoint, optional_endpoint};
 
 /// Compatibility for existing protocols outside the current native-crate extraction.
 pub(super) struct ExistingEvidence;
@@ -20,6 +21,69 @@ impl EvidenceAdapter for ExistingEvidence {
     }
     fn supports_replay(&self, _event: &Value) -> bool {
         true
+    }
+    fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
+        let (protocol, operation) = match event["event_type"].as_str()? {
+            "memcached_exchange" => {
+                let command = event["command"].as_str()?.to_ascii_lowercase();
+                if matches!(command.as_str(), "version" | "noop") {
+                    return None;
+                }
+                ("memcached", command)
+            }
+            "kafka_produce" => ("kafka", "produce".into()),
+            "kafka_fetch" => ("kafka", "fetch".into()),
+            "motan_exchange" if event["heartbeat"] != true => (
+                "motan",
+                event["method_name"]
+                    .as_str()
+                    .or_else(|| event["command"].as_str())?
+                    .to_owned(),
+            ),
+            _ => return None,
+        };
+        let endpoint = event["target_host"]
+            .as_str()
+            .zip(
+                event["target_port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok()),
+            )
+            .map(|(host, port)| format_endpoint(host, port));
+        Some(TrafficInteraction {
+            protocol: protocol.into(),
+            endpoint,
+            operation,
+        })
+    }
+}
+
+pub(super) struct TransportEvidence;
+impl EvidenceAdapter for TransportEvidence {
+    fn schema(&self) -> &'static str {
+        "transport/evidence/v1"
+    }
+    fn event_types(&self) -> &'static [&'static str] {
+        &["udp_datagram"]
+    }
+    fn supports_replay(&self, _event: &Value) -> bool {
+        false
+    }
+    fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
+        let endpoint = optional_endpoint(
+            event["target_host"].as_str(),
+            event["target_port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok()),
+            event["target_addr"]
+                .as_str()
+                .or_else(|| event["upstream_addr"].as_str()),
+        );
+        Some(TrafficInteraction {
+            protocol: "udp".into(),
+            endpoint,
+            operation: event["protocol"].as_str()?.to_owned(),
+        })
     }
 }
 

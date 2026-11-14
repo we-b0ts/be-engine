@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub mod evidence;
 pub mod io;
 pub mod message;
+pub mod observation;
 
 /// A process-local provider factory. Connection ownership, scheduling and
 /// persistence belong to the framework.

@@ -248,7 +248,10 @@ impl Recorder {
         Ok(recorder)
     }
 
-    pub async fn record(&self, event: RecorderEvent) -> Result<()> {
+    pub async fn record(
+        &self,
+        event: impl traffic_protocol::capture::CaptureEvidence,
+    ) -> Result<()> {
         if !should_write_traffic_event(self.traffic_jsonl, &event) {
             return Ok(());
         }
@@ -264,13 +267,13 @@ impl Recorder {
 
     pub(crate) fn try_record_event(
         &self,
-        event: RecorderEvent,
+        event: impl traffic_protocol::capture::CaptureEvidence,
         targets: crate::active_case::DependencyTargets,
         global_attribution: Option<GlobalDependencyAttribution>,
         suppress_default_global: bool,
     ) -> Result<()> {
         self.writer.try_record(writer::RecordEnvelope {
-            event,
+            event: traffic_recording::CapturedEvent::capture(&event)?,
             targets,
             global_attribution,
             suppress_default_global,

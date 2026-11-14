@@ -45,6 +45,9 @@ pub fn default_providers() -> Arc<DependencyProviders> {
         providers
             .register_evidence("existing", Arc::new(evidence::ExistingEvidence))
             .expect("unique existing evidence adapter");
+        providers
+            .register_evidence("transport", Arc::new(evidence::TransportEvidence))
+            .expect("unique transport evidence adapter");
         Arc::new(providers)
     }))
 }

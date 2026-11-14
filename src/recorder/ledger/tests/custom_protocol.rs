@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use traffic_protocol::{
     capture::{CaptureEvidence, CaptureFacts},
     evidence::{EvidenceAdapter, EvidenceRegistry},
+    observation::{NativeSummary, TrafficInteraction},
 };
 
 #[derive(Serialize)]
@@ -37,6 +38,36 @@ impl EvidenceAdapter for CustomEvidence {
     }
     fn supports_replay(&self, event: &Value) -> bool {
         event["response"]["truncated"] == false
+    }
+    fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
+        Some(TrafficInteraction {
+            protocol: "custom".into(),
+            endpoint: Some("custom.test:18452".into()),
+            operation: event["stream"].as_str()?.to_owned(),
+        })
+    }
+    fn process_summary_types(&self) -> &'static [&'static str] {
+        &["custom_metrics"]
+    }
+    fn process_summary_key(&self, _event: &Value) -> Option<&'static str> {
+        Some("custom_metrics")
+    }
+    fn process_summary(&self, name: &str) -> Option<Box<dyn NativeSummary>> {
+        (name == "custom_metrics")
+            .then(|| Box::new(CustomMetrics::default()) as Box<dyn NativeSummary>)
+    }
+}
+
+#[derive(Default)]
+struct CustomMetrics {
+    calls: u64,
+}
+impl NativeSummary for CustomMetrics {
+    fn observe(&mut self, _event: &Value, _endpoint: Option<&str>) {
+        self.calls += 1;
+    }
+    fn value(&self) -> Value {
+        json!({"calls":self.calls})
     }
 }
 
@@ -154,4 +185,51 @@ async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_s
             row["capture"]["exchange_id"]
         );
     }
+}
+
+#[tokio::test]
+async fn the_normal_recording_writer_accepts_new_native_events_and_their_summary_format() {
+    let mut providers = crate::protocols::default_providers().as_ref().clone();
+    providers
+        .register_evidence("custom", Arc::new(CustomEvidence))
+        .unwrap();
+    let (_temp, state) = state_with_providers(Arc::new(providers)).await;
+    let event = CustomExchange {
+        stream: "requests".into(),
+        offset: 7,
+        outcome: crate::DependencyExchangeOutcome::Response,
+        response: crate::recorder::capture_body(b"custom-output", usize::MAX),
+    };
+    state
+        .recorder()
+        .try_record_event(
+            event,
+            start(&state),
+            Some(crate::recorder::GlobalDependencyAttribution {
+                reason: "background_rule",
+                phase: "runtime",
+                matched_by: "periodic-cache-refresh".into(),
+            }),
+            false,
+        )
+        .unwrap();
+    state.recorder().finish_run().await.unwrap();
+    let rows = records(&state).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["capture"]["attribution"]["kind"], "process");
+    assert_eq!(rows[0]["capture"]["protocol_ref"]["protocol"], "custom");
+    let summary: Value = serde_json::from_slice(
+        &std::fs::read(
+            state
+                .recorder()
+                .run_dir
+                .join("source-process-traffic-summary.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let rule = &summary["background"]["rules"][0];
+    assert_eq!(rule["custom_metrics"]["calls"], 1);
+    assert_eq!(rule["observations"][0]["protocol"], "custom");
+    assert_eq!(rule["observations"][0]["operation"], "requests");
 }
