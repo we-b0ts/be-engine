@@ -3,6 +3,7 @@ use traffic_model::recording::ProtocolRef;
 use traffic_protocol::capture::{CaptureEvidence, CaptureFacts, SemanticRequirement};
 
 use crate::events::*;
+pub mod connection;
 mod response;
 mod semantic;
 mod tracker;

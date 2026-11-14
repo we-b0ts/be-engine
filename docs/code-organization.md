@@ -69,6 +69,13 @@ facts. The framework supplies actual admission/delivery observations, input
 windows and complete value-comparison results, then applies returned constraints
 to its finite inventory. Authenticated `RecordSource` sizes bound native evidence
 materialization before payload reads.
+The MySQL recording connection driver owns its complete native handshake, TLS
+upgrade, authentication, FIFO exchange tracking, packet flushes and peer
+termination handling in `traffic-protocol-mysql::capture::connection`.
+Application composition under `protocols/mysql` supplies recording access
+decisions, capture ownership, persistence, certificates and actual output receipts
+through the native host interface. The recorder's registry and ledger retain
+connection cancellation, attribution and sealed storage.
 Redis storage positions and RESP value ranges belong to its
 protocol library. Recorder retains capture clocks, ownership and persistence.
 Native capture payloads and physical value locations belong to the HTTP,

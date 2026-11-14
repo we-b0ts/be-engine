@@ -9,7 +9,7 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use crate::AppState;
 use crate::mysql::wire::{CLIENT_CONNECT_WITH_DB, MysqlPacket, read_packet};
-use crate::recorder::mysql::{MysqlConnectionContext, handle_connected_mysql};
+use crate::protocols::mysql::{MysqlConnectionContext, handle_connected_mysql};
 
 pub(super) async fn gateway(state: AppState) -> (SocketAddr, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

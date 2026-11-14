@@ -3623,7 +3623,7 @@ Useful focused test commands:
 
 ```bash
 cargo test mysql::wire
-cargo test recorder::mysql::semantic
+cargo test -p traffic-protocol-mysql capture::semantic
 cargo test proxy_integration
 cargo test redis::
 cargo test memcached::

@@ -3022,6 +3022,7 @@ dependencies = [
  "sha2",
  "sqlparser",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "traffic-model",
  "traffic-protocol",

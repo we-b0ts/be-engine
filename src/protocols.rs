@@ -59,6 +59,22 @@ impl DependencyProviders {
 
 mod capture;
 pub(crate) mod evidence;
+pub(crate) mod mysql;
+
+pub(crate) type RecordingDriver = fn(
+    tokio::net::TcpStream,
+    tokio::net::TcpStream,
+    crate::AppState,
+    traffic_protocol::connection::ConnectionInfo,
+) -> traffic_protocol::connection::NativeFuture<'static, ()>;
+
+/// Application bindings supply policy-aware hosts for independently compiled drivers.
+pub(crate) fn recording_driver(protocol: DependencyProtocol) -> Option<RecordingDriver> {
+    match protocol {
+        DependencyProtocol::Mysql => Some(mysql::record_connected),
+        _ => None,
+    }
+}
 
 pub fn default_providers() -> Arc<DependencyProviders> {
     static PROVIDERS: OnceLock<Arc<DependencyProviders>> = OnceLock::new();

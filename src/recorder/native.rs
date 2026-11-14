@@ -23,6 +23,9 @@ pub(crate) async fn handle_connected(
     state: AppState,
     info: ConnectionInfo,
 ) -> Result<()> {
+    if let Some(driver) = crate::protocols::recording_driver(protocol) {
+        return driver(client, upstream, state, info).await;
+    }
     let native = state
         .dependency_providers()
         .provider(protocol)?
@@ -118,7 +121,7 @@ struct Exchange {
     targets: DependencyTargets,
 }
 
-struct Output(super::ledger::OutputReservation);
+pub(crate) struct Output(pub(crate) super::ledger::OutputReservation);
 impl CaptureOutput for Output {
     fn commit(self: Box<Self>) {
         self.0.commit();

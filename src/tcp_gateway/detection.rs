@@ -9,7 +9,6 @@ const MEMCACHED_BINARY_REQUEST_MAGIC: u8 = 0x80;
 pub(crate) enum DetectedProtocol {
     Http,
     Tls,
-    Mysql,
     Redis,
     MemcachedText,
     MemcachedBinary,
@@ -132,7 +131,6 @@ pub(crate) fn detect_server_protocol_with(
 fn native_protocol(protocol: DependencyProtocol) -> DetectedProtocol {
     match protocol {
         DependencyProtocol::Http => DetectedProtocol::Http,
-        DependencyProtocol::Mysql => DetectedProtocol::Mysql,
         DependencyProtocol::Redis => DetectedProtocol::Redis,
         _ => DetectedProtocol::Registered(protocol),
     }

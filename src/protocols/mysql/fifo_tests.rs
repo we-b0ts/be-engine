@@ -29,18 +29,19 @@ async fn records_pipelined_query_and_ping_responses_in_fifo_order() {
     let (mut upstream, _) = upstream_listener.accept().await.unwrap();
     let proxy_upstream = proxy_upstream.await.unwrap().unwrap();
 
-    let handler = tokio::spawn(handle_connected_mysql(
+    let handler = tokio::spawn(crate::recorder::native::handle_connected(
+        crate::protocols::DependencyProtocol::Mysql,
         proxy_client,
         proxy_upstream,
         state.clone(),
-        MysqlConnectionContext {
-            route_name: Some("test".to_string()),
-            listen_addr: client_addr.to_string(),
+        traffic_protocol::connection::ConnectionInfo {
+            endpoint: traffic_protocol::connection::Endpoint {
+                host: "mysql.test".to_string(),
+                port: 3306,
+            },
             client_addr: None,
-            target_host: Some("mysql.test".to_string()),
-            target_port: Some(3306),
-            target_addr: Some("mysql.test:3306".to_string()),
-            upstream_addr: upstream_addr.to_string(),
+            upstream_addr: None,
+            max_frame_bytes: state.config().recording.max_body_bytes,
         },
     ));
 

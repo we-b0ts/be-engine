@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use crate::network_probe::{CASE_LIMIT_SHUTDOWN_GRACE, PreflightProbeKind};
 use crate::recording_completion::RecordingCompletionReason;
 use crate::recording_control::RecordingControlServer;
-use crate::{AppState, dns_mock, gateway, proxy, recorder, tcp_gateway, udp_gateway};
+use crate::{AppState, dns_mock, gateway, proxy, tcp_gateway, udp_gateway};
 
 impl AppState {
     pub async fn run(self) -> Result<()> {
@@ -110,7 +110,7 @@ impl AppState {
 
         if self.config().mysql.enabled {
             let mysql_state = self.clone();
-            tasks.spawn(async move { recorder::mysql::run(mysql_state).await });
+            tasks.spawn(async move { crate::protocols::mysql::run(mysql_state).await });
         }
 
         info!(

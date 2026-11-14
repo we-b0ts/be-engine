@@ -22,7 +22,6 @@ use crate::recorder::memcached::{
 use crate::recorder::motan::{
     ConnectionContext as MotanConnectionContext, handle_connected as handle_connected_motan,
 };
-use crate::recorder::mysql::{MysqlConnectionContext, handle_connected_mysql};
 use crate::recorder::redis::{
     ConnectionContext as RedisConnectionContext, handle_connected as handle_connected_redis,
 };
@@ -265,7 +264,6 @@ async fn proxy_raw_tcp(
             .detected_protocol
             .or_else(|| protocol_hint(&state, fake_addr.port()))
         {
-            Some(DetectedProtocol::Mysql) => "mysql",
             Some(DetectedProtocol::Redis) => "redis",
             Some(DetectedProtocol::Registered(protocol)) => protocol.as_str(),
             _ => "tcp",
@@ -341,22 +339,6 @@ async fn proxy_raw_tcp(
                 max_frame_bytes: state.config().recording.max_body_bytes,
             };
             crate::recorder::native::handle_connected(protocol, client, upstream, state, info).await
-        }
-        DetectedProtocol::Mysql => {
-            let context = MysqlConnectionContext {
-                route_name: Some(format!("fake-ip:{}", entry.domain)),
-                listen_addr: state.config().tcp_gateway.listen.to_string(),
-                client_addr,
-                target_host: Some(entry.domain.clone()),
-                target_port: Some(fake_addr.port()),
-                target_addr: Some(super::format_authority(
-                    &entry.domain,
-                    fake_addr.port(),
-                    3306,
-                )),
-                upstream_addr: upstream_addr.to_string(),
-            };
-            handle_connected_mysql(client, upstream, state, context).await
         }
         DetectedProtocol::Redis => {
             reject_protocol_tls_if_needed(

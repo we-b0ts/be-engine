@@ -312,7 +312,10 @@ async fn idle_detection_accepts_a_delayed_mysql_greeting() {
         .await
         .unwrap();
 
-    assert_eq!(detection.await.unwrap().unwrap(), DetectedProtocol::Mysql);
+    assert_eq!(
+        detection.await.unwrap().unwrap(),
+        DetectedProtocol::Registered(crate::protocols::DependencyProtocol::Mysql)
+    );
 }
 
 #[tokio::test]
