@@ -409,3 +409,5 @@ pub(crate) struct AppendedSource {
     pub(super) mysql_start: usize,
     pub(super) http_start: usize,
 }
+
+pub(crate) mod global;

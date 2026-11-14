@@ -1,60 +1,54 @@
-//! Global evidence is traversed with a bounded pipeline, independently of case loading.
+//! Bounded Global traversal retains producer lifetime and immutable Source validation.
 use super::*;
-use crate::dependency_index::{Paged, RecordReader, RecordRef, RecordSource};
-use crate::protocols::replay::source::{
-    DependencyRecord, register_dependency_records, validate_index_record,
-};
+use crate::dependency_index::global::{GlobalEntry, GlobalIndex};
+use crate::dependency_index::{Paged, RecordReader, RecordSource};
 
-mod notifications;
-pub(super) use notifications::load as load_unattributed_notifications;
-
-type StreamItem = (DependencyRecord, RecordRef, Option<(usize, bool)>);
-type StreamBatch = Vec<StreamItem>;
-
-#[derive(Clone, Copy)]
-enum Phase {
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Phase {
     Metadata,
     Exchanges,
 }
 
 impl Phase {
-    fn accepts(self, record: &Value) -> Result<bool> {
-        let kind = record["event_type"]
-            .as_str()
-            .context("Global index record lacks an event type")?;
-        Ok(match self {
-            Self::Metadata => matches!(
-                kind,
-                "mysql_connection"
-                    | "mysql_exchange"
-                    | "redis_pub_sub_push"
-                    | "redis_connection"
-                    | "memcached_connection"
-                    | "kafka_connection"
-                    | "motan_connection"
-                    | "proxy_error"
-            ),
-            Self::Exchanges => !matches!(
-                kind,
-                "mysql_connection"
-                    | "mysql_exchange"
-                    | "redis_pub_sub_push"
-                    | "redis_connection"
-                    | "memcached_connection"
-                    | "kafka_connection"
-                    | "motan_connection"
-                    | "proxy_error"
-            ),
-        })
+    fn context(self) -> &'static str {
+        match self {
+            Self::Metadata => "Global metadata traversal failed",
+            Self::Exchanges => "Global exchange traversal failed",
+        }
     }
 }
 
-fn stream(
-    inventory: Paged<crate::dependency_index::global::GlobalEntry>,
+pub(crate) trait GlobalProjection: Send + Sync + 'static {
+    type Item: Send + 'static;
+    fn validate(record: &Value) -> Result<()>;
+    fn accepts(phase: Phase, record: &Value) -> Result<bool>;
+    fn decode(entry: GlobalEntry, source: &Arc<RecordSource>) -> Result<Self::Item>;
+}
+
+pub(crate) trait GlobalRegistrar {
+    type Projection: GlobalProjection;
+    fn prepare(
+        &mut self,
+        index: &GlobalIndex,
+        root: &Path,
+        source: Arc<RecordSource>,
+    ) -> Result<()>;
+    fn register(
+        &mut self,
+        phase: Phase,
+        item: <Self::Projection as GlobalProjection>::Item,
+    ) -> Result<()>;
+    fn complete(&mut self, phase: Phase) -> Result<()>;
+}
+
+type StreamBatch<P> = Vec<<P as GlobalProjection>::Item>;
+
+pub(crate) fn stream<P: GlobalProjection>(
+    inventory: Paged<GlobalEntry>,
     source: Arc<RecordSource>,
     phase: Phase,
 ) -> (
-    tokio::sync::mpsc::Receiver<StreamBatch>,
+    tokio::sync::mpsc::Receiver<StreamBatch<P>>,
     tokio::task::JoinHandle<Result<()>>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -62,22 +56,12 @@ fn stream(
         for page in 0..inventory.pages() {
             let mut batch = Vec::new();
             for entry in inventory.read_page(page)? {
-                // The index already validated the complete original records.
-                // Decode only the types registered in this phase, in source order.
-                if !phase.accepts(&entry.record)? {
+                if !P::accepts(phase, &entry.record)? {
                     continue;
                 }
-                let reference = source.reference(entry.location);
-                // RPC/unsafe notification evidence retains its original full codec validation.
-                let record = if entry.record["event_type"] == "redis_pub_sub_push" {
-                    reference.load()?
-                } else {
-                    serde_json::from_value(entry.record)?
-                };
-                batch.push((record, reference, entry.mysql_row_shape));
+                batch.push(P::decode(entry, &source)?);
             }
-            // A page is already bounded to 256 metadata records / 64 KiB,
-            // except for a single oversized record. Only one batch is queued.
+            // Original pages bound each batch. A single queued batch bounds producer lookahead.
             if !batch.is_empty() && tx.blocking_send(batch).is_err() {
                 return Ok(());
             }
@@ -88,11 +72,11 @@ fn stream(
     (rx, task)
 }
 
-async fn consume(
-    mut input: tokio::sync::mpsc::Receiver<StreamBatch>,
+pub(crate) async fn consume<T>(
+    mut input: tokio::sync::mpsc::Receiver<Vec<T>>,
     task: tokio::task::JoinHandle<Result<()>>,
     context: &'static str,
-    mut register: impl FnMut(StreamItem) -> Result<()>,
+    mut register: impl FnMut(T) -> Result<()>,
 ) -> Result<()> {
     let registration = async {
         while let Some(batch) = input.recv().await {
@@ -103,8 +87,7 @@ async fn consume(
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    // Registration errors close the bounded channel before joining the producer;
-    // no blocked/detached indexing task survives an aborted phase.
+    // Close the bounded channel before joining when registration fails.
     drop(input);
     let traversal = task.await.context(context);
     registration?;
@@ -112,175 +95,28 @@ async fn consume(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn load(
+pub(crate) async fn load<R: GlobalRegistrar>(
     path: &Path,
-    source_kind: ReplaySource,
-    mysql: &mut MysqlReplayState,
-    http: &mut Vec<http::ReplayHttpExchange>,
-    blackholes: &mut Vec<http::ReplayHttpBlackhole>,
-    redis: &mut redis::RedisReplayState,
-    memcached: &mut memcached::MemcachedReplayState,
-    kafka: &mut kafka::KafkaReplayState,
-    motan: &mut motan::MotanReplayState,
-    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
-    identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
-    rules: &[crate::BackgroundDependencyRuleConfig],
     reader: Arc<std::sync::Mutex<RecordReader>>,
-    native: &mut native::Inventory,
+    registrar: &mut R,
 ) -> Result<()> {
     let source_path = path.to_owned();
     let (index, root) = tokio::task::spawn_blocking(move || {
-        crate::dependency_index::global::load_global_index(&source_path, validate_index_record)
+        crate::dependency_index::global::load_global_index(&source_path, R::Projection::validate)
     })
     .await
     .context("Global index preparation failed")??;
     let source = RecordSource::new(path, index.stamp.clone(), reader);
-    redis.pubsub.restore_indexed(
-        index.notifications.clone(),
-        &root,
-        source.clone(),
-        source_kind,
-    )?;
+    registrar.prepare(&index, &root, source.clone())?;
     let records = crate::dependency_index::global::global_records(&index, &root)?;
-    let mut sql = Vec::new();
-    let (input, task) = stream(records.clone(), source.clone(), Phase::Metadata);
-    // Subscription/RPC anchors must be known before any exchange is linked.
-    consume(
-        input,
-        task,
-        "Global metadata traversal failed",
-        |(record, reference, row_shape)| {
-            match record {
-                DependencyRecord::MysqlConnection(connection) => {
-                    if let Some(identity) = identity_from_connection(&connection) {
-                        register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
-                        identities.insert(connection.id, identity);
-                    }
-                }
-                DependencyRecord::MysqlExchange(mut exchange) => {
-                    let line = reference.location.line;
-                    exchange.response.detach(reference);
-                    exchange.response.row_shape = row_shape.or(exchange.response.row_shape);
-                    sql.push((line, DependencyRecord::MysqlExchange(exchange)));
-                }
-                DependencyRecord::RedisPubSubPush(push) => {
-                    redis
-                        .pubsub
-                        .register_indexed(*push, reference, source_kind)?
-                }
-                DependencyRecord::RedisConnection(connection) => {
-                    redis.register_connection(*connection, targets)?
-                }
-                DependencyRecord::MemcachedConnection(connection) => {
-                    memcached.register_connection(*connection, targets)?
-                }
-                DependencyRecord::KafkaConnection(connection) => {
-                    kafka.register_connection(*connection, targets)?
-                }
-                DependencyRecord::MotanConnection(connection) => {
-                    motan.register_connection(*connection, targets)?
-                }
-                DependencyRecord::ProxyError(error) => {
-                    redis::RedisReplayState::reject_proxy_error(&error)?;
-                    memcached::MemcachedReplayState::reject_proxy_error(&error)?;
-                    motan::MotanReplayState::reject_proxy_error(&error)?;
-                    ensure!(
-                        error.protocol != "kafka",
-                        "unsafe Kafka dependency proxy error: {}",
-                        error.error
-                    );
-                }
-                _ => {}
-            }
-            Ok(())
-        },
-    )
-    .await?;
-    redis.pubsub.finish_indexed()?;
-    let (input, task) = stream(records, source, Phase::Exchanges);
-    consume(
-        input,
-        task,
-        "Global exchange traversal failed",
-        |(record, reference, _)| {
-            match record {
-                DependencyRecord::Native(record) => {
-                    native.register(
-                        &record,
-                        source_kind,
-                        None,
-                        reference.location.line,
-                        targets,
-                    )?;
-                }
-                DependencyRecord::TcpGatewayConnection(record) => {
-                    http::register_tcp_connection_blackhole(
-                        *record,
-                        source_kind,
-                        None,
-                        blackholes,
-                        targets,
-                    )?
-                }
-                DependencyRecord::HttpExchange(mut record) => {
-                    record.decrypt_request_headers(path)?;
-                    http::register_global_exchange(
-                        *record,
-                        reference,
-                        http,
-                        targets,
-                        rules,
-                        source_kind,
-                    )?;
-                }
-                DependencyRecord::RedisExchange(record) => redis.register_global_exchange(
-                    *record,
-                    source_kind,
-                    reference,
-                    targets,
-                    rules,
-                )?,
-                DependencyRecord::MemcachedExchange(record) => {
-                    memcached.register_global_exchange(*record, source_kind, reference, targets)?
-                }
-                DependencyRecord::MotanExchange(record) => {
-                    motan.register_global_exchange(*record, source_kind, reference, targets)?
-                }
-                DependencyRecord::KafkaProduce(record) => {
-                    kafka.register_global_produce(*record, source_kind, reference, targets)?
-                }
-                DependencyRecord::KafkaFetch(record) => {
-                    kafka.register_fetch(*record, source_kind, None, targets)?
-                }
-                DependencyRecord::KafkaDelivery(record) => {
-                    kafka.register_global_delivery(*record, source_kind, reference, targets)?
-                }
-                _ => {}
-            }
-            Ok(())
-        },
-    )
-    .await?;
-    register_dependency_records(
-        path,
-        sql,
-        &BTreeSet::new(),
-        source_kind,
-        None,
-        mysql,
-        http,
-        blackholes,
-        redis,
-        memcached,
-        kafka,
-        motan,
-        targets,
-        identities,
-        rules,
-        &BTreeSet::new(),
-        native,
-    )?;
+    for phase in [Phase::Metadata, Phase::Exchanges] {
+        let (input, task) = stream::<R::Projection>(records.clone(), source.clone(), phase);
+        consume(input, task, phase.context(), |item| {
+            registrar.register(phase, item)
+        })
+        .await?;
+        registrar.complete(phase)?;
+    }
     Ok(())
 }
 

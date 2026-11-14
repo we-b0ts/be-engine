@@ -3,7 +3,7 @@ use super::*;
 use crate::dependency_index::RecordRef;
 
 impl KafkaReplayState {
-    pub(in crate::replay) fn register_global_produce(
+    pub(crate) fn register_global_produce(
         &mut self,
         record: RecordedKafkaProduce,
         source_kind: ReplaySource,
@@ -19,7 +19,7 @@ impl KafkaReplayState {
         Ok(())
     }
 
-    pub(in crate::replay) fn register_global_delivery(
+    pub(crate) fn register_global_delivery(
         &mut self,
         record: RecordedKafkaDelivery,
         source_kind: ReplaySource,

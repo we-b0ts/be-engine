@@ -54,7 +54,7 @@ pub(crate) mod ingress;
 pub(in crate::replay) mod input_timing;
 mod lifecycle;
 mod recording;
-pub(super) use evidence::register_global_exchange;
+pub(crate) use evidence::register_global_exchange;
 pub(in crate::replay) mod request_headers;
 mod selector;
 mod stream_delivery;

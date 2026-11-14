@@ -152,7 +152,7 @@ pub(crate) struct PubSubState {
 }
 
 impl PubSubState {
-    pub(in crate::replay) fn register_indexed(
+    pub(crate) fn register_indexed(
         &mut self,
         record: RecordedPush,
         reference: crate::dependency_index::RecordRef,
@@ -175,10 +175,10 @@ impl PubSubState {
         Ok(())
     }
 
-    pub(in crate::replay) fn finish_indexed(&mut self) -> Result<()> {
+    pub(crate) fn finish_indexed(&mut self) -> Result<()> {
         self.indexed.seal()
     }
-    pub(in crate::replay) fn restore_indexed(
+    pub(crate) fn restore_indexed(
         &mut self,
         lanes: Vec<crate::dependency_index::global::NotificationLane>,
         root: &Path,

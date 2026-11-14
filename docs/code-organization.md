@@ -118,7 +118,11 @@ validation. `replay/deferred` owns serialized installation, endpoint validation,
 shared rule-source observation, execution-plan publication and failed-install
 retry rejection. Native append checkpoints retain stable positions across those
 steps. The application retains the frozen native session-identity snapshot used
-by each deferred registration.
+by each deferred registration. `replay/global` owns bounded, two-phase Source
+traversal and producer completion. Application-supplied `GlobalProjection` and
+`GlobalRegistrar` capabilities provide native record selection, decoding,
+metadata prerequisites and registration. Producer cancellation, final Source
+validation and failed-consumer joining use the shared traversal path.
 
 Run tests and Clippy across the workspace so extracted library tests remain
 part of the ordinary verification path. Product source files in `crates/`

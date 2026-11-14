@@ -3,7 +3,7 @@ use super::*;
 
 /// Load only the immutable notification section. Unattributed outgoing commands,
 /// queries and HTTP calls never become executable dependencies through this path.
-pub(in crate::replay) async fn load(
+pub(crate) async fn load(
     path: &Path,
     redis: &mut redis::RedisReplayState,
     reader: Arc<std::sync::Mutex<RecordReader>>,

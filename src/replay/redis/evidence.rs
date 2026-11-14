@@ -3,7 +3,7 @@ use super::*;
 use crate::dependency_index::RecordRef;
 
 impl RedisReplayState {
-    pub(in crate::replay) fn register_global_exchange(
+    pub(crate) fn register_global_exchange(
         &mut self,
         record: RecordedExchange,
         source_kind: ReplaySource,

@@ -54,7 +54,7 @@ pub(crate) use reconciliation::validate_completed_receipt;
 mod dns;
 mod egress_counter;
 mod exchange;
-mod global;
+pub(crate) mod global;
 mod global_source;
 #[cfg(test)]
 mod global_test_support;

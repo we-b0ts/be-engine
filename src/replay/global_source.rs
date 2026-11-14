@@ -34,7 +34,7 @@ impl GlobalSource {
         let reader = Arc::new(std::sync::Mutex::new(
             crate::dependency_index::RecordReader::new(8 * 1024 * 1024),
         ));
-        global::load(
+        crate::protocols::replay::source::global::load(
             path,
             ReplaySource::Startup,
             &mut source.mysql,
@@ -54,7 +54,7 @@ impl GlobalSource {
         if let Some(run) = crate::dependency_index::recording::root(path) {
             let process = run.join("indexes/process-scope.json");
             if process.is_file() {
-                global::load(
+                crate::protocols::replay::source::global::load(
                     &process,
                     ReplaySource::Process,
                     &mut source.mysql,

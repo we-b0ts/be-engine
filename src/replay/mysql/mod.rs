@@ -76,8 +76,7 @@ pub(crate) fn source_records(
 mod source_identity;
 pub(super) use source_identity::active_case_matches;
 pub(super) use traffic_protocol_mysql::session_identity::{
-    identity_from_connection, identity_from_exchange, identity_matches_exchange,
-    normalize_identity_value,
+    identity_from_exchange, identity_matches_exchange, normalize_identity_value,
 };
 
 mod source_loading;

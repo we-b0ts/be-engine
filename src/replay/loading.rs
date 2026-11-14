@@ -138,7 +138,7 @@ impl ReplayRuntime {
         );
 
         if let Some(path) = &global_path {
-            global::load(
+            crate::protocols::replay::source::global::load(
                 path,
                 ReplaySource::Startup,
                 &mut mysql,
@@ -157,7 +157,7 @@ impl ReplayRuntime {
             .await?;
         }
         if let Some(path) = attribution.process {
-            global::load(
+            crate::protocols::replay::source::global::load(
                 &path,
                 ReplaySource::Process,
                 &mut mysql,
@@ -176,7 +176,12 @@ impl ReplayRuntime {
             .await?;
         }
         if let Some(path) = attribution.unattributed {
-            global::load_unattributed_notifications(&path, &mut redis, reader.clone()).await?;
+            crate::protocols::replay::source::global::load_unattributed_notifications(
+                &path,
+                &mut redis,
+                reader.clone(),
+            )
+            .await?;
         }
         // Source-owned Global slots are stable across selected APIs. Later
         // Case-derived Global aliases remain small session-specific evidence.

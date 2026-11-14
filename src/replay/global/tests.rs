@@ -1,4 +1,7 @@
 use super::*;
+use crate::protocols::replay::source::global::Records;
+use crate::protocols::replay::source::{DependencyRecord, validate_index_record};
+
 use crate::dependency_index::global::{GlobalEntry, global_records, load_global_index};
 use serde_json::json;
 
@@ -107,7 +110,7 @@ async fn both_phases_cover_every_protocol_in_source_order_with_bounded_page_batc
                 .then_some(index + 1)
             })
             .collect::<Vec<_>>();
-        let (mut receiver, task) = stream(pages.clone(), source.clone(), phase);
+        let (mut receiver, task) = stream::<Records>(pages.clone(), source.clone(), phase);
         let mut observed = Vec::new();
         let mut batches = 0;
         let mut combined = false;
@@ -138,7 +141,7 @@ async fn both_phases_cover_every_protocol_in_source_order_with_bounded_page_batc
 async fn source_changes_fail_even_when_a_phase_selects_no_records() {
     let (_root, pages, source) = indexed(&records()[..1]);
     std::fs::write(source.path(), "changed\n").unwrap();
-    let (receiver, task) = stream(pages, source, Phase::Metadata);
+    let (receiver, task) = stream::<Records>(pages, source, Phase::Metadata);
     assert!(
         consume(receiver, task, "phase failed", |_| Ok(()))
             .await
@@ -150,7 +153,7 @@ async fn source_changes_fail_even_when_a_phase_selects_no_records() {
 async fn registration_failure_closes_and_joins_the_bounded_producer() {
     let originals = (0..40).flat_map(|_| records()).collect::<Vec<_>>();
     let (_root, pages, source) = indexed(&originals);
-    let (receiver, task) = stream(pages, source, Phase::Exchanges);
+    let (receiver, task) = stream::<Records>(pages, source, Phase::Exchanges);
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         consume(receiver, task, "phase failed", |_| {
@@ -168,7 +171,7 @@ async fn a_corrupt_page_is_not_silently_filtered_out() {
     let manifest = serde_json::to_value(pages.manifest()).unwrap();
     let path = std::path::Path::new(manifest["directory"].as_str().unwrap()).join("0.json");
     std::fs::write(path, "corrupt").unwrap();
-    let (receiver, task) = stream(pages, source, Phase::Metadata);
+    let (receiver, task) = stream::<Records>(pages, source, Phase::Metadata);
     assert!(
         consume(receiver, task, "phase failed", |_| Ok(()))
             .await

@@ -2,7 +2,7 @@
 use super::*;
 use crate::dependency_index::RecordRef;
 
-pub(in crate::replay) fn register_global_exchange(
+pub(crate) fn register_global_exchange(
     mut record: RecordedHttpExchange,
     reference: RecordRef,
     exchanges: &mut Vec<ReplayHttpExchange>,
