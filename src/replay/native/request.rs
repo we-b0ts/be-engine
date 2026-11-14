@@ -204,7 +204,7 @@ impl Inventory {
         &self,
         index: usize,
         observed: DateTime<Utc>,
-    ) -> Result<bytes::Bytes> {
+    ) -> Result<Box<dyn traffic_protocol::output::OutputStream>> {
         let exchange = &self.core.exchanges[index];
         let scope = self.scope(index);
         let rendered = exchange.response.render_delivery(
@@ -218,7 +218,7 @@ impl Inventory {
             },
         )?;
         let proposed = identity(&self.contracts, self, index, &rendered.comparison)?;
-        let response = exchange.native.response.encode(&rendered.values)?;
+        let response = exchange.native.response.output(&rendered.values)?;
         let mut decision =
             policy::request_contract::Decision::from_value_comparison(rendered.comparison);
         decision.identity = Some(proposed);

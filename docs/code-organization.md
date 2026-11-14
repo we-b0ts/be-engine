@@ -76,6 +76,12 @@ Application composition under `protocols/mysql` supplies recording access
 decisions, capture ownership, persistence, certificates and actual output receipts
 through the native host interface. The recorder's registry and ledger retain
 connection cancellation, attribution and sealed storage.
+Native `OutputStream` plans supply encoded chunks and finite header/part/end
+boundaries. `traffic-replay::output` owns transport writes, flushes, ordered
+barriers and contiguous part receipts. The caller retains final wire publication
+and semantic commit. MySQL response, PREPARE and continuation framing belong to
+its protocol library. Registered native encoders enter the same delivery path
+through `MessageEncoder::output`, including multipart native frames.
 Redis storage positions and RESP value ranges belong to its
 protocol library. Recorder retains capture clocks, ownership and persistence.
 Native capture payloads and physical value locations belong to the HTTP,

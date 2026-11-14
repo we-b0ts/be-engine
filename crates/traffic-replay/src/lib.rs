@@ -6,6 +6,7 @@ use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 pub mod index;
+pub mod output;
 pub mod request;
 pub mod request_wait;
 pub mod rules;

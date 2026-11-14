@@ -10,6 +10,7 @@ mod identity;
 pub mod io;
 pub mod message;
 pub mod observation;
+pub mod output;
 pub mod transport;
 pub use identity::ProtocolId;
 

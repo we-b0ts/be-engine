@@ -17,6 +17,9 @@ async fn encodes_boundaries_empty_terminators_and_sequence_wrap() {
         };
         let mut wire = Vec::new();
         let next = write_message(&mut wire, &message).await.unwrap();
+        let (encoded, encoded_next) = encode_message(&message).unwrap();
+        assert_eq!(encoded.as_ref(), wire.as_slice());
+        assert_eq!(encoded_next, next);
         let count = len / MAX_PACKET_PAYLOAD_LEN + 1;
         assert_eq!(wire.len(), len + 4 * count);
         assert_eq!(next, 255_u8.wrapping_add(count as u8));

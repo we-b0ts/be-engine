@@ -141,6 +141,39 @@ impl MessageEncoder for Message {
                 .clone(),
         )
     }
+
+    fn output(
+        &self,
+        values: &BTreeMap<String, Bytes>,
+    ) -> Result<Box<dyn traffic_protocol::output::OutputStream>> {
+        let wire = self.encode(values)?;
+        Ok(Box::new(FrameOutput {
+            chunks: [Some(wire.slice(..8)), Some(wire.slice(8..))],
+            next: 0,
+        }))
+    }
+}
+
+struct FrameOutput {
+    chunks: [Option<Bytes>; 2],
+    next: usize,
+}
+
+impl traffic_protocol::output::OutputStream for FrameOutput {
+    fn part_count(&self) -> usize {
+        0
+    }
+    fn next(&mut self) -> Result<Option<traffic_protocol::output::OutputChunk>> {
+        let Some(bytes) = self.chunks.get_mut(self.next).and_then(Option::take) else {
+            return Ok(None);
+        };
+        self.next += 1;
+        Ok(Some(traffic_protocol::output::OutputChunk {
+            bytes,
+            boundary: traffic_protocol::output::OutputBoundary::End,
+            complete: self.next == self.chunks.len(),
+        }))
+    }
 }
 
 struct Native;

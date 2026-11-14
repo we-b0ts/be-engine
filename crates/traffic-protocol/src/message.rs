@@ -50,4 +50,13 @@ pub trait ProtocolMessage: Send + Sync {
 
 pub trait MessageEncoder: ProtocolMessage {
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes>;
+
+    fn output(
+        &self,
+        values: &BTreeMap<String, Bytes>,
+    ) -> Result<Box<dyn crate::output::OutputStream>> {
+        Ok(Box::new(crate::output::SingleOutput::new(
+            self.encode(values)?,
+        )))
+    }
 }

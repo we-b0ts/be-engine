@@ -1,11 +1,13 @@
 pub mod access;
 pub mod autocommit;
 pub mod builtin;
+pub mod diagnostics;
 pub mod isolation;
 pub mod isolation_session;
 pub mod message;
 pub mod model;
 pub mod operation;
+pub mod output;
 pub mod prepare;
 pub mod prepared;
 pub mod projection;

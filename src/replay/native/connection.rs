@@ -1,7 +1,6 @@
 //! Native drivers submit requests while the host owns matching and actual delivery.
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::AsyncWriteExt;
 use traffic_protocol::{
     connection::{
         ConnectionInfo, ConnectionIo, NativeFuture, RequestHost, ResponseDelivery, ResponseFramer,
@@ -161,9 +160,8 @@ impl ResponseDelivery for Delivery {
                         .native
                         .render_response(matched.index, matched.observed)?
                 };
-                let bytes = framer.frame(response)?;
-                io.write_all(&bytes).await?;
-                io.flush().await?;
+                let mut output = traffic_protocol::output::FramedOutput::new(response, framer);
+                traffic_replay::output::deliver(io, &mut output, matched.ticket.sequence()).await?;
                 ensure!(
                     matched.ticket.publish_wire(),
                     "native response delivery receipt was cancelled"

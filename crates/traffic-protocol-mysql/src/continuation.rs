@@ -63,19 +63,57 @@ where
     W: AsyncWrite + Unpin + ?Sized,
 {
     let mut sequence_id = packet.sequence_id;
-    let mut remaining = packet.payload.as_slice();
-    loop {
-        let len = remaining.len().min(MAX_PACKET_PAYLOAD_LEN);
-        let header = [len as u8, (len >> 8) as u8, (len >> 16) as u8, sequence_id];
+    for (header, payload) in message_frames(packet) {
         writer.write_all(&header).await?;
-        writer.write_all(&remaining[..len]).await?;
-        sequence_id = sequence_id.wrapping_add(1);
-        remaining = &remaining[len..];
-        // Exact multiples need an empty packet to terminate the logical message.
-        if len < MAX_PACKET_PAYLOAD_LEN {
-            return Ok(sequence_id);
-        }
+        writer.write_all(payload).await?;
+        sequence_id = header[3].wrapping_add(1);
     }
+    Ok(sequence_id)
+}
+
+/// Encode the same physical frames supplied to the asynchronous native writer.
+pub fn encode_message(packet: &MysqlPacket) -> io::Result<(bytes::Bytes, u8)> {
+    let frames = packet.payload.len() / MAX_PACKET_PAYLOAD_LEN + 1;
+    let capacity = frames
+        .checked_mul(4)
+        .and_then(|headers| packet.payload.len().checked_add(headers))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "MySQL message size overflow"))?;
+    let mut wire = Vec::with_capacity(capacity);
+    let mut next_sequence = packet.sequence_id;
+    for (header, payload) in message_frames(packet) {
+        wire.extend_from_slice(&header);
+        wire.extend_from_slice(payload);
+        next_sequence = header[3].wrapping_add(1);
+    }
+    Ok((wire.into(), next_sequence))
+}
+
+fn message_frames(packet: &MysqlPacket) -> impl Iterator<Item = ([u8; 4], &[u8])> {
+    packet
+        .payload
+        .chunks(MAX_PACKET_PAYLOAD_LEN)
+        // Exact multiples need an empty physical packet to end the message.
+        .chain(
+            packet
+                .payload
+                .len()
+                .is_multiple_of(MAX_PACKET_PAYLOAD_LEN)
+                .then_some(&[][..]),
+        )
+        .enumerate()
+        .map(|(index, payload)| {
+            let length = payload.len();
+            let sequence = packet.sequence_id.wrapping_add(index as u8);
+            (
+                [
+                    length as u8,
+                    (length >> 8) as u8,
+                    (length >> 16) as u8,
+                    sequence,
+                ],
+                payload,
+            )
+        })
 }
 
 #[cfg(test)]
