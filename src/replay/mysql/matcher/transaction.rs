@@ -14,7 +14,7 @@ impl TransactionMatch<'_> {
     pub(super) fn permits(self, mysql: &MysqlReplayState, index: usize) -> bool {
         mysql
             .isolation
-            .permits(self.connection, index, &mysql.exchanges)
+            .permits(self.connection, index, &SessionContext(&mysql.exchanges))
             && mysql
                 .transaction_equivalence
                 .permits_savepoint_member(index, self.witness)

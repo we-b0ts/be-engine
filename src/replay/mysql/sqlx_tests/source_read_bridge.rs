@@ -2,7 +2,7 @@
 use super::*;
 
 fn records() -> (Vec<Value>, Vec<Value>) {
-    let base = super::super::transaction_equivalence::tests::records();
+    let base = traffic_protocol_mysql::transaction_delivery::test_support::records();
     let mut case = base[1..4].to_vec();
     for (record, sequence) in case.iter_mut().zip([1, 3, 4]) {
         record["query_sequence"] = json!(sequence);

@@ -219,11 +219,14 @@ pub(super) fn register_dependency_records(
     let (lines, records): (Vec<_>, Vec<_>) = records.into_iter().unzip();
     let optional_sessions =
         mysql::optional_session::classify(&records, source, &mut mysql.read_prefixes);
-    let isolation_plans = mysql.isolation.prepare(&records, source, case_id);
-    let transaction_plans =
-        mysql
-            .transaction_equivalence
-            .prepare(&records, &optional_sessions, source);
+    let isolation_plans = mysql
+        .isolation
+        .prepare(mysql::source_records(&records), source, case_id);
+    let transaction_plans = mysql.transaction_equivalence.prepare(
+        mysql::source_records(&records),
+        &optional_sessions,
+        source,
+    );
     let mut mysql_record_indices = std::collections::BTreeMap::new();
     for (record_index, (line, record)) in lines.into_iter().zip(records).enumerate() {
         if skip.contains(&line) {
@@ -346,7 +349,7 @@ pub(super) fn register_dependency_records(
     let transaction_omissions = mysql.transaction_equivalence.install(
         transaction_plans,
         &mysql_record_indices,
-        &mysql.exchanges,
+        &mysql::SessionContext(&mysql.exchanges),
     );
     for (index, kind) in transaction_omissions {
         if mysql.exchanges[index].status.is_available() {

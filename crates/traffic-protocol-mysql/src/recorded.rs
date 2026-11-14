@@ -111,6 +111,15 @@ impl<E> crate::sql_match::SqlRequest for RecordedMysqlExchange<E> {
 }
 
 impl<E> RecordedMysqlExchange<E> {
+    pub fn source_started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.request_started_at.or_else(|| {
+            self.timestamp?
+                .checked_sub_signed(chrono::TimeDelta::try_milliseconds(
+                    i64::try_from(self.duration_ms).ok()?,
+                )?)
+        })
+    }
+
     /// Exact rows in a complete result, including resident shape metadata after
     /// lazy payload detachment. Partial or malformed results have no exact count.
     pub fn result_row_count(&self) -> Option<usize> {

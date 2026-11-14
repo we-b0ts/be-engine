@@ -181,7 +181,11 @@ fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wi
             if scenario == "pooled-future-probe" {
                 base["timestamp"] = json!("2020-01-01T00:00:02Z");
             }
-            registry.prepare(&decoded(vec![base]), ReplaySource::Startup, None);
+            registry.prepare(
+                super::super::source_records(&decoded(vec![base])),
+                ReplaySource::Startup,
+                None,
+            );
         }
         let mut rows = records();
         if scenario.starts_with("same-baseline") {
@@ -230,7 +234,11 @@ fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wi
             }
             _ => {}
         }
-        let plans = registry.prepare(&decoded(rows), ReplaySource::Case, Some("case"));
+        let plans = registry.prepare(
+            super::super::source_records(&decoded(rows)),
+            ReplaySource::Case,
+            Some("case"),
+        );
         assert_eq!(
             plans.len(),
             usize::from(matches!(scenario, "valid" | "pooled" | "same-baseline")),
@@ -249,7 +257,11 @@ fn reassertions_require_a_contiguous_successful_same_level_prefix_and_one_origin
         let mut registry = Registry::default();
         let mut probe = baseline();
         probe["response"]["rows"][0][0]["value"] = json!("READ-COMMITTED");
-        registry.prepare(&decoded(vec![probe]), ReplaySource::Startup, None);
+        registry.prepare(
+            super::super::source_records(&decoded(vec![probe])),
+            ReplaySource::Startup,
+            None,
+        );
         let mut rows = reasserted_records();
         match scenario {
             "gap" => rows[1]["query_sequence"] = json!(99),
@@ -260,7 +272,11 @@ fn reassertions_require_a_contiguous_successful_same_level_prefix_and_one_origin
             "failed" => rows[0]["response"]["status"] = json!("error"),
             _ => {}
         }
-        let plans = registry.prepare(&decoded(rows), ReplaySource::Case, Some("case"));
+        let plans = registry.prepare(
+            super::super::source_records(&decoded(rows)),
+            ReplaySource::Case,
+            Some("case"),
+        );
         assert_eq!(plans.len(), 1, "{scenario}");
         let plan = &plans[0];
         assert_eq!(plan.required, BTreeSet::from([4, 5, 6]), "{scenario}");

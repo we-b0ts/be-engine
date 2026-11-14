@@ -516,13 +516,7 @@ fn validate_request_clocks(
 pub(in crate::replay) fn source_started(
     record: &RecordedMysqlExchange,
 ) -> Option<chrono::DateTime<Utc>> {
-    record.request_started_at.or_else(|| {
-        record
-            .timestamp?
-            .checked_sub_signed(chrono::TimeDelta::try_milliseconds(
-                i64::try_from(record.duration_ms).ok()?,
-            )?)
-    })
+    record.source_started_at()
 }
 fn source_clocks(clocks: AnchorClocks) -> AnchorClocks {
     fn pair(p: crate::value_contract::time::ClockPair) -> crate::value_contract::time::ClockPair {

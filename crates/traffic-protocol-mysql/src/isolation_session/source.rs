@@ -1,59 +1,51 @@
 //! A complete original SESSION override, one transaction and restoration.
 use super::*;
-use crate::replay::dependencies::DependencyRecord;
 
 #[derive(Debug, Clone)]
-pub(super) struct Baseline {
+pub struct Baseline {
     connection: Uuid,
     completed_at: Option<DateTime<Utc>>,
-    pub(super) identity: MysqlDependencyIdentity,
+    pub identity: MysqlDependencyIdentity,
     sequence: u64,
-    pub(super) level: Level,
+    pub level: Level,
 }
 
 #[derive(Debug)]
-pub(in crate::replay) struct Plan {
-    pub(super) identity: MysqlDependencyIdentity,
-    pub(super) case: String,
-    pub(super) source_connection: Uuid,
-    pub(super) sequence: u64,
-    pub(super) baseline_sequence: u64,
-    pub(super) baseline_connection: Uuid,
-    pub(super) baseline: Level,
-    pub(super) level: Level,
-    pub(super) setup: usize,
-    pub(super) end: usize,
-    pub(super) reset: usize,
-    pub(super) reassertions: BTreeSet<usize>,
-    pub(super) required: BTreeSet<usize>,
-    pub(super) read_only: bool,
+pub struct Plan {
+    pub identity: MysqlDependencyIdentity,
+    pub case: String,
+    pub source_connection: Uuid,
+    pub sequence: u64,
+    pub baseline_sequence: u64,
+    pub baseline_connection: Uuid,
+    pub baseline: Level,
+    pub level: Level,
+    pub setup: usize,
+    pub end: usize,
+    pub reset: usize,
+    pub reassertions: BTreeSet<usize>,
+    pub required: BTreeSet<usize>,
+    pub read_only: bool,
 }
 
-use traffic_protocol_mysql::session_control::{
+use crate::session_control::{
     isolation_control as control, isolation_inactive as inactive,
     isolation_successful as successful,
 };
 
 impl Registry {
-    pub(in crate::replay) fn prepare(
+    pub fn prepare<'a, E: Clone + RecordSource + 'a>(
         &mut self,
-        records: &[DependencyRecord],
+        records: impl Iterator<Item = (usize, &'a RecordedMysqlExchange<E>)>,
         scope: ReplaySource,
         case: Option<&str>,
     ) -> Vec<Plan> {
         if scope.is_run_owned() {
-            for record in records {
-                let DependencyRecord::MysqlExchange(record) = record else {
-                    continue;
-                };
+            for (_, record) in records {
                 let Some(connection) = record.connection_id else {
                     continue;
                 };
-                if !record
-                    .sql
-                    .as_deref()
-                    .is_some_and(crate::mysql::isolation::probe)
-                {
+                if !record.sql.as_deref().is_some_and(crate::isolation::probe) {
                     continue;
                 }
                 if self.baselines.len() >= 4096 && !self.baselines.contains_key(&connection) {
@@ -110,11 +102,9 @@ impl Registry {
             return Vec::new();
         }
         let Some(case) = case else { return Vec::new() };
-        let mut connections = BTreeMap::<Uuid, Vec<(usize, &RecordedMysqlExchange)>>::new();
-        for (index, record) in records.iter().enumerate() {
-            if let DependencyRecord::MysqlExchange(record) = record
-                && let Some(connection) = record.connection_id
-            {
+        let mut connections = BTreeMap::<Uuid, Vec<(usize, &RecordedMysqlExchange<E>)>>::new();
+        for (index, record) in records {
+            if let Some(connection) = record.connection_id {
                 connections
                     .entry(connection)
                     .or_default()
@@ -157,10 +147,8 @@ impl Registry {
                 if plans.len() >= 128 {
                     return plans;
                 }
-                let Some((Scope::Session, level)) = row
-                    .sql
-                    .as_deref()
-                    .and_then(crate::mysql::isolation::setting)
+                let Some((Scope::Session, level)) =
+                    row.sql.as_deref().and_then(crate::isolation::setting)
                 else {
                     continue;
                 };
@@ -180,19 +168,19 @@ impl Registry {
     }
 }
 
-fn prove(
+fn prove<E>(
     case: &str,
     connection: Uuid,
     baseline: &Baseline,
     level: Level,
     setup: usize,
-    rows: &[(usize, &RecordedMysqlExchange)],
+    rows: &[(usize, &RecordedMysqlExchange<E>)],
 ) -> Option<Plan> {
     let first = rows.first()?.1;
     let mut sequence = first.query_sequence?;
     if baseline
         .completed_at
-        .zip(contracts::source_started(first))
+        .zip(first.source_started_at())
         .is_some_and(|(probe, start)| probe > start)
     {
         return None;
@@ -202,7 +190,7 @@ fn prove(
     } else {
         baseline
             .completed_at
-            .zip(contracts::source_started(first))
+            .zip(first.source_started_at())
             .is_some_and(|(probe, start)| probe < start)
     };
     if !preceding
@@ -219,7 +207,7 @@ fn prove(
     let mut read_only = true;
     let mut active = false;
     let mut end = None;
-    let mut savepoints = crate::mysql::savepoint::Names::default();
+    let mut savepoints = crate::savepoint::Names::default();
     for &(index, row) in rows.iter().skip(1).take(260) {
         sequence = sequence.checked_add(1)?;
         let before = row.server_status_before? & 0x200b;
@@ -233,7 +221,7 @@ fn prove(
         }
         previous = after;
         let sql = row.sql.as_deref()?;
-        if let Some((Scope::Session, reset)) = crate::mysql::isolation::setting(sql) {
+        if let Some((Scope::Session, reset)) = crate::isolation::setting(sql) {
             // Pool initialization and a scoped checkout can reassert the same
             // level before any business operation. Keep these finite controls
             // until the Target genuinely covers the complete transaction.
@@ -278,7 +266,7 @@ fn prove(
             }
             continue;
         }
-        if let Some(savepoint) = crate::mysql::savepoint::parse(sql) {
+        if let Some(savepoint) = crate::savepoint::parse(sql) {
             if !active
                 || before != 1
                 || after != 1
@@ -298,7 +286,7 @@ fn prove(
             || after != 1
             || !(before == 0 && !active || before == 1 && active)
             || effect == optional_session::read::Effect::Unknown
-            || crate::mysql::sql::tokens(sql)
+            || crate::sql::tokens(sql)
                 .is_none_or(|t| optional_session::read::has_session_effect(&t))
             || !matches!(row.response.status.as_str(), "ok" | "resultset")
         {

@@ -2,7 +2,7 @@
 use super::*;
 
 fn records() -> Vec<Value> {
-    super::super::transaction_equivalence::tests::records()
+    traffic_protocol_mysql::transaction_delivery::test_support::records()
 }
 
 fn with_setup_observations(mut values: Vec<Value>) -> Vec<Value> {

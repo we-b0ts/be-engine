@@ -154,7 +154,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
             && matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE")
             && state.mysql.isolation.waiting_for_prior(
                 self.session.transaction_witness.connection(),
-                &state.mysql.exchanges,
+                &SessionContext(&state.mysql.exchanges),
             )
             && self
                 .sql

@@ -468,7 +468,7 @@ impl ReplayState {
                                     context.connection,
                                     context.status_flags,
                                     sql,
-                                    &self.mysql.exchanges,
+                                    &SessionContext(&self.mysql.exchanges),
                                 )
                             })
                         });

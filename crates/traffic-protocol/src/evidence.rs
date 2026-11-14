@@ -9,6 +9,13 @@ use serde_json::Value;
 /// their native payload without depending on its physical location or reader.
 pub trait RecordSource {
     fn load<T: serde::de::DeserializeOwned>(&self) -> Result<T>;
+
+    /// Authenticated encoded size, when the storage owner can supply it.
+    /// Bounded native projections can reject unavailable or oversized records
+    /// before reading their payloads.
+    fn byte_len(&self) -> Option<u64> {
+        None
+    }
 }
 
 pub trait EvidenceAdapter: Send + Sync {

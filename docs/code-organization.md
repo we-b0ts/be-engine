@@ -62,6 +62,13 @@ endpoint identities. MySQL session control and Source transaction analysis use
 these immutable inputs to project original wire positions, complete read prefixes,
 transaction spans and bounded rejection reasons. Replay retains scope selection,
 live claim state, value rules and actual delivery coverage.
+MySQL transaction and isolation constraints consume a read-only `SessionContext`
+supplied by Replay. Their protocol library owns native member traces, status
+continuity, equivalent first-read groups, baseline probes and session restoration
+facts. The framework supplies actual admission/delivery observations, input
+windows and complete value-comparison results, then applies returned constraints
+to its finite inventory. Authenticated `RecordSource` sizes bound native evidence
+materialization before payload reads.
 Redis storage positions and RESP value ranges belong to its
 protocol library. Recorder retains capture clocks, ownership and persistence.
 Native capture payloads and physical value locations belong to the HTTP,
@@ -773,16 +780,17 @@ retain the same responsibility and 1000-line requirements as `src/`.
   control. `transaction_ownership` reuses the Source name lifetime proof for
   Global-started intervals and versions its disposable proof cache separately.
 
-- `mysql/isolation` owns closed isolation-setting/probe syntax without expanding
-  the generic session-setup whitelist. `replay/mysql/isolation/source` proves
+- `traffic-protocol-mysql::isolation` owns closed isolation-setting/probe syntax.
+  `traffic-protocol-mysql::isolation_session::source` proves
   original baseline probes and complete override/transaction/restoration scopes
   during preparation, including a complete scope reasserting its known baseline.
   Same-level settings before its first business operation retain exact Source
   references under that one proof; successful real Target completion alone can
   authorize their finite omission alongside restoration.
-  Its parent binds NEXT settings to actual Target sockets,
-  observes successful deliveries through the existing transaction owner and
-  grants only proven Source restoration omission. Its Source proof classifies
+  Its parent binds NEXT settings to actual Target sockets and
+  observes successful deliveries through the native transaction constraints.
+  Replay supplies a read-only view of actual admission and delivery and applies
+  proven Source restoration omissions. The Source proof classifies
   complete read-only scopes; its live owner requires every original read and a
   successful real Target end before allowing an already optional read-only
   Source end to differ between COMMIT and ROLLBACK. Candidate fencing stays in
@@ -1652,9 +1660,9 @@ explicit repository-wide audit.
   read-only span, including retained zero-effect COM_PING continuity witnesses.
   Case-local completed read spans may restart across consistent inactive
   boundaries; active-transaction gaps and Global post-read gaps remain strict.
-  `replay/mysql/transaction_equivalence/source` separately proves complete
+  `traffic-protocol-mysql::transaction_source` separately proves complete
   ordinary implicit read/write transaction segments, their write counts and
-  first-write-through-end windows, retaining unsafe-evidence reasons. Its sibling
+  first-write-through-end windows, retaining unsafe-evidence reasons. Its child
   `source_evidence` stores immutable Global ordinary-read identity/status facts,
   without SQL/result bodies or consumption rights. It can bridge only a Case's
   pre-write active sequence gap in an established implicit span with complete,
@@ -1664,15 +1672,17 @@ explicit repository-wide audit.
   witnesses. The Source scanner may resume at a later
   independently known inactive start; earlier rejected spans remain diagnosed
   and connection-level incompleteness still prevents setup omission. Its
-  `source/error_rollback` child retains a complete contiguous active prefix,
+  `error_rollback` child retains a complete contiguous active prefix,
   native DML ERR without status flags, and immediate successful plain ROLLBACK
   as a strict segment. It requires known inactive Source boundaries and exact
   identity/sequence continuity, never fills gaps with Global reads or infers
   missing ERR flags. The existing explicit physical Target transaction witness
   must deliver every prefix member, the error and the real end in order; this
-  proof grants neither autocommit equivalence nor end omission. Its parent
-  owns connection-local Target BEGIN/end witnesses, ordered finite Source window
-  correspondence and delivery-confirmed setup coverage. Multi-write windows
+  proof grants neither autocommit equivalence nor end omission.
+  `traffic-protocol-mysql::transaction_delivery` owns connection-local Target
+  BEGIN/end witnesses, ordered Source window correspondence and native setup
+  coverage constraints. The Replay adapter supplies actual wire receipts and
+  shared rule comparison, then updates finite inventory and reports. Multi-write windows
   include every read after the first write, through the actual matching end.
   Preceding reads remain finite ordinary dependencies. The live matcher
   rejects a required member on an inactive autocommitting

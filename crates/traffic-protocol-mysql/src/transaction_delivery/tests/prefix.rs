@@ -37,31 +37,24 @@ fn deliver(
     after: u16,
 ) -> Observation {
     let record = &exchanges[index].record;
-    let confirmed = registry.prefixes.confirmed(index, &record.response);
-    if let Some(trace) = witness.active.as_mut()
-        && let Some(&(requirement, transaction)) = registry.members.get(&index)
-        && let [first, effect, _] = registry.requirements[requirement].transactions[transaction]
-            .members
-            .as_slice()
-        && *effect == index
-        && registry.prefixes.covers(*first, trace.neutral_first)
-    {
-        trace.prefix_equivalent = true;
-    }
-    registry.observe_delivery_with_prefix(
+    let delivery = Delivery {
+        command: "COM_QUERY",
+        params: None,
+        sql: record.sql.as_deref().unwrap(),
+        index: Some(index),
+        successful: true,
+        before,
+        after,
+    };
+    let now = Utc::now();
+    let confirmed = registry.prepare_prefix(
         witness,
-        Delivery {
-            command: "COM_QUERY",
-            params: None,
-            sql: record.sql.as_deref().unwrap(),
-            index: Some(index),
-            successful: true,
-            before,
-            after,
-        },
-        confirmed,
-        |_| true,
-    )
+        delivery,
+        Some((&record.response, now, now)),
+        |_| Some((0, 0)),
+        |expected, actual| exchanges[expected].record.response == actual.response,
+    );
+    registry.observe_delivery_with_prefix(witness, delivery, confirmed, |_| true)
 }
 
 #[test]
@@ -179,5 +172,49 @@ fn equivalent_prefix_cannot_replace_the_lock_or_prove_a_different_socket() {
                 .is_some()
         );
         assert!(registry.requires_witness(2));
+    }
+}
+
+#[test]
+fn native_prefix_confirmation_requires_the_hosts_complete_value_comparison() {
+    for accepted in [false, true] {
+        let (mut registry, exchanges) = equivalent_prefix_fixture();
+        let mut witness = Witness::default();
+        deliver(&mut registry, &exchanges, &mut witness, 3, 0, 1);
+        let compared = std::cell::Cell::new(false);
+        let delivery = Delivery {
+            command: "COM_QUERY",
+            params: None,
+            sql: exchanges[1].record.sql.as_deref().unwrap(),
+            index: Some(1),
+            successful: true,
+            before: 1,
+            after: 1,
+        };
+        assert!(
+            registry
+                .prepare_prefix(
+                    &mut witness,
+                    delivery,
+                    None,
+                    |_| Some((0, 0)),
+                    |expected, actual| {
+                        compared.set(true);
+                        assert_eq!(expected, 0);
+                        assert_eq!(actual.response, exchanges[3].record.response);
+                        accepted
+                    },
+                )
+                .is_none()
+        );
+        assert!(compared.get());
+        registry.observe_delivery_with_prefix(&mut witness, delivery, None, |_| true);
+        assert_eq!(
+            registry.preferred_end(&witness, "COMMIT"),
+            accepted.then_some(2)
+        );
+        let observed = deliver(&mut registry, &exchanges, &mut witness, 2, 1, 0);
+        assert_eq!(observed.violation.is_none(), accepted);
+        assert_eq!(registry.requires_witness(2), !accepted);
     }
 }

@@ -5,32 +5,50 @@ mod implicit_native;
 mod member_comparison;
 mod prefix;
 
-pub(crate) fn records() -> Vec<Value> {
-    let control = |seq, sql, before, after| {
-        json!({
-            "event_type":"mysql_exchange", "connection_id":Uuid::nil(), "query_sequence":seq,
-            "target_host":"127.0.0.1", "target_port":3306, "database":"appdb", "username":"root",
-            "command":"COM_QUERY", "sql":sql, "server_status_before":before,
-            "response":{"status":"ok", "server_status":after, "affected_rows":0, "last_insert_id":0}
-        })
-    };
-    let read = |seq| {
-        let mut r = control(seq, "SELECT id FROM users WHERE id=1", 0, 1);
-        r["response"] = json!({"status":"resultset", "server_status":1,
-            "columns":[{"name":"id", "family":"integer", "sql_type":"INT"}],
-            "rows":[[{"kind":"integer", "value":1}]]});
-        r
-    };
-    vec![
-        control(3, "SET AUTOCOMMIT = 0", 2, 0),
-        read(5),
-        control(6, "UPDATE users SET active=1 WHERE id=1", 1, 1),
-        control(7, "COMMIT", 1, 0),
-        control(8, "ROLLBACK", 0, 0),
-        read(9),
-        control(10, "UPDATE users SET active=2 WHERE id=1", 1, 1),
-        control(11, "COMMIT", 1, 0),
-    ]
+use super::test_support::records;
+use crate::session_identity::{DependencyIdentity, identity_from_exchange};
+type Witness = super::Witness<TestEvidence>;
+type RecordedMysqlExchange = crate::recorded::RecordedMysqlExchange<TestEvidence>;
+
+#[derive(Debug, Clone)]
+struct TestEvidence;
+impl RecordSource for TestEvidence {
+    fn load<T: serde::de::DeserializeOwned>(&self) -> anyhow::Result<T> {
+        anyhow::bail!("inline fixture has no external evidence")
+    }
+}
+
+struct ReplayExchange {
+    record: RecordedMysqlExchange,
+    identity: DependencyIdentity,
+    source: ReplaySource,
+    case_id: Option<String>,
+    optional_session: Option<OptionalSessionExchange>,
+}
+
+impl SessionContext for [ReplayExchange] {
+    type Evidence = TestEvidence;
+
+    fn exchange(&self, index: usize) -> SourceExchange<'_, TestEvidence> {
+        let exchange = &self[index];
+        SourceExchange {
+            record: &exchange.record,
+            identity: &exchange.identity,
+            source: exchange.source,
+            case_id: exchange.case_id.as_deref(),
+            optional_session: exchange.optional_session,
+        }
+    }
+
+    fn available(&self, _index: usize) -> bool {
+        true
+    }
+    fn admitted(&self, _index: usize) -> bool {
+        false
+    }
+    fn delivered(&self, _index: usize) -> bool {
+        false
+    }
 }
 
 fn registry(values: &[Value]) -> Registry {
@@ -38,34 +56,28 @@ fn registry(values: &[Value]) -> Registry {
 }
 
 fn registry_with_exchanges(values: &[Value]) -> (Registry, Vec<ReplayExchange>) {
-    let records: Vec<crate::replay::dependencies::DependencyRecord> = values
+    let records: Vec<RecordedMysqlExchange> = values
         .iter()
         .map(|v| serde_json::from_value(v.clone()).unwrap())
         .collect();
     let mut registry = Registry::default();
-    let plans = registry.prepare(&records, &BTreeMap::new(), ReplaySource::Case);
+    let plans = registry.prepare(
+        records.iter().enumerate(),
+        &BTreeMap::new(),
+        ReplaySource::Case,
+    );
     let exchanges: Vec<_> = records
         .into_iter()
-        .map(|r| {
-            let crate::replay::dependencies::DependencyRecord::MysqlExchange(record) = r else {
-                panic!()
-            };
-            ReplayExchange {
-                source: ReplaySource::Case,
-                case_id: Some("case".into()),
-                identity: identity_from_exchange(&record).unwrap(),
-                record: *record,
-                optional_session: None,
-                status: ReplayExchangeStatus::Available,
-                timing: ReplayExchangeTiming::from_recorded(
-                    0,
-                    crate::DependencyExchangeOutcome::Response,
-                ),
-            }
+        .map(|record| ReplayExchange {
+            source: ReplaySource::Case,
+            case_id: Some("case".into()),
+            identity: identity_from_exchange(&record).unwrap(),
+            record,
+            optional_session: None,
         })
         .collect();
     let mapping = (0..exchanges.len()).map(|i| (i, i)).collect();
-    let _ = registry.install(plans, &mapping, &exchanges);
+    let _ = registry.install(plans, &mapping, exchanges.as_slice());
     (registry, exchanges)
 }
 
@@ -90,12 +102,12 @@ fn fast_dispatch_defers_only_coverage_for_future_transactions() {
         value["request_started_at"] = json!(at(value["query_sequence"].as_i64().unwrap()));
     }
     let (mut registry, exchanges) = registry_with_exchanges(&values);
-    assert!(!registry.can_defer_setup(0, at(8), &exchanges));
+    assert!(!registry.can_defer_setup(0, at(8), |i| exchanges[i].record.request_started_at));
     let mut first = Witness::default();
     assert!(segment(&mut registry, &mut first, &[1, 2, 3], "COMMIT").is_empty());
-    assert!(registry.can_defer_setup(0, at(8), &exchanges));
-    assert!(!registry.can_defer_setup(0, at(10), &exchanges));
-    assert!(!registry.can_defer_setup(0, at(11), &exchanges));
+    assert!(registry.can_defer_setup(0, at(8), |i| exchanges[i].record.request_started_at));
+    assert!(!registry.can_defer_setup(0, at(10), |i| exchanges[i].record.request_started_at));
+    assert!(!registry.can_defer_setup(0, at(11), |i| exchanges[i].record.request_started_at));
 
     let mut second = Witness::default();
     assert_eq!(
@@ -124,10 +136,10 @@ fn fast_dispatch_uses_the_proven_prefix_before_a_later_source_status_gap() {
         registry.diagnostic(0).unwrap()["reason"],
         "source_status_discontinuous"
     );
-    assert!(!registry.can_defer_setup(0, at(7), &exchanges));
+    assert!(!registry.can_defer_setup(0, at(7), |i| exchanges[i].record.request_started_at));
     assert!(segment(&mut registry, &mut Witness::default(), &[1, 2, 3], "COMMIT").is_empty());
-    assert!(registry.can_defer_setup(0, at(7), &exchanges));
-    assert!(!registry.can_defer_setup(0, at(8), &exchanges));
+    assert!(registry.can_defer_setup(0, at(7), |i| exchanges[i].record.request_started_at));
+    assert!(!registry.can_defer_setup(0, at(8), |i| exchanges[i].record.request_started_at));
     assert_eq!(
         registry.diagnostic(0).unwrap()["reason"],
         "source_status_discontinuous",
@@ -137,7 +149,7 @@ fn fast_dispatch_uses_the_proven_prefix_before_a_later_source_status_gap() {
     values[6]["request_started_at"] = json!(at(6));
     let (mut reversed, exchanges) = registry_with_exchanges(&values);
     assert!(segment(&mut reversed, &mut Witness::default(), &[1, 2, 3], "COMMIT").is_empty());
-    assert!(!reversed.can_defer_setup(0, at(7), &exchanges));
+    assert!(!reversed.can_defer_setup(0, at(7), |i| exchanges[i].record.request_started_at));
 }
 
 #[test]
@@ -159,9 +171,9 @@ fn fast_dispatch_stops_at_the_start_of_a_later_incomplete_transaction() {
         "source_sequence_gap"
     );
     assert!(segment(&mut registry, &mut Witness::default(), &[1, 2, 3], "COMMIT").is_empty());
-    assert!(registry.can_defer_setup(0, at(8), &exchanges));
-    assert!(!registry.can_defer_setup(0, at(9), &exchanges));
-    assert!(!registry.can_defer_setup(0, at(10), &exchanges));
+    assert!(registry.can_defer_setup(0, at(8), |i| exchanges[i].record.request_started_at));
+    assert!(!registry.can_defer_setup(0, at(9), |i| exchanges[i].record.request_started_at));
+    assert!(!registry.can_defer_setup(0, at(10), |i| exchanges[i].record.request_started_at));
 }
 
 #[test]
@@ -502,11 +514,19 @@ fn scoped_plans(case: &[Value], global: &[Value]) -> Vec<source::Plan> {
         values
             .iter()
             .map(|v| serde_json::from_value(v.clone()).unwrap())
-            .collect::<Vec<_>>()
+            .collect::<Vec<RecordedMysqlExchange>>()
     };
     let mut registry = Registry::default();
-    let _ = registry.prepare(&decode(global), &BTreeMap::new(), ReplaySource::Startup);
-    registry.prepare(&decode(case), &BTreeMap::new(), ReplaySource::Case)
+    let _ = registry.prepare(
+        decode(global).iter().enumerate(),
+        &BTreeMap::new(),
+        ReplaySource::Startup,
+    );
+    registry.prepare(
+        decode(case).iter().enumerate(),
+        &BTreeMap::new(),
+        ReplaySource::Case,
+    )
 }
 
 #[test]

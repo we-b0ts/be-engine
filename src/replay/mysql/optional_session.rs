@@ -1,7 +1,8 @@
 //! Install native control facts while the framework retains live finite admission.
 use super::*;
 use crate::replay::dependencies::DependencyRecord;
-pub(in crate::replay::mysql) use traffic_protocol_mysql::read_effect as read;
+#[cfg(test)]
+use traffic_protocol_mysql::read_effect as read;
 pub(in crate::replay) use traffic_protocol_mysql::session_control::ReadPrefixes;
 pub(in crate::replay::mysql) use traffic_protocol_mysql::session_control::{
     successful_begin, successful_end,
@@ -41,7 +42,9 @@ impl MysqlReplayState {
                     == Some(false)
                 && self
                     .transaction_equivalence
-                    .can_defer_setup(index, input_at, &self.exchanges)
+                    .can_defer_setup(index, input_at, |index| {
+                        self.exchanges[index].record.request_started_at
+                    })
         })
     }
 }

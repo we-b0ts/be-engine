@@ -94,4 +94,8 @@ impl traffic_protocol::evidence::RecordSource for RecordRef {
     fn load<T: serde::de::DeserializeOwned>(&self) -> anyhow::Result<T> {
         RecordRef::load(self)
     }
+
+    fn byte_len(&self) -> Option<u64> {
+        Some(self.location.length)
+    }
 }

@@ -15,6 +15,7 @@ mod report_inventory;
 mod response;
 mod savepoints;
 mod session;
+mod session_constraints;
 mod session_setup;
 pub(in crate::replay) use session_setup::is_nonsemantic_session_setup;
 pub(in crate::replay) mod sql_match;
@@ -36,6 +37,7 @@ pub(super) use matcher::MysqlReplayState;
 pub(super) use model::*;
 pub(super) use response::*;
 pub(super) use session::*;
+pub(super) use session_constraints::SessionContext;
 pub(super) use values::*;
 
 use super::*;
