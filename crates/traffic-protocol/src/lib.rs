@@ -245,3 +245,5 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
 
 #[cfg(test)]
 mod tests;
+
+pub mod capture;

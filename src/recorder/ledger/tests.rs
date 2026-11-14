@@ -6,6 +6,7 @@ use crate::recorder::{CaseContext, DependencyConnectFailureEvent, RecorderEvent}
 use crate::{AppConfig, AppState};
 use std::time::Duration;
 
+mod custom_protocol;
 mod shutdown;
 
 fn failure() -> RecorderEvent {

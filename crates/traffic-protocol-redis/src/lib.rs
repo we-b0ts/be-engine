@@ -612,3 +612,5 @@ mod tests {
 pub mod events;
 
 pub mod evidence;
+
+pub mod capture;

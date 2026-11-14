@@ -13,7 +13,8 @@ use uuid::Uuid;
 use crate::active_case::DependencyTargets;
 use crate::dependency::attribution::DependencyOwner;
 use crate::dependency::observation::*;
-use crate::recorder::{GlobalDependencyAttribution, RecorderEvent};
+use crate::recorder::GlobalDependencyAttribution;
+use traffic_protocol::capture::CaptureEvidence;
 
 use super::LifecycleRecord;
 
@@ -142,7 +143,7 @@ impl LedgerWriter {
     pub(in crate::recorder) async fn append(
         &mut self,
         files: &mut crate::recorder::jsonl::JsonlWriterPool,
-        event: &RecorderEvent,
+        event: &impl CaptureEvidence,
         targets: Option<&DependencyTargets>,
         explicit: Option<DependencyOwner>,
         global: Option<&GlobalDependencyAttribution>,
@@ -151,6 +152,14 @@ impl LedgerWriter {
             !self.sealed,
             "recording dependency ledger is already sealed"
         );
+        let mut value = traffic_protocol::capture::payload(event)?;
+        let outcome = value
+            .get("outcome")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        let facts = event.capture_facts();
         let owner = explicit.unwrap_or_else(|| self.owner(targets, global));
         let matched_rule_id = global
             .filter(|a| a.reason == "background_rule")
@@ -160,7 +169,7 @@ impl LedgerWriter {
             .filter(|targets| !targets.process_rule_ids.is_empty())
             .map(|targets| targets.process_rule_ids.clone())
             .unwrap_or_else(|| matched_rule_id.iter().cloned().collect());
-        if super::event::is_debug(event) {
+        if facts.debug {
             let mut metadata = if let Some(capture) = targets.and_then(|t| t.capture.as_ref()) {
                 capture.metadata(owner, false)
             } else {
@@ -179,7 +188,7 @@ impl LedgerWriter {
                         .or(admitted_case),
                     admitted_case,
                     started_at: Utc::now(),
-                    protocol_ref: super::event::protocol_ref(event),
+                    protocol_ref: facts.reference.clone(),
                     attribution: owner,
                     matched_rule_id: None,
                     matched_rule_ids: Vec::new(),
@@ -189,7 +198,6 @@ impl LedgerWriter {
             };
             metadata.matched_rule_id = matched_rule_id;
             metadata.matched_rule_ids = matched_rule_ids;
-            let mut value = serde_json::to_value(event)?;
             value
                 .as_object_mut()
                 .context("dependency debug event is not an object")?
@@ -201,30 +209,14 @@ impl LedgerWriter {
                 )
                 .await;
         }
-        let semantic_required = matches!(
-            event,
-            RecorderEvent::DependencyConnectFailure(_)
-                | RecorderEvent::UdpDatagram(_)
-                | RecorderEvent::HttpExchange(_)
-                | RecorderEvent::MysqlExchange(_)
-                | RecorderEvent::RedisExchange(_)
-                | RecorderEvent::RedisPubSubPush(_)
-                | RecorderEvent::MemcachedExchange(_)
-                | RecorderEvent::KafkaProduce(_)
-                | RecorderEvent::KafkaFetch(_)
-                | RecorderEvent::KafkaDelivery(_)
-                | RecorderEvent::MotanExchange(_)
-        ) && crate::recorder::should_append_case_dependency(event)
-            && !global.is_some_and(|attribution| attribution.reason == "preflight_probe")
-            && !matches!(event,RecorderEvent::MysqlExchange(e) if e.command=="COM_PING")
-            && !matches!(event,RecorderEvent::RedisExchange(e) if e.command=="QUIT")
-            && !matches!(event,RecorderEvent::MotanExchange(e) if e.heartbeat)
-            || matches!(event, RecorderEvent::TcpGatewayConnection(event)
-                if event.client_to_server_bytes > 0 || event.server_to_client_bytes > 0);
-        let (terminal, complete) = super::event::terminal(event);
+        let semantic_required = facts.semantic_required(
+            global.is_some_and(|attribution| attribution.reason == "preflight_probe"),
+        );
+        let terminal = facts.terminal;
+        let complete = facts.complete;
         let capture = targets.and_then(|t| t.capture.as_ref());
         let mut metadata = if let Some(capture) = capture {
-            capture.bind_protocol(super::event::protocol_ref(event));
+            capture.bind_protocol(facts.reference.clone());
             capture.note_terminal(terminal, complete);
             capture.metadata(owner, semantic_required)
         } else {
@@ -273,7 +265,7 @@ impl LedgerWriter {
                 observed_case,
                 admitted_case,
                 started_at,
-                protocol_ref: super::event::protocol_ref(event),
+                protocol_ref: facts.reference.clone(),
                 attribution: owner,
                 matched_rule_id: None,
                 matched_rule_ids: Vec::new(),
@@ -283,14 +275,10 @@ impl LedgerWriter {
         };
         metadata.matched_rule_id = matched_rule_id;
         metadata.matched_rule_ids = matched_rule_ids;
-        let mut value = serde_json::to_value(event)?;
-        let outcome = value
+        value
             .as_object_mut()
             .context("dependency event is not an object")?
-            .remove("outcome")
-            .map(serde_json::from_value)
-            .transpose()?
-            .unwrap_or_default();
+            .remove("outcome");
         let value = serde_json::to_value(RecordedDependency {
             recording_id: self.run_epoch,
             capture: metadata.clone(),

@@ -359,7 +359,7 @@ fn decode(capture: &BodyCapture) -> Option<Vec<u8>> {
 }
 
 fn failed(event: &RecorderEvent) -> bool {
-    !crate::recorder::ledger::event::terminal(event).1
+    !event.capture_complete()
 }
 
 #[cfg(test)]

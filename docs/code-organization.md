@@ -48,6 +48,8 @@ protocol library. Recorder retains capture clocks, ownership and persistence.
 Native capture payloads and physical value locations belong to the HTTP,
 MySQL and Redis libraries. Protocol references retain open identity fields, and
 semantic evidence support is supplied by the registered native evidence owner.
+`CaptureEvidence` supplies native completeness, references and control facts.
+The ledger owns capture lifetime and sealed persistence through that interface.
 `traffic-response-rewrite` owns pure document selection, decoding,
 address discovery and materialization. The root HTTP adapter owns route
 registration, managed processes and provenance. See

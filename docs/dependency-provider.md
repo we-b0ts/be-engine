@@ -84,6 +84,11 @@ MySQL Provider 还提供逻辑结果边界识别，列定义整体对应 Headers
 录制清单与 Replay 准备使用相同的能力注册表，准备缓存也绑定证据能力的 schema 版本。
 `ProtocolRef` 保存协议名和原生身份字段，既有 HTTP/MySQL/Redis 引用保持原来的序列化结构。
 
+`CaptureEvidence` 提供原生引用、完整性、控制观察与语义义务。
+ledger 使用这些事实执行统一的生命周期、归属与封存，HTTP/MySQL/Redis 的原生完整性和控制判断由协议库实现。
+序列化检查在分配兜底依赖编号之前完成，原生负载保留自己的字段，框架写入统一录制 envelope。
+自定义事件测试覆盖共享 ledger、封存清单与 scope 索引，并验证未注册的语义义务继续计入 unsupported inventory。
+
 ## 录制结构
 
 | 结构 | 单位 | 内容 |

@@ -10,7 +10,6 @@ use crate::dependency::observation::{CaptureCoverage, CapturePhase, ProtocolRef}
 
 use super::writer::RecorderWriter;
 
-pub(super) mod event;
 pub(super) mod persistence;
 #[cfg(test)]
 mod tests;

@@ -17,6 +17,7 @@ pub enum DependencyProtocol {
 
 pub type DependencyProviders = ProviderRegistry<DependencyProtocol>;
 
+mod capture;
 pub(crate) mod evidence;
 
 pub fn default_providers() -> Arc<DependencyProviders> {

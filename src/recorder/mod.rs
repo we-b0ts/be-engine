@@ -330,43 +330,14 @@ pub(crate) struct GlobalDependencyAttribution {
     pub(crate) matched_by: String,
 }
 
-pub(super) fn should_write_traffic_event(mode: TrafficJsonlMode, event: &RecorderEvent) -> bool {
+pub(super) fn should_write_traffic_event(
+    mode: TrafficJsonlMode,
+    event: &impl traffic_protocol::capture::CaptureEvidence,
+) -> bool {
     match mode {
         TrafficJsonlMode::Full => true,
         TrafficJsonlMode::Off => false,
-        TrafficJsonlMode::Errors => match event {
-            RecorderEvent::DependencyConnectFailure(_) => true,
-            RecorderEvent::HttpExchange(event) => {
-                event.outcome.is_client_terminated()
-                    || event.outcome.is_server_terminated()
-                    || event.error.is_some()
-                    || event.response_status.is_some_and(|status| status >= 500)
-            }
-            RecorderEvent::TcpGatewayConnection(event) => event.error.is_some(),
-            RecorderEvent::UdpDatagram(event) => event.error.is_some(),
-            RecorderEvent::RedisConnection(event) => event.error.is_some(),
-            RecorderEvent::MemcachedConnection(event) => event.error.is_some(),
-            RecorderEvent::KafkaConnection(event) => event.error.is_some(),
-            RecorderEvent::MotanConnection(event) => event.error.is_some(),
-            RecorderEvent::MysqlConnection(event) => event.error.is_some(),
-            RecorderEvent::MysqlPacket(event) => event.error_code.is_some(),
-            RecorderEvent::MysqlResponse(event) => event.error_code.is_some(),
-            RecorderEvent::MysqlExchange(event) => event.response.error_code.is_some(),
-            RecorderEvent::MotanExchange(event) => {
-                event.response_status == "exception" || !event.replay_safe
-            }
-            RecorderEvent::MysqlTlsRejected(_)
-            | RecorderEvent::AccessPolicyAllow(_)
-            | RecorderEvent::ReadonlyRejection(_)
-            | RecorderEvent::ProxyError(_) => true,
-            RecorderEvent::RedisExchange(_)
-            | RecorderEvent::RedisPubSubPush(_)
-            | RecorderEvent::MemcachedExchange(_)
-            | RecorderEvent::KafkaProduce(_)
-            | RecorderEvent::KafkaFetch(_)
-            | RecorderEvent::KafkaDelivery(_)
-            | RecorderEvent::MysqlQuery(_) => false,
-        },
+        TrafficJsonlMode::Errors => event.capture_facts().traffic_error,
     }
 }
 

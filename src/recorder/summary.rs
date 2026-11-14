@@ -5,8 +5,10 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::mysql::maintenance::is_mysql_maintenance_exchange;
-use crate::recorder::RecorderEvent;
+use traffic_protocol::capture::CaptureEvidence;
+use traffic_protocol_mysql::capture::is_debug_only_mysql_exchange_value;
+#[cfg(test)]
+use traffic_protocol_mysql::capture::is_successful_mysql_session_setup;
 
 mod persistence;
 pub(crate) use persistence::refresh_owned_dependency_indexes;
@@ -32,14 +34,8 @@ pub(crate) use source_process::{
 };
 use udp::{UdpDependencySummary, record_udp_summary};
 
-pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
-    // PING is semantic continuity evidence even though maintenance stays out
-    // of the business dependency summary. Never turn its sequence into a gap.
-    !matches!(event, RecorderEvent::MysqlExchange(exchange) if exchange.command != "COM_PING" && is_debug_only_mysql_exchange(exchange))
-        && !matches!(event, RecorderEvent::RedisExchange(exchange) if redis::is_client_library_info_exchange(exchange))
-        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.session_setup && exchange.outcome == crate::DependencyExchangeOutcome::Response && exchange.response_kind != "error" && exchange.replay_safe)
-        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "PING" && exchange.outcome == crate::DependencyExchangeOutcome::Response && exchange.response_kind != "error" && exchange.replay_safe)
-        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.cache_snapshot_hit)
+pub(crate) fn should_append_case_dependency(event: &impl CaptureEvidence) -> bool {
+    event.capture_facts().case_dependency
 }
 
 pub(crate) async fn write_case_dependency_summary(dir: &Path) -> Result<()> {
@@ -565,144 +561,6 @@ fn record_proxy_error_summary(summary: &mut ProxyErrorSummary, value: &Value) {
     if let Some(target) = json_str(value, "target") {
         *summary.targets.entry(target.to_string()).or_default() += 1;
     }
-}
-
-fn is_debug_only_mysql_exchange(exchange: &crate::recorder::MysqlExchangeEvent) -> bool {
-    if exchange.outcome != crate::DependencyExchangeOutcome::Response {
-        return false;
-    }
-    (is_mysql_maintenance_exchange(exchange.command.as_str(), exchange.sql.as_deref())
-        && (exchange.command != "COM_PING" || exchange.response.status == "ok"))
-        || is_successful_stmt_prepare(exchange)
-        || is_successful_mysql_session_setup(
-            exchange.command.as_str(),
-            exchange.sql.as_deref(),
-            exchange.response.status.as_str(),
-            exchange.query_sequence,
-        )
-}
-
-fn is_successful_stmt_prepare(exchange: &crate::recorder::MysqlExchangeEvent) -> bool {
-    exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare"
-}
-
-fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
-    if termination::outcome(value)
-        .is_some_and(|outcome| outcome != crate::DependencyExchangeOutcome::Response)
-    {
-        return false;
-    }
-    (is_mysql_maintenance_exchange(
-        json_str(value, "command").unwrap_or_default(),
-        json_str(value, "sql"),
-    ) && (value["command"] != "COM_PING" || value["response"]["status"] == "ok"))
-        || is_successful_stmt_prepare_value(value)
-        || is_successful_mysql_session_setup(
-            json_str(value, "command").unwrap_or_default(),
-            json_str(value, "sql"),
-            value
-                .get("response")
-                .and_then(|response| json_str(response, "status"))
-                .unwrap_or_default(),
-            json_u64(value, "query_sequence").unwrap_or_default(),
-        )
-}
-
-fn is_successful_stmt_prepare_value(value: &Value) -> bool {
-    json_str(value, "command") == Some("COM_STMT_PREPARE")
-        && value
-            .get("response")
-            .and_then(|response| json_str(response, "status"))
-            == Some("stmt_prepare")
-}
-
-fn is_successful_mysql_session_setup(
-    command: &str,
-    sql: Option<&str>,
-    status: &str,
-    query_sequence: u64,
-) -> bool {
-    command == "COM_QUERY"
-        && matches!(status, "ok" | "resultset")
-        && sql.is_some_and(|sql| {
-            is_mysql_session_setup_sql(sql)
-                || (query_sequence <= 9 && is_mysql_connector_initialization_sql(sql))
-        })
-}
-
-fn is_mysql_session_setup_sql(sql: &str) -> bool {
-    let normalized = normalize_mysql_control_sql(sql);
-    // Preserve transaction controls, including compound/unsupported SET forms.
-    // Replay needs the full exchange and surrounding session evidence.
-    if normalized.contains("autocommit")
-        && crate::mysql::sql::tokens(sql).is_none_or(|tokens| {
-            tokens.iter().any(|token| token.is("autocommit")
-                || matches!(token, crate::mysql::sql::Token::Identifier(name) if name.eq_ignore_ascii_case("autocommit")))
-        })
-    {
-        return false;
-    }
-    normalized.starts_with("set names ")
-        || normalized.starts_with("set character set ")
-        || normalized.starts_with("set character_set_client ")
-        || normalized.starts_with("set character_set_connection ")
-        || normalized.starts_with("set character_set_results ")
-        || normalized.starts_with("set collation_connection ")
-        || normalized.starts_with("set time_zone ")
-        || is_mysql_set_assignment(&normalized, "sql_mode")
-}
-
-fn is_mysql_set_assignment(sql: &str, variable: &str) -> bool {
-    sql.strip_prefix("set ")
-        .and_then(|remainder| remainder.strip_prefix(variable))
-        .and_then(|remainder| remainder.chars().next())
-        .is_some_and(|separator| separator == '=' || separator.is_whitespace())
-}
-
-fn is_mysql_connector_initialization_sql(sql: &str) -> bool {
-    let normalized = normalize_mysql_control_sql(sql);
-    let normalized = strip_leading_mysql_comment(&normalized);
-    normalized == "show collation"
-        || normalized == "show warnings"
-        || matches!(
-            normalized,
-            "select @@session.auto_increment_increment"
-                | "select @@session.tx_isolation"
-                | "select @@session.transaction_isolation"
-        )
-        || (normalized.starts_with("show variables where ")
-            && normalized.contains("variable_name")
-            && normalized.contains("character_set_client")
-            && normalized.contains("transaction_isolation")
-            && normalized.contains("max_allowed_packet"))
-}
-
-fn strip_leading_mysql_comment(sql: &str) -> &str {
-    let Some(comment) = sql.strip_prefix("/*") else {
-        return sql;
-    };
-    comment
-        .split_once("*/")
-        .map(|(_, remainder)| remainder.trim_start())
-        .unwrap_or(sql)
-}
-
-fn normalize_mysql_control_sql(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len());
-    let mut last_was_space = false;
-    for ch in sql.chars() {
-        let ch = if ch == '`' { continue } else { ch };
-        if ch.is_whitespace() {
-            if !last_was_space {
-                out.push(' ');
-            }
-            last_was_space = true;
-        } else {
-            out.push(ch.to_ascii_lowercase());
-            last_was_space = false;
-        }
-    }
-    out.trim().to_string()
 }
 
 fn mysql_phase(command: Option<&str>) -> &'static str {
