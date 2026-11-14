@@ -60,8 +60,8 @@ pub(crate) mod shared_read;
 mod snapshot_seed;
 mod startup;
 pub(crate) mod value;
-use connection_scope::{ConnectionScopes, TargetConnection};
 use matching::redis_authentication_hint;
+use traffic_protocol_redis::session_binding::{ConnectionScopes, TargetConnection};
 pub(super) mod snapshot_overlay;
 use super::command_matching::{CaseConnectionBinding, is_process_lane};
 use super::report::command::{

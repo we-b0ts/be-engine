@@ -619,3 +619,5 @@ pub mod capture;
 pub mod process_summary;
 
 pub mod report;
+
+pub mod session_binding;

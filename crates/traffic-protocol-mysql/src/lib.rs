@@ -17,6 +17,7 @@ pub mod response;
 pub mod response_progress;
 pub mod savepoint;
 pub mod semantic;
+pub mod server;
 pub mod session_constraints;
 pub mod session_control;
 pub mod session_identity;
@@ -36,7 +37,7 @@ mod recognition;
 pub use recognition::recognize;
 
 use bytes::{Buf, BytesMut};
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use traffic_protocol::FrameDecoder;
 
 pub mod continuation;
@@ -180,6 +181,15 @@ impl FrameDecoder for MysqlDecoder {
         let len = input[0] as usize | ((input[1] as usize) << 8) | ((input[2] as usize) << 16);
         Ok((len + 4).saturating_sub(input.len()))
     }
+}
+
+pub async fn write_packet<W: AsyncWrite + Unpin + ?Sized>(
+    writer: &mut W,
+    packet: &MysqlPacket,
+) -> io::Result<()> {
+    writer.write_all(&packet.to_wire_bytes()).await?;
+    // TLS may retain ciphertext after writing a complete native packet.
+    writer.flush().await
 }
 
 pub async fn read_packet<R: AsyncRead + Unpin + ?Sized>(

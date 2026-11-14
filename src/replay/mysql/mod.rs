@@ -47,17 +47,8 @@ use super::*;
 use crate::mysql::wire::{
     CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, CLIENT_SSL, read_packet,
 };
-use crate::mysql::wire::{MysqlPacket, parse_client_command, parse_handshake_response};
-use tokio::io::{AsyncRead, AsyncWrite};
-
-pub(in crate::replay) trait MysqlReplayIo:
-    AsyncRead + AsyncWrite + Unpin + Send
-{
-}
-
-impl<T> MysqlReplayIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
-
-pub(in crate::replay) type BoxedMysqlReplayIo = Box<dyn MysqlReplayIo>;
+use crate::mysql::wire::{MysqlPacket, parse_client_command};
+pub(in crate::replay) use traffic_protocol::connection::ConnectionIo as MysqlReplayIo;
 
 pub(in crate::replay) use traffic_protocol_mysql::types::*;
 

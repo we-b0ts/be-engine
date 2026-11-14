@@ -447,7 +447,7 @@ impl RedisReplayState {
         for index in indices {
             requires_binding |=
                 self.connection_scopes
-                    .claim(&self.exchanges[index], Some(case), connection);
+                    .bind(&self.exchanges[index], Some(case), connection);
             self.exchanges[index].status = ReplayExchangeStatus::Responding;
         }
         *self.append_streams.calls.entry(case.into()).or_default() += 1;

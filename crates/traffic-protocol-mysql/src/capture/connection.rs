@@ -15,8 +15,7 @@ use uuid::Uuid;
 
 use super::{MysqlExchangeContext, MysqlQueryTracker};
 use crate::{
-    MysqlPacket, MysqlSession, clear_client_compression_capability,
-    clear_server_compression_capability,
+    MysqlSession, clear_client_compression_capability, clear_server_compression_capability,
     events::{MysqlConnectionEvent, MysqlQueryEvent},
     parse_client_command, parse_handshake_response, parse_server_packet, readonly_error_packet,
 };
@@ -50,16 +49,7 @@ pub struct ConnectionOptions {
     pub termination: ConnectionTermination,
 }
 
-pub async fn write_packet<W>(writer: &mut W, packet: &MysqlPacket) -> std::io::Result<()>
-where
-    W: AsyncWrite + Unpin + ?Sized,
-{
-    writer.write_all(&packet.to_wire_bytes()).await?;
-    // TLS may retain ciphertext after write_all, even for a complete packet.
-    // Delivery must not depend on the semantic tracker recognizing a response.
-    writer.flush().await?;
-    Ok(())
-}
+pub use crate::write_packet;
 
 async fn write_rejection(
     writer: &mut (impl AsyncWrite + Unpin + ?Sized),

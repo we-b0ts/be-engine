@@ -69,7 +69,7 @@ impl RedisReplayState {
         let target_event_index = self.events.request_order.reserve(active_case_id);
         let requires_binding =
             self.connection_scopes
-                .claim(&self.exchanges[index], active_case_id, connection);
+                .bind(&self.exchanges[index], active_case_id, connection);
         let exchange = &mut self.exchanges[index];
         let kind = if exchange.timing.outcome().is_client_terminated()
             && !exchange.record.lifecycle_cleanup

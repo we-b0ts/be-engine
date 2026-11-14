@@ -90,8 +90,20 @@ barriers and contiguous part receipts. The caller retains final wire publication
 and semantic commit. MySQL response, PREPARE and continuation framing belong to
 its protocol library. Registered native encoders enter the same delivery path
 through `MessageEncoder::output`, including multipart native frames.
+`traffic-protocol-mysql::server` owns server greeting, CLIENT_SSL negotiation and
+the once-only login acknowledgement. The Replay host supplies its replay-CA
+configuration and observes the native login before accepting it. Business
+selection, shared admission and response-delivery accounting retain their
+framework entry points.
 Redis storage positions and RESP value ranges belong to its
 protocol library. Recorder retains capture clocks, ownership and persistence.
+`traffic-protocol-redis::session_binding` owns native physical-session
+eligibility and selected socket bindings. Replay supplies recorded facts through
+read-only `RecordedSession` and `SessionExchange` projections. Shared finite
+admission and delivery receipts retain their existing Replay owner. MySQL Source
+control classification and its native conformance tests live together under
+`traffic-protocol-mysql::session_control`; the Replay adapter preserves original
+positions while projecting interleaved protocol records into that classifier.
 Native capture payloads and physical value locations belong to the HTTP,
 MySQL and Redis libraries. Protocol references retain open identity fields, and
 semantic evidence support is supplied by the registered native evidence owner.

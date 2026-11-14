@@ -1,8 +1,6 @@
 //! Install native control facts while the framework retains live finite admission.
 use super::*;
 use crate::protocols::replay::source::DependencyRecord;
-#[cfg(test)]
-use traffic_protocol_mysql::read_effect as read;
 pub(in crate::replay) use traffic_protocol_mysql::session_control::ReadPrefixes;
 pub(in crate::replay::mysql) use traffic_protocol_mysql::session_control::{
     successful_begin, successful_end,
@@ -62,6 +60,46 @@ pub(crate) fn classify(
 }
 
 #[cfg(test)]
-mod autocommit;
-#[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_control_classification_retains_original_positions_among_other_records() {
+        let connection = Uuid::new_v4();
+        let exchange = |sequence, sql| {
+            serde_json::json!({
+                "event_type": "mysql_exchange",
+                "connection_id": connection,
+                "query_sequence": sequence,
+                "target_host": "db.internal",
+                "target_port": 3306,
+                "database": "app",
+                "username": "user",
+                "command": "COM_QUERY",
+                "sql": sql,
+                "response": {
+                    "status": "ok",
+                    "server_status": 0,
+                    "affected_rows": 0,
+                    "last_insert_id": 0
+                }
+            })
+        };
+        let records = [
+            serde_json::json!({"event_type":"proxy_error","protocol":"http","error":"closed"}),
+            exchange(1, "COMMIT"),
+            serde_json::json!({"event_type":"proxy_error","protocol":"redis","error":"closed"}),
+            exchange(2, "ROLLBACK"),
+        ]
+        .into_iter()
+        .map(|value| serde_json::from_value(value).unwrap())
+        .collect::<Vec<_>>();
+        let optional = classify(
+            &records,
+            ReplaySource::Startup,
+            &mut ReadPrefixes::default(),
+        );
+        assert_eq!(optional.len(), 1);
+        assert_eq!(optional.get(&3), Some(&OptionalSessionExchange::Rollback));
+    }
+}

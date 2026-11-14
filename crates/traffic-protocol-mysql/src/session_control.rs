@@ -228,3 +228,6 @@ pub fn complete_read<E>(exchange: &RecordedMysqlExchange<E>) -> bool {
         && !exchange.response.columns.is_empty()
         && exchange.response.valid_row_widths()
 }
+
+#[cfg(test)]
+mod conformance;

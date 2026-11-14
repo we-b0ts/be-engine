@@ -755,7 +755,7 @@ impl RedisReplayState {
         let adapter_echo = self.pubsub.prepare_echo(&self.exchanges[index], args);
         let requires_binding =
             self.connection_scopes
-                .claim(&self.exchanges[index], active_case_id, connection);
+                .bind(&self.exchanges[index], active_case_id, connection);
         let observation = self.reserve_observation(index, args);
         let refresh = self
             .reserve_activity_mutation(index, args)
