@@ -52,7 +52,8 @@ pub(super) fn arguments_match(exchange: &ReplayExchange, actual: &[Vec<u8>]) -> 
     if exchange.args == actual {
         return true;
     }
-    let Some((source, target)) = paired_values(&exchange.record.command, &exchange.args, actual)
+    let Some((source, target)) =
+        paired_values(&exchange.record.native.command, &exchange.args, actual)
     else {
         return false;
     };

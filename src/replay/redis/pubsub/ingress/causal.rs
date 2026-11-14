@@ -85,9 +85,9 @@ pub(super) fn prerequisites(
         if exchange.source != ReplaySource::Case
             || exchange.case_id.as_deref() != Some(case)
             || exchange.shared_rule_id.is_some()
-            || exchange.record.target_port != key.0.port
-            || normalize_host(&exchange.record.target_host) != key.0.host
-            || exchange.record.command != "PUBLISH"
+            || exchange.record.native.target_port != key.0.port
+            || normalize_host(&exchange.record.native.target_host) != key.0.host
+            || exchange.record.native.command != "PUBLISH"
             || exchange.args.len() != 2
             || exchange.args[0] != key.1
         {
@@ -113,8 +113,8 @@ pub(super) fn prerequisites(
             continue;
         }
         ensure!(
-            exchange.record.replay_safe
-                && exchange.record.outcome == DependencyExchangeOutcome::Response,
+            exchange.record.native.replay_safe
+                && exchange.record.native.outcome == DependencyExchangeOutcome::Response,
             "unsafe remote Socket.IO causal prefix"
         );
         ensure!(
@@ -123,7 +123,10 @@ pub(super) fn prerequisites(
         );
         prior.push((
             timestamp,
-            (exchange.record.connection_id, exchange.record.sequence),
+            (
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
+            ),
             index,
             value["event"]
                 .as_str()
@@ -255,8 +258,10 @@ impl Ingress {
                     && exchanges.get(prior.exchange_index).is_some_and(|exchange| {
                         exchange.source == ReplaySource::Case
                             && exchange.case_id.as_deref() == Some(&entry.case)
-                            && (exchange.record.connection_id, exchange.record.sequence)
-                                == prior.wire
+                            && (
+                                exchange.record.native.connection_id,
+                                exchange.record.native.sequence,
+                            ) == prior.wire
                             && exchange.status.is_consumed()
                     })
             })

@@ -38,7 +38,7 @@ fn cancelled_cache_short_prefix_keeps_real_source_consumption_and_audits_missing
         state
             .exchanges
             .iter()
-            .filter(|e| e.record.command == "APPEND")
+            .filter(|e| e.record.native.command == "APPEND")
             .all(|e| !e.status.is_consumed())
     );
     let audit = &state.cancelled_cache_audits()[0];

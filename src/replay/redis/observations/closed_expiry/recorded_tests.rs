@@ -72,8 +72,8 @@ fn recorded_marker_closes_initial_expiry_without_source_refresh_calls() {
         .filter_map(|(i, e)| {
             (e.args.first().is_some_and(|k| k == key.as_bytes())
                 && i <= deletion
-                && e.record.command != "EXPIRE")
-                .then_some((i, e.record.command.clone(), e.args.clone()))
+                && e.record.native.command != "EXPIRE")
+                .then_some((i, e.record.native.command.clone(), e.args.clone()))
         })
         .collect::<Vec<_>>();
     let mut observed = false;

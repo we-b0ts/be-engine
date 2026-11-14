@@ -50,8 +50,8 @@ fn activity_refresh_source_proof_rejects_business_mutations_ttl_readback_and_for
                 }
             }
             "missing-clock" => {
-                state.exchanges[3].record.timestamp = None;
-                state.exchanges[3].record.request_started_at = None;
+                state.exchanges[3].record.native.timestamp = None;
+                state.exchanges[3].record.native.request_started_at = None;
             }
             _ => unreachable!(),
         }

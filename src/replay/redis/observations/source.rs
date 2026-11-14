@@ -14,19 +14,19 @@ pub(super) fn has_owned_set(
     for exchange in &state.exchanges {
         if exchange.source == ReplaySource::Case
             && exchange.case_id.as_deref() == Some(case)
-            && exchange.record.database == seed.record.database
+            && exchange.record.native.database == seed.record.native.database
             && target_matches(
                 &TargetKey {
-                    host: seed.record.target_host.clone(),
-                    port: seed.record.target_port,
+                    host: seed.record.native.target_host.clone(),
+                    port: seed.record.native.target_port,
                 },
-                &exchange.record.target_host,
-                exchange.record.target_port,
+                &exchange.record.native.target_host,
+                exchange.record.native.target_port,
             )
-            && exchange.record.resp_version == seed.record.resp_version
-            && normalize_optional(exchange.record.username.as_deref())
-                == normalize_optional(seed.record.username.as_deref())
-            && exchange.record.outcome == DependencyExchangeOutcome::Response
+            && exchange.record.native.resp_version == seed.record.native.resp_version
+            && normalize_optional(exchange.record.native.username.as_deref())
+                == normalize_optional(seed.record.native.username.as_deref())
+            && exchange.record.native.outcome == DependencyExchangeOutcome::Response
             && supported_set(exchange, key)
             && exchange.response_bytes()? == b"+OK\r\n"
         {
@@ -37,7 +37,7 @@ pub(super) fn has_owned_set(
 }
 
 fn supported_set(exchange: &ReplayExchange, key: &[u8]) -> bool {
-    exchange.record.command == "SET"
+    exchange.record.native.command == "SET"
         && matches!(exchange.args.len(), 2 | 4)
         && exchange
             .args
@@ -59,12 +59,12 @@ pub(super) fn prepare(
         kind,
         transient_nil,
         target: TargetKey {
-            host: seed.record.target_host.clone(),
-            port: seed.record.target_port,
+            host: seed.record.native.target_host.clone(),
+            port: seed.record.native.target_port,
         },
-        database: seed.record.database,
-        username: seed.record.username.clone(),
-        resp_version: seed.record.resp_version,
+        database: seed.record.native.database,
+        username: seed.record.native.username.clone(),
+        resp_version: seed.record.native.resp_version,
         key: seed
             .args
             .first()
@@ -84,19 +84,23 @@ pub(super) fn prepare(
     };
     let mut timeline = Vec::new();
     for (index, e) in state.exchanges.iter().enumerate().filter(|(_, e)| {
-        e.record.database == profile.database
-            && target_matches(&profile.target, &e.record.target_host, e.record.target_port)
+        e.record.native.database == profile.database
+            && target_matches(
+                &profile.target,
+                &e.record.native.target_host,
+                e.record.native.target_port,
+            )
     }) {
         if e.source == ReplaySource::Case && e.case_id.as_deref() == Some(case) {
             ensure!(
                 !matches!(
-                    e.record.command.as_str(),
+                    e.record.native.command.as_str(),
                     "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "MONITOR"
                 ),
                 "state observations cannot relax transactional or watched Cases"
             );
         }
-        if !super::super::key_access::touches(&e.record.command, &e.args, &profile.key) {
+        if !super::super::key_access::touches(&e.record.native.command, &e.args, &profile.key) {
             continue;
         }
         if super::super::case_scope::is_other_ordinary_exchange(case, e) {
@@ -110,13 +114,13 @@ pub(super) fn prepare(
         ensure!(
             e.shared_rule_id.is_none()
                 && !e.reusable_snapshot
-                && !e.record.cache_snapshot_hit
-                && e.record.cache_snapshot_rule.is_none()
-                && !e.record.session_setup
+                && !e.record.native.cache_snapshot_hit
+                && e.record.native.cache_snapshot_rule.is_none()
+                && !e.record.native.session_setup
                 && e.record.run_owner_kind().is_none()
-                && e.record.outcome == DependencyExchangeOutcome::Response
-                && e.record.resp_version == profile.resp_version
-                && normalize_optional(e.record.username.as_deref())
+                && e.record.native.outcome == DependencyExchangeOutcome::Response
+                && e.record.native.resp_version == profile.resp_version
+                && normalize_optional(e.record.native.username.as_deref())
                     == normalize_optional(profile.username.as_deref())
                 && !state.connection_scopes.is_stateful(e),
             "state observations require ordinary successful Case exchanges with one user/protocol"
@@ -150,7 +154,7 @@ pub(super) fn prepare(
         }
         let mut unknown_prefix = false;
         for (_, exchange) in &timeline[..first_set] {
-            if exchange.record.command == "GET" {
+            if exchange.record.native.command == "GET" {
                 let response = exchange.response_bytes()?;
                 ensure!(
                     response.len() <= crate::value_limits::MAX_VALUE_BYTES,
@@ -170,7 +174,7 @@ pub(super) fn prepare(
             ensure!(
                 timeline[..first_set]
                     .iter()
-                    .all(|(_, exchange)| exchange.record.command == "GET"),
+                    .all(|(_, exchange)| exchange.record.native.command == "GET"),
                 "unknown initial state prefix cannot hide unsupported writers or expiry observations"
             );
             profile.finite_prefix = timeline
@@ -189,11 +193,11 @@ pub(super) fn prepare(
         .first()
         .and_then(|(_, e)| e.record.earliest_start());
     let last = timeline.last().and_then(|(_, e)| {
-        let last = e.record.timestamp?;
+        let last = e.record.native.timestamp?;
         Some(if kind == Kind::StateRead {
             timeline
                 .iter()
-                .filter_map(|(_, e)| e.record.timestamp)
+                .filter_map(|(_, e)| e.record.native.timestamp)
                 .max()
                 .unwrap_or(last)
         } else {
@@ -206,7 +210,7 @@ pub(super) fn prepare(
             response.len() <= crate::value_limits::MAX_VALUE_BYTES,
             "state observation response exceeds bounds"
         );
-        match e.record.command.as_str() {
+        match e.record.native.command.as_str() {
             "SET" => {
                 ensure!(
                     kind != Kind::AbsentRead,
@@ -276,7 +280,7 @@ pub(super) fn prepare(
                 );
                 positive_ttl(
                     &mut profile,
-                    if e.record.command == "EXPIRE" {
+                    if e.record.native.command == "EXPIRE" {
                         b"EX"
                     } else {
                         b"PX"
@@ -286,7 +290,7 @@ pub(super) fn prepare(
                 alive = Some(true);
                 if kind == Kind::Expiry {
                     ensure!(
-                        e.record.command == "EXPIRE",
+                        e.record.native.command == "EXPIRE",
                         "expiry refresh cannot mix EXPIRE and PEXPIRE"
                     );
                     if let Some(expected) = &refresh {
@@ -378,7 +382,7 @@ pub(super) fn prepare(
             if Some(index) == first_mutation && profile.initial_accesses.is_empty() {
                 break;
             }
-            let command = state.exchanges[index].record.command.as_str();
+            let command = state.exchanges[index].record.native.command.as_str();
             if !matches!(command, "EXPIRE" | "PEXPIRE") {
                 ensure!(
                     profile.initial_accesses.len() < MAX_OBSERVATIONS,
@@ -403,7 +407,7 @@ pub(super) fn prepare(
 
 fn observes_absence(exchange: &ReplayExchange, key: &[u8], response: &[u8]) -> bool {
     let single_key = exchange.args.len() == 1 && exchange.args[0] == key;
-    match exchange.record.command.as_str() {
+    match exchange.record.native.command.as_str() {
         "GET" => single_key && (response == b"$-1\r\n" || response == b"_\r\n"),
         "EXISTS" | "LLEN" => single_key && response == b":0\r\n",
         "TYPE" => single_key && (response == b"+none\r\n" || response == b"$4\r\nnone\r\n"),
@@ -437,16 +441,17 @@ fn validate_causal_epochs(
     let mut reads = BTreeMap::<_, &ReplayExchange>::new();
     let multiple_lanes = owned_from.is_some()
         && timeline.first().is_some_and(|(_, first)| {
-            timeline
-                .iter()
-                .any(|(_, exchange)| exchange.record.connection_id != first.record.connection_id)
+            timeline.iter().any(|(_, exchange)| {
+                exchange.record.native.connection_id != first.record.native.connection_id
+            })
         });
     for (position, (_, exchange)) in timeline.iter().enumerate() {
-        if let Some(sequence) =
-            lanes.insert(exchange.record.connection_id, exchange.record.sequence)
-        {
+        if let Some(sequence) = lanes.insert(
+            exchange.record.native.connection_id,
+            exchange.record.native.sequence,
+        ) {
             ensure!(
-                sequence < exchange.record.sequence,
+                sequence < exchange.record.native.sequence,
                 "state observation Source clocks reverse a lane"
             );
         }
@@ -455,7 +460,7 @@ fn validate_causal_epochs(
                 exchange
                     .record
                     .earliest_start()
-                    .zip(exchange.record.timestamp)
+                    .zip(exchange.record.native.timestamp)
                     .is_some_and(|(start, end)| start <= end),
                 "concurrent owned state observations require complete Source clocks"
             );
@@ -464,12 +469,12 @@ fn validate_causal_epochs(
             require_causal_order(before, exchange)?;
         }
         if owned_from.is_some_and(|first_set| position > first_set)
-            && exchange.record.command == "GET"
+            && exchange.record.native.command == "GET"
         {
             let read = reads
-                .entry(exchange.record.connection_id)
+                .entry(exchange.record.native.connection_id)
                 .or_insert(exchange);
-            if read.record.timestamp < exchange.record.timestamp {
+            if read.record.native.timestamp < exchange.record.native.timestamp {
                 *read = exchange;
             }
         } else {
@@ -484,23 +489,24 @@ fn validate_causal_epochs(
 
 pub(super) fn require_causal_order(before: &ReplayExchange, after: &ReplayExchange) -> Result<()> {
     ensure!(
-        before.record.connection_id == after.record.connection_id
+        before.record.native.connection_id == after.record.native.connection_id
             || before
                 .record
+                .native
                 .timestamp
                 .zip(after.record.earliest_start())
                 .is_some_and(|(end, start)| end <= start),
         "state observation Source accesses overlap or lack causal clocks: \
          before connection={} sequence={} start={:?} end={:?}; \
          after connection={} sequence={} start={:?} end={:?}",
-        before.record.connection_id,
-        before.record.sequence,
+        before.record.native.connection_id,
+        before.record.native.sequence,
         before.record.earliest_start(),
-        before.record.timestamp,
-        after.record.connection_id,
-        after.record.sequence,
+        before.record.native.timestamp,
+        after.record.native.connection_id,
+        after.record.native.sequence,
         after.record.earliest_start(),
-        after.record.timestamp,
+        after.record.native.timestamp,
     );
     Ok(())
 }

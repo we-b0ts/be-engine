@@ -22,7 +22,7 @@ fn client_info_exemption_keeps_other_session_errors_and_incomplete_exchanges() {
     let mut variants = Vec::new();
     for command in ["AUTH", "SELECT", "HELLO"] {
         let mut record = base.clone();
-        record.command = command.to_string();
+        record.native.command = command.to_string();
         variants.push(record);
     }
     for args in [
@@ -32,11 +32,11 @@ fn client_info_exemption_keeps_other_session_errors_and_incomplete_exchanges() {
         vec!["SETNAME", "name"],
     ] {
         let mut record = base.clone();
-        record.args = args.into_iter().map(capture).collect();
+        record.native.args = args.into_iter().map(capture).collect();
         variants.push(record);
     }
     let mut terminated = base.clone();
-    terminated.outcome = DependencyExchangeOutcome::ClientTerminated;
+    terminated.native.outcome = DependencyExchangeOutcome::ClientTerminated;
     variants.push(terminated);
     for record in variants {
         let mut state = RedisReplayState::default();
@@ -54,9 +54,9 @@ fn client_info_exemption_keeps_other_session_errors_and_incomplete_exchanges() {
     for field in ["unsafe", "args", "response"] {
         let mut record = base.clone();
         match field {
-            "unsafe" => record.replay_safe = false,
-            "args" => record.args[0].truncated = true,
-            _ => record.response.truncated = true,
+            "unsafe" => record.native.replay_safe = false,
+            "args" => record.native.args[0].truncated = true,
+            _ => record.native.response.truncated = true,
         }
         let mut state = RedisReplayState::default();
         assert!(

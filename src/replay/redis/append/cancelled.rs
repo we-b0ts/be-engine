@@ -58,11 +58,15 @@ impl RedisReplayState {
             let expiring = self.exchanges.iter().any(|e| {
                 e.source == ReplaySource::Case
                     && e.case_id.as_deref() == Some(case)
-                    && e.record.database == profile.database
-                    && target_matches(&profile.target, &e.record.target_host, e.record.target_port)
-                    && normalize_optional(e.record.username.as_deref())
+                    && e.record.native.database == profile.database
+                    && target_matches(
+                        &profile.target,
+                        &e.record.native.target_host,
+                        e.record.native.target_port,
+                    )
+                    && normalize_optional(e.record.native.username.as_deref())
                         == normalize_optional(profile.username.as_deref())
-                    && matches!(e.record.command.as_str(), "EXPIRE" | "PEXPIRE")
+                    && matches!(e.record.native.command.as_str(), "EXPIRE" | "PEXPIRE")
                     && e.args.first() == Some(&profile.key)
             });
             if !expiring {

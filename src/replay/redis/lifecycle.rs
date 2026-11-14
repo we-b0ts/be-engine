@@ -5,33 +5,35 @@ use crate::replay::control::dependency_tail::RecordedReference;
 impl RecordedExchange {
     pub(crate) fn cleanup_reference(&self) -> RecordedReference {
         RecordedReference::Redis {
-            connection_id: self.connection_id,
-            sequence: self.sequence,
+            connection_id: self.native.connection_id,
+            sequence: self.native.sequence,
         }
     }
 
     pub(crate) fn authorize_lifecycle_cleanup(&mut self) -> Result<()> {
         ensure!(
-            (self.outcome == DependencyExchangeOutcome::Response
-                && !self.replay_safe
-                && self.response_kind == "other"
-                && self.parse_warnings.as_slice() == ["engine cleanup interrupted Redis capture"]
+            (self.native.outcome == DependencyExchangeOutcome::Response
+                && !self.native.replay_safe
+                && self.native.response_kind == "other"
+                && self.native.parse_warnings.as_slice()
+                    == ["engine cleanup interrupted Redis capture"]
                 || self
+                    .native
                     .outcome
                     .termination()
                     .is_some_and(|end| end.side != crate::dependency::TerminationSide::Engine
                         && end.scope != crate::dependency::TerminationScope::Stream)
-                    && (self.parse_warnings.is_empty()
-                        || self.parse_warnings.as_slice()
+                    && (self.native.parse_warnings.is_empty()
+                        || self.native.parse_warnings.as_slice()
                             == ["engine cleanup interrupted Redis capture"]))
-                && !self.args.iter().any(|capture| capture.truncated)
-                && !self.response.truncated,
+                && !self.native.args.iter().any(|capture| capture.truncated)
+                && !self.native.response.truncated,
             "Redis lifecycle cleanup requires an exact admitted complete request and no independent capture corruption"
         );
-        for argument in &self.args {
+        for argument in &self.native.args {
             argument.decode()?;
         }
-        self.response.decode()?;
+        self.native.response.decode()?;
         self.lifecycle_cleanup = true;
         Ok(())
     }
@@ -106,7 +108,7 @@ async fn claim_pipeline(
             .any(|exchange| {
                 exchange.case_id.as_deref() == Some(case)
                     && exchange.source == ReplaySource::Case
-                    && exchange.record.connection_id == first.connection_id
+                    && exchange.record.native.connection_id == first.connection_id
                     && exchange.record.lifecycle_cleanup
                     && exchange.status.is_available()
             });
@@ -131,9 +133,9 @@ async fn claim_pipeline(
                     Some(case),
                     &first.report.target,
                     connection,
-                    record.resp_version,
-                    record.database,
-                    record.username.as_deref(),
+                    record.native.resp_version,
+                    record.native.database,
+                    record.native.username.as_deref(),
                     &command,
                 )
                 .context("no admitted Redis cleanup request matched the pipeline")?
@@ -145,9 +147,9 @@ async fn claim_pipeline(
                     Some(case),
                     &first.report.target,
                     connection,
-                    record.resp_version,
-                    record.database,
-                    record.username.as_deref(),
+                    record.native.resp_version,
+                    record.native.database,
+                    record.native.username.as_deref(),
                     &command.name,
                     &command.args,
                 )

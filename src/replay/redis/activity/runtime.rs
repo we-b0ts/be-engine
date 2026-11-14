@@ -174,7 +174,7 @@ impl RedisReplayState {
             publish_duration_ms: 0,
             adapter_echo: None,
             index: witness,
-            connection_id: e.record.connection_id,
+            connection_id: e.record.native.connection_id,
             response,
             timing,
             requires_binding: false,
@@ -184,8 +184,8 @@ impl RedisReplayState {
                 source: e.source,
                 index: witness,
                 target: target.clone(),
-                connection_id: e.record.connection_id,
-                sequence: e.record.sequence,
+                connection_id: e.record.native.connection_id,
+                sequence: e.record.native.sequence,
                 command: command.into(),
                 shared_origin: None,
                 target_event_index: self.request_event_index,
@@ -257,8 +257,8 @@ pub(super) fn reference(
     super::super::super::report::command::CommandExchangeRefReport {
         case_id: e.case_id.clone(),
         source: e.source,
-        connection_id: e.record.connection_id,
-        sequence: e.record.sequence,
-        command: e.record.command.clone(),
+        connection_id: e.record.native.connection_id,
+        sequence: e.record.native.sequence,
+        command: e.record.native.command.clone(),
     }
 }

@@ -40,20 +40,20 @@ impl RedisReplayState {
             && let Some(case) = exchange.case_id.as_deref()
         {
             let target = TargetKey {
-                host: exchange.record.target_host.clone(),
-                port: exchange.record.target_port,
+                host: exchange.record.native.target_host.clone(),
+                port: exchange.record.native.target_port,
             };
             self.request_contracts.record_unified_request(
                 &crate::replay::policy::request_contract::RedisRequestContext {
                     case,
                     target: &target,
-                    database: exchange.record.database,
-                    username: exchange.record.username.as_deref(),
-                    command: &exchange.record.command,
+                    database: exchange.record.native.database,
+                    username: exchange.record.native.username.as_deref(),
+                    command: &exchange.record.native.command,
                     recorded_at: exchange.record.started_at(),
                     actual_at: self.request_observed_at,
-                    connection_id: Some(exchange.record.connection_id),
-                    sequence: Some(exchange.record.sequence),
+                    connection_id: Some(exchange.record.native.connection_id),
+                    sequence: Some(exchange.record.native.sequence),
                     observation_id: self.request_observation_id,
                 },
                 &exchange.args,
@@ -70,7 +70,7 @@ impl RedisReplayState {
             rpc_exchange = exchange.clone();
             rpc_exchange.args = rpc_comparison.source.clone();
             rpc_exchange.rpc_push = None;
-            rpc_exchange.record.rpc_callback_capture = None;
+            rpc_exchange.record.native.rpc_callback_capture = None;
             (&rpc_exchange, rpc_comparison.actual.as_slice())
         } else {
             (exchange, args)
@@ -82,14 +82,14 @@ impl RedisReplayState {
                     .redis_with_identity(
                         exchange.case_id.as_deref(),
                         &TargetKey {
-                            host: exchange.record.target_host.clone(),
-                            port: exchange.record.target_port,
+                            host: exchange.record.native.target_host.clone(),
+                            port: exchange.record.native.target_port,
                         },
                         crate::replay::policy::dynamic_values::RedisIdentity {
-                            database: exchange.record.database,
-                            username: exchange.record.username.as_deref(),
+                            database: exchange.record.native.database,
+                            username: exchange.record.native.username.as_deref(),
                         },
-                        &exchange.record.command,
+                        &exchange.record.native.command,
                         &exchange.args,
                         args,
                     )
@@ -143,7 +143,7 @@ impl RedisReplayState {
 
     fn arguments_match_plain(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
         let normalized = match super::expiration::normalize(
-            &exchange.record.command,
+            &exchange.record.native.command,
             &exchange.args,
             args,
             crate::value_contract::time::ClockPair {
@@ -427,14 +427,14 @@ impl RedisReplayState {
                         && exchange.status.is_available()
                         && target_matches(
                             target,
-                            &exchange.record.target_host,
-                            exchange.record.target_port,
+                            &exchange.record.native.target_host,
+                            exchange.record.native.target_port,
                         )
-                        && exchange.record.resp_version == resp_version
-                        && exchange.record.database == database
+                        && exchange.record.native.resp_version == resp_version
+                        && exchange.record.native.database == database
                         && normalize_optional(username)
-                            == normalize_optional(exchange.record.username.as_deref())
-                        && exchange.record.command == command
+                            == normalize_optional(exchange.record.native.username.as_deref())
+                        && exchange.record.native.command == command
                 }) {
                     if let Some(case) = active_case_id {
                         self.request_contracts.observe_redis(
@@ -539,16 +539,16 @@ impl RedisReplayState {
             command,
             recorded_at: exchange.record.started_at(),
             actual_at: self.request_observed_at,
-            connection_id: Some(exchange.record.connection_id),
-            sequence: Some(exchange.record.sequence),
+            connection_id: Some(exchange.record.native.connection_id),
+            sequence: Some(exchange.record.native.sequence),
             observation_id: self.request_observation_id,
         };
         let read_back_eligible = exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none()
             && !exchange.reusable_snapshot
-            && !exchange.record.cache_snapshot_hit
-            && exchange.record.cache_snapshot_rule.is_none()
-            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response;
+            && !exchange.record.native.cache_snapshot_hit
+            && exchange.record.native.cache_snapshot_rule.is_none()
+            && exchange.record.native.outcome == crate::DependencyExchangeOutcome::Response;
         let time_read = if read_back_eligible {
             self.request_contracts
                 .prepare_redis_time_read(
@@ -556,7 +556,7 @@ impl RedisReplayState {
                     &exchange.args,
                     args,
                     &response,
-                    exchange.record.timestamp,
+                    exchange.record.native.timestamp,
                 )
                 .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
                     reason: format!("stored field read provenance failed: {error:#}"),
@@ -571,7 +571,7 @@ impl RedisReplayState {
                     &exchange.args,
                     args,
                     &response,
-                    exchange.record.timestamp,
+                    exchange.record.native.timestamp,
                 )
                 .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
                     reason: format!("stored write provenance failed: {error:#}"),
@@ -592,7 +592,7 @@ impl RedisReplayState {
                         &exchange.args,
                         args,
                         &response,
-                        exchange.record.timestamp,
+                        exchange.record.native.timestamp,
                     )
                     .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
                         reason: format!("read_back write failed: {error:#}"),
@@ -601,7 +601,7 @@ impl RedisReplayState {
         } else {
             (None, Default::default())
         };
-        let unified_delivery = (exchange.record.outcome
+        let unified_delivery = (exchange.record.native.outcome
             == crate::DependencyExchangeOutcome::Response)
             .then_some(active_case_id.or(exchange.case_id.as_deref()))
             .flatten()
@@ -616,11 +616,11 @@ impl RedisReplayState {
                     &exchange.args,
                     args,
                     &response,
-                    exchange.record.timestamp,
+                    exchange.record.native.timestamp,
                     self.request_observed_at,
                     exchange.record.started_at(),
-                    exchange.record.connection_id,
-                    exchange.record.sequence,
+                    exchange.record.native.connection_id,
+                    exchange.record.native.sequence,
                 )
             })
             .transpose()
@@ -629,8 +629,8 @@ impl RedisReplayState {
             })?;
         if unified_delivery.is_some()
             && (exchange.reusable_snapshot
-                || exchange.record.cache_snapshot_hit
-                || exchange.record.cache_snapshot_rule.is_some())
+                || exchange.record.native.cache_snapshot_hit
+                || exchange.record.native.cache_snapshot_rule.is_some())
         {
             return Err(CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: "value delivery rules cannot renew snapshot response inventory".into(),
@@ -646,7 +646,7 @@ impl RedisReplayState {
             rpc_exchange = exchange.clone();
             rpc_exchange.args = rpc_comparison.source.clone();
             rpc_exchange.rpc_push = None;
-            rpc_exchange.record.rpc_callback_capture = None;
+            rpc_exchange.record.native.rpc_callback_capture = None;
             (&rpc_exchange, rpc_comparison.actual.as_slice())
         } else {
             (exchange, args)
@@ -657,14 +657,14 @@ impl RedisReplayState {
             self.dynamic_values.redis_with_identity(
                 exchange.case_id.as_deref(),
                 &TargetKey {
-                    host: exchange.record.target_host.clone(),
-                    port: exchange.record.target_port,
+                    host: exchange.record.native.target_host.clone(),
+                    port: exchange.record.native.target_port,
                 },
                 crate::replay::policy::dynamic_values::RedisIdentity {
-                    database: exchange.record.database,
-                    username: exchange.record.username.as_deref(),
+                    database: exchange.record.native.database,
+                    username: exchange.record.native.username.as_deref(),
                 },
-                &exchange.record.command,
+                &exchange.record.native.command,
                 &comparison_exchange.args,
                 comparison_args,
             )
@@ -798,7 +798,12 @@ impl RedisReplayState {
             exchange.serial_predecessors = None;
             exchange.serial_broadcast = None;
         }
-        if exchange.record.command.eq_ignore_ascii_case("PUBLISH") {
+        if exchange
+            .record
+            .native
+            .command
+            .eq_ignore_ascii_case("PUBLISH")
+        {
             // A notification may depend on this accepted request's identity,
             // before either its response or a related RPC callback completes.
             self.lifecycle.notify_waiters();
@@ -815,10 +820,10 @@ impl RedisReplayState {
             rpc_push: exchange.rpc_push,
             rpc_response,
             adapter_echo,
-            publish_duration_ms: exchange.record.duration_ms,
+            publish_duration_ms: exchange.record.native.duration_ms,
             rule_ids,
             index,
-            connection_id: exchange.record.connection_id,
+            connection_id: exchange.record.native.connection_id,
             response,
             timing,
             requires_binding,
@@ -831,9 +836,9 @@ impl RedisReplayState {
                 source: exchange.source,
                 index,
                 target: target.clone(),
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
-                command: exchange.record.command.clone(),
+                connection_id: exchange.record.native.connection_id,
+                sequence: exchange.record.native.sequence,
+                command: exchange.record.native.command.clone(),
                 shared_origin: exchange.shared_rule_id.as_ref().map(|rule_id| {
                     crate::replay::report::command::SharedCommandOrigin {
                         rule_id: rule_id.clone(),
@@ -863,15 +868,15 @@ impl CommandExchangeScope for ReplayExchange {
     }
 
     fn connection_id(&self) -> Uuid {
-        self.record.connection_id
+        self.record.native.connection_id
     }
 
     fn sequence(&self) -> u64 {
-        self.record.sequence
+        self.record.native.sequence
     }
 
     fn command(&self) -> &str {
-        &self.record.command
+        &self.record.native.command
     }
 
     fn is_available(&self) -> bool {
@@ -921,15 +926,17 @@ fn redis_mismatch_fields(
     }
     if !target_matches(
         target,
-        &exchange.record.target_host,
-        exchange.record.target_port,
+        &exchange.record.native.target_host,
+        exchange.record.native.target_port,
     ) {
         fields.push("target");
     }
-    if exchange.record.resp_version != resp_version || exchange.record.database != database {
+    if exchange.record.native.resp_version != resp_version
+        || exchange.record.native.database != database
+    {
         fields.push("session");
     }
-    let recorded_username = normalize_optional(exchange.record.username.as_deref());
+    let recorded_username = normalize_optional(exchange.record.native.username.as_deref());
     let target_username = normalize_optional(username);
     if recorded_username != target_username {
         fields.push(
@@ -940,7 +947,7 @@ fn redis_mismatch_fields(
             },
         );
     }
-    if !exchange.record.command.eq_ignore_ascii_case(command) {
+    if !exchange.record.native.command.eq_ignore_ascii_case(command) {
         fields.push("command");
     }
     if !arguments_match {

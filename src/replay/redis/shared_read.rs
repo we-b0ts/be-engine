@@ -43,8 +43,10 @@ impl RedisSharedReadSelector {
         args: &[Vec<u8>],
     ) -> bool {
         self.host.as_ref().is_none_or(|host| {
-            super::normalize_host(host) == super::normalize_host(&record.target_host)
-        }) && self.port.is_none_or(|port| port == record.target_port)
+            super::normalize_host(host) == super::normalize_host(&record.native.target_host)
+        }) && self
+            .port
+            .is_none_or(|port| port == record.native.target_port)
             && self.read.matches(record, args)
     }
 }
@@ -70,10 +72,10 @@ impl RedisSharedRead {
         Ok(())
     }
     fn matches(&self, record: &RecordedExchange, args: &[Vec<u8>]) -> bool {
-        record.command.eq_ignore_ascii_case(&self.command)
+        record.native.command.eq_ignore_ascii_case(&self.command)
             && self
                 .database
-                .is_none_or(|database| record.database == database)
+                .is_none_or(|database| record.native.database == database)
             && args.len() == if self.command == "HGET" { 2 } else { 1 }
             && self.key.matches(&args[0])
             && self

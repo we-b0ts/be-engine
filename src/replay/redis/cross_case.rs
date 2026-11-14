@@ -12,13 +12,13 @@ pub(super) use super::request_identity::target_fingerprint;
 fn recorded_fingerprint(record: &RecordedExchange, args: &[Vec<u8>]) -> String {
     target_fingerprint(
         &TargetKey {
-            host: normalize_host(&record.target_host),
-            port: record.target_port,
+            host: normalize_host(&record.native.target_host),
+            port: record.native.target_port,
         },
-        record.resp_version,
-        record.database,
-        record.username.as_deref(),
-        &record.command,
+        record.native.resp_version,
+        record.native.database,
+        record.native.username.as_deref(),
+        &record.native.command,
         args,
     )
 }
@@ -88,6 +88,7 @@ pub(in crate::replay) fn verify_candidate(
                 continue;
             };
             let args = record
+                .native
                 .args
                 .iter()
                 .map(RecordedCapture::decode)
@@ -97,11 +98,13 @@ pub(in crate::replay) fn verify_candidate(
             }
             shareable(&record, selector)?;
             ensure!(
-                selected_identities.insert((record.connection_id, record.sequence)),
+                selected_identities.insert((record.native.connection_id, record.native.sequence)),
                 "duplicate Redis cross-case exchange identity"
             );
             selected += 1;
-            *selected_lanes.entry(record.connection_id).or_default() += 1;
+            *selected_lanes
+                .entry(record.native.connection_id)
+                .or_default() += 1;
             digest.update(file.strip_prefix(&root)?.as_os_str().as_encoded_bytes());
             digest.update((line as u64).to_be_bytes());
             digest.update(Sha256::digest(raw.as_bytes()));
@@ -155,21 +158,21 @@ fn shareable(
 ) -> Result<()> {
     ensure!(
         record.run_owner_kind().is_none()
-            && record.cache_snapshot_rule.is_none()
-            && !record.cache_snapshot_hit,
+            && record.native.cache_snapshot_rule.is_none()
+            && !record.native.cache_snapshot_hit,
         "Redis cross-case requires an ordinary case-owned read"
     );
     ensure!(
-        record.replay_safe
-            && !record.session_setup
-            && record.outcome == DependencyExchangeOutcome::Response
-            && record.response_kind == "bulk_string"
-            && !record.response.truncated
-            && record.args.iter().all(|arg| !arg.truncated),
+        record.native.replay_safe
+            && !record.native.session_setup
+            && record.native.outcome == DependencyExchangeOutcome::Response
+            && record.native.response_kind == "bulk_string"
+            && !record.native.response.truncated
+            && record.native.args.iter().all(|arg| !arg.truncated),
         "Redis sharing requires a complete successful ordinary bulk read"
     );
     ensure!(
-        crate::replay::redis_bulk_payload(&record.response.decode()?)?.is_some(),
+        crate::replay::redis_bulk_payload(&record.native.response.decode()?)?.is_some(),
         "Redis sharing requires one complete bulk response"
     );
     Ok(())
@@ -213,8 +216,8 @@ pub(in crate::replay) fn load(
         ensure!(
             selected_identities.insert((
                 exchange.case_id.clone(),
-                exchange.record.connection_id,
-                exchange.record.sequence,
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
             )),
             "duplicate Redis cross-case exchange identity"
         );
@@ -223,7 +226,7 @@ pub(in crate::replay) fn load(
                 .exchanges
                 .iter()
                 .filter(|other| other.case_id == exchange.case_id
-                    && other.record.connection_id == exchange.record.connection_id)
+                    && other.record.native.connection_id == exchange.record.native.connection_id)
                 .all(|other| rules
                     .iter()
                     .any(|(_, selector)| selector.matches(&other.record, &other.args))),
@@ -259,6 +262,7 @@ pub(in crate::replay) fn load(
                 continue;
             };
             let args = record
+                .native
                 .args
                 .iter()
                 .map(RecordedCapture::decode)
@@ -271,8 +275,8 @@ pub(in crate::replay) fn load(
                 ensure!(
                     selected_identities.insert((
                         Some(origin.clone()),
-                        record.connection_id,
-                        record.sequence,
+                        record.native.connection_id,
+                        record.native.sequence,
                     )),
                     "duplicate Redis cross-case exchange identity"
                 );
@@ -289,11 +293,14 @@ pub(in crate::replay) fn load(
         }
         let mut selected_lanes = BTreeMap::<Uuid, usize>::new();
         for (_, record) in &selected {
-            *selected_lanes.entry(record.connection_id).or_default() += 1;
+            *selected_lanes
+                .entry(record.native.connection_id)
+                .or_default() += 1;
         }
         for (rule_id, record) in selected {
             ensure!(
-                lane_counts.get(&record.connection_id) == selected_lanes.get(&record.connection_id),
+                lane_counts.get(&record.native.connection_id)
+                    == selected_lanes.get(&record.native.connection_id),
                 "Redis cross-case cannot split a recorded connection lane"
             );
             state.register_exchange(
@@ -320,7 +327,7 @@ pub(in crate::replay) fn load(
             exchange
                 .shared_rule_id
                 .as_ref()
-                .and(exchange.record.timestamp),
+                .and(exchange.record.native.timestamp),
         )
     });
     state.case_exchange_index = CaseExchangeIndex::default();

@@ -29,42 +29,7 @@ pub(super) use notifications::{NotificationJob, schedule_notifications};
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RecordedPush {
-    #[serde(default)]
-    capture: Option<PushCaptureIdentity>,
-    #[serde(default)]
-    pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    pub(super) target_host: String,
-    pub(super) target_port: u16,
-    pub(super) database: i64,
-    pub(super) username: Option<String>,
-    pub(super) connection_id: Uuid,
-    pub(super) subscription_sequence: u64,
-    pub(super) rpc_request: Option<RequestRef>,
-    pub(super) response: RecordedCapture,
-    pub(super) duration_ms: u64,
-    pub(super) replay_safe: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct PushCaptureIdentity {
-    exchange_id: Uuid,
-}
-
-impl RecordedPush {
-    fn source_exchange_id(&self) -> Option<Uuid> {
-        self.capture.as_ref().map(|capture| capture.exchange_id)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RequestRef {
-    pub(super) connection_id: Uuid,
-    pub(super) sequence: u64,
-    #[serde(default)]
-    pub(super) case_id: Option<String>,
-}
+pub(crate) use traffic_protocol_redis::recorded::RecordedPush;
 
 #[derive(Debug)]
 struct Push {

@@ -22,7 +22,7 @@ pub(super) fn prove(
     let later = &redis.exchanges[index];
     if !ordinary_publish(redis, later)
         || !later.status.is_available()
-        || later.record.request_started_at?
+        || later.record.native.request_started_at?
             < close.checked_add_signed(chrono::TimeDelta::milliseconds(1))?
     {
         return None;
@@ -37,7 +37,7 @@ pub(super) fn prove(
         let prior = &redis.exchanges[slot];
         ordinary_publish(redis, prior)
             && prior.args.first() == later.args.first()
-            && prior.record.timestamp.is_some_and(|at| at < close)
+            && prior.record.native.timestamp.is_some_and(|at| at < close)
     };
     let is_pair = |a, b| {
         before_close(a)
@@ -105,9 +105,9 @@ pub(super) fn prove(
 }
 
 fn ordinary_publish(redis: &RedisReplayState, exchange: &ReplayExchange) -> bool {
-    exchange.record.command == "PUBLISH"
+    exchange.record.native.command == "PUBLISH"
         && lane::is_ordinary(exchange)
         && !redis.connection_scopes.is_stateful(exchange)
-        && exchange.record.response_kind == "integer"
+        && exchange.record.native.response_kind == "integer"
         && !exchange.record.lifecycle_cleanup
 }

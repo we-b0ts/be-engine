@@ -40,22 +40,26 @@ impl RedisReplayState {
             |exchange, _| {
                 exchange.status.is_available()
                     && (exchange.record.lifecycle_cleanup
-                        || exchange.record.response_kind == "error"
-                        || exchange.record.outcome.termination().is_some()
-                        || exchange.record.outcome.is_client_terminated())
+                        || exchange.record.native.response_kind == "error"
+                        || exchange.record.native.outcome.termination().is_some()
+                        || exchange.record.native.outcome.is_client_terminated())
                     && self
                         .connection_scopes
                         .matches(exchange, active_case_id, connection)
                     && target_matches(
                         target,
-                        &exchange.record.target_host,
-                        exchange.record.target_port,
+                        &exchange.record.native.target_host,
+                        exchange.record.native.target_port,
                     )
-                    && exchange.record.resp_version == resp_version
-                    && exchange.record.database == database
+                    && exchange.record.native.resp_version == resp_version
+                    && exchange.record.native.database == database
                     && normalize_optional(username)
-                        == normalize_optional(exchange.record.username.as_deref())
-                    && exchange.record.command.eq_ignore_ascii_case(&command.name)
+                        == normalize_optional(exchange.record.native.username.as_deref())
+                    && exchange
+                        .record
+                        .native
+                        .command
+                        .eq_ignore_ascii_case(&command.name)
                     && (matches!(command.name.as_str(), "AUTH" | "HELLO")
                         || exchange.args == command.args)
             },
@@ -92,10 +96,10 @@ impl RedisReplayState {
             rpc_push: None,
             rpc_response: None,
             adapter_echo: None,
-            publish_duration_ms: exchange.record.duration_ms,
+            publish_duration_ms: exchange.record.native.duration_ms,
             rule_ids: Vec::new(),
             index,
-            connection_id: exchange.record.connection_id,
+            connection_id: exchange.record.native.connection_id,
             response,
             timing: exchange.timing,
             requires_binding,
@@ -104,9 +108,9 @@ impl RedisReplayState {
                 source: exchange.source,
                 index,
                 target: target.clone(),
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
-                command: exchange.record.command.clone(),
+                connection_id: exchange.record.native.connection_id,
+                sequence: exchange.record.native.sequence,
+                command: exchange.record.native.command.clone(),
                 shared_origin: None,
                 target_event_index: Some(target_event_index),
             },

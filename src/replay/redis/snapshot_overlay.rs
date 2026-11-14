@@ -156,22 +156,22 @@ fn evidence_from_replay(index: usize, exchange: &ReplayExchange) -> Result<Snaps
     Ok(SnapshotEvidence {
         replay_index: Some(index),
         source: exchange.source,
-        connection_id: exchange.record.connection_id,
-        sequence: exchange.record.sequence,
-        target_host: exchange.record.target_host.clone(),
-        target_port: exchange.record.target_port,
-        resp_version: exchange.record.resp_version,
-        database: exchange.record.database,
-        username: exchange.record.username.clone(),
-        command: exchange.record.command.clone(),
+        connection_id: exchange.record.native.connection_id,
+        sequence: exchange.record.native.sequence,
+        target_host: exchange.record.native.target_host.clone(),
+        target_port: exchange.record.native.target_port,
+        resp_version: exchange.record.native.resp_version,
+        database: exchange.record.native.database,
+        username: exchange.record.native.username.clone(),
+        command: exchange.record.native.command.clone(),
         args: exchange.args.clone(),
-        response_kind: exchange.record.response_kind.clone(),
+        response_kind: exchange.record.native.response_kind.clone(),
         response: exchange.response_bytes()?,
-        outcome: exchange.record.outcome,
-        replay_safe: exchange.record.replay_safe,
-        cache_snapshot_rule: exchange.record.cache_snapshot_rule.clone(),
-        cache_snapshot_hit: exchange.record.cache_snapshot_hit,
-        session_setup: exchange.record.session_setup,
+        outcome: exchange.record.native.outcome,
+        replay_safe: exchange.record.native.replay_safe,
+        cache_snapshot_rule: exchange.record.native.cache_snapshot_rule.clone(),
+        cache_snapshot_hit: exchange.record.native.cache_snapshot_hit,
+        session_setup: exchange.record.native.session_setup,
         run_owner_kind: exchange.record.run_owner_kind().map(str::to_owned),
     })
 }
@@ -182,31 +182,32 @@ fn evidence_from_record(
     record: RecordedExchange,
 ) -> Result<SnapshotEvidence> {
     let args = record
+        .native
         .args
         .iter()
         .map(super::RecordedCapture::decode)
         .collect::<Result<Vec<_>>>()?;
-    let response = record.response.decode()?;
+    let response = record.native.response.decode()?;
     let run_owner_kind = record.run_owner_kind().map(str::to_owned);
     Ok(SnapshotEvidence {
         replay_index,
         source,
-        connection_id: record.connection_id,
-        sequence: record.sequence,
-        target_host: record.target_host,
-        target_port: record.target_port,
-        resp_version: record.resp_version,
-        database: record.database,
-        username: record.username,
-        command: record.command,
+        connection_id: record.native.connection_id,
+        sequence: record.native.sequence,
+        target_host: record.native.target_host,
+        target_port: record.native.target_port,
+        resp_version: record.native.resp_version,
+        database: record.native.database,
+        username: record.native.username,
+        command: record.native.command,
         args,
-        response_kind: record.response_kind,
+        response_kind: record.native.response_kind,
         response,
-        outcome: record.outcome,
-        replay_safe: record.replay_safe,
-        cache_snapshot_rule: record.cache_snapshot_rule,
-        cache_snapshot_hit: record.cache_snapshot_hit,
-        session_setup: record.session_setup,
+        outcome: record.native.outcome,
+        replay_safe: record.native.replay_safe,
+        cache_snapshot_rule: record.native.cache_snapshot_rule,
+        cache_snapshot_hit: record.native.cache_snapshot_hit,
+        session_setup: record.native.session_setup,
         run_owner_kind,
     })
 }

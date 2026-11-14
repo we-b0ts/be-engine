@@ -183,7 +183,7 @@ async fn rpc_subscriber_generations_keep_distinct_live_connections_and_finite_ca
             2
         );
         assert!(state.protocols.redis.exchanges.iter().any(|e| {
-            e.record.connection_id == older && e.status == ReplayExchangeStatus::Available
+            e.record.native.connection_id == older && e.status == ReplayExchangeStatus::Available
         }));
         pub_task.abort();
         first_task.abort();

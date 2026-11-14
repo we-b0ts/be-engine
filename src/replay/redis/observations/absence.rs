@@ -15,7 +15,7 @@ mod tests;
 pub(super) fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
     let initial = timeline
         .iter()
-        .position(|(_, e)| matches!(e.record.command.as_str(), "DEL" | "UNLINK"))
+        .position(|(_, e)| matches!(e.record.native.command.as_str(), "DEL" | "UNLINK"))
         .context("absent read observations require an owned single-key DEL or UNLINK")?;
     super::source::validate_causal_order(&timeline[..=initial])?;
     let boundary = timeline[initial].1;
@@ -24,17 +24,18 @@ pub(super) fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Re
     }
     let multiple_lanes = timeline
         .iter()
-        .any(|(_, e)| e.record.connection_id != boundary.record.connection_id);
+        .any(|(_, e)| e.record.native.connection_id != boundary.record.native.connection_id);
     let mut lanes = BTreeMap::new();
     for (position, (_, exchange)) in timeline.iter().enumerate() {
-        if let Some(previous) =
-            lanes.insert(exchange.record.connection_id, exchange.record.sequence)
-        {
+        if let Some(previous) = lanes.insert(
+            exchange.record.native.connection_id,
+            exchange.record.native.sequence,
+        ) {
             ensure!(
-                previous < exchange.record.sequence,
+                previous < exchange.record.native.sequence,
                 "absent observation Source clocks reverse connection={} sequence={} previous={}",
-                exchange.record.connection_id,
-                exchange.record.sequence,
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
                 previous,
             );
         }
@@ -43,14 +44,14 @@ pub(super) fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Re
                 exchange
                     .record
                     .earliest_start()
-                    .zip(exchange.record.timestamp)
+                    .zip(exchange.record.native.timestamp)
                     .is_some_and(|(start, end)| start <= end),
                 "concurrent absent observations require complete Source clocks: \
                  connection={} sequence={} start={:?} end={:?}",
-                exchange.record.connection_id,
-                exchange.record.sequence,
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
                 exchange.record.earliest_start(),
-                exchange.record.timestamp,
+                exchange.record.native.timestamp,
             );
         }
         if position > initial {
@@ -65,7 +66,7 @@ pub(super) fn prepare(
     timeline: &mut Vec<(usize, &ReplayExchange)>,
 ) -> Result<()> {
     let deletion = |exchange: &ReplayExchange| {
-        matches!(exchange.record.command.as_str(), "DEL" | "UNLINK")
+        matches!(exchange.record.native.command.as_str(), "DEL" | "UNLINK")
             && exchange.args == [profile.key.clone()]
     };
     let first = timeline
@@ -75,7 +76,7 @@ pub(super) fn prepare(
     ensure!(
         timeline[..first]
             .iter()
-            .all(|(_, exchange)| exchange.record.command == "GET"
+            .all(|(_, exchange)| exchange.record.native.command == "GET"
                 && exchange.args == [profile.key.clone()]),
         "historical absent-read prefix must contain only finite single-key GETs"
     );
@@ -94,7 +95,8 @@ pub(super) fn prepare(
         timeline[first..]
             .iter()
             .all(|(_, exchange)| deletion(exchange)
-                || (exchange.record.command == "GET" && exchange.args == [profile.key.clone()])),
+                || (exchange.record.native.command == "GET"
+                    && exchange.args == [profile.key.clone()])),
         "absent read observations cannot hide writers, TTL operations or multi-key access"
     );
     profile.finite_prefix = timeline.drain(..first).map(|(index, _)| index).collect();

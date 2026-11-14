@@ -30,13 +30,13 @@ impl Candidates {
                 exchange.source,
                 exchange.case_id.as_deref(),
                 &TargetKey {
-                    host: normalize_host(&record.target_host),
-                    port: record.target_port,
+                    host: normalize_host(&record.native.target_host),
+                    port: record.native.target_port,
                 },
-                record.resp_version,
-                record.database,
-                record.username.as_deref(),
-                &record.command,
+                record.native.resp_version,
+                record.native.database,
+                record.native.username.as_deref(),
+                &record.native.command,
             );
             self.exempt.register(key.clone(), index);
             if exchange.subscription_alias {
@@ -86,13 +86,13 @@ impl Candidates {
                 exchange.source,
                 exchange.case_id.as_deref(),
                 &TargetKey {
-                    host: normalize_host(&record.target_host),
-                    port: record.target_port,
+                    host: normalize_host(&record.native.target_host),
+                    port: record.native.target_port,
                 },
-                record.resp_version,
-                record.database,
-                record.username.as_deref(),
-                &record.command,
+                record.native.resp_version,
+                record.native.database,
+                record.native.username.as_deref(),
+                &record.native.command,
             );
             self.index.register(key.clone(), index);
             if exchange.subscription_alias {
@@ -103,9 +103,9 @@ impl Candidates {
                 LaneKey {
                     owner: LaneOwner::new(exchange.source),
                     case: exchange.case_id.clone(),
-                    connection: record.connection_id,
+                    connection: record.native.connection_id,
                 },
-                record.sequence,
+                record.native.sequence,
                 index,
             );
         }

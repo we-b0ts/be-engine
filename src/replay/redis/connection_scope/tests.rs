@@ -90,7 +90,7 @@ fn explicit_session_setup_keeps_its_connection_wide_boundary_with_a_case_origin(
         let local = event(1, "GET", &[b"session"], b"$1\r\nx\r\n");
         let (_root, mut state) = state(std::slice::from_ref(&local), vec![]);
         let mut setup = state.exchanges[0].record.clone();
-        setup.session_setup = true;
+        setup.native.session_setup = true;
         state
             .connection_scopes
             .register(&setup, &[], source, Some("origin-case"));

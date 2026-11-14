@@ -34,14 +34,14 @@ impl RedisReplayState {
                 || !self.connection_scopes.matches(exchange, case, connection)
                 || !target_matches(
                     target,
-                    &exchange.record.target_host,
-                    exchange.record.target_port,
+                    &exchange.record.native.target_host,
+                    exchange.record.native.target_port,
                 )
-                || exchange.record.resp_version != resp_version
-                || exchange.record.database != database
+                || exchange.record.native.resp_version != resp_version
+                || exchange.record.native.database != database
                 || normalize_optional(username)
-                    != normalize_optional(exchange.record.username.as_deref())
-                || exchange.record.command != command
+                    != normalize_optional(exchange.record.native.username.as_deref())
+                || exchange.record.native.command != command
             {
                 continue;
             }

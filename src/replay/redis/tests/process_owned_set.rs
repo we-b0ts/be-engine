@@ -15,29 +15,31 @@ fn process_owned_set_preserves_exact_arguments_and_single_consumption() {
         .register_exchange(
             RecordedExchange {
                 lifecycle_cleanup: false,
-                parse_warnings: vec![],
-                rpc_callback_capture: None,
-                id: None,
-                timestamp: None,
-                request_started_at: None,
-                connection_id: Uuid::new_v4(),
-                sequence: 1,
-                target_host: "redis.test".into(),
-                target_port: 6379,
-                resp_version: 2,
-                database: 0,
-                username: None,
-                command: "SET".into(),
-                args: vec![capture("shutdown:state"), capture("stopped")],
-                response_kind: "simple_string".into(),
-                response: capture("+OK\r\n"),
-                outcome: DependencyExchangeOutcome::Response,
-                duration_ms: 1,
-                replay_safe: true,
-                cache_snapshot_rule: None,
-                cache_snapshot_hit: false,
-                session_setup: false,
-                capture: Some(crate::dependency::observation::fixture_capture("process")),
+                native: NativeRecordedExchange {
+                    parse_warnings: vec![],
+                    rpc_callback_capture: None,
+                    id: None,
+                    timestamp: None,
+                    request_started_at: None,
+                    connection_id: Uuid::new_v4(),
+                    sequence: 1,
+                    target_host: "redis.test".into(),
+                    target_port: 6379,
+                    resp_version: 2,
+                    database: 0,
+                    username: None,
+                    command: "SET".into(),
+                    args: vec![capture("shutdown:state"), capture("stopped")],
+                    response_kind: "simple_string".into(),
+                    response: capture("+OK\r\n"),
+                    outcome: DependencyExchangeOutcome::Response,
+                    duration_ms: 1,
+                    replay_safe: true,
+                    cache_snapshot_rule: None,
+                    cache_snapshot_hit: false,
+                    session_setup: false,
+                    capture: Some(crate::dependency::observation::fixture_capture("process")),
+                },
             },
             ReplaySource::Process,
             None,
@@ -283,6 +285,7 @@ async fn process_owned_set_uses_global_timestamp_contract_with_independent_depen
                 let mut state = runtime.state.lock().await;
                 let capture = state.protocols.redis.exchanges[0]
                     .record
+                    .native
                     .capture
                     .as_mut()
                     .unwrap();

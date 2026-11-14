@@ -33,9 +33,9 @@ impl RedisReplayState {
                 source_witness: crate::replay::report::command::CommandExchangeRefReport {
                     case_id: e.case_id.clone(),
                     source: e.source,
-                    connection_id: e.record.connection_id,
-                    sequence: e.record.sequence,
-                    command: e.record.command.clone(),
+                    connection_id: e.record.native.connection_id,
+                    sequence: e.record.native.sequence,
+                    command: e.record.native.command.clone(),
                 },
             })
             .collect()

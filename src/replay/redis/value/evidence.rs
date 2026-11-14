@@ -53,14 +53,18 @@ impl RedisReplayState {
                 || !self
                     .connection_scopes
                     .matches(exchange, case_id, connection)
-                || !super::super::target_matches(target, &record.target_host, record.target_port)
-                || record.resp_version != resp_version
-                || record.database != database
+                || !super::super::target_matches(
+                    target,
+                    &record.native.target_host,
+                    record.native.target_port,
+                )
+                || record.native.resp_version != resp_version
+                || record.native.database != database
                 || super::super::normalize_optional(username)
-                    != super::super::normalize_optional(record.username.as_deref())
-                || !record.command.eq_ignore_ascii_case(command)
-                || record.response_kind == "error"
-                || record.outcome != crate::DependencyExchangeOutcome::Response
+                    != super::super::normalize_optional(record.native.username.as_deref())
+                || !record.native.command.eq_ignore_ascii_case(command)
+                || record.native.response_kind == "error"
+                || record.native.outcome != crate::DependencyExchangeOutcome::Response
             {
                 continue;
             }
@@ -83,10 +87,10 @@ impl RedisReplayState {
                 self.unordered_value.candidates.push(OrderCandidate {
                     case_id: case_id.map(str::to_string),
                     source_case_id: exchange.case_id.clone(),
-                    command: record.command.clone(),
+                    command: record.native.command.clone(),
                     selector: RedisUnorderedSelector {
-                        host: record.target_host.clone(),
-                        port: record.target_port,
+                        host: record.native.target_host.clone(),
+                        port: record.native.target_port,
                         key: RedisValueKeySelector::Exact { value: key.into() },
                         field: field.clone(),
                     },

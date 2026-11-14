@@ -16,10 +16,10 @@ pub(super) fn validate(
     args: &[Vec<u8>],
 ) -> Result<bool> {
     ensure!(
-        !record.cache_snapshot_hit,
+        !record.native.cache_snapshot_hit,
         "Redis cache snapshot hits are diagnostic events and must not be replay dependencies"
     );
-    let Some(recorded_rule) = record.cache_snapshot_rule.as_deref() else {
+    let Some(recorded_rule) = record.native.cache_snapshot_rule.as_deref() else {
         return Ok(false);
     };
     ensure!(
@@ -27,15 +27,20 @@ pub(super) fn validate(
         "Redis cache snapshot seed must be a background Global dependency"
     );
     ensure!(
-        record.outcome == DependencyExchangeOutcome::Response
-            && !record.response_kind.eq_ignore_ascii_case("error"),
+        record.native.outcome == DependencyExchangeOutcome::Response
+            && !record.native.response_kind.eq_ignore_ascii_case("error"),
         "Redis cache snapshot seed must contain a successful response"
     );
     ensure!(
         rules.iter().any(|rule| {
             rule.uses_redis_snapshot()
                 && owner_name_matches(recorded_rule, rule.name())
-                && redis_rule_matches(rule, record.target_port, &record.command, args)
+                && redis_rule_matches(
+                    rule,
+                    record.native.target_port,
+                    &record.native.command,
+                    args,
+                )
         }),
         "Redis cache snapshot seed rule is absent or no longer matches the recording"
     );

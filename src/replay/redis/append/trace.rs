@@ -16,26 +16,26 @@ pub(super) fn prepare(
     let same_database = |e: &ReplayExchange| {
         target_matches(
             &TargetKey {
-                host: seed.record.target_host.clone(),
-                port: seed.record.target_port,
+                host: seed.record.native.target_host.clone(),
+                port: seed.record.native.target_port,
             },
-            &e.record.target_host,
-            e.record.target_port,
-        ) && e.record.database == seed.record.database
+            &e.record.native.target_host,
+            e.record.native.target_port,
+        ) && e.record.native.database == seed.record.native.database
     };
     let same_resource = |e: &ReplayExchange| {
         same_database(e)
-            && normalize_optional(e.record.username.as_deref())
-                == normalize_optional(seed.record.username.as_deref())
+            && normalize_optional(e.record.native.username.as_deref())
+                == normalize_optional(seed.record.native.username.as_deref())
     };
     ensure!(
         !exchanges.iter().any(|e| same_database(e)
             && !super::super::case_scope::is_other_ordinary_exchange(case, e)
             && (e.source != ReplaySource::Case
                 || e.case_id.as_deref() != Some(case)
-                || normalize_optional(e.record.username.as_deref())
-                    != normalize_optional(seed.record.username.as_deref()))
-            && touches(&e.record.command, &e.args, &key)),
+                || normalize_optional(e.record.native.username.as_deref())
+                    != normalize_optional(seed.record.native.username.as_deref()))
+            && touches(&e.record.native.command, &e.args, &key)),
         "append stream key overlaps Global/shared inventory or another Case-local authentication identity"
     );
     let mut timeline = exchanges
@@ -47,7 +47,7 @@ pub(super) fn prepare(
         .collect::<Vec<_>>();
     ensure!(
         !timeline.iter().any(|(_, e)| matches!(
-            e.record.command.as_str(),
+            e.record.native.command.as_str(),
             "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "MONITOR"
         )),
         "append stream does not authorize transactional or watched sessions"
@@ -55,9 +55,11 @@ pub(super) fn prepare(
     timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
     let mut lanes = BTreeMap::new();
     for (_, e) in &timeline {
-        if let Some(previous) = lanes.insert(e.record.connection_id, e.record.sequence) {
+        if let Some(previous) =
+            lanes.insert(e.record.native.connection_id, e.record.native.sequence)
+        {
             ensure!(
-                previous < e.record.sequence,
+                previous < e.record.native.sequence,
                 "append stream Source clocks reverse a lane"
             );
         }
@@ -66,12 +68,12 @@ pub(super) fn prepare(
         rule: rule.into(),
         case: case.into(),
         target: TargetKey {
-            host: seed.record.target_host.clone(),
-            port: seed.record.target_port,
+            host: seed.record.native.target_host.clone(),
+            port: seed.record.native.target_port,
         },
-        database: seed.record.database,
-        username: seed.record.username.clone(),
-        resp_version: seed.record.resp_version,
+        database: seed.record.native.database,
+        username: seed.record.native.username.clone(),
+        resp_version: seed.record.native.resp_version,
         key,
         bytes: vec![],
         pieces: vec![],
@@ -89,15 +91,23 @@ pub(super) fn prepare(
     let mut initial_known = true;
     let mut last_access: Option<&ReplayExchange> = None;
     for (index, exchange) in timeline {
-        if !touches(&exchange.record.command, &exchange.args, &profile.key) {
+        if !touches(
+            &exchange.record.native.command,
+            &exchange.args,
+            &profile.key,
+        ) {
             continue;
         }
-        if !matches!(exchange.record.command.as_str(), "EXPIRE" | "PEXPIRE") {
+        if !matches!(
+            exchange.record.native.command.as_str(),
+            "EXPIRE" | "PEXPIRE"
+        ) {
             if let Some(previous) = last_access {
                 ensure!(
-                    previous.record.connection_id == exchange.record.connection_id
+                    previous.record.native.connection_id == exchange.record.native.connection_id
                         || previous
                             .record
+                            .native
                             .timestamp
                             .zip(exchange.record.earliest_start())
                             .is_some_and(|(end, start)| end <= start),
@@ -107,7 +117,7 @@ pub(super) fn prepare(
             last_access = Some(exchange);
         }
         let offset = profile.bytes.len();
-        if exchange.record.command == "APPEND" {
+        if exchange.record.native.command == "APPEND" {
             ensure!(
                 initial_known,
                 "append stream follows an unsupported mutation"
@@ -115,16 +125,16 @@ pub(super) fn prepare(
             ensure!(
                 exchange.shared_rule_id.is_none()
                     && !exchange.reusable_snapshot
-                    && exchange.record.cache_snapshot_rule.is_none()
-                    && !exchange.record.cache_snapshot_hit
-                    && !exchange.record.session_setup
+                    && exchange.record.native.cache_snapshot_rule.is_none()
+                    && !exchange.record.native.cache_snapshot_hit
+                    && !exchange.record.native.session_setup
                     && exchange.record.run_owner_kind().is_none()
-                    && exchange.record.resp_version == profile.resp_version,
+                    && exchange.record.native.resp_version == profile.resp_version,
                 "append stream requires ordinary Case exchanges"
             );
             ensure!(
-                exchange.record.outcome == DependencyExchangeOutcome::Response
-                    && exchange.record.response_kind == "integer"
+                exchange.record.native.outcome == DependencyExchangeOutcome::Response
+                    && exchange.record.native.response_kind == "integer"
                     && exchange.args.len() == 2,
                 "append stream requires successful two-argument APPEND"
             );
@@ -172,11 +182,14 @@ pub(super) fn prepare(
         }
         // A successful fixed-argument expiry refresh is still matched and consumed
         // by its ordinary native owner. It does not observe the string's contents.
-        if matches!(exchange.record.command.as_str(), "EXPIRE" | "PEXPIRE") {
+        if matches!(
+            exchange.record.native.command.as_str(),
+            "EXPIRE" | "PEXPIRE"
+        ) {
             ensure!(
                 exchange.args.len() == 2
-                    && exchange.record.outcome == DependencyExchangeOutcome::Response
-                    && exchange.record.response_kind == "integer"
+                    && exchange.record.native.outcome == DependencyExchangeOutcome::Response
+                    && exchange.record.native.response_kind == "integer"
                     && exchange.args[1].iter().all(u8::is_ascii_digit)
                     && !exchange.args[1].is_empty()
                     && std::str::from_utf8(&exchange.args[1])?.parse::<u64>()? > 0
@@ -187,15 +200,15 @@ pub(super) fn prepare(
         }
         profile.barriers.push((index, offset));
         let response = exchange.response_bytes()?;
-        let success = exchange.record.outcome == DependencyExchangeOutcome::Response;
-        match exchange.record.command.as_str() {
+        let success = exchange.record.native.outcome == DependencyExchangeOutcome::Response;
+        match exchange.record.native.command.as_str() {
             "DEL" | "UNLINK" if success && integer(&response).is_ok() => {
                 base = Some(0);
                 epoch_start = offset;
                 initial_known = true;
             }
             "SET" | "SETEX" | "PSETEX" if success && response == b"+OK\r\n" => {
-                let value = if exchange.record.command == "SET" {
+                let value = if exchange.record.native.command == "SET" {
                     1
                 } else {
                     2

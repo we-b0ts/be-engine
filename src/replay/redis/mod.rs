@@ -81,82 +81,40 @@ mod pipeline;
 use super::admission::{Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle};
 use delivery::deliver_redis_exchange;
 
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RecordedConnection {
-    target_host: String,
-    target_port: u16,
-    replay_safe: bool,
-}
+pub(crate) use traffic_protocol_redis::recorded::RecordedConnection;
+use traffic_protocol_redis::recorded::{
+    RecordedCapture, RecordedExchange as NativeRecordedExchange,
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct RecordedExchange {
     #[serde(skip)]
     lifecycle_cleanup: bool,
-    // Subscription aliases retain event identity without changing existing
-    // Redis rule/evidence fingerprints, which serialize this projection.
-    #[serde(default, skip_serializing)]
-    id: Option<Uuid>,
-    #[serde(default)]
-    timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    request_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    connection_id: Uuid,
-    sequence: u64,
-    target_host: String,
-    target_port: u16,
-    resp_version: u8,
-    database: i64,
-    username: Option<String>,
-    command: String,
-    args: Vec<RecordedCapture>,
-    response_kind: String,
-    response: RecordedCapture,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    rpc_callback_capture: Option<String>,
-    #[serde(default)]
-    outcome: DependencyExchangeOutcome,
-    #[serde(default)]
-    duration_ms: u64,
-    replay_safe: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    parse_warnings: Vec<String>,
-    #[serde(default)]
-    cache_snapshot_rule: Option<String>,
-    #[serde(default)]
-    cache_snapshot_hit: bool,
-    #[serde(default)]
-    session_setup: bool,
-    #[serde(default)]
-    capture: Option<crate::dependency::observation::CaptureMetadata>,
+    #[serde(flatten)]
+    native: NativeRecordedExchange,
 }
 
 impl RecordedExchange {
     fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.request_started_at.or_else(|| {
-            self.timestamp?
+        self.native.request_started_at.or_else(|| {
+            self.native
+                .timestamp?
                 .checked_sub_signed(chrono::TimeDelta::milliseconds(
-                    i64::try_from(self.duration_ms).ok()?,
+                    i64::try_from(self.native.duration_ms).ok()?,
                 ))
         })
     }
 
     /// A floor-millisecond duration only establishes a conservative lower bound.
     fn earliest_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.request_started_at.or_else(|| {
-            self.timestamp?
+        self.native.request_started_at.or_else(|| {
+            self.native
+                .timestamp?
                 .checked_sub_signed(chrono::TimeDelta::milliseconds(
-                    i64::try_from(self.duration_ms.checked_add(1)?).ok()?,
+                    i64::try_from(self.native.duration_ms.checked_add(1)?).ok()?,
                 ))
         })
     }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct RecordedCapture {
-    encoding: String,
-    data: String,
-    #[serde(default)]
-    truncated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +201,7 @@ impl RedisReplayState {
         .then(|| {
             exchange
                 .record
+                .native
                 .capture
                 .as_ref()
                 .map(|capture| capture.exchange_id)
@@ -288,7 +247,10 @@ impl RedisReplayState {
     ) -> Result<BTreeMap<(Uuid, u64), usize>> {
         let mut indices = BTreeMap::new();
         for (index, exchange) in self.exchanges.iter().enumerate() {
-            let key = (exchange.record.connection_id, exchange.record.sequence);
+            let key = (
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
+            );
             if exchange.source == ReplaySource::Case
                 && exchange.case_id.as_deref() == Some(case_id)
                 && selected.contains(&key)
@@ -397,9 +359,10 @@ impl RedisReplayState {
         self.read_commutation.check_case_addition(source, case_id)?;
         self.observations.check_case_addition(source, case_id)?;
         self.activity_refresh.check_case_addition(source, case_id)?;
-        record.outcome.validate()?;
+        record.native.outcome.validate()?;
         ensure!(
             record
+                .native
                 .outcome
                 .termination()
                 .is_none_or(|end| end.scope != crate::dependency::TerminationScope::Stream),
@@ -407,11 +370,13 @@ impl RedisReplayState {
         );
         validate_recorded_exchange(
             "redis_exchange",
-            &record.command,
-            record.replay_safe || record.lifecycle_cleanup,
-            record.response.truncated || record.args.iter().any(|capture| capture.truncated),
+            &record.native.command,
+            record.native.replay_safe || record.lifecycle_cleanup,
+            record.native.response.truncated
+                || record.native.args.iter().any(|capture| capture.truncated),
         )?;
         let args = record
+            .native
             .args
             .iter()
             .map(RecordedCapture::decode)
@@ -420,9 +385,10 @@ impl RedisReplayState {
             .check_inventory_addition(&record, &args, source, case_id)?;
         self.read_commutation
             .check_inventory_addition(&record, &args, source, case_id)?;
-        let response = record.response.decode()?;
+        let response = record.native.response.decode()?;
         ensure!(
             record
+                .native
                 .outcome
                 .termination()
                 .is_none_or(|end| end.side != crate::dependency::TerminationSide::Client)
@@ -430,7 +396,8 @@ impl RedisReplayState {
             "Redis client termination response prefix has no recorded delivery timing"
         );
         validate_subscription_exchange(&record, &args, &response)?;
-        let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
+        let timing =
+            ReplayExchangeTiming::from_recorded(record.native.duration_ms, record.native.outcome);
         let reusable_snapshot =
             snapshot_seed::validate(&record, source, process_owned_dependencies, &args)?;
         self.observations.check_inventory_addition(
@@ -446,32 +413,39 @@ impl RedisReplayState {
             || (source.is_run_owned()
                 && record.run_owner_kind() == Some("startup")
                 && process_owned_dependencies.iter().any(|rule| {
-                    redis_rule_matches(rule, record.target_port, &record.command, &args)
+                    redis_rule_matches(
+                        rule,
+                        record.native.target_port,
+                        &record.native.command,
+                        &args,
+                    )
                 }));
         register_target(
             targets,
-            &record.target_host,
-            record.target_port,
+            &record.native.target_host,
+            record.native.target_port,
             ReplayProtocol::Redis,
         )?;
         // Central ledgers retain successful protocol controls as observations.
         // Builtins still own Target session context; these observations cannot
         // add finite slots or bind otherwise ordinary data lanes to a socket.
         let control_observation = record
+            .native
             .capture
             .as_ref()
             .is_some_and(|capture| !capture.semantic_required)
             && !record.lifecycle_cleanup
-            && record.replay_safe
-            && record.response_kind != "error"
-            && redis_is_builtin(&record.command.to_ascii_uppercase())
-            && (record.session_setup
-                || record.command.eq_ignore_ascii_case("PING")
-                || record.command.eq_ignore_ascii_case("QUIT"));
+            && record.native.replay_safe
+            && record.native.response_kind != "error"
+            && redis_is_builtin(&record.native.command.to_ascii_uppercase())
+            && (record.native.session_setup
+                || record.native.command.eq_ignore_ascii_case("PING")
+                || record.native.command.eq_ignore_ascii_case("QUIT"));
         // Rejected SDK identity announcements are observations as well. Other
         // recorded session errors and termination keep their native witnesses.
-        if record.outcome == DependencyExchangeOutcome::Response
-            && (control_observation || crate::redis::is_client_library_info(&record.command, &args))
+        if record.native.outcome == DependencyExchangeOutcome::Response
+            && (control_observation
+                || crate::redis::is_client_library_info(&record.native.command, &args))
         {
             return Ok(());
         }
@@ -831,21 +805,6 @@ async fn record_runtime_unsafe(
     state.protocols.redis.events.unsafe_events.push(request);
 }
 
-impl RecordedCapture {
-    fn decode(&self) -> Result<Vec<u8>> {
-        if self.truncated {
-            return Err(anyhow!("recorded Redis capture is truncated"));
-        }
-        match self.encoding.as_str() {
-            "base64" => STANDARD
-                .decode(&self.data)
-                .context("invalid Redis capture base64"),
-            "utf8" => Ok(self.data.as_bytes().to_vec()),
-            other => Err(anyhow!("unsupported Redis capture encoding {other}")),
-        }
-    }
-}
-
 fn register_target(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     host: &str,
@@ -884,38 +843,38 @@ fn validate_subscription_exchange(
     if record.lifecycle_cleanup {
         return Ok(());
     }
-    if !is_pubsub_command(&record.command) || record.outcome.termination().is_some() {
+    if !is_pubsub_command(&record.native.command) || record.native.outcome.termination().is_some() {
         return Ok(());
     }
 
     ensure!(
-        record.resp_version == 2,
+        record.native.resp_version == 2,
         "Redis Pub/Sub replay requires RESP2"
     );
     ensure!(
         args.len() == 1,
         "Redis {} confirmation replay requires exactly one subscription argument",
-        record.command
+        record.native.command
     );
 
     let command = RedisCommand {
-        name: record.command.clone(),
+        name: record.native.command.clone(),
         args: args.to_vec(),
     };
-    match record.response_kind.as_str() {
+    match record.native.response_kind.as_str() {
         "array" => validate_subscription_confirmation(&command, response),
         "error" => {
             let raw = bytes::Bytes::copy_from_slice(response);
             ensure!(
                 redis_frame_kind(&raw)? == RedisFrameKind::Error,
                 "Redis {} recorded error response is not a RESP2 error frame",
-                record.command
+                record.native.command
             );
             Ok(())
         }
         other => Err(anyhow!(
             "Redis {} replay requires an exact subscription confirmation or error, got {other}",
-            record.command
+            record.native.command
         )),
     }
 }
@@ -952,12 +911,12 @@ fn unused_iter(
             case_id: exchange.case_id.clone(),
             source: exchange.source,
             target: TargetKey {
-                host: normalize_host(&exchange.record.target_host),
-                port: exchange.record.target_port,
+                host: normalize_host(&exchange.record.native.target_host),
+                port: exchange.record.native.target_port,
             },
-            connection_id: exchange.record.connection_id,
-            sequence: exchange.record.sequence,
-            command: exchange.record.command.clone(),
+            connection_id: exchange.record.native.connection_id,
+            sequence: exchange.record.native.sequence,
+            command: exchange.record.native.command.clone(),
         })
 }
 
@@ -972,11 +931,14 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
 }
 
 #[cfg(test)]
+mod recording_tests;
+#[cfg(test)]
 mod tests;
 
 impl RecordedExchange {
     fn run_owner_kind(&self) -> Option<&'static str> {
-        self.capture
+        self.native
+            .capture
             .as_ref()
             .and_then(|capture| match capture.owner_kind() {
                 "case" => None,

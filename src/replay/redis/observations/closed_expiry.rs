@@ -63,9 +63,9 @@ pub(super) fn prove(state: &RedisReplayState, profile: &Profile, trace: &[usize]
             let first = &state.exchanges[creation];
             let last = &state.exchanges[deletion];
             // Multi-key DEL's aggregate count cannot prove this particular key existed.
-            if first.record.command != "SET"
+            if first.record.native.command != "SET"
                 || first.args.len() != 4
-                || !matches!(last.record.command.as_str(), "DEL" | "UNLINK")
+                || !matches!(last.record.native.command.as_str(), "DEL" | "UNLINK")
                 || last.args != [profile.key.clone()]
                 || last.response_bytes().ok()? != b":1\r\n"
             {
@@ -74,6 +74,7 @@ pub(super) fn prove(state: &RedisReplayState, profile: &Profile, trace: &[usize]
             let ttl = set_ttl(&first.args)?;
             let elapsed = last
                 .record
+                .native
                 .timestamp?
                 .signed_duration_since(first.record.earliest_start()?)
                 .to_std()
@@ -92,7 +93,7 @@ pub(super) fn prove(state: &RedisReplayState, profile: &Profile, trace: &[usize]
             let mut required = vec![creation];
             for &index in &trace[start + 1..end] {
                 let exchange = &state.exchanges[index];
-                match exchange.record.command.as_str() {
+                match exchange.record.native.command.as_str() {
                     "EXPIRE"
                         if exchange.args.len() == 2
                             && seconds(&exchange.args[1]).map(Duration::from_secs) == Some(ttl) => {
@@ -316,8 +317,8 @@ fn reference(exchange: &ReplayExchange) -> CommandExchangeRefReport {
     CommandExchangeRefReport {
         case_id: exchange.case_id.clone(),
         source: exchange.source,
-        connection_id: exchange.record.connection_id,
-        sequence: exchange.record.sequence,
-        command: exchange.record.command.clone(),
+        connection_id: exchange.record.native.connection_id,
+        sequence: exchange.record.native.sequence,
+        command: exchange.record.native.command.clone(),
     }
 }

@@ -131,9 +131,13 @@ impl AppendStreams {
         ensure!(
             !self.profiles.iter().any(|profile| {
                 !super::case_scope::is_other_ordinary_case(&profile.case, source, case_id, record)
-                    && record.database == profile.database
-                    && target_matches(&profile.target, &record.target_host, record.target_port)
-                    && super::key_access::touches(&record.command, args, &profile.key)
+                    && record.native.database == profile.database
+                    && target_matches(
+                        &profile.target,
+                        &record.native.target_host,
+                        record.native.target_port,
+                    )
+                    && super::key_access::touches(&record.native.command, args, &profile.key)
             }),
             "cannot add overlapping inventory after append stream Source preparation"
         );
@@ -156,13 +160,13 @@ impl RedisReplayState {
         for exchange in &self.exchanges {
             if exchange.source != ReplaySource::Case
                 || exchange.case_id.as_deref() != Some(case)
-                || exchange.record.command != "APPEND"
+                || exchange.record.native.command != "APPEND"
             {
                 continue;
             }
             let target = TargetKey {
-                host: exchange.record.target_host.clone(),
-                port: exchange.record.target_port,
+                host: exchange.record.native.target_host.clone(),
+                port: exchange.record.native.target_port,
             };
             for rule in self
                 .request_contracts
@@ -176,8 +180,8 @@ impl RedisReplayState {
                         Some(case),
                         Protocol::Redis,
                         &target,
-                        Some(&Database::Index(exchange.record.database)),
-                        exchange.record.username.as_deref(),
+                        Some(&Database::Index(exchange.record.native.database)),
+                        exchange.record.native.username.as_deref(),
                     )
                     || !rule.rule.selector.key.as_ref().is_some_and(|selector| {
                         exchange.args.first().is_some_and(|key| {
@@ -189,8 +193,8 @@ impl RedisReplayState {
                 }
                 let identity = (
                     target.clone(),
-                    exchange.record.database,
-                    exchange.record.username.clone(),
+                    exchange.record.native.database,
+                    exchange.record.native.username.clone(),
                     exchange.args[0].clone(),
                 );
                 if !keys.insert(identity) {
@@ -375,14 +379,15 @@ impl RedisReplayState {
             .filter_map(|piece| {
                 let exchange = &self.exchanges[piece.index];
                 (!exchange.connection_independent && self.connection_scopes.is_stateful(exchange))
-                    .then_some(exchange.record.connection_id)
+                    .then_some(exchange.record.native.connection_id)
             })
             .collect::<BTreeSet<_>>();
         ensure!(
             bound_lanes.is_empty()
                 || (bound_lanes.len() == 1
                     && pieces.iter().all(|piece| {
-                        bound_lanes.contains(&self.exchanges[piece.index].record.connection_id)
+                        bound_lanes
+                            .contains(&self.exchanges[piece.index].record.native.connection_id)
                     })),
             "append stream cannot merge different stateful connection scopes"
         );
@@ -407,8 +412,8 @@ impl RedisReplayState {
                 let end = to.min(piece.end);
                 let exchange = &self.exchanges[piece.index];
                 AppendFragment {
-                    source_connection: exchange.record.connection_id,
-                    source_sequence: exchange.record.sequence,
+                    source_connection: exchange.record.native.connection_id,
+                    source_sequence: exchange.record.native.sequence,
                     source_offset: begin - piece.start,
                     target_offset: begin - from,
                     bytes: end - begin,
@@ -419,7 +424,7 @@ impl RedisReplayState {
             .iter()
             .filter(|p| self.exchanges[p.index].status == ReplayExchangeStatus::Available)
             .try_fold(0_u64, |sum, p| {
-                sum.checked_add(self.exchanges[p.index].record.duration_ms)
+                sum.checked_add(self.exchanges[p.index].record.native.duration_ms)
                     .context("append stream duration overflow")
             })?;
         let audit = AppendAudit {
@@ -475,7 +480,7 @@ impl RedisReplayState {
             adapter_echo: None,
             publish_duration_ms: 0,
             index,
-            connection_id: exchange.record.connection_id,
+            connection_id: exchange.record.native.connection_id,
             response: format!(":{returned}\r\n").into_bytes(),
             timing: ReplayExchangeTiming::from_recorded(delay, DependencyExchangeOutcome::Response),
             requires_binding,
@@ -485,8 +490,8 @@ impl RedisReplayState {
                 source: ReplaySource::Case,
                 index,
                 target: target.clone(),
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
+                connection_id: exchange.record.native.connection_id,
+                sequence: exchange.record.native.sequence,
                 command: "APPEND".into(),
                 shared_origin: None,
                 target_event_index: None,
@@ -514,7 +519,7 @@ impl RedisReplayState {
                     .into());
                 }
                 if matches!(
-                    self.exchanges[index].record.command.as_str(),
+                    self.exchanges[index].record.native.command.as_str(),
                     "SET" | "SETEX" | "PSETEX"
                 ) {
                     ensure!(

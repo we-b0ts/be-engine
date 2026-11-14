@@ -11,10 +11,10 @@ pub(super) fn prepare(
     let mut profile = Profile {
         case: case.into(),
         target: TargetKey {
-            host: seed.record.target_host.clone(),
-            port: seed.record.target_port,
+            host: seed.record.native.target_host.clone(),
+            port: seed.record.native.target_port,
         },
-        database: seed.record.database,
+        database: seed.record.native.database,
         key: seed
             .args
             .first()
@@ -25,9 +25,13 @@ pub(super) fn prepare(
     };
     let mut cleanups = Vec::new();
     for (index, exchange) in state.exchanges.iter().enumerate().filter(|(_, e)| {
-        e.record.database == profile.database
-            && target_matches(&profile.target, &e.record.target_host, e.record.target_port)
-            && super::super::key_access::touches(&e.record.command, &e.args, &profile.key)
+        e.record.native.database == profile.database
+            && target_matches(
+                &profile.target,
+                &e.record.native.target_host,
+                e.record.native.target_port,
+            )
+            && super::super::key_access::touches(&e.record.native.command, &e.args, &profile.key)
     }) {
         if super::super::case_scope::is_other_ordinary_exchange(case, exchange) {
             continue;
@@ -39,18 +43,18 @@ pub(super) fn prepare(
         ensure!(
             exchange.shared_rule_id.is_none()
                 && !exchange.reusable_snapshot
-                && exchange.record.cache_snapshot_rule.is_none()
-                && !exchange.record.cache_snapshot_hit
-                && !exchange.record.session_setup
+                && exchange.record.native.cache_snapshot_rule.is_none()
+                && !exchange.record.native.cache_snapshot_hit
+                && !exchange.record.native.session_setup
                 && exchange.record.run_owner_kind().is_none()
-                && exchange.record.outcome == DependencyExchangeOutcome::Response
-                && exchange.record.resp_version == seed.record.resp_version
-                && normalize_optional(exchange.record.username.as_deref())
-                    == normalize_optional(seed.record.username.as_deref()),
+                && exchange.record.native.outcome == DependencyExchangeOutcome::Response
+                && exchange.record.native.resp_version == seed.record.native.resp_version
+                && normalize_optional(exchange.record.native.username.as_deref())
+                    == normalize_optional(seed.record.native.username.as_deref()),
             "read commutation requires ordinary successful Case exchanges with one protocol/user"
         );
         let response = exchange.response_bytes()?;
-        match exchange.record.command.as_str() {
+        match exchange.record.native.command.as_str() {
             "GET" => {
                 ensure!(
                     exchange.args == [profile.key.clone()],
@@ -99,10 +103,11 @@ fn validate_cleanup(
     ensure!(
         profile.reads.iter().all(|&index| {
             let read = &state.exchanges[index];
-            if read.record.connection_id == cleanup.record.connection_id {
-                read.record.sequence < cleanup.record.sequence
+            if read.record.native.connection_id == cleanup.record.native.connection_id {
+                read.record.native.sequence < cleanup.record.native.sequence
             } else {
                 read.record
+                    .native
                     .timestamp
                     .zip(cleanup.record.earliest_start())
                     .is_some_and(|(end, start)| end <= start)

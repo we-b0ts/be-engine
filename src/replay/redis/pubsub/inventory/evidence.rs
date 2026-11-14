@@ -52,10 +52,10 @@ impl IndexedNotifications {
                     // Keep the confirmed native command, without its Case/Global
                     // alias classification, which differs by selected API.
                     subscription_proof: json!({
-                        "command": subscription.command,
-                        "args": subscription.args,
-                        "response_kind": subscription.response_kind,
-                        "response": subscription.response,
+                        "command": subscription.native.command,
+                        "args": subscription.native.args,
+                        "response_kind": subscription.native.response_kind,
+                        "response": subscription.native.response,
                     }),
                 },
             });

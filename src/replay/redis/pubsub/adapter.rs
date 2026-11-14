@@ -63,21 +63,23 @@ impl PubSubState {
     ) -> Result<Option<usize>> {
         ensure!(
             record
+                .native
                 .rpc_callback_capture
                 .as_deref()
                 .is_none_or(|value| value == "bounded_window"),
             "unsupported Redis RPC callback capture contract"
         );
-        if record.response_kind == "error" || record.outcome != DependencyExchangeOutcome::Response
+        if record.native.response_kind == "error"
+            || record.native.outcome != DependencyExchangeOutcome::Response
         {
             return Ok(None);
         }
-        let Some(request) = rpc::request(&record.command, args)? else {
+        let Some(request) = rpc::request(&record.native.command, args)? else {
             ensure!(
-                record.rpc_callback_capture.is_none(),
+                record.native.rpc_callback_capture.is_none(),
                 "RPC capture marker requires a supported RPC request"
             );
-            if rpc::broadcast(&record.command, args)
+            if rpc::broadcast(&record.native.command, args)
                 .ok()
                 .flatten()
                 .is_some()
@@ -90,25 +92,29 @@ impl PubSubState {
         ensure!(
             self.bindings
                 .publishers
-                .insert((record.connection_id, record.sequence)),
+                .insert((record.native.connection_id, record.native.sequence)),
             "duplicate Redis RPC publisher wire identity"
         );
         let scope = (source == ReplaySource::Case, case_id.map(str::to_owned));
         let index = self
             .bindings
             .requests
-            .get(&(scope.clone(), record.connection_id, record.sequence))
+            .get(&(
+                scope.clone(),
+                record.native.connection_id,
+                record.native.sequence,
+            ))
             .copied();
         let Some(index) = index else {
             ensure!(
                 !self
                     .bindings
                     .wire_references
-                    .contains(&(record.connection_id, record.sequence)),
+                    .contains(&(record.native.connection_id, record.native.sequence)),
                 "RPC callback original scope differs from its publisher"
             );
             ensure!(
-                record.rpc_callback_capture.as_deref() == Some("bounded_window"),
+                record.native.rpc_callback_capture.as_deref() == Some("bounded_window"),
                 "Redis Pub/Sub RPC callback evidence missing; refresh the recording with callback capture enabled"
             );
             // A sealed modern window may contain no callback. Retain the finite
@@ -118,13 +124,13 @@ impl PubSubState {
         let push = &mut self.pushes[index];
         ensure!(
             push.source == source
-                || record.rpc_callback_capture.as_deref() == Some("bounded_window"),
+                || record.native.rpc_callback_capture.as_deref() == Some("bounded_window"),
             "cross-scope RPC callback requires a bounded-window publisher"
         );
         ensure!(!push.linked, "duplicate Redis RPC callback reference");
         ensure!(
-            normalize_host(&push.record.target_host) == normalize_host(&record.target_host)
-                && push.record.target_port == record.target_port,
+            normalize_host(&push.record.target_host) == normalize_host(&record.native.target_host)
+                && push.record.target_port == record.native.target_port,
             "RPC callback endpoint/session mismatch"
         );
         let raw = push.bytes()?;
@@ -151,10 +157,10 @@ impl PubSubState {
         &self,
         exchange: &ReplayExchange,
     ) -> bool {
-        self.bindings
-            .callback_subscriptions
-            .contains(&(exchange.record.connection_id, exchange.record.sequence))
-            || self.ingress.requires_subscription(exchange)
+        self.bindings.callback_subscriptions.contains(&(
+            exchange.record.native.connection_id,
+            exchange.record.native.sequence,
+        )) || self.ingress.requires_subscription(exchange)
     }
 
     pub(crate) fn validate_links(&self, source: ReplaySource, case_id: Option<&str>) -> Result<()> {
@@ -169,8 +175,8 @@ impl PubSubState {
     pub(in crate::replay::redis) fn is_adapter_source(&self, exchange: &ReplayExchange) -> bool {
         self.ingress.owns_callback(exchange)
             || exchange.rpc_push.is_some()
-            || exchange.record.rpc_callback_capture.as_deref() == Some("bounded_window")
-            || rpc::broadcast(&exchange.record.command, &exchange.args)
+            || exchange.record.native.rpc_callback_capture.as_deref() == Some("bounded_window")
+            || rpc::broadcast(&exchange.record.native.command, &exchange.args)
                 .ok()
                 .flatten()
                 .is_some()
@@ -222,10 +228,10 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<(rpc::Broadcast, rpc::Broadcast)> {
-        let mut source = rpc::broadcast(&exchange.record.command, &exchange.args)
+        let mut source = rpc::broadcast(&exchange.record.native.command, &exchange.args)
             .ok()
             .flatten()?;
-        let actual = rpc::broadcast(&exchange.record.command, args)
+        let actual = rpc::broadcast(&exchange.record.native.command, args)
             .ok()
             .flatten()?;
         for field in ["room", "skip_sid"] {
@@ -244,11 +250,11 @@ impl PubSubState {
         }
         let realm = (
             TargetKey {
-                host: normalize_host(&exchange.record.target_host),
-                port: exchange.record.target_port,
+                host: normalize_host(&exchange.record.native.target_host),
+                port: exchange.record.native.target_port,
             },
-            exchange.record.database,
-            exchange.record.username.clone(),
+            exchange.record.native.database,
+            exchange.record.native.username.clone(),
         );
         (exchange.args.first() == args.first()
             && source.envelope_matches(&actual)
@@ -273,19 +279,19 @@ impl PubSubState {
         if !self.is_adapter_source(exchange) {
             return None;
         }
-        let source = rpc::request(&exchange.record.command, &exchange.args)
+        let source = rpc::request(&exchange.record.native.command, &exchange.args)
             .ok()
             .flatten()?;
-        let actual = rpc::request(&exchange.record.command, args)
+        let actual = rpc::request(&exchange.record.native.command, args)
             .ok()
             .flatten()?;
         let realm = (
             TargetKey {
-                host: normalize_host(&exchange.record.target_host),
-                port: exchange.record.target_port,
+                host: normalize_host(&exchange.record.native.target_host),
+                port: exchange.record.native.target_port,
             },
-            exchange.record.database,
-            exchange.record.username.clone(),
+            exchange.record.native.database,
+            exchange.record.native.username.clone(),
         );
         (exchange.args.first() == args.first()
             && self
@@ -342,11 +348,11 @@ impl PubSubState {
         if let Some((source, actual)) = self.compatible_broadcast(exchange, args) {
             let realm = (
                 TargetKey {
-                    host: normalize_host(&exchange.record.target_host),
-                    port: exchange.record.target_port,
+                    host: normalize_host(&exchange.record.native.target_host),
+                    port: exchange.record.native.target_port,
                 },
-                exchange.record.database,
-                exchange.record.username.clone(),
+                exchange.record.native.database,
+                exchange.record.native.username.clone(),
             );
             self.bindings
                 .hosts
@@ -356,19 +362,19 @@ impl PubSubState {
                 .insert((realm, actual.host), source.host);
             return None;
         }
-        let source = rpc::request(&exchange.record.command, &exchange.args)
+        let source = rpc::request(&exchange.record.native.command, &exchange.args)
             .ok()
             .flatten()?;
-        let actual = rpc::request(&exchange.record.command, args)
+        let actual = rpc::request(&exchange.record.native.command, args)
             .ok()
             .flatten()?;
         let realm = (
             TargetKey {
-                host: normalize_host(&exchange.record.target_host),
-                port: exchange.record.target_port,
+                host: normalize_host(&exchange.record.native.target_host),
+                port: exchange.record.native.target_port,
             },
-            exchange.record.database,
-            exchange.record.username.clone(),
+            exchange.record.native.database,
+            exchange.record.native.username.clone(),
         );
         self.bindings.sessions.insert(
             (

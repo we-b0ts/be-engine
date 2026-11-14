@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use traffic_protocol_redis::recorded::RecordedExchange as NativeRecordedExchange;
 
 use serde_json::json;
 
@@ -40,37 +41,39 @@ fn capture(data: &str) -> RecordedCapture {
 fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
     RecordedExchange {
         lifecycle_cleanup: false,
-        parse_warnings: Vec::new(),
-        rpc_callback_capture: None,
-        id: None,
-        timestamp: None,
-        request_started_at: None,
-        connection_id: Uuid::new_v4(),
-        sequence: 1,
-        target_host: "redis.example".to_string(),
-        target_port: 50_600,
-        resp_version: 2,
-        database: 0,
-        username: None,
-        command: "HGET".to_string(),
-        args: vec![capture("big-list"), capture("version")],
-        response_kind: "bulk_string".to_string(),
-        response: capture(response),
-        outcome: DependencyExchangeOutcome::Response,
-        duration_ms: 1,
-        replay_safe: true,
-        cache_snapshot_rule: None,
-        cache_snapshot_hit: false,
-        session_setup: false,
-        capture: reason.map(|reason| {
-            crate::dependency::observation::fixture_capture(if reason == "background_rule" {
-                "process"
-            } else if reason == "bootstrap_window" {
-                "startup"
-            } else {
-                "unattributed"
-            })
-        }),
+        native: NativeRecordedExchange {
+            parse_warnings: Vec::new(),
+            rpc_callback_capture: None,
+            id: None,
+            timestamp: None,
+            request_started_at: None,
+            connection_id: Uuid::new_v4(),
+            sequence: 1,
+            target_host: "redis.example".to_string(),
+            target_port: 50_600,
+            resp_version: 2,
+            database: 0,
+            username: None,
+            command: "HGET".to_string(),
+            args: vec![capture("big-list"), capture("version")],
+            response_kind: "bulk_string".to_string(),
+            response: capture(response),
+            outcome: DependencyExchangeOutcome::Response,
+            duration_ms: 1,
+            replay_safe: true,
+            cache_snapshot_rule: None,
+            cache_snapshot_hit: false,
+            session_setup: false,
+            capture: reason.map(|reason| {
+                crate::dependency::observation::fixture_capture(if reason == "background_rule" {
+                    "process"
+                } else if reason == "bootstrap_window" {
+                    "startup"
+                } else {
+                    "unattributed"
+                })
+            }),
+        },
     }
 }
 
@@ -92,8 +95,8 @@ fn finite_process_get_preserves_each_response_and_never_derives_reuse() {
     let mut state = RedisReplayState::default();
     for response in ["$2\r\nv1\r\n", "$-1\r\n"] {
         let mut record = record(Some("background_rule"), response);
-        record.command = "GET".into();
-        record.args.truncate(1);
+        record.native.command = "GET".into();
+        record.native.args.truncate(1);
         state
             .register_exchange(
                 record,
@@ -148,9 +151,9 @@ fn finite_process_get_preserves_each_response_and_never_derives_reuse() {
             .is_err()
     );
     let mut seed = record(Some("background_rule"), "$2\r\nv1\r\n");
-    seed.command = "GET".into();
-    seed.args.truncate(1);
-    seed.cache_snapshot_rule = Some(rule.name().into());
+    seed.native.command = "GET".into();
+    seed.native.args.truncate(1);
+    seed.native.cache_snapshot_rule = Some(rule.name().into());
     assert!(
         state
             .register_exchange(

@@ -114,6 +114,11 @@ Header capture uses the protocol library's shared header representation. Replay'
 keeps authenticated response references, protected-header provenance, actual
 delivery and lifecycle state beside that native payload. Flat recordings retain
 their stored field layout through deserialization at this boundary.
+`traffic-protocol-redis::recorded` owns stored connection and exchange schemas,
+capture decoding, notification payloads and notification references. Replay keeps
+lifecycle authorization beside the native exchange and retains the historical
+flat witness serialization. Native notification evidence supplies its Source
+exchange identity through the protocol-owned accessor.
 `CaptureEvidence` supplies native completeness, references and control facts.
 The ledger owns capture lifetime and sealed persistence through that interface.
 The recording queue holds protocol-independent `CapturedEvent` snapshots.

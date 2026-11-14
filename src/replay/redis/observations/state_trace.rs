@@ -19,14 +19,15 @@ pub(super) fn read_only(
     let multiple_lanes = timeline.first().is_some_and(|(_, first)| {
         timeline
             .iter()
-            .any(|(_, e)| e.record.connection_id != first.record.connection_id)
+            .any(|(_, e)| e.record.native.connection_id != first.record.native.connection_id)
     });
     for &(index, exchange) in timeline {
-        if let Some(previous) =
-            lanes.insert(exchange.record.connection_id, exchange.record.sequence)
-        {
+        if let Some(previous) = lanes.insert(
+            exchange.record.native.connection_id,
+            exchange.record.native.sequence,
+        ) {
             ensure!(
-                previous < exchange.record.sequence,
+                previous < exchange.record.native.sequence,
                 "state read Source clocks reverse a connection lane"
             );
         }
@@ -35,7 +36,7 @@ pub(super) fn read_only(
                 exchange
                     .record
                     .earliest_start()
-                    .zip(exchange.record.timestamp)
+                    .zip(exchange.record.native.timestamp)
                     .is_some_and(|(start, end)| start <= end),
                 "concurrent state observations require complete Source clocks"
             );
@@ -48,7 +49,7 @@ pub(super) fn read_only(
         if let Some(before) = mutation {
             source::require_causal_order(before, exchange)?;
         }
-        match exchange.record.command.as_str() {
+        match exchange.record.native.command.as_str() {
             "GET" => {
                 ensure!(
                     exchange.args == [profile.key.clone()],
@@ -88,9 +89,11 @@ pub(super) fn read_only(
                             .filter(|(_, earlier)| {
                                 earlier.source == ReplaySource::Case
                                     && earlier.case_id.as_deref() == Some(profile.case.as_str())
-                                    && earlier.record.connection_id == exchange.record.connection_id
-                                    && earlier.record.sequence < exchange.record.sequence
-                                    && !(earlier.record.command == "GET"
+                                    && earlier.record.native.connection_id
+                                        == exchange.record.native.connection_id
+                                    && earlier.record.native.sequence
+                                        < exchange.record.native.sequence
+                                    && !(earlier.record.native.command == "GET"
                                         && earlier.args == [profile.key.clone()])
                             })
                             .map(|(index, _)| index)

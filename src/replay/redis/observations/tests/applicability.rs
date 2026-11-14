@@ -150,7 +150,8 @@ fn prefix_support_preserves_expiry_writer_capture_and_foreign_witness_boundaries
             state.exchanges[0].response = b"$3\r\nold".to_vec();
         }
         if change == "overlap" {
-            state.exchanges[0].record.timestamp = Some("2020-01-01T00:00:10Z".parse().unwrap());
+            state.exchanges[0].record.native.timestamp =
+                Some("2020-01-01T00:00:10Z".parse().unwrap());
         }
         if change == "cross_case" {
             state.prepare_observations("case").unwrap();

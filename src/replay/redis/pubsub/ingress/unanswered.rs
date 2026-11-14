@@ -40,16 +40,17 @@ impl<'a> Rooms<'a> {
         for exchange in exchanges {
             if exchange.source != ReplaySource::Case
                 || exchange.shared_rule_id.is_some()
-                || !exchange.record.replay_safe
-                || exchange.record.outcome != DependencyExchangeOutcome::Response
-                || exchange.record.response_kind != "integer"
+                || !exchange.record.native.replay_safe
+                || exchange.record.native.outcome != DependencyExchangeOutcome::Response
+                || exchange.record.native.response_kind != "integer"
             {
                 continue;
             }
             let Some(case) = exchange.case_id.as_deref() else {
                 continue;
             };
-            let Ok(Some(request)) = rpc::request(&exchange.record.command, &exchange.args) else {
+            let Ok(Some(request)) = rpc::request(&exchange.record.native.command, &exchange.args)
+            else {
                 continue;
             };
             let identity = request.identity;
@@ -65,8 +66,8 @@ impl<'a> Rooms<'a> {
                 continue;
             };
             let endpoint = TargetKey {
-                host: normalize_host(&exchange.record.target_host),
-                port: exchange.record.target_port,
+                host: normalize_host(&exchange.record.native.target_host),
+                port: exchange.record.native.target_port,
             };
             let room = rooms
                 .0

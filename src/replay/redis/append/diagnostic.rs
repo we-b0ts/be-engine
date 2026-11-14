@@ -64,9 +64,9 @@ pub(super) fn boundary_mismatch(
         barrier: CommandExchangeRefReport {
             case_id: exchange.case_id.clone(),
             source: exchange.source,
-            connection_id: exchange.record.connection_id,
-            sequence: exchange.record.sequence,
-            command: exchange.record.command.clone(),
+            connection_id: exchange.record.native.connection_id,
+            sequence: exchange.record.native.sequence,
+            command: exchange.record.native.command.clone(),
         },
     }
 }
@@ -93,9 +93,9 @@ pub(super) fn bytes_mismatch(
             CommandExchangeRefReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
-                command: exchange.record.command.clone(),
+                connection_id: exchange.record.native.connection_id,
+                sequence: exchange.record.native.sequence,
+                command: exchange.record.native.command.clone(),
             }
         });
     AppendMismatch {

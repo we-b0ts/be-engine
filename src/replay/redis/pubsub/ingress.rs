@@ -78,14 +78,21 @@ impl Ingress {
     }
     pub(super) fn owns_callback(&self, exchange: &ReplayExchange) -> bool {
         self.callbacks
-            .get(&(exchange.record.connection_id, exchange.record.sequence))
+            .get(&(
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
+            ))
             .is_some_and(|&index| exchange.case_id.as_deref() == Some(&self.entries[index].case))
     }
 
     pub(super) fn requires_subscription(&self, exchange: &ReplayExchange) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.anchor == (exchange.record.connection_id, exchange.record.sequence))
+        self.entries.iter().any(|entry| {
+            entry.anchor
+                == (
+                    exchange.record.native.connection_id,
+                    exchange.record.native.sequence,
+                )
+        })
     }
 
     pub(super) fn comparison(
@@ -93,9 +100,10 @@ impl Ingress {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<RpcComparison> {
-        let &index = self
-            .callbacks
-            .get(&(exchange.record.connection_id, exchange.record.sequence))?;
+        let &index = self.callbacks.get(&(
+            exchange.record.native.connection_id,
+            exchange.record.native.sequence,
+        ))?;
         let entry = &self.entries[index];
         if entry.delivered_at.is_none()
             || entry.failed

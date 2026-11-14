@@ -11,11 +11,11 @@ impl RedisReplayState {
         for seed in self.exchanges.iter().filter(|e| {
             e.source == ReplaySource::Case
                 && e.case_id.as_deref() == Some(case)
-                && e.record.command == "SET"
+                && e.record.native.command == "SET"
         }) {
             let target = TargetKey {
-                host: seed.record.target_host.clone(),
-                port: seed.record.target_port,
+                host: seed.record.native.target_host.clone(),
+                port: seed.record.native.target_port,
             };
             for compiled in self
                 .request_contracts
@@ -32,8 +32,8 @@ impl RedisReplayState {
                     Some(case),
                     Protocol::Redis,
                     &target,
-                    Some(&Database::Index(seed.record.database)),
-                    seed.record.username.as_deref(),
+                    Some(&Database::Index(seed.record.native.database)),
+                    seed.record.native.username.as_deref(),
                 ) || !rule.selector.key.as_ref().is_some_and(|s| {
                     seed.args.first().is_some_and(|k| {
                         crate::replay::policy::native_projection::key(s).matches(k)
@@ -43,8 +43,8 @@ impl RedisReplayState {
                 }
                 if !seen.insert((
                     target.clone(),
-                    seed.record.database,
-                    normalize_optional(seed.record.username.as_deref()),
+                    seed.record.native.database,
+                    normalize_optional(seed.record.native.username.as_deref()),
                     seed.args[0].clone(),
                 )) {
                     continue;
@@ -91,7 +91,7 @@ impl RedisReplayState {
                     .owned
                     .entry(case.into())
                     .or_default()
-                    .insert((e.record.connection_id, e.record.sequence));
+                    .insert((e.record.native.connection_id, e.record.native.sequence));
             }
             self.activity_refresh.profiles.push(profile);
         }
@@ -111,12 +111,12 @@ fn prepare(
         case: case.into(),
         rule: rule.into(),
         target: TargetKey {
-            host: seed.record.target_host.clone(),
-            port: seed.record.target_port,
+            host: seed.record.native.target_host.clone(),
+            port: seed.record.native.target_port,
         },
-        database: seed.record.database,
-        username: seed.record.username.clone(),
-        resp_version: seed.record.resp_version,
+        database: seed.record.native.database,
+        username: seed.record.native.username.clone(),
+        resp_version: seed.record.native.resp_version,
         key: seed.args[0].clone(),
         lifetimes: Vec::new(),
         current: None,
@@ -124,10 +124,14 @@ fn prepare(
     };
     let mut timeline = Vec::new();
     for (index, e) in state.exchanges.iter().enumerate().filter(|(_, e)| {
-        e.record.database == profile.database
-            && target_matches(&profile.target, &e.record.target_host, e.record.target_port)
+        e.record.native.database == profile.database
+            && target_matches(
+                &profile.target,
+                &e.record.native.target_host,
+                e.record.native.target_port,
+            )
     }) {
-        if !super::super::key_access::touches(&e.record.command, &e.args, &profile.key) {
+        if !super::super::key_access::touches(&e.record.native.command, &e.args, &profile.key) {
             continue;
         }
         if super::super::case_scope::is_other_ordinary_exchange(case, e) {
@@ -138,13 +142,13 @@ fn prepare(
                 && e.case_id.as_deref() == Some(case)
                 && e.shared_rule_id.is_none()
                 && !e.reusable_snapshot
-                && !e.record.cache_snapshot_hit
-                && e.record.cache_snapshot_rule.is_none()
-                && !e.record.session_setup
+                && !e.record.native.cache_snapshot_hit
+                && e.record.native.cache_snapshot_rule.is_none()
+                && !e.record.native.session_setup
                 && e.record.run_owner_kind().is_none()
-                && e.record.outcome == DependencyExchangeOutcome::Response
-                && e.record.resp_version == profile.resp_version
-                && normalize_optional(e.record.username.as_deref())
+                && e.record.native.outcome == DependencyExchangeOutcome::Response
+                && e.record.native.resp_version == profile.resp_version
+                && normalize_optional(e.record.native.username.as_deref())
                     == normalize_optional(profile.username.as_deref())
                 && !state.connection_scopes.is_stateful(e),
             "activity refresh requires isolated successful Case inventory without foreign writers, expiry observers or stateful lanes"
@@ -164,7 +168,7 @@ fn prepare(
             response.len() <= MAX_BYTES,
             "activity Source response exceeds bounds"
         );
-        match e.record.command.as_str() {
+        match e.record.native.command.as_str() {
             "SET" => {
                 ensure!(
                     e.args.len() == 4
@@ -274,6 +278,7 @@ fn prepare(
                 .context("activity creation clock missing")?;
             let last = e
                 .record
+                .native
                 .timestamp
                 .context("activity Source completion clock missing")?;
             ensure!(

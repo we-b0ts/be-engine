@@ -92,7 +92,11 @@ fn source_upgrade_keeps_generated_snapshot_reusable_and_overlay_consistent() {
     assert_eq!(state.snapshot_overlays[0].derived_seeds, 0);
     assert_eq!(state.snapshot_overlays[0].reusable_seeds, 1);
     assert_eq!(
-        state.exchanges[0].record.cache_snapshot_rule.as_deref(),
+        state.exchanges[0]
+            .record
+            .native
+            .cache_snapshot_rule
+            .as_deref(),
         Some(previous.name())
     );
     let target = TargetKey {
@@ -133,8 +137,8 @@ fn generated_name_does_not_waive_current_scope_or_seed_safety() {
         (6379, "HSCAN", "another:123"),
     ] {
         let mut changed = original.clone();
-        changed.target_port = port;
-        changed.command = command.into();
+        changed.native.target_port = port;
+        changed.native.command = command.into();
         let changed_args = vec![key.as_bytes().to_vec(), b"0".to_vec()];
         assert!(
             validate(
@@ -149,10 +153,11 @@ fn generated_name_does_not_waive_current_scope_or_seed_safety() {
     for invalid in ["hit", "error", "ownership"] {
         let mut changed = original.clone();
         match invalid {
-            "hit" => changed.cache_snapshot_hit = true,
-            "error" => changed.response_kind = "error".into(),
+            "hit" => changed.native.cache_snapshot_hit = true,
+            "error" => changed.native.response_kind = "error".into(),
             "ownership" => {
-                changed.capture = Some(crate::dependency::observation::fixture_capture("startup"))
+                changed.native.capture =
+                    Some(crate::dependency::observation::fixture_capture("startup"))
             }
             _ => unreachable!(),
         }

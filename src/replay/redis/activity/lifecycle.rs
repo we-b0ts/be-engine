@@ -60,7 +60,7 @@ impl RedisReplayState {
         let Some((profile, lifetime, creation)) = selected else {
             return Ok(None);
         };
-        let command = self.exchanges[index].record.command.clone();
+        let command = self.exchanges[index].record.native.command.clone();
         if creation {
             let next = value::decode(&args[1])?;
             self.activity_refresh.profiles[profile].current = Some(Current {

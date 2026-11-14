@@ -57,7 +57,7 @@ impl SerialPublish {
             .chain(std::iter::once(&index))
             .map(|&index| &state.protocols.redis.exchanges[index])
             .any(|exchange| {
-                exchange.record.command != "PUBLISH"
+                exchange.record.native.command != "PUBLISH"
                     || !lane::is_ordinary(exchange)
                     || state
                         .protocols
@@ -65,7 +65,7 @@ impl SerialPublish {
                         .connection_scopes
                         .is_stateful(exchange)
                     || !exchange.status.is_available()
-                    || exchange.record.response_kind != "integer"
+                    || exchange.record.native.response_kind != "integer"
                     || exchange.record.lifecycle_cleanup
                     || exchange.args.first() != later.args.first()
             })
@@ -237,10 +237,10 @@ impl AdjacentPublish {
 }
 
 fn recorded_route(exchange: &ReplayExchange) -> Option<AdapterRoute> {
-    if exchange.record.response_kind != "integer" || exchange.record.lifecycle_cleanup {
+    if exchange.record.native.response_kind != "integer" || exchange.record.lifecycle_cleanup {
         return None;
     }
-    AdapterRoute::from_args(&exchange.record.command, &exchange.args)
+    AdapterRoute::from_args(&exchange.record.native.command, &exchange.args)
 }
 
 #[derive(Debug)]

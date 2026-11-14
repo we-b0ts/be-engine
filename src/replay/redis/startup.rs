@@ -6,7 +6,7 @@ impl RedisReplayState {
         for (index, exchange) in self.exchanges.iter_mut().enumerate() {
             self.lifecycle.synchronize(index, &mut exchange.status);
             let control = matches!(
-                exchange.record.command.as_str(),
+                exchange.record.native.command.as_str(),
                 "PING"
                     | "QUIT"
                     | "AUTH"

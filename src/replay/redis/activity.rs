@@ -120,7 +120,7 @@ impl ActivityRefreshes {
         e.source == ReplaySource::Case
             && e.case_id.as_deref().is_some_and(|case| {
                 self.owned.get(case).is_some_and(|owned| {
-                    owned.contains(&(e.record.connection_id, e.record.sequence))
+                    owned.contains(&(e.record.native.connection_id, e.record.native.sequence))
                 })
             })
     }
@@ -157,10 +157,19 @@ impl ActivityRefreshes {
         case_id: Option<&str>,
     ) -> Result<()> {
         ensure!(
-            !self.profiles.iter().any(|p| p.database == record.database
-                && target_matches(&p.target, &record.target_host, record.target_port)
-                && super::key_access::touches(&record.command, args, &p.key)
-                && !super::case_scope::is_other_ordinary_case(&p.case, source, case_id, record)),
+            !self
+                .profiles
+                .iter()
+                .any(|p| p.database == record.native.database
+                    && target_matches(
+                        &p.target,
+                        &record.native.target_host,
+                        record.native.target_port
+                    )
+                    && super::key_access::touches(&record.native.command, args, &p.key)
+                    && !super::case_scope::is_other_ordinary_case(
+                        &p.case, source, case_id, record
+                    )),
             "cannot add overlapping activity refresh inventory after Source preparation"
         );
         Ok(())

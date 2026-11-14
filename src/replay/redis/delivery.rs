@@ -601,9 +601,9 @@ async fn claim_terminated_pipeline(
                         case_id.as_deref(),
                         &first.report.target,
                         connection,
-                        record.resp_version,
-                        record.database,
-                        record.username.as_deref(),
+                        record.native.resp_version,
+                        record.native.database,
+                        record.native.username.as_deref(),
                         &command,
                     )
                     .ok_or_else(|| anyhow!("no recorded Redis pipeline termination matched"))?
@@ -615,9 +615,9 @@ async fn claim_terminated_pipeline(
                         case_id.as_deref(),
                         &first.report.target,
                         connection,
-                        record.resp_version,
-                        record.database,
-                        record.username.as_deref(),
+                        record.native.resp_version,
+                        record.native.database,
+                        record.native.username.as_deref(),
                         &command.name,
                         &command.args,
                     )

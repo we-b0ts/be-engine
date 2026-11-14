@@ -54,7 +54,7 @@ fn ordinary_pool_matching_keeps_case_and_endpoint_boundaries() {
     register(&mut state, record(Uuid::new_v4(), 1, "GET"), "a");
     register(&mut state, record(Uuid::new_v4(), 1, "GET"), "b");
     let mut other_port = record(Uuid::new_v4(), 1, "GET");
-    other_port.target_port = 6380;
+    other_port.native.target_port = 6380;
     register(&mut state, other_port, "a");
     let mut target = TargetKey {
         host: "redis.test".into(),
@@ -79,10 +79,10 @@ fn central_protocol_observations_do_not_bind_ordinary_pool_connections() {
         let mut state = RedisReplayState::default();
         let connection = Uuid::new_v4();
         let mut control = record(connection, 1, "AUTH");
-        control.args = vec![capture("<redacted>")];
-        control.response_kind = "simple_string".into();
-        control.response = capture("+OK\r\n");
-        control.session_setup = true;
+        control.native.args = vec![capture("<redacted>")];
+        control.native.response_kind = "simple_string".into();
+        control.native.response = capture("+OK\r\n");
+        control.native.session_setup = true;
         let mut metadata =
             crate::dependency::observation::fixture_capture(if source == ReplaySource::Startup {
                 "startup"
@@ -90,7 +90,7 @@ fn central_protocol_observations_do_not_bind_ordinary_pool_connections() {
                 "case"
             });
         metadata.semantic_required = false;
-        control.capture = Some(metadata);
+        control.native.capture = Some(metadata);
         let mut targets = BTreeMap::new();
         state
             .register_exchange(control.clone(), source, Some("case"), &mut targets, &[])
@@ -127,8 +127,8 @@ fn central_protocol_observations_do_not_bind_ordinary_pool_connections() {
             .is_err()
         );
 
-        control.response_kind = "error".into();
-        control.response = capture("-ERR authentication failed\r\n");
+        control.native.response_kind = "error".into();
+        control.native.response = capture("-ERR authentication failed\r\n");
         let mut failures = RedisReplayState::default();
         failures
             .register_exchange(control, source, Some("case"), &mut BTreeMap::new(), &[])

@@ -89,23 +89,23 @@ impl RedisReplayState {
         {
             let record = &exchange.record;
             if record.lifecycle_cleanup
-                || record.session_setup
+                || record.native.session_setup
                 || exchange.reusable_snapshot
-                || record.cache_snapshot_hit
+                || record.native.cache_snapshot_hit
                 // A proven transient observation may be omitted. It is not a
                 // delivery prerequisite and never receives a wire-success receipt.
                 || exchange.optional_observation_rule.is_some()
             {
                 continue;
             }
-            let Some(at) = record.timestamp else {
+            let Some(at) = record.native.timestamp else {
                 covered = false;
                 continue;
             };
             if at < start {
                 continue;
             }
-            if record.outcome != DependencyExchangeOutcome::Response {
+            if record.native.outcome != DependencyExchangeOutcome::Response {
                 covered = false;
                 continue;
             }
@@ -137,11 +137,11 @@ pub(super) fn response_delivered(
     let reference = DeliveryReference::RedisResponse(exchange.record.cleanup_reference());
     if exchange.subscription_alias
         && matches!(
-            exchange.record.command.as_str(),
+            exchange.record.native.command.as_str(),
             "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE"
         )
-        && exchange.record.outcome == DependencyExchangeOutcome::Response
-        && exchange.record.response_kind == "array"
+        && exchange.record.native.outcome == DependencyExchangeOutcome::Response
+        && exchange.record.native.response_kind == "array"
         && !state.target_session_stopped
         && state.finalized_at.is_none()
         && let Some(case) = exchange.case_id.as_ref()

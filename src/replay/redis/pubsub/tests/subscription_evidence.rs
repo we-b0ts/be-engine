@@ -149,10 +149,10 @@ async fn foreign_case_lookup_loads_only_exact_referenced_control_evidence() {
             let state = runtime.state.lock().await;
             assert_eq!(state.protocols.redis.exchanges.len(), 1);
             assert_eq!(
-                state.protocols.redis.exchanges[0].record.command,
+                state.protocols.redis.exchanges[0].record.native.command,
                 "SUBSCRIBE"
             );
-            assert_eq!(state.protocols.redis.exchanges[0].record.sequence, 4);
+            assert_eq!(state.protocols.redis.exchanges[0].record.native.sequence, 4);
         }
         let (mut client, task) = connect(&runtime).await;
         assert!(

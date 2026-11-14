@@ -82,10 +82,10 @@ pub(super) fn predecessors(
             let record = &exchange.record;
             if exchange.source != ReplaySource::Case
                 || exchange.case_id.as_deref() != Some(case)
-                || !record.command.eq_ignore_ascii_case("PUBLISH")
-                || !record.replay_safe
-                || record.outcome != DependencyExchangeOutcome::Response
-                || record.response_kind != "integer"
+                || !record.native.command.eq_ignore_ascii_case("PUBLISH")
+                || !record.native.replay_safe
+                || record.native.outcome != DependencyExchangeOutcome::Response
+                || record.native.response_kind != "integer"
                 || exchange.args.len() != 2
             {
                 continue;

@@ -38,8 +38,8 @@ pub(super) fn replay_evidence(
     for (index, exchange) in exchanges.iter().enumerate().filter(|(_, exchange)| {
         redis_rule_matches(
             rule,
-            exchange.record.target_port,
-            &exchange.record.command,
+            exchange.record.native.target_port,
+            &exchange.record.native.command,
             &exchange.args,
         )
     }) {
@@ -113,14 +113,15 @@ fn matches_rule(
     rule: &BackgroundDependencyRuleConfig,
 ) -> Result<bool> {
     let args = exchange
+        .native
         .args
         .iter()
         .map(|capture| capture.decode())
         .collect::<Result<Vec<_>>>()?;
     Ok(redis_rule_matches(
         rule,
-        exchange.target_port,
-        &exchange.command,
+        exchange.native.target_port,
+        &exchange.native.command,
         &args,
     ))
 }

@@ -21,14 +21,18 @@ impl Request<'_> {
                 .matches(exchange, self.case, self.connection)
             && target_matches(
                 self.target,
-                &exchange.record.target_host,
-                exchange.record.target_port,
+                &exchange.record.native.target_host,
+                exchange.record.native.target_port,
             )
-            && exchange.record.resp_version == self.resp_version
-            && exchange.record.database == self.database
+            && exchange.record.native.resp_version == self.resp_version
+            && exchange.record.native.database == self.database
             && normalize_optional(self.username)
-                == normalize_optional(exchange.record.username.as_deref())
-            && exchange.record.command.eq_ignore_ascii_case(self.command)
+                == normalize_optional(exchange.record.native.username.as_deref())
+            && exchange
+                .record
+                .native
+                .command
+                .eq_ignore_ascii_case(self.command)
             && state.arguments_match(exchange, self.args)
     }
 
@@ -43,14 +47,14 @@ impl Request<'_> {
         // An unclaimed blocker cannot advance independently of this selection.
         // The Fast zero-subscriber exception can only bypass a DEL.
         self.command == "PUBLISH"
-            && blocker.record.command == "PUBLISH"
+            && blocker.record.native.command == "PUBLISH"
             && blocker.status.is_available()
             && blocker.claim.is_none()
             && exchange.preserves_connection_order()
             && exchange.source == blocker.source
             && exchange.case_id == blocker.case_id
-            && exchange.record.connection_id == blocker.record.connection_id
-            && exchange.record.sequence > blocker.record.sequence
+            && exchange.record.native.connection_id == blocker.record.native.connection_id
+            && exchange.record.native.sequence > blocker.record.native.sequence
     }
 }
 
@@ -84,10 +88,10 @@ impl RedisReplayState {
             let blocker = if let Some(first) = first_serial_blocker {
                 // The admission proof verified every effective lane member
                 // from this blocker up to the exact candidate under this lock.
-                let first_sequence = self.exchanges[first].record.sequence;
+                let first_sequence = self.exchanges[first].record.native.sequence;
                 self.candidates
                     .lane_blocker_excluding(&self.exchanges, candidate, |prior| {
-                        self.exchanges[prior].record.sequence >= first_sequence
+                        self.exchanges[prior].record.native.sequence >= first_sequence
                     })
             } else {
                 self.strict_lane_blocker(candidate, fast_socketio)
@@ -171,16 +175,16 @@ impl RedisReplayState {
         if fast_socketio
             && publish.source == ReplaySource::Case
             && deletion.source == ReplaySource::Case
-            && publish.record.command == "PUBLISH"
+            && publish.record.native.command == "PUBLISH"
             && publish.args.len() == 2
             && publish.response == b":0\r\n"
-            && publish.record.replay_safe
-            && publish.record.parse_warnings.is_empty()
-            && publish.record.outcome == crate::DependencyExchangeOutcome::Response
+            && publish.record.native.replay_safe
+            && publish.record.native.parse_warnings.is_empty()
+            && publish.record.native.outcome == crate::DependencyExchangeOutcome::Response
             && !publish.record.lifecycle_cleanup
             && !self.connection_scopes.is_stateful(publish)
             && !self.pubsub.is_adapter_source(publish)
-            && deletion.record.command == "DEL"
+            && deletion.record.native.command == "DEL"
             && deletion.args.len() == 1
             && deletion.status.is_available()
             && self.is_observed_state_mutation(blocker)

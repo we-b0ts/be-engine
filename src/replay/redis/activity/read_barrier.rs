@@ -37,9 +37,9 @@ impl RedisReplayState {
                     && fingerprint(&profile.key) == *source_key_fingerprint
                     && creation.case_id == source.case_id
                     && creation.source == source.source
-                    && creation.command == source.record.command
-                    && creation.connection_id == source.record.connection_id
-                    && creation.sequence == source.record.sequence
+                    && creation.command == source.record.native.command
+                    && creation.connection_id == source.record.native.connection_id
+                    && creation.sequence == source.record.native.sequence
                     && self.activity_refresh.pending.values().any(|pending| {
                         pending.profile == index
                             && pending.lifetime == current.lifetime

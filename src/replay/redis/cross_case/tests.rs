@@ -55,7 +55,7 @@ fn loading_an_unselected_sibling_skips_pubsub_frames_and_preserves_shared_read_i
     )
     .unwrap();
     assert_eq!(state.exchanges.len(), 1);
-    assert_eq!(state.exchanges[0].record.command, "GET");
+    assert_eq!(state.exchanges[0].record.native.command, "GET");
     assert_eq!(state.exchanges[0].source, ReplaySource::Startup);
     assert_eq!(state.exchanges[0].case_id.as_deref(), Some("origin"));
     assert_eq!(

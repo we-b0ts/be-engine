@@ -52,9 +52,13 @@ impl ReadCommutation {
     ) -> Result<()> {
         ensure!(
             !self.profiles.iter().any(|p| {
-                record.database == p.database
-                    && target_matches(&p.target, &record.target_host, record.target_port)
-                    && super::key_access::touches(&record.command, args, &p.key)
+                record.native.database == p.database
+                    && target_matches(
+                        &p.target,
+                        &record.native.target_host,
+                        record.native.target_port,
+                    )
+                    && super::key_access::touches(&record.native.command, args, &p.key)
                     && !super::case_scope::is_other_ordinary_case(&p.case, source, case_id, record)
             }),
             "cannot add overlapping inventory after read commutation Source preparation"
@@ -73,13 +77,13 @@ impl RedisReplayState {
         for exchange in &self.exchanges {
             if exchange.source != ReplaySource::Case
                 || exchange.case_id.as_deref() != Some(case)
-                || exchange.record.command != "GET"
+                || exchange.record.native.command != "GET"
             {
                 continue;
             }
             let target = TargetKey {
-                host: exchange.record.target_host.clone(),
-                port: exchange.record.target_port,
+                host: exchange.record.native.target_host.clone(),
+                port: exchange.record.native.target_port,
             };
             for rule in self
                 .request_contracts
@@ -93,8 +97,8 @@ impl RedisReplayState {
                         Some(case),
                         Protocol::Redis,
                         &target,
-                        Some(&Database::Index(exchange.record.database)),
-                        exchange.record.username.as_deref(),
+                        Some(&Database::Index(exchange.record.native.database)),
+                        exchange.record.native.username.as_deref(),
                     )
                     || !rule.rule.selector.key.as_ref().is_some_and(|selector| {
                         exchange.args.first().is_some_and(|key| {
@@ -106,7 +110,7 @@ impl RedisReplayState {
                 }
                 if !keys.insert((
                     target.clone(),
-                    exchange.record.database,
+                    exchange.record.native.database,
                     exchange.args[0].clone(),
                 )) {
                     continue;

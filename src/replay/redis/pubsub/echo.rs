@@ -35,12 +35,12 @@ impl Echoes {
     pub(super) fn register(&mut self, record: &RecordedExchange, args: &[Vec<u8>]) {
         if let Some(digest) = rpc::echo_digest(&args[0], &args[1]) {
             let target = TargetKey {
-                host: normalize_host(&record.target_host),
-                port: record.target_port,
+                host: normalize_host(&record.native.target_host),
+                port: record.native.target_port,
             };
             let publishers = self.publishers.entry((target.clone(), digest)).or_default();
             if let std::collections::btree_map::Entry::Vacant(entry) =
-                publishers.entry((record.connection_id, record.sequence))
+                publishers.entry((record.native.connection_id, record.native.sequence))
             {
                 entry.insert(window::Publication::from_record(record));
                 self.windows.take();
@@ -74,7 +74,7 @@ impl Echoes {
             .ok_or("Source publisher has no echo inventory")?
             .as_ref()
             .map_err(Clone::clone)?
-            .get(&(record.connection_id, record.sequence))
+            .get(&(record.native.connection_id, record.native.sequence))
             .cloned()
             .ok_or_else(|| "Source publisher missing from immutable echo inventory".into())
     }
@@ -112,16 +112,16 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<Prepared> {
-        if exchange.record.response_kind == "error"
-            || exchange.record.outcome != DependencyExchangeOutcome::Response
+        if exchange.record.native.response_kind == "error"
+            || exchange.record.native.outcome != DependencyExchangeOutcome::Response
         {
             return None;
         }
         self.is_adapter_source(exchange).then_some(())?;
         let digest = rpc::echo_digest(&exchange.args[0], &exchange.args[1])?;
         let target = TargetKey {
-            host: normalize_host(&exchange.record.target_host),
-            port: exchange.record.target_port,
+            host: normalize_host(&exchange.record.native.target_host),
+            port: exchange.record.native.target_port,
         };
         let publications = self.echoes.publishers.get(&(target.clone(), digest))?;
         Some(Prepared {

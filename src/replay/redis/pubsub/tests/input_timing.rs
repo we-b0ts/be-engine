@@ -268,7 +268,8 @@ async fn redis_response_delivery_is_distinct_from_a_later_rpc_callback() {
             .redis
             .exchanges
             .iter()
-            .any(|e| e.record.command == "PUBLISH" && e.status == ReplayExchangeStatus::Responding)
+            .any(|e| e.record.native.command == "PUBLISH"
+                && e.status == ReplayExchangeStatus::Responding)
     );
     let advance = tokio::time::timeout(Duration::from_secs(1), observer.wait(3, vec![2]))
         .await

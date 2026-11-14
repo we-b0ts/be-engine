@@ -28,12 +28,12 @@ impl Requirement {
     fn validate(&self, record: &RecordedExchange) -> Result<()> {
         let args = validate_confirmation(record)?;
         ensure!(
-            record.command == self.command()
+            record.native.command == self.command()
                 && args.first() == Some(&self.subject)
-                && normalize_host(&record.target_host) == self.host
-                && record.target_port == self.port
-                && record.database == self.database
-                && record.username == self.username,
+                && normalize_host(&record.native.target_host) == self.host
+                && record.native.target_port == self.port
+                && record.native.database == self.database
+                && record.native.username == self.username,
             "Redis Pub/Sub push does not match its recorded subscription"
         );
         Ok(())
@@ -168,24 +168,25 @@ impl RedisReplayState {
 fn validate_confirmation(record: &RecordedExchange) -> Result<Vec<Vec<u8>>> {
     ensure!(
         matches!(
-            record.command.as_str(),
+            record.native.command.as_str(),
             "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE"
-        ) && record.outcome == DependencyExchangeOutcome::Response
-            && record.response_kind == "array",
+        ) && record.native.outcome == DependencyExchangeOutcome::Response
+            && record.native.response_kind == "array",
         "Redis Pub/Sub subscription evidence lacks a successful confirmation"
     );
     validate_recorded_exchange(
         "redis_exchange",
-        &record.command,
-        record.replay_safe,
-        record.response.truncated || record.args.iter().any(|arg| arg.truncated),
+        &record.native.command,
+        record.native.replay_safe,
+        record.native.response.truncated || record.native.args.iter().any(|arg| arg.truncated),
     )?;
     let args = record
+        .native
         .args
         .iter()
         .map(RecordedCapture::decode)
         .collect::<Result<Vec<_>>>()?;
-    validate_subscription_exchange(record, &args, &record.response.decode()?)?;
+    validate_subscription_exchange(record, &args, &record.native.response.decode()?)?;
     Ok(args)
 }
 
@@ -195,13 +196,13 @@ pub(super) fn loaded_subscriptions(
     let mut records = BTreeMap::new();
     for (index, exchange) in exchanges.iter().enumerate().filter(|(_, e)| {
         matches!(
-            e.record.command.as_str(),
+            e.record.native.command.as_str(),
             "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE"
-        ) && e.record.response_kind != "error"
-            && e.record.outcome == DependencyExchangeOutcome::Response
+        ) && e.record.native.response_kind != "error"
+            && e.record.native.outcome == DependencyExchangeOutcome::Response
     }) {
         let mut record = exchange.record.clone();
-        record.response = RecordedCapture {
+        record.native.response = RecordedCapture {
             encoding: "base64".into(),
             data: STANDARD.encode(exchange.response_bytes()?),
             truncated: false,
@@ -209,7 +210,10 @@ pub(super) fn loaded_subscriptions(
         validate_confirmation(&record)?;
         ensure!(
             records
-                .insert((record.connection_id, record.sequence), (index, record))
+                .insert(
+                    (record.native.connection_id, record.native.sequence),
+                    (index, record)
+                )
                 .is_none(),
             "ambiguous recorded Redis subscription identity"
         );
@@ -220,15 +224,20 @@ pub(super) fn loaded_subscriptions(
 fn ensure_same_subscription(original: &RecordedExchange, mirror: &RecordedExchange) -> Result<()> {
     fn normalized(record: &RecordedExchange) -> Result<serde_json::Value> {
         let mut record = record.clone();
-        record.capture = None;
-        for capture in record.args.iter_mut().chain([&mut record.response]) {
+        record.native.capture = None;
+        for capture in record
+            .native
+            .args
+            .iter_mut()
+            .chain([&mut record.native.response])
+        {
             capture.data = STANDARD.encode(capture.decode()?);
             capture.encoding = "base64".into();
         }
         Ok(serde_json::to_value(record)?)
     }
     ensure!(
-        original.id == mirror.id && normalized(original)? == normalized(mirror)?,
+        original.native.id == mirror.native.id && normalized(original)? == normalized(mirror)?,
         "Redis Pub/Sub subscription mirror conflicts with its original command evidence"
     );
     Ok(())
@@ -267,7 +276,7 @@ fn find_subscriptions(
                 continue;
             }
             let record: RecordedExchange = serde_json::from_value(value)?;
-            let anchor = (record.connection_id, record.sequence);
+            let anchor = (record.native.connection_id, record.native.sequence);
             if let Some(requirement) = required.get(&anchor) {
                 requirement.validate(&record)?;
                 ensure!(
@@ -277,11 +286,12 @@ fn find_subscriptions(
             }
             if !is_filtered_session_setup(&record)? {
                 for &required_anchor in required.keys().filter(|required_anchor| {
-                    required_anchor.0 == record.connection_id && record.sequence < required_anchor.1
+                    required_anchor.0 == record.native.connection_id
+                        && record.native.sequence < required_anchor.1
                 }) {
                     blockers
                         .entry(required_anchor)
-                        .or_insert((record.sequence, record.command.clone()));
+                        .or_insert((record.native.sequence, record.native.command.clone()));
                 }
             }
         }
@@ -306,30 +316,31 @@ fn find_subscriptions(
 
 fn is_filtered_session_setup(record: &RecordedExchange) -> Result<bool> {
     if !matches!(
-        record.command.as_str(),
+        record.native.command.as_str(),
         "AUTH" | "HELLO" | "SELECT" | "CLIENT" | "PING"
     ) {
         return Ok(false);
     }
     let args = record
+        .native
         .args
         .iter()
         .map(RecordedCapture::decode)
         .collect::<Result<Vec<_>>>()?;
-    if record.outcome != DependencyExchangeOutcome::Response
-        || !record.replay_safe
-        || record.response.truncated
+    if record.native.outcome != DependencyExchangeOutcome::Response
+        || !record.native.replay_safe
+        || record.native.response.truncated
     {
         return Ok(false);
     }
-    record.response.decode()?;
-    if crate::redis::is_client_library_info(&record.command, &args) {
+    record.native.response.decode()?;
+    if crate::redis::is_client_library_info(&record.native.command, &args) {
         return Ok(true);
     }
     let command = RedisCommand {
-        name: record.command.clone(),
+        name: record.native.command.clone(),
         args,
     };
-    Ok(record.response_kind != "error"
+    Ok(record.native.response_kind != "error"
         && redis_builtin(&command, &mut 2, &mut 0, &mut None).is_some())
 }

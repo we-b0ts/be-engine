@@ -276,7 +276,7 @@ fn callbacks(
     for exchange in exchanges {
         if exchange.source != ReplaySource::Case
             || exchange.shared_rule_id.is_some()
-            || exchange.record.command != "PUBLISH"
+            || exchange.record.native.command != "PUBLISH"
             || exchange.args.len() != 2
         {
             continue;
@@ -316,18 +316,24 @@ fn callbacks(
             "remote Socket.IO request inventory exceeds bound"
         );
         ensure!(
-            exchange.record.outcome == DependencyExchangeOutcome::Response
-                && matches!(exchange.record.response_kind.as_str(), "integer" | "error")
-                && exchange.record.replay_safe,
+            exchange.record.native.outcome == DependencyExchangeOutcome::Response
+                && matches!(
+                    exchange.record.native.response_kind.as_str(),
+                    "integer" | "error"
+                )
+                && exchange.record.native.replay_safe,
             "unsafe remote Socket.IO reply evidence"
         );
         result.push(Callback {
             case: case.into(),
-            wire: (exchange.record.connection_id, exchange.record.sequence),
+            wire: (
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
+            ),
             key: (
                 TargetKey {
-                    host: normalize_host(&exchange.record.target_host),
-                    port: exchange.record.target_port,
+                    host: normalize_host(&exchange.record.native.target_host),
+                    port: exchange.record.native.target_port,
                 },
                 exchange.args[0].clone(),
                 identity,

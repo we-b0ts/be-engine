@@ -260,7 +260,7 @@ async fn rpc_ack_crosses_real_connections_and_maps_only_protocol_identities() {
                 .redis
                 .exchanges
                 .iter()
-                .find(|e| e.record.command == "PUBLISH")
+                .find(|e| e.record.native.command == "PUBLISH")
                 .unwrap();
             assert_eq!(
                 state

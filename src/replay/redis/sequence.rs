@@ -10,10 +10,10 @@ impl RedisReplayState {
     }
     pub(in crate::replay) fn recorded_sequence(&self, index: usize) -> Option<u64> {
         let exchange = self.exchanges.get(index)?;
-        let capture = exchange.record.capture.as_ref()?;
+        let capture = exchange.record.native.capture.as_ref()?;
         (capture.semantic_required
             && !exchange.reusable_snapshot
-            && !is_pubsub_command(&exchange.record.command)
+            && !is_pubsub_command(&exchange.record.native.command)
             && !(exchange.source == ReplaySource::Startup && exchange.connection_independent)
             && exchange.shared_rule_id.is_none()
             && self.observations.native_rule(index).is_none()
@@ -33,7 +33,7 @@ impl RedisReplayState {
                 Some((
                     index,
                     self.recorded_sequence(index)?,
-                    exchange.record.capture.as_ref()?.attribution.clone(),
+                    exchange.record.native.capture.as_ref()?.attribution.clone(),
                 ))
             })
             .collect()

@@ -9,10 +9,10 @@ pub(super) fn is_other_ordinary_case(
 ) -> bool {
     source == ReplaySource::Case
         && case.is_some_and(|case| case != owner)
-        && record.cache_snapshot_rule.is_none()
-        && !record.cache_snapshot_hit
+        && record.native.cache_snapshot_rule.is_none()
+        && !record.native.cache_snapshot_hit
         && record.run_owner_kind().is_none()
-        && !record.session_setup
+        && !record.native.session_setup
 }
 
 pub(super) fn is_other_ordinary_exchange(owner: &str, exchange: &ReplayExchange) -> bool {

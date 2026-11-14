@@ -268,7 +268,7 @@ async fn global_rpc_started_during_an_api_delivers_once_after_the_active_case_ch
                     .redis
                     .exchanges
                     .iter()
-                    .filter(|exchange| exchange.record.command == "PUBLISH"
+                    .filter(|exchange| exchange.record.native.command == "PUBLISH"
                         && exchange.status.is_consumed())
                     .count(),
                 1

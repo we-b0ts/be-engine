@@ -106,12 +106,12 @@ impl RedisReplayState {
                     case_id: exchange.case_id.clone(),
                     source: exchange.source,
                     target: TargetKey {
-                        host: normalize_host(&exchange.record.target_host),
-                        port: exchange.record.target_port,
+                        host: normalize_host(&exchange.record.native.target_host),
+                        port: exchange.record.native.target_port,
                     },
-                    connection_id: exchange.record.connection_id,
-                    sequence: exchange.record.sequence,
-                    command: exchange.record.command.clone(),
+                    connection_id: exchange.record.native.connection_id,
+                    sequence: exchange.record.native.sequence,
+                    command: exchange.record.native.command.clone(),
                 })?,
             })?;
         }

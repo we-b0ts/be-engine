@@ -5,16 +5,16 @@ use uuid::Uuid;
 
 impl RecordedSession for RecordedExchange {
     fn connection_id(&self) -> Uuid {
-        self.connection_id
+        self.native.connection_id
     }
     fn sequence(&self) -> u64 {
-        self.sequence
+        self.native.sequence
     }
     fn command(&self) -> &str {
-        &self.command
+        &self.native.command
     }
     fn session_setup(&self) -> bool {
-        self.session_setup
+        self.native.session_setup
     }
 }
 

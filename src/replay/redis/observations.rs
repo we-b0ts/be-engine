@@ -155,11 +155,20 @@ impl Observations {
         reusable_snapshot: bool,
     ) -> Result<()> {
         ensure!(
-            !self.profiles.iter().any(|p| record.database == p.database
-                && target_matches(&p.target, &record.target_host, record.target_port)
-                && super::key_access::touches(&record.command, args, &p.key)
-                && (reusable_snapshot
-                    || !super::case_scope::is_other_ordinary_case(&p.case, source, case, record))),
+            !self
+                .profiles
+                .iter()
+                .any(|p| record.native.database == p.database
+                    && target_matches(
+                        &p.target,
+                        &record.native.target_host,
+                        record.native.target_port
+                    )
+                    && super::key_access::touches(&record.native.command, args, &p.key)
+                    && (reusable_snapshot
+                        || !super::case_scope::is_other_ordinary_case(
+                            &p.case, source, case, record
+                        ))),
             "cannot add Global or explicitly shared key inventory after Case state preparation"
         );
         Ok(())
@@ -214,11 +223,11 @@ impl RedisReplayState {
             {
                 let rule = &compiled.rule;
                 let kind = if matches!(rule.effect, NativeEffect::RedisExpiryRefresh(_))
-                    && (seed.record.command == "EXPIRE"
-                        || seed.record.command == "SET" && seed.args.len() == 4)
+                    && (seed.record.native.command == "EXPIRE"
+                        || seed.record.native.command == "SET" && seed.args.len() == 4)
                 {
                     Kind::Expiry
-                } else if seed.record.command == "GET"
+                } else if seed.record.native.command == "GET"
                     && let NativeEffect::RedisReadObservation(effect) = &rule.effect
                 {
                     if effect.state_values {
@@ -226,7 +235,7 @@ impl RedisReplayState {
                     } else {
                         Kind::AbsentRead
                     }
-                } else if seed.record.command == "GET"
+                } else if seed.record.native.command == "GET"
                     && rule
                         .effect
                         .redis_read_back()
@@ -238,16 +247,16 @@ impl RedisReplayState {
                     continue;
                 };
                 let target = TargetKey {
-                    host: seed.record.target_host.clone(),
-                    port: seed.record.target_port,
+                    host: seed.record.native.target_host.clone(),
+                    port: seed.record.native.target_port,
                 };
                 if !self.request_contracts.native_rule_scope_matches(
                     &rule.id,
                     Some(case),
                     Protocol::Redis,
                     &target,
-                    Some(&Database::Index(seed.record.database)),
-                    seed.record.username.as_deref(),
+                    Some(&Database::Index(seed.record.native.database)),
+                    seed.record.native.username.as_deref(),
                 ) || !rule.selector.key.as_ref().is_some_and(|k| {
                     seed.args.first().is_some_and(|key| {
                         crate::replay::policy::native_projection::key(k).matches(key)
@@ -257,9 +266,9 @@ impl RedisReplayState {
                 }
                 let partition = (
                     target,
-                    seed.record.database,
-                    normalize_optional(seed.record.username.as_deref()),
-                    seed.record.resp_version,
+                    seed.record.native.database,
+                    normalize_optional(seed.record.native.username.as_deref()),
+                    seed.record.native.resp_version,
                     seed.args[0].clone(),
                     kind as u8,
                 );
@@ -273,7 +282,8 @@ impl RedisReplayState {
                 let prepared = source::prepare(self, case, &rule.id, kind, seed, transient_nil);
                 // A SET without a complete closed-scalar proof grants nothing.
                 // Any actual Source EXPIRE still requires its existing full proof.
-                if seed.record.command == "SET" && kind == Kind::Expiry && prepared.is_err() {
+                if seed.record.native.command == "SET" && kind == Kind::Expiry && prepared.is_err()
+                {
                     seen.remove(&partition);
                     continue;
                 }
@@ -460,15 +470,17 @@ impl RedisReplayState {
                     .iter()
                     .map(|&index| {
                         let record = &self.exchanges[index].record;
-                        (record.connection_id, record.sequence)
+                        (record.native.connection_id, record.native.sequence)
                     })
                     .collect::<BTreeSet<_>>();
                 let candidate = crate::replay::command_matching::preferred_match(
                     &self.exchanges,
                     case,
                     |exchange| {
-                        prefix.contains(&(exchange.record.connection_id, exchange.record.sequence))
-                            && exchange.status.is_available()
+                        prefix.contains(&(
+                            exchange.record.native.connection_id,
+                            exchange.record.native.sequence,
+                        )) && exchange.status.is_available()
                             && self.connection_scopes.matches(exchange, case, connection)
                             && self.observation_arguments_match(exchange, args)
                     },
@@ -536,7 +548,10 @@ impl RedisReplayState {
                 None => None,
             };
             let expirable = epoch.mutation.map_or(profile.kind == Kind::Expiry, |i| {
-                !matches!(self.exchanges[i].record.command.as_str(), "DEL" | "UNLINK")
+                !matches!(
+                    self.exchanges[i].record.native.command.as_str(),
+                    "DEL" | "UNLINK"
+                )
             });
             if expirable
                 && established_at.is_some_and(|established_at| {
@@ -582,9 +597,9 @@ impl RedisReplayState {
                 Box::new(super::super::report::command::CommandExchangeRefReport {
                     case_id: e.case_id.clone(),
                     source: e.source,
-                    connection_id: e.record.connection_id,
-                    sequence: e.record.sequence,
-                    command: e.record.command.clone(),
+                    connection_id: e.record.native.connection_id,
+                    sequence: e.record.native.sequence,
+                    command: e.record.native.command.clone(),
                 })
             }),
             reason: reason.into(),
@@ -715,9 +730,9 @@ impl RedisReplayState {
             super::super::report::command::CommandExchangeRefReport {
                 case_id: e.case_id.clone(),
                 source: e.source,
-                connection_id: e.record.connection_id,
-                sequence: e.record.sequence,
-                command: e.record.command.clone(),
+                connection_id: e.record.native.connection_id,
+                sequence: e.record.native.sequence,
+                command: e.record.native.command.clone(),
             }
         };
         let audit = ObservationAudit {

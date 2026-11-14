@@ -26,7 +26,7 @@ async fn ambient_native_input_delivers_without_admitting_unknown_outgoing_comman
                     .redis
                     .exchanges
                     .iter()
-                    .any(|e| e.record.command == "SET")
+                    .any(|e| e.record.native.command == "SET")
             );
             assert_eq!(state.protocols.redis.pubsub.indexed.total, 1);
             assert_eq!(

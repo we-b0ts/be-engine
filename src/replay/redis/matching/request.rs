@@ -31,7 +31,7 @@ impl RedisReplayState {
         allow_hypotheses: bool,
     ) -> Option<Result<Decision>> {
         if exchange.source.is_run_owned() && exchange.shared_rule_id.is_none() {
-            let capture = exchange.record.capture.as_ref()?;
+            let capture = exchange.record.native.capture.as_ref()?;
             let scope = self
                 .run_value_scopes
                 .get(&capture.exchange_id)
@@ -41,7 +41,7 @@ impl RedisReplayState {
                         .map(Arc::<str>::from)
                 })?;
             let normalized = match super::super::expiration::normalize(
-                &exchange.record.command,
+                &exchange.record.native.command,
                 source,
                 actual,
                 crate::value_contract::time::ClockPair {
@@ -53,7 +53,7 @@ impl RedisReplayState {
                 Err(error) => return Some(Err(error)),
             };
             let (source, actual) = super::super::value::paired_values(
-                &exchange.record.command,
+                &exchange.record.native.command,
                 source,
                 normalized.as_deref().unwrap_or(actual),
             )?;
@@ -70,20 +70,20 @@ impl RedisReplayState {
         }
         let case = exchange.case_id.as_deref()?;
         let target = TargetKey {
-            host: exchange.record.target_host.clone(),
-            port: exchange.record.target_port,
+            host: exchange.record.native.target_host.clone(),
+            port: exchange.record.native.target_port,
         };
         let context = crate::replay::policy::request_contract::RedisRequestContext {
             observation_id: self.request_observation_id,
             case,
             target: &target,
-            database: exchange.record.database,
-            username: exchange.record.username.as_deref(),
-            command: &exchange.record.command,
+            database: exchange.record.native.database,
+            username: exchange.record.native.username.as_deref(),
+            command: &exchange.record.native.command,
             recorded_at: exchange.record.started_at(),
             actual_at: self.request_observed_at,
-            connection_id: Some(exchange.record.connection_id),
-            sequence: Some(exchange.record.sequence),
+            connection_id: Some(exchange.record.native.connection_id),
+            sequence: Some(exchange.record.native.sequence),
         };
         let protected = match self.request_contracts.protect_redis_identity_values(
             &context,
@@ -99,7 +99,7 @@ impl RedisReplayState {
             (protected.source.as_slice(), protected.actual.as_slice())
         });
         let expiration = match super::super::expiration::normalize(
-            &exchange.record.command,
+            &exchange.record.native.command,
             source,
             actual,
             crate::value_contract::time::ClockPair {
@@ -116,7 +116,7 @@ impl RedisReplayState {
                 self.request_contracts
                 .with_hypothesis_context(crate::replay::policy::request_contract::HypothesisContext {
                     carrier: "redis_args".into(),
-                    source_reference: serde_json::json!({"connection_id":exchange.record.connection_id,"sequence":exchange.record.sequence}),
+                    source_reference: serde_json::json!({"connection_id":exchange.record.native.connection_id,"sequence":exchange.record.native.sequence}),
                     target_observation_id:self.request_observation_id.map(|id|id.to_string()),
                 })
             } else {

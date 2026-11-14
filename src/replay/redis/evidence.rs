@@ -11,15 +11,18 @@ impl RedisReplayState {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         rules: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
-        let identity = (record.connection_id, record.sequence);
+        let identity = (record.native.connection_id, record.native.sequence);
         self.register_exchange(record, source_kind, None, targets, rules)?;
         if let Some(exchange) = self.exchanges.last_mut()
-            && (exchange.record.connection_id, exchange.record.sequence) == identity
+            && (
+                exchange.record.native.connection_id,
+                exchange.record.native.sequence,
+            ) == identity
             && exchange.source.is_run_owned()
         {
             exchange.response_evidence = Some(reference);
             exchange.response = Vec::new();
-            exchange.record.response.data = String::new();
+            exchange.record.native.response.data = String::new();
         }
         Ok(())
     }
@@ -28,7 +31,11 @@ impl RedisReplayState {
 impl ReplayExchange {
     pub(super) fn response_bytes(&self) -> Result<Vec<u8>> {
         match &self.response_evidence {
-            Some(reference) => reference.load::<RecordedExchange>()?.response.decode(),
+            Some(reference) => reference
+                .load::<RecordedExchange>()?
+                .native
+                .response
+                .decode(),
             None => Ok(self.response.clone()),
         }
     }

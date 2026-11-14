@@ -18,7 +18,7 @@ impl RedisReplayState {
             .take(4)
             .map(|(index, e)| {
                 json!({"index":index, "case_id":e.case_id,
-                "connection_id":e.record.connection_id, "sequence":e.record.sequence,
+                "connection_id":e.record.native.connection_id, "sequence":e.record.native.sequence,
                 "status":format!("{:?}", self.lifecycle.live_status(index,e.status))})
             })
             .collect::<Vec<_>>();
