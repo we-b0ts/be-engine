@@ -22,7 +22,7 @@ pub use api_trigger::plan::{
 pub use dependency_index::DependencyIndexReport;
 
 pub fn prepare_dependency_index(source: &std::path::Path) -> anyhow::Result<DependencyIndexReport> {
-    dependency_index::store::prepare(source, replay::validate_index_record)
+    dependency_index::store::prepare(source, protocols::replay::source::validate_index_record)
         .map(|(_, report)| report)
 }
 pub use replay::{GlobalDependencyPage, read_global_dependency_page};

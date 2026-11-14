@@ -75,7 +75,7 @@ impl DependencyRuleDecision {
 }
 
 #[derive(Debug)]
-pub(in crate::replay) struct ReplayPolicyRuntime {
+pub(crate) struct ReplayPolicyRuntime {
     pub(in crate::replay) request_contracts: super::request_contract::RequestContracts,
     pub(in crate::replay) dynamic_values: super::dynamic_values::DynamicValues,
     loaded: LoadedReplayPolicy,

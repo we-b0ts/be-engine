@@ -23,14 +23,14 @@ pub(in crate::replay) use finite_inventory::FiniteExchange;
 mod report_inventory;
 
 #[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RecordedKafkaConnection {
+pub(crate) struct RecordedKafkaConnection {
     pub(super) target_host: String,
     pub(super) target_port: u16,
     pub(super) replay_safe: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RecordedKafkaProduce {
+pub(crate) struct RecordedKafkaProduce {
     pub(super) connection_id: Uuid,
     #[serde(default, rename = "sequence")]
     pub(super) record_sequence: Option<u64>,
@@ -49,7 +49,7 @@ pub(in crate::replay) struct RecordedKafkaProduce {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RecordedKafkaFetch {
+pub(crate) struct RecordedKafkaFetch {
     pub(super) connection_id: Uuid,
     pub(super) sequence: u64,
     pub(super) target_host: String,
@@ -61,7 +61,7 @@ pub(in crate::replay) struct RecordedKafkaFetch {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RecordedKafkaDelivery {
+pub(crate) struct RecordedKafkaDelivery {
     pub(super) connection_id: Uuid,
     #[serde(default)]
     pub(super) sequence: Option<u64>,
@@ -186,7 +186,7 @@ pub(in crate::replay) struct KafkaReplayEvents {
 }
 
 impl KafkaReplayState {
-    pub(in crate::replay) fn register_connection(
+    pub(crate) fn register_connection(
         &mut self,
         record: RecordedKafkaConnection,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
@@ -205,7 +205,7 @@ impl KafkaReplayState {
         register_replay_target(targets, &target, ReplayProtocol::Kafka)
     }
 
-    pub(in crate::replay) fn register_produce(
+    pub(crate) fn register_produce(
         &mut self,
         record: RecordedKafkaProduce,
         source: ReplaySource,
@@ -263,7 +263,7 @@ impl KafkaReplayState {
         Ok(())
     }
 
-    pub(in crate::replay) fn register_fetch(
+    pub(crate) fn register_fetch(
         &mut self,
         record: RecordedKafkaFetch,
         source: ReplaySource,
@@ -300,7 +300,7 @@ impl KafkaReplayState {
         Ok(())
     }
 
-    pub(in crate::replay) fn register_delivery(
+    pub(crate) fn register_delivery(
         &mut self,
         record: RecordedKafkaDelivery,
         source: ReplaySource,
@@ -807,7 +807,7 @@ fn scope_matches(
 }
 
 impl KafkaReplayState {
-    pub(in crate::replay) fn release_consumed_payloads(
+    pub(crate) fn release_consumed_payloads(
         &mut self,
         cases: &BTreeMap<String, crate::replay::ReplayCase>,
     ) {

@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) use traffic_replay::ReplaySource;
 
-pub(super) use traffic_protocol::connection::Endpoint as TargetKey;
+pub(crate) use traffic_protocol::connection::Endpoint as TargetKey;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ReplayTarget {
@@ -47,7 +47,7 @@ pub(super) enum ReplayCaseStatus {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ReplayCase {
+pub(crate) struct ReplayCase {
     pub(super) id: String,
     pub(super) dir: PathBuf,
     pub(super) dependencies_path: PathBuf,
@@ -66,7 +66,7 @@ pub(super) struct ReplayCaseReport {
     pub(super) target_request_started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub(super) fn register_replay_target(
+pub(crate) fn register_replay_target(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     target: &TargetKey,
     protocol: ReplayProtocol,

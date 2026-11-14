@@ -48,7 +48,11 @@ fn global_payload_pages_preserve_all_protocol_evidence_and_mysql_widths() {
             "headers":[{"name":"id","value":capture("header")}],"result":"accepted","outcome":"response","duration_ms":0,"replay_safe":true}),
     ];
     let path = write(dir.path(), &records);
-    let (index, root) = load_global_index(&path, crate::replay::validate_index_record).unwrap();
+    let (index, root) = load_global_index(
+        &path,
+        crate::protocols::replay::source::validate_index_record,
+    )
+    .unwrap();
     let inventory = global_records(&index, &root).unwrap();
     assert_eq!(inventory.count, records.len());
     let reader = Arc::new(Mutex::new(RecordReader::new(1)));
@@ -71,7 +75,7 @@ fn warm_global_index_reuses_pages_and_changed_source_is_never_replayed() {
     static VALIDATIONS: AtomicUsize = AtomicUsize::new(0);
     fn validate(value: &Value) -> anyhow::Result<()> {
         VALIDATIONS.fetch_add(1, Ordering::Relaxed);
-        crate::replay::validate_index_record(value)
+        crate::protocols::replay::source::validate_index_record(value)
     }
     let dir = tempfile::tempdir().unwrap();
     let path = write(dir.path(), &[redis(capture("$3\r\nold\r\n"))]);
@@ -108,7 +112,11 @@ fn unsafe_and_invalid_payloads_cannot_be_laundered_by_projection() {
         dir.path(),
         &[redis(invalid.clone()), redis(truncated.clone())],
     );
-    let (index, root) = load_global_index(&path, crate::replay::validate_index_record).unwrap();
+    let (index, root) = load_global_index(
+        &path,
+        crate::protocols::replay::source::validate_index_record,
+    )
+    .unwrap();
     let entries = global_records(&index, &root).unwrap().read_page(0).unwrap();
     assert_eq!(entries[0].record["response"], invalid);
     assert_eq!(entries[1].record["response"], truncated);
@@ -117,7 +125,13 @@ fn unsafe_and_invalid_payloads_cannot_be_laundered_by_projection() {
         &[json!({"event_type":"mysql_exchange","command":"COM_QUERY",
         "response":{"status":"resultset","rows":[["invalid typed cell"]]}})],
     );
-    assert!(load_global_index(&path, crate::replay::validate_index_record).is_err());
+    assert!(
+        load_global_index(
+            &path,
+            crate::protocols::replay::source::validate_index_record
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -127,7 +141,7 @@ fn global_builds_are_locked_and_cancelled_builds_do_not_publish() {
     assert!(
         load_global_index_cancellable(
             &path,
-            crate::replay::validate_index_record,
+            crate::protocols::replay::source::validate_index_record,
             &AtomicBool::new(true)
         )
         .is_err()
@@ -136,7 +150,11 @@ fn global_builds_are_locked_and_cancelled_builds_do_not_publish() {
         let handles: Vec<_> = (0..3)
             .map(|_| {
                 scope.spawn(|| {
-                    load_global_index(&path, crate::replay::validate_index_record).unwrap()
+                    load_global_index(
+                        &path,
+                        crate::protocols::replay::source::validate_index_record,
+                    )
+                    .unwrap()
                 })
             })
             .collect();

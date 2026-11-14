@@ -8,7 +8,7 @@ const MAX_DURATION_MS: u64 = 86_400_000;
 mod order;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub(super) struct RecordedFailure {
+pub(crate) struct RecordedFailure {
     id: Uuid,
     timestamp: DateTime<Utc>,
     protocol: String,
@@ -20,7 +20,7 @@ pub(super) struct RecordedFailure {
 }
 
 impl RecordedFailure {
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             !self.target_host.is_empty()
                 && self.target_host.len() <= 1024

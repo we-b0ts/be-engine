@@ -5,12 +5,12 @@ const ENGINE_CLEANUP: &str =
     "HTTP dependency response ended during engine cleanup before capture completed";
 
 impl RecordedHttpExchange {
-    pub(in crate::replay) fn exchange_id(&self) -> Option<uuid::Uuid> {
+    pub(crate) fn exchange_id(&self) -> Option<uuid::Uuid> {
         self.id.as_deref()?.parse().ok()
     }
 
     /// Called only for a case's exact, validated async cleanup reference.
-    pub(in crate::replay) fn authorize_lifecycle_cleanup(&mut self) -> Result<()> {
+    pub(crate) fn authorize_lifecycle_cleanup(&mut self) -> Result<()> {
         validate_record(self)?;
         self.cleanup_authorized = true;
         Ok(())

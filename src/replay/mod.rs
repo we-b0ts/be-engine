@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::MitmCa;
 use crate::request_headers::validate_request_file;
 mod adapters;
+pub(crate) use adapters::RecordedReference;
 pub(crate) mod admission;
 mod assertion;
 mod candidate_selection;
@@ -28,9 +29,9 @@ mod case_index;
 mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
-mod connect_failure;
+pub(crate) mod connect_failure;
 mod contract_value;
-mod lifecycle_cleanup;
+pub(crate) mod lifecycle_cleanup;
 pub(crate) mod native;
 pub(crate) use memcached::contracts::{
     source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
@@ -44,7 +45,7 @@ pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
 mod attribution;
 pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes};
 mod deferred;
-mod dependencies;
+pub(crate) mod dependencies;
 mod loading;
 mod loading_config;
 mod reconciliation;
@@ -96,7 +97,7 @@ pub(crate) use mysql::contracts::{
 };
 pub(crate) use policy::mysql_native_witness_matches;
 pub(crate) use policy::validate_mysql_value_selector;
-mod execution_plan;
+pub(crate) mod execution_plan;
 mod native_index;
 mod network_access;
 pub(crate) mod policy;
@@ -121,13 +122,17 @@ mod test_support;
 
 pub(crate) use case_index::CaseExchangeIndex;
 use control::*;
-pub(crate) use dependencies::validate_index_record;
+pub(crate) use dependencies::RecordedProxyError;
 use dependencies::*;
 use dns::*;
 use exchange::*;
+pub(crate) use exchange::{ReplayExchangeStatus, ReplayExchangeTiming};
+pub(crate) use model::register_replay_target;
 use model::*;
+pub(crate) use model::{ReplayCase, TargetKey};
 pub(crate) use model::{ReplayProtocol, ReplayTarget};
 use mysql::*;
+pub(crate) use policy::ReplayPolicyRuntime;
 use policy::*;
 #[cfg(test)]
 pub(crate) use report::reclassify_background_dependencies;

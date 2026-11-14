@@ -16,7 +16,7 @@ pub(crate) struct MysqlReplayState {
     pub(in crate::replay) request_observation_id: Option<String>,
     #[cfg(test)]
     pub(in crate::replay) observed_at_for_test: Option<DateTime<Utc>>,
-    pub(in crate::replay) exchanges: Vec<ReplayExchange>,
+    pub(crate) exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
@@ -25,9 +25,9 @@ pub(crate) struct MysqlReplayState {
     candidates: candidates::Candidates,
     request_sources: Vec<Option<crate::policy_evidence::PreparedRequestSource>>,
     cleanup_selection: cleanup_selection::Index,
-    pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
-    pub(in crate::replay) transaction_equivalence: transaction_equivalence::Registry,
-    pub(in crate::replay) isolation: isolation::Registry,
+    pub(crate) read_prefixes: optional_session::ReadPrefixes,
+    pub(crate) transaction_equivalence: transaction_equivalence::Registry,
+    pub(crate) isolation: isolation::Registry,
     pub(super) origins: ownership::Origins,
     pub(super) foreign: ownership::Foreign,
     pub(super) transaction_wires: std::collections::HashSet<(Uuid, u64)>,
@@ -126,7 +126,7 @@ impl MysqlReplayState {
         self.statement_metadata = statement_metadata::Cache::default();
         self.request_sources.clear();
     }
-    pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
+    pub(crate) fn register_exchange(&mut self, exchange: ReplayExchange) {
         if exchange.source == ReplaySource::Case
             && exchange
                 .record

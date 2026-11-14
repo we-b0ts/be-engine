@@ -62,7 +62,7 @@ async fn case_tail_attribution_reuses_unchanged_native_indexes_and_rebuilds_chan
     });
     let (index, cache) = crate::dependency_index::global::load_global_index(
         &process,
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )
     .unwrap();
     assert_eq!(index.records.count, 1);
@@ -110,7 +110,7 @@ async fn case_tail_attribution_reuses_unchanged_native_indexes_and_rebuilds_chan
     assert_ne!(changed["process"], process);
     let (empty, changed_cache) = crate::dependency_index::global::load_global_index(
         &changed["process"],
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )
     .unwrap();
     assert_eq!(empty.records.count, 0);
@@ -137,7 +137,7 @@ async fn case_tail_attribution_reuses_unchanged_native_indexes_and_rebuilds_chan
     assert_eq!(warmed.len(), 1);
     let (index, cache) = crate::dependency_index::global::load_global_index(
         &warmed["process"],
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )
     .unwrap();
     assert_eq!(index.records.count, 2);

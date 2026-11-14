@@ -30,7 +30,7 @@ pub(super) use notifications::{NotificationJob, schedule_notifications};
 mod tests;
 
 #[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RecordedPush {
+pub(crate) struct RecordedPush {
     #[serde(default)]
     capture: Option<PushCaptureIdentity>,
     #[serde(default)]
@@ -130,7 +130,7 @@ struct Subscription {
 }
 
 #[derive(Debug, Default)]
-pub(in crate::replay) struct PubSubState {
+pub(crate) struct PubSubState {
     global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     subscription_mirrors: BTreeMap<(Uuid, u64), RecordedExchange>,
     indexed: inventory::IndexedNotifications,
@@ -219,7 +219,7 @@ impl PubSubState {
         })
     }
 
-    pub(in crate::replay) fn register(
+    pub(crate) fn register(
         &mut self,
         record: RecordedPush,
         source: ReplaySource,

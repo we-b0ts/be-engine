@@ -157,11 +157,7 @@ impl PubSubState {
             || self.ingress.requires_subscription(exchange)
     }
 
-    pub(in crate::replay) fn validate_links(
-        &self,
-        source: ReplaySource,
-        case_id: Option<&str>,
-    ) -> Result<()> {
+    pub(crate) fn validate_links(&self, source: ReplaySource, case_id: Option<&str>) -> Result<()> {
         let scope = (source == ReplaySource::Case, case_id.map(str::to_owned));
         ensure!(
             self.bindings.unlinked.get(&scope).copied().unwrap_or(0) == 0,

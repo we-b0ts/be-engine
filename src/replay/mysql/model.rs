@@ -22,14 +22,14 @@ pub(in crate::replay) struct ReplayEvents {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::replay) struct ReplayExchange {
-    pub(in crate::replay) source: ReplaySource,
-    pub(in crate::replay) case_id: Option<String>,
-    pub(in crate::replay) identity: MysqlDependencyIdentity,
-    pub(in crate::replay) record: RecordedMysqlExchange,
-    pub(in crate::replay) optional_session: Option<OptionalSessionExchange>,
-    pub(in crate::replay) status: ReplayExchangeStatus,
-    pub(in crate::replay) timing: ReplayExchangeTiming,
+pub(crate) struct ReplayExchange {
+    pub(crate) source: ReplaySource,
+    pub(crate) case_id: Option<String>,
+    pub(crate) identity: MysqlDependencyIdentity,
+    pub(crate) record: RecordedMysqlExchange,
+    pub(crate) optional_session: Option<OptionalSessionExchange>,
+    pub(crate) status: ReplayExchangeStatus,
+    pub(crate) timing: ReplayExchangeTiming,
 }
 
 pub(in crate::replay) use traffic_protocol_mysql::session_control::OptionalSessionExchange;
@@ -57,7 +57,6 @@ pub(in crate::replay) use traffic_protocol_mysql::session_identity::{
     DependencyIdentity as MysqlDependencyIdentity, SessionIdentity as ReplaySessionIdentity,
 };
 
-pub(in crate::replay) use traffic_protocol_mysql::recorded::RecordedMysqlConnection;
 pub(in crate::replay) type RecordedMysqlExchange =
     traffic_protocol_mysql::recorded::RecordedMysqlExchange<crate::dependency_index::RecordRef>;
 pub(in crate::replay) type RecordedMysqlResponse =

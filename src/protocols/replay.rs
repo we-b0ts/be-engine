@@ -1,5 +1,6 @@
 //! Application assembly for built-in protocol state and native connection drivers.
 pub(crate) mod auto_protocol;
+pub(crate) mod source;
 use crate::{MitmCa, replay};
 use anyhow::{Context, Result, anyhow};
 use replay::protocol_runtime::{InFlightScope, ReplayProtocolSet};
@@ -15,6 +16,12 @@ use traffic_replay::{SequenceBinding, SequenceRuntime};
 
 #[derive(Debug)]
 pub(crate) struct ReplayProtocols {
+    pub(crate) deferred_identities: Option<
+        std::collections::HashMap<
+            uuid::Uuid,
+            traffic_protocol_mysql::session_identity::DependencyIdentity,
+        >,
+    >,
     pub(crate) mysql: replay::mysql::MysqlReplayState,
     pub(crate) redis: replay::redis::RedisReplayState,
     pub(crate) memcached: replay::memcached::MemcachedReplayState,
@@ -34,6 +41,74 @@ pub(crate) struct ReplayProtocols {
 }
 
 impl ReplayProtocolSet for ReplayProtocols {
+    type SourceRecord = source::DependencyRecord;
+    type SourceAppend = source::AppendedSource;
+    fn register_source(
+        &mut self,
+        batch: replay::dependencies::SourceBatch<'_, Self::SourceRecord>,
+        native: &mut replay::native::Inventory,
+        targets: &mut BTreeMap<replay::TargetKey, ReplayTarget>,
+    ) -> Result<Self::SourceAppend> {
+        let appended = source::AppendedSource {
+            mysql_start: self.mysql.source_len(),
+            http_start: self.http_exchanges.len(),
+        };
+        let mut identities = self
+            .deferred_identities
+            .as_ref()
+            .context("deferred native Source identities are absent")?
+            .clone();
+        source::register_dependency_records(
+            batch.path,
+            batch.records,
+            batch.skip,
+            batch.source,
+            batch.case,
+            &mut self.mysql,
+            &mut self.http_exchanges,
+            &mut self.http_blackholes,
+            &mut self.redis,
+            &mut self.memcached,
+            &mut self.kafka,
+            &mut self.motan,
+            targets,
+            &mut identities,
+            batch.process_rules,
+            batch.cleanup,
+            native,
+        )?;
+        Ok(appended)
+    }
+    fn index_source(&mut self, appended: &Self::SourceAppend) {
+        replay::http::extend_case_exchange_index(
+            &mut self.http_case_exchange_index,
+            &self.http_exchanges,
+            appended.http_start,
+        );
+        self.http_ingress
+            .register(&self.http_exchanges[appended.http_start..]);
+    }
+    fn observe_source(
+        &self,
+        appended: &Self::SourceAppend,
+        policy: &mut replay::ReplayPolicyRuntime,
+    ) {
+        self.mysql
+            .observe_registered_policy_exchanges(policy, appended.mysql_start);
+        replay::http::observe_recorded_policy_exchanges(
+            policy,
+            &self.http_exchanges[appended.http_start..],
+        );
+        replay::memcached::observe_recorded_policy_exchanges(policy, &self.memcached);
+    }
+    fn release_payloads(&mut self, cases: &BTreeMap<String, replay::ReplayCase>) {
+        self.mysql.release_consumed_payloads(cases);
+        replay::http::release_consumed_payloads(&mut self.http_exchanges, cases);
+        self.memcached.release_consumed_payloads(cases);
+        self.motan.release_consumed_payloads(cases);
+        self.kafka.release_consumed_payloads(cases);
+    }
+
     fn case_is_dirty(&self, case: &str) -> bool {
         let dirty = self.mysql.case_is_dirty(case)
             || replay::http::case_is_dirty(

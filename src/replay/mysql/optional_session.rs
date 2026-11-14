@@ -1,6 +1,6 @@
 //! Install native control facts while the framework retains live finite admission.
 use super::*;
-use crate::replay::dependencies::DependencyRecord;
+use crate::protocols::replay::source::DependencyRecord;
 #[cfg(test)]
 use traffic_protocol_mysql::read_effect as read;
 pub(in crate::replay) use traffic_protocol_mysql::session_control::ReadPrefixes;
@@ -49,7 +49,7 @@ impl MysqlReplayState {
     }
 }
 
-pub(in crate::replay) fn classify(
+pub(crate) fn classify(
     records: &[DependencyRecord],
     source: ReplaySource,
     global_prefixes: &mut ReadPrefixes,

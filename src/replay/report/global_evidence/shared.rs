@@ -138,7 +138,7 @@ fn retain_at(
     );
     let (index, _) = crate::dependency_index::global::load_global_index(
         first.source.path(),
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )?;
     first.source.validate()?;
     let source = SourceIdentity {

@@ -11,7 +11,7 @@ use crate::replay::report::global_evidence::{
 fn unified(fixture: &Fixture) -> Value {
     let (index, _) = crate::dependency_index::global::load_global_index(
         &fixture.source,
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )
     .unwrap();
     let identity = Identity {

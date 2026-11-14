@@ -63,7 +63,6 @@ pub use initialization::{
 };
 pub(in crate::replay) use matcher::{
     DependencyRuleDecision, HttpPolicyContext, MemcachedPolicyContext, MysqlPolicyContext,
-    ReplayPolicyRuntime,
 };
 pub(in crate::replay) use pattern::uri_path;
 pub(in crate::replay) use report::ReplayPolicyReport;
@@ -160,3 +159,5 @@ pub(crate) use matcher::mysql_native::{
     CopyProofs as MysqlTimeCopyProofs,
     compare_with_time_copies as compare_mysql_contracts_with_time_copies,
 };
+
+pub(crate) use matcher::ReplayPolicyRuntime;

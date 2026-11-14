@@ -1,5 +1,5 @@
 use super::*;
-use crate::replay::dependencies::DependencyRecord;
+use crate::protocols::replay::source::DependencyRecord;
 use serde_json::json;
 
 pub(in crate::replay::mysql) fn record(sequence: u64, sql: &str, before: u16, after: u16) -> Value {

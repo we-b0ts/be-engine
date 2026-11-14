@@ -1,7 +1,7 @@
 use super::*;
 
 impl MotanReplayState {
-    pub(in crate::replay) fn release_consumed_payloads(
+    pub(crate) fn release_consumed_payloads(
         &mut self,
         cases: &BTreeMap<String, crate::replay::ReplayCase>,
     ) {

@@ -13,7 +13,7 @@ pub(crate) struct SourceOccurrence {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::replay) struct CaptureFact {
+pub(crate) struct CaptureFact {
     capture: CaptureMetadata,
     complete: bool,
     notification: bool,

@@ -13,17 +13,17 @@ use crate::dependency::{TerminationKind, TerminationScope};
 const CLIENT_TERMINATION_EARLY_TOLERANCE: Duration = Duration::from_millis(50);
 const CLIENT_TERMINATION_LATE_TOLERANCE: Duration = Duration::from_secs(1);
 
-pub(super) use traffic_replay::ReplayExchangeStatus;
+pub(crate) use traffic_replay::ReplayExchangeStatus;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ReplayExchangeTiming {
+pub(crate) struct ReplayExchangeTiming {
     duration: Duration,
     outcome: DependencyExchangeOutcome,
     fast_server: bool,
 }
 
 impl ReplayExchangeTiming {
-    pub(super) fn from_recorded(duration_ms: u64, outcome: DependencyExchangeOutcome) -> Self {
+    pub(crate) fn from_recorded(duration_ms: u64, outcome: DependencyExchangeOutcome) -> Self {
         Self::from_duration(Duration::from_millis(duration_ms), outcome)
     }
 

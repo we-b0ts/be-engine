@@ -50,14 +50,14 @@ use delivery::deliver_memcached_exchange;
 use expiration::{ArgumentSnapshot, arguments_match};
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedConnection {
+pub(crate) struct RecordedConnection {
     target_host: String,
     target_port: u16,
     replay_safe: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedExchange {
+pub(crate) struct RecordedExchange {
     connection_id: Uuid,
     sequence: u64,
     #[serde(default = "default_recorded_timestamp")]
@@ -165,7 +165,7 @@ pub(super) struct MemcachedReplayEvents {
 }
 
 impl MemcachedReplayState {
-    pub(super) fn register_connection(
+    pub(crate) fn register_connection(
         &mut self,
         record: RecordedConnection,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
@@ -185,7 +185,7 @@ impl MemcachedReplayState {
         )
     }
 
-    pub(super) fn reject_proxy_error(record: &super::RecordedProxyError) -> Result<()> {
+    pub(crate) fn reject_proxy_error(record: &super::RecordedProxyError) -> Result<()> {
         if record.protocol == "memcached" {
             return Err(anyhow!(
                 "unsafe {} dependency proxy error: {}",
@@ -196,7 +196,7 @@ impl MemcachedReplayState {
         Ok(())
     }
 
-    pub(super) fn register_exchange(
+    pub(crate) fn register_exchange(
         &mut self,
         record: RecordedExchange,
         source: ReplaySource,
@@ -457,7 +457,7 @@ async fn record_runtime_unsafe(
     state.protocols.memcached.events.unsafe_events.push(request);
 }
 
-pub(super) fn observe_recorded_policy_exchanges(
+pub(crate) fn observe_recorded_policy_exchanges(
     policy: &mut ReplayPolicyRuntime,
     state: &MemcachedReplayState,
 ) {
@@ -705,7 +705,7 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
 }
 
 impl MemcachedReplayState {
-    pub(super) fn release_consumed_payloads(
+    pub(crate) fn release_consumed_payloads(
         &mut self,
         cases: &BTreeMap<String, super::ReplayCase>,
     ) {

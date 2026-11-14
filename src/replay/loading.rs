@@ -1,5 +1,6 @@
 //! Replay startup inventory construction.
 use super::*;
+use crate::protocols::replay::source::{load_dependency_file, load_motan_debug_file};
 
 impl ReplayRuntime {
     #[cfg(test)]
@@ -232,7 +233,9 @@ impl ReplayRuntime {
                         let mut cache = cache
                             .lock()
                             .map_err(|_| anyhow!("dependency cache lock poisoned"))?;
-                        let records = deferred::startup_records(&path, &index, &mut cache)?;
+                        let records = crate::protocols::replay::source::startup_records(
+                            &path, &index, &mut cache,
+                        )?;
                         native::extend_index(&index_providers, &path, &mut index, &mut cache)?;
                         let shared_lines = http_cross_case::selected_source_lines(
                             &path,
@@ -248,7 +251,7 @@ impl ReplayRuntime {
                 deferred::register_index_targets(&file_index, &mut targets, &providers)?;
                 let mut skip: BTreeSet<_> = startup.iter().map(|(line, _)| *line).collect();
                 skip.extend(shared_lines);
-                dependencies::register_dependency_records(
+                crate::protocols::replay::source::register_dependency_records(
                     &case.dependencies_path,
                     startup,
                     &BTreeSet::new(),
@@ -470,11 +473,11 @@ impl ReplayRuntime {
             policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
         }
 
+        let deferred_identities = lazy.then_some(connection_identities);
         let deferred = lazy.then(|| {
             Arc::new(deferred::DeferredDependencies::new(
                 deferred_files,
                 reader,
-                connection_identities,
                 process_owned_dependencies.to_vec(),
                 lifecycle.dependency_loading.case_timeout_seconds,
                 lifecycle.dependency_loading.cache_bytes,
@@ -548,6 +551,7 @@ impl ReplayRuntime {
             targets,
             replay_policy,
             protocols: crate::protocols::replay::ReplayProtocols {
+                deferred_identities,
                 mysql,
                 redis,
                 memcached,

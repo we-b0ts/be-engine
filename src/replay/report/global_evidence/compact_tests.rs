@@ -56,7 +56,7 @@ impl Fixture {
         drop(output);
         let (index, directory) = crate::dependency_index::global::load_global_index(
             &source,
-            crate::replay::validate_index_record,
+            crate::protocols::replay::source::validate_index_record,
         )
         .unwrap();
         let reader = Arc::new(StdMutex::new(RecordReader::new(1024)));

@@ -2,7 +2,7 @@
 use super::*;
 
 #[derive(Debug)]
-pub(in crate::replay) enum DependencyRecord {
+pub(crate) enum DependencyRecord {
     ConnectFailure,
     MysqlConnection(Box<RecordedMysqlConnection>),
     MysqlExchange(Box<RecordedMysqlExchange>),
@@ -34,7 +34,7 @@ impl<'de> Deserialize<'de> for DependencyRecord {
             .ok_or_else(|| serde::de::Error::custom("dependency record has no event_type"))?;
         let parsed = match kind {
             "dependency_connect_failure" => {
-                serde_json::from_value::<connect_failure::RecordedFailure>(value)
+                serde_json::from_value::<replay::connect_failure::RecordedFailure>(value)
                     .and_then(|failure| failure.validate().map_err(serde::de::Error::custom))
                     .map(|()| Self::ConnectFailure)
             }

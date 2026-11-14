@@ -334,7 +334,7 @@ pub(in crate::replay) fn initialize(
     };
     let (index, _) = crate::dependency_index::global::load_global_index(
         &source,
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )?;
     for protocol in super::PROTOCOLS {
         if protocol == "http" && !state.http_global_report_sharing_is_stable() {

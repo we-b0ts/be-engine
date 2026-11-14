@@ -1,6 +1,9 @@
 //! Global evidence is traversed with a bounded pipeline, independently of case loading.
 use super::*;
 use crate::dependency_index::{Paged, RecordReader, RecordRef, RecordSource};
+use crate::protocols::replay::source::{
+    DependencyRecord, register_dependency_records, validate_index_record,
+};
 
 mod notifications;
 pub(super) use notifications::load as load_unattributed_notifications;

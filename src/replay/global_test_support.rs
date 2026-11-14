@@ -11,7 +11,11 @@ pub(super) fn indexed(records: &[Value]) -> (tempfile::TempDir, Vec<(Value, Reco
         records.iter().map(|v| format!("{v}\n")).collect::<String>(),
     )
     .unwrap();
-    let (index, root) = load_global_index(&path, super::validate_index_record).unwrap();
+    let (index, root) = load_global_index(
+        &path,
+        crate::protocols::replay::source::validate_index_record,
+    )
+    .unwrap();
     // Force every response to exceed the cache budget. Session consumption must
     // still be finite when the same immutable bytes are loaded again.
     let source = RecordSource::new(

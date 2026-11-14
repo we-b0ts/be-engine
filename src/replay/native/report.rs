@@ -97,7 +97,7 @@ impl Inventory {
         }
     }
 
-    pub fn snapshot(&self) -> BTreeMap<String, ProtocolReport> {
+    pub(in crate::replay) fn snapshot(&self) -> BTreeMap<String, ProtocolReport> {
         let mut reports = BTreeMap::<String, ProtocolReport>::new();
         for (protocol, count) in &self.matched {
             reports.entry(protocol.clone()).or_default().matched_count = *count;

@@ -81,7 +81,7 @@ fn read_global(
 ) -> Result<()> {
     let (index, root) = crate::dependency_index::global::load_global_index(
         path,
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )?;
     let pages = crate::dependency_index::global::global_records(&index, &root)?;
     let source = RecordSource::new(

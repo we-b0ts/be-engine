@@ -28,7 +28,10 @@ pub(crate) fn prewarm_attribution_indexes(
         let paths = freeze_scopes(&root, &manifest, &stage, selected, &owners, &digest)?;
         for (scope, path) in paths {
             if GLOBAL_SCOPES.contains(&scope.as_str()) {
-                global::load_global_index(&path, crate::replay::validate_index_record)?;
+                global::load_global_index(
+                    &path,
+                    crate::protocols::replay::source::validate_index_record,
+                )?;
             } else {
                 crate::dependency_index::load_file(&path)?;
             }

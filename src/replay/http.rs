@@ -68,7 +68,7 @@ type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 pub(super) use request_headers::HeaderDifferenceReport;
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedHttpExchange {
+pub(crate) struct RecordedHttpExchange {
     #[serde(default)]
     id: Option<String>,
     #[serde(skip)]
@@ -146,7 +146,7 @@ pub(crate) struct ReplayHttpExchange {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedTcpGatewayConnection {
+pub(crate) struct RecordedTcpGatewayConnection {
     domain: Option<String>,
     fake_addr: String,
     client_to_server_bytes: u64,
@@ -200,7 +200,7 @@ pub(super) fn case_exchange_index(exchanges: &[ReplayHttpExchange]) -> CaseExcha
     index
 }
 
-pub(super) fn extend_case_exchange_index(
+pub(crate) fn extend_case_exchange_index(
     index: &mut CaseExchangeIndex,
     exchanges: &[ReplayHttpExchange],
     start: usize,
@@ -260,7 +260,7 @@ pub(super) struct RecordedHttpExchangeSummary {
     status: Option<u16>,
 }
 
-pub(super) fn register_http_exchange(
+pub(crate) fn register_http_exchange(
     record: RecordedHttpExchange,
     source: ReplaySource,
     case_id: Option<&str>,
@@ -383,7 +383,7 @@ pub(super) fn register_http_exchange(
     Ok(())
 }
 
-pub(super) fn register_tcp_connection_blackhole(
+pub(crate) fn register_tcp_connection_blackhole(
     record: RecordedTcpGatewayConnection,
     source: ReplaySource,
     case_id: Option<&str>,
@@ -419,7 +419,7 @@ pub(super) fn register_tcp_connection_blackhole(
     Ok(())
 }
 
-pub(super) fn observe_recorded_policy_exchanges(
+pub(crate) fn observe_recorded_policy_exchanges(
     policy: &mut ReplayPolicyRuntime,
     exchanges: &[ReplayHttpExchange],
 ) {
@@ -920,7 +920,7 @@ pub(crate) mod tests;
 #[path = "http/cross_case/tests.rs"]
 mod cross_case_tests;
 
-pub(super) fn release_consumed_payloads(
+pub(crate) fn release_consumed_payloads(
     exchanges: &mut [ReplayHttpExchange],
     cases: &BTreeMap<String, super::ReplayCase>,
 ) {

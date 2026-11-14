@@ -57,7 +57,7 @@ enum IncomingEvent {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedConnection {
+pub(crate) struct RecordedConnection {
     target_host: String,
     target_port: u16,
     advertised_ip: Ipv4Addr,
@@ -65,7 +65,7 @@ pub(super) struct RecordedConnection {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedExchange {
+pub(crate) struct RecordedExchange {
     connection_id: Uuid,
     sequence: u64,
     target_host: String,
@@ -209,7 +209,7 @@ impl MotanReplayState {
         })
     }
 
-    pub(super) fn register_connection(
+    pub(crate) fn register_connection(
         &mut self,
         record: RecordedConnection,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
@@ -229,7 +229,7 @@ impl MotanReplayState {
         )
     }
 
-    pub(super) fn reject_proxy_error(record: &super::RecordedProxyError) -> Result<()> {
+    pub(crate) fn reject_proxy_error(record: &super::RecordedProxyError) -> Result<()> {
         if record.protocol == "motan" {
             return Err(anyhow!(
                 "unsafe Motan dependency proxy error: {}",
@@ -239,7 +239,7 @@ impl MotanReplayState {
         Ok(())
     }
 
-    pub(super) fn register_exchange(
+    pub(crate) fn register_exchange(
         &mut self,
         record: RecordedExchange,
         source: ReplaySource,
@@ -310,7 +310,7 @@ impl MotanReplayState {
         Ok(())
     }
 
-    pub(super) fn register_heartbeat(
+    pub(crate) fn register_heartbeat(
         &mut self,
         record: RecordedExchange,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,

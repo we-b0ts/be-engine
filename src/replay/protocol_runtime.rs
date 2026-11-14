@@ -8,6 +8,18 @@ pub(crate) enum InFlightScope {
 }
 
 pub(crate) trait ReplayProtocolSet: std::fmt::Debug + Send + Sized + 'static {
+    type SourceRecord: serde::de::DeserializeOwned + Send + 'static;
+    type SourceAppend;
+    fn register_source(
+        &mut self,
+        batch: dependencies::SourceBatch<'_, Self::SourceRecord>,
+        native: &mut native::Inventory,
+        targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+    ) -> Result<Self::SourceAppend>;
+    fn index_source(&mut self, appended: &Self::SourceAppend);
+    fn observe_source(&self, appended: &Self::SourceAppend, policy: &mut ReplayPolicyRuntime);
+    fn release_payloads(&mut self, cases: &BTreeMap<String, ReplayCase>);
+
     fn case_is_dirty(&self, case: &str) -> bool;
     fn pending_diagnostic(&self) -> BTreeMap<String, Value>;
     fn prepare_candidates(&mut self);

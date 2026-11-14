@@ -471,7 +471,7 @@ async fn run_active(
     crate::dependency_index::store::prepare_with_timeout(
         layout.case_source.clone(),
         config.replay_loading.index_timeout_seconds,
-        crate::replay::validate_index_record,
+        crate::protocols::replay::source::validate_index_record,
     )
     .await
     .context("Replay dependency index preparation failed")?;

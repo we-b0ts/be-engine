@@ -13,7 +13,7 @@ pub(in crate::replay) use inventory::resolve_case;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
-pub(in crate::replay) enum RecordedReference {
+pub(crate) enum RecordedReference {
     Capture { exchange_id: Uuid },
     Redis { connection_id: Uuid, sequence: u64 },
     RedisRpcPush { connection_id: Uuid, sequence: u64 },

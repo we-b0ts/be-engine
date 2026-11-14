@@ -13,10 +13,10 @@ use tokio::sync::Mutex;
 use crate::dependency::DependencyExchangeOutcome;
 use crate::kafka::{decode_request, read_frame, replay_supports, write_frame};
 
+pub(super) use matcher::FiniteExchange;
 pub(crate) use matcher::KafkaReplayState;
-pub(super) use matcher::{
-    FiniteExchange, RecordedKafkaConnection, RecordedKafkaDelivery, RecordedKafkaFetch,
-    RecordedKafkaProduce,
+pub(crate) use matcher::{
+    RecordedKafkaConnection, RecordedKafkaDelivery, RecordedKafkaFetch, RecordedKafkaProduce,
 };
 pub(super) use report::KafkaProtocolReport;
 

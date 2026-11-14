@@ -4,7 +4,7 @@ pub(super) use crate::replay::recording_evidence::{case_id, files};
 use std::path::Path;
 
 impl RecordedHttpExchange {
-    pub(in crate::replay) fn decrypt_request_headers(&mut self, file: &Path) -> Result<()> {
+    pub(crate) fn decrypt_request_headers(&mut self, file: &Path) -> Result<()> {
         self.protected_request_headers =
             crate::request_headers::decrypt_dependency_headers(&mut self.request_headers, file)
                 .context("failed to decrypt recorded HTTP dependency headers")?;

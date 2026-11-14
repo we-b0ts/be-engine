@@ -4,7 +4,7 @@ use control::dependency_tail::RecordedReference;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::AsyncReadExt;
 
-pub(super) async fn load_refs(case_dir: &Path) -> Result<BTreeSet<RecordedReference>> {
+pub(crate) async fn load_refs(case_dir: &Path) -> Result<BTreeSet<RecordedReference>> {
     let directory = case_dir.to_owned();
     tokio::task::spawn_blocking(move || control::dependency_tail::load_cleanup_refs(&directory))
         .await
@@ -118,42 +118,6 @@ pub(in crate::replay) async fn accept_peer_end(
         )
         .await;
     }
-}
-
-pub(super) fn authorize(
-    records: &mut [(usize, dependencies::DependencyRecord)],
-    references: &BTreeSet<RecordedReference>,
-) -> Result<()> {
-    for (_, record) in records {
-        match record {
-            dependencies::DependencyRecord::MysqlExchange(record) => {
-                if record.connection_id.zip(record.query_sequence).is_some_and(
-                    |(connection_id, sequence)| {
-                        references.contains(&RecordedReference::Mysql {
-                            connection_id,
-                            sequence,
-                        })
-                    },
-                ) {
-                    record.authorize_lifecycle_cleanup()?;
-                }
-            }
-            dependencies::DependencyRecord::RedisExchange(record) => {
-                if references.contains(&record.cleanup_reference()) {
-                    record.authorize_lifecycle_cleanup()?;
-                }
-            }
-            dependencies::DependencyRecord::HttpExchange(record)
-                if record.exchange_id().is_some_and(|exchange_id| {
-                    references.contains(&RecordedReference::Http { exchange_id })
-                }) =>
-            {
-                record.authorize_lifecycle_cleanup()?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -49,7 +49,7 @@ mod native_source;
 pub(in crate::replay) mod observations;
 mod preparation;
 mod process_owned;
-pub(in crate::replay) mod pubsub;
+pub(crate) mod pubsub;
 #[cfg(test)]
 mod read_back_tests;
 pub(in crate::replay) mod read_commutation;
@@ -82,14 +82,14 @@ use super::admission::{Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle};
 use delivery::deliver_redis_exchange;
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedConnection {
+pub(crate) struct RecordedConnection {
     target_host: String,
     target_port: u16,
     replay_safe: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub(super) struct RecordedExchange {
+pub(crate) struct RecordedExchange {
     #[serde(skip)]
     lifecycle_cleanup: bool,
     // Subscription aliases retain event identity without changing existing
@@ -222,7 +222,7 @@ pub(crate) struct RedisReplayState {
     request_observation_retained: bool,
     pub(in crate::replay) target_observations:
         Option<crate::replay::target_observation::TargetObservations>,
-    pub(in crate::replay) pubsub: pubsub::PubSubState,
+    pub(crate) pubsub: pubsub::PubSubState,
     pub(super) request_contracts: super::policy::request_contract::RequestContracts,
     pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,
     connection_scopes: ConnectionScopes,
@@ -350,7 +350,7 @@ impl RedisReplayState {
     pub(in crate::replay) fn validate_pubsub(&self) -> Result<()> {
         self.pubsub.validate_subscriptions(&self.exchanges)
     }
-    pub(super) fn register_connection(
+    pub(crate) fn register_connection(
         &mut self,
         record: RecordedConnection,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
@@ -370,7 +370,7 @@ impl RedisReplayState {
         )
     }
 
-    pub(super) fn reject_proxy_error(record: &super::RecordedProxyError) -> Result<()> {
+    pub(crate) fn reject_proxy_error(record: &super::RecordedProxyError) -> Result<()> {
         if record.protocol == "redis" {
             return Err(anyhow!(
                 "unsafe {} dependency proxy error: {}",
@@ -381,7 +381,7 @@ impl RedisReplayState {
         Ok(())
     }
 
-    pub(super) fn register_exchange(
+    pub(crate) fn register_exchange(
         &mut self,
         record: RecordedExchange,
         source: ReplaySource,

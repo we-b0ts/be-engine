@@ -53,7 +53,9 @@ pub(in crate::replay) async fn prepare_source(
     Ok(())
 }
 
-pub(in crate::replay) fn source_fast_cap(state: &ReplayState) -> Option<u64> {
+pub(in crate::replay) fn source_fast_cap<P: crate::replay::ReplayProtocolSet>(
+    state: &crate::replay::RuntimeState<P>,
+) -> Option<u64> {
     (state.stream_timing == Some(ReplayStreamTiming::Fast)).then_some(state.stream_interval_cap_ms)
 }
 

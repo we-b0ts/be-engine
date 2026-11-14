@@ -44,7 +44,11 @@ fn fixture() -> Fixture {
     drop(output);
     // Use the ordinary index builder and page publication interfaces to produce
     // the same immutable sibling artifact consumed after recording handoff.
-    let (sealed, cache) = load_global_index(&path, crate::replay::validate_index_record).unwrap();
+    let (sealed, cache) = load_global_index(
+        &path,
+        crate::protocols::replay::source::validate_index_record,
+    )
+    .unwrap();
     sealed.records.stage_into(&cache, &original).unwrap();
     for lane in &sealed.notifications {
         lane.pages.stage_into(&cache, &original).unwrap();
@@ -150,7 +154,11 @@ async fn recording_process_index_survives_copy_and_missing_pages_fall_back_local
 
     // A copy without the packaged pages must build in Replay's local cache.
     fs::remove_dir_all(packaged.join(".global-replay-pages")).unwrap();
-    let (rebuilt, root) = load_global_index(&scope, crate::replay::validate_index_record).unwrap();
+    let (rebuilt, root) = load_global_index(
+        &scope,
+        crate::protocols::replay::source::validate_index_record,
+    )
+    .unwrap();
     assert!(root.starts_with(replay.join("local/dependency-index")));
     assert_eq!(rebuilt.sha256, index.sha256);
     let (_, warm) = load_global_index(&scope, reject_rescan).unwrap();
@@ -252,7 +260,7 @@ fn copied_sealed_global_size_or_mtime_changes_use_the_normal_rebuild() {
     static VALIDATIONS: AtomicUsize = AtomicUsize::new(0);
     fn validate(value: &Value) -> Result<()> {
         VALIDATIONS.fetch_add(1, Ordering::Relaxed);
-        crate::replay::validate_index_record(value)
+        crate::protocols::replay::source::validate_index_record(value)
     }
     for mutation in ["size", "mtime"] {
         let fixture = fixture();
@@ -310,7 +318,7 @@ fn absent_invalid_or_unsupported_sealed_fragments_fall_back_to_rebuild() {
         }
         let (index, root) = load_global_index(
             &fixture.copied.join("global-dependencies.jsonl"),
-            crate::replay::validate_index_record,
+            crate::protocols::replay::source::validate_index_record,
         )
         .unwrap();
         assert_ne!(root, fixture.copied, "{mutation}");

@@ -56,7 +56,7 @@ impl PreparedCaseRules {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::replay) struct SourceScopeIdentity {
+pub(crate) struct SourceScopeIdentity {
     pub sha256: String,
     pub source_bytes: u64,
 }

@@ -12,7 +12,7 @@ use crate::config::process_owned_dependencies::{
     matches_redis_numeric_key_pattern, redis_rule_matches,
 };
 use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
-use crate::replay::dependencies::DependencyRecord;
+use crate::protocols::replay::source::DependencyRecord;
 use crate::replay::model::ReplaySource;
 use crate::replay::report::command::CommandSnapshotOverlayReport;
 

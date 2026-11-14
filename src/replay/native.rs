@@ -11,7 +11,7 @@ pub(crate) use connection::handle_connection;
 pub(super) use report::ProtocolReport;
 
 #[derive(Debug)]
-pub(super) struct Inventory {
+pub(crate) struct Inventory {
     pub core: ExchangeInventory,
     pub providers: Arc<crate::protocols::DependencyProviders>,
     pub contracts: policy::request_contract::RequestContracts,

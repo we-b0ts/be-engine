@@ -110,6 +110,16 @@ address discovery and materialization. The root HTTP adapter owns route
 registration, managed processes and provenance. See
 [dependency protocols and response rules](dependency-provider.md).
 
+`RuntimeState<P>` owns shared Replay session context and an application-supplied
+protocol set. `protocols/replay` supplies native connection dispatch, Source record
+decoding, inventory preparation, sequence references and lifecycle projections.
+`replay/dependencies` owns authenticated Source traversal and common transport
+validation. `replay/deferred` owns serialized installation, endpoint validation,
+shared rule-source observation, execution-plan publication and failed-install
+retry rejection. Native append checkpoints retain stable positions across those
+steps. The application retains the frozen native session-identity snapshot used
+by each deferred registration.
+
 Run tests and Clippy across the workspace so extracted library tests remain
 part of the ordinary verification path. Product source files in `crates/`
 retain the same responsibility and 1000-line requirements as `src/`.

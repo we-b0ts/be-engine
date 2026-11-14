@@ -20,7 +20,6 @@ pub(super) struct CaseInventory {
 pub(super) struct DeferredDependencies {
     pub files: BTreeMap<String, CaseInventory>,
     pub reader: Arc<std::sync::Mutex<RecordReader>>,
-    pub identities: HashMap<Uuid, MysqlDependencyIdentity>,
     pub process_rules: Vec<crate::BackgroundDependencyRuleConfig>,
     pub known_targets: BTreeMap<TargetKey, ReplayTarget>,
     pub timeout: std::time::Duration,
@@ -36,7 +35,6 @@ impl DeferredDependencies {
     pub fn new(
         files: BTreeMap<String, CaseInventory>,
         reader: Arc<std::sync::Mutex<RecordReader>>,
-        identities: HashMap<Uuid, MysqlDependencyIdentity>,
         process_rules: Vec<crate::BackgroundDependencyRuleConfig>,
         seconds: u64,
         cache_bytes: usize,
@@ -50,7 +48,6 @@ impl DeferredDependencies {
             prefetch_rx: Mutex::new(prefetch_rx),
             files,
             reader,
-            identities,
             process_rules,
             timeout: std::time::Duration::from_secs(seconds),
             serial: Mutex::new(()),
@@ -108,27 +105,10 @@ pub(super) fn register_index_targets(
     Ok(())
 }
 
-/// Retain small connection/setup and Redis evidence before listeners become ready.
-/// Redis overlays and lane classification require a complete selected inventory.
-pub(super) fn startup_records(
-    path: &Path,
-    index: &FileIndex,
-    reader: &mut RecordReader,
-) -> Result<Vec<(usize, dependencies::DependencyRecord)>> {
-    let mut records = BTreeMap::new();
-    for (line, value) in &index.metadata {
-        if value["event_type"] != "indexed_advertised_target" {
-            records.insert(*line, serde_json::from_value(value.clone())?);
-        }
-    }
-    for entry in &index.redis {
-        let raw = reader.read(path, &index.stamp, &entry.location)?;
-        records.insert(entry.location.line, serde_json::from_slice(&raw)?);
-    }
-    Ok(records.into_iter().collect())
-}
-
-pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) -> Result<()> {
+pub(super) async fn prepare_case<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
+    case_id: &str,
+) -> Result<()> {
     let deferred = state.lock().await.deferred.clone();
     let Some(deferred) = deferred else {
         return Ok(());
@@ -186,7 +166,8 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
     let task = tokio::task::spawn_blocking(move || -> Result<_> {
         let (raw, lines) = scoped_read::read(&read_path, &inventory.index, &reader)?;
         let text = std::str::from_utf8(&raw)?;
-        let mut records = dependencies::parse_dependency_records(&read_path, text)?;
+        let mut records =
+            dependencies::parse_dependency_records::<P::SourceRecord>(&read_path, text)?;
         if let Some(lines) = lines {
             for (line, _) in &mut records {
                 *line = *lines
@@ -254,52 +235,35 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
     result
 }
 
-fn install(
-    state: &mut ReplayState,
+fn install<P: ReplayProtocolSet>(
+    state: &mut RuntimeState<P>,
     deferred: &DeferredDependencies,
     case_id: &str,
     path: &Path,
     inventory: CaseInventory,
     raw: &[u8],
-    records: Vec<(usize, dependencies::DependencyRecord)>,
+    records: Vec<(usize, P::SourceRecord)>,
 ) -> Result<()> {
-    let mysql_start = state.protocols.mysql.exchanges.len();
-    let http_start = state.protocols.http_exchanges.len();
-    // Preserve assigned addresses and validate every late target against startup inventory.
+    // Preserve assigned addresses and validate late targets against the startup inventory.
     let mut targets = deferred.known_targets.clone();
-    let mut identities = deferred.identities.clone();
-    dependencies::register_dependency_records(
-        path,
-        records,
-        &inventory.skip,
-        ReplaySource::Case,
-        Some(case_id),
-        &mut state.protocols.mysql,
-        &mut state.protocols.http_exchanges,
-        &mut state.protocols.http_blackholes,
-        &mut state.protocols.redis,
-        &mut state.protocols.memcached,
-        &mut state.protocols.kafka,
-        &mut state.protocols.motan,
-        &mut targets,
-        &mut identities,
-        &deferred.process_rules,
-        &inventory.cleanup,
+    let appended = state.protocols.register_source(
+        dependencies::SourceBatch {
+            path,
+            records,
+            skip: &inventory.skip,
+            source: ReplaySource::Case,
+            case: Some(case_id),
+            process_rules: &deferred.process_rules,
+            cleanup: &inventory.cleanup,
+        },
         &mut state.native,
+        &mut targets,
     )?;
     ensure!(
         targets.len() == deferred.known_targets.len(),
         "case preparation found an endpoint absent from its dependency index"
     );
-    http::extend_case_exchange_index(
-        &mut state.protocols.http_case_exchange_index,
-        &state.protocols.http_exchanges,
-        http_start,
-    );
-    state
-        .protocols
-        .http_ingress
-        .register(&state.protocols.http_exchanges[http_start..]);
+    state.protocols.index_source(&appended);
     if let Some(policy) = &mut state.replay_policy {
         policy
             .request_contracts
@@ -307,27 +271,7 @@ fn install(
         if policy.dynamic_values.enabled() {
             policy.dynamic_values.observe_source(case_id, raw)?;
         }
-        for (offset, exchange) in state.protocols.mysql.exchanges[mysql_start..]
-            .iter()
-            .enumerate()
-        {
-            policy.observe_recorded_mysql_exchange(
-                exchange.case_id.as_deref(),
-                &ReplaySessionIdentity {
-                    target: Some(exchange.identity.target.clone()),
-                    database: exchange.identity.database.clone(),
-                    username: exchange.identity.username.clone(),
-                },
-                &exchange.record.command,
-                exchange.record.sql.as_deref(),
-                Some(mysql_start + offset),
-            );
-        }
-        http::observe_recorded_policy_exchanges(
-            policy,
-            &state.protocols.http_exchanges[http_start..],
-        );
-        memcached::observe_recorded_policy_exchanges(policy, &state.protocols.memcached);
+        state.protocols.observe_source(&appended, policy);
     }
     state.prepare_native_candidates();
     state.install_case_execution_plan(
@@ -342,34 +286,8 @@ fn install(
 
 /// Keep vector positions, metadata, counters and unavailable statuses stable.
 /// Responses currently owned by a driver are retained until a later sweep.
-pub(super) fn release_consumed_payloads(state: &mut ReplayState) {
-    if state.deferred.is_none() {
-        return;
+pub(super) fn release_consumed_payloads<P: ReplayProtocolSet>(state: &mut RuntimeState<P>) {
+    if state.deferred.is_some() {
+        state.protocols.release_payloads(&state.cases);
     }
-    for exchange in &mut state.protocols.mysql.exchanges {
-        if exchange.source == ReplaySource::Case
-            && exchange.status.is_consumed()
-            && exchange.case_id.as_ref().is_some_and(|id| {
-                state
-                    .cases
-                    .get(id)
-                    .is_some_and(|case| case.status == ReplayCaseStatus::Ended)
-            })
-        {
-            exchange.record.response.rows = Vec::new();
-        }
-    }
-    http::release_consumed_payloads(&mut state.protocols.http_exchanges, &state.cases);
-    state
-        .protocols
-        .memcached
-        .release_consumed_payloads(&state.cases);
-    state
-        .protocols
-        .motan
-        .release_consumed_payloads(&state.cases);
-    state
-        .protocols
-        .kafka
-        .release_consumed_payloads(&state.cases);
 }

@@ -31,7 +31,7 @@ impl Recorder {
         let result = tokio::task::spawn_blocking(move || {
             crate::dependency_index::global::seal_recording_scopes(
                 &run,
-                crate::replay::validate_index_record,
+                crate::protocols::replay::source::validate_index_record,
             )
         })
         .await

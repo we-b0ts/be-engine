@@ -3,14 +3,14 @@ use super::*;
 use crate::replay::control::dependency_tail::RecordedReference;
 
 impl RecordedExchange {
-    pub(in crate::replay) fn cleanup_reference(&self) -> RecordedReference {
+    pub(crate) fn cleanup_reference(&self) -> RecordedReference {
         RecordedReference::Redis {
             connection_id: self.connection_id,
             sequence: self.sequence,
         }
     }
 
-    pub(in crate::replay) fn authorize_lifecycle_cleanup(&mut self) -> Result<()> {
+    pub(crate) fn authorize_lifecycle_cleanup(&mut self) -> Result<()> {
         ensure!(
             (self.outcome == DependencyExchangeOutcome::Response
                 && !self.replay_safe

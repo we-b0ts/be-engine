@@ -1,5 +1,5 @@
 //! Native driver initialization facts used by the shared replay lifecycle.
-pub(in crate::replay) use traffic_protocol_mysql::session_control::is_nonsemantic_session_setup;
+pub(crate) use traffic_protocol_mysql::session_control::is_nonsemantic_session_setup;
 pub(super) use traffic_protocol_mysql::session_setup::is_mysql_session_setup_sql;
 
 #[cfg(test)]

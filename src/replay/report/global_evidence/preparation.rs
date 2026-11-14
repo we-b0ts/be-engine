@@ -107,7 +107,7 @@ pub(crate) async fn prewarm(
         tokio::task::spawn_blocking(move || -> Result<_> {
             let (index, _) = crate::dependency_index::global::load_global_index(
                 &source,
-                crate::replay::validate_index_record,
+                crate::protocols::replay::source::validate_index_record,
             )?;
             ensure!(
                 index.stamp == stamp,

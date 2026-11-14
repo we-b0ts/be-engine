@@ -4,7 +4,7 @@ use traffic_protocol_mysql::session_constraints::{
     SessionContext as NativeContext, SourceExchange,
 };
 
-pub(in crate::replay) struct SessionContext<'a>(pub &'a [ReplayExchange]);
+pub(crate) struct SessionContext<'a>(pub &'a [ReplayExchange]);
 
 impl NativeContext for SessionContext<'_> {
     type Evidence = crate::dependency_index::RecordRef;
