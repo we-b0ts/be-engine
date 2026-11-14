@@ -1,25 +1,5 @@
-#[derive(Debug, Deserialize)]
-#[serde(tag = "event_type", rename_all = "snake_case")]
-pub(super) enum DependencyRecord {
-    MysqlConnection(Box<RecordedMysqlConnection>),
-    MysqlExchange(Box<RecordedMysqlExchange>),
-    HttpExchange(Box<http::RecordedHttpExchange>),
-    TcpGatewayConnection(Box<http::RecordedTcpGatewayConnection>),
-    RedisConnection(Box<redis::RecordedConnection>),
-    RedisExchange(Box<redis::RecordedExchange>),
-    RedisPubSubPush(Box<redis::pubsub::RecordedPush>),
-    MemcachedConnection(Box<memcached::RecordedConnection>),
-    MemcachedExchange(Box<memcached::RecordedExchange>),
-    KafkaConnection(Box<kafka::RecordedKafkaConnection>),
-    KafkaProduce(Box<kafka::RecordedKafkaProduce>),
-    KafkaFetch(Box<kafka::RecordedKafkaFetch>),
-    KafkaDelivery(Box<kafka::RecordedKafkaDelivery>),
-    MotanConnection(Box<motan::RecordedConnection>),
-    MotanExchange(Box<motan::RecordedExchange>),
-    ProxyError(Box<RecordedProxyError>),
-    #[serde(other)]
-    Other,
-}
+mod record;
+pub(super) use record::DependencyRecord;
 
 pub(crate) fn validate_index_record(value: &Value) -> Result<()> {
     validate_outcome(value)?;
@@ -69,6 +49,7 @@ pub(super) async fn load_dependency_file(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
+    native: &mut native::Inventory,
 ) -> Result<(
     super::execution_plan::SourceScopeIdentity,
     Vec<report::unused_source::CaptureFact>,
@@ -128,6 +109,7 @@ pub(super) async fn load_dependency_file(
         connection_identities,
         process_owned_dependencies,
         &cleanup,
+        native,
     )?;
     Ok((scope, facts))
 }
@@ -181,6 +163,7 @@ pub(super) fn register_dependency_records(
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
     cleanup: &BTreeSet<control::dependency_tail::RecordedReference>,
+    native: &mut native::Inventory,
 ) -> Result<()> {
     ensure!(
         cleanup.is_empty() || source == ReplaySource::Case && case_id.is_some(),
@@ -192,6 +175,9 @@ pub(super) fn register_dependency_records(
             continue;
         }
         match record {
+            DependencyRecord::Native(event) => {
+                native.register(event, source, case_id, *line, targets)?;
+            }
             DependencyRecord::MysqlConnection(connection) => {
                 if let Some(identity) = identity_from_connection(connection) {
                     let target = identity.target.clone();
@@ -296,7 +282,8 @@ pub(super) fn register_dependency_records(
             | DependencyRecord::KafkaConnection(_)
             | DependencyRecord::MotanConnection(_)
             | DependencyRecord::ProxyError(_)
-            | DependencyRecord::Other => continue,
+            | DependencyRecord::ConnectFailure
+            | DependencyRecord::Native(_) => continue,
             DependencyRecord::MysqlExchange(_) => {}
         }
         let DependencyRecord::MysqlExchange(exchange) = record else {

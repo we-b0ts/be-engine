@@ -6,6 +6,7 @@ const MAX_FAILURES: usize = 8;
 
 pub(super) fn failed(state: &ReplayState, case: &str) -> bool {
     state.dependency_tails.failure(case).is_some()
+        || state.native.case_has_runtime_failure(case)
         || state.unrecorded_case_ids.contains(case)
         || state.mysql.events.dirty_case_ids.contains(case)
         || state.redis.case_has_runtime_failure(case)
@@ -36,7 +37,7 @@ pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
         return serde_json::json!({"ok":true,"case_id":case,"failed":false,"failures":[],
             "has_response_time_copies":has_response_time_copies});
     }
-    let mut failures = Vec::new();
+    let mut failures = state.native.failures_for_case(case, MAX_FAILURES);
     // The primary request polls this endpoint while replay is still running.
     // Its bounded diagnostic does not need unused inventory or signed witnesses.
     macro_rules! project {

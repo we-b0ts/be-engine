@@ -13,6 +13,11 @@ use traffic_protocol::message::{
     ProjectedMessage, ProjectedValue, ProtocolMessage, ScalarEncoding,
 };
 
+mod delivery;
+pub use delivery::RenderedMessage;
+mod registry;
+pub use registry::{BindingRegistry, MessageSide};
+
 #[derive(Debug, Clone)]
 pub struct ValueRule {
     pub id: String,
@@ -60,6 +65,10 @@ impl std::fmt::Debug for PreparedMessage {
 }
 
 impl PreparedMessage {
+    pub(crate) fn structure(&self) -> &Value {
+        &self.projection.structure
+    }
+
     pub fn compile(native: &dyn ProtocolMessage, bindings: &[RuleBinding]) -> Result<Self> {
         let projection = native.project()?;
         let mut values = BTreeMap::<String, BoundValue>::new();
@@ -194,6 +203,20 @@ impl PreparedMessage {
         clocks: AnchorClocks,
         metadata: &dyn RuleMetadata,
     ) -> Result<BTreeMap<String, bytes::Bytes>> {
+        let (rendered, _) = self.render_projection(updates, clocks, metadata)?;
+        Ok(rendered
+            .values
+            .into_iter()
+            .map(|(location, value)| (location, value.bytes))
+            .collect())
+    }
+
+    fn render_projection(
+        &self,
+        updates: &BTreeMap<String, Value>,
+        clocks: AnchorClocks,
+        metadata: &dyn RuleMetadata,
+    ) -> Result<(ProjectedMessage, Comparison)> {
         let mut values = self.projection.values.clone();
         for (location, logical) in updates {
             let bound = self
@@ -219,16 +242,12 @@ impl PreparedMessage {
             structure: self.projection.structure.clone(),
             values,
         };
+        let comparison = self.compare_projection(&rendered, clocks, metadata);
         ensure!(
-            self.compare_projection(&rendered, clocks, metadata)
-                .passed(),
+            comparison.passed(),
             "derived native values violate their field contracts"
         );
-        Ok(rendered
-            .values
-            .into_iter()
-            .map(|(location, value)| (location, value.bytes))
-            .collect())
+        Ok((rendered, comparison))
     }
 }
 
@@ -247,3 +266,6 @@ fn difference(location: &str, reason: &str) -> Difference {
         reason: reason.into(),
     }
 }
+
+#[cfg(test)]
+mod tests;

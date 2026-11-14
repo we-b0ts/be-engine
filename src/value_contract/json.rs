@@ -12,13 +12,13 @@ pub(crate) use super::time_copies::VerifiedTimeCopy;
 pub(crate) use kernel::diagnosis;
 pub(crate) use kernel::{
     AnchorClocks, Comparison, Field, LeafContext, LeafObservations, NonceIdentity, VerifiedField,
-    core_format, parse_time_pair, parse_time_value, pointer_observed,
+    parse_time_pair, parse_time_value, pointer_observed,
 };
 pub(crate) use native::NativeField;
 pub(crate) use traffic_contract::comparison::Difference;
 pub(crate) use traffic_contract::identity::{key as identity_key, token as identity_token};
 
-struct PolicyMetadata;
+pub(crate) struct PolicyMetadata;
 impl kernel::RuleMetadata for PolicyMetadata {
     fn permits_scalar_composition(&self, rule: &str) -> bool {
         rule == crate::policy::GLOBAL_JSON_ID

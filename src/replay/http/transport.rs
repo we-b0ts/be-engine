@@ -33,12 +33,9 @@ pub(in crate::replay) async fn handle_http_replay_connection(
                 })?;
             serve_http_io(tls, target, state, control, termination).await
         }
-        ReplayProtocol::Auto
-        | ReplayProtocol::Mysql
-        | ReplayProtocol::Redis
-        | ReplayProtocol::Memcached
-        | ReplayProtocol::Kafka
-        | ReplayProtocol::Motan => Err(anyhow!("HTTP replay received a non-HTTP target")),
+        protocol => Err(anyhow!(
+            "HTTP replay received incompatible protocol {protocol:?}"
+        )),
     }
 }
 

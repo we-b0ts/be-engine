@@ -2,6 +2,8 @@ use super::super::*;
 
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in crate::replay) dependency_protocols: BTreeMap<String, native::ProtocolReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) dependency_sequence_missing: Vec<sequence::MissingDependency>,
     pub(in crate::replay) batch_reconciliation: Option<reconciliation::BatchReconciliation>,

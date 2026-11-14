@@ -366,6 +366,7 @@ impl ReplayState {
             || self.finalized_at.is_some()
             || self.unrecorded_case_ids.contains(case)
             || self.mysql.events.dirty_case_ids.contains(case)
+            || self.native.case_has_runtime_failure(case)
             || self.redis.case_has_runtime_failure(case)
             || self.http_events.case_has_runtime_failure(case)
             || !tail
@@ -505,6 +506,7 @@ async fn drain_selected(
         );
         if state.unrecorded_case_ids.contains(case_id)
             || state.mysql.events.dirty_case_ids.contains(case_id)
+            || state.native.case_has_runtime_failure(case_id)
             || state.redis.case_has_runtime_failure(case_id)
             || state.http_events.case_has_runtime_failure(case_id)
         {

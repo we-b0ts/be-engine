@@ -4,10 +4,14 @@ use bytes::BytesMut;
 use std::any::Any;
 use std::sync::Arc;
 
+pub mod connection;
 pub mod evidence;
+mod identity;
 pub mod io;
 pub mod message;
 pub mod observation;
+pub mod transport;
+pub use identity::ProtocolId;
 
 /// A process-local provider factory. Connection ownership, scheduling and
 /// persistence belong to the framework.
@@ -16,6 +20,9 @@ pub trait DependencyProvider: Send + Sync {
     fn recognize(&self, probe: Probe<'_>) -> Recognition;
     fn create_session(&self) -> Result<Session>;
     fn evidence(&self) -> Option<Arc<dyn evidence::EvidenceAdapter>> {
+        None
+    }
+    fn native_protocol(&self) -> Option<Arc<dyn connection::NativeProtocol>> {
         None
     }
 }
@@ -227,6 +234,17 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
 
     pub fn evidence(&self) -> &evidence::EvidenceRegistry {
         &self.evidence
+    }
+
+    pub fn registrations(&self) -> &[RegisteredProtocol<Kind>] {
+        &self.providers
+    }
+
+    pub fn event_provider(&self, event: &serde_json::Value) -> Option<&RegisteredProtocol<Kind>> {
+        let owner = self.evidence.owner(event)?;
+        self.providers
+            .iter()
+            .find(|entry| entry.provider.name() == owner)
     }
 
     pub fn register_evidence(

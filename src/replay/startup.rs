@@ -77,7 +77,7 @@ impl StartupPhase {
 }
 impl ReplayState {
     fn startup_counts(&mut self, close: bool) -> BTreeMap<String, Counts> {
-        BTreeMap::from([
+        let mut counts = BTreeMap::from([
             ("mysql".into(), self.mysql.startup_counts(close)),
             (
                 "http".into(),
@@ -87,7 +87,11 @@ impl ReplayState {
             ("memcached".into(), self.memcached.startup_counts(close)),
             ("motan".into(), self.motan.startup_counts(close)),
             ("kafka".into(), self.kafka.startup_counts(close)),
-        ])
+        ]);
+        for (protocol, native) in self.native.startup_counts(close) {
+            counts.entry(protocol).or_default().merge(native);
+        }
+        counts
     }
     pub(super) fn initialize_startup_phase(&mut self) {
         self.startup_phase.inventory = self

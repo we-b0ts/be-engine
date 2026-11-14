@@ -84,3 +84,7 @@ pub fn is_client_library_info_exchange(exchange: &RedisExchangeEvent) -> bool {
         .collect::<Option<Vec<_>>>();
     args.is_some_and(|args| crate::is_client_library_info(&exchange.command, &args))
 }
+mod session;
+mod subscriptions;
+pub use session::{CaptureSessionState, is_terminal_quit, sanitize_and_classify};
+pub use subscriptions::Subscriptions;

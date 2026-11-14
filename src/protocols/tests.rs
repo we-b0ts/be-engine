@@ -57,6 +57,10 @@ impl DependencyProvider for TrackedProvider {
                     stats: self.stats.clone(),
                 }))
             }
+            _ => anyhow::bail!(
+                "tracked fixture has no session adapter for {}",
+                self.kind.as_str()
+            ),
         })
     }
 }

@@ -48,6 +48,9 @@ pub(super) async fn detect_with_providers(
             ClientProtocolDetection::Match(DetectedClientProtocol::Tls) => {
                 return Ok(Some(ReplayProtocol::Https));
             }
+            ClientProtocolDetection::Match(DetectedClientProtocol::Registered(protocol)) => {
+                return Ok(Some(ReplayProtocol::registered(protocol)));
+            }
             ClientProtocolDetection::NeedMore if len < MAX_SNIFF_BYTES => {
                 sleep(RETRY_INTERVAL).await;
             }

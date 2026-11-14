@@ -5,6 +5,12 @@ use crate::observation::{NativeSummaries, NativeSummary, TrafficInteraction};
 use anyhow::{Result, ensure};
 use serde_json::Value;
 
+/// Authenticated storage is owned by the host. Protocol implementations decode
+/// their native payload without depending on its physical location or reader.
+pub trait RecordSource {
+    fn load<T: serde::de::DeserializeOwned>(&self) -> Result<T>;
+}
+
 pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
     fn event_types(&self) -> &'static [&'static str];
@@ -128,6 +134,11 @@ impl EvidenceRegistry {
             return false;
         };
         self.registrations[*index].adapter.supports_replay(event)
+    }
+
+    pub fn owner(&self, event: &Value) -> Option<&str> {
+        let index = self.events.get(event["event_type"].as_str()?)?;
+        Some(&self.registrations[*index].name)
     }
 
     /// Part of off-path inventory cache identity, independent of payload bytes.

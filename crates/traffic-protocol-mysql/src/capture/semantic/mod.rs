@@ -6,20 +6,20 @@ use chrono::Utc;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::DependencyExchangeOutcome;
-use crate::mysql::wire::{ClientCommand, MysqlPacket};
-use crate::recorder::{
-    MysqlExchangeEvent, MysqlResponseEvent, MysqlWirePrefixPacket, capture_body,
-};
+use crate::events::{MysqlExchangeEvent, MysqlResponseEvent};
+use crate::semantic::MysqlWirePrefixPacket;
+use crate::{ClientCommand, MysqlPacket};
+use traffic_model::DependencyExchangeOutcome;
+use traffic_model::capture::capture_body;
 
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
-use traffic_protocol_mysql::semantic::*;
-use traffic_protocol_mysql::semantic::{SemanticRequest, SemanticSession};
+use crate::semantic::*;
+use crate::semantic::{SemanticRequest, SemanticSession};
 #[cfg(test)]
-use traffic_protocol_mysql::types::*;
+use crate::types::*;
 
 const MAX_TERMINATION_PREFIX_PACKETS: usize = 4096;
 
@@ -32,7 +32,7 @@ pub(crate) struct MysqlSemanticTracker {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct MysqlExchangeContext {
+pub struct MysqlExchangeContext {
     pub route_name: Option<String>,
     pub target_host: Option<String>,
     pub target_port: Option<u16>,

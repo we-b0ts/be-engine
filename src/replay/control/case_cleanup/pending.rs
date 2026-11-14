@@ -32,6 +32,7 @@ pub(super) fn snapshot(state: &ReplayState) -> Value {
     json!({
         "mysql":{"count":mysql_count, "references":mysql_references,
             "omitted":mysql_count.saturating_sub(MAX_REFERENCES)},
+        "dependency_protocols":state.native.in_flight_diagnostic(),
         "redis":state.redis.case_in_flight_diagnostic(),
         "http":state.http_case_in_flight_diagnostic(),
         "http_ingress":state.http_ingress.pending_diagnostic(),

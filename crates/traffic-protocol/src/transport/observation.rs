@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Observe bytes before a protocol decoder can turn EOF into a parse error.
-pub(crate) struct ObservedIo<T> {
+pub struct ObservedIo<T> {
     inner: T,
     termination: ConnectionTermination,
     side: TerminationSide,
@@ -20,7 +20,7 @@ struct FrameCapture {
 }
 
 impl<T> ObservedIo<T> {
-    pub(crate) fn new(inner: T, termination: ConnectionTermination, side: TerminationSide) -> Self {
+    pub fn new(inner: T, termination: ConnectionTermination, side: TerminationSide) -> Self {
         Self {
             inner,
             termination,
@@ -29,20 +29,20 @@ impl<T> ObservedIo<T> {
             frame_capture: None,
         }
     }
-    pub(crate) fn get_ref(&self) -> &T {
+    pub fn get_ref(&self) -> &T {
         &self.inner
     }
-    pub(crate) fn get_mut(&mut self) -> &mut T {
+    pub fn get_mut(&mut self) -> &mut T {
         &mut self.inner
     }
-    pub(crate) fn bytes_read(&self) -> u64 {
+    pub fn bytes_read(&self) -> u64 {
         self.bytes_read
     }
 
     /// Retain the current decoder input so an interrupted frame can still be
     /// forwarded before its observed FIN/RST. This does not certify replayable
     /// framing, and callers must reject evidence when this bound is exceeded.
-    pub(crate) fn begin_capture(&mut self, max_bytes: usize) {
+    pub fn begin_capture(&mut self, max_bytes: usize) {
         let capture = self.frame_capture.get_or_insert_with(|| FrameCapture {
             bytes: Vec::new(),
             limit: max_bytes,
@@ -53,14 +53,14 @@ impl<T> ObservedIo<T> {
         capture.truncated = false;
     }
 
-    pub(crate) fn captured(&self) -> &[u8] {
+    pub fn captured(&self) -> &[u8] {
         self.frame_capture
             .as_ref()
             .map_or(&[], |capture| capture.bytes.as_slice())
     }
 
     #[cfg(test)]
-    pub(crate) fn capture_truncated(&self) -> bool {
+    pub fn capture_truncated(&self) -> bool {
         self.frame_capture
             .as_ref()
             .is_some_and(|capture| capture.truncated)

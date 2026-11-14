@@ -21,33 +21,21 @@ use crate::dependency::TerminationSide;
 use crate::dependency::termination::{ConnectionControl, ConnectionTermination, ObservedIo};
 use crate::mysql::access::analyze_command;
 use crate::mysql::wire::{
-    MysqlPacket, ServerPacketInfo, clear_client_compression_capability,
-    clear_server_compression_capability, parse_client_command, parse_handshake_response,
-    parse_server_packet, readonly_error_packet,
+    MysqlPacket, clear_client_compression_capability, clear_server_compression_capability,
+    parse_client_command, parse_handshake_response, parse_server_packet, readonly_error_packet,
 };
-use crate::recorder::{
-    MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
-    ProxyErrorEvent, RecorderEvent, capture_body, capture_body_with_original_len,
-};
+use crate::recorder::{MysqlConnectionEvent, MysqlQueryEvent, ProxyErrorEvent, RecorderEvent};
 use crate::recording_control::RecordingListener;
 
 #[cfg(test)]
-mod continuation_tests;
-#[cfg(test)]
 mod fifo_tests;
 mod ownership;
-mod response;
-mod semantic;
 #[cfg(test)]
 mod tests;
 mod tls;
-mod tracker;
 
 use ownership::{QueryDependencyOwnerships, record_event, record_query_completion};
-#[cfg(test)]
-use response::MysqlResponseTracker;
-use semantic::MysqlExchangeContext;
-use tracker::MysqlQueryTracker;
+use traffic_protocol_mysql::capture::{MysqlExchangeContext, MysqlQueryTracker};
 
 trait MysqlIo: AsyncRead + AsyncWrite + Unpin + Send {}
 

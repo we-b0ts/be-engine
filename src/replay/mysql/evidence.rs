@@ -1,57 +1,7 @@
 //! Result rows are delivery evidence; session and projection facts stay resident.
 use super::*;
+#[cfg(test)]
 use crate::DependencyExchangeOutcome;
-
-impl RecordedMysqlExchange {
-    /// Exact rows in a complete result, including resident shape metadata after
-    /// lazy payload detachment. Partial or malformed results have no exact count.
-    pub(in crate::replay) fn result_row_count(&self) -> Option<usize> {
-        let response = &self.response;
-        (self.outcome == DependencyExchangeOutcome::Response
-            && response.status == "resultset"
-            && !response.rows_truncated
-            && response.valid_row_widths())
-        .then(|| {
-            response
-                .row_shape
-                .map_or(response.rows.len(), |(count, _)| count)
-        })
-    }
-}
-
-impl RecordedMysqlResponse {
-    pub(in crate::replay) fn detach(&mut self, evidence: crate::dependency_index::RecordRef) {
-        self.row_shape = Some((
-            self.rows.len(),
-            self.rows.iter().all(|row| row.len() == self.columns.len()),
-        ));
-        self.rows = Vec::new();
-        self.evidence = Some(evidence);
-    }
-
-    pub(super) fn valid_row_widths(&self) -> bool {
-        self.row_shape.map_or_else(
-            || self.rows.iter().all(|row| row.len() == self.columns.len()),
-            |(_, valid)| valid,
-        )
-    }
-
-    pub(super) fn no_rows(&self) -> bool {
-        self.row_shape
-            .map_or_else(|| self.rows.is_empty(), |(count, _)| count == 0)
-    }
-
-    pub(super) fn materialize(&self) -> Result<Self> {
-        let Some(evidence) = &self.evidence else {
-            return Ok(self.clone());
-        };
-        #[derive(Deserialize)]
-        struct Envelope {
-            response: RecordedMysqlResponse,
-        }
-        Ok(evidence.load::<Envelope>()?.response)
-    }
-}
 
 impl ReplayState {
     pub(in crate::replay) fn visit_global_mysql_unused(

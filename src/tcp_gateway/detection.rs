@@ -15,6 +15,7 @@ pub(crate) enum DetectedProtocol {
     MemcachedBinary,
     Kafka,
     Motan,
+    Registered(DependencyProtocol),
     Raw,
 }
 
@@ -112,7 +113,10 @@ fn detect_motan(bytes: &[u8]) -> Detection {
     }
 }
 
-pub(crate) fn detect_mysql_server_with(bytes: &[u8], providers: &DependencyProviders) -> Detection {
+pub(crate) fn detect_server_protocol_with(
+    bytes: &[u8],
+    providers: &DependencyProviders,
+) -> Detection {
     match providers.recognize(Probe {
         peer: Peer::Server,
         bytes,
@@ -130,6 +134,7 @@ fn native_protocol(protocol: DependencyProtocol) -> DetectedProtocol {
         DependencyProtocol::Http => DetectedProtocol::Http,
         DependencyProtocol::Mysql => DetectedProtocol::Mysql,
         DependencyProtocol::Redis => DetectedProtocol::Redis,
+        _ => DetectedProtocol::Registered(protocol),
     }
 }
 

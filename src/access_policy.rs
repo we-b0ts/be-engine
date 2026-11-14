@@ -1,30 +1,10 @@
-use serde::Serialize;
-
 use crate::config::RecordingAccessPolicy;
 
 mod mysql;
 
 pub(crate) use mysql::{MysqlAccessContext, evaluate_mysql_access};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum OperationClass {
-    Read,
-    Write,
-    Session,
-    Unknown,
-}
-
-impl OperationClass {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Session => "session",
-            Self::Unknown => "unknown",
-        }
-    }
-}
+pub(crate) use traffic_protocol::connection::Operation as OperationClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccessDecision {

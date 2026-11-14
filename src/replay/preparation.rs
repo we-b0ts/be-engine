@@ -4,6 +4,7 @@ use execution_plan::{CaseExecutionPlan, NativeCaseRefs, SourceScopeIdentity};
 
 impl ReplayState {
     pub(super) fn prepare_native_candidates(&mut self) {
+        self.native.core.seal();
         self.http_candidates.register(&self.http_exchanges);
         self.mysql.prepare_candidates();
         self.redis.prepare_candidates();
@@ -27,6 +28,7 @@ impl ReplayState {
             self.redis.prepare_native_sequence(case)?;
         }
         let native = NativeCaseRefs {
+            registered: self.native.core.case_members(case),
             http: self.http_candidates.case_members(case),
             redis: self.redis.prepared_case_members(case),
             mysql: self.mysql.prepared_case_members(case),
@@ -70,7 +72,12 @@ impl ReplayState {
                 .mysql
                 .iter()
                 .filter_map(|index| self.mysql.recorded_sequence(*index));
-            plan.sequence = Some(catalog.scope(http.chain(redis).chain(mysql))?);
+            let registered = plan
+                .native
+                .registered
+                .iter()
+                .filter_map(|index| self.native.recorded_sequence(*index));
+            plan.sequence = Some(catalog.scope(http.chain(redis).chain(mysql).chain(registered))?);
         }
         plan.rules = rules;
         self.case_execution_plans

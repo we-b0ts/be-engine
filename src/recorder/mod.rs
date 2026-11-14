@@ -33,6 +33,7 @@ pub(crate) mod ledger;
 pub(crate) mod memcached;
 pub(crate) mod motan;
 pub(crate) mod mysql;
+pub(crate) mod native;
 mod network;
 mod preparation;
 pub(crate) mod process_classification;

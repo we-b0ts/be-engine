@@ -1,8 +1,10 @@
-use super::*;
-use crate::mysql::wire::continuation::{MAX_PACKET_PAYLOAD_LEN, write_message};
+use super::{MysqlExchangeContext, MysqlQueryTracker};
+use crate::continuation::{MAX_PACKET_PAYLOAD_LEN, write_message};
+use crate::{MysqlPacket, parse_client_command, read_packet};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::json;
+use uuid::Uuid;
 
 fn column(name: &str, type_code: u8) -> Vec<u8> {
     let mut payload = Vec::new();

@@ -1,8 +1,8 @@
 use super::*;
-use crate::mysql::wire::parse_client_command;
-use crate::recorder::BodyCapture;
+use crate::parse_client_command;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use traffic_model::capture::BodyCapture;
 
 mod transaction_status;
 

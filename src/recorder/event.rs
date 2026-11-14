@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
@@ -8,20 +6,7 @@ use crate::dependency::DependencyExchangeOutcome;
 
 pub use traffic_model::capture::BodyCapture;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct CaseBodyCapture {
-    pub encoding: &'static str,
-    pub original_len: usize,
-    pub stored_len: usize,
-    pub limit_bytes: usize,
-    pub truncated: bool,
-    pub decoded: bool,
-    pub content_encoding: Option<String>,
-    pub data: String,
-    pub decode_error: Option<String>,
-}
-
-pub type HeaderMapSnapshot = BTreeMap<String, Vec<String>>;
+pub use traffic_protocol_http::events::{CaseBodyCapture, HeaderMapSnapshot};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CaseContext {
@@ -334,9 +319,7 @@ pub struct UdpDatagramEvent {
     pub error: Option<String>,
 }
 
-pub use traffic_protocol_mysql::semantic::{
-    MysqlColumn, MysqlExchangeResponse, MysqlValue, MysqlWirePrefixPacket,
-};
+pub use traffic_protocol_mysql::semantic::{MysqlColumn, MysqlExchangeResponse, MysqlValue};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyErrorEvent {

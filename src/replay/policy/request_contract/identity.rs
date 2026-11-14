@@ -5,6 +5,19 @@ use crate::value_contract::identities::{
 };
 
 impl RequestContracts {
+    pub(in crate::replay) fn preview_run_identity_pairs(
+        &self,
+        scope: &str,
+        pairs: &[IdentityPair],
+    ) -> Result<IdentityDecision> {
+        let decision = IdentityDecision::prepare(scope, pairs.to_vec())?;
+        self.identities
+            .lock()
+            .expect("identity contracts")
+            .validate(&decision)?;
+        Ok(decision)
+    }
+
     pub(in crate::replay) fn identity_decision(
         &self,
         case: &str,

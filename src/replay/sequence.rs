@@ -71,6 +71,7 @@ impl super::ReplayState {
         self.http_sequence = Binding::default();
         self.redis.lifecycle.sequence = Binding::default();
         self.mysql.lifecycle.sequence = Binding::default();
+        self.native.core.lifecycle.sequence = Binding::default();
         let Some(runtime) = self.active_sequence.clone() else {
             self.attach_run_sequence();
             return;
@@ -93,11 +94,18 @@ impl super::ReplayState {
                 .filter_map(|index| Some((*index, self.redis.recorded_sequence(*index)?))),
         );
         self.mysql.lifecycle.sequence = Binding::new(
-            runtime,
+            runtime.clone(),
             plan.native
                 .mysql
                 .iter()
                 .filter_map(|index| Some((*index, self.mysql.recorded_sequence(*index)?))),
+        );
+        self.native.core.lifecycle.sequence = Binding::new(
+            runtime,
+            plan.native
+                .registered
+                .iter()
+                .filter_map(|index| Some((*index, self.native.recorded_sequence(*index)?))),
         );
         self.attach_run_sequence();
     }

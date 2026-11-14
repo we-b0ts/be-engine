@@ -1,5 +1,6 @@
 //! Finite dependency status, independent of native messages.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReplayExchangeStatus {
     #[default]
     Available,

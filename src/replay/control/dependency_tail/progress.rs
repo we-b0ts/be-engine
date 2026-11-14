@@ -4,7 +4,7 @@ use super::*;
 pub(super) struct NoProgress {
     timeout: Duration,
     idle_since: Option<Instant>,
-    counts: Option<[usize; 6]>,
+    counts: Option<Vec<usize>>,
 }
 
 impl NoProgress {
@@ -16,8 +16,19 @@ impl NoProgress {
         }
     }
 
-    pub(super) fn observe(&mut self, now: Instant, in_flight: bool, counts: [usize; 6]) -> bool {
-        if in_flight || self.counts.is_some_and(|previous| previous != counts) {
+    pub(super) fn observe(
+        &mut self,
+        now: Instant,
+        in_flight: bool,
+        counts: impl Into<Vec<usize>>,
+    ) -> bool {
+        let counts = counts.into();
+        if in_flight
+            || self
+                .counts
+                .as_ref()
+                .is_some_and(|previous| *previous != counts)
+        {
             self.idle_since = None;
         }
         self.counts = Some(counts);
@@ -36,9 +47,9 @@ impl NoProgress {
     }
 }
 
-pub(in crate::replay::control) fn counts(state: &ReplayState, case: &str) -> [usize; 6] {
+pub(in crate::replay::control) fn counts(state: &ReplayState, case: &str) -> Vec<usize> {
     let case = Some(case);
-    [
+    let mut counts = vec![
         state
             .mysql
             .events
@@ -53,7 +64,27 @@ pub(in crate::replay::control) fn counts(state: &ReplayState, case: &str) -> [us
             .next_event_index(case),
         state.motan.events.matched_details.next_event_index(case),
         state.kafka.events.matched_details.next_event_index(case),
-    ]
+    ];
+    if !state.native.core.exchanges.is_empty() {
+        counts.push(
+            state
+                .native
+                .core
+                .exchanges
+                .iter()
+                .filter(|exchange| {
+                    exchange.source.case_id.as_deref() == case
+                        && state
+                            .native
+                            .core
+                            .lifecycle
+                            .live_status(exchange.index, exchange.status)
+                            .is_consumed()
+                })
+                .count(),
+        );
+    }
+    counts
 }
 
 pub(super) fn waiting(

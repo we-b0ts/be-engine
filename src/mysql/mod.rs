@@ -1,7 +1,6 @@
 pub(crate) mod access;
 pub(crate) mod autocommit;
 pub(crate) mod isolation;
-pub(crate) mod maintenance;
 pub mod operation;
 pub(crate) mod savepoint;
 pub(crate) mod sql;

@@ -75,6 +75,7 @@ x509-parser = "0.16"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+traffic-protocol-fixture = { path = "crates/traffic-protocol-fixture" }
 traffic-contract = { path = "crates/traffic-contract", features = ["test-support"] }
 traffic-protocol-mysql = { path = "crates/traffic-protocol-mysql", features = ["test-support"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "mysql", "chrono", "bigdecimal"] }

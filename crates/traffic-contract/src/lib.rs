@@ -1,6 +1,7 @@
 //! Protocol-independent content decoding and value relationships.
 pub mod codec;
 pub mod comparison;
+pub mod delivery;
 pub mod identity;
 pub mod json;
 pub mod path;

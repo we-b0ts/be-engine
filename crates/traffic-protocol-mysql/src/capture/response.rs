@@ -1,8 +1,16 @@
 use std::collections::VecDeque;
 
-use super::*;
+use crate::events::{MysqlResponseEvent, MysqlResponsePacket};
+use crate::{MysqlPacket, ServerPacketInfo, parse_server_packet};
+use chrono::Utc;
+use std::time::Instant;
+use traffic_model::capture::{capture_body, capture_body_with_original_len};
+use uuid::Uuid;
 
-pub(super) struct MysqlResponseTracker {
+#[cfg(test)]
+mod tests;
+
+pub struct MysqlResponseTracker {
     pending: VecDeque<MysqlResponseBuilder>,
     max_payload_bytes: usize,
     record_raw_packets: bool,
@@ -33,7 +41,7 @@ enum MysqlResponsePhase {
 }
 
 impl MysqlResponseTracker {
-    pub(super) fn new(max_payload_bytes: usize, record_raw_packets: bool) -> Self {
+    pub fn new(max_payload_bytes: usize, record_raw_packets: bool) -> Self {
         Self {
             pending: VecDeque::new(),
             max_payload_bytes,
@@ -41,11 +49,11 @@ impl MysqlResponseTracker {
         }
     }
 
-    pub(super) fn pending_len(&self) -> usize {
+    pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
 
-    pub(super) fn start_query(
+    pub fn start_query(
         &mut self,
         connection_id: Uuid,
         query_sequence: u64,
@@ -70,7 +78,7 @@ impl MysqlResponseTracker {
         });
     }
 
-    pub(super) fn observe_packet(
+    pub fn observe_packet(
         &mut self,
         packet: &MysqlPacket,
         message: Option<&MysqlPacket>,
@@ -80,7 +88,7 @@ impl MysqlResponseTracker {
         complete.then(|| self.finish_active("incomplete")).flatten()
     }
 
-    pub(super) fn finish_active(&mut self, fallback_status: &str) -> Option<MysqlResponseEvent> {
+    pub fn finish_active(&mut self, fallback_status: &str) -> Option<MysqlResponseEvent> {
         self.pending
             .pop_front()
             .map(|mut active| active.finish(fallback_status))

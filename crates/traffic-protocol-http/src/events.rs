@@ -7,6 +7,19 @@ use traffic_model::{DependencyExchangeOutcome, capture::BodyCapture};
 use uuid::Uuid;
 pub type HeaderMapSnapshot = BTreeMap<String, Vec<String>>;
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CaseBodyCapture {
+    pub encoding: &'static str,
+    pub original_len: usize,
+    pub stored_len: usize,
+    pub limit_bytes: usize,
+    pub truncated: bool,
+    pub decoded: bool,
+    pub content_encoding: Option<String>,
+    pub data: String,
+    pub decode_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct HttpExchangeEvent {
     pub outcome: DependencyExchangeOutcome,

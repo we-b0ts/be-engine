@@ -1,22 +1,22 @@
-use crate::dependency::termination::ObservedTermination;
 use std::collections::VecDeque;
 use std::time::Instant;
+use traffic_protocol::transport::ObservedTermination;
 
 use anyhow::{Result, bail, ensure};
 
-use crate::DependencyExchangeOutcome;
-use crate::mysql::wire::continuation::MysqlPacketAssembler;
-use crate::mysql::wire::{ClientCommand, MysqlPacket};
-use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent};
+use crate::continuation::MysqlPacketAssembler;
+use crate::events::{MysqlExchangeEvent, MysqlResponseEvent};
+use crate::{ClientCommand, MysqlPacket};
+use traffic_model::DependencyExchangeOutcome;
 
 use super::response::MysqlResponseTracker;
 use super::semantic::{MysqlExchangeContext, MysqlSemanticTracker};
-use traffic_protocol_mysql::response_progress::{ResponseBoundary, ResponseProgress};
+use crate::response_progress::{ResponseBoundary, ResponseProgress};
 
 const MAX_PENDING_QUERIES: usize = 64;
 const MAX_PENDING_QUERY_BYTES: usize = 16 * 1024 * 1024;
 
-pub(super) struct MysqlQueryTracker {
+pub struct MysqlQueryTracker {
     response: MysqlResponseTracker,
     semantic: MysqlSemanticTracker,
     pending_requests: VecDeque<PendingRequest>,
@@ -33,14 +33,14 @@ struct PendingRequest {
 }
 
 #[derive(Default)]
-pub(super) struct MysqlQueryCompletion {
+pub struct MysqlQueryCompletion {
     response: Option<MysqlResponseEvent>,
     exchange: Option<MysqlExchangeEvent>,
     started: Option<Instant>,
 }
 
 impl MysqlQueryTracker {
-    pub(super) fn new(
+    pub fn new(
         max_body_bytes: usize,
         record_raw_packets: bool,
         context: MysqlExchangeContext,
@@ -55,20 +55,20 @@ impl MysqlQueryTracker {
         }
     }
 
-    pub(super) fn database(&self) -> Option<&str> {
+    pub fn database(&self) -> Option<&str> {
         self.semantic.database()
     }
 
-    pub(super) fn pending_len(&self) -> usize {
+    pub fn pending_len(&self) -> usize {
         self.pending_requests.len()
     }
 
-    pub(super) fn prepared_sql_for_packet(&self, packet: &MysqlPacket) -> Option<&str> {
+    pub fn prepared_sql_for_packet(&self, packet: &MysqlPacket) -> Option<&str> {
         self.semantic.prepared_sql_for_packet(packet)
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn start_query(
+    pub fn start_query(
         &mut self,
         connection_id: uuid::Uuid,
         query_sequence: u64,
@@ -112,18 +112,11 @@ impl MysqlQueryTracker {
         Ok(())
     }
 
-    pub(super) fn observe_no_response_command(
-        &mut self,
-        command: &ClientCommand,
-        packet: &MysqlPacket,
-    ) {
+    pub fn observe_no_response_command(&mut self, command: &ClientCommand, packet: &MysqlPacket) {
         self.semantic.observe_no_response_command(command, packet);
     }
 
-    pub(super) fn observe_server_packet(
-        &mut self,
-        packet: &MysqlPacket,
-    ) -> Result<MysqlQueryCompletion> {
+    pub fn observe_server_packet(&mut self, packet: &MysqlPacket) -> Result<MysqlQueryCompletion> {
         let message = self.server_message.push(packet)?;
         self.output = message.as_deref().and_then(|message| {
             let pending = self.pending_requests.front_mut()?;
@@ -139,15 +132,15 @@ impl MysqlQueryTracker {
         self.complete(response, exchange)
     }
 
-    pub(super) fn observe_delivery(&mut self, packet: &MysqlPacket) {
+    pub fn observe_delivery(&mut self, packet: &MysqlPacket) {
         self.semantic.observe_delivery(packet);
     }
 
-    pub(super) fn take_output(&mut self) -> Option<(u64, ResponseBoundary)> {
+    pub fn take_output(&mut self) -> Option<(u64, ResponseBoundary)> {
         self.output.take()
     }
 
-    pub(super) fn finish_active(&mut self, status: &str) -> Result<MysqlQueryCompletion> {
+    pub fn finish_active(&mut self, status: &str) -> Result<MysqlQueryCompletion> {
         if let Err(error) = self.server_message.finish() {
             self.semantic.observe_parse_warning(error.to_string());
         }
@@ -167,7 +160,7 @@ impl MysqlQueryTracker {
         self.complete(response, exchange)
     }
 
-    pub(super) fn finish_all(&mut self, status: &str) -> Result<Vec<MysqlQueryCompletion>> {
+    pub fn finish_all(&mut self, status: &str) -> Result<Vec<MysqlQueryCompletion>> {
         let mut completions = Vec::with_capacity(self.pending_requests.len());
         while !self.pending_requests.is_empty() {
             completions.push(self.finish_active(status)?);
@@ -236,17 +229,17 @@ impl MysqlQueryCompletion {
         }
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.response.is_none() && self.exchange.is_none()
     }
 
-    pub(super) fn mark_delivered(&mut self) {
+    pub fn mark_delivered(&mut self) {
         if let Some(exchange) = self.exchange.as_mut() {
             exchange.response.wire_prefix.clear();
         }
     }
 
-    pub(super) fn mark_terminated(&mut self, observed: ObservedTermination) {
+    pub fn mark_terminated(&mut self, observed: ObservedTermination) {
         if self.started.is_some_and(|started| observed.at < started) {
             self.mark_capture_error("MySQL request began after the recorded termination; post-terminal capture is unsupported");
             return;
@@ -254,7 +247,7 @@ impl MysqlQueryCompletion {
         self.mark_client_terminated();
         if let Some(exchange) = self.exchange.as_mut() {
             exchange.outcome = DependencyExchangeOutcome::Terminated(observed.termination);
-            exchange.timestamp = crate::dependency::termination::observed_wall_time(observed.at);
+            exchange.timestamp = traffic_protocol::transport::observed_wall_time(observed.at);
             if exchange
                 .response
                 .wire_prefix
@@ -288,13 +281,13 @@ impl MysqlQueryCompletion {
         }
     }
 
-    pub(super) fn mark_capture_error(&mut self, reason: &str) {
+    pub fn mark_capture_error(&mut self, reason: &str) {
         if let Some(exchange) = self.exchange.as_mut() {
             exchange.parse_warnings.push(reason.to_owned());
         }
     }
 
-    pub(super) fn mark_engine_cleanup(&mut self) {
+    pub fn mark_engine_cleanup(&mut self) {
         if let Some(exchange) = self.exchange.as_mut() {
             exchange
                 .parse_warnings
@@ -302,13 +295,13 @@ impl MysqlQueryCompletion {
         }
     }
 
-    pub(super) fn mark_unsupported_batch(&mut self) {
+    pub fn mark_unsupported_batch(&mut self) {
         if let Some(exchange) = self.exchange.as_mut() {
             exchange.parse_warnings.push("multiple in-flight MySQL commands share a termination; batch replay is unsupported".into());
         }
     }
 
-    pub(super) fn reject_partial_write(&mut self) {
+    pub fn reject_partial_write(&mut self) {
         if let Some(exchange) = self.exchange.as_mut() {
             exchange
                 .parse_warnings
@@ -316,7 +309,7 @@ impl MysqlQueryCompletion {
         }
     }
 
-    pub(super) fn mark_client_terminated(&mut self) {
+    pub fn mark_client_terminated(&mut self) {
         let Some(exchange) = self.exchange.as_mut() else {
             return;
         };
@@ -332,7 +325,7 @@ impl MysqlQueryCompletion {
         exchange.response.rows_truncated = false;
     }
 
-    pub(super) fn sequences(&self) -> (Option<u64>, Option<u64>) {
+    pub fn sequences(&self) -> (Option<u64>, Option<u64>) {
         (
             self.response
                 .as_ref()
@@ -343,7 +336,7 @@ impl MysqlQueryCompletion {
         )
     }
 
-    pub(super) fn into_parts(self) -> (Option<MysqlResponseEvent>, Option<MysqlExchangeEvent>) {
+    pub fn into_parts(self) -> (Option<MysqlResponseEvent>, Option<MysqlExchangeEvent>) {
         (self.response, self.exchange)
     }
 }
@@ -351,7 +344,7 @@ impl MysqlQueryCompletion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mysql::wire::parse_client_command;
+    use crate::parse_client_command;
 
     #[test]
     fn completed_response_is_detached_before_the_next_query_starts() {

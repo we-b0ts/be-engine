@@ -6,7 +6,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 /// Flush decoder-consumed bytes, then forward undecodable traffic until its
 /// actual peer termination. The protocol owner keeps the capture unsafe and
 /// mirrors any observed FIN/RST separately; a parser error proves neither.
-pub(crate) async fn forward_captured<R, W>(
+pub async fn forward_captured<R, W>(
     reader: &mut ObservedIo<R>,
     writer: &mut W,
     termination: &ConnectionTermination,
@@ -34,9 +34,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dependency::TerminationKind;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use traffic_model::TerminationKind;
 
     #[tokio::test]
     async fn decoder_failure_forwards_prefix_and_tail_without_inventing_a_close() {

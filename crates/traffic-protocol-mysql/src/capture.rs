@@ -3,8 +3,17 @@ use traffic_model::recording::ProtocolRef;
 use traffic_protocol::capture::{CaptureEvidence, CaptureFacts, SemanticRequirement};
 
 use crate::events::*;
+mod response;
+mod semantic;
+mod tracker;
+mod upstream_tls;
+pub use semantic::MysqlExchangeContext;
+pub use tracker::{MysqlQueryCompletion, MysqlQueryTracker};
+pub use upstream_tls::upstream_client_config;
 #[path = "capture_classification.rs"]
 mod classification;
+#[cfg(test)]
+mod continuation_tests;
 pub use classification::{
     is_debug_only_mysql_exchange, is_debug_only_mysql_exchange_value,
     is_successful_mysql_session_setup,

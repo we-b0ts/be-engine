@@ -3,6 +3,7 @@ use super::*;
 use report::global_evidence::regular::Row;
 
 pub(super) struct GlobalSource {
+    pub native: native::Inventory,
     pub mysql: MysqlReplayState,
     pub http: Vec<http::ReplayHttpExchange>,
     pub http_events: http::HttpReplayEvents,
@@ -18,6 +19,7 @@ impl GlobalSource {
         rules: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<Self> {
         let mut source = Self {
+            native: Default::default(),
             mysql: Default::default(),
             http: vec![],
             http_events: Default::default(),
@@ -46,6 +48,7 @@ impl GlobalSource {
             &mut identities,
             rules,
             reader.clone(),
+            &mut source.native,
         )
         .await?;
         if let Some(run) = crate::dependency_index::recording::root(path) {
@@ -65,6 +68,7 @@ impl GlobalSource {
                     &mut identities,
                     rules,
                     reader.clone(),
+                    &mut source.native,
                 )
                 .await?;
             }

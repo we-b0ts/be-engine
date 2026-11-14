@@ -74,6 +74,12 @@ pub(in crate::replay) fn resolve_case<T>(
         .iter()
         .map(|reference| {
             let exchange = match reference {
+                RecordedReference::Capture { exchange_id } => {
+                    return Ok(project(
+                        *reference,
+                        ExchangeHandle::Registered(state.native.resolve(case_id, *exchange_id)?),
+                    ));
+                }
                 RecordedReference::Redis {
                     connection_id,
                     sequence,

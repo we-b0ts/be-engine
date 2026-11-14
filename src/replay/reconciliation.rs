@@ -105,6 +105,10 @@ impl BatchScope {
                     .unwrap_or(report.protocols.kafka.unused_global.len()),
             ),
         ]);
+        for (protocol, native) in &report.dependency_protocols {
+            *unused_run_dependencies.entry(protocol.clone()).or_default() +=
+                native.unused_global_count;
+        }
         // Teardown is retained outside executable primary inputs. Until a real
         // teardown driver delivers these facts, WholeSource cannot certify them.
         let shutdown = self
@@ -135,7 +139,12 @@ impl BatchScope {
             + report.protocols.kafka.unmatched.len()
             + report.protocols.kafka.unsupported.len()
             + report.protocols.kafka.unsafe_events.len()
-            + report.unrecorded_targets.len();
+            + report.unrecorded_targets.len()
+            + report
+                .dependency_protocols
+                .values()
+                .map(|native| native.unmatched_count)
+                .sum::<usize>();
         let complete_source_scope =
             self.required_cases == self.selected_cases && !self.required_cases.is_empty();
         let execution_complete = report.is_complete() && report.finalized;

@@ -14,6 +14,7 @@ pub(in crate::replay) use inventory::resolve_case;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub(in crate::replay) enum RecordedReference {
+    Capture { exchange_id: Uuid },
     Redis { connection_id: Uuid, sequence: u64 },
     RedisRpcPush { connection_id: Uuid, sequence: u64 },
     Mysql { connection_id: Uuid, sequence: u64 },
@@ -104,6 +105,7 @@ impl NativeDependencyAdapter for DependencyAdapter {
 /// Transport connection failures retain their original independent finite identity.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::replay) enum ExchangeHandle {
+    Registered(usize),
     Native(DependencyAdapter),
     Connect(usize),
 }
@@ -112,7 +114,7 @@ impl ExchangeHandle {
     pub(in crate::replay) fn permits_cancelled_omission(self, state: &ReplayState) -> bool {
         match self {
             Self::Native(adapter) => adapter.permits_cancelled_omission(state),
-            Self::Connect(_) => false,
+            Self::Connect(_) | Self::Registered(_) => false,
         }
     }
     pub(in crate::replay) fn shared_initialization(
@@ -135,6 +137,13 @@ impl ExchangeHandle {
         match self {
             Self::Native(adapter) => adapter.delivery_state(state),
             Self::Connect(index) => state.connect_failures.status(index),
+            Self::Registered(index) => state.native.core.exchanges.get(index).map(|exchange| {
+                state
+                    .native
+                    .core
+                    .lifecycle
+                    .live_status(index, exchange.status)
+            }),
         }
     }
 
@@ -148,7 +157,7 @@ impl ExchangeHandle {
             Self::Native(adapter) => {
                 adapter.permits_unstarted_omission(state, shared_initialization, strict_reference)
             }
-            Self::Connect(_) => false,
+            Self::Connect(_) | Self::Registered(_) => false,
         }
     }
 }

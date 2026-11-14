@@ -119,6 +119,7 @@ impl ReplayRuntime {
         let mut kafka = kafka::KafkaReplayState::default();
         let mut motan = motan::MotanReplayState::default();
         let mut connect_failures = connect_failure::Inventory::default();
+        let mut native = native::Inventory::new(providers.clone());
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let reader = Arc::new(std::sync::Mutex::new(
@@ -150,6 +151,7 @@ impl ReplayRuntime {
                 &mut connection_identities,
                 process_owned_dependencies,
                 reader.clone(),
+                &mut native,
             )
             .await?;
         }
@@ -168,6 +170,7 @@ impl ReplayRuntime {
                 &mut connection_identities,
                 process_owned_dependencies,
                 reader.clone(),
+                &mut native,
             )
             .await?;
         }
@@ -216,19 +219,21 @@ impl ReplayRuntime {
         for (index, case) in cases.values().enumerate() {
             let cleanup = lifecycle_cleanup::load_refs(&case.dir).await?;
             connect_failures
-                .load(&case.id, &case.dependencies_path, &mut targets)
+                .load(&case.id, &case.dependencies_path, &mut targets, &providers)
                 .await?;
             if lazy {
                 let path = case.dependencies_path.clone();
                 let cache = reader.clone();
                 let shared_http = shared_http_selectors.clone();
+                let index_providers = providers.clone();
                 let (file_index, startup, shared_lines, source_bytes) =
                     tokio::task::spawn_blocking(move || -> Result<_> {
-                        let index = crate::dependency_index::load_file(&path)?;
+                        let mut index = crate::dependency_index::load_file(&path)?;
                         let mut cache = cache
                             .lock()
                             .map_err(|_| anyhow!("dependency cache lock poisoned"))?;
                         let records = deferred::startup_records(&path, &index, &mut cache)?;
+                        native::extend_index(&index_providers, &path, &mut index, &mut cache)?;
                         let shared_lines = http_cross_case::selected_source_lines(
                             &path,
                             &index,
@@ -240,7 +245,7 @@ impl ReplayRuntime {
                     })
                     .await
                     .context("case startup index task failed")??;
-                deferred::register_index_targets(&file_index, &mut targets)?;
+                deferred::register_index_targets(&file_index, &mut targets, &providers)?;
                 let mut skip: BTreeSet<_> = startup.iter().map(|(line, _)| *line).collect();
                 skip.extend(shared_lines);
                 dependencies::register_dependency_records(
@@ -260,6 +265,7 @@ impl ReplayRuntime {
                     &mut connection_identities,
                     process_owned_dependencies,
                     &cleanup,
+                    &mut native,
                 )?;
                 deferred_files.insert(
                     case.id.clone(),
@@ -285,6 +291,7 @@ impl ReplayRuntime {
                     &mut targets,
                     &mut connection_identities,
                     process_owned_dependencies,
+                    &mut native,
                 )
                 .await?;
                 prepared_scopes.insert(case.id.clone(), scope);
@@ -404,6 +411,14 @@ impl ReplayRuntime {
             .unwrap_or_else(|| {
                 crate::policy_evidence::digest(b"native-strict-request-evidence/v1")
             });
+        let witness_policy = if providers.bindings().is_empty() {
+            witness_policy
+        } else {
+            crate::policy_evidence::digest(&serde_json::to_vec(&(
+                witness_policy,
+                providers.bindings().signature()?,
+            ))?)
+        };
         let witnesses = crate::policy_evidence::WitnessStore::new_bound(
             &replay_artifact_dir,
             &session_id.to_string(),
@@ -477,8 +492,13 @@ impl ReplayRuntime {
             .report_path
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
+        native.contracts = replay_policy
+            .as_ref()
+            .map(|policy| policy.request_contracts.clone())
+            .unwrap_or_default();
         let mut state = ReplayState {
             providers,
+            native,
             admission_epoch: 0,
             case_execution_plans: BTreeMap::new(),
             sequence_catalog,

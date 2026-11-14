@@ -8,14 +8,54 @@ pub use traffic_protocol::{
     Session,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DependencyProtocol {
-    Http,
-    Mysql,
-    Redis,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DependencyProtocol(traffic_protocol::ProtocolId);
+
+impl DependencyProtocol {
+    pub const fn new(name: &'static str) -> Self {
+        Self(traffic_protocol::ProtocolId::new(name))
+    }
+    pub const fn as_str(self) -> &'static str {
+        self.0.as_str()
+    }
+    pub const fn id(self) -> traffic_protocol::ProtocolId {
+        self.0
+    }
 }
 
-pub type DependencyProviders = ProviderRegistry<DependencyProtocol>;
+// Preserve the application assembly names used by existing callers.
+#[allow(non_upper_case_globals)]
+impl DependencyProtocol {
+    pub const Http: Self = Self::new("http");
+    pub const Mysql: Self = Self::new("mysql");
+    pub const Redis: Self = Self::new("redis");
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DependencyProviders {
+    providers: ProviderRegistry<DependencyProtocol>,
+    bindings: traffic_replay::rules::BindingRegistry,
+}
+
+impl std::ops::Deref for DependencyProviders {
+    type Target = ProviderRegistry<DependencyProtocol>;
+    fn deref(&self) -> &Self::Target {
+        &self.providers
+    }
+}
+impl std::ops::DerefMut for DependencyProviders {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.providers
+    }
+}
+impl DependencyProviders {
+    pub fn bindings(&self) -> &traffic_replay::rules::BindingRegistry {
+        &self.bindings
+    }
+    pub fn bindings_mut(&mut self) -> &mut traffic_replay::rules::BindingRegistry {
+        &mut self.bindings
+    }
+}
 
 mod capture;
 pub(crate) mod evidence;

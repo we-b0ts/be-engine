@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::DependencyExchangeOutcome;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct ReplayEvents {
@@ -76,81 +75,11 @@ pub(in crate::replay) struct ReplaySessionIdentity {
     pub(in crate::replay) username: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RecordedMysqlConnection {
-    pub(in crate::replay) id: Uuid,
-    pub(in crate::replay) target_host: Option<String>,
-    pub(in crate::replay) target_port: Option<u16>,
-    pub(in crate::replay) target_addr: Option<String>,
-    pub(in crate::replay) database: Option<String>,
-    pub(in crate::replay) username: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(in crate::replay) struct RecordedMysqlExchange {
-    #[serde(default)]
-    pub(in crate::replay) capture: Option<crate::dependency::observation::CaptureMetadata>,
-    #[serde(skip)]
-    pub(in crate::replay) lifecycle_cleanup: bool,
-    #[serde(default)]
-    pub(in crate::replay) timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(default)]
-    pub(in crate::replay) request_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub(in crate::replay) server_status_before: Option<u16>,
-    pub(in crate::replay) query_sequence: Option<u64>,
-    pub(in crate::replay) connection_id: Option<Uuid>,
-    pub(in crate::replay) target_host: Option<String>,
-    pub(in crate::replay) target_port: Option<u16>,
-    pub(in crate::replay) target_addr: Option<String>,
-    pub(in crate::replay) database: Option<String>,
-    pub(in crate::replay) username: Option<String>,
-    pub(in crate::replay) command: String,
-    pub(in crate::replay) sql: Option<String>,
-    pub(in crate::replay) params: Option<Vec<RecordedMysqlValue>>,
-    pub(in crate::replay) response: RecordedMysqlResponse,
-    #[serde(default)]
-    pub(in crate::replay) parse_warnings: Vec<String>,
-    #[serde(default)]
-    pub(in crate::replay) outcome: DependencyExchangeOutcome,
-    #[serde(default)]
-    pub(in crate::replay) duration_ms: u64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(in crate::replay) struct RecordedMysqlResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) wire_prefix: Vec<RecordedMysqlWirePrefixPacket>,
-    #[serde(skip)]
-    pub(in crate::replay) evidence: Option<crate::dependency_index::RecordRef>,
-    #[serde(skip)]
-    pub(in crate::replay) row_shape: Option<(usize, bool)>,
-    pub(in crate::replay) server_status: Option<u16>,
-    pub(in crate::replay) status: String,
-    pub(in crate::replay) error_code: Option<u16>,
-    pub(in crate::replay) error_message: Option<String>,
-    pub(in crate::replay) affected_rows: Option<u64>,
-    pub(in crate::replay) last_insert_id: Option<u64>,
-    #[serde(default)]
-    pub(in crate::replay) columns: Vec<RecordedMysqlColumn>,
-    #[serde(default)]
-    pub(in crate::replay) rows: Vec<Vec<RecordedMysqlValue>>,
-    #[serde(default)]
-    pub(in crate::replay) rows_truncated: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub(in crate::replay) struct RecordedMysqlWirePrefixPacket {
-    pub(in crate::replay) offset_ms: u64,
-    pub(in crate::replay) packet: RecordedMysqlWireCapture,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub(in crate::replay) struct RecordedMysqlWireCapture {
-    pub(in crate::replay) encoding: String,
-    pub(in crate::replay) data: String,
-    #[serde(default)]
-    pub(in crate::replay) truncated: bool,
-}
+pub(in crate::replay) use traffic_protocol_mysql::recorded::RecordedMysqlConnection;
+pub(in crate::replay) type RecordedMysqlExchange =
+    traffic_protocol_mysql::recorded::RecordedMysqlExchange<crate::dependency_index::RecordRef>;
+pub(in crate::replay) type RecordedMysqlResponse =
+    traffic_protocol_mysql::recorded::RecordedMysqlResponse<crate::dependency_index::RecordRef>;
 
 pub(in crate::replay) use traffic_protocol_mysql::model::{
     MysqlColumn as RecordedMysqlColumn, MysqlValue as RecordedMysqlValue, PreparedStatement,
@@ -158,30 +87,3 @@ pub(in crate::replay) use traffic_protocol_mysql::model::{
 };
 
 pub(in crate::replay) use traffic_protocol_mysql::prepare::StatementMetadata;
-
-impl PartialEq for RecordedMysqlResponse {
-    fn eq(&self, other: &Self) -> bool {
-        self.wire_prefix == other.wire_prefix
-            && self.server_status == other.server_status
-            && self.status == other.status
-            && self.error_code == other.error_code
-            && self.error_message == other.error_message
-            && self.affected_rows == other.affected_rows
-            && self.last_insert_id == other.last_insert_id
-            && self.columns == other.columns
-            && self.rows == other.rows
-            && self.rows_truncated == other.rows_truncated
-    }
-}
-
-impl traffic_protocol_mysql::sql_match::SqlRequest for RecordedMysqlExchange {
-    fn command(&self) -> &str {
-        &self.command
-    }
-    fn sql(&self) -> Option<&str> {
-        self.sql.as_deref()
-    }
-    fn params(&self) -> Option<&[RecordedMysqlValue]> {
-        self.params.as_deref()
-    }
-}

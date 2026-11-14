@@ -4,6 +4,9 @@ use serde::Serialize;
 use serde_json::Value;
 use traffic_model::recording::ProtocolRef;
 
+mod snapshot;
+pub use snapshot::CaptureSnapshot;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SemanticRequirement {
     Observation,

@@ -20,7 +20,7 @@ pub(super) struct RecordedFailure {
 }
 
 impl RecordedFailure {
-    pub(super) fn validate(&self) -> Result<ReplayProtocol> {
+    pub(super) fn validate(&self) -> Result<()> {
         ensure!(
             !self.target_host.is_empty()
                 && self.target_host.len() <= 1024
@@ -36,26 +36,19 @@ impl RecordedFailure {
                 && self.client_outcome == "reset",
             "recorded connection failure has invalid transport evidence"
         );
-        Ok(match self.protocol.as_str() {
-            "mysql" => ReplayProtocol::Mysql,
-            "redis" => ReplayProtocol::Redis,
-            "memcached" => ReplayProtocol::Memcached,
-            "motan" => ReplayProtocol::Motan,
-            "kafka" => ReplayProtocol::Kafka,
-            "http" => ReplayProtocol::Http,
-            "https" => ReplayProtocol::Https,
-            "tcp" => ReplayProtocol::Auto,
-            _ => anyhow::bail!("unsupported recorded connection-failure protocol"),
-        })
+        ensure!(
+            !self.protocol.is_empty()
+                && self.protocol.len() <= 1024
+                && !self.protocol.chars().any(char::is_control),
+            "recorded connection failure has an invalid protocol identity"
+        );
+        Ok(())
     }
 
     fn matches(&self, target: &ReplayTarget) -> bool {
         normalize_host(&self.target_host) == normalize_host(&target.host)
             && self.target_port == target.port
-            && (self.protocol == "tcp"
-                || self
-                    .validate()
-                    .is_ok_and(|protocol| protocol == target.protocol))
+            && (self.protocol == "tcp" || self.protocol == target.protocol.id().as_str())
     }
 }
 
@@ -101,6 +94,7 @@ impl Inventory {
         case_id: &str,
         path: &Path,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+        providers: &crate::protocols::DependencyProviders,
     ) -> Result<()> {
         let cleanup = super::lifecycle_cleanup::load_refs(
             &crate::dependency_index::scoped::case_directory(path)?,
@@ -117,7 +111,15 @@ impl Inventory {
                 continue;
             }
             let record: RecordedFailure = serde_json::from_value(event)?;
-            let protocol = record.validate()?;
+            record.validate()?;
+            let protocol = ReplayProtocol::resolve(
+                if record.protocol == "tcp" {
+                    "auto"
+                } else {
+                    &record.protocol
+                },
+                providers,
+            )?;
             ensure!(
                 cleanup.contains(&control::dependency_tail::RecordedReference::Connect {
                     event_id: record.id

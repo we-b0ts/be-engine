@@ -104,6 +104,19 @@ pub(crate) struct FileIndex {
     pub proof_records: Option<Vec<ProofRecord>>,
 }
 
+impl FileIndex {
+    pub(crate) fn register_endpoint(&mut self, host: String, port: u16, protocol: String) {
+        let endpoint = Endpoint {
+            host,
+            port,
+            protocol,
+        };
+        if !self.endpoints.contains(&endpoint) {
+            self.endpoints.push(endpoint);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProofRecord {
     pub location: RecordLocation,

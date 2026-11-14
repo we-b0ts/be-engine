@@ -195,7 +195,12 @@ async fn overlapping_normal_and_failed_source_connections_fail_closed() {
         .await
         .unwrap();
     let error = Inventory::default()
-        .load("case", &path, &mut BTreeMap::new())
+        .load(
+            "case",
+            &path,
+            &mut BTreeMap::new(),
+            &crate::protocols::default_providers(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -223,7 +228,14 @@ async fn http_predecessors_use_their_physical_authority_and_cannot_be_skipped() 
             .await
             .unwrap();
         let mut inventory = Inventory::default();
-        let result = inventory.load("case", &path, &mut BTreeMap::new()).await;
+        let result = inventory
+            .load(
+                "case",
+                &path,
+                &mut BTreeMap::new(),
+                &crate::protocols::default_providers(),
+            )
+            .await;
         if overlapping {
             assert!(
                 result
@@ -358,7 +370,12 @@ async fn failure_inventory_rejects_duplicate_ids_and_unbounded_transport_values(
         .unwrap();
         assert!(
             Inventory::default()
-                .load("case", &path, &mut BTreeMap::new())
+                .load(
+                    "case",
+                    &path,
+                    &mut BTreeMap::new(),
+                    &crate::protocols::default_providers()
+                )
                 .await
                 .is_err(),
             "accepted {change}"

@@ -34,6 +34,7 @@ struct CompletedInventory {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(tag = "protocol", rename_all = "snake_case")]
 enum CompletedRef {
+    Capture { exchange_id: Uuid },
     Connect { event_id: Uuid },
     Http { exchange_id: Uuid },
     Mysql { connection_id: Uuid, sequence: u64 },
@@ -235,8 +236,41 @@ impl ActiveCaseRegistry {
         targets: &DependencyTargets,
         recorded_in_case: bool,
     ) {
+        self.observe_tail_reference(CompletedRef::for_event(event), targets, recorded_in_case,
+            matches!(event, RecorderEvent::UdpDatagram(_))
+                || matches!(event, RecorderEvent::RedisPubSubPush(push) if push.rpc_request.is_none()),
+            |stop| cleanup_candidate(event, stop));
+    }
+
+    pub(crate) fn observe_capture_tail_event(
+        &self,
+        event: &traffic_protocol::capture::CaptureSnapshot,
+        targets: &DependencyTargets,
+    ) {
+        let reference = event
+            .facts()
+            .semantic_required(false)
+            .then(|| {
+                targets
+                    .capture
+                    .as_ref()
+                    .map(|capture| CompletedRef::Capture {
+                        exchange_id: capture.exchange_id(),
+                    })
+            })
+            .flatten();
+        self.observe_tail_reference(reference, targets, true, false, |_| false);
+    }
+
+    fn observe_tail_reference(
+        &self,
+        reference: Option<CompletedRef>,
+        targets: &DependencyTargets,
+        recorded_in_case: bool,
+        unsupported: bool,
+        cleanup: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
+    ) {
         if recorded_in_case {
-            let reference = CompletedRef::for_event(event);
             let state = self.state.lock().expect("active case registry poisoned");
             for (target, _) in &targets.cases {
                 let Some(case) = state.active.iter().find(|case| case.case.id == target.id) else {
@@ -263,14 +297,12 @@ impl ActiveCaseRegistry {
                             .async_api
                             .as_ref()
                             .and_then(|scope| scope.source_stop_wall_time())
-                            .is_some_and(|stop| cleanup_candidate(event, stop))
+                            .is_some_and(&cleanup)
                         {
                             completed.cleanup_refs.insert(reference.clone());
                         }
                     }
-                } else if matches!(event, RecorderEvent::UdpDatagram(_))
-                    || matches!(event, RecorderEvent::RedisPubSubPush(push) if push.rpc_request.is_none())
-                {
+                } else if unsupported {
                     completed.unsupported = true;
                 }
             }

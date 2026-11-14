@@ -6,24 +6,24 @@ use tokio::net::TcpStream;
 
 /// Control remains usable through split IO, TLS and duplicated recovery handles.
 #[derive(Debug, Clone)]
-pub(crate) struct ConnectionControl(Arc<StdTcpStream>);
+pub struct ConnectionControl(Arc<StdTcpStream>);
 
 impl ConnectionControl {
-    pub(crate) fn new(stream: &TcpStream) -> io::Result<Self> {
+    pub fn new(stream: &TcpStream) -> io::Result<Self> {
         Ok(Self(Arc::new(StdTcpStream::from(
             stream.as_fd().try_clone_to_owned()?,
         ))))
     }
-    pub(crate) fn shutdown_write(&self) -> io::Result<()> {
+    pub fn shutdown_write(&self) -> io::Result<()> {
         self.0.shutdown(Shutdown::Write)
     }
 
-    pub(crate) fn clone_stream(&self) -> io::Result<TcpStream> {
+    pub fn clone_stream(&self) -> io::Result<TcpStream> {
         TcpStream::from_std(self.0.try_clone()?)
     }
 
     /// SO_LINGER alone cannot reset until every duplicated descriptor is closed.
-    pub(crate) fn reset(&self) -> io::Result<()> {
+    pub fn reset(&self) -> io::Result<()> {
         #[cfg(target_os = "linux")]
         {
             let address = libc::sockaddr {

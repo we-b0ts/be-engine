@@ -90,3 +90,8 @@ impl RecordRef {
         })
     }
 }
+impl traffic_protocol::evidence::RecordSource for RecordRef {
+    fn load<T: serde::de::DeserializeOwned>(&self) -> anyhow::Result<T> {
+        RecordRef::load(self)
+    }
+}

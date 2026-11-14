@@ -7,6 +7,7 @@ pub(in crate::replay) struct RunBindings {
     http: Binding,
     redis: Binding,
     mysql: Binding,
+    registered: Binding,
 }
 
 #[derive(Default)]
@@ -14,6 +15,7 @@ struct ScopeRefs {
     http: Vec<(usize, u64)>,
     redis: Vec<(usize, u64)>,
     mysql: Vec<(usize, u64)>,
+    registered: Vec<(usize, u64)>,
 }
 
 fn task_scope(
@@ -98,9 +100,21 @@ impl super::super::ReplayState {
             }
         }
         let mut runtimes = Vec::new();
+        for exchange in &self.native.core.exchanges {
+            if exchange.source.source.is_run_owned()
+                && let Some(capture) = &exchange.source.capture
+            {
+                scopes
+                    .entry(task_scope(capture.attribution.clone()))
+                    .or_default()
+                    .registered
+                    .push((exchange.index, capture.sequence));
+            }
+        }
         let mut http = Vec::new();
         let mut redis = Vec::new();
         let mut mysql = Vec::new();
+        let mut registered = Vec::new();
         for scope in scopes.into_values() {
             let plan = catalog.scope(
                 scope
@@ -108,12 +122,14 @@ impl super::super::ReplayState {
                     .iter()
                     .chain(&scope.redis)
                     .chain(&scope.mysql)
+                    .chain(&scope.registered)
                     .map(|(_, sequence)| *sequence),
             )?;
             let runtime = SequenceRuntime::new(plan);
             http.push(Binding::new(runtime.clone(), scope.http.into_iter()));
             redis.push(Binding::new(runtime.clone(), scope.redis.into_iter()));
             mysql.push(Binding::new(runtime.clone(), scope.mysql.into_iter()));
+            registered.push(Binding::new(runtime.clone(), scope.registered.into_iter()));
             runtimes.push(runtime);
         }
         self.run_sequence = Some(RunBindings {
@@ -121,6 +137,7 @@ impl super::super::ReplayState {
             http: Binding::merge(http),
             redis: Binding::merge(redis),
             mysql: Binding::merge(mysql),
+            registered: Binding::merge(registered),
         });
         Ok(())
     }
@@ -130,6 +147,11 @@ impl super::super::ReplayState {
             self.http_sequence.attach_run(run.http.clone());
             self.redis.lifecycle.sequence.attach_run(run.redis.clone());
             self.mysql.lifecycle.sequence.attach_run(run.mysql.clone());
+            self.native
+                .core
+                .lifecycle
+                .sequence
+                .attach_run(run.registered.clone());
         }
     }
 }

@@ -23,7 +23,7 @@ fn expected_phase(record: &DependencyRecord) -> Option<Phase> {
         | DependencyRecord::KafkaProduce(_)
         | DependencyRecord::KafkaFetch(_)
         | DependencyRecord::KafkaDelivery(_) => Some(Phase::Exchanges),
-        DependencyRecord::Other => None,
+        DependencyRecord::Native(_) | DependencyRecord::ConnectFailure => Some(Phase::Exchanges),
     }
 }
 

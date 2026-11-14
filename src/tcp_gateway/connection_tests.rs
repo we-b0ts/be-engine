@@ -14,6 +14,9 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
+#[path = "connection_tests/native_protocol.rs"]
+mod native_protocol;
+
 #[test]
 fn exact_override_wins_over_port_hints() {
     let mut config = crate::TcpProtocolDetectionConfig::default();

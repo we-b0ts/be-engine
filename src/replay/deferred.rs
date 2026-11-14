@@ -63,6 +63,7 @@ impl DeferredDependencies {
 pub(super) fn register_index_targets(
     index: &FileIndex,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+    providers: &crate::protocols::DependencyProviders,
 ) -> Result<()> {
     for endpoint in &index.endpoints {
         register_replay_target(
@@ -71,7 +72,7 @@ pub(super) fn register_index_targets(
                 host: endpoint.host.clone(),
                 port: endpoint.port,
             },
-            protocol(&endpoint.protocol)?,
+            ReplayProtocol::resolve(&endpoint.protocol, providers)?,
         )?;
     }
     for (_, value) in &index.metadata {
@@ -89,10 +90,11 @@ pub(super) fn register_index_targets(
                         value["port"].as_u64().context("advertised port missing")?,
                     )?,
                 },
-                protocol(
+                ReplayProtocol::resolve(
                     value["protocol"]
                         .as_str()
                         .context("advertised protocol missing")?,
+                    providers,
                 )?,
                 Some(
                     value["advertised_ip"]
@@ -104,20 +106,6 @@ pub(super) fn register_index_targets(
         }
     }
     Ok(())
-}
-
-fn protocol(value: &str) -> Result<ReplayProtocol> {
-    Ok(match value {
-        "auto" => ReplayProtocol::Auto,
-        "mysql" => ReplayProtocol::Mysql,
-        "http" => ReplayProtocol::Http,
-        "https" => ReplayProtocol::Https,
-        "redis" => ReplayProtocol::Redis,
-        "memcached" => ReplayProtocol::Memcached,
-        "kafka" => ReplayProtocol::Kafka,
-        "motan" => ReplayProtocol::Motan,
-        _ => anyhow::bail!("unsupported indexed dependency protocol {value:?}"),
-    })
 }
 
 /// Retain small connection/setup and Redis evidence before listeners become ready.
@@ -297,6 +285,7 @@ fn install(
         &mut identities,
         &deferred.process_rules,
         &inventory.cleanup,
+        &mut state.native,
     )?;
     ensure!(
         targets.len() == deferred.known_targets.len(),

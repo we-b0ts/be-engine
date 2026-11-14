@@ -2931,6 +2931,7 @@ dependencies = [
  "traffic-contract",
  "traffic-model",
  "traffic-protocol",
+ "traffic-protocol-fixture",
  "traffic-protocol-http",
  "traffic-protocol-mysql",
  "traffic-protocol-redis",
@@ -2963,7 +2964,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "chrono",
  "http",
+ "libc",
  "serde",
  "serde_json",
  "tokio",
@@ -2971,12 +2974,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "traffic-protocol-http"
+name = "traffic-protocol-fixture"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "serde",
+ "serde_json",
+ "tokio",
+ "traffic-model",
+ "traffic-protocol",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-protocol-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
  "chrono",
+ "flate2",
  "http-body",
  "hyper",
  "hyper-util",
@@ -2997,6 +3016,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "rustls",
  "serde",
  "serde_json",
  "sqlparser",

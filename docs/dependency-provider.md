@@ -78,7 +78,24 @@ MySQL Provider 还提供逻辑结果边界识别，列定义整体对应 Headers
 `ValueRule` 只描述字段语义，`RuleBinding` 分别绑定原生位置、codec 与逻辑指针。
 共享 `PreparedMessage` 执行规则、严格比较未选字段并生成身份对应提案，交付修改通过相同规则和 codec 校验后交回原生编码器。
 `evidence` 由协议提供证据视图。HTTP 路径段与 body、Redis key/field/value、MySQL 参数与 SQL 字面量已覆盖同一身份规则的接口测试。
-现有完整协议执行路径仍在接入这些能力，应用入口的封闭协议分派和录制事件分派还需要继续迁移。
+现有 HTTP、Redis、MySQL 的完整执行路径仍在接入这些能力，旧路径中的具体协议状态和分派还需要继续迁移。
+
+注册标识 `ProtocolId` 接受协议库声明的名称。应用注册表同时保存原生能力和协议无关的值规则绑定。
+`NativeProtocol` 提供录制会话、服务会话、Source 交换投影及原生 endpoint 提取。
+`CaptureSession` 通过 `CaptureHost` 申请录制许可，并在实际输出 flush 后提交输出回执。
+`ServerSession` 持有传输，可处理握手、TLS 升级与原生会话控制。
+它把业务请求交给 `RequestHost`，通过框架提供的 `ResponseDelivery` 执行实际响应交付。
+框架执行 Source 候选选择、规则校验、有界等待和有限消费，协议会话提供原生 framing。
+
+共享 `ExchangeInventory` 按协议标识、endpoint、归属和原生结构建立 postings。
+录制原生字段由协议解释，框架使用 capture UUID 解析有限尾部义务。
+Case 流水线采用独立的请求接纳与交付屏障，会话级 lane 继续要求前置真实交付。
+派生响应在实际交付前读取已接纳的共享身份，按当时的独立观察时钟生成并校验。
+绑定签名包含原生位置、codec、字段语义、运行期时间锚点和显式重编码许可，并参与保护证据的策略身份。
+
+开发用 `traffic-protocol-fixture` 通过正常 TCP 入口录制真实请求和响应，随后封存并进入正常 Replay 入口。
+测试覆盖即时和延迟加载、共享身份规则、原生响应编码、真实交付、未选字段拒绝及未消费核算。
+该协议使用自己的证据负载和 endpoint 格式，扩展实现集中在独立协议库与应用注册处。
 
 `EvidenceRegistry` 由 Provider 安装原生证据能力，同一事件类型具有唯一注册者。
 录制清单与 Replay 准备使用相同的能力注册表，准备缓存也绑定证据能力的 schema 版本。
@@ -93,6 +110,15 @@ ledger 使用这些事实执行统一的生命周期、归属与封存，HTTP/My
 `EvidenceAdapter` 提供通用流量观察与原生摘要聚合器，进程流量汇总按注册能力调用。
 Redis snapshot 计数器属于 Redis 协议库。框架通过开放的摘要字段保存结果，既有摘要字段继续可读。
 自定义事件通过正常写入队列生成原生摘要的测试也覆盖了这条接口。
+
+MySQL 的录制 FIFO、continuation 组装、预处理语句状态、逻辑响应边界和终止前缀验证由协议库维护。
+Redis 的录制会话控制、认证字段脱敏、已确认订阅及原始订阅锚点也由协议库维护。
+HTTP 协议库提供有界 body capture、Content-Encoding 解码与 header 脱敏。
+框架使用相同的操作分类事实执行录制访问策略，保存请求原来的归属，并在实际 I/O 后发布回执。
+
+协议无关的 transport 接口提供 FIN/RST 观察、单调终止时钟与解析失败后的透明转发。
+MySQL 的录制投影通过 `RecordSource` 读取自身原生结果格式，存储实现负责认证原来的文件位置与内容。
+延迟加载继续保留列信息、行形状与会话事实，真实响应交付按需加载完整原生结果。
 
 ## 录制结构
 
@@ -189,9 +215,9 @@ Replay 的值规则复用现有类型化值 contract，并独立保留 native �
 | --- | --- |
 | `traffic-model` | 录制身份、归属、完整性、outcome、事件 envelope |
 | `traffic-protocol` | Provider contract、识别注册与统一有界帧读取 |
-| `traffic-protocol-http` | Hyper connection driver 与响应流模型 |
-| `traffic-protocol-mysql` | MySQL wire、continuation、SQL 解析与结果边界 |
-| `traffic-protocol-redis` | RESP framing、命令与消息解释 |
+| `traffic-protocol-http` | Hyper connection driver、响应流模型、body capture 与 content coding |
+| `traffic-protocol-mysql` | MySQL wire、continuation、SQL 解析、录制 FIFO、结果投影与原生响应边界 |
+| `traffic-protocol-redis` | RESP framing、命令解释、录制会话及确认后的订阅状态 |
 | `traffic-recording` | 共用录制时钟与发号 |
 | `traffic-replay` | 编译事件计划、通用候选索引、有限 claim、请求等待执行、pending 与真实回执 |
 | `traffic-contract` | Scalar/JSON/Protobuf codec、字段契约类型、时间运算与共享身份提案和状态 |

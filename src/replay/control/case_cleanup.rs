@@ -64,6 +64,7 @@ pub(super) async fn failure_description(
 
 pub(in crate::replay) fn has_started(state: &ReplayState) -> bool {
     state.mysql.has_case_in_flight()
+        || state.native.has_case_in_flight()
         || state.redis.has_case_in_flight()
         || state.kafka.has_case_in_flight()
         || state.connect_failures.has_in_flight()

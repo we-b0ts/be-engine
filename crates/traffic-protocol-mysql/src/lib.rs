@@ -1,4 +1,6 @@
+pub mod access;
 pub mod autocommit;
+pub mod builtin;
 pub mod isolation;
 pub mod message;
 pub mod model;
@@ -7,6 +9,7 @@ pub mod prepare;
 pub mod prepared;
 pub mod projection;
 pub mod read_effect;
+pub mod recorded;
 pub mod response;
 pub mod response_progress;
 pub mod savepoint;

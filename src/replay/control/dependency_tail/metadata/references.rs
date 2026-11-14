@@ -81,6 +81,12 @@ pub(in crate::replay::control::dependency_tail) fn reference(
             sequence: sequence("sequence")?,
         }),
         Some("udp_datagram") => anyhow::bail!("finite-tail UDP replay is unsupported"),
+        _ if event["capture"]["semantic_required"] == true => Some(RecordedReference::Capture {
+            exchange_id: event["capture"]["exchange_id"]
+                .as_str()
+                .context("Source dependency has no framework capture identity")?
+                .parse()?,
+        }),
         _ => None,
     })
 }

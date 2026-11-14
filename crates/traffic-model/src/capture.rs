@@ -31,3 +31,17 @@ impl From<bytes::Bytes> for BodyCapture {
         capture_body(&value, value.len())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn captures_body_with_truncation() {
+        let capture = capture_body(b"abcdef", 3);
+        assert_eq!(capture.original_len, 6);
+        assert_eq!(capture.stored_len, 3);
+        assert!(capture.truncated);
+        assert_eq!(capture.data, "YWJj");
+    }
+}

@@ -31,16 +31,16 @@ impl Phase {
                     | "motan_connection"
                     | "proxy_error"
             ),
-            Self::Exchanges => matches!(
+            Self::Exchanges => !matches!(
                 kind,
-                "tcp_gateway_connection"
-                    | "http_exchange"
-                    | "redis_exchange"
-                    | "memcached_exchange"
-                    | "motan_exchange"
-                    | "kafka_produce"
-                    | "kafka_fetch"
-                    | "kafka_delivery"
+                "mysql_connection"
+                    | "mysql_exchange"
+                    | "redis_pub_sub_push"
+                    | "redis_connection"
+                    | "memcached_connection"
+                    | "kafka_connection"
+                    | "motan_connection"
+                    | "proxy_error"
             ),
         })
     }
@@ -124,6 +124,7 @@ pub(super) async fn load(
     identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     rules: &[crate::BackgroundDependencyRuleConfig],
     reader: Arc<std::sync::Mutex<RecordReader>>,
+    native: &mut native::Inventory,
 ) -> Result<()> {
     let source_path = path.to_owned();
     let (index, root) = tokio::task::spawn_blocking(move || {
@@ -201,6 +202,15 @@ pub(super) async fn load(
         "Global exchange traversal failed",
         |(record, reference, _)| {
             match record {
+                DependencyRecord::Native(record) => {
+                    native.register(
+                        &record,
+                        source_kind,
+                        None,
+                        reference.location.line,
+                        targets,
+                    )?;
+                }
                 DependencyRecord::TcpGatewayConnection(record) => {
                     http::register_tcp_connection_blackhole(
                         *record,
@@ -266,6 +276,7 @@ pub(super) async fn load(
         identities,
         rules,
         &BTreeSet::new(),
+        native,
     )?;
     Ok(())
 }

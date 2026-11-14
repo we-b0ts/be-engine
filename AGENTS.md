@@ -49,7 +49,7 @@ Useful focused tests:
 
 ```bash
 cargo test -p traffic-protocol-mysql
-cargo test recorder::mysql::semantic
+cargo test -p traffic-protocol-mysql capture::semantic
 cargo test proxy_integration
 ```
 

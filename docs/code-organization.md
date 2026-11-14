@@ -43,7 +43,18 @@ field-contract types, strict whole-document comparison, temporal arithmetic and
 shared identity proposals/stores. Native leaf verification and authenticated
 read provenance enter that comparator through capabilities supplied by callers.
 Native MySQL semantic decoding and prepared-statement state belong to its
-protocol library. Redis storage positions and RESP value ranges belong to its
+protocol library. Its capture queue owns request/response FIFO correlation,
+continuation assembly, logical response boundaries and native termination-prefix
+validation. Its recording upstream connector owns MySQL's self-signed TLS policy.
+The protocol-independent transport contract owns peer FIN/RST
+observations, monotonic end clocks and transparent forwarding after decoder
+failure. Redis capture state owns successful session controls, credential
+redaction, confirmed subscription subjects and original subscription anchors.
+HTTP body capture owns content-coding interpretation and header redaction.
+Native recording projections decode their own stored payloads through the
+host-supplied `RecordSource` interface. Authenticated storage access and finite
+delivery receipts retain framework ownership.
+Redis storage positions and RESP value ranges belong to its
 protocol library. Recorder retains capture clocks, ownership and persistence.
 Native capture payloads and physical value locations belong to the HTTP,
 MySQL and Redis libraries. Protocol references retain open identity fields, and
@@ -54,6 +65,18 @@ The recording queue holds protocol-independent `CapturedEvent` snapshots.
 Native evidence adapters project process-traffic observations and aggregate
 their own summary formats. Shared process aggregation retains attribution,
 bounded observation counts and publication.
+Open native connection capabilities supply capture sessions, serving sessions and
+Source exchange projections. Native drivers retain transport framing, handshake
+and session state. Recording hosts authorize captures and preserve their original
+ownership through output receipts and persistence. Replay hosts retain shared
+selection, identity/time rules, sequence waits, response materialization and actual
+write/flush receipts. Registered exchanges participate in Case tails, startup
+closure, cancellation and reconciliation through framework capture identities.
+Value-rule bindings retain one semantic definition across protocol selectors and
+their effective signature participates in protected evidence identity.
+`traffic-protocol-fixture` is a development-only native implementation used by
+normal recording/replay conformance tests. It depends on the protocol contracts
+and model libraries.
 `traffic-response-rewrite` owns pure document selection, decoding,
 address discovery and materialization. The root HTTP adapter owns route
 registration, managed processes and provenance. See

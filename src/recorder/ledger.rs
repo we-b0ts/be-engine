@@ -287,6 +287,9 @@ impl CaptureRegistry {
 }
 
 impl CaptureReservation {
+    pub(crate) fn exchange_id(&self) -> Uuid {
+        self.0.exchange_id
+    }
     pub(crate) fn wire_terminal(&self) -> bool {
         self.0
             .facts

@@ -1,4 +1,6 @@
 //! HTTP wire recognition and native message adaptation.
+pub mod body_capture;
+pub mod content_encoding;
 pub mod headers;
 pub mod message;
 pub mod multipart;

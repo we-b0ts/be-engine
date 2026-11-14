@@ -63,6 +63,7 @@ pub(in crate::replay) struct SourceScopeIdentity {
 
 #[derive(Debug, Clone, Default)]
 pub(in crate::replay) struct NativeCaseRefs {
+    pub registered: Arc<[usize]>,
     pub http: Arc<[usize]>,
     pub redis: Arc<[usize]>,
     pub mysql: Arc<[usize]>,

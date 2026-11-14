@@ -7,7 +7,7 @@ use crate::AppState;
 use crate::active_case::DependencyTargets;
 use crate::recorder::RecorderEvent;
 
-use super::tracker::MysqlQueryCompletion;
+use traffic_protocol_mysql::capture::MysqlQueryCompletion;
 
 #[derive(Clone, Default)]
 pub(super) struct QueryDependencyOwnerships {

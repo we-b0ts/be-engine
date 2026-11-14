@@ -32,6 +32,7 @@ mod command_protocol_tests;
 mod connect_failure;
 mod contract_value;
 mod lifecycle_cleanup;
+mod native;
 pub(crate) use memcached::contracts::{
     source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
 };
@@ -473,6 +474,7 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 #[derive(Debug)]
 struct ReplayState {
     providers: Arc<crate::protocols::DependencyProviders>,
+    native: native::Inventory,
     admission_epoch: u64,
     case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
     sequence_catalog: Option<Arc<traffic_replay::SequenceCatalog>>,
@@ -608,6 +610,16 @@ async fn handle_gateway_connection(
                     target.protocol = protocol;
                     http::handle_http_replay_connection(stream, peer_addr, target, state, ca).await
                 }
+                Some(protocol)
+                    if providers.registrations().iter().any(|entry| {
+                        entry.kind.id() == protocol.id()
+                            && entry.provider.native_protocol().is_some()
+                    }) =>
+                {
+                    let mut target = target;
+                    target.protocol = protocol;
+                    native::handle_connection(stream, peer_addr, target, state).await
+                }
                 Some(protocol) => Err(anyhow!(
                     "auto replay target resolved to unsupported protocol {protocol:?}"
                 )),
@@ -662,6 +674,15 @@ async fn handle_gateway_connection(
                 port: target.port,
             });
             mysql::handle_connection(stream, peer_addr, target, state, ca).await
+        }
+        Some(_) => {
+            native::handle_connection(
+                stream,
+                peer_addr,
+                target.context("native replay connection has no target")?,
+                state,
+            )
+            .await
         }
         None => {
             let registered_targets = state.lock().await.targets.len();

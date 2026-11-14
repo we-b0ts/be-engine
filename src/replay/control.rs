@@ -417,6 +417,7 @@ async fn finalize_replay(
     }
     let mut state = state.lock().await;
     if state.mysql.has_in_flight()
+        || state.native.has_in_flight()
         || state.redis.has_in_flight()
         || state.kafka.has_in_flight()
         || state.connect_failures.has_in_flight()
@@ -595,6 +596,8 @@ pub(super) async fn begin_case(
     state.redis.pubsub.namespace_sessions.begin_case();
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
+    } else {
+        state.native.contracts.begin_case(case_id);
     }
     if let Some(case) = state.cases.get_mut(case_id) {
         case.status = ReplayCaseStatus::Active;
@@ -743,6 +746,8 @@ pub(super) async fn end_case(
         if let Some(policy) = &state.replay_policy {
             policy.request_contracts.clear_time_copies(case_id);
             policy.request_contracts.clear_identities(case_id);
+        } else {
+            state.native.contracts.clear_identities(case_id);
         }
         deferred::release_consumed_payloads(&mut state);
         sample
@@ -895,6 +900,7 @@ impl ReplayState {
             return true;
         }
         let dirty = self.unrecorded_case_ids.contains(case_id)
+            || self.native.case_is_dirty(case_id)
             || self.mysql.case_is_dirty(case_id)
             || self.http_case_is_dirty(case_id)
             || self.redis.case_is_dirty(case_id)
