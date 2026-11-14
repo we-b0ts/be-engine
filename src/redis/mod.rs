@@ -1,5 +1,3 @@
-pub(crate) mod access;
-
 pub(crate) use traffic_protocol_redis::key_slots;
 pub(crate) mod socketio_rpc;
 mod wire;

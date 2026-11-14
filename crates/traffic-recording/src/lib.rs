@@ -7,6 +7,8 @@ use traffic_model::trace::RecordedEvent;
 use uuid::Uuid;
 mod event;
 pub use event::CapturedEvent;
+mod extensions;
+pub use extensions::RecordingExtensions;
 
 #[derive(Clone)]
 pub struct RecordingClock(Arc<Clock>);

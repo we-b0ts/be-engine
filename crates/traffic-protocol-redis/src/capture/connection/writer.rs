@@ -6,18 +6,17 @@ use std::collections::BTreeMap;
 pub(super) async fn run_ordered_writer(
     client_write: Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
     mut output_rx: mpsc::Receiver<RedisOutput>,
-    state: AppState,
+    host: Arc<dyn CaptureHost>,
     context: ConnectionContext,
     connection_id: Uuid,
     termination: ConnectionTermination,
     max_frame_bytes: usize,
     client_control: ConnectionControl,
-    capture_health: Arc<ConnectionCaptureHealth>,
 ) -> Result<(u64, bool)> {
     let mut next_sequence = 1_u64;
     let mut buffered =
         BTreeMap::<u64, (Bytes, Option<(PendingRedisExchange, RedisFrameKind)>)>::new();
-    let mut deferred_pushes = VecDeque::<Box<pubsub::CapturedPush>>::new();
+    let mut deferred_pushes = VecDeque::<QueuedPush>::new();
     let mut bytes = 0_u64;
     let mut client_open = true;
     let mut replay_safe = true;
@@ -34,7 +33,7 @@ pub(super) async fn run_ordered_writer(
                     if client_open {
                         let receipt = completion.as_ref().and_then(|(exchange, _)| {
                             exchange
-                                .targets
+                                .capture
                                 .prepare_output(traffic_model::trace::OutputKind::End)
                         });
                         let (written, result) = write_response(&client_write, &payload).await;
@@ -46,7 +45,6 @@ pub(super) async fn run_ordered_writer(
                                 }
                                 if let Some((exchange, response_kind)) = completion {
                                     record_exchange(
-                                        &state,
                                         connection_id,
                                         &context,
                                         exchange,
@@ -65,13 +63,12 @@ pub(super) async fn run_ordered_writer(
                                         exchange.warnings.push("Redis short write prefix has no captured delivery timing".to_string());
                                     }
                                     replay_safe &= record_termination(
-                                        &state,
                                         connection_id,
                                         &context,
                                         exchange,
                                         &payload[..written],
                                         &termination,
-                                        !capture_health.is_degraded() && written == 0,
+                                        !host.is_degraded() && written == 0,
                                         max_frame_bytes,
                                     )
                                     .await?;
@@ -82,13 +79,12 @@ pub(super) async fn run_ordered_writer(
                     } else if let Some((exchange, _)) = completion {
                         client_open = false;
                         replay_safe &= record_termination(
-                            &state,
                             connection_id,
                             &context,
                             exchange,
                             b"",
                             &termination,
-                            !capture_health.is_degraded(),
+                            !host.is_degraded(),
                             max_frame_bytes,
                         )
                         .await?;
@@ -106,26 +102,26 @@ pub(super) async fn run_ordered_writer(
                         )
                         .await?
                         {
-                            push.record(&state).await?;
+                            push.capture.record().await?;
                         }
                     }
                 }
             }
-            RedisOutput::PubSubPush { capture } => {
+            RedisOutput::PubSubPush { push } => {
                 if buffered.is_empty() {
                     if pubsub::write_push(
                         &client_write,
                         &termination,
                         &mut client_open,
                         &mut bytes,
-                        &capture.bytes,
+                        &push.bytes,
                     )
                     .await?
                     {
-                        capture.record(&state).await?;
+                        push.capture.record().await?;
                     }
                 } else {
-                    deferred_pushes.push_back(capture);
+                    deferred_pushes.push_back(push);
                 }
             }
             RedisOutput::Terminated {
@@ -134,8 +130,7 @@ pub(super) async fn run_ordered_writer(
                 reset,
             } => {
                 if !response.is_empty() && exchanges.is_empty() {
-                    capture_health.activate(
-                        &state,
+                    host.degrade(
                         "Redis response prefix arrived without a pending request".to_string(),
                     );
                     replay_safe = false;
@@ -165,7 +160,7 @@ pub(super) async fn run_ordered_writer(
                         .filter_map(|exchange| {
                             let (outcome, _) = termination.outcome_since(exchange.started)?;
                             let terminal = outcome.termination()?;
-                            exchange.targets.prepare_output(
+                            exchange.capture.prepare_output(
                                 traffic_model::trace::OutputKind::Terminated {
                                     termination: terminal,
                                 },
@@ -199,7 +194,6 @@ pub(super) async fn run_ordered_writer(
                         );
                     }
                     replay_safe &= record_termination(
-                        &state,
                         connection_id,
                         &context,
                         exchange,
@@ -209,7 +203,7 @@ pub(super) async fn run_ordered_writer(
                             b""
                         },
                         &termination,
-                        !capture_health.is_degraded() && timed_delivery,
+                        !host.is_degraded() && timed_delivery,
                         max_frame_bytes,
                     )
                     .await?;
@@ -220,13 +214,12 @@ pub(super) async fn run_ordered_writer(
                 for (_, (_, completion)) in std::mem::take(&mut buffered) {
                     if let Some((exchange, _)) = completion {
                         replay_safe &= record_termination(
-                            &state,
                             connection_id,
                             &context,
                             exchange,
                             b"",
                             &termination,
-                            !capture_health.is_degraded(),
+                            !host.is_degraded(),
                             max_frame_bytes,
                         )
                         .await?;
@@ -273,130 +266,6 @@ async fn write_payload<W: AsyncWrite + Unpin>(
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
-
-    #[tokio::test]
-    async fn disconnected_client_close_does_not_invent_peer_completion() {
-        for (engine_stop, pending_request) in
-            [(false, false), (true, false), (false, true), (true, true)]
-        {
-            let temp = tempfile::tempdir().unwrap();
-            let mut config = crate::AppConfig::default();
-            config.recording.output_dir = temp.path().join("recordings");
-            config.tls.ca_cert_path = temp.path().join("ca.pem");
-            config.tls.ca_key_path = temp.path().join("ca-key.pem");
-            let state = AppState::new(config).await.unwrap();
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let (client, accepted) = tokio::join!(
-                TcpStream::connect(listener.local_addr().unwrap()),
-                listener.accept()
-            );
-            let _peer = client.unwrap();
-            let stream = accepted.unwrap().0;
-            let control = ConnectionControl::new(&stream).unwrap();
-            control.reset().unwrap();
-            assert_eq!(
-                control.shutdown_write().unwrap_err().kind(),
-                std::io::ErrorKind::NotConnected
-            );
-            let (_read, write) = stream.into_split();
-            let termination = ConnectionTermination::default();
-            if engine_stop {
-                termination.observe_engine_stop();
-            }
-            let connection = Uuid::new_v4();
-            let exchanges = if pending_request {
-                let command = RedisCommand {
-                    name: "GET".into(),
-                    args: vec![b"key".to_vec()],
-                };
-                let targets = state.capture_dependency_request(
-                    crate::recorder::request::DependencyRequest::Redis {
-                        target_port: 6379,
-                        command: &command.name,
-                        args: &command.args,
-                    },
-                );
-                targets.bind_protocol(crate::dependency::observation::ProtocolRef::connection(
-                    "redis", connection, 1,
-                ));
-                vec![PendingRedisExchange {
-                    targets,
-                    sequence: 1,
-                    recorded_args: command.args.clone(),
-                    command,
-                    session: RedisSession {
-                        resp_version: 2,
-                        database: 0,
-                        username: None,
-                        subscriptions: pubsub::Subscriptions::default(),
-                    },
-                    session_setup: false,
-                    replay_safe: true,
-                    warnings: Vec::new(),
-                    cache_snapshot_rule: None,
-                    cache_snapshot_key: None,
-                    cache_snapshot_hit: false,
-                    started: Instant::now(),
-                    request_started_at: Utc::now(),
-                    ended_at: None,
-                }]
-            } else {
-                vec![]
-            };
-            let (tx, rx) = mpsc::channel(1);
-            tx.send(RedisOutput::Terminated {
-                exchanges,
-                response: Bytes::new(),
-                reset: false,
-            })
-            .await
-            .unwrap();
-            drop(tx);
-            let context = ConnectionContext {
-                client_addr: None,
-                target_host: "redis.test".into(),
-                target_port: 6379,
-                target_addr: "127.0.0.1:6379".into(),
-                upstream_addr: "127.0.0.1:6379".into(),
-            };
-            let health = Arc::new(ConnectionCaptureHealth::new(
-                connection,
-                "redis",
-                None,
-                context.target_addr.clone(),
-            ));
-            let result = run_ordered_writer(
-                Arc::new(Mutex::new(write)),
-                rx,
-                state.clone(),
-                context,
-                connection,
-                termination.clone(),
-                4096,
-                control,
-                health,
-            )
-            .await;
-            assert_eq!(result.unwrap(), (0, !pending_request));
-            assert!(termination.peer_snapshot().is_none());
-            if pending_request {
-                state.recorder().flush_traffic().await.unwrap();
-                let raw = crate::recorder::test_io::read_to_string(
-                    state.recorder().run_dir.join("traffic.jsonl"),
-                )
-                .await
-                .unwrap();
-                let exchange = raw
-                    .lines()
-                    .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-                    .find(|row| row["event_type"] == "redis_exchange")
-                    .unwrap();
-                assert_eq!(exchange["replay_safe"], false);
-                assert_eq!(exchange["outcome"], "response");
-                assert!(!exchange["parse_warnings"].as_array().unwrap().is_empty());
-            }
-        }
-    }
 
     #[tokio::test]
     async fn failed_short_write_keeps_the_delivered_prefix_length() {

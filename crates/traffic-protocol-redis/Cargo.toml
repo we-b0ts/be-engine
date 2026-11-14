@@ -15,7 +15,7 @@ traffic-protocol = { path = "../traffic-protocol" }
 anyhow = "1"
 bytes = "1"
 redis-protocol = { version = "6", features = ["bytes"] }
-tokio = { version = "1", features = ["io-util"] }
+tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time", "macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "io-util"] }

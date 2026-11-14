@@ -13,7 +13,7 @@ use super::{ProxyErrorEvent, RecorderEvent};
 const RAW_COPY_BUFFER_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RawTrafficDirection {
+pub(crate) enum RawTrafficDirection {
     ClientToServer,
     ServerToClient,
 }
@@ -25,7 +25,7 @@ struct CaptureStatus {
 }
 
 #[derive(Debug)]
-pub(super) struct ConnectionCaptureHealth {
+pub(crate) struct ConnectionCaptureHealth {
     connection_id: Uuid,
     protocol: &'static str,
     client_addr: Option<String>,
@@ -35,7 +35,7 @@ pub(super) struct ConnectionCaptureHealth {
 }
 
 impl ConnectionCaptureHealth {
-    pub(super) fn new(
+    pub(crate) fn new(
         connection_id: Uuid,
         protocol: &'static str,
         client_addr: Option<String>,
@@ -54,7 +54,7 @@ impl ConnectionCaptureHealth {
         }
     }
 
-    pub(super) fn activate(&self, state: &AppState, reason: String) {
+    pub(crate) fn activate(&self, state: &AppState, reason: String) {
         let targets = state.capture_dependency_targets();
         let current_case = targets.cases.first().map(|(case, _)| case.id);
         let first = {
@@ -75,11 +75,11 @@ impl ConnectionCaptureHealth {
         state.record_event_for_targets(self.proxy_error(reason), targets);
     }
 
-    pub(super) fn is_degraded(&self) -> bool {
+    pub(crate) fn is_degraded(&self) -> bool {
         self.degraded.load(Ordering::Acquire)
     }
 
-    pub(super) fn reason(&self) -> Option<String> {
+    pub(crate) fn reason(&self) -> Option<String> {
         self.status
             .lock()
             .expect("capture health poisoned")
@@ -87,7 +87,7 @@ impl ConnectionCaptureHealth {
             .clone()
     }
 
-    pub(super) async fn write_raw<W>(
+    pub(crate) async fn write_raw<W>(
         &self,
         state: &AppState,
         direction: RawTrafficDirection,
@@ -105,7 +105,7 @@ impl ConnectionCaptureHealth {
         Ok(bytes.len() as u64)
     }
 
-    pub(super) async fn copy_raw<R, W>(
+    pub(crate) async fn copy_raw<R, W>(
         &self,
         state: &AppState,
         direction: RawTrafficDirection,
@@ -129,7 +129,7 @@ impl ConnectionCaptureHealth {
         }
     }
 
-    fn note_activity(&self, state: &AppState, direction: RawTrafficDirection) {
+    pub(crate) fn note_activity(&self, state: &AppState, direction: RawTrafficDirection) {
         if direction != RawTrafficDirection::ClientToServer || !self.is_degraded() {
             return;
         }

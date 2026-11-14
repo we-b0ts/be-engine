@@ -22,9 +22,6 @@ use crate::recorder::memcached::{
 use crate::recorder::motan::{
     ConnectionContext as MotanConnectionContext, handle_connected as handle_connected_motan,
 };
-use crate::recorder::redis::{
-    ConnectionContext as RedisConnectionContext, handle_connected as handle_connected_redis,
-};
 use crate::recording_control::RecordingListener;
 
 use super::{
@@ -350,11 +347,21 @@ async fn proxy_raw_tcp(
                 "redis",
             )
             .await?;
-            handle_connected_redis(
+            let info = traffic_protocol::connection::ConnectionInfo {
+                endpoint: traffic_protocol::connection::Endpoint {
+                    host: entry.domain,
+                    port: fake_addr.port(),
+                },
+                client_addr,
+                upstream_addr: Some(upstream_addr.to_string()),
+                max_frame_bytes: state.config().recording.max_body_bytes,
+            };
+            crate::recorder::native::handle_connected(
+                crate::protocols::DependencyProtocol::Redis,
                 client,
                 upstream,
                 state,
-                redis_context(&entry, fake_addr, upstream_addr, client_addr),
+                info,
             )
             .await
         }
@@ -485,21 +492,6 @@ async fn proxy_raw_tcp(
             }
             Ok(())
         }
-    }
-}
-
-fn redis_context(
-    entry: &FakeDnsEntry,
-    fake_addr: SocketAddr,
-    upstream_addr: SocketAddr,
-    client_addr: Option<String>,
-) -> RedisConnectionContext {
-    RedisConnectionContext {
-        client_addr,
-        target_host: entry.domain.clone(),
-        target_port: fake_addr.port(),
-        target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
-        upstream_addr: upstream_addr.to_string(),
     }
 }
 

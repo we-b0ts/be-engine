@@ -3,7 +3,7 @@ use crate::AppState;
 use crate::active_case::DependencyTargets;
 use crate::recorder::RecorderEvent;
 
-pub(in crate::recorder::redis) async fn record_subscription(
+pub(in crate::protocols::redis) async fn record_subscription(
     state: &AppState,
     event: RecorderEvent,
     targets: DependencyTargets,

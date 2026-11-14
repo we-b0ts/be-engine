@@ -19,7 +19,7 @@ use crate::request_headers::RequestHeaderCapture;
 pub(crate) mod async_api;
 pub(crate) mod background;
 mod capture;
-mod capture_health;
+pub(crate) mod capture_health;
 pub(crate) mod case;
 pub(crate) mod connect_failure;
 pub(crate) mod connections;
@@ -37,7 +37,6 @@ mod network;
 mod preparation;
 pub(crate) mod process_classification;
 pub(crate) mod readiness;
-pub(crate) mod redis;
 pub(crate) mod request;
 mod run;
 mod shutdown;
@@ -73,7 +72,7 @@ struct RecorderOptions {
 #[derive(Clone)]
 pub struct Recorder {
     global_preparation: Option<Arc<preparation::GlobalPreparation>>,
-    pub(crate) redis_rpc: Arc<std::sync::Mutex<redis::rpc::CaptureState>>,
+    pub(crate) extensions: traffic_recording::RecordingExtensions,
     artifact_owner: Option<ArtifactOwner>,
     traffic_jsonl: TrafficJsonlMode,
     writer: writer::RecorderWriter,
@@ -225,7 +224,7 @@ impl Recorder {
             .collect();
         let recorder = Self {
             global_preparation: None,
-            redis_rpc: Default::default(),
+            extensions: Default::default(),
             artifact_owner,
             traffic_jsonl,
             capture: ledger::CaptureRegistry::new(writer.clone(), process_epoch),

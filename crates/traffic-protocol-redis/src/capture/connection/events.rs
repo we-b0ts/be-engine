@@ -1,9 +1,9 @@
 //! Redis exchange and connection event projection.
 use super::*;
+use traffic_model::capture::capture_body;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn record_exchange(
-    state: &AppState,
     connection_id: Uuid,
     context: &ConnectionContext,
     mut pending: PendingRedisExchange,
@@ -12,7 +12,6 @@ pub(super) async fn record_exchange(
     outcome: DependencyExchangeOutcome,
     max_frame_bytes: usize,
 ) -> Result<()> {
-    pending.targets.record_output(outcome);
     let subscription_replay_safe = if outcome.is_client_terminated()
         || outcome.is_server_terminated()
     {
@@ -69,18 +68,13 @@ pub(super) async fn record_exchange(
         )
         && response_kind == RedisFrameKind::Array
         && outcome == DependencyExchangeOutcome::Response;
-    let rpc_callback_capture =
-        crate::redis::socketio_rpc::request(&pending.command.name, &pending.command.args)
-            .ok()
-            .flatten()
-            .map(|_| "bounded_window".to_owned());
-    let event = RecorderEvent::RedisExchange(RedisExchangeEvent {
+    let event = RedisExchangeEvent {
         id: Uuid::new_v4(),
         connection_id,
         sequence: pending.sequence,
         timestamp: pending
             .ended_at
-            .map(crate::dependency::termination::observed_wall_time)
+            .map(traffic_protocol::transport::observed_wall_time)
             .unwrap_or_else(Utc::now),
         request_started_at: pending.request_started_at,
         client_addr: context.client_addr.clone(),
@@ -95,9 +89,9 @@ pub(super) async fn record_exchange(
         args,
         response_kind: response_kind.as_str().to_string(),
         response,
-        rpc_callback_capture,
-        cache_snapshot_rule: pending.cache_snapshot_rule,
-        cache_snapshot_hit: pending.cache_snapshot_hit,
+        rpc_callback_capture: None,
+        cache_snapshot_rule: None,
+        cache_snapshot_hit: false,
         session_setup: pending.session_setup,
         outcome,
         duration_ms: pending
@@ -107,18 +101,16 @@ pub(super) async fn record_exchange(
             .as_millis(),
         replay_safe,
         parse_warnings: pending.warnings,
-    });
-    if confirmed_subscription {
-        pubsub::record_subscription(state, event, pending.targets).await?;
-    } else {
-        state.record_event_for_targets(event, pending.targets);
-    }
-    Ok(())
+    };
+    pending
+        .capture
+        .complete(event, confirmed_subscription)
+        .await
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn record_connection(
-    state: &AppState,
+    host: &dyn CaptureHost,
     id: Uuid,
     context: &ConnectionContext,
     phase: &str,
@@ -129,33 +121,29 @@ pub(super) async fn record_connection(
     replay_safe: bool,
     error: Option<String>,
 ) -> Result<()> {
-    record_event(
-        state,
-        RecorderEvent::RedisConnection(RedisConnectionEvent {
-            id,
-            timestamp: Utc::now(),
-            phase: phase.to_string(),
-            client_addr: context.client_addr.clone(),
-            target_host: context.target_host.clone(),
-            target_port: context.target_port,
-            target_addr: context.target_addr.clone(),
-            upstream_addr: context.upstream_addr.clone(),
-            resp_version: session.resp_version,
-            database: session.database,
-            username: session.username.clone(),
-            duration_ms,
-            client_to_server_bytes,
-            server_to_client_bytes,
-            replay_safe,
-            error,
-        }),
-    )
+    host.observe_connection(RedisConnectionEvent {
+        id,
+        timestamp: Utc::now(),
+        phase: phase.to_string(),
+        client_addr: context.client_addr.clone(),
+        target_host: context.target_host.clone(),
+        target_port: context.target_port,
+        target_addr: context.target_addr.clone(),
+        upstream_addr: context.upstream_addr.clone(),
+        resp_version: session.resp_version,
+        database: session.database,
+        username: session.username.clone(),
+        duration_ms,
+        client_to_server_bytes,
+        server_to_client_bytes,
+        replay_safe,
+        error,
+    })
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn record_termination(
-    state: &AppState,
     connection_id: Uuid,
     context: &ConnectionContext,
     mut exchange: PendingRedisExchange,
@@ -164,11 +152,7 @@ pub(super) async fn record_termination(
     healthy: bool,
     max_frame_bytes: usize,
 ) -> Result<bool> {
-    if let Some(key) = exchange.cache_snapshot_key.take() {
-        state
-            .abort_cache_snapshot(&key, "Redis snapshot fill ended before a response")
-            .await;
-    }
+    exchange.capture.abort_response().await?;
     let terminal = termination.outcome_since(exchange.started);
     let clean_quit = is_terminal_quit(&exchange.command) && healthy;
     let prefix_timing_known =
@@ -191,7 +175,6 @@ pub(super) async fn record_termination(
         terminal.map_or(DependencyExchangeOutcome::Response, |(outcome, _)| outcome)
     };
     record_exchange(
-        state,
         connection_id,
         context,
         exchange,

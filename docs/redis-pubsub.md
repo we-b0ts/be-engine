@@ -282,7 +282,7 @@ absence alone is never a synthesized timeout-response fixture.
 
 ## Validation
 
-`cargo test pubsub` and `cargo test recorder::redis` exercise actual TCP Recorder
+`cargo test pubsub` and `cargo test protocols::redis` exercise actual TCP Recorder
 and Replay connections,
 binary notifications, pattern/shard subscriptions, cross-connection RPC results,
 identity translation, strict command data, finite consumption, missing-evidence

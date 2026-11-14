@@ -1,13 +1,8 @@
-mod capture;
-mod evidence;
-use crate::dependency::termination::ConnectionTermination;
+//! RESP push forwarding shares the connection's ordered native writer.
 use anyhow::Result;
-pub(super) use capture::{CapturedPush, capture};
-pub(super) use evidence::record_subscription;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
-pub(super) use traffic_protocol_redis::capture::Subscriptions;
+use tokio::{io::AsyncWriteExt, sync::Mutex};
+use traffic_protocol::transport::ConnectionTermination;
 
 pub(super) async fn write_push(
     client_write: &Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,

@@ -1,9 +1,14 @@
 //! RPC attribution is separate from generic RESP Pub/Sub capture.
-use super::*;
+use super::ConnectionContext;
+use crate::AppState;
 use crate::active_case::DependencyTargets;
 use crate::recorder::RedisRpcRequestRef;
 use crate::redis::{RedisPubSubPush, socketio_rpc as rpc};
+use anyhow::Result;
 use std::collections::HashMap;
+use std::{sync::Arc, time::Instant};
+use traffic_protocol_redis::RedisCommand;
+use uuid::Uuid;
 
 type Key = (String, u16, Vec<u8>, rpc::Identity);
 
@@ -43,11 +48,11 @@ pub(super) fn observe(
         return Ok(());
     };
     let key = key(context, command.args[0].clone(), request.identity);
-    let mut captures = state
+    let registry = state
         .recorder()
-        .redis_rpc
-        .lock()
-        .expect("Redis RPC captures");
+        .extensions
+        .get::<std::sync::Mutex<CaptureState>>();
+    let mut captures = registry.lock().expect("Redis RPC captures");
     anyhow::ensure!(
         captures.pending.len() < 4096,
         "Redis RPC capture limit exceeded"
@@ -72,7 +77,7 @@ pub(super) fn observe(
     );
     if !captures.cleaner_started {
         captures.cleaner_started = true;
-        let registry = state.recorder().redis_rpc.clone();
+        let registry = registry.clone();
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
             loop {
@@ -92,14 +97,16 @@ pub(super) fn observe(
     Ok(())
 }
 
-pub(in crate::recorder::redis) fn take(
+pub(in crate::protocols::redis) fn take(
     state: &AppState,
     context: &ConnectionContext,
     push: &RedisPubSubPush,
 ) -> Option<(RedisRpcRequestRef, Option<DependencyTargets>, u64)> {
-    if state
+    let registry = state
         .recorder()
-        .redis_rpc
+        .extensions
+        .get::<std::sync::Mutex<CaptureState>>();
+    if registry
         .lock()
         .expect("Redis RPC captures")
         .pending
@@ -108,9 +115,7 @@ pub(in crate::recorder::redis) fn take(
         return None;
     }
     let (identity, _) = rpc::callback(&push.payload).ok().flatten()?;
-    let pending = state
-        .recorder()
-        .redis_rpc
+    let pending = registry
         .lock()
         .expect("Redis RPC captures")
         .pending

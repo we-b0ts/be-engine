@@ -150,15 +150,15 @@ impl Recorder {
         Ok(None)
     }
 
-    pub(super) async fn flush_case_dependency_files(&self, dir: &Path) -> Result<()> {
+    pub(crate) async fn flush_case_dependency_files(&self, dir: &Path) -> Result<()> {
         self.writer.flush_case(dir).await
     }
 
-    pub(super) async fn flush_global_dependency_files(&self) -> Result<()> {
+    pub(crate) async fn flush_global_dependency_files(&self) -> Result<()> {
         self.writer.flush_global().await
     }
 
-    pub(super) async fn flush_all_dependency_files(&self) -> Result<()> {
+    pub(crate) async fn flush_all_dependency_files(&self) -> Result<()> {
         self.writer.flush_all().await
     }
 }

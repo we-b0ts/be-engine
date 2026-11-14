@@ -1,25 +1,38 @@
 //! Generic RESP push evidence and writer admission.
-use super::super::*;
+use super::super::{ConnectionContext, rpc};
 use crate::active_case::DependencyTargets;
 use crate::recorder::RedisPubSubPushEvent;
 use crate::redis::RedisPubSubPush;
+use crate::{
+    AppState,
+    recorder::{RecorderEvent, capture_body},
+};
+use anyhow::Result;
+use bytes::Bytes;
+use chrono::Utc;
+use traffic_protocol::connection::NativeFuture;
+use traffic_protocol_redis::capture::CaptureSessionState as RedisSession;
+use traffic_protocol_redis::capture::connection::CapturedPush as NativeCapturedPush;
+use uuid::Uuid;
 
-pub(in crate::recorder::redis) struct CapturedPush {
-    pub bytes: Bytes,
+pub(in crate::protocols::redis) struct CapturedPush {
+    state: AppState,
     event: RedisPubSubPushEvent,
     targets: DependencyTargets,
 }
 
-impl CapturedPush {
-    pub async fn record(self, state: &AppState) -> Result<()> {
-        let event = RecorderEvent::RedisPubSubPush(self.event);
-        state.record_event_for_targets(event, self.targets);
-        Ok(())
+impl NativeCapturedPush for CapturedPush {
+    fn record(self: Box<Self>) -> NativeFuture<'static, ()> {
+        Box::pin(async move {
+            let event = RecorderEvent::RedisPubSubPush(self.event);
+            self.state.record_event_for_targets(event, self.targets);
+            Ok(())
+        })
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::recorder::redis) fn capture(
+pub(in crate::protocols::redis) fn capture(
     state: &AppState,
     context: &ConnectionContext,
     session: &RedisSession,
@@ -29,7 +42,7 @@ pub(in crate::recorder::redis) fn capture(
     subscription_sequence: u64,
     elapsed_ms: u64,
 ) -> Result<CapturedPush> {
-    let pending = super::super::rpc::take(state, context, push);
+    let pending = rpc::take(state, context, push);
     let (reference, targets, duration_ms) = match pending {
         Some((reference, targets, elapsed)) => (
             Some(reference),
@@ -63,7 +76,7 @@ pub(in crate::recorder::redis) fn capture(
             response,
             duration_ms,
         },
-        bytes,
+        state: state.clone(),
         targets,
     })
 }

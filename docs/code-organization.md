@@ -57,6 +57,14 @@ delivery receipts retain framework ownership.
 Native capture facts supply the common outcome explicitly. Snapshot construction
 validates its shared transport contract and any compatible flattened outcome.
 Protocol evidence adapters interpret their own native safety fields.
+The Redis recording connection driver owns RESP framing, FIFO correlation,
+ordered output, subscription confirmation and FIN/RST projection in
+`traffic-protocol-redis::capture::connection`. Application bindings under
+`protocols/redis` supply request admission, snapshot coordination, RPC ownership,
+capture health, persistence and actual output receipts. Admitted requests and
+queued notifications retain opaque host-owned capture leases. Recording-local
+extensions store application protocol state without adding native fields to the
+Recorder. Native connection libraries retain their own event safety projection.
 `traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
 endpoint identities. MySQL session control and Source transaction analysis use
 these immutable inputs to project original wire positions, complete read prefixes,
@@ -1018,14 +1026,14 @@ retain the same responsibility and 1000-line requirements as `src/`.
 
 - `redis/wire` owns generic RESP2 Pub/Sub framing; `redis/socketio_rpc` owns the
   bounded Redis-adapter JSON codec without application semantics.
-  `recorder/redis/pubsub` owns confirmed subscription state and its `capture`
-  child persists generic frames; its `evidence` child retains subscription
-  confirmations and same-command Global mirrors without changing Case ownership.
-  `recorder/redis/rpc` retains RPC attribution across connections without
+  `traffic-protocol-redis::capture` owns confirmed subscription state and native
+  connection/exchange projection. The `protocols/redis/pubsub/capture` binding
+  persists generic frames; its `evidence` sibling retains subscription
+  confirmations with their original Case ownership.
+  `protocols/redis/rpc` retains RPC attribution across connections without
   extending a completed PUBLISH's in-flight lifetime. A callback reacquires
   its original Case only while admission remains open; later callbacks retain
-  exact publisher references in Global evidence. `recorder/redis/events`
-  projects connection/exchange records. `replay/redis/pubsub` owns finite push
+  exact publisher references in Global evidence. `replay/redis/pubsub` owns finite push
   evidence, subscription routing and delivery; its `adapter` child owns
   Socket.IO Redis-adapter identity correlation. Its `echo` child associates exact
   finite Source PUBLISH payloads with recorded self-echo notifications and delivers

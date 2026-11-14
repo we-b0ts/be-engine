@@ -38,11 +38,11 @@ async fn redis_capture(
         for _ in 0..2 {
             let (client, client_address) = recorder.accept().await.unwrap();
             let upstream = TcpStream::connect(upstream_address).await.unwrap();
-            crate::recorder::redis::handle_connected(
+            crate::protocols::redis::handle_connected(
                 client,
                 upstream,
                 state.clone(),
-                crate::recorder::redis::ConnectionContext {
+                crate::protocols::redis::ConnectionContext {
                     client_addr: Some(client_address.to_string()),
                     target_host: "redis.test".into(),
                     target_port: 6379,
