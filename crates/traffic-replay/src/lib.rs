@@ -5,6 +5,23 @@ use std::sync::Arc;
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
+pub mod index;
+pub mod request;
+pub mod request_wait;
+pub mod rules;
+mod scope;
+pub use scope::ReplaySource;
+mod status;
+pub use status::ReplayExchangeStatus;
+mod sequence_binding;
+pub use sequence_binding::SequenceBinding;
+mod waiting;
+pub use waiting::{WaitOutcome, WaitRegistration};
+mod request_order;
+pub use request_order::RequestOrder;
+mod admission;
+pub use admission::{Barrier, ClaimKind, ClaimTicket, DeliveryGuard, Finish, Lifecycle};
+
 mod catalog;
 pub use catalog::SequenceCatalog;
 mod runtime;
@@ -395,3 +412,6 @@ impl SequenceScheduler {
 
 #[cfg(test)]
 mod tests;
+
+pub mod candidate_selection;
+pub mod command;

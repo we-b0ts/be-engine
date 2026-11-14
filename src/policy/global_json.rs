@@ -679,15 +679,7 @@ fn scope_time(pointer: &str, contract: &mut FieldContract) -> Result<()> {
     Ok(())
 }
 
-/// Automatic groups carry no authored cross-field clock relationship.
-pub fn is_schema_clock_group(group: &str) -> bool {
-    group.strip_prefix("schema.").is_some_and(|value| {
-        value.len() == 32
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
-}
+pub use traffic_contract::rule::is_schema_clock_group;
 
 #[cfg(test)]
 mod tests;

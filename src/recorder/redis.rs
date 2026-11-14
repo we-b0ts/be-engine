@@ -306,10 +306,11 @@ pub(crate) async fn handle_connected(
                     args: &command.args,
                 },
             );
-            targets.bind_protocol(crate::dependency::observation::ProtocolRef::Redis {
+            targets.bind_protocol(crate::dependency::observation::ProtocolRef::connection(
+                "redis",
                 connection_id,
                 sequence,
-            });
+            ));
             if let Err(error) = rpc::observe(
                 &c2s_state,
                 &c2s_context,

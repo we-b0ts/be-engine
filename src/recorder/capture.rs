@@ -2,26 +2,12 @@ use std::collections::HashSet;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use bytes::Bytes;
 use hyper::HeaderMap;
 
-use super::{BodyCapture, CaseBodyCapture, HeaderMapSnapshot};
+use super::{CaseBodyCapture, HeaderMapSnapshot};
 use crate::http::content_encoding;
 
-pub fn capture_body(bytes: &[u8], max_body_bytes: usize) -> BodyCapture {
-    let stored_len = bytes.len().min(max_body_bytes);
-    capture_body_with_original_len(&bytes[..stored_len], bytes.len())
-}
-
-pub fn capture_body_with_original_len(bytes: &[u8], original_len: usize) -> BodyCapture {
-    BodyCapture {
-        encoding: "base64",
-        original_len,
-        stored_len: bytes.len(),
-        truncated: original_len > bytes.len(),
-        data: STANDARD.encode(bytes),
-    }
-}
+pub use traffic_model::capture::{capture_body, capture_body_with_original_len};
 
 pub fn capture_case_body(
     bytes: &[u8],
@@ -114,12 +100,6 @@ fn content_encoding(headers: &HeaderMap) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
-}
-
-impl From<Bytes> for BodyCapture {
-    fn from(value: Bytes) -> Self {
-        capture_body(&value, value.len())
-    }
 }
 
 #[cfg(test)]

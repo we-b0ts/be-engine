@@ -440,10 +440,11 @@ pub(crate) async fn handle_connected_mysql(
                 }
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 dependency_ownership.bind_protocol(
-                    crate::dependency::observation::ProtocolRef::Mysql {
-                        connection_id: c2s_connection_id,
+                    crate::dependency::observation::ProtocolRef::connection(
+                        "mysql",
+                        c2s_connection_id,
                         sequence,
-                    },
+                    ),
                 );
                 c2s_dependency_ownerships.insert(sequence, dependency_ownership);
                 let expects_server_response = command.expects_server_response();

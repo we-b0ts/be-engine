@@ -1,7 +1,8 @@
 //! One prepared Source scope and its stable native positions for begin/end.
 use std::sync::Arc;
 
-use super::{ReplaySource, native_index::Postings};
+#[cfg(test)]
+use super::ReplaySource;
 use crate::value_contract::plan::{EvidenceRequirements, IndexRequirements, RuleExecutionPlan};
 
 /// Eligibility is frozen from Source selectors. Exact key/SQL/value guards still
@@ -92,35 +93,7 @@ impl CaseExecutionPlan {
     }
 }
 
-/// Membership is appended alongside protocol registration and freezes only the
-/// changed Cases. Payload release and a new active Case never rebuild this map.
-#[derive(Debug, Default)]
-pub(in crate::replay) struct CaseMembership {
-    positions: Postings<String>,
-}
-
-impl CaseMembership {
-    pub(in crate::replay) fn register(
-        &mut self,
-        source: ReplaySource,
-        case: Option<&str>,
-        index: usize,
-    ) {
-        if source == ReplaySource::Case
-            && let Some(case) = case
-        {
-            self.positions.register(case.to_owned(), index);
-        }
-    }
-
-    pub(in crate::replay) fn seal(&mut self) {
-        self.positions.seal();
-    }
-
-    pub(in crate::replay) fn for_case(&self, case: &str) -> Arc<[usize]> {
-        self.positions.lookup(&case.to_owned())
-    }
-}
+pub(in crate::replay) use traffic_replay::index::CaseMembership;
 
 #[cfg(test)]
 mod tests {

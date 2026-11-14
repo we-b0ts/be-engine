@@ -10,47 +10,35 @@ impl RecorderEvent {
 
 pub(super) fn protocol_ref(event: &RecorderEvent) -> ProtocolRef {
     match event {
-        RecorderEvent::HttpExchange(e) => ProtocolRef::Http { exchange_id: e.id },
-        RecorderEvent::MysqlQuery(e) => ProtocolRef::Mysql {
-            connection_id: e.connection_id,
-            sequence: e.sequence,
-        },
-        RecorderEvent::MysqlResponse(e) => ProtocolRef::Mysql {
-            connection_id: e.connection_id,
-            sequence: e.query_sequence,
-        },
-        RecorderEvent::MysqlExchange(e) => ProtocolRef::Mysql {
-            connection_id: e.connection_id,
-            sequence: e.query_sequence,
-        },
-        RecorderEvent::RedisExchange(e) => ProtocolRef::Redis {
-            connection_id: e.connection_id,
-            sequence: e.sequence,
-        },
-        RecorderEvent::MemcachedExchange(e) => ProtocolRef::Memcached {
-            connection_id: e.connection_id,
-            sequence: e.sequence,
-        },
-        RecorderEvent::KafkaProduce(e) => ProtocolRef::Kafka {
-            connection_id: e.connection_id,
-            sequence: e.request_sequence,
-        },
-        RecorderEvent::KafkaFetch(e) => ProtocolRef::Kafka {
-            connection_id: e.connection_id,
-            sequence: e.sequence,
-        },
-        RecorderEvent::KafkaDelivery(e) => ProtocolRef::Kafka {
-            connection_id: e.connection_id,
-            sequence: e.fetch_sequence,
-        },
-        RecorderEvent::MotanExchange(e) => ProtocolRef::Motan {
-            connection_id: e.connection_id,
-            sequence: e.sequence,
-        },
-        _ => ProtocolRef::Observation {
-            event_id: observation_id(event),
-            kind: event.kind().into(),
-        },
+        RecorderEvent::HttpExchange(e) => ProtocolRef::exchange("http", e.id),
+        RecorderEvent::MysqlQuery(e) => {
+            ProtocolRef::connection("mysql", e.connection_id, e.sequence)
+        }
+        RecorderEvent::MysqlResponse(e) => {
+            ProtocolRef::connection("mysql", e.connection_id, e.query_sequence)
+        }
+        RecorderEvent::MysqlExchange(e) => {
+            ProtocolRef::connection("mysql", e.connection_id, e.query_sequence)
+        }
+        RecorderEvent::RedisExchange(e) => {
+            ProtocolRef::connection("redis", e.connection_id, e.sequence)
+        }
+        RecorderEvent::MemcachedExchange(e) => {
+            ProtocolRef::connection("memcached", e.connection_id, e.sequence)
+        }
+        RecorderEvent::KafkaProduce(e) => {
+            ProtocolRef::connection("kafka", e.connection_id, e.request_sequence)
+        }
+        RecorderEvent::KafkaFetch(e) => {
+            ProtocolRef::connection("kafka", e.connection_id, e.sequence)
+        }
+        RecorderEvent::KafkaDelivery(e) => {
+            ProtocolRef::connection("kafka", e.connection_id, e.fetch_sequence)
+        }
+        RecorderEvent::MotanExchange(e) => {
+            ProtocolRef::connection("motan", e.connection_id, e.sequence)
+        }
+        _ => ProtocolRef::observation(observation_id(event), event.kind()),
     }
 }
 

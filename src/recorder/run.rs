@@ -738,6 +738,7 @@ mod tests {
             None,
             vec![("GET /api/users/*".to_string(), 2)],
             None,
+            std::sync::Arc::new(crate::protocols::default_providers().evidence().clone()),
         )
         .await
         .unwrap();

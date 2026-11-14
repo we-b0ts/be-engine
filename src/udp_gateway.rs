@@ -74,11 +74,9 @@ async fn handle_datagram(
 ) -> Result<()> {
     let started = Instant::now();
     let id = Uuid::new_v4();
-    let targets =
-        state.capture_dependency_start(crate::dependency::observation::ProtocolRef::Observation {
-            event_id: id,
-            kind: "udp_datagram".into(),
-        });
+    let targets = state.capture_dependency_start(
+        crate::dependency::observation::ProtocolRef::observation(id, "udp_datagram"),
+    );
     let fake_addr = datagram.original_dst.unwrap_or(listen_addr);
     let client_addr = Some(datagram.peer.to_string());
     let target = target_from_fake_addr(state, fake_addr).await;

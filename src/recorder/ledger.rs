@@ -198,10 +198,7 @@ impl CaptureRegistry {
             facts: Mutex::new(AdmissionFacts {
                 transformations: Vec::new(),
                 wire_terminal: false,
-                protocol_ref: ProtocolRef::Observation {
-                    event_id: exchange_id,
-                    kind: "pending_dependency".into(),
-                },
+                protocol_ref: ProtocolRef::observation(exchange_id, "pending_dependency"),
                 terminal: None,
                 next_effect: 0,
             }),

@@ -17,17 +17,7 @@ pub enum CapturePhase {
     Shutdown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "protocol", rename_all = "snake_case")]
-pub enum ProtocolRef {
-    Http { exchange_id: Uuid },
-    Mysql { connection_id: Uuid, sequence: u64 },
-    Redis { connection_id: Uuid, sequence: u64 },
-    Memcached { connection_id: Uuid, sequence: u64 },
-    Kafka { connection_id: Uuid, sequence: u64 },
-    Motan { connection_id: Uuid, sequence: u64 },
-    Observation { event_id: Uuid, kind: String },
-}
+pub use super::reference::ProtocolRef;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureMetadata {
@@ -84,30 +74,6 @@ impl CaptureMetadata {
 
 pub fn is_case_event(value: &serde_json::Value) -> bool {
     value.get("capture").is_none() || value["capture"]["attribution"]["kind"] == "case"
-}
-
-/// Supported semantic obligations must have a native consumption owner. This
-/// predicate is shared by capture and independently rebuilt frozen inventories.
-pub fn semantic_replay_unsupported(event: &serde_json::Value, owner: &DependencyOwner) -> bool {
-    let kind = event["event_type"].as_str().unwrap_or("unknown");
-    let supported = match kind {
-        "http_exchange" | "mysql_exchange" | "redis_exchange" | "redis_pub_sub_push"
-        | "memcached_exchange" | "motan_exchange" | "kafka_produce" | "kafka_fetch"
-        | "kafka_delivery" => true,
-        "dependency_connect_failure" => matches!(owner, DependencyOwner::Case { .. }),
-        _ => false,
-    };
-    !supported
-        || event["replay_safe"] == false
-        || event["_capture_complete"] == false
-        || (kind == "mysql_exchange"
-            && event["parse_warnings"].as_array().is_some_and(|warnings| {
-                warnings.iter().any(|warning| {
-                    warning
-                        .as_str()
-                        .is_some_and(|warning| warning.contains("unsupported"))
-                })
-            }))
 }
 
 pub fn raw_tcp_has_payload(event: &serde_json::Value) -> bool {
@@ -193,7 +159,12 @@ impl Default for SemanticInventory {
 }
 
 impl SemanticInventory {
-    pub fn observe_mandatory(&mut self, event: &serde_json::Value, owner: &DependencyOwner) {
+    pub fn observe_mandatory(
+        &mut self,
+        event: &serde_json::Value,
+        owner: &DependencyOwner,
+        replay_supported: bool,
+    ) {
         let (kind, scope) = match owner {
             DependencyOwner::Case { origin_case_id, .. } => ("case", origin_case_id.to_string()),
             DependencyOwner::Startup { .. } => ("startup", "startup".into()),
@@ -204,7 +175,7 @@ impl SemanticInventory {
         self.total_mandatory += 1;
         *self.by_owner_kind.entry(kind.into()).or_default() += 1;
         self.unattributed_dependencies += u64::from(kind == "unattributed");
-        if semantic_replay_unsupported(event, owner) {
+        if !replay_supported {
             let protocol = event["event_type"].as_str().unwrap_or("unknown");
             *self
                 .unsupported_by_scope
@@ -246,35 +217,4 @@ pub struct RecordingManifest {
     pub semantic_inventory: SemanticInventory,
     pub inputs: Vec<RecordedCase>,
     pub files: Vec<LedgerFileIdentity>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn unsupported_semantics_follow_the_effective_owner_and_keep_unknown_kinds_closed() {
-        let case = DependencyOwner::Case {
-            origin_case_id: Uuid::new_v4(),
-            task_instance: None,
-        };
-        let process = DependencyOwner::Process {
-            process_epoch: Uuid::new_v4(),
-            source_task: "worker".into(),
-            invocation: None,
-        };
-        let failure = json!({"event_type":"dependency_connect_failure"});
-        assert!(!semantic_replay_unsupported(&failure, &case));
-        assert!(semantic_replay_unsupported(&failure, &process));
-        for event in [
-            json!({"event_type":"udp_datagram"}),
-            json!({"event_type":"unimplemented_exchange"}),
-            json!({"event_type":"mysql_exchange", "parse_warnings":["unsupported result framing"]}),
-            json!({"event_type":"redis_exchange", "replay_safe":false}),
-        ] {
-            assert!(semantic_replay_unsupported(&event, &case));
-            assert!(semantic_replay_unsupported(&event, &process));
-        }
-    }
 }

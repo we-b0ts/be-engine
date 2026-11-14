@@ -1,23 +1,9 @@
 //! Pure, bounded value hypotheses. Evidence and selection remain with callers.
 use super::json::{self, AnchorClocks, Comparison, Field};
 use crate::policy::{CompiledJsonPolicy, FieldContract};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Candidate {
-    pub(crate) case_id: String,
-    pub(crate) candidate_id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) attempt_id: String,
-    pub(crate) pointer: String,
-    pub(crate) command: String,
-    pub(crate) draft_policy: Value,
-    pub(crate) expected: Value,
-    pub(crate) actual: Value,
-    pub(crate) source_proof_required: bool,
-    pub(crate) reason: String,
-}
+pub(crate) use traffic_contract::hypothesis::Candidate;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Considered {

@@ -4,7 +4,9 @@ use bytes::BytesMut;
 use std::any::Any;
 use std::sync::Arc;
 
+pub mod evidence;
 pub mod io;
+pub mod message;
 
 /// A process-local provider factory. Connection ownership, scheduling and
 /// persistence belong to the framework.
@@ -12,6 +14,9 @@ pub trait DependencyProvider: Send + Sync {
     fn name(&self) -> &'static str;
     fn recognize(&self, probe: Probe<'_>) -> Recognition;
     fn create_session(&self) -> Result<Session>;
+    fn evidence(&self) -> Option<Arc<dyn evidence::EvidenceAdapter>> {
+        None
+    }
 }
 
 /// One native session interface, erased at the registration boundary and bound
@@ -136,6 +141,7 @@ impl<Kind> RegisteredProtocol<Kind> {
 #[derive(Clone)]
 pub struct ProviderRegistry<Kind> {
     providers: Vec<RegisteredProtocol<Kind>>,
+    evidence: evidence::EvidenceRegistry,
 }
 
 impl<Kind: std::fmt::Debug> std::fmt::Debug for ProviderRegistry<Kind> {
@@ -155,6 +161,7 @@ impl<Kind> Default for ProviderRegistry<Kind> {
     fn default() -> Self {
         Self {
             providers: Vec::new(),
+            evidence: evidence::EvidenceRegistry::default(),
         }
     }
 }
@@ -169,6 +176,9 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
                     && registered.provider.name() != provider.name()),
             "dependency provider is already registered"
         );
+        if let Some(adapter) = provider.evidence() {
+            self.evidence.register(provider.name(), adapter)?;
+        }
         self.providers.push(RegisteredProtocol::new(kind, provider));
         Ok(())
     }
@@ -193,6 +203,11 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
                 }),
             "dependency provider name is already registered"
         );
+        self.evidence.replace(
+            self.providers[index].provider.name(),
+            provider.name(),
+            provider.evidence(),
+        )?;
         self.providers[index] = RegisteredProtocol::new(kind, provider);
         Ok(())
     }
@@ -207,6 +222,24 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
 
     pub fn create_session(&self, kind: Kind) -> Result<Session> {
         self.provider(kind)?.create_session()
+    }
+
+    pub fn evidence(&self) -> &evidence::EvidenceRegistry {
+        &self.evidence
+    }
+
+    pub fn register_evidence(
+        &mut self,
+        name: &str,
+        adapter: Arc<dyn evidence::EvidenceAdapter>,
+    ) -> Result<()> {
+        ensure!(
+            self.providers
+                .iter()
+                .all(|entry| entry.provider.name() != name),
+            "evidence adapter name belongs to a registered connection provider"
+        );
+        self.evidence.register(name, adapter)
     }
 }
 

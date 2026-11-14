@@ -21,6 +21,12 @@ use super::{CaseContext, RecorderEvent, should_write_traffic_event};
 
 type WriterAck = oneshot::Sender<std::result::Result<(), String>>;
 
+pub(super) struct CaptureOptions {
+    pub(super) process_epoch: Uuid,
+    pub(super) policy_identity: String,
+    pub(super) evidence: Arc<traffic_protocol::evidence::EvidenceRegistry>,
+}
+
 pub(super) struct RecordEnvelope {
     pub(super) event: RecorderEvent,
     pub(super) targets: DependencyTargets,
@@ -105,8 +111,7 @@ impl RecorderWriter {
         settings: JsonlBufferSettings,
         queue_capacity: usize,
         finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
-        process_epoch: Uuid,
-        capture_policy_identity: String,
+        capture: CaptureOptions,
     ) -> Result<Self> {
         let traffic_file = if traffic_jsonl == TrafficJsonlMode::Off {
             None
@@ -125,9 +130,10 @@ impl RecorderWriter {
             source_process_traffic: SourceProcessTrafficSummaryBuilder::default(),
             ledger: super::ledger::persistence::LedgerWriter::new(
                 &run_dir,
-                process_epoch,
-                capture_policy_identity,
+                capture.process_epoch,
+                capture.policy_identity,
                 clock.clone(),
+                capture.evidence,
             ),
         };
         super::storage::write(&run_dir.join("dependencies.jsonl"), b"").await?;

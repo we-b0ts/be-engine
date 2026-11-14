@@ -42,10 +42,9 @@ async fn associated_shutdown_bypasses_analysis_but_idle_shutdown_requires_it() {
         let RecorderEvent::HttpExchange(exchange) = &event else {
             unreachable!()
         };
-        let targets =
-            app.capture_dependency_start(crate::dependency::observation::ProtocolRef::Http {
-                exchange_id: exchange.id,
-            });
+        let targets = app.capture_dependency_start(
+            crate::dependency::observation::ProtocolRef::exchange("http", exchange.id),
+        );
         app.record_event_for_targets(event, targets);
         app.recorder().finish_run().await.unwrap();
         let mut state = crate::rewrite::test_support::test_state();

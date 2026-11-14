@@ -1,67 +1,34 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use chrono::Utc;
-use serde_json::{Number, Value};
+#[cfg(test)]
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::DependencyExchangeOutcome;
 use crate::mysql::wire::{ClientCommand, MysqlPacket};
 use crate::recorder::{
-    MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, MysqlResponseEvent, MysqlValue,
-    MysqlWirePrefixPacket, capture_body,
+    MysqlExchangeEvent, MysqlResponseEvent, MysqlWirePrefixPacket, capture_body,
 };
 
-mod decode;
 #[cfg(test)]
 mod tests;
 
-use decode::*;
+#[cfg(test)]
+use traffic_protocol_mysql::semantic::*;
+use traffic_protocol_mysql::semantic::{SemanticRequest, SemanticSession};
+#[cfg(test)]
+use traffic_protocol_mysql::types::*;
 
 const MAX_TERMINATION_PREFIX_PACKETS: usize = 4096;
 
-const MYSQL_TYPE_DECIMAL: u8 = 0;
-const MYSQL_TYPE_TINY: u8 = 1;
-const MYSQL_TYPE_SHORT: u8 = 2;
-const MYSQL_TYPE_LONG: u8 = 3;
-const MYSQL_TYPE_FLOAT: u8 = 4;
-const MYSQL_TYPE_DOUBLE: u8 = 5;
-const MYSQL_TYPE_NULL: u8 = 6;
-const MYSQL_TYPE_TIMESTAMP: u8 = 7;
-const MYSQL_TYPE_LONGLONG: u8 = 8;
-const MYSQL_TYPE_INT24: u8 = 9;
-const MYSQL_TYPE_DATE: u8 = 10;
-const MYSQL_TYPE_TIME: u8 = 11;
-const MYSQL_TYPE_DATETIME: u8 = 12;
-const MYSQL_TYPE_YEAR: u8 = 13;
-const MYSQL_TYPE_NEWDATE: u8 = 14;
-const MYSQL_TYPE_VARCHAR: u8 = 15;
-const MYSQL_TYPE_BIT: u8 = 16;
-const MYSQL_TYPE_JSON: u8 = 245;
-const MYSQL_TYPE_NEWDECIMAL: u8 = 246;
-const MYSQL_TYPE_ENUM: u8 = 247;
-const MYSQL_TYPE_SET: u8 = 248;
-const MYSQL_TYPE_TINY_BLOB: u8 = 249;
-const MYSQL_TYPE_MEDIUM_BLOB: u8 = 250;
-const MYSQL_TYPE_LONG_BLOB: u8 = 251;
-const MYSQL_TYPE_BLOB: u8 = 252;
-const MYSQL_TYPE_VAR_STRING: u8 = 253;
-const MYSQL_TYPE_STRING: u8 = 254;
-const MYSQL_TYPE_GEOMETRY: u8 = 255;
-
-const MYSQL_FLAG_NOT_NULL: u16 = 0x0001;
-const MYSQL_FLAG_UNSIGNED: u16 = 0x0020;
-const MYSQL_FLAG_BINARY: u16 = 0x0080;
-
-const MYSQL_CHARSET_BINARY: u16 = 63;
-
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlSemanticTracker {
-    statements: HashMap<u32, PreparedStatement>,
+    session: SemanticSession,
     pending: VecDeque<ActiveExchange>,
     max_value_bytes: usize,
     context: MysqlExchangeContext,
-    last_status: Option<(Uuid, u64, u16)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -76,52 +43,24 @@ pub(crate) struct MysqlExchangeContext {
 }
 
 #[derive(Debug, Clone)]
-struct PreparedStatement {
-    statement_id: u32,
-    sql: String,
-    param_count: usize,
-    _params: Vec<MysqlColumn>,
-    _columns: Vec<MysqlColumn>,
-    last_param_types: Vec<BoundParamType>,
-}
-
-#[derive(Debug, Clone)]
-struct BoundParamType {
-    type_code: u8,
-    unsigned: bool,
-}
-
-#[derive(Debug, Clone)]
 struct ActiveExchange {
     connection_id: Uuid,
     query_sequence: u64,
     client_addr: Option<String>,
-    command: String,
-    sql: Option<String>,
-    statement_id: Option<u32>,
-    params: Option<Vec<MysqlValue>>,
+    native: SemanticRequest,
     started: Instant,
     request_started_at: chrono::DateTime<Utc>,
-    packets: Vec<MysqlPacket>,
     wire_prefix: Vec<MysqlWirePrefixPacket>,
     wire_prefix_bytes: usize,
-    parse_warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RowProtocol {
-    Text,
-    Binary,
 }
 
 impl MysqlSemanticTracker {
     pub(crate) fn new(max_value_bytes: usize, context: MysqlExchangeContext) -> Self {
         Self {
-            statements: HashMap::new(),
+            session: SemanticSession::new(max_value_bytes),
             pending: VecDeque::new(),
             max_value_bytes,
             context,
-            last_status: None,
         }
     }
 
@@ -133,25 +72,16 @@ impl MysqlSemanticTracker {
         packet: &MysqlPacket,
         client_addr: Option<String>,
     ) {
-        let (statement_id, params, sql, mut parse_warnings) =
-            self.parse_client_input(command, packet);
+        let native = self.session.start_request(command, packet);
         self.pending.push_back(ActiveExchange {
             connection_id,
             query_sequence,
             client_addr,
-            command: command.command_name.clone(),
-            sql: sql.or_else(|| command.query.clone()),
-            statement_id,
-            params,
+            native,
             started: Instant::now(),
             request_started_at: Utc::now(),
-            packets: Vec::new(),
             wire_prefix: Vec::new(),
             wire_prefix_bytes: 0,
-            parse_warnings: {
-                parse_warnings.shrink_to_fit();
-                parse_warnings
-            },
         });
     }
 
@@ -164,18 +94,12 @@ impl MysqlSemanticTracker {
         command: &ClientCommand,
         packet: &MysqlPacket,
     ) {
-        // Do not carry evidence across commands outside the response FIFO.
-        self.last_status = None;
-        if command.command_name == "COM_STMT_CLOSE"
-            && let Some(statement_id) = read_u32_le(&packet.payload, 1)
-        {
-            self.statements.remove(&statement_id);
-        }
+        self.session.observe_no_response(command, packet);
     }
 
     pub(crate) fn observe_packet(&mut self, packet: &MysqlPacket) {
         if let Some(active) = self.pending.front_mut() {
-            active.packets.push(packet.clone());
+            active.native.packets.push(packet.clone());
         }
     }
 
@@ -205,7 +129,7 @@ impl MysqlSemanticTracker {
 
     pub(crate) fn observe_parse_warning(&mut self, warning: String) {
         if let Some(active) = self.pending.front_mut() {
-            active.parse_warnings.push(warning);
+            active.native.parse_warnings.push(warning);
         }
     }
 
@@ -218,10 +142,7 @@ impl MysqlSemanticTracker {
     }
 
     pub(crate) fn prepared_sql_for_packet(&self, packet: &MysqlPacket) -> Option<&str> {
-        let statement_id = read_u32_le(&packet.payload, 1)?;
-        self.statements
-            .get(&statement_id)
-            .map(|statement| statement.sql.as_str())
+        self.session.prepared_sql_for_packet(packet)
     }
 
     pub(crate) fn finish_from_response(
@@ -231,8 +152,8 @@ impl MysqlSemanticTracker {
         let confirmed_database = (response.status == "ok")
             .then_some(self.pending.front())
             .flatten()
-            .filter(|active| active.command == "COM_INIT_DB")
-            .and_then(|active| active.sql.clone());
+            .filter(|active| active.native.command == "COM_INIT_DB")
+            .and_then(|active| active.native.sql.clone());
         let exchange = self.finish_active(
             &response.status,
             response.error_code,
@@ -254,29 +175,16 @@ impl MysqlSemanticTracker {
     ) -> Option<MysqlExchangeEvent> {
         let mut active = self.pending.pop_front()?;
         let status = fallback_status.to_string();
-        let response = self.parse_response(&mut active, &status, error_code, error_message);
-        // Compute this at completion, not enqueue time: pipelined commands are
-        // executed in FIFO order and must see the preceding command's status.
-        let server_status_before = self.last_status.and_then(|(connection, sequence, flags)| {
-            (connection == active.connection_id
-                && sequence.checked_add(1) == Some(active.query_sequence))
-            .then_some(flags)
-        });
-        let confirmed_status = if active.parse_warnings.is_empty()
-            && response.error_code.is_none()
-            && response.error_message.is_none()
-        {
-            match status.as_str() {
-                "ok" | "resultset" => response.server_status.filter(|flags| flags & 8 == 0),
-                // PREPARE reports metadata; it does not execute the statement.
-                "stmt_prepare" if active.command == "COM_STMT_PREPARE" => server_status_before,
-                _ => None,
-            }
-        } else {
-            None
-        };
-        self.last_status =
-            confirmed_status.map(|flags| (active.connection_id, active.query_sequence, flags));
+        let mut response =
+            self.session
+                .parse_response(&mut active.native, &status, error_code, error_message);
+        response.wire_prefix = std::mem::take(&mut active.wire_prefix);
+        let server_status_before = self.session.confirm_status(
+            active.connection_id,
+            active.query_sequence,
+            &active.native,
+            &response,
+        );
         Some(MysqlExchangeEvent {
             id: Uuid::new_v4(),
             connection_id: active.connection_id,
@@ -291,10 +199,10 @@ impl MysqlSemanticTracker {
             upstream_addr: self.context.upstream_addr.clone(),
             username: self.context.username.clone(),
             database: self.context.database.clone(),
-            command: active.command,
-            sql: active.sql,
-            statement_id: active.statement_id,
-            params: active.params,
+            command: active.native.command,
+            sql: active.native.sql,
+            statement_id: active.native.statement_id,
+            params: active.native.params,
             server_status_before,
             response,
             outcome: if fallback_status == "client_terminated" {
@@ -303,186 +211,7 @@ impl MysqlSemanticTracker {
                 DependencyExchangeOutcome::Response
             },
             duration_ms: duration_ms.unwrap_or_else(|| active.started.elapsed().as_millis()),
-            parse_warnings: active.parse_warnings,
+            parse_warnings: active.native.parse_warnings,
         })
-    }
-
-    fn parse_client_input(
-        &mut self,
-        command: &ClientCommand,
-        packet: &MysqlPacket,
-    ) -> (
-        Option<u32>,
-        Option<Vec<MysqlValue>>,
-        Option<String>,
-        Vec<String>,
-    ) {
-        if command.command_name != "COM_STMT_EXECUTE" {
-            return (None, None, command.query.clone(), Vec::new());
-        }
-
-        let Some(statement_id) = read_u32_le(&packet.payload, 1) else {
-            return (
-                None,
-                None,
-                None,
-                vec!["failed to parse COM_STMT_EXECUTE statement id".to_string()],
-            );
-        };
-        let Some(statement) = self.statements.get(&statement_id).cloned() else {
-            return (
-                Some(statement_id),
-                None,
-                None,
-                vec![format!(
-                    "statement {statement_id} was executed before this recorder saw its prepare"
-                )],
-            );
-        };
-        let (params, param_types, warnings) =
-            parse_stmt_execute_params(&packet.payload, &statement, self.max_value_bytes);
-        if let Some(param_types) = param_types
-            && let Some(statement) = self.statements.get_mut(&statement_id)
-        {
-            statement.last_param_types = param_types;
-        }
-        (
-            Some(statement_id),
-            params,
-            Some(statement.sql.clone()),
-            warnings,
-        )
-    }
-
-    fn parse_response(
-        &mut self,
-        active: &mut ActiveExchange,
-        status: &str,
-        error_code: Option<u16>,
-        error_message: Option<String>,
-    ) -> MysqlExchangeResponse {
-        let mut response = MysqlExchangeResponse {
-            wire_prefix: std::mem::take(&mut active.wire_prefix),
-            server_status: None,
-            status: status.to_string(),
-            error_code,
-            error_message,
-            affected_rows: None,
-            last_insert_id: None,
-            columns: Vec::new(),
-            rows: Vec::new(),
-            row_count: 0,
-            rows_truncated: false,
-        };
-
-        if active.packets.is_empty() {
-            if !matches!(status, "client_terminated" | "server_terminated") {
-                active
-                    .parse_warnings
-                    .push("no server response packets were captured".to_string());
-            }
-            return response;
-        }
-
-        match status {
-            "ok" => {
-                if let Some(ok) = parse_ok_packet(&active.packets[0].payload) {
-                    response.server_status = ok.server_status;
-                    response.affected_rows = Some(ok.affected_rows);
-                    response.last_insert_id = Some(ok.last_insert_id);
-                }
-            }
-            "stmt_prepare" => {
-                self.parse_prepare_response(active, &mut response);
-            }
-            "resultset" => {
-                let protocol = if active.command == "COM_STMT_EXECUTE" {
-                    RowProtocol::Binary
-                } else {
-                    RowProtocol::Text
-                };
-                parse_resultset_response(
-                    &active.packets,
-                    protocol,
-                    self.max_value_bytes,
-                    &mut response,
-                    &mut active.parse_warnings,
-                );
-            }
-            "error" | "eof" | "incomplete" | "client_terminated" | "server_terminated" => {}
-            _ => {
-                active
-                    .parse_warnings
-                    .push(format!("unhandled MySQL response status {status}"));
-            }
-        }
-
-        response
-    }
-
-    fn parse_prepare_response(
-        &mut self,
-        active: &mut ActiveExchange,
-        response: &mut MysqlExchangeResponse,
-    ) {
-        let Some(ok) = parse_stmt_prepare_ok(&active.packets[0].payload) else {
-            active
-                .parse_warnings
-                .push("failed to parse COM_STMT_PREPARE OK packet".to_string());
-            return;
-        };
-        active.statement_id = Some(ok.statement_id);
-        let mut index = 1;
-        let mut params = Vec::new();
-        for _ in 0..ok.num_params {
-            let Some(packet) = active.packets.get(index) else {
-                active
-                    .parse_warnings
-                    .push("COM_STMT_PREPARE parameter metadata ended early".to_string());
-                break;
-            };
-            match parse_column_definition(&packet.payload) {
-                Some(column) => params.push(column),
-                None => active
-                    .parse_warnings
-                    .push("failed to parse COM_STMT_PREPARE parameter column".to_string()),
-            }
-            index += 1;
-        }
-        if ok.num_params > 0 && active.packets.get(index).is_some_and(is_eof_packet) {
-            index += 1;
-        }
-
-        let mut columns = Vec::new();
-        for _ in 0..ok.num_columns {
-            let Some(packet) = active.packets.get(index) else {
-                active
-                    .parse_warnings
-                    .push("COM_STMT_PREPARE result metadata ended early".to_string());
-                break;
-            };
-            match parse_column_definition(&packet.payload) {
-                Some(column) => columns.push(column),
-                None => active
-                    .parse_warnings
-                    .push("failed to parse COM_STMT_PREPARE result column".to_string()),
-            }
-            index += 1;
-        }
-
-        response.columns = columns.clone();
-        if let Some(sql) = &active.sql {
-            self.statements.insert(
-                ok.statement_id,
-                PreparedStatement {
-                    statement_id: ok.statement_id,
-                    sql: sql.clone(),
-                    param_count: ok.num_params as usize,
-                    _params: params,
-                    _columns: columns,
-                    last_param_types: Vec::new(),
-                },
-            );
-        }
     }
 }

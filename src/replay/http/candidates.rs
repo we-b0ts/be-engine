@@ -1,28 +1,14 @@
 //! Append-only HTTP envelope candidates shared by strict and hypothesis matching.
 use super::*;
 use crate::replay::execution_plan::CaseMembership;
-use crate::replay::native_index::{
-    CandidateCursor, CandidateLookup, HttpKey, NativeKey, NativeQuery, ProtocolIndex,
-    ScopePartition,
-};
+use crate::replay::native_index::{CandidateCursor, CandidateIndex, HttpKey, ScopePartition};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(in crate::replay) struct Candidates {
     count: usize,
-    index: ProtocolIndex,
-    exempt: ProtocolIndex,
+    index: CandidateIndex<HttpKey>,
+    exempt: CandidateIndex<HttpKey>,
     members: CaseMembership,
-}
-
-impl Default for Candidates {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            index: ProtocolIndex::http(),
-            exempt: ProtocolIndex::http(),
-            members: CaseMembership::default(),
-        }
-    }
 }
 
 impl Candidates {
@@ -44,10 +30,10 @@ impl Candidates {
             let mut coarse = exact.clone();
             coarse.path = None;
             for mut key in [exact, coarse] {
-                self.exempt.register(NativeKey::Http(key.clone()), index);
+                self.exempt.register(key.clone(), index);
                 if exchange.shared_origin.is_some() {
                     key.scope = ScopePartition::Shared;
-                    self.exempt.register(NativeKey::Http(key), index);
+                    self.exempt.register(key, index);
                 }
             }
         }
@@ -65,9 +51,9 @@ impl Candidates {
         path: Option<&str>,
     ) -> CandidateCursor {
         let mut key = key(source, case, scheme, target, method, path);
-        let scoped = self.exempt.lookup(NativeQuery::Http(&key));
+        let scoped = self.exempt.lookup(&key);
         key.scope = ScopePartition::Shared;
-        scoped.merge(self.exempt.lookup(NativeQuery::Http(&key)))
+        scoped.merge(self.exempt.lookup(&key))
     }
     pub(in crate::replay) fn register(&mut self, exchanges: &[ReplayHttpExchange]) {
         if self.count > exchanges.len() {
@@ -87,10 +73,10 @@ impl Candidates {
             let mut coarse = exact.clone();
             coarse.path = None;
             for mut key in [exact, coarse] {
-                self.index.register(NativeKey::Http(key.clone()), index);
+                self.index.register(key.clone(), index);
                 if exchange.shared_origin.is_some() {
                     key.scope = ScopePartition::Shared;
-                    self.index.register(NativeKey::Http(key), index);
+                    self.index.register(key, index);
                 }
             }
         }
@@ -128,9 +114,9 @@ impl Candidates {
     }
 
     fn select_key(&self, mut key: HttpKey) -> CandidateCursor {
-        let scoped = self.index.lookup(NativeQuery::Http(&key));
+        let scoped = self.index.lookup(&key);
         key.scope = ScopePartition::Shared;
-        scoped.merge(self.index.lookup(NativeQuery::Http(&key)))
+        scoped.merge(self.index.lookup(&key))
     }
 }
 

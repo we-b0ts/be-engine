@@ -1,40 +1,6 @@
-//! Lost-wakeup-safe waits retain the original independent Target observation.
+//! Preserve the original Target observation across framework-owned retries.
 use super::super::ReplayState;
 use chrono::{DateTime, Utc};
-use std::{pin::Pin, sync::Arc, time::Duration};
-use tokio::{
-    sync::{Notify, futures::OwnedNotified},
-    time::Instant,
-};
-
-pub(in crate::replay) struct WaitRegistration {
-    changed: Pin<Box<OwnedNotified>>,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::replay) enum WaitOutcome {
-    Changed,
-    Poll,
-    Deadline,
-}
-impl WaitRegistration {
-    pub(super) fn new(changed: Arc<Notify>) -> Self {
-        let mut changed = Box::pin(changed.notified_owned());
-        changed.as_mut().enable();
-        Self { changed }
-    }
-    pub(in crate::replay) async fn wait(mut self, deadline: Instant) -> WaitOutcome {
-        tokio::select! {
-            biased;
-            _=tokio::time::sleep_until(deadline)=>WaitOutcome::Deadline,
-            _=&mut self.changed=>WaitOutcome::Changed,
-            _=tokio::time::sleep(Duration::from_millis(100))=>WaitOutcome::Poll,
-        }
-    }
-
-    pub(in crate::replay) async fn changed(mut self) {
-        (&mut self.changed).await;
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct RequestAdmission {

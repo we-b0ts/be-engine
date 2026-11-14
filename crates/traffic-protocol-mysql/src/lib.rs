@@ -1,5 +1,6 @@
 pub mod autocommit;
 pub mod isolation;
+pub mod message;
 pub mod model;
 pub mod operation;
 pub mod prepare;
@@ -9,6 +10,7 @@ pub mod read_effect;
 pub mod response;
 pub mod response_progress;
 pub mod savepoint;
+pub mod semantic;
 pub mod session_setup;
 pub mod session_status;
 pub mod sql;
@@ -118,6 +120,10 @@ pub type MysqlSession = Box<dyn FrameDecoder<Frame = MysqlPacket>>;
 impl traffic_protocol::DependencyProvider for MysqlProvider {
     fn name(&self) -> &'static str {
         "mysql"
+    }
+
+    fn evidence(&self) -> Option<std::sync::Arc<dyn traffic_protocol::evidence::EvidenceAdapter>> {
+        Some(std::sync::Arc::new(evidence::NativeEvidence))
     }
 
     fn recognize(&self, probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
@@ -543,3 +549,7 @@ mod tests {
         payload
     }
 }
+
+pub mod events;
+
+pub mod evidence;

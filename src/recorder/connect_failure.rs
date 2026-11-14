@@ -77,10 +77,10 @@ pub(crate) async fn connect_upstream<A: tokio::net::ToSocketAddrs>(
     upstream: A,
 ) -> io::Result<Option<TcpStream>> {
     let targets =
-        state.capture_dependency_start(crate::dependency::observation::ProtocolRef::Observation {
-            event_id: uuid::Uuid::new_v4(),
-            kind: format!("{protocol}_connect"),
-        });
+        state.capture_dependency_start(crate::dependency::observation::ProtocolRef::observation(
+            uuid::Uuid::new_v4(),
+            format!("{protocol}_connect"),
+        ));
     let started = Instant::now();
     tokio::select! {
         result = TcpStream::connect(upstream) => match result {

@@ -17,11 +17,29 @@ impl ReplayRuntime {
         .await
     }
 
+    #[cfg(test)]
     pub(super) async fn load_with_lifecycle(
         config: ReplayConfig,
         dns_listen: SocketAddr,
         tcp_listen: SocketAddr,
         lifecycle: ReplayLifecycleConfig,
+    ) -> Result<Self> {
+        Self::load_with_providers(
+            config,
+            dns_listen,
+            tcp_listen,
+            lifecycle,
+            crate::protocols::default_providers(),
+        )
+        .await
+    }
+
+    pub(super) async fn load_with_providers(
+        config: ReplayConfig,
+        dns_listen: SocketAddr,
+        tcp_listen: SocketAddr,
+        lifecycle: ReplayLifecycleConfig,
+        providers: Arc<crate::protocols::DependencyProviders>,
     ) -> Result<Self> {
         lifecycle.dependency_loading.validate()?;
         ensure!(
@@ -76,8 +94,9 @@ impl ReplayRuntime {
             discover_replay_cases(&root_dir, &selected_case_ids).await?;
         let source = root_dir.clone();
         let output = replay_artifact_dir.clone();
+        let evidence = providers.evidence().clone();
         let (prepared_cases, attribution) = tokio::task::spawn_blocking(move || -> Result<_> {
-            let frozen = attribution::freeze(&source, &output, &mut cases)?;
+            let frozen = attribution::freeze(&source, &output, &mut cases, &evidence)?;
             Ok((cases, frozen))
         })
         .await
@@ -459,7 +478,7 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
-            providers: crate::protocols::default_providers(),
+            providers,
             admission_epoch: 0,
             case_execution_plans: BTreeMap::new(),
             sequence_catalog,

@@ -23,7 +23,6 @@ pub use global_json::*;
 pub use global_protocol::*;
 pub use mysql_global::*;
 pub use redis_global::*;
-mod condition;
 pub mod native;
 mod native_compile;
 mod proof;

@@ -15,7 +15,7 @@ struct Counts {
 struct Probe {
     counts: Arc<StdMutex<Counts>>,
 }
-impl DependencyRequestAdapter for Probe {
+impl DependencyRequestAdapter<ReplayState> for Probe {
     type Matched = RequestAdmission;
     type Error = &'static str;
     fn observe_once(&mut self, state: &mut ReplayState) -> RequestAdmission {

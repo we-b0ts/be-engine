@@ -445,10 +445,10 @@ async fn proxy_raw_tcp(
         }
         DetectedProtocol::Http | DetectedProtocol::Raw => {
             let targets = state.capture_dependency_start(
-                crate::dependency::observation::ProtocolRef::Observation {
-                    event_id: id,
-                    kind: "tcp_gateway_connection".into(),
-                },
+                crate::dependency::observation::ProtocolRef::observation(
+                    id,
+                    "tcp_gateway_connection",
+                ),
             );
             let _connection = state
                 .dependency_connections()

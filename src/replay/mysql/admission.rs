@@ -27,7 +27,7 @@ struct NativeRequest<'a> {
     isolation_deadline: tokio::time::Instant,
 }
 
-impl DependencyRequestAdapter for NativeRequest<'_> {
+impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
     type Matched = MatchedExchange;
     type Error = &'static str;
     fn sequence_request_bytes(&self) -> Option<usize> {

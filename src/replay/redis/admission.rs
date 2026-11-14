@@ -36,7 +36,7 @@ struct RedisRequest<'a> {
     observed: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl DependencyRequestAdapter for RedisRequest<'_> {
+impl DependencyRequestAdapter<ReplayState> for RedisRequest<'_> {
     type Matched = MatchedRedisExchange;
     type Error = CommandMatchDiagnostic;
     fn sequence_request_bytes(&self) -> Option<usize> {

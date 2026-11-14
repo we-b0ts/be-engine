@@ -358,7 +358,7 @@ fn stmt_close_clears_prepared_statement_without_creating_exchange() {
     tracker
         .finish_active("stmt_prepare", None, None, Some(1))
         .expect("prepare exchange");
-    assert!(tracker.statements.contains_key(&9));
+    assert!(tracker.session.prepared_sql(9).is_some());
 
     let close = MysqlPacket {
         sequence_id: 0,
@@ -366,7 +366,7 @@ fn stmt_close_clears_prepared_statement_without_creating_exchange() {
     };
     let command = parse_client_command(&close).unwrap();
     tracker.observe_no_response_command(&command, &close);
-    assert!(!tracker.statements.contains_key(&9));
+    assert!(!tracker.session.prepared_sql(9).is_some());
     assert!(
         tracker
             .finish_active("incomplete", None, None, None)

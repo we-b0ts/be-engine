@@ -38,7 +38,7 @@ pub(super) async fn match_memcached_request(
     .ok()
 }
 
-impl DependencyRequestAdapter for NativeRequest<'_> {
+impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
     type Matched = MatchedMemcachedExchange;
     type Error = Rejection;
 

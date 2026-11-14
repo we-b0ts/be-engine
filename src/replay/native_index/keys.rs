@@ -1,23 +1,4 @@
-use super::ReplaySource;
-
-/// Startup and Process share matching permissions; their real ownership remains
-/// on each exchange and is checked independently for startup/lane admission.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(in crate::replay) enum ScopePartition {
-    Case(Option<String>),
-    Run,
-    Shared,
-}
-
-impl ScopePartition {
-    pub(in crate::replay) fn new(source: ReplaySource, case: Option<&str>) -> Self {
-        if source.is_run_owned() {
-            Self::Run
-        } else {
-            Self::Case(case.map(str::to_owned))
-        }
-    }
-}
+pub(in crate::replay) use traffic_replay::index::ScopePartition;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::replay) struct HttpKey {

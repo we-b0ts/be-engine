@@ -257,7 +257,7 @@ async fn associated_shutdown_has_authenticated_scope_without_entering_primary_in
     super::super::super::test_support::recording::publish_case(app.recorder()).await;
     drop(guard);
     let id = Uuid::new_v4();
-    let targets = app.capture_dependency_start(ProtocolRef::Http { exchange_id: id });
+    let targets = app.capture_dependency_start(ProtocolRef::exchange("http", id));
     app.record_event_for_targets(
         RecorderEvent::HttpExchange(HttpExchangeEvent {
             outcome: crate::DependencyExchangeOutcome::Response,

@@ -35,7 +35,7 @@ fn multi_megabyte_json_values_validate_and_render_through_redis_carriers() {
         .render(DateTime::from_timestamp(2000, 0).unwrap())
         .unwrap();
     assert_eq!(rendered, bulk(&target));
-    let (payload, consumed) = response::bulk_prefix(&rendered).unwrap();
+    let (payload, consumed) = bulk_prefix(&rendered).unwrap();
     assert_eq!(payload, target.as_bytes());
     assert_eq!(consumed, rendered.len());
     assert_eq!(
@@ -54,7 +54,7 @@ fn multi_megabyte_json_values_validate_and_render_through_redis_carriers() {
 fn redis_carriers_reject_frames_above_sixty_four_mib() {
     let oversized = vec![0; crate::value_limits::MAX_VALUE_BYTES + 1];
     let keys = args(&["key"]);
-    assert!(response::bulk_prefix(&oversized).is_err());
+    assert!(bulk_prefix(&oversized).is_err());
     assert!(redis_field_values("GET", &keys, Some(&oversized)).is_err());
     assert!(
         crate::replay::policy::request_contract::unified_response::redis_bulk_payload(&oversized)

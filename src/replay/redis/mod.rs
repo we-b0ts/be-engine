@@ -68,6 +68,8 @@ use super::report::command::{
 };
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
 mod admission;
+mod claim;
+use claim::{Claim, NativeClaimKind};
 mod cleanup;
 mod completion;
 mod delivery;
@@ -75,9 +77,7 @@ mod evidence;
 mod input_timing;
 mod lifecycle;
 mod pipeline;
-use super::admission::{
-    Barrier, Claim, ClaimKind, ClaimTicket, Finish, Lifecycle, NativeClaimKind,
-};
+use super::admission::{Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle};
 use delivery::deliver_redis_exchange;
 
 #[derive(Debug, Clone, Deserialize)]

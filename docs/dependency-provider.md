@@ -74,6 +74,16 @@ MySQL Provider 还提供逻辑结果边界识别，列定义整体对应 Headers
 普通有限依赖通过共享 `Lifecycle` 和 `ClaimTicket` 完成 once-only 消费。
 响应与真实终止均由实际 I/O 回执推进。
 
+`ProtocolMessage` 投影原生结构和物理值，并通过 `locate` 解析协议自己的位置选择器。
+`ValueRule` 只描述字段语义，`RuleBinding` 分别绑定原生位置、codec 与逻辑指针。
+共享 `PreparedMessage` 执行规则、严格比较未选字段并生成身份对应提案，交付修改通过相同规则和 codec 校验后交回原生编码器。
+`evidence` 由协议提供证据视图。HTTP 路径段与 body、Redis key/field/value、MySQL 参数与 SQL 字面量已覆盖同一身份规则的接口测试。
+现有完整协议执行路径仍在接入这些能力，应用入口的封闭协议分派和录制事件分派还需要继续迁移。
+
+`EvidenceRegistry` 由 Provider 安装原生证据能力，同一事件类型具有唯一注册者。
+录制清单与 Replay 准备使用相同的能力注册表，准备缓存也绑定证据能力的 schema 版本。
+`ProtocolRef` 保存协议名和原生身份字段，既有 HTTP/MySQL/Redis 引用保持原来的序列化结构。
+
 ## 录制结构
 
 | 结构 | 单位 | 内容 |
@@ -173,7 +183,8 @@ Replay 的值规则复用现有类型化值 contract，并独立保留 native �
 | `traffic-protocol-mysql` | MySQL wire、continuation、SQL 解析与结果边界 |
 | `traffic-protocol-redis` | RESP framing、命令与消息解释 |
 | `traffic-recording` | 共用录制时钟与发号 |
-| `traffic-replay` | 编译事件计划、有限状态机、pending 与真实回执 |
+| `traffic-replay` | 编译事件计划、通用候选索引、有限 claim、请求等待执行、pending 与真实回执 |
+| `traffic-contract` | Scalar/JSON/Protobuf codec、字段契约类型、时间运算与共享身份提案和状态 |
 | `traffic-response-rewrite` | 纯声明式文档改写内核 |
 
 根 crate 组合配置、存储、网络、规则准入、Recorder/Replay runtime 与 backend-rewrite 工作流。

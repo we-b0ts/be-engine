@@ -24,10 +24,7 @@ pub(crate) fn fixture_capture(kind: &str) -> CaptureMetadata {
         observed_case: None,
         admitted_case: None,
         started_at: Utc::now(),
-        protocol_ref: ProtocolRef::Observation {
-            event_id: Uuid::new_v4(),
-            kind: "fixture".into(),
-        },
+        protocol_ref: ProtocolRef::observation(Uuid::new_v4(), "fixture"),
         attribution: match kind {
             "startup" => DependencyOwner::Startup {
                 process_epoch: epoch,

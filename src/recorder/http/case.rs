@@ -367,6 +367,7 @@ mod tests {
             None,
             vec![("GET /api/resource/getprivkey/*".to_string(), 1)],
             None,
+            std::sync::Arc::new(crate::protocols::default_providers().evidence().clone()),
         )
         .await
         .unwrap();

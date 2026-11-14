@@ -1,26 +1,6 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ReplaySource {
-    Startup,
-    Process,
-    Case,
-    /// Original ambient input evidence has no proven business owner.
-    Unattributed,
-}
-
-impl ReplaySource {
-    pub(super) fn is_run_owned(self) -> bool {
-        matches!(self, Self::Startup | Self::Process)
-    }
-    pub(super) fn is_run_level(self) -> bool {
-        self != Self::Case
-    }
-    pub(super) fn matches_scope(self, requested: Self) -> bool {
-        self == requested || self.is_run_owned() && requested.is_run_owned()
-    }
-}
+pub(super) use traffic_replay::ReplaySource;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(super) struct TargetKey {

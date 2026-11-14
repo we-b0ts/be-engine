@@ -47,7 +47,6 @@ mod summary;
 pub(crate) mod test_io;
 mod writer;
 
-pub use crate::http::stream::ResponseStream as HttpResponseStream;
 pub use capture::*;
 pub(crate) use case::{
     CaseInvalidation, CaseInvalidationContext, PrimaryCaseDescriptor, PrimarySourceBinding,
@@ -68,6 +67,7 @@ struct RecorderOptions {
     artifact_owner: Option<ArtifactOwner>,
     request_header_capture: RequestHeaderCapture,
     capture_policy_identity: String,
+    evidence: Arc<traffic_protocol::evidence::EvidenceRegistry>,
 }
 
 #[derive(Clone)]
@@ -102,6 +102,7 @@ impl Recorder {
         Self::new_with_options(
             output_dir,
             RecorderOptions {
+                evidence: Arc::new(crate::protocols::default_providers().evidence().clone()),
                 access_policy,
                 traffic_jsonl: defaults.traffic_jsonl,
                 buffer_settings: jsonl::JsonlBufferSettings {
@@ -136,6 +137,7 @@ impl Recorder {
             run_id,
             Vec::new(),
             None,
+            Arc::new(crate::protocols::default_providers().evidence().clone()),
         )
         .await
     }
@@ -146,10 +148,12 @@ impl Recorder {
         run_id: Option<String>,
         recording_api_limits: Vec<(String, usize)>,
         artifact_owner: Option<ArtifactOwner>,
+        evidence: Arc<traffic_protocol::evidence::EvidenceRegistry>,
     ) -> Result<Self> {
         Self::new_with_options(
             output_dir,
             RecorderOptions {
+                evidence,
                 access_policy: config.access_policy,
                 traffic_jsonl: config.traffic_jsonl,
                 buffer_settings: jsonl::JsonlBufferSettings {
@@ -183,6 +187,7 @@ impl Recorder {
         options: RecorderOptions,
     ) -> Result<Self> {
         let RecorderOptions {
+            evidence,
             access_policy,
             traffic_jsonl,
             buffer_settings,
@@ -207,8 +212,11 @@ impl Recorder {
             buffer_settings,
             writer_queue_capacity,
             finalized_cases.clone(),
-            process_epoch,
-            capture_policy_identity.clone(),
+            writer::CaptureOptions {
+                process_epoch,
+                policy_identity: capture_policy_identity.clone(),
+                evidence,
+            },
         )
         .await?;
         let recording_apis = recording_api_limits

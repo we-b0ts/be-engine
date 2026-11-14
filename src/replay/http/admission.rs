@@ -15,7 +15,7 @@ struct HttpRequest<'a> {
     waitable: bool,
 }
 
-impl DependencyRequestAdapter for HttpRequest<'_> {
+impl DependencyRequestAdapter<ReplayState> for HttpRequest<'_> {
     type Matched = std::result::Result<RecordedHttpExchange, HttpReplayMatchError>;
     type Error = HttpReplayMatchError;
 

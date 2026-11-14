@@ -34,8 +34,21 @@ event contract; the application owns capture and Replay execution.
 `traffic-protocol` owns registration and bounded frame I/O, and the HTTP provider
 owns its native Hyper driver and response stream model. `traffic-recording`
 owns shared recording identities and sequence allocation. `traffic-replay`
-owns immutable event plans, bounded pending admissions and actual delivery
-receipts. `traffic-response-rewrite` owns pure document selection, decoding,
+owns immutable event plans, ordered candidate postings, finite claims, bounded
+pending admissions, shared request waiting, scope/lane candidate selection and
+actual delivery receipts. Its value-rule preparation binds protocol-projected
+locations to shared field contracts and codecs.
+`traffic-contract` owns Scalar/JSON/Protobuf strategies, strict JSON rendering,
+field-contract types, strict whole-document comparison, temporal arithmetic and
+shared identity proposals/stores. Native leaf verification and authenticated
+read provenance enter that comparator through capabilities supplied by callers.
+Native MySQL semantic decoding and prepared-statement state belong to its
+protocol library. Redis storage positions and RESP value ranges belong to its
+protocol library. Recorder retains capture clocks, ownership and persistence.
+Native capture payloads and physical value locations belong to the HTTP,
+MySQL and Redis libraries. Protocol references retain open identity fields, and
+semantic evidence support is supplied by the registered native evidence owner.
+`traffic-response-rewrite` owns pure document selection, decoding,
 address discovery and materialization. The root HTTP adapter owns route
 registration, managed processes and provenance. See
 [dependency protocols and response rules](dependency-provider.md).

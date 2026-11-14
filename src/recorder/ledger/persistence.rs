@@ -42,6 +42,7 @@ pub(in crate::recorder) struct LedgerWriter {
     sealed: bool,
     process_dependency_tasks: BTreeMap<String, String>,
     semantic_inventory: SemanticInventory,
+    evidence: std::sync::Arc<traffic_protocol::evidence::EvidenceRegistry>,
 }
 
 impl LedgerWriter {
@@ -50,8 +51,10 @@ impl LedgerWriter {
         process_epoch: Uuid,
         capture_policy_identity: String,
         clock: RecordingClock,
+        evidence: std::sync::Arc<traffic_protocol::evidence::EvidenceRegistry>,
     ) -> Self {
         Self {
+            evidence,
             root: root.into(),
             process_epoch,
             run_epoch: clock.recording_id(),
@@ -311,8 +314,11 @@ impl LedgerWriter {
         self.offset += line.len() as u64;
         self.records += 1;
         if metadata.semantic_required {
-            self.semantic_inventory
-                .observe_mandatory(&value, &metadata.attribution);
+            self.semantic_inventory.observe_mandatory(
+                &value,
+                &metadata.attribution,
+                crate::protocols::evidence::supports(&value, &metadata.attribution, &self.evidence),
+            );
         }
         // Every raw observation is retained centrally. Maintenance and snapshot
         // reuse remain observations without creating business consumption slots.

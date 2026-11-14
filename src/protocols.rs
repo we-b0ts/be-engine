@@ -17,6 +17,8 @@ pub enum DependencyProtocol {
 
 pub type DependencyProviders = ProviderRegistry<DependencyProtocol>;
 
+pub(crate) mod evidence;
+
 pub fn default_providers() -> Arc<DependencyProviders> {
     static PROVIDERS: OnceLock<Arc<DependencyProviders>> = OnceLock::new();
     Arc::clone(PROVIDERS.get_or_init(|| {
@@ -39,6 +41,9 @@ pub fn default_providers() -> Arc<DependencyProviders> {
                 .register(kind, provider)
                 .expect("unique built-in dependency provider");
         }
+        providers
+            .register_evidence("existing", Arc::new(evidence::ExistingEvidence))
+            .expect("unique existing evidence adapter");
         Arc::new(providers)
     }))
 }
@@ -63,3 +68,5 @@ pub(crate) fn redis_session(
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod value_rule_tests;

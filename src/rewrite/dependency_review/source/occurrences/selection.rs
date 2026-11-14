@@ -110,10 +110,7 @@ mod tests {
         let mut http = BTreeMap::new();
         for _ in 0..2 {
             let mut capture = fixture_capture("case");
-            capture.protocol_ref = ProtocolRef::Mysql {
-                connection_id: connection,
-                sequence: 1,
-            };
+            capture.protocol_ref = ProtocolRef::connection("mysql", connection, 1);
             assert!(selected.matches(&capture, &json!({})).unwrap());
             observe_reference(&mut native, &mut http, &capture, &json!({})).unwrap();
         }

@@ -243,10 +243,11 @@ pub(crate) async fn handle_connected(
             };
             let request = PendingRequest {
                 targets: request_state.capture_dependency_start(
-                    crate::dependency::observation::ProtocolRef::Kafka {
+                    crate::dependency::observation::ProtocolRef::connection(
+                        "kafka",
                         connection_id,
-                        sequence: request_sequence,
-                    },
+                        request_sequence,
+                    ),
                 ),
                 api_key: decoded.api_key,
                 api_version: decoded.header.request_api_version,

@@ -76,35 +76,7 @@ pub(crate) fn checks<'a>(
 }
 /// Compact JWT syntax only. Claims and signatures remain opaque token content;
 /// correspondence uses the complete typed string, never a decoded field.
-pub(crate) fn is_jwt(value: &serde_json::Value) -> bool {
-    let Some(token) = value.as_str().filter(|token| token.len() <= 64 * 1024) else {
-        return false;
-    };
-    let parts = token.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return false;
-    }
-    let decode = |part: &str| {
-        URL_SAFE_NO_PAD
-            .decode(part)
-            .ok()
-            .filter(|bytes| URL_SAFE_NO_PAD.encode(bytes) == part)
-    };
-    let Some(header) = decode(parts[0]).and_then(|bytes| crate::json_value::parse(&bytes)) else {
-        return false;
-    };
-    let Some(claims) = decode(parts[1]).and_then(|bytes| crate::json_value::parse(&bytes)) else {
-        return false;
-    };
-    header.is_object()
-        && header
-            .get("alg")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|algorithm| !algorithm.is_empty())
-        && claims.is_object()
-        && decode(parts[2])
-            .is_some_and(|signature| !signature.is_empty() || header["alg"] == "none")
-}
+pub(crate) use traffic_contract::identity::is_jwt;
 
 /// Recognition is intentionally broader than authentication: duplicate JSON
 /// members or a disallowed algorithm cannot turn a compact JWS into an exact

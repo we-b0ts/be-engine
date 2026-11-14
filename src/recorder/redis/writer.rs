@@ -316,10 +316,9 @@ mod tests {
                         args: &command.args,
                     },
                 );
-                targets.bind_protocol(crate::dependency::observation::ProtocolRef::Redis {
-                    connection_id: connection,
-                    sequence: 1,
-                });
+                targets.bind_protocol(crate::dependency::observation::ProtocolRef::connection(
+                    "redis", connection, 1,
+                ));
                 vec![PendingRedisExchange {
                     targets,
                     sequence: 1,

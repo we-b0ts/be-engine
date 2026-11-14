@@ -4,30 +4,17 @@ use crate::replay::execution_plan::CaseMembership;
 use crate::replay::{
     command_matching::CommandExchangeScope,
     native_index::{
-        CandidateCursor, CandidateLookup, LaneIndex, LaneKey, LaneOwner, NativeKey, NativeQuery,
-        ProtocolIndex, RedisKey, ScopePartition,
+        CandidateCursor, CandidateIndex, LaneIndex, LaneKey, LaneOwner, RedisKey, ScopePartition,
     },
 };
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(in crate::replay) struct Candidates {
     count: usize,
-    index: ProtocolIndex,
-    exempt: ProtocolIndex,
+    index: CandidateIndex<RedisKey>,
+    exempt: CandidateIndex<RedisKey>,
     lanes: LaneIndex,
     members: CaseMembership,
-}
-
-impl Default for Candidates {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            index: ProtocolIndex::redis(),
-            exempt: ProtocolIndex::redis(),
-            lanes: LaneIndex::default(),
-            members: CaseMembership::default(),
-        }
-    }
 }
 
 impl Candidates {
@@ -51,10 +38,10 @@ impl Candidates {
                 record.username.as_deref(),
                 &record.command,
             );
-            self.exempt.register(NativeKey::Redis(key.clone()), index);
+            self.exempt.register(key.clone(), index);
             if exchange.subscription_alias {
                 key.scope = ScopePartition::Shared;
-                self.exempt.register(NativeKey::Redis(key), index);
+                self.exempt.register(key, index);
             }
         }
         self.exempt.seal();
@@ -80,12 +67,12 @@ impl Candidates {
             username,
             command,
         );
-        let scoped = self.exempt.lookup(NativeQuery::Redis(&key));
+        let scoped = self.exempt.lookup(&key);
         if !source.is_run_owned() {
             return scoped;
         }
         key.scope = ScopePartition::Shared;
-        scoped.merge(self.exempt.lookup(NativeQuery::Redis(&key)))
+        scoped.merge(self.exempt.lookup(&key))
     }
     pub(super) fn register(&mut self, exchanges: &[ReplayExchange]) {
         if self.count > exchanges.len() {
@@ -107,10 +94,10 @@ impl Candidates {
                 record.username.as_deref(),
                 &record.command,
             );
-            self.index.register(NativeKey::Redis(key.clone()), index);
+            self.index.register(key.clone(), index);
             if exchange.subscription_alias {
                 key.scope = ScopePartition::Shared;
-                self.index.register(NativeKey::Redis(key), index);
+                self.index.register(key, index);
             }
             self.lanes.register(
                 LaneKey {
@@ -167,12 +154,12 @@ impl Candidates {
             username,
             command,
         );
-        let scoped = self.index.lookup(NativeQuery::Redis(&key));
+        let scoped = self.index.lookup(&key);
         if !source.is_run_owned() {
             return scoped;
         }
         key.scope = ScopePartition::Shared;
-        scoped.merge(self.index.lookup(NativeQuery::Redis(&key)))
+        scoped.merge(self.index.lookup(&key))
     }
 
     pub(super) fn lane_blocker(

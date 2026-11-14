@@ -1,5 +1,6 @@
 //! HTTP wire recognition and native message adaptation.
 pub mod headers;
+pub mod message;
 pub mod multipart;
 pub mod sse;
 use traffic_protocol::{Peer, Probe, Recognition};
@@ -80,6 +81,10 @@ impl HttpConnectionSession for NativeHttpSession {
 impl traffic_protocol::DependencyProvider for HttpProvider {
     fn name(&self) -> &'static str {
         "http"
+    }
+
+    fn evidence(&self) -> Option<std::sync::Arc<dyn traffic_protocol::evidence::EvidenceAdapter>> {
+        Some(std::sync::Arc::new(evidence::NativeEvidence))
     }
 
     fn recognize(&self, probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
@@ -172,3 +177,7 @@ mod tests {
         );
     }
 }
+
+pub mod events;
+
+pub mod evidence;

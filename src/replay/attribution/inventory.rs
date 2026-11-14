@@ -7,20 +7,36 @@ use crate::dependency_index::scoped;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 pub(super) fn effective(
     root: &Path,
     manifest: &RecordingManifest,
     decisions: &BTreeMap<Uuid, DependencyOwner>,
 ) -> Result<SemanticInventory> {
+    effective_with_evidence(
+        root,
+        manifest,
+        decisions,
+        crate::protocols::default_providers().evidence(),
+    )
+}
+
+pub(super) fn effective_with_evidence(
+    root: &Path,
+    manifest: &RecordingManifest,
+    decisions: &BTreeMap<Uuid, DependencyOwner>,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+) -> Result<SemanticInventory> {
     let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
-        "mandatory-scope-coverage/v3",
+        "mandatory-scope-coverage/v4",
+        evidence.revisions(),
         manifest,
         decisions,
     ))?);
     let directory = crate::dependency_index::store::cache_directory(root);
     crate::dependency_index::store::private_directory(&directory)?;
     let cache = directory.join(format!(
-        "semantic-inventory-v3-{}.json",
+        "semantic-inventory-v4-{}.json",
         key.trim_start_matches("sha256:")
     ));
     if let Ok(inventory) = crate::dependency_index::store::read_json::<SemanticInventory>(&cache)
@@ -98,11 +114,19 @@ pub(super) fn effective(
                 && same_location(location, &record),
             "Source scope does not identify its original physical effect"
         );
-        captured.observe_mandatory(&selector, &capture.attribution);
+        captured.observe_mandatory(
+            &selector,
+            &capture.attribution,
+            crate::protocols::evidence::supports(&selector, &capture.attribution, evidence),
+        );
         let owner = decisions
             .get(&capture.exchange_id)
             .unwrap_or(&capture.attribution);
-        inventory.observe_mandatory(&selector, owner);
+        inventory.observe_mandatory(
+            &selector,
+            owner,
+            crate::protocols::evidence::supports(&selector, owner, evidence),
+        );
     }
     ensure!(
         record_count == manifest.records,

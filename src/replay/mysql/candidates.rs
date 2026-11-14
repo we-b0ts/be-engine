@@ -2,8 +2,7 @@
 use super::*;
 use crate::replay::execution_plan::CaseMembership;
 use crate::replay::native_index::{
-    CandidateLookup, LaneIndex, LaneKey, LaneOwner, MysqlCommand, MysqlKey, NativeKey, NativeQuery,
-    ProtocolIndex, ScopePartition,
+    CandidateIndex, LaneIndex, LaneKey, LaneOwner, MysqlCommand, MysqlKey, ScopePartition,
 };
 use std::sync::Arc;
 use traffic_protocol_mysql::sql_family as family;
@@ -13,11 +12,11 @@ pub(super) use family::classify as sql_family;
 pub(super) use family::select_hint;
 use family::{Family, SelectHint};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(super) struct Candidates {
     count: usize,
-    index: ProtocolIndex,
-    exempt: ProtocolIndex,
+    index: CandidateIndex<MysqlKey>,
+    exempt: CandidateIndex<MysqlKey>,
     members: CaseMembership,
     lanes: LaneIndex,
     families: Vec<Option<Family>>,
@@ -25,23 +24,6 @@ pub(super) struct Candidates {
     savepoints: Vec<Option<crate::mysql::savepoint::Command>>,
     windows: windows::Windows,
     groups: groups::Groups,
-}
-
-impl Default for Candidates {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            index: ProtocolIndex::mysql(),
-            exempt: ProtocolIndex::mysql(),
-            members: CaseMembership::default(),
-            lanes: LaneIndex::default(),
-            families: Vec::new(),
-            selects: Vec::new(),
-            savepoints: Vec::new(),
-            windows: windows::Windows::default(),
-            groups: groups::Groups::default(),
-        }
-    }
 }
 
 fn key(
@@ -81,7 +63,7 @@ impl Candidates {
                     &identity,
                     command,
                 ) {
-                    self.exempt.register(NativeKey::Mysql(key), index);
+                    self.exempt.register(key, index);
                 }
             }
         }
@@ -98,7 +80,7 @@ impl Candidates {
         let Some(key) = key(source, case, identity, command) else {
             return Arc::from([]);
         };
-        self.exempt.lookup(NativeQuery::Mysql(&key)).into_indices()
+        self.exempt.lookup(&key).into_indices()
     }
     pub(super) fn register(&mut self, exchanges: &[ReplayExchange]) {
         // Some test/repair constructors append directly. Reconcile their immutable
@@ -155,7 +137,7 @@ impl Candidates {
                 &identity,
                 None,
             ) {
-                self.index.register(NativeKey::Mysql(key), index);
+                self.index.register(key, index);
             }
             if let Some(key) = key(
                 exchange.source,
@@ -169,7 +151,7 @@ impl Candidates {
                     index,
                     exchange,
                 );
-                self.index.register(NativeKey::Mysql(key), index);
+                self.index.register(key, index);
             }
         }
         self.count = exchanges.len();
@@ -243,7 +225,7 @@ impl Candidates {
         let Some(key) = key(source, case, identity, command) else {
             return Arc::from([]);
         };
-        self.index.lookup(NativeQuery::Mysql(&key)).into_indices()
+        self.index.lookup(&key).into_indices()
     }
 
     pub(super) fn select_window(

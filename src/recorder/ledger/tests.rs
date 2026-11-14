@@ -42,10 +42,7 @@ async fn state() -> (tempfile::TempDir, AppState) {
 }
 
 fn start(state: &AppState) -> crate::active_case::DependencyTargets {
-    state.capture_dependency_start(ProtocolRef::Observation {
-        event_id: Uuid::new_v4(),
-        kind: "connect_attempt".into(),
-    })
+    state.capture_dependency_start(ProtocolRef::observation(Uuid::new_v4(), "connect_attempt"))
 }
 
 async fn records(state: &AppState) -> Vec<serde_json::Value> {

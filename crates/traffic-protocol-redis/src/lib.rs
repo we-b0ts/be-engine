@@ -5,7 +5,9 @@ pub mod key_access;
 pub mod key_selector;
 pub mod key_slots;
 pub mod keys;
+pub mod message;
 pub mod subject;
+pub mod values;
 use anyhow::{Context, Result, anyhow};
 pub use client_info::is_client_library_info;
 
@@ -80,6 +82,10 @@ pub type RedisSession = Box<dyn FrameDecoder<Frame = RedisFrame>>;
 impl traffic_protocol::DependencyProvider for RedisProvider {
     fn name(&self) -> &'static str {
         "redis"
+    }
+
+    fn evidence(&self) -> Option<std::sync::Arc<dyn traffic_protocol::evidence::EvidenceAdapter>> {
+        Some(std::sync::Arc::new(evidence::NativeEvidence))
     }
 
     fn recognize(&self, probe: traffic_protocol::Probe<'_>) -> traffic_protocol::Recognition {
@@ -602,3 +608,7 @@ mod tests {
         assert!(error.to_string().contains("invalid Redis RESP frame"));
     }
 }
+
+pub mod events;
+
+pub mod evidence;

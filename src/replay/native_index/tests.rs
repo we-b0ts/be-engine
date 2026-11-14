@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 fn http(scope: ScopePartition, path: Option<&str>) -> HttpKey {
     HttpKey {
@@ -25,7 +26,7 @@ fn redis(scope: ScopePartition, command: &str) -> RedisKey {
 
 #[test]
 fn native_http_scope_candidates_match_the_original_ordered_scan_with_shared_aliases() {
-    let mut index = ProtocolIndex::http();
+    let mut index = CandidateIndex::<HttpKey>::default();
     let rows = (0..500)
         .map(|position| {
             let scope = if position % 4 == 0 {
@@ -43,12 +44,9 @@ fn native_http_scope_candidates_match_the_original_ordered_scan_with_shared_alia
         })
         .collect::<Vec<_>>();
     for (position, (scope, path, shared)) in rows.iter().enumerate() {
-        index.register(NativeKey::Http(http(scope.clone(), Some(path))), position);
+        index.register(http(scope.clone(), Some(path)), position);
         if *shared {
-            index.register(
-                NativeKey::Http(http(ScopePartition::Shared, Some(path))),
-                position,
-            );
+            index.register(http(ScopePartition::Shared, Some(path)), position);
         }
     }
     index.seal();
@@ -64,11 +62,8 @@ fn native_http_scope_candidates_match_the_original_ordered_scan_with_shared_alia
             .map(|(position, _)| position)
             .collect::<Vec<_>>();
         let actual = index
-            .lookup(NativeQuery::Http(&http(scope, Some("/wanted"))))
-            .merge(index.lookup(NativeQuery::Http(&http(
-                ScopePartition::Shared,
-                Some("/wanted"),
-            ))))
+            .lookup(&http(scope, Some("/wanted")))
+            .merge(index.lookup(&http(ScopePartition::Shared, Some("/wanted"))))
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
@@ -76,7 +71,7 @@ fn native_http_scope_candidates_match_the_original_ordered_scan_with_shared_alia
 
 #[test]
 fn redis_subscription_aliases_join_only_run_queries_and_keep_source_order() {
-    let mut index = ProtocolIndex::redis();
+    let mut index = CandidateIndex::<RedisKey>::default();
     let case = ScopePartition::Case(Some("origin".into()));
     for (position, scope, alias) in [
         (0, ScopePartition::Run, false),
@@ -84,51 +79,43 @@ fn redis_subscription_aliases_join_only_run_queries_and_keep_source_order() {
         (2, ScopePartition::Run, false),
         (3, ScopePartition::Case(Some("other".into())), false),
     ] {
-        index.register(NativeKey::Redis(redis(scope, "GET")), position);
+        index.register(redis(scope, "GET"), position);
         if alias {
-            index.register(
-                NativeKey::Redis(redis(ScopePartition::Shared, "GET")),
-                position,
-            );
+            index.register(redis(ScopePartition::Shared, "GET"), position);
         }
     }
     index.seal();
     assert_eq!(
         index
-            .lookup(NativeQuery::Redis(&redis(ScopePartition::Run, "GET")))
-            .merge(index.lookup(NativeQuery::Redis(&redis(ScopePartition::Shared, "GET"))))
+            .lookup(&redis(ScopePartition::Run, "GET"))
+            .merge(index.lookup(&redis(ScopePartition::Shared, "GET")))
             .collect::<Vec<_>>(),
         [0, 1, 2]
     );
-    assert_eq!(
-        index
-            .lookup(NativeQuery::Redis(&redis(case, "GET")))
-            .collect::<Vec<_>>(),
-        [1]
-    );
+    assert_eq!(index.lookup(&redis(case, "GET")).collect::<Vec<_>>(), [1]);
 }
 
 #[test]
 fn unrelated_cases_do_not_enter_strict_or_hypothesis_candidate_walks() {
-    let mut index = ProtocolIndex::redis();
+    let mut index = CandidateIndex::<RedisKey>::default();
     for position in 0..20_000 {
         index.register(
-            NativeKey::Redis(redis(
+            redis(
                 ScopePartition::Case(Some(format!("unrelated-{position}"))),
                 "SET",
-            )),
+            ),
             position,
         );
     }
     let key = redis(ScopePartition::Case(Some("active".into())), "SET");
     for position in [20_000, 20_001] {
-        index.register(NativeKey::Redis(key.clone()), position);
+        index.register(key.clone(), position);
     }
     index.seal();
     for _strict_or_hypothesis in [false, true] {
         let mut visited = 0;
         let candidates = index
-            .lookup(NativeQuery::Redis(&key))
+            .lookup(&key)
             .inspect(|_| visited += 1)
             .collect::<Vec<_>>();
         assert_eq!(visited, 2);
@@ -166,12 +153,12 @@ fn a_legal_time_rule_candidate_stays_ahead_of_a_later_exact_payload() {
     let source = [json!({"at":10,"value":7}), json!({"at":110,"value":7})];
     let target = json!({"at":110,"value":7});
     let key = http(ScopePartition::Case(Some("active".into())), Some("/clock"));
-    let mut index = ProtocolIndex::http();
+    let mut index = CandidateIndex::<HttpKey>::default();
     for position in 0..2 {
-        index.register(NativeKey::Http(key.clone()), position);
+        index.register(key.clone(), position);
     }
     index.seal();
-    let selected = index.lookup(NativeQuery::Http(&key)).find(|position| {
+    let selected = index.lookup(&key).find(|position| {
         source[*position] == target
             || compare(&source[*position], &target, &fields, clocks).passed()
     });
@@ -183,36 +170,25 @@ fn a_legal_time_rule_candidate_stays_ahead_of_a_later_exact_payload() {
 #[test]
 fn coarse_http_candidates_preserve_generated_paths_without_broadening_exact_lookup() {
     let scope = ScopePartition::Case(Some("active".into()));
-    let mut index = ProtocolIndex::http();
+    let mut index = CandidateIndex::<HttpKey>::default();
     for (position, path) in ["/x/source-id", "/unrelated"].into_iter().enumerate() {
-        index.register(NativeKey::Http(http(scope.clone(), Some(path))), position);
-        index.register(NativeKey::Http(http(scope.clone(), None)), position);
+        index.register(http(scope.clone(), Some(path)), position);
+        index.register(http(scope.clone(), None), position);
     }
     index.seal();
     assert!(
         index
-            .lookup(NativeQuery::Http(&http(
-                scope.clone(),
-                Some("/x/target-id")
-            )))
+            .lookup(&http(scope.clone(), Some("/x/target-id")))
             .next()
             .is_none()
     );
     assert_eq!(
         index
-            .lookup(NativeQuery::Http(&http(
-                scope.clone(),
-                Some("/x/source-id")
-            )))
+            .lookup(&http(scope.clone(), Some("/x/source-id")))
             .collect::<Vec<_>>(),
         [0]
     );
-    assert_eq!(
-        index
-            .lookup(NativeQuery::Http(&http(scope, None)))
-            .collect::<Vec<_>>(),
-        [0, 1]
-    );
+    assert_eq!(index.lookup(&http(scope, None)).collect::<Vec<_>>(), [0, 1]);
 }
 
 #[test]
@@ -251,25 +227,19 @@ fn lane_blockers_cross_command_buckets_but_not_case_or_actual_owner_boundaries()
 
 #[test]
 fn incremental_preparation_keeps_existing_cursor_and_unchanged_bucket_storage() {
-    let mut index = ProtocolIndex::http();
+    let mut index = CandidateIndex::<HttpKey>::default();
     let first = http(ScopePartition::Case(Some("first".into())), Some("/x"));
-    index.register(NativeKey::Http(first.clone()), 0);
+    index.register(first.clone(), 0);
     index.seal();
-    let prior = index.lookup(NativeQuery::Http(&first)).into_indices();
+    let prior = index.lookup(&first).into_indices();
     let second = http(ScopePartition::Case(Some("second".into())), Some("/x"));
-    index.register(NativeKey::Http(second), 1);
+    index.register(second, 1);
     index.seal();
-    assert!(Arc::ptr_eq(
-        &prior,
-        &index.lookup(NativeQuery::Http(&first)).into_indices()
-    ));
-    index.register(NativeKey::Http(first.clone()), 2);
+    assert!(Arc::ptr_eq(&prior, &index.lookup(&first).into_indices()));
+    index.register(first.clone(), 2);
     index.seal();
     assert_eq!(prior.as_ref(), [0]);
-    assert_eq!(
-        index.lookup(NativeQuery::Http(&first)).collect::<Vec<_>>(),
-        [0, 2]
-    );
+    assert_eq!(index.lookup(&first).collect::<Vec<_>>(), [0, 2]);
 }
 
 #[test]
@@ -281,7 +251,7 @@ fn mysql_command_postings_match_query_execute_compatibility_without_reordering()
         "sql",
         "COM_QUERY",
     ];
-    let mut index = ProtocolIndex::mysql();
+    let mut index = CandidateIndex::<MysqlKey>::default();
     let key = |command| MysqlKey {
         scope: ScopePartition::Case(Some("active".into())),
         host: "sql.test".into(),
@@ -291,8 +261,8 @@ fn mysql_command_postings_match_query_execute_compatibility_without_reordering()
         command: MysqlCommand::new(command),
     };
     for (position, command) in commands.iter().enumerate() {
-        index.register(NativeKey::Mysql(key(None)), position);
-        index.register(NativeKey::Mysql(key(Some(command))), position);
+        index.register(key(None), position);
+        index.register(key(Some(command)), position);
     }
     index.seal();
     for query in [
@@ -315,12 +285,7 @@ fn mysql_command_postings_match_query_execute_compatibility_without_reordering()
             })
             .map(|(position, _)| position)
             .collect::<Vec<_>>();
-        assert_eq!(
-            index
-                .lookup(NativeQuery::Mysql(&key(query)))
-                .collect::<Vec<_>>(),
-            scanned
-        );
+        assert_eq!(index.lookup(&key(query)).collect::<Vec<_>>(), scanned);
     }
 }
 

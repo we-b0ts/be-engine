@@ -70,14 +70,7 @@ pub(in crate::replay) enum CommandMatchDiagnostic {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct CommandExchangeRefReport {
-    pub(in crate::replay) case_id: Option<String>,
-    pub(in crate::replay) source: ReplaySource,
-    pub(in crate::replay) connection_id: Uuid,
-    pub(in crate::replay) sequence: u64,
-    pub(in crate::replay) command: String,
-}
+pub(in crate::replay) use traffic_replay::command::ExchangeRef as CommandExchangeRefReport;
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct CommandUnusedReport {

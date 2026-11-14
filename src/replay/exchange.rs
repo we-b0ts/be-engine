@@ -13,33 +13,7 @@ use crate::dependency::{TerminationKind, TerminationScope};
 const CLIENT_TERMINATION_EARLY_TOLERANCE: Duration = Duration::from_millis(50);
 const CLIENT_TERMINATION_LATE_TOLERANCE: Duration = Duration::from_secs(1);
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) enum ReplayExchangeStatus {
-    #[default]
-    Available,
-    /// Unclaimed initialization traffic cannot be borrowed after the first primary input.
-    StartupBlocked,
-    Responding,
-    AwaitingClientTermination,
-    Consumed,
-    /// A separately audited primary cancellation; recorded EOF was not delivered.
-    Cancelled,
-    Failed,
-}
-
-impl ReplayExchangeStatus {
-    pub(super) fn is_available(self) -> bool {
-        self == Self::Available
-    }
-
-    pub(super) fn is_covered(self) -> bool {
-        self.is_consumed()
-    }
-
-    pub(super) fn is_consumed(self) -> bool {
-        self == Self::Consumed
-    }
-}
+pub(super) use traffic_replay::ReplayExchangeStatus;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ReplayExchangeTiming {

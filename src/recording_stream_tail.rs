@@ -27,10 +27,11 @@ impl AppState {
             Vec::new()
         };
         let targets = self.process_observation_targets(&rules, true);
-        targets.bind_protocol(crate::dependency::observation::ProtocolRef::Memcached {
+        targets.bind_protocol(crate::dependency::observation::ProtocolRef::connection(
+            "memcached",
             connection_id,
             sequence,
-        });
+        ));
         crate::recorder::process_classification::classify(
             targets,
             rules,
@@ -52,10 +53,11 @@ impl AppState {
                     && identity.method_name.as_deref()==Some(method_name)))
             .map(|rule|rule.name().to_owned()).collect::<Vec<_>>();
         let targets = self.process_observation_targets(&rules, !heartbeat);
-        targets.bind_protocol(crate::dependency::observation::ProtocolRef::Motan {
+        targets.bind_protocol(crate::dependency::observation::ProtocolRef::connection(
+            "motan",
             connection_id,
             sequence,
-        });
+        ));
         crate::recorder::process_classification::classify(
             targets,
             rules,

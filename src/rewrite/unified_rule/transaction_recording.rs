@@ -73,12 +73,13 @@ pub(super) fn seal(root: &Path) {
                 let event_type = event["event_type"].as_str().unwrap().to_owned();
                 let protocol = event_type.split('_').next().unwrap();
                 let reference = match protocol {
-                    "http" => ProtocolRef::Http {
-                        exchange_id: event["id"]
+                    "http" => ProtocolRef::exchange(
+                        "http",
+                        event["id"]
                             .as_str()
                             .and_then(|id| id.parse().ok())
                             .unwrap_or(id),
-                    },
+                    ),
                     "mysql" | "redis" | "memcached" | "motan" | "kafka" => {
                         let connection = event["connection_id"]
                             .as_str()
@@ -89,32 +90,16 @@ pub(super) fn seal(root: &Path) {
                             .or_else(|| event["sequence"].as_u64())
                             .unwrap_or(index as u64 + 1);
                         match protocol {
-                            "mysql" => ProtocolRef::Mysql {
-                                connection_id: connection,
-                                sequence,
-                            },
-                            "redis" => ProtocolRef::Redis {
-                                connection_id: connection,
-                                sequence,
-                            },
-                            "memcached" => ProtocolRef::Memcached {
-                                connection_id: connection,
-                                sequence,
-                            },
-                            "motan" => ProtocolRef::Motan {
-                                connection_id: connection,
-                                sequence,
-                            },
-                            _ => ProtocolRef::Kafka {
-                                connection_id: connection,
-                                sequence,
-                            },
+                            "mysql" => ProtocolRef::connection("mysql", connection, sequence),
+                            "redis" => ProtocolRef::connection("redis", connection, sequence),
+                            "memcached" => {
+                                ProtocolRef::connection("memcached", connection, sequence)
+                            }
+                            "motan" => ProtocolRef::connection("motan", connection, sequence),
+                            _ => ProtocolRef::connection("kafka", connection, sequence),
                         }
                     }
-                    _ => ProtocolRef::Observation {
-                        event_id: id,
-                        kind: event_type,
-                    },
+                    _ => ProtocolRef::observation(id, event_type),
                 };
                 let case = match owner {
                     DependencyOwner::Case { origin_case_id, .. } => Some(origin_case_id),

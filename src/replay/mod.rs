@@ -346,11 +346,11 @@ pub async fn run_replay_with_providers(
         .local_addr()
         .context("failed to read dependency replay DNS listen address")?;
     let runtime =
-        ReplayRuntime::load_with_lifecycle(config, dns_listen, tcp_listen, lifecycle).await?;
+        ReplayRuntime::load_with_providers(config, dns_listen, tcp_listen, lifecycle, providers)
+            .await?;
     {
         let mut state = runtime.state.lock().await;
         state.egress_counter_reader = counter_reader;
-        state.providers = providers;
     }
     info!(
         dns_listen = %dns_listen,

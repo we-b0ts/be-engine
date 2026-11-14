@@ -1,14 +1,15 @@
 use super::*;
 use crate::policy::{
-    FieldContract, ProtobufCodec, ProtobufField, ProtobufType as Type, TimeAnchor, TimeRelation,
-    TimestampFormat,
+    Codec, FieldContract, ProtobufCodec, ProtobufField, ProtobufType as Type, TimeAnchor,
+    TimeRelation, TimestampFormat,
 };
 use crate::value_contract::{
     json::{self, AnchorClocks, Field},
     time::ClockPair,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use traffic_contract::codec::pointer_matches;
 
 fn codec(fields: &[(&str, &[u32], Type, bool)]) -> Codec {
     Codec::Protobuf(ProtobufCodec {
@@ -179,7 +180,7 @@ fn delivery_recomputes_message_lengths_and_preserves_every_unselected_byte() {
     edited["items"][0]["id"] = json!(8);
     assert!(decoded.encode(&edited, &allowed).is_err());
     let mut edited = decoded.logical.clone();
-    edited[protobuf::INTERNAL_KEY] = json!({});
+    edited[traffic_contract::codec::PROTOBUF_REMAINDER_KEY] = json!({});
     assert!(decoded.encode(&edited, &["".into()]).is_err());
     let mut edited = decoded.logical.clone();
     edited["added"] = json!(1);

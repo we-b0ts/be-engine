@@ -68,37 +68,38 @@ pub(super) fn publish(case: &Path, raw: &str) -> PathBuf {
             }
         }
         let protocol_ref = match kind.as_str() {
-            "mysql_exchange" => ProtocolRef::Mysql {
-                connection_id: event["connection_id"]
+            "mysql_exchange" => ProtocolRef::connection(
+                "mysql",
+                event["connection_id"]
                     .as_str()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(epoch),
-                sequence: event["query_sequence"].as_u64().unwrap_or(index as u64),
-            },
-            "redis_exchange" => ProtocolRef::Redis {
-                connection_id: event["connection_id"]
+                event["query_sequence"].as_u64().unwrap_or(index as u64),
+            ),
+            "redis_exchange" => ProtocolRef::connection(
+                "redis",
+                event["connection_id"]
                     .as_str()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(epoch),
-                sequence: event["sequence"].as_u64().unwrap_or(index as u64),
-            },
-            "memcached_exchange" => ProtocolRef::Memcached {
-                connection_id: event["connection_id"]
+                event["sequence"].as_u64().unwrap_or(index as u64),
+            ),
+            "memcached_exchange" => ProtocolRef::connection(
+                "memcached",
+                event["connection_id"]
                     .as_str()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(epoch),
-                sequence: event["sequence"].as_u64().unwrap_or(index as u64),
-            },
-            "http_exchange" => ProtocolRef::Http {
-                exchange_id: event["id"]
+                event["sequence"].as_u64().unwrap_or(index as u64),
+            ),
+            "http_exchange" => ProtocolRef::exchange(
+                "http",
+                event["id"]
                     .as_str()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(exchange_id),
-            },
-            kind => ProtocolRef::Observation {
-                event_id: exchange_id,
-                kind: kind.into(),
-            },
+            ),
+            kind => ProtocolRef::observation(exchange_id, kind),
         };
         let started_at = "2026-10-01T00:00:00Z".parse().unwrap();
         event["capture"] = serde_json::to_value(CaptureMetadata {

@@ -26,6 +26,7 @@ pub(super) fn freeze(
     source: &Path,
     output: &Path,
     cases: &mut BTreeMap<String, ReplayCase>,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
 ) -> Result<Frozen> {
     let Some(root) = recording::root(source) else {
         return Ok(Frozen {
@@ -54,7 +55,8 @@ pub(super) fn freeze(
         )?),
     };
     if let Some(scope) = &mut frozen.batch_scope {
-        scope.inventory = inventory::effective(&root, &manifest, &decisions)?;
+        scope.inventory =
+            inventory::effective_with_evidence(&root, &manifest, &decisions, evidence)?;
     }
     if decisions.is_empty() {
         return Ok(frozen);

@@ -458,6 +458,7 @@ impl AppState {
             run_id,
             recording_api_limits,
             artifact_owner,
+            Arc::new(providers.evidence().clone()),
         )
         .await
         .context("failed to initialize JSONL recorder")?

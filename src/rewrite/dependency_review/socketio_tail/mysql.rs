@@ -1,6 +1,5 @@
 //! Empty MySQL controls can complete the wire sequence of a proved tail.
 use super::*;
-use crate::dependency::observation::ProtocolRef;
 
 pub(super) fn is_bounded_control(
     source: &SourceSnapshot,
@@ -9,13 +8,19 @@ pub(super) fn is_bounded_control(
     anchors_share_origin: impl FnOnce(&Uuid, &Uuid) -> bool,
 ) -> Result<bool> {
     let capture = &source.exchanges[&id].capture;
-    let ProtocolRef::Mysql {
-        connection_id,
-        sequence,
-    } = capture.protocol_ref
-    else {
+    if capture.protocol_ref.protocol() != "mysql" {
         return Ok(false);
-    };
+    }
+    let reference = capture.protocol_ref.fields();
+    let connection_id: Uuid = reference
+        .get("connection_id")
+        .and_then(Value::as_str)
+        .context("MySQL reference has no connection identity")?
+        .parse()?;
+    let sequence = reference
+        .get("sequence")
+        .and_then(Value::as_u64)
+        .context("MySQL reference has no request sequence")?;
     let same_victim = |id: &Uuid| {
         source.exchanges.get(id).is_some_and(|event| {
             event.complete
