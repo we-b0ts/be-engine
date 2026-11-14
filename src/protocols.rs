@@ -41,6 +41,7 @@ impl DependencyProtocol {
 pub struct DependencyProviders {
     providers: ProviderRegistry<DependencyProtocol>,
     bindings: traffic_replay::rules::BindingRegistry,
+    report_codecs: traffic_protocol::report::CodecRegistry,
 }
 
 impl std::ops::Deref for DependencyProviders {
@@ -55,6 +56,19 @@ impl std::ops::DerefMut for DependencyProviders {
     }
 }
 impl DependencyProviders {
+    pub fn register_report_codec(
+        &mut self,
+        protocol: traffic_protocol::ProtocolId,
+        codec: Arc<dyn traffic_protocol::report::ReportCodec>,
+    ) -> Result<()> {
+        self.report_codecs.register(protocol, codec)
+    }
+    pub fn report_codec(
+        &self,
+        protocol: &str,
+    ) -> Option<Arc<dyn traffic_protocol::report::ReportCodec>> {
+        self.report_codecs.codec(protocol)
+    }
     pub fn bindings(&self) -> &traffic_replay::rules::BindingRegistry {
         &self.bindings
     }
@@ -111,6 +125,14 @@ pub fn default_providers() -> Arc<DependencyProviders> {
         providers
             .register_evidence("transport", Arc::new(evidence::TransportEvidence))
             .expect("unique transport evidence adapter");
+        for protocol in replay::report::PROTOCOLS {
+            providers
+                .register_report_codec(
+                    traffic_protocol::ProtocolId::new(protocol),
+                    Arc::new(replay::report::codecs::Builtin(protocol)),
+                )
+                .expect("unique built-in report codec");
+        }
         Arc::new(providers)
     }))
 }

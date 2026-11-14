@@ -15,7 +15,7 @@ pub(in crate::replay) fn protocol_snapshot(
         policy: "protocol-differential".into(),
         protocol: protocol.into(),
         layout,
-        semantics: Identity::current_semantics(protocol),
+        semantics: crate::protocols::replay::report::semantics(protocol),
     };
     let baseline = RegularBaseline::retain(report, identity, |visit| {
         for row in rows {
@@ -44,7 +44,7 @@ fn identity(protocol: &str) -> Identity {
         } else {
             vec![1024]
         },
-        semantics: Identity::current_semantics(protocol),
+        semantics: crate::protocols::replay::report::semantics(protocol),
     }
 }
 
@@ -79,7 +79,7 @@ fn historical_identity_keys_survive_and_only_new_mysql_semantics_change_the_key(
         .unwrap();
         assert_eq!(historical.key().unwrap(), old_key, "{protocol}");
         let mut current = historical;
-        current.semantics = Identity::current_semantics(protocol);
+        current.semantics = crate::protocols::replay::report::semantics(protocol);
         if protocol == "mysql" {
             assert_eq!(
                 current.semantics.as_deref(),

@@ -57,6 +57,10 @@ struct Recording {
 }
 
 async fn record() -> Recording {
+    record_with_startup(false).await
+}
+
+async fn record_with_startup(startup: bool) -> Recording {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let directory = tempfile::tempdir().unwrap();
     let native_upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -116,10 +120,14 @@ async fn record() -> Recording {
         )
         .unwrap();
     state.install_recording_upstreams(routes).unwrap();
-    state.close_bootstrap("fixture Source ready").await.unwrap();
     let upstream = tokio::spawn(async move {
         let (mut stream, _) = native_upstream.accept().await.unwrap();
-        for operation in ["fetch", "next"] {
+        let operations = if startup {
+            vec!["warm", "fetch", "next"]
+        } else {
+            vec!["fetch", "next"]
+        };
+        for operation in operations {
             let request = traffic_protocol_fixture::read(&mut stream).await.unwrap();
             assert_eq!(
                 request,
@@ -137,10 +145,29 @@ async fn record() -> Recording {
         let (stream, peer) = native_proxy.accept().await.unwrap();
         handle_connection(stream, peer, recording).await.unwrap();
     });
+    let startup_dependency = if startup {
+        let mut stream = TcpStream::connect(native_address).await.unwrap();
+        let request = json!({"id":42,"operation":"warm","fixed":"original"});
+        stream
+            .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            traffic_protocol_fixture::read(&mut stream).await.unwrap(),
+            request
+        );
+        Some(stream)
+    } else {
+        None
+    };
+    state.close_bootstrap("fixture Source ready").await.unwrap();
     let source = tokio::spawn(async move {
         let (mut stream, _) = primary_source.accept().await.unwrap();
         read_http_head(&mut stream).await;
-        let mut dependency = TcpStream::connect(native_address).await.unwrap();
+        let mut dependency = match startup_dependency {
+            Some(stream) => stream,
+            None => TcpStream::connect(native_address).await.unwrap(),
+        };
         for operation in ["fetch", "next"] {
             let request = json!({"id":42,"operation":operation,"fixed":"original"});
             let wire = traffic_protocol_fixture::encode(&request).unwrap();
@@ -205,7 +232,7 @@ async fn record() -> Recording {
         .iter()
         .filter(|row| row["event_type"] == traffic_protocol_fixture::EVENT)
         .collect::<Vec<_>>();
-    assert_eq!(native.len(), 2);
+    assert_eq!(native.len(), 2 + usize::from(startup));
     assert!(native.iter().all(|row| row.get("target_host").is_none() && row["peer"]["address"] == "fixture.test"));
     Recording {
         _directory: directory,
@@ -233,6 +260,9 @@ struct Replay {
 
 impl Replay {
     async fn start(recording: &Recording, lazy: bool) -> Self {
+        Self::start_with_startup(recording, lazy, false).await
+    }
+    async fn start_with_startup(recording: &Recording, lazy: bool, deliver_startup: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let session = directory.path().join("session.json");
         let config = ReplayConfig {
@@ -266,11 +296,23 @@ impl Replay {
         ));
         let ready = control(&session, "wait_ready", None).await;
         assert_eq!(ready["ok"], true);
-        let address = ready["session"]["tcp_listen"]
+        let address: SocketAddr = ready["session"]["tcp_listen"]
             .as_str()
             .unwrap()
             .parse()
             .unwrap();
+        if deliver_startup {
+            let mut target = TcpStream::connect(address).await.unwrap();
+            let request = json!({"id":1042,"operation":"warm","fixed":"original"});
+            target
+                .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                traffic_protocol_fixture::read(&mut target).await.unwrap(),
+                request
+            );
+        }
         assert_eq!(
             control(&session, "begin", Some(&recording.case)).await["ok"],
             true
@@ -284,14 +326,18 @@ impl Replay {
         }
     }
 
-    async fn finish(self) -> Value {
+    async fn finish(mut self) -> Value {
+        self.finalize().await
+    }
+
+    async fn finalize(&mut self) -> Value {
         assert_eq!(
             control(&self.session, "end", Some(&self.case)).await["ok"],
             true
         );
         let finalized = control(&self.session, "finalize", None).await;
         assert_eq!(finalized["ok"], true);
-        self.task.await.unwrap().unwrap();
+        (&mut self.task).await.unwrap().unwrap();
         serde_json::from_slice(&std::fs::read(self._directory.path().join("report.json")).unwrap())
             .unwrap()
     }
@@ -388,6 +434,69 @@ async fn registered_protocol_keeps_unselected_fields_strict_and_rejections_uncon
             std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
             recording.source_bytes
         );
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn registered_protocol_global_evidence_uses_native_projection_and_generic_publication() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let recording = record_with_startup(true).await;
+        for (lazy, delivered) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut replay = Replay::start_with_startup(&recording, lazy, delivered).await;
+            let report_path = replay._directory.path().join("report.json");
+            let published = tempfile::tempdir().unwrap();
+            let mut target = TcpStream::connect(replay.address).await.unwrap();
+            for operation in ["fetch", "next"] {
+                let request = json!({"id":1042,"operation":operation,"fixed":"original"});
+                target
+                    .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    traffic_protocol_fixture::read(&mut target).await.unwrap(),
+                    request
+                );
+            }
+            drop(target);
+            let report = replay.finalize().await;
+            assert_eq!(
+                report["dependency_protocols"][NATIVE]["matched_count"],
+                if delivered { 3 } else { 2 }
+            );
+            assert_eq!(
+                report["dependency_protocols"][NATIVE]["unused_global_count"],
+                usize::from(!delivered)
+            );
+            let page =
+                crate::replay::read_global_dependency_page(&report_path, NATIVE, 0, 10).unwrap();
+            assert_eq!(page.total, usize::from(!delivered));
+            assert_eq!(report["global_evidence"][NATIVE]["regular"]["recorded"], 1);
+            if delivered {
+                assert!(page.items.is_empty());
+            } else {
+                assert_eq!(
+                    page.items[0]["native"],
+                    json!({"wire_format":"fixture","operation":"warm"})
+                );
+            }
+            let staged = published.path().join("report.json");
+            let rebound = crate::replay::report::stage_global_evidence(&report_path, &staged)
+                .unwrap()
+                .unwrap_or(report);
+            std::fs::write(&staged, serde_json::to_vec(&rebound).unwrap()).unwrap();
+            assert_eq!(
+                crate::replay::read_global_dependency_page(&staged, NATIVE, 0, 10)
+                    .unwrap()
+                    .items,
+                page.items
+            );
+            assert_eq!(
+                std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+                recording.source_bytes
+            );
+        }
     })
     .await
     .unwrap();

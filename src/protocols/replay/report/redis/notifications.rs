@@ -7,16 +7,16 @@ use serde_json::Value;
 
 use super::shared::{SharedInventory, SharedReference};
 use crate::dependency_index::{PageManifest, Paged, global::NotificationEntry};
-use crate::replay::ReplaySource;
 use crate::replay::redis::pubsub::{NotificationDelta, NotificationSessionEvidence};
 use crate::replay::report::command::CommandUnusedReport;
+use traffic_replay::ReplaySource;
 
 const KIND: &str = "redis_global_compact_v1";
 const SEMANTICS: &str = "global_unused_not_case_obligation";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct RedisEvidence {
+pub(crate) struct RedisEvidence {
     kind: String,
     pub pages: PageManifest,
     notifications: NotificationEvidence,
@@ -24,7 +24,7 @@ pub(super) struct RedisEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct NotificationEvidence {
+pub(crate) struct NotificationEvidence {
     semantics: String,
     inventory: SharedReference,
     recorded: usize,
@@ -36,7 +36,7 @@ pub(super) struct NotificationEvidence {
 }
 
 impl RedisEvidence {
-    pub(super) fn prepare(
+    pub(crate) fn prepare(
         report: &Path,
         pages: PageManifest,
         session: NotificationSessionEvidence,
@@ -49,7 +49,7 @@ impl RedisEvidence {
             }),
         )
     }
-    pub(super) fn parse(value: &Value) -> Result<Option<Self>> {
+    pub(crate) fn parse(value: &Value) -> Result<Option<Self>> {
         if value.get("kind").is_none() {
             return Ok(None);
         }
@@ -57,17 +57,17 @@ impl RedisEvidence {
         ensure!(evidence.kind == KIND, "unsupported Global evidence format");
         Ok(Some(evidence))
     }
-    pub(super) fn count(&self) -> Result<usize> {
+    pub(crate) fn count(&self) -> Result<usize> {
         self.pages
             .count
             .checked_add(self.notifications.remaining)
             .context("Global detail count overflow")
     }
-    pub(super) fn load(&self, report: &Path) -> Result<(SharedInventory, std::path::PathBuf)> {
+    pub(crate) fn load(&self, report: &Path) -> Result<(SharedInventory, std::path::PathBuf)> {
         ensure!(self.kind == KIND, "unsupported Global evidence format");
         self.notifications.load(report)
     }
-    pub(super) fn read_notifications(
+    pub(crate) fn read_notifications(
         &self,
         report: &Path,
         offset: usize,
@@ -76,7 +76,7 @@ impl RedisEvidence {
     ) -> Result<()> {
         self.notifications.read(report, offset, limit, items)
     }
-    pub(super) fn stage(&mut self, source: &Path, destination: &Path) -> Result<()> {
+    pub(crate) fn stage(&mut self, source: &Path, destination: &Path) -> Result<()> {
         self.load(source)?;
         self.pages.stage_into(
             source.parent().context("report has no parent")?,
@@ -87,7 +87,7 @@ impl RedisEvidence {
     }
 }
 impl NotificationEvidence {
-    pub(super) fn prepare(
+    pub(crate) fn prepare(
         report: &Path,
         session: NotificationSessionEvidence,
     ) -> Result<Option<Self>> {
@@ -113,10 +113,10 @@ impl NotificationEvidence {
         evidence.load(report)?;
         Ok(Some(evidence))
     }
-    pub(super) fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.remaining
     }
-    pub(super) fn load(&self, report: &Path) -> Result<(SharedInventory, std::path::PathBuf)> {
+    pub(crate) fn load(&self, report: &Path) -> Result<(SharedInventory, std::path::PathBuf)> {
         ensure!(
             self.semantics == SEMANTICS,
             "unsupported Global notification semantics"
@@ -179,7 +179,7 @@ impl NotificationEvidence {
         Ok((inventory, root))
     }
 
-    pub(super) fn read(
+    pub(crate) fn read(
         &self,
         report: &Path,
         mut offset: usize,
@@ -246,7 +246,7 @@ impl NotificationEvidence {
         Ok(())
     }
 
-    pub(super) fn stage(&self, source: &Path, destination: &Path) -> Result<Self> {
+    pub(crate) fn stage(&self, source: &Path, destination: &Path) -> Result<Self> {
         self.load(source)?;
         Ok(Self {
             inventory: self.inventory.stage(source, destination)?,

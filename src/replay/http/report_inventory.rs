@@ -9,16 +9,6 @@ use crate::replay::report::global_evidence::{
 mod tests;
 
 impl ReplayState {
-    pub(in crate::replay) fn http_global_report_sharing_is_stable(&self) -> bool {
-        // Cross-case sharing may reclassify and reorder original Global rows.
-        // Those native indexes belong to this session; preserve them through
-        // the existing complete visitor instead of reusing an unmodified core.
-        !self.protocols.http_exchanges.iter().any(|exchange| {
-            exchange.available_in_run_pool()
-                && exchange.case_id.is_none()
-                && exchange.shared_origin.is_some()
-        })
-    }
     pub(in crate::replay) fn global_http_extra_unused_count(&self) -> usize {
         self.protocols
             .http_events
@@ -31,9 +21,6 @@ impl ReplayState {
     }
     pub(in crate::replay) fn http_global_report_usage(&self) -> &Usage {
         &self.protocols.http_events.global_report
-    }
-    pub(in crate::replay) fn initialize_http_global_report_usage(&mut self, count: usize) {
-        self.protocols.http_events.global_report.initialize(count);
     }
     pub(in crate::replay) fn refresh_http_global_report(&mut self, index: usize) {
         let Some(exchange) = self
@@ -51,20 +38,9 @@ impl ReplayState {
             !exchange.status.is_consumed(),
         );
     }
-    pub(in crate::replay) fn visit_http_global_report_extras(
-        &self,
-        visitor: &mut dyn FnMut(Row) -> Result<()>,
-    ) -> Result<()> {
-        visit_global_report_range(
-            &self.protocols.http_exchanges,
-            &self.protocols.http_events.global_report,
-            true,
-            visitor,
-        )
-    }
 }
 
-pub(in crate::replay) fn visit_global_report_range(
+pub(crate) fn visit_global_report_range(
     exchanges: &[ReplayHttpExchange],
     usage: &Usage,
     extras: bool,
@@ -92,4 +68,12 @@ pub(in crate::replay) fn visit_global_report_range(
         })?;
     }
     Ok(())
+}
+
+pub(crate) fn global_report_sharing_is_stable(exchanges: &[ReplayHttpExchange]) -> bool {
+    !exchanges.iter().any(|exchange| {
+        exchange.available_in_run_pool()
+            && exchange.case_id.is_none()
+            && exchange.shared_origin.is_some()
+    })
 }

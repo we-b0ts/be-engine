@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod index;
 pub mod output;
 pub mod preparation;
+pub mod report;
 pub mod request;
 pub mod request_wait;
 pub mod rules;

@@ -1,45 +1,18 @@
 //! Read-only notification identity and sparse session state, separate from delivery.
 use super::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::replay) struct NotificationIdentity {
-    pub target: TargetKey,
-    pub database: i64,
-    pub username: Option<String>,
-    pub connection_id: Uuid,
-    pub subscription_sequence: u64,
-    pub kind: String,
-    pub subject: Vec<u8>,
-    pub subscription_proof: Value,
-}
+pub(crate) use traffic_protocol_redis::report::NotificationIdentity;
+pub(crate) use traffic_replay::report::DeliveryDelta as NotificationDelta;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::replay) struct NotificationDelta {
-    pub lane: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub consumed: Vec<usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed: Vec<usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub responding: Vec<usize>,
-}
-
-pub(in crate::replay) struct NotificationLaneEvidence {
+pub(crate) struct NotificationLaneEvidence {
     pub source: Arc<RecordSource>,
     pub pages: Paged<NotificationEntry>,
     pub identity: NotificationIdentity,
 }
 
-pub(in crate::replay) struct NotificationSessionEvidence {
-    pub lanes: Vec<NotificationLaneEvidence>,
-    pub deltas: Vec<NotificationDelta>,
-    pub recorded: usize,
-    pub delivered: usize,
-    pub failed: usize,
-}
+pub(crate) type NotificationSessionEvidence =
+    traffic_replay::report::DeliverySession<NotificationLaneEvidence>;
 
 impl IndexedNotifications {
     pub(in crate::replay::redis::pubsub) fn evidence(

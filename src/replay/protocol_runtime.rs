@@ -7,8 +7,32 @@ pub(crate) enum InFlightScope {
     Case,
 }
 
-pub(crate) trait ReplayProtocolSet: std::fmt::Debug + Send + Sized + 'static {
+pub(crate) trait ReplayProtocolSet:
+    std::fmt::Debug + Send + Sized + traffic_replay::report::GlobalReportRuntime + 'static
+{
+    fn visit_global_unused(
+        state: &RuntimeState<Self>,
+        protocol: &str,
+        visitor: &mut dyn FnMut(Value) -> Result<()>,
+    ) -> Result<()>;
+    fn global_report_extensions(
+        &self,
+        protocol: &str,
+        report: &Path,
+    ) -> Result<BTreeMap<String, Value>>;
+    fn global_report_fallback(
+        &self,
+        protocol: &str,
+        report: &Path,
+        pages: crate::dependency_index::PageManifest,
+    ) -> Result<Value>;
     type SourceRecord: serde::de::DeserializeOwned + Send + 'static;
+    fn validate_source_record(value: &Value) -> Result<()> {
+        dependencies::validate_outcome(value)?;
+        let _: Self::SourceRecord = serde_json::from_value(value.clone())?;
+        Ok(())
+    }
+
     type SourceAppend;
     fn register_source(
         &mut self,
@@ -61,6 +85,10 @@ pub(crate) trait ReplayProtocolSet: std::fmt::Debug + Send + Sized + 'static {
 }
 
 impl<P: ReplayProtocolSet> RuntimeState<P> {
+    pub(crate) fn protocol_data(&self) -> &P {
+        &self.protocols
+    }
+
     pub(in crate::replay) fn set_active_case(&mut self, case: Option<String>) {
         if self.active_case_id != case {
             self.activate_sequence(case.as_deref());

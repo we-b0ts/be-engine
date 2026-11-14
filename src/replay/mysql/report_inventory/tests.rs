@@ -421,7 +421,9 @@ fn rows(state: &ReplayState) -> Vec<Row> {
 fn equivalent(state: &ReplayState, report: &Path, rows: &[Row]) -> usize {
     let mut extras = Vec::new();
     state
-        .visit_mysql_global_report_extras(&mut |row| {
+        .protocols
+        .mysql
+        .visit_global_report_range(true, &mut |row| {
             extras.push(row);
             Ok(())
         })

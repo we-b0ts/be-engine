@@ -13,13 +13,13 @@ impl PubSubState {
             .filter(|(_, push)| push.source.is_run_level() && !push.status.is_consumed())
             .count()
     }
-    pub(in crate::replay) fn freeze_global_report_layout(&mut self) {
+    pub(crate) fn freeze_global_report_layout(&mut self) {
         self.global_report.freeze_layout(vec![0, self.pushes.len()]);
     }
     pub(in crate::replay) fn indexed_global_remaining(&self) -> usize {
         self.indexed.total - self.indexed.delivered
     }
-    pub(in crate::replay) fn global_report_usage(&self) -> &Usage {
+    pub(crate) fn global_report_usage(&self) -> &Usage {
         &self.global_report
     }
     pub(super) fn refresh_global_report(&mut self, index: usize) {
@@ -33,13 +33,13 @@ impl PubSubState {
         self.global_report
             .observe(1, index, true, !push.status.is_consumed());
     }
-    pub(in crate::replay) fn visit_global_report_rows(
+    pub(crate) fn visit_global_report_rows(
         &self,
         visitor: &mut dyn FnMut(Row) -> Result<()>,
     ) -> Result<()> {
         self.visit_global_report_range(false, visitor)
     }
-    pub(in crate::replay) fn visit_global_report_extras(
+    pub(crate) fn visit_global_report_extras(
         &self,
         visitor: &mut dyn FnMut(Row) -> Result<()>,
     ) -> Result<()> {

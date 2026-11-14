@@ -185,7 +185,7 @@ impl ReplayRuntime {
         }
         // Source-owned Global slots are stable across selected APIs. Later
         // Case-derived Global aliases remain small session-specific evidence.
-        global_source::freeze(
+        crate::protocols::replay::source::projection::freeze(
             &mut mysql,
             &mut http_events,
             http_exchanges.len(),
@@ -194,6 +194,7 @@ impl ReplayRuntime {
             &mut kafka,
             &mut motan,
         );
+        native.freeze_global_report_layout();
         // Current capture/frozen scopes are authoritative per request. A shared
         // physical BEGIN cannot assign later Case queries to its run owner.
         if mysql.has_global_transaction_start

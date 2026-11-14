@@ -6,9 +6,9 @@ pub(crate) mod aggregate;
 #[cfg(test)]
 mod aggregate_tests;
 mod background_overlay;
-pub(super) mod command;
+pub(crate) mod command;
 mod dependency_evidence;
-pub(in crate::replay) mod global_evidence;
+pub(crate) mod global_evidence;
 mod model;
 mod sql_summary;
 mod success;

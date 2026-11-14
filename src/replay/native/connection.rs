@@ -178,6 +178,7 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                     .finish(matched.index, &matched.ticket, || Ok(()))
                 {
                     admission::Finish::Committed(()) => {
+                        state.native.refresh_global_report(matched.index);
                         *state
                             .native
                             .matched

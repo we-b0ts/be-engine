@@ -5,7 +5,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::artifact::{ArtifactReference, digest};
 use super::regular_usage::Position;
@@ -28,11 +27,6 @@ pub(super) struct Identity {
 }
 
 impl Identity {
-    pub(super) fn current_semantics(protocol: &str) -> Option<String> {
-        (protocol == "mysql")
-            .then(|| "mysql-transaction-diagnostics-v6-source-read-proof".to_owned())
-    }
-
     pub(super) fn key(&self) -> Result<String> {
         digest(&(
             "global-regular-projection",
@@ -43,13 +37,7 @@ impl Identity {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::replay) struct Row {
-    pub position: Position,
-    pub visible: bool,
-    pub value: Value,
-}
+pub(in crate::replay) use traffic_replay::report::Row;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -125,7 +125,7 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
             .is_file()
     );
     assert!(!recorder.run_dir.join(".replay/replay-ca.pem").exists());
-    assert!(status.notifications.is_some());
+    assert!(status.extensions.contains_key("notifications"));
     let report = temp
         .path()
         .join(".traffic-e2e/local/artifacts/replays/first/report.json");
@@ -156,10 +156,8 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
             .size,
             policy: runtime_identity.clone(),
             protocol: protocol.into(),
-            layout: crate::replay::global_source::ProjectionView::from(&*state)
-                .layout(protocol)
-                .unwrap(),
-            semantics: Identity::current_semantics(protocol),
+            layout: state.protocols.global_report_layout(protocol).unwrap(),
+            semantics: crate::protocols::replay::report::semantics(protocol),
         };
         assert_eq!(inventory.identity, expected);
         assert_eq!(reference.key(), status.inventories[protocol].key());
@@ -190,7 +188,11 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
     let notifications = super::super::shared::retain(&report, &session.lanes).unwrap();
     assert_eq!(
         notifications.key(),
-        status.notifications.as_ref().unwrap().key()
+        serde_json::from_value::<crate::protocols::replay::report::redis::shared::SharedReference>(
+            status.extensions["notifications"].clone()
+        )
+        .unwrap()
+        .key()
     );
     drop(state);
     // Local durable inventories no longer depend on the optional portable copy.

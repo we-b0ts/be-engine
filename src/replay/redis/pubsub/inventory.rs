@@ -2,7 +2,7 @@
 use super::*;
 pub(super) use crate::dependency_index::global::NotificationEntry;
 use crate::dependency_index::{PageWriter, Paged, RecordRef, RecordSource};
-pub(in crate::replay) use evidence::{
+pub(crate) use evidence::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
 };
 use std::path::Path;

@@ -178,6 +178,16 @@ impl traffic_protocol::output::OutputStream for FrameOutput {
 
 struct Native;
 impl NativeProtocol for Native {
+    fn report_semantics(&self) -> &'static str {
+        "fixture-rpc-report/v1"
+    }
+    fn report_summary(&self, exchange: &RecordedExchange) -> Result<Value> {
+        let operation = exchange
+            .request
+            .evidence(&json!({"pointer":"/operation"}))?;
+        Ok(json!({"wire_format":"fixture","operation":operation["value"]}))
+    }
+
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>> {
         if event["event_type"] != EVENT {
             return Ok(None);

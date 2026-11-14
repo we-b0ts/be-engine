@@ -1,5 +1,6 @@
 use super::*;
 use crate::dependency_index::{RecordReader, RecordSource, global::NotificationEntry};
+use crate::protocols::replay::report::redis::notifications::RedisEvidence;
 use crate::replay::redis::pubsub::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
 };

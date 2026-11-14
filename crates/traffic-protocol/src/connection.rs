@@ -154,6 +154,15 @@ pub trait CaptureSession: Send {
 /// Installed with the native codec at application startup. A new protocol
 /// supplies this capability without extending host enums or state layouts.
 pub trait NativeProtocol: Send + Sync {
+    fn report_semantics(&self) -> &'static str {
+        "native-reference/v1"
+    }
+    fn report_summary(&self, exchange: &RecordedExchange) -> Result<Value> {
+        Ok(
+            serde_json::json!({"protocol_ref":exchange.reference,"target":exchange.endpoint,"lane":exchange.lane}),
+        )
+    }
+
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>>;
     fn recorded_endpoint(&self, event: &Value) -> Result<Option<Endpoint>> {
         Ok(self

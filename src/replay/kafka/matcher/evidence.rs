@@ -73,7 +73,7 @@ impl ReplayKafkaDelivery {
 }
 
 impl KafkaReplayState {
-    pub(in crate::replay) fn visit_global_unused(
+    pub(crate) fn visit_global_unused(
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {

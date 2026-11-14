@@ -35,7 +35,7 @@ impl ReplayExchange {
 }
 
 impl RedisReplayState {
-    pub(in crate::replay) fn visit_global_regular_unused(
+    pub(crate) fn visit_global_regular_unused(
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
@@ -46,7 +46,7 @@ impl RedisReplayState {
         Ok(())
     }
 
-    pub(in crate::replay) fn global_notification_evidence(
+    pub(crate) fn global_notification_evidence(
         &self,
     ) -> Result<pubsub::NotificationSessionEvidence> {
         self.pubsub.notification_evidence(&self.exchanges)

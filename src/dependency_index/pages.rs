@@ -183,6 +183,25 @@ impl PageManifest {
 }
 
 impl<T: DeserializeOwned> Paged<T> {
+    pub(crate) fn read_into(&self, offset: usize, limit: usize, items: &mut Vec<T>) -> Result<()> {
+        if offset >= self.count || items.len() >= limit {
+            return Ok(());
+        }
+        for page in self.page_for(offset)?..self.pages() {
+            let start = self.page_start(page);
+            for (index, item) in self.read_page(page)?.into_iter().enumerate() {
+                if start + index < offset {
+                    continue;
+                }
+                items.push(item);
+                if items.len() == limit {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn manifest(&self) -> PageManifest {
         PageManifest {
             directory: self.directory.path.clone(),

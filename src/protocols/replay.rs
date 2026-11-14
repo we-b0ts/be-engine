@@ -1,5 +1,6 @@
 //! Application assembly for built-in protocol state and native connection drivers.
 pub(crate) mod auto_protocol;
+pub(crate) mod report;
 pub(crate) mod source;
 use crate::{MitmCa, replay};
 use anyhow::{Context, Result, anyhow};
@@ -9,6 +10,7 @@ use replay::{
     RuntimeState,
 };
 use std::net::SocketAddr;
+use std::path::Path;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::{net::TcpStream, sync::Mutex};
 use traffic_protocol::ProtocolId;
@@ -41,6 +43,39 @@ pub(crate) struct ReplayProtocols {
 }
 
 impl ReplayProtocolSet for ReplayProtocols {
+    fn visit_global_unused(
+        state: &RuntimeState<Self>,
+        protocol: &str,
+        visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
+    ) -> Result<()> {
+        let protocols = state.protocol_data();
+        match protocol {
+            "mysql" => state.visit_global_mysql_unused(visitor),
+            "http" => state.visit_global_http_unused(visitor),
+            "redis" => protocols.redis.visit_global_regular_unused(visitor),
+            "memcached" => protocols.memcached.visit_global_unused(visitor),
+            "kafka" => protocols.kafka.visit_global_unused(visitor),
+            "motan" => protocols.motan.visit_global_unused(visitor),
+            _ => anyhow::bail!("unknown native Global report protocol"),
+        }
+    }
+
+    fn global_report_extensions(
+        &self,
+        protocol: &str,
+        report: &Path,
+    ) -> Result<BTreeMap<String, serde_json::Value>> {
+        self.global_report_extensions(protocol, report)
+    }
+    fn global_report_fallback(
+        &self,
+        protocol: &str,
+        report: &Path,
+        pages: crate::dependency_index::PageManifest,
+    ) -> Result<serde_json::Value> {
+        self.global_report_fallback(protocol, report, pages)
+    }
+
     type SourceRecord = source::DependencyRecord;
     type SourceAppend = source::AppendedSource;
     fn register_source(

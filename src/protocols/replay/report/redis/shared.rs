@@ -1,14 +1,14 @@
 //! Source-bound notification projection, independent of shared-artifact storage.
-use super::artifact::{ArtifactReference, digest};
 use crate::dependency_index::PageManifest;
 use crate::replay::redis::pubsub::{NotificationIdentity, NotificationLaneEvidence};
+use crate::replay::report::global_evidence::artifact::{ArtifactReference, digest};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 const VERSION: u32 = 1;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SharedReference(ArtifactReference);
+pub(crate) struct SharedReference(ArtifactReference);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceIdentity {
@@ -17,13 +17,13 @@ struct SourceIdentity {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SharedLane {
+pub(crate) struct SharedLane {
     pub identity: NotificationIdentity,
     pub pages: PageManifest,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SharedInventory {
+pub(crate) struct SharedInventory {
     version: u32,
     source: SourceIdentity,
     pub lanes: Vec<SharedLane>,
@@ -38,10 +38,10 @@ fn key(source: &SourceIdentity, lanes: &[SharedLane]) -> Result<String> {
     digest(&("global-pubsub-notifications", VERSION, source, layout))
 }
 impl SharedReference {
-    pub(super) fn key(&self) -> &str {
+    pub(crate) fn key(&self) -> &str {
         self.0.key()
     }
-    pub(super) fn validate_pages(&self, report: &Path) -> Result<()> {
+    pub(crate) fn validate_pages(&self, report: &Path) -> Result<()> {
         let (inventory, root) = self.load(report)?;
         for lane in inventory.lanes {
             let pages = crate::dependency_index::Paged::<
@@ -53,7 +53,7 @@ impl SharedReference {
         }
         Ok(())
     }
-    pub(super) fn load(&self, report: &Path) -> Result<(SharedInventory, PathBuf)> {
+    pub(crate) fn load(&self, report: &Path) -> Result<(SharedInventory, PathBuf)> {
         let (inventory, directory) = self.0.load::<SharedInventory>(report)?;
         inventory.validate()?;
         ensure!(
@@ -62,7 +62,7 @@ impl SharedReference {
         );
         Ok((inventory, directory))
     }
-    pub(super) fn stage(&self, source: &Path, destination: &Path) -> Result<Self> {
+    pub(crate) fn stage(&self, source: &Path, destination: &Path) -> Result<Self> {
         self.load(source)?;
         Ok(Self(self.0.stage::<SharedInventory>(
             source,
@@ -101,21 +101,15 @@ impl SharedInventory {
                 )),
                 "duplicate shared notification anchor"
             );
-            ensure!(
-                matches!(
-                    lane.identity.kind.as_str(),
-                    "channel" | "pattern" | "shard_channel"
-                ),
-                "invalid shared notification kind"
-            );
+            lane.identity.validate()?;
         }
         Ok(())
     }
 }
-pub(super) fn retain(report: &Path, lanes: &[NotificationLaneEvidence]) -> Result<SharedReference> {
+pub(crate) fn retain(report: &Path, lanes: &[NotificationLaneEvidence]) -> Result<SharedReference> {
     retain_at(report, lanes, false)
 }
-pub(super) fn retain_portable(
+pub(crate) fn retain_portable(
     report: &Path,
     lanes: &[NotificationLaneEvidence],
 ) -> Result<SharedReference> {
@@ -158,7 +152,7 @@ fn retain_at(
     } else if let Some(reference) = ArtifactReference::existing::<SharedInventory>(report, &key)? {
         Some(SharedReference(reference))
     } else {
-        super::preparation::import_notifications(first.source.path(), report, &key)?
+        import_notifications(first.source.path(), report, &key)?
     };
     let reference = if let Some(reference) = imported {
         reference
@@ -195,4 +189,36 @@ fn retain_at(
         "shared notification inventory differs from admitted Replay lanes"
     );
     Ok(reference)
+}
+
+fn import_notifications(
+    source: &Path,
+    report: &Path,
+    key: &str,
+) -> Result<Option<SharedReference>> {
+    let Some((marker, value)) =
+        crate::replay::report::global_evidence::preparation::read_extension(
+            source,
+            "notifications",
+        )?
+    else {
+        return Ok(None);
+    };
+    let reference: SharedReference = match serde_json::from_value(value) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    if reference.key() != key {
+        return Ok(None);
+    }
+    match reference
+        .validate_pages(&marker)
+        .and_then(|()| reference.stage(&marker, report))
+    {
+        Ok(reference) => Ok(Some(reference)),
+        Err(error) => {
+            tracing::warn!(error=%error, "optional recording notification projection is unavailable; rebuilding from Source");
+            Ok(None)
+        }
+    }
 }

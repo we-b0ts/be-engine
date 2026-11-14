@@ -124,6 +124,17 @@ traversal and producer completion. Application-supplied `GlobalProjection` and
 metadata prerequisites and registration. Producer cancellation, final Source
 validation and failed-consumer joining use the shared traversal path.
 
+`traffic-replay::report` owns immutable Global rows, sparse visibility and
+delivery deltas. Native inventories project their complete Source layout and
+actual delivery state through `GlobalReportProjection` and
+`GlobalReportRuntime`. The composed projection rejects overlapping inventory
+owners. `traffic-protocol::report` owns the open evidence codec contract.
+Application bindings under `protocols/replay/report` retain native evidence
+formats and historical report field locations. Shared report publication,
+artifact validation and pagination consume those capabilities. Registered
+native protocols supply their own summaries and participate in the same
+Source-only preparation and live Global publication path.
+
 Run tests and Clippy across the workspace so extracted library tests remain
 part of the ordinary verification path. Product source files in `crates/`
 retain the same responsibility and 1000-line requirements as `src/`.

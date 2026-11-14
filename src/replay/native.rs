@@ -5,6 +5,7 @@ use traffic_protocol::{ProtocolId, connection::Endpoint};
 use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
 mod connection;
+mod global_report;
 mod report;
 mod request;
 pub(crate) use connection::handle_connection;
@@ -13,6 +14,7 @@ pub(super) use report::ProtocolReport;
 #[derive(Debug)]
 pub(crate) struct Inventory {
     pub core: ExchangeInventory,
+    global_usage: BTreeMap<ProtocolId, traffic_replay::report::Usage>,
     pub providers: Arc<crate::protocols::DependencyProviders>,
     pub contracts: policy::request_contract::RequestContracts,
     pub order: admission::RequestOrder,
@@ -33,6 +35,7 @@ impl Inventory {
     pub fn new(providers: Arc<crate::protocols::DependencyProviders>) -> Self {
         Self {
             core: Default::default(),
+            global_usage: Default::default(),
             providers,
             contracts: Default::default(),
             order: Default::default(),

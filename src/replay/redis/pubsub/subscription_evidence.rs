@@ -110,7 +110,7 @@ impl PubSubState {
 }
 
 impl RedisReplayState {
-    pub(in crate::replay) fn resolve_pubsub_subscriptions(
+    pub(crate) fn resolve_pubsub_subscriptions(
         &mut self,
         root: &Path,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,

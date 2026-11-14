@@ -8,22 +8,22 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::dependency_index::{PageWriter, Paged};
-use crate::replay::ReplayState;
+use crate::replay::{ReplayProtocolSet, RuntimeState};
+use traffic_replay::report::GlobalReportProjection;
 
-mod artifact;
+pub(crate) mod artifact;
 #[cfg(test)]
 mod compact_tests;
-mod notifications;
 pub(crate) mod preparation;
+mod projection;
 mod protocol;
 pub(in crate::replay) mod regular;
 mod regular_store;
 pub(in crate::replay) mod regular_usage;
-mod shared;
-use notifications::RedisEvidence;
 use protocol::{NativeInventory, ProtocolEvidence};
 
-const PROTOCOLS: [&str; 6] = ["mysql", "redis", "memcached", "http", "kafka", "motan"];
+#[cfg(test)]
+use crate::protocols::replay::report::PROTOCOLS;
 
 pub(in crate::replay) struct GlobalDetails {
     pub(in crate::replay) manifests: Value,
@@ -38,8 +38,8 @@ impl GlobalDetails {
     }
 }
 
-pub(in crate::replay) async fn prepare(
-    state: Arc<Mutex<ReplayState>>,
+pub(in crate::replay) async fn prepare<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
     report_path: &Path,
 ) -> Result<GlobalDetails> {
     let report_path = report_path.to_owned();
@@ -54,52 +54,33 @@ pub(in crate::replay) async fn prepare(
             .parent()
             .context("Global report has no parent directory")?;
         let mut pages = Vec::new();
-        for protocol in PROTOCOLS {
+        for protocol in state.global_report_protocols() {
+            let protocol = protocol.as_str();
+            state.global_report_layout(protocol)?;
             if let Some(regular) =
                 regular::RegularEvidence::prepare(&report_path, &state, protocol)?
             {
-                let notifications = if protocol == "redis" {
-                    notifications::NotificationEvidence::prepare(
-                        &report_path,
-                        state.protocols.redis.global_notification_evidence()?,
-                    )?
-                } else {
-                    None
-                };
+                let extensions = state
+                    .protocols
+                    .global_report_extensions(protocol, &report_path)?;
                 manifests.insert(
                     protocol.into(),
-                    serde_json::to_value(ProtocolEvidence::new(protocol, regular, notifications))?,
+                    serde_json::to_value(ProtocolEvidence::new(protocol, regular, extensions))?,
                 );
                 continue;
             }
             let mut writer = PageWriter::<Value>::new_in(&root.join("global-dependencies"))?;
             let mut visit = |item| writer.push(item);
-            match protocol {
-                "mysql" => state.visit_global_mysql_unused(&mut visit)?,
-                "redis" => state
-                    .protocols
-                    .redis
-                    .visit_global_regular_unused(&mut visit)?,
-                "memcached" => state.protocols.memcached.visit_global_unused(&mut visit)?,
-                "http" => state.visit_global_http_unused(&mut visit)?,
-                "kafka" => state.protocols.kafka.visit_global_unused(&mut visit)?,
-                "motan" => state.protocols.motan.visit_global_unused(&mut visit)?,
-                _ => unreachable!(),
+            if state.native.owns_global_report(protocol) {
+                state.native.visit_global_unused(protocol, &mut visit)?;
+            } else {
+                P::visit_global_unused(&state, protocol, &mut visit)?;
             }
             let inventory = writer.finish()?;
             let manifest = inventory.manifest().relative_to(root)?;
-            let value = if protocol == "redis" {
-                match RedisEvidence::prepare(
-                    &report_path,
-                    manifest.clone(),
-                    state.protocols.redis.global_notification_evidence()?,
-                )? {
-                    Some(compact) => serde_json::to_value(compact)?,
-                    None => serde_json::to_value(manifest)?,
-                }
-            } else {
-                serde_json::to_value(manifest)?
-            };
+            let value = state
+                .protocols
+                .global_report_fallback(protocol, &report_path, manifest)?;
             manifests.insert(protocol.into(), value);
             pages.push(inventory);
         }
@@ -130,10 +111,6 @@ pub fn read_global_dependency_page(
     limit: usize,
 ) -> Result<GlobalDependencyPage> {
     ensure!(
-        PROTOCOLS.contains(&protocol),
-        "unsupported Global dependency protocol {protocol:?}"
-    );
-    ensure!(
         (1..=1000).contains(&limit),
         "Global dependency page limit must be between 1 and 1000"
     );
@@ -143,16 +120,23 @@ pub fn read_global_dependency_page(
         report["finalized"] == true,
         "Global dependency details require a finalized report"
     );
+    ensure!(
+        report["global_evidence"]
+            .as_object()
+            .is_some_and(|sections| sections.contains_key(protocol)),
+        "unsupported Global dependency protocol {protocol:?}"
+    );
     let inventory =
         NativeInventory::open(report_path, protocol, &report["global_evidence"][protocol])?;
     let native_count = inventory.count()?;
     // Reclassification is reversible and updates the report, while native pages
     // remain immutable. Project its Case witnesses after the native inventory.
-    let events = match protocol {
-        "mysql" => &report["unused_global_exchanges"],
-        "http" => &report["unused_global_http_exchanges"],
-        _ => &report[protocol]["unused_global"],
-    };
+    let providers = crate::protocols::default_providers();
+    let codec = providers.report_codec(protocol);
+    let events = codec.as_ref().map_or(
+        &report["dependency_protocols"][protocol]["unused_global"],
+        |codec| codec.reclassified_rows(&report, protocol),
+    );
     let overlay: Vec<_> = events
         .as_array()
         .into_iter()
@@ -212,6 +196,9 @@ pub(crate) fn stage_global_evidence(source: &Path, destination: &Path) -> Result
     }
     Ok(rebound.then_some(report))
 }
+
+#[cfg(test)]
+use crate::protocols::replay::report::redis::{notifications, shared};
 
 #[cfg(test)]
 mod tests {

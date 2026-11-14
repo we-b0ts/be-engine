@@ -38,7 +38,11 @@ fn unified(fixture: &Fixture) -> Value {
     let regular: RegularEvidence = serde_json::from_value(json!({"inventory":reference,"recorded":2,
         "baseline_visible":2,"remaining":1,"changes":[{"position":{"section":0,"index":0},"before":true,"after":false}]})).unwrap();
     let notifications = NotificationEvidence::prepare(&fixture.report, fixture.session()).unwrap();
-    let evidence = ProtocolEvidence::new("redis", regular, notifications);
+    let evidence = ProtocolEvidence::new(
+        "redis",
+        regular,
+        crate::protocols::replay::report::redis::fields(notifications).unwrap(),
+    );
     let report = json!({"finalized":true,"global_evidence":{"redis":evidence},
         "redis":{"unused_global_count":fixture.expected.len()-1,"unused_global":[fixture.expected.last().unwrap()]}});
     fs::write(&fixture.report, serde_json::to_vec(&report).unwrap()).unwrap();

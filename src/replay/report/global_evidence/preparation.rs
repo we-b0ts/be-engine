@@ -7,17 +7,17 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+use traffic_replay::report::{GlobalReportProjection, ReportRows};
 
 const MARKER: &str = ".global-report-preparation.json";
 const VERSION: u32 = 3;
 #[cfg(test)]
 mod tests;
 
-pub(super) fn import_notifications(
+pub(crate) fn read_extension(
     source: &Path,
-    report: &Path,
-    key: &str,
-) -> Result<Option<super::shared::SharedReference>> {
+    name: &str,
+) -> Result<Option<(std::path::PathBuf, serde_json::Value)>> {
     let marker = marker_path(source)?;
     let status: Preparation = match store::read_json(&marker) {
         Ok(value) => value,
@@ -26,22 +26,10 @@ pub(super) fn import_notifications(
     if status.version != VERSION || status.status != "ready" {
         return Ok(None);
     }
-    let Some(reference) = status
-        .notifications
-        .filter(|reference| reference.key() == key)
-    else {
-        return Ok(None);
-    };
-    match reference
-        .validate_pages(&marker)
-        .and_then(|()| reference.stage(&marker, report))
-    {
-        Ok(reference) => Ok(Some(reference)),
-        Err(error) => {
-            tracing::warn!(error=%error, "optional recording notification projection is unavailable; rebuilding from Source");
-            Ok(None)
-        }
-    }
+    Ok(status
+        .extensions
+        .get(name)
+        .map(|value| (marker, value.clone())))
 }
 
 fn marker_path(source: &Path) -> Result<std::path::PathBuf> {
@@ -56,15 +44,14 @@ fn marker_path(source: &Path) -> Result<std::path::PathBuf> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Preparation {
     version: u32,
     status: String,
     policy: String,
     source_sha256: Option<String>,
     inventories: BTreeMap<String, ArtifactReference>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    notifications: Option<super::shared::SharedReference>,
+    #[serde(flatten)]
+    extensions: BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
 }
@@ -92,7 +79,7 @@ pub(crate) async fn prewarm(
         policy: policy.clone(),
         source_sha256: None,
         inventories: BTreeMap::new(),
-        notifications: None,
+        extensions: BTreeMap::new(),
         reason: None,
     };
     if !crate::dependency_index::scoped::exists(&source) {
@@ -102,7 +89,9 @@ pub(crate) async fn prewarm(
     }
     let result = async {
         let stamp = crate::dependency_index::FileStamp::read(&source)?;
-        let prepared = crate::replay::global_source::GlobalSource::load(&source, rules).await?;
+        let prepared =
+            crate::protocols::replay::source::projection::GlobalSource::load(&source, rules)
+                .await?;
         let run = run.to_owned();
         tokio::task::spawn_blocking(move || -> Result<_> {
             let (index, _) = crate::dependency_index::global::load_global_index(
@@ -130,21 +119,22 @@ pub(crate) async fn prewarm(
             let marker = run.join(MARKER);
             let view = prepared.view();
             let mut inventories = BTreeMap::new();
-            for protocol in super::PROTOCOLS {
+            for protocol in view.global_report_protocols() {
+                let protocol = protocol.as_str();
                 let identity = Identity {
                     source_sha256: source_sha256.clone(),
                     source_bytes: index.stamp.size,
                     policy: policy.clone(),
                     protocol: protocol.into(),
-                    layout: view.layout(protocol)?,
-                    semantics: Identity::current_semantics(protocol),
+                    layout: view.global_report_layout(protocol)?,
+                    semantics: view.global_report_semantics(protocol),
                 };
                 let reference = super::regular::retain_reference(
                     &marker,
                     identity.clone(),
                     true,
                     None,
-                    |visitor| view.visit(protocol, visitor),
+                    |visitor| view.visit_global_report(protocol, ReportRows::Core, visitor),
                 )?;
                 let (inventory, _) = reference.load::<Inventory>(&marker)?;
                 inventory.validate(&reference)?;
@@ -154,28 +144,23 @@ pub(crate) async fn prewarm(
                 );
                 inventories.insert(protocol.to_owned(), reference);
             }
-            let session = prepared.redis.global_notification_evidence()?;
-            let notifications = if session.lanes.is_empty() {
-                None
-            } else {
-                Some(super::shared::retain_portable(&marker, &session.lanes)?)
-            };
+            let extensions = prepared.retain_source_extensions(&marker)?;
             ensure!(
                 crate::dependency_index::FileStamp::read(&source)? == stamp,
                 "Global Source changed while preparing report projection"
             );
-            Ok((source_sha256, inventories, notifications))
+            Ok((source_sha256, inventories, extensions))
         })
         .await
         .context("recording Global projection task failed")?
     }
     .await;
     match result {
-        Ok((sha256, inventories, notifications)) => {
+        Ok((sha256, inventories, extensions)) => {
             status.status = "ready".into();
             status.source_sha256 = Some(sha256);
             status.inventories = inventories;
-            status.notifications = notifications;
+            status.extensions = extensions;
         }
         Err(error) => {
             status.reason = Some(format!("{error:#}"));

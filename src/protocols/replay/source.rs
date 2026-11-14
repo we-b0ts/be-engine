@@ -411,3 +411,5 @@ pub(crate) struct AppendedSource {
 }
 
 pub(crate) mod global;
+
+pub(crate) mod projection;

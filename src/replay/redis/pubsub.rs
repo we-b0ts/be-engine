@@ -16,7 +16,7 @@ pub(super) struct RpcComparison {
 pub(in crate::replay) mod ingress;
 mod inventory;
 pub(in crate::replay) mod native_clock;
-pub(in crate::replay) use inventory::{
+pub(crate) use inventory::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
 };
 mod finite_inventory;

@@ -48,7 +48,7 @@ impl RecordedHttpExchange {
 }
 
 impl ReplayState {
-    pub(in crate::replay) fn visit_global_http_unused(
+    pub(crate) fn visit_global_http_unused(
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {

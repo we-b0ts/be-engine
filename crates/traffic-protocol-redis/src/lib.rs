@@ -617,3 +617,5 @@ pub mod evidence;
 pub mod capture;
 
 pub mod process_summary;
+
+pub mod report;

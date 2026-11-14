@@ -13,7 +13,8 @@ use super::regular_store::{Builder, Identity, Inventory};
 #[cfg(test)]
 use super::regular_usage::Usage;
 use super::regular_usage::{Change, Position};
-use crate::replay::ReplayState;
+use crate::replay::{ReplayProtocolSet, RuntimeState};
+use traffic_replay::report::{GlobalReportProjection, GlobalReportRuntime, ReportRows};
 mod cursor;
 
 #[cfg(test)]
@@ -110,23 +111,23 @@ pub(super) fn retain_reference(
 }
 
 impl RegularEvidence {
-    pub(super) fn prepare(
+    pub(super) fn prepare<P: ReplayProtocolSet>(
         report: &Path,
-        state: &ReplayState,
+        state: &RuntimeState<P>,
         protocol: &str,
     ) -> Result<Option<Self>> {
         let Some(baseline) = state.regular_global.get(protocol) else {
             return Ok(None);
         };
         let mut extras = Vec::new();
-        state.visit_regular_report_extras(protocol, &mut |row| {
+        state.visit_global_report(protocol, ReportRows::Extras, &mut |row| {
             extras.push(row);
             Ok(())
         })?;
         Self::from_live_snapshot(
             report,
             baseline,
-            state.regular_report_snapshot(protocol)?,
+            state.global_report_snapshot(protocol)?,
             extras,
         )
         .map(Some)
@@ -320,8 +321,8 @@ impl RegularEvidence {
 
 /// Seal before accepting Target traffic. Cache hits do not invoke protocol
 /// visitors, and neither API identity nor session UUID enters the cache key.
-pub(in crate::replay) fn initialize(
-    state: &mut ReplayState,
+pub(in crate::replay) fn initialize<P: ReplayProtocolSet>(
+    state: &mut RuntimeState<P>,
     report: &Path,
     policy: &str,
 ) -> Result<()> {
@@ -332,15 +333,15 @@ pub(in crate::replay) fn initialize(
     let Some(source) = state.global_path.clone() else {
         return Ok(());
     };
-    let (index, _) = crate::dependency_index::global::load_global_index(
-        &source,
-        crate::protocols::replay::source::validate_index_record,
-    )?;
-    for protocol in super::PROTOCOLS {
-        if protocol == "http" && !state.http_global_report_sharing_is_stable() {
+    let (index, _) =
+        crate::dependency_index::global::load_global_index(&source, P::validate_source_record)?;
+    for protocol in state.global_report_protocols() {
+        let protocol = protocol.as_str();
+        let layout = state.global_report_layout(protocol)?;
+        if !state.global_report_is_stable(protocol) {
             tracing::warn!(
                 protocol,
-                "HTTP cross-case rules transformed native Global rows; preserving native order through full session report projection"
+                "Source transformations require a session-specific report projection"
             );
             continue;
         }
@@ -359,60 +360,15 @@ pub(in crate::replay) fn initialize(
             source_bytes: index.stamp.size,
             policy: policy.into(),
             protocol: protocol.into(),
-            layout: crate::replay::global_source::ProjectionView::from(&*state).layout(protocol)?,
-            semantics: Identity::current_semantics(protocol),
+            layout,
+            semantics: state.global_report_semantics(protocol),
         };
         let baseline =
             RegularBaseline::retain_from_source(report, identity, Some(&source), |visitor| {
-                crate::replay::global_source::ProjectionView::from(&*state).visit(protocol, visitor)
+                state.visit_global_report(protocol, ReportRows::Core, visitor)
             })?;
-        state.initialize_regular_report_usage(protocol, baseline.visible)?;
+        state.initialize_global_report(protocol, baseline.visible)?;
         state.regular_global.insert(protocol.into(), baseline);
     }
     Ok(())
-}
-
-impl ReplayState {
-    fn visit_regular_report_extras(
-        &self,
-        protocol: &str,
-        visitor: &mut dyn FnMut(Row) -> Result<()>,
-    ) -> Result<()> {
-        match protocol {
-            "mysql" => self.visit_mysql_global_report_extras(visitor),
-            "http" => self.visit_http_global_report_extras(visitor),
-            "redis" => self.protocols.redis.visit_global_report_extras(visitor),
-            "memcached" => self.protocols.memcached.visit_global_report_extras(visitor),
-            "motan" => self.protocols.motan.visit_global_report_extras(visitor),
-            "kafka" => self.protocols.kafka.visit_global_report_extras(visitor),
-            _ => anyhow::bail!("unknown Global projection protocol"),
-        }
-    }
-    fn regular_report_snapshot(&self, protocol: &str) -> Result<(usize, Vec<Change>)> {
-        match protocol {
-            "mysql" => self.protocols.mysql.global_report_snapshot(),
-            "http" => self.http_global_report_usage().snapshot(),
-            "redis" => self.protocols.redis.global_report_snapshot(),
-            "memcached" => self.protocols.memcached.global_report_usage().snapshot(),
-            "motan" => self.protocols.motan.global_report_usage().snapshot(),
-            "kafka" => self.protocols.kafka.global_report_usage().snapshot(),
-            _ => anyhow::bail!("unknown Global projection protocol"),
-        }
-    }
-
-    fn initialize_regular_report_usage(&mut self, protocol: &str, visible: usize) -> Result<()> {
-        match protocol {
-            "mysql" => self.protocols.mysql.initialize_global_report_usage(visible),
-            "http" => self.initialize_http_global_report_usage(visible),
-            "redis" => self.protocols.redis.initialize_global_report_usage(visible),
-            "memcached" => self
-                .protocols
-                .memcached
-                .initialize_global_report_usage(visible),
-            "motan" => self.protocols.motan.initialize_global_report_usage(visible),
-            "kafka" => self.protocols.kafka.initialize_global_report_usage(visible),
-            _ => anyhow::bail!("unknown Global projection protocol"),
-        }
-        Ok(())
-    }
 }

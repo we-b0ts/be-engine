@@ -11,7 +11,9 @@ pub(crate) mod diagnosis;
 mod matching;
 pub(in crate::replay) use traffic_protocol_http::multipart;
 mod report_inventory;
-pub(super) use report_inventory::visit_global_report_range as visit_global_report_rows;
+pub(crate) use report_inventory::{
+    global_report_sharing_is_stable, visit_global_report_range as visit_global_report_rows,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::pending;
@@ -173,7 +175,7 @@ mod upstream_failure;
 #[derive(Debug, Default)]
 pub(crate) struct HttpReplayEvents {
     pub(super) cancelled: BTreeMap<usize, cancelled::Audit>,
-    pub(super) global_report: crate::replay::report::global_evidence::regular_usage::Usage,
+    pub(crate) global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     pub(super) dirty_case_ids: BTreeSet<String>,
     pub(super) matched_count: usize,
     pub(super) matched: Vec<MatchedHttpExchangeReport>,

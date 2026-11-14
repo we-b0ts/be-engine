@@ -1,113 +1,118 @@
-//! Compose native protocol inventory, optional Redis notifications and legacy pages.
-use std::path::Path;
-
+//! Shared Global inventories compose ordinary rows and registered evidence sections.
+use super::regular::RegularEvidence;
+use crate::dependency_index::{PageManifest, Paged};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use super::notifications::{NotificationEvidence, RedisEvidence};
-use super::regular::RegularEvidence;
-use crate::dependency_index::{PageManifest, Paged};
-
+use std::{collections::BTreeMap, path::Path};
+use traffic_protocol::report::{ReportCodec, ReportSection};
 const KIND: &str = "global_compact_v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct ProtocolEvidence {
     kind: String,
     protocol: String,
     regular: RegularEvidence,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    notifications: Option<NotificationEvidence>,
+    #[serde(flatten)]
+    extensions: BTreeMap<String, Value>,
 }
-
 impl ProtocolEvidence {
     pub(super) fn new(
         protocol: &str,
         regular: RegularEvidence,
-        notifications: Option<NotificationEvidence>,
+        extensions: BTreeMap<String, Value>,
     ) -> Self {
         Self {
             kind: KIND.into(),
             protocol: protocol.into(),
             regular,
-            notifications,
+            extensions,
         }
     }
-
     fn parse(value: &Value) -> Result<Option<Self>> {
         if value["kind"] != KIND {
             return Ok(None);
         }
         Ok(Some(serde_json::from_value(value.clone())?))
     }
-
-    fn validate(&self, report: &Path, protocol: &str) -> Result<()> {
+    fn validate(
+        &self,
+        report: &Path,
+        protocol: &str,
+        codec: Option<&dyn ReportCodec>,
+    ) -> Result<Option<Box<dyn ReportSection>>> {
         ensure!(
-            self.kind == KIND
-                && self.protocol == protocol
-                && (protocol == "redis" || self.notifications.is_none()),
+            self.kind == KIND && self.protocol == protocol,
             "Global inventory protocol differs from its report section"
         );
         self.regular.validate_protocol(report, protocol)?;
-        if let Some(notifications) = &self.notifications {
-            notifications.load(report)?;
+        if self.extensions.is_empty() {
+            return Ok(None);
         }
-        Ok(())
-    }
-
-    fn count(&self) -> Result<usize> {
-        self.regular
-            .count()?
-            .checked_add(
-                self.notifications
-                    .as_ref()
-                    .map_or(0, NotificationEvidence::count),
-            )
-            .context("Global detail count overflow")
+        let codec = codec.context("Global inventory has no registered extension codec")?;
+        Ok(Some(codec.decode_extensions(report, &self.extensions)?))
     }
 }
 
 pub(super) enum NativeInventory {
     Pages(Paged<Value>),
-    Redis {
-        pages: Paged<Value>,
-        evidence: RedisEvidence,
+    Native(Box<dyn ReportSection>),
+    Shared {
+        evidence: ProtocolEvidence,
+        extension: Option<Box<dyn ReportSection>>,
     },
-    Shared(ProtocolEvidence),
 }
-
 impl NativeInventory {
     pub(super) fn open(report: &Path, protocol: &str, value: &Value) -> Result<Self> {
-        if let Some(evidence) = ProtocolEvidence::parse(value)? {
-            evidence.validate(report, protocol)?;
-            return Ok(Self::Shared(evidence));
-        }
-        let root = report.parent().context("Global report has no parent")?;
-        if let Some(evidence) = RedisEvidence::parse(value)? {
-            ensure!(
-                protocol == "redis",
-                "compact Redis evidence used for another protocol"
-            );
-            evidence.load(report)?;
-            let pages = Paged::restore(evidence.pages.clone().resolve(root)?)?;
-            Ok(Self::Redis { pages, evidence })
-        } else {
-            let manifest: PageManifest = serde_json::from_value(value.clone()).context(
-                "report lacks paginated Global evidence; use a fresh Replay on this engine",
-            )?;
-            Ok(Self::Pages(Paged::restore(manifest.resolve(root)?)?))
-        }
+        let providers = crate::protocols::default_providers();
+        let codec = providers.report_codec(protocol);
+        Self::open_with_codec(report, protocol, value, codec.as_deref())
     }
-
+    pub(super) fn open_with_codec(
+        report: &Path,
+        protocol: &str,
+        value: &Value,
+        codec: Option<&dyn ReportCodec>,
+    ) -> Result<Self> {
+        if let Some(evidence) = ProtocolEvidence::parse(value)? {
+            let extension = evidence.validate(report, protocol, codec)?;
+            return Ok(Self::Shared {
+                evidence,
+                extension,
+            });
+        }
+        if let Some(codec) = codec
+            && let Some(section) = codec.decode(report, value)?
+        {
+            return Ok(Self::Native(section));
+        }
+        ensure!(
+            value.get("kind").is_none(),
+            "unsupported Global evidence format"
+        );
+        let root = report.parent().context("Global report has no parent")?;
+        let manifest: PageManifest = serde_json::from_value(value.clone())
+            .context("report lacks paginated Global evidence; use a fresh Replay on this engine")?;
+        Ok(Self::Pages(Paged::restore(manifest.resolve(root)?)?))
+    }
     pub(super) fn count(&self) -> Result<usize> {
         match self {
             Self::Pages(pages) => Ok(pages.count),
-            Self::Redis { evidence, .. } => evidence.count(),
-            Self::Shared(evidence) => evidence.count(),
+            Self::Native(section) => section.count(),
+            Self::Shared {
+                evidence,
+                extension,
+            } => evidence
+                .regular
+                .count()?
+                .checked_add(
+                    extension
+                        .as_ref()
+                        .map_or(Ok(0), |section| section.count())?,
+                )
+                .context("Global detail count overflow"),
         }
     }
-
     pub(super) fn read(
         &self,
         report: &Path,
@@ -116,83 +121,59 @@ impl NativeInventory {
         items: &mut Vec<Value>,
     ) -> Result<()> {
         match self {
-            Self::Pages(pages) => read_pages(pages, offset, limit, items),
-            Self::Redis { pages, evidence } => {
-                read_pages(pages, offset, limit, items)?;
-                if items.len() < limit && offset < evidence.count()? {
-                    evidence.read_notifications(
-                        report,
-                        offset.saturating_sub(pages.count),
-                        limit,
-                        items,
-                    )?;
-                }
-                Ok(())
-            }
-            Self::Shared(evidence) => {
+            Self::Pages(pages) => pages.read_into(offset, limit, items),
+            Self::Native(section) => section.read(report, offset, limit, items),
+            Self::Shared {
+                evidence,
+                extension,
+            } => {
                 let regular = evidence.regular.count()?;
                 if offset < regular {
                     evidence.regular.read(report, offset, limit, items)?;
                 }
                 if items.len() < limit
-                    && offset < evidence.count()?
-                    && let Some(notifications) = &evidence.notifications
+                    && offset < self.count()?
+                    && let Some(section) = extension
                 {
-                    notifications.read(report, offset.saturating_sub(regular), limit, items)?;
+                    section.read(report, offset.saturating_sub(regular), limit, items)?;
                 }
                 Ok(())
             }
         }
     }
 }
-
-fn read_pages(
-    pages: &Paged<Value>,
-    offset: usize,
-    limit: usize,
-    items: &mut Vec<Value>,
-) -> Result<()> {
-    if offset >= pages.count || items.len() >= limit {
-        return Ok(());
-    }
-    for page in pages.page_for(offset)?..pages.pages() {
-        let start = pages.page_start(page);
-        for (index, item) in pages.read_page(page)?.into_iter().enumerate() {
-            if start + index < offset {
-                continue;
-            }
-            items.push(item);
-            if items.len() == limit {
-                return Ok(());
-            }
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn stage(
     value: &mut Value,
     protocol: &str,
     source: &Path,
     destination: &Path,
 ) -> Result<()> {
+    let providers = crate::protocols::default_providers();
+    let codec = providers.report_codec(protocol);
     if let Some(mut evidence) = ProtocolEvidence::parse(value)? {
-        evidence.validate(source, protocol)?;
+        let extension = evidence.validate(source, protocol, codec.as_deref())?;
         evidence.regular = evidence.regular.stage(source, destination)?;
-        evidence.notifications = evidence
-            .notifications
-            .as_ref()
-            .map(|notifications| notifications.stage(source, destination))
-            .transpose()?;
+        if let Some(section) = extension {
+            evidence.extensions = serde_json::from_value(section.stage(source, destination)?)?;
+            ensure!(
+                evidence
+                    .extensions
+                    .keys()
+                    .all(|key| !matches!(key.as_str(), "kind" | "protocol" | "regular")),
+                "native evidence overlaps shared inventory fields"
+            );
+        }
+        evidence.validate(destination, protocol, codec.as_deref())?;
         *value = serde_json::to_value(evidence)?;
-    } else if let Some(mut evidence) = RedisEvidence::parse(value)? {
-        ensure!(
-            protocol == "redis",
-            "compact Redis evidence used for another protocol"
-        );
-        evidence.stage(source, destination)?;
-        *value = serde_json::to_value(evidence)?;
+    } else if let Some(codec) = codec
+        && let Some(section) = codec.decode(source, value)?
+    {
+        *value = section.stage(source, destination)?;
     } else {
+        ensure!(
+            value.get("kind").is_none(),
+            "unsupported Global evidence format"
+        );
         serde_json::from_value::<PageManifest>(value.clone())?.stage_into(
             source.parent().context("report has no parent")?,
             destination.parent().context("report has no parent")?,

@@ -74,12 +74,12 @@ impl Anchor {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ArtifactReference {
+pub(crate) struct ArtifactReference {
     anchor: Anchor,
     key: String,
     sha256: String,
 }
-pub(super) fn digest(value: &impl Serialize) -> Result<String> {
+pub(crate) fn digest(value: &impl Serialize) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
 }
 fn valid_digest(value: &str) -> bool {
@@ -89,10 +89,10 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 impl ArtifactReference {
-    pub(super) fn key(&self) -> &str {
+    pub(crate) fn key(&self) -> &str {
         &self.key
     }
-    pub(super) fn existing<T: Serialize + DeserializeOwned>(
+    pub(crate) fn existing<T: Serialize + DeserializeOwned>(
         report: &Path,
         key: &str,
     ) -> Result<Option<Self>> {
@@ -116,7 +116,7 @@ impl ArtifactReference {
     }
     /// Domain owners bind all source, projection-version and policy/layout inputs
     /// in the key, then validate that binding after loading the document.
-    pub(super) fn retain<T: Serialize + DeserializeOwned>(
+    pub(crate) fn retain<T: Serialize + DeserializeOwned>(
         report: &Path,
         key: String,
         build: impl FnOnce(&Path) -> Result<T>,
@@ -129,7 +129,7 @@ impl ArtifactReference {
         let anchor = Anchor::for_report(report)?;
         Self::retain_at(report, key, anchor, build)
     }
-    pub(super) fn retain_portable<T: Serialize + DeserializeOwned>(
+    pub(crate) fn retain_portable<T: Serialize + DeserializeOwned>(
         report: &Path,
         key: String,
         build: impl FnOnce(&Path) -> Result<T>,
@@ -151,7 +151,7 @@ impl ArtifactReference {
             sha256,
         })
     }
-    pub(super) fn load<T: Serialize + DeserializeOwned>(
+    pub(crate) fn load<T: Serialize + DeserializeOwned>(
         &self,
         report: &Path,
     ) -> Result<(T, PathBuf)> {
@@ -174,7 +174,7 @@ impl ArtifactReference {
     }
     /// Same-owner publication reads only the small document. Cross-root exports
     /// retain immutable pages once and explicitly rebind the anchor.
-    pub(super) fn stage<T: Serialize + DeserializeOwned>(
+    pub(crate) fn stage<T: Serialize + DeserializeOwned>(
         &self,
         source: &Path,
         destination: &Path,

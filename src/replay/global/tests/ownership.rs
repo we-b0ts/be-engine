@@ -30,9 +30,10 @@ async fn legacy_rule_annotations_do_not_control_finite_startup_inventory() {
     let (_root, _pages, source) = indexed(std::slice::from_ref(&record));
     let before = std::fs::read(source.path()).unwrap();
     for rules in [vec![], vec![current_rule()]] {
-        let loaded = super::super::super::global_source::GlobalSource::load(source.path(), &rules)
-            .await
-            .unwrap();
+        let loaded =
+            crate::protocols::replay::source::projection::GlobalSource::load(source.path(), &rules)
+                .await
+                .unwrap();
         assert_eq!(loaded.http.len(), 1);
     }
     assert_eq!(std::fs::read(source.path()).unwrap(), before);
@@ -49,7 +50,7 @@ async fn startup_inventory_does_not_depend_on_a_retired_background_selector() {
         let mut record = exchange();
         record[field] = value;
         let (_root, _pages, source) = indexed(&[record]);
-        let loaded = super::super::super::global_source::GlobalSource::load(
+        let loaded = crate::protocols::replay::source::projection::GlobalSource::load(
             source.path(),
             &[current_rule()],
         )
@@ -66,8 +67,9 @@ async fn bootstrap_http_without_background_ownership_keeps_its_original_role() {
     record["global_dependency_phase"] = "bootstrap".into();
     record["global_dependency_matched_by"] = Value::Null;
     let (_root, _pages, source) = indexed(&[record]);
-    let loaded = super::super::super::global_source::GlobalSource::load(source.path(), &[])
-        .await
-        .unwrap();
+    let loaded =
+        crate::protocols::replay::source::projection::GlobalSource::load(source.path(), &[])
+            .await
+            .unwrap();
     assert_eq!(loaded.http.len(), 1);
 }

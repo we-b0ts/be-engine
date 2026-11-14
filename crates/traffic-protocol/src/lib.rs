@@ -267,3 +267,5 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
 mod tests;
 
 pub mod capture;
+
+pub mod report;
