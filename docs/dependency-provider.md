@@ -120,6 +120,15 @@ HTTP 协议库提供有界 body capture、Content-Encoding 解码与 header 脱�
 MySQL 的录制投影通过 `RecordSource` 读取自身原生结果格式，存储实现负责认证原来的文件位置与内容。
 延迟加载继续保留列信息、行形状与会话事实，真实响应交付按需加载完整原生结果。
 
+`CaptureFacts` 显式提供统一 outcome，协议实现把自己的原生状态转换为框架的结果事实。
+Snapshot 校验共享传输约束及信封一致性，ledger 据此写入统一 envelope。
+`EvidenceAdapter` 解释协议自己的安全字段，包括既有协议的 `replay_safe`。
+共同的录制完整性仍由证据注册表检查。
+
+MySQL 协议库根据原来的有序录制位置分析 session control、只读前缀、完整事务及有界失败原因。
+调用方提供已经解析的原生交换迭代器和共享归属范围，框架安装这些事实并执行实际 Target 接纳与交付覆盖。
+协议分析复用同一套 endpoint、用户名、database 和原生状态转换事实。
+
 ## 录制结构
 
 | 结构 | 单位 | 内容 |

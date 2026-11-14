@@ -13,6 +13,7 @@ impl EvidenceAdapter for NativeEvidence {
     }
     fn supports_replay(&self, event: &Value) -> bool {
         event["event_type"] == "mysql_exchange"
+            && event["replay_safe"] != false
             && !event["parse_warnings"].as_array().is_some_and(|warnings| {
                 warnings.iter().any(|warning| {
                     warning

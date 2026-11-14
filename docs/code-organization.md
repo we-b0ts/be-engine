@@ -54,6 +54,14 @@ HTTP body capture owns content-coding interpretation and header redaction.
 Native recording projections decode their own stored payloads through the
 host-supplied `RecordSource` interface. Authenticated storage access and finite
 delivery receipts retain framework ownership.
+Native capture facts supply the common outcome explicitly. Snapshot construction
+validates its shared transport contract and any compatible flattened outcome.
+Protocol evidence adapters interpret their own native safety fields.
+`traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
+endpoint identities. MySQL session control and Source transaction analysis use
+these immutable inputs to project original wire positions, complete read prefixes,
+transaction spans and bounded rejection reasons. Replay retains scope selection,
+live claim state, value rules and actual delivery coverage.
 Redis storage positions and RESP value ranges belong to its
 protocol library. Recorder retains capture clocks, ownership and persistence.
 Native capture payloads and physical value locations belong to the HTTP,

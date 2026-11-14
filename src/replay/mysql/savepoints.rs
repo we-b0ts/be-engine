@@ -16,26 +16,7 @@ pub(super) struct Bindings {
     names: Vec<Binding>,
 }
 
-pub(super) fn complete(record: &RecordedMysqlExchange) -> bool {
-    matches!(record.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE")
-        && record.outcome == crate::DependencyExchangeOutcome::Response
-        && record.parse_warnings.is_empty()
-        && record.params.as_ref().is_none_or(Vec::is_empty)
-        && record.response.status == "ok"
-        && record.response.error_code.is_none()
-        && record.response.error_message.is_none()
-        && record.response.affected_rows == Some(0)
-        && record.response.last_insert_id == Some(0)
-        && record.response.no_rows()
-        && record.response.columns.is_empty()
-        && !record.response.rows_truncated
-        && record
-            .server_status_before
-            .zip(record.response.server_status)
-            .is_some_and(|(before, after)| {
-                before & 0x2009 == 1 && after & 0x2009 == 1 && before & 2 == after & 2
-            })
-}
+pub(super) use traffic_protocol_mysql::session_control::complete_savepoint as complete;
 
 impl Bindings {
     pub(super) fn preview_parsed(

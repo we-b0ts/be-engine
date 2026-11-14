@@ -11,6 +11,7 @@ use traffic_protocol::{
 struct CustomExchange {
     stream: String,
     offset: u64,
+    #[serde(skip_serializing)]
     outcome: crate::DependencyExchangeOutcome,
     response: crate::recorder::BodyCapture,
 }
@@ -20,11 +21,13 @@ impl CaptureEvidence for CustomExchange {
         "custom_exchange"
     }
     fn capture_facts(&self) -> CaptureFacts {
-        CaptureFacts::dependency(
+        let mut facts = CaptureFacts::dependency(
             ProtocolRef::new("custom", json!({"stream":self.stream,"offset":self.offset})).unwrap(),
             self.outcome.label(),
             !self.response.truncated,
-        )
+        );
+        facts.outcome = self.outcome;
+        facts
     }
 }
 
@@ -91,7 +94,13 @@ impl CaptureEvidence for InvalidOutcome {
 
 #[tokio::test]
 async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_support() {
-    for installed in [false, true] {
+    use crate::DependencyExchangeOutcome::{NoResponse, Response};
+    for (installed, outcome) in [
+        (false, Response),
+        (true, Response),
+        (false, NoResponse),
+        (true, NoResponse),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let case_id = Uuid::new_v4();
         let case = temp.path().join("cases").join(case_id.to_string());
@@ -117,8 +126,15 @@ async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_s
         let event = CustomExchange {
             stream: "requests".into(),
             offset: 7,
-            outcome: crate::DependencyExchangeOutcome::Response,
-            response: crate::recorder::capture_body(b"custom-output", usize::MAX),
+            outcome,
+            response: crate::recorder::capture_body(
+                if outcome == NoResponse {
+                    b""
+                } else {
+                    b"custom-output"
+                },
+                usize::MAX,
+            ),
         };
         ledger.register_input(case_id, format!("cases/{case_id}"), true);
         assert!(
@@ -170,6 +186,7 @@ async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_s
         )
         .unwrap();
         assert_eq!(row["event_type"], "custom_exchange");
+        assert_eq!(row["outcome"], serde_json::to_value(outcome).unwrap());
         assert_eq!(
             row["capture"]["protocol_ref"],
             json!({"protocol":"custom","stream":"requests","offset":7})

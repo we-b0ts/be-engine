@@ -76,31 +76,43 @@ impl CaptureEvidence for RecorderEvent {
                 facts.traffic_error = event.error.is_some();
                 facts
             }
-            MemcachedExchange(event) => CaptureFacts::dependency(
-                ProtocolRef::connection("memcached", event.connection_id, event.sequence),
-                event.outcome.label(),
-                event.response_status != "incomplete"
-                    && event.response_frames.iter().all(|body| !body.truncated)
-                    && event.args.iter().all(|arg| !arg.truncated)
-                    && event.key.as_ref().is_none_or(|body| !body.truncated)
-                    && event.value.as_ref().is_none_or(|body| !body.truncated)
-                    && event.extras.as_ref().is_none_or(|body| !body.truncated),
-            ),
-            KafkaProduce(event) => CaptureFacts::dependency(
-                ProtocolRef::connection("kafka", event.connection_id, event.request_sequence),
-                event.outcome.label(),
-                event.value.as_ref().is_none_or(|body| !body.truncated)
-                    && event.key.as_ref().is_none_or(|body| !body.truncated)
-                    && event
-                        .headers
-                        .iter()
-                        .all(|header| header.value.as_ref().is_none_or(|body| !body.truncated)),
-            ),
-            KafkaFetch(event) => CaptureFacts::dependency(
-                ProtocolRef::connection("kafka", event.connection_id, event.sequence),
-                event.outcome.label(),
-                true,
-            ),
+            MemcachedExchange(event) => {
+                let mut facts = CaptureFacts::dependency(
+                    ProtocolRef::connection("memcached", event.connection_id, event.sequence),
+                    event.outcome.label(),
+                    event.response_status != "incomplete"
+                        && event.response_frames.iter().all(|body| !body.truncated)
+                        && event.args.iter().all(|arg| !arg.truncated)
+                        && event.key.as_ref().is_none_or(|body| !body.truncated)
+                        && event.value.as_ref().is_none_or(|body| !body.truncated)
+                        && event.extras.as_ref().is_none_or(|body| !body.truncated),
+                );
+                facts.outcome = event.outcome;
+                facts
+            }
+            KafkaProduce(event) => {
+                let mut facts = CaptureFacts::dependency(
+                    ProtocolRef::connection("kafka", event.connection_id, event.request_sequence),
+                    event.outcome.label(),
+                    event.value.as_ref().is_none_or(|body| !body.truncated)
+                        && event.key.as_ref().is_none_or(|body| !body.truncated)
+                        && event
+                            .headers
+                            .iter()
+                            .all(|header| header.value.as_ref().is_none_or(|body| !body.truncated)),
+                );
+                facts.outcome = event.outcome;
+                facts
+            }
+            KafkaFetch(event) => {
+                let mut facts = CaptureFacts::dependency(
+                    ProtocolRef::connection("kafka", event.connection_id, event.sequence),
+                    event.outcome.label(),
+                    true,
+                );
+                facts.outcome = event.outcome;
+                facts
+            }
             KafkaDelivery(event) => CaptureFacts::dependency(
                 ProtocolRef::connection("kafka", event.connection_id, event.fetch_sequence),
                 "delivery",
@@ -117,6 +129,7 @@ impl CaptureEvidence for RecorderEvent {
                     event.outcome.label(),
                     !event.request.truncated && !event.response.truncated,
                 );
+                facts.outcome = event.outcome;
                 if event.heartbeat {
                     facts.semantic = SemanticRequirement::Observation;
                 }

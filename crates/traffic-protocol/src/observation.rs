@@ -43,6 +43,10 @@ pub fn format_endpoint(host: &str, port: u16) -> String {
     }
 }
 
+pub fn normalize_host(host: &str) -> String {
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
 pub fn normalize_endpoint(value: &str) -> Option<String> {
     let authority = value.parse::<http::uri::Authority>().ok()?;
     Some(format_endpoint(authority.host(), authority.port_u16()?))

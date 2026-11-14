@@ -32,6 +32,7 @@ impl CaptureEvidence for RedisExchangeEvent {
             self.outcome.label(),
             complete,
         );
+        facts.outcome = self.outcome;
         let successful_control = self.outcome == DependencyExchangeOutcome::Response
             && self.response_kind != "error"
             && self.replay_safe

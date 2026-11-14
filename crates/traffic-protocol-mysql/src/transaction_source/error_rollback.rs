@@ -2,8 +2,8 @@
 //! require every original member on one explicit Target transaction.
 use super::*;
 
-pub(super) fn prove(
-    records: &[(usize, &RecordedMysqlExchange)],
+pub fn prove<E>(
+    records: &[(usize, &RecordedMysqlExchange<E>)],
     position: usize,
     active: &[(usize, bool, bool)],
     explicit: bool,
@@ -81,13 +81,13 @@ pub(super) fn prove(
     })
 }
 
-fn failed_dml(record: &RecordedMysqlExchange) -> bool {
+fn failed_dml<E>(record: &RecordedMysqlExchange<E>) -> bool {
     let Some(sql) = record.sql.as_deref() else {
         return false;
     };
     if sql.len() > 1024 * 1024
         || !matches!(record.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE")
-        || record.outcome != crate::DependencyExchangeOutcome::Response
+        || record.outcome != traffic_model::DependencyExchangeOutcome::Response
         || !record.parse_warnings.is_empty()
         || record.response.status != "error"
         || record.response.error_code.is_none()
@@ -100,7 +100,7 @@ fn failed_dml(record: &RecordedMysqlExchange) -> bool {
     {
         return false;
     }
-    crate::mysql::sql::tokens(sql).is_some_and(|tokens| {
+    crate::sql::tokens(sql).is_some_and(|tokens| {
         tokens.first().is_some_and(|first| {
             ["insert", "update", "delete", "replace"]
                 .iter()

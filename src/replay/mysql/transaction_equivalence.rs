@@ -277,7 +277,7 @@ impl Registry {
         scope: ReplaySource,
     ) -> Vec<source::Plan> {
         if scope.is_run_owned() {
-            self.global_reads.record(records);
+            self.global_reads.record(super::source_records(records));
         }
         source::prepare(records, optional, scope, &self.global_reads)
     }

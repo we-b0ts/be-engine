@@ -39,6 +39,7 @@ pub(super) use session::*;
 pub(super) use values::*;
 
 use super::*;
+
 #[cfg(test)]
 use crate::mysql::wire::{
     CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, CLIENT_SSL, read_packet,
@@ -56,3 +57,14 @@ impl<T> MysqlReplayIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 pub(in crate::replay) type BoxedMysqlReplayIo = Box<dyn MysqlReplayIo>;
 
 pub(in crate::replay) use traffic_protocol_mysql::types::*;
+
+pub(super) fn source_records(
+    records: &[super::dependencies::DependencyRecord],
+) -> impl Iterator<Item = (usize, &RecordedMysqlExchange)> + Clone {
+    records.iter().enumerate().filter_map(|(index, record)| {
+        let super::dependencies::DependencyRecord::MysqlExchange(record) = record else {
+            return None;
+        };
+        Some((index, record.as_ref()))
+    })
+}

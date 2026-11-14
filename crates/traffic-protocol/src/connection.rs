@@ -17,10 +17,31 @@ pub type NativeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + '
 pub trait ConnectionIo: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ConnectionIo for T {}
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Endpoint {
     pub host: String,
     pub port: u16,
+}
+
+pub fn endpoint_from_addr(value: &str) -> Option<Endpoint> {
+    use crate::observation::normalize_host;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(addr) = value.parse::<std::net::SocketAddr>() {
+        return Some(Endpoint {
+            host: normalize_host(&addr.ip().to_string()),
+            port: addr.port(),
+        });
+    }
+    let (host, port) = value.rsplit_once(':')?;
+    Some(Endpoint {
+        host: normalize_host(host.trim_start_matches('[').trim_end_matches(']')),
+        port: port.parse().ok()?,
+    })
 }
 
 #[derive(Debug, Clone)]

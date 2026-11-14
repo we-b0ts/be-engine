@@ -154,3 +154,25 @@ mod tests {
         assert!(proof.validate("source-v3").is_err());
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyScope {
+    Startup,
+    Process,
+    Case,
+    /// Original ambient input evidence has no proven business owner.
+    Unattributed,
+}
+
+impl DependencyScope {
+    pub fn is_run_owned(self) -> bool {
+        matches!(self, Self::Startup | Self::Process)
+    }
+    pub fn is_run_level(self) -> bool {
+        self != Self::Case
+    }
+    pub fn matches_scope(self, requested: Self) -> bool {
+        self == requested || self.is_run_owned() && requested.is_run_owned()
+    }
+}

@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use serde_json::Value;
-use traffic_model::recording::ProtocolRef;
+use traffic_model::{DependencyExchangeOutcome, recording::ProtocolRef};
 
 mod snapshot;
 pub use snapshot::CaptureSnapshot;
@@ -17,6 +17,7 @@ pub enum SemanticRequirement {
 #[derive(Clone)]
 pub struct CaptureFacts {
     pub reference: ProtocolRef,
+    pub outcome: DependencyExchangeOutcome,
     pub terminal: String,
     pub complete: bool,
     pub semantic: SemanticRequirement,
@@ -29,6 +30,7 @@ impl CaptureFacts {
     pub fn observation(reference: ProtocolRef) -> Self {
         Self {
             reference,
+            outcome: DependencyExchangeOutcome::Response,
             terminal: "observation".into(),
             complete: true,
             semantic: SemanticRequirement::Observation,
@@ -61,6 +63,10 @@ pub trait CaptureEvidence: Serialize + Send + Sync {
 }
 
 pub fn payload(event: &impl CaptureEvidence) -> Result<Value> {
+    Ok(CaptureSnapshot::capture(event)?.into_parts().0)
+}
+
+pub(crate) fn native_payload(event: &impl CaptureEvidence) -> Result<Value> {
     let mut payload = serde_json::to_value(event)?;
     let object = payload
         .as_object_mut()

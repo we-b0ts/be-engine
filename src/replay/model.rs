@@ -2,11 +2,7 @@ use super::*;
 
 pub(super) use traffic_replay::ReplaySource;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(super) struct TargetKey {
-    pub(super) host: String,
-    pub(super) port: u16,
-}
+pub(super) use traffic_protocol::connection::Endpoint as TargetKey;
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ReplayTarget {
@@ -415,9 +411,7 @@ pub(super) fn assign_fake_ips(
     Ok(out)
 }
 
-pub(super) fn normalize_host(host: &str) -> String {
-    host.trim_end_matches('.').to_ascii_lowercase()
-}
+pub(super) use traffic_protocol::observation::normalize_host;
 
 #[cfg(test)]
 mod tests {

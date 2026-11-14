@@ -1,5 +1,5 @@
 //! Immutable native payload and capture facts crossing the host boundary.
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 
@@ -14,17 +14,19 @@ pub struct CaptureSnapshot {
 
 impl CaptureSnapshot {
     pub fn capture(event: &impl CaptureEvidence) -> Result<Self> {
-        let payload = super::payload(event)?;
+        let facts = event.capture_facts();
+        facts.outcome.validate()?;
+        let payload = super::native_payload(event)?;
         if let Some(outcome) = payload.get("outcome") {
-            let outcome = serde_json::from_value::<traffic_model::DependencyExchangeOutcome>(
-                outcome.clone(),
-            )?;
-            outcome.validate()?;
+            ensure!(
+                *outcome == serde_json::to_value(facts.outcome)?,
+                "native payload conflicts with the framework outcome"
+            );
         }
         Ok(Self {
             kind: event.event_type(),
             payload,
-            facts: event.capture_facts(),
+            facts,
         })
     }
 
@@ -36,6 +38,10 @@ impl CaptureSnapshot {
     }
     pub fn facts(&self) -> &CaptureFacts {
         &self.facts
+    }
+
+    pub fn into_parts(self) -> (Value, CaptureFacts) {
+        (self.payload, self.facts)
     }
 }
 
@@ -62,3 +68,6 @@ impl std::fmt::Debug for CaptureSnapshot {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests;

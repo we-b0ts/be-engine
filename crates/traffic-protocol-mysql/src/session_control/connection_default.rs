@@ -1,20 +1,19 @@
 //! A framework may set READ COMMITTED once when opening a physical connection.
 use super::*;
-use crate::mysql::{
+use crate::{
     autocommit,
     isolation::{Level, Scope, setting},
 };
 
-pub(super) fn classify(records: &[DependencyRecord]) -> BTreeMap<usize, OptionalSessionExchange> {
+pub fn classify<'a, E: 'a>(
+    records: impl Iterator<Item = (usize, &'a RecordedMysqlExchange<E>)>,
+) -> BTreeMap<usize, OptionalSessionExchange> {
     // Only inspect a bounded prefix of the original wire sequence. A Case
     // whose connection began in a different scope cannot supply this proof.
     const MAX_PREFIX: u64 = 16;
-    let mut connections = HashMap::<Uuid, BTreeMap<u64, (usize, &RecordedMysqlExchange)>>::new();
+    let mut connections = HashMap::<Uuid, BTreeMap<u64, (usize, &RecordedMysqlExchange<E>)>>::new();
     let mut ambiguous = BTreeSet::new();
-    for (index, record) in records.iter().enumerate() {
-        let DependencyRecord::MysqlExchange(exchange) = record else {
-            continue;
-        };
+    for (index, exchange) in records {
         let Some(connection) = exchange.connection_id else {
             continue;
         };
@@ -42,11 +41,11 @@ pub(super) fn classify(records: &[DependencyRecord]) -> BTreeMap<usize, Optional
         .collect()
 }
 
-fn read_committed_default(
-    exchanges: &BTreeMap<u64, (usize, &RecordedMysqlExchange)>,
+fn read_committed_default<E>(
+    exchanges: &BTreeMap<u64, (usize, &RecordedMysqlExchange<E>)>,
 ) -> Option<usize> {
     let (_, first) = exchanges.get(&1)?;
-    if !super::super::is_nonsemantic_session_setup(first) {
+    if !is_nonsemantic_session_setup(first) {
         return None;
     }
     let identity = identity_from_exchange(first)?;
@@ -65,7 +64,7 @@ fn read_committed_default(
             return None;
         }
         previous = after;
-        if super::super::is_nonsemantic_session_setup(exchange) {
+        if is_nonsemantic_session_setup(exchange) {
             continue;
         }
         let sql = exchange.sql.as_deref()?;

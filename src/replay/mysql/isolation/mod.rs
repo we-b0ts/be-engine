@@ -7,10 +7,6 @@ mod source;
 #[cfg(test)]
 pub(in crate::replay::mysql) mod tests;
 
-pub(in crate::replay::mysql) fn source_session_control(record: &RecordedMysqlExchange) -> bool {
-    source::session_control(record)
-}
-
 #[derive(Debug)]
 struct Profile {
     plan: source::Plan,

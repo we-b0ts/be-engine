@@ -12,7 +12,7 @@ impl EvidenceAdapter for NativeEvidence {
         &["http_exchange"]
     }
     fn supports_replay(&self, event: &Value) -> bool {
-        event["event_type"] == "http_exchange"
+        event["event_type"] == "http_exchange" && event["replay_safe"] != false
     }
     fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
         let method = event["method"].as_str()?;

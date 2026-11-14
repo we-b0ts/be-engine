@@ -1,29 +1,6 @@
-//! Narrow recognition of driver-owned session initialization, never business SQL.
+//! Native driver initialization facts used by the shared replay lifecycle.
+pub(in crate::replay) use traffic_protocol_mysql::session_control::is_nonsemantic_session_setup;
 pub(super) use traffic_protocol_mysql::session_setup::is_mysql_session_setup_sql;
-
-/// Retained driver observations keep their native builtin owner. They neither
-/// create finite SQL obligations nor invalidate later proven transactions.
-pub(in crate::replay) fn is_nonsemantic_session_setup(
-    record: &super::RecordedMysqlExchange,
-) -> bool {
-    record
-        .capture
-        .as_ref()
-        .is_some_and(|capture| !capture.semantic_required)
-        && !record.lifecycle_cleanup
-        && record
-            .sql
-            .as_deref()
-            .is_some_and(is_mysql_session_setup_sql)
-        && super::optional_session::successful_control(record)
-        && record.response.server_status.is_some_and(|after| {
-            record
-                .server_status_before
-                .map_or(record.query_sequence == Some(1), |before| {
-                    before & 0x200b == after & 0x200b
-                })
-        })
-}
 
 #[cfg(test)]
 mod tests {

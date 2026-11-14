@@ -6,15 +6,14 @@ use sqlparser::{
 };
 use std::ops::ControlFlow;
 
-pub(in crate::replay::mysql::transaction_equivalence) fn transaction_local(sql: &str) -> bool {
+pub fn transaction_local(sql: &str) -> bool {
     if sql.len() > 1024 * 1024 {
         return false;
     }
-    let Some(tokens) = crate::mysql::sql::tokens(sql).filter(|tokens| tokens.len() <= 64 * 1024)
-    else {
+    let Some(tokens) = crate::sql::tokens(sql).filter(|tokens| tokens.len() <= 64 * 1024) else {
         return false;
     };
-    if crate::replay::mysql::optional_session::read::has_session_effect(&tokens) {
+    if crate::read_effect::has_session_effect(&tokens) {
         return false;
     }
     let Ok(statements) = Parser::new(&MySqlDialect {})

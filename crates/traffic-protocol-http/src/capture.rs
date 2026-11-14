@@ -21,6 +21,7 @@ impl CaptureEvidence for HttpExchangeEvent {
             self.outcome.label(),
             complete,
         );
+        facts.outcome = self.outcome;
         facts.traffic_error = self.outcome.is_client_terminated()
             || self.outcome.is_server_terminated()
             || self.error.is_some()

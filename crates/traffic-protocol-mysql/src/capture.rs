@@ -41,6 +41,7 @@ impl CaptureEvidence for MysqlExchangeEvent {
             self.outcome.label(),
             complete,
         );
+        facts.outcome = self.outcome;
         facts.case_dependency = self.command == "COM_PING" || !is_debug_only_mysql_exchange(self);
         if !facts.case_dependency || self.command == "COM_PING" {
             facts.semantic = SemanticRequirement::Observation;

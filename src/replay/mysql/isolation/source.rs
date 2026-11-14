@@ -29,44 +29,10 @@ pub(in crate::replay) struct Plan {
     pub(super) read_only: bool,
 }
 
-fn successful(record: &RecordedMysqlExchange) -> bool {
-    !record.lifecycle_cleanup
-        && record.outcome == crate::DependencyExchangeOutcome::Response
-        && record.parse_warnings.is_empty()
-        && record.params.as_ref().is_none_or(Vec::is_empty)
-        && record.response.error_code.is_none()
-        && record.response.error_message.is_none()
-        && !record.response.rows_truncated
-        && record.response.valid_row_widths()
-}
-
-fn control(record: &RecordedMysqlExchange) -> bool {
-    successful(record)
-        && record.command == "COM_QUERY"
-        && record.response.status == "ok"
-        && record.response.affected_rows == Some(0)
-        && record.response.last_insert_id == Some(0)
-        && record.response.columns.is_empty()
-        && record.response.no_rows()
-}
-
-fn inactive(record: &RecordedMysqlExchange) -> bool {
-    record.server_status_before.is_some_and(|s| s & 0x200b == 0)
-        && record
-            .response
-            .server_status
-            .is_some_and(|s| s & 0x200b == 0)
-}
-
-pub(super) fn session_control(record: &RecordedMysqlExchange) -> bool {
-    control(record)
-        && inactive(record)
-        && record
-            .sql
-            .as_deref()
-            .and_then(crate::mysql::isolation::setting)
-            .is_some_and(|(scope, _)| scope == Scope::Session)
-}
+use traffic_protocol_mysql::session_control::{
+    isolation_control as control, isolation_inactive as inactive,
+    isolation_successful as successful,
+};
 
 impl Registry {
     pub(in crate::replay) fn prepare(

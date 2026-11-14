@@ -12,10 +12,11 @@ impl EvidenceAdapter for NativeEvidence {
         &["redis_exchange", "redis_pub_sub_push"]
     }
     fn supports_replay(&self, event: &Value) -> bool {
-        matches!(
-            event["event_type"].as_str(),
-            Some("redis_exchange" | "redis_pub_sub_push")
-        )
+        event["replay_safe"] != false
+            && matches!(
+                event["event_type"].as_str(),
+                Some("redis_exchange" | "redis_pub_sub_push")
+            )
     }
 
     fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {

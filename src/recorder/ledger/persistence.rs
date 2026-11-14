@@ -14,7 +14,7 @@ use crate::active_case::DependencyTargets;
 use crate::dependency::attribution::DependencyOwner;
 use crate::dependency::observation::*;
 use crate::recorder::GlobalDependencyAttribution;
-use traffic_protocol::capture::CaptureEvidence;
+use traffic_protocol::capture::{CaptureEvidence, CaptureSnapshot};
 
 use super::LifecycleRecord;
 
@@ -152,14 +152,8 @@ impl LedgerWriter {
             !self.sealed,
             "recording dependency ledger is already sealed"
         );
-        let mut value = traffic_protocol::capture::payload(event)?;
-        let outcome = value
-            .get("outcome")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?
-            .unwrap_or_default();
-        let facts = event.capture_facts();
+        let (mut value, facts) = CaptureSnapshot::capture(event)?.into_parts();
+        let outcome = facts.outcome;
         let owner = explicit.unwrap_or_else(|| self.owner(targets, global));
         let matched_rule_id = global
             .filter(|a| a.reason == "background_rule")

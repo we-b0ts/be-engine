@@ -14,11 +14,14 @@ pub mod response;
 pub mod response_progress;
 pub mod savepoint;
 pub mod semantic;
+pub mod session_control;
+pub mod session_identity;
 pub mod session_setup;
 pub mod session_status;
 pub mod sql;
 pub mod sql_family;
 pub mod sql_match;
+pub mod transaction_source;
 pub mod types;
 pub mod values;
 

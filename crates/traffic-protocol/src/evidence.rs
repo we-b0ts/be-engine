@@ -121,10 +121,7 @@ impl EvidenceRegistry {
     }
 
     pub fn supports_replay(&self, event: &Value) -> bool {
-        if event["replay_safe"] == false
-            || event["capture_complete"] == false
-            || event["_capture_complete"] == false
-        {
+        if event["capture_complete"] == false || event["_capture_complete"] == false {
             return false;
         }
         let Some(index) = event["event_type"]
@@ -224,16 +221,14 @@ mod tests {
             )
             .unwrap();
         assert!(registry.supports_replay(&event));
-        for field in [
-            "replay_safe",
-            "capture_complete",
-            "_capture_complete",
-            "native_complete",
-        ] {
+        for field in ["capture_complete", "_capture_complete", "native_complete"] {
             let mut incomplete = event.clone();
             incomplete[field] = json!(false);
             assert!(!registry.supports_replay(&incomplete));
         }
+        let mut native_field = event;
+        native_field["replay_safe"] = json!(false);
+        assert!(registry.supports_replay(&native_field));
     }
 
     #[test]

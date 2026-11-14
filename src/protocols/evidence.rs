@@ -19,8 +19,8 @@ impl EvidenceAdapter for ExistingEvidence {
             "kafka_delivery",
         ]
     }
-    fn supports_replay(&self, _event: &Value) -> bool {
-        true
+    fn supports_replay(&self, event: &Value) -> bool {
+        event["replay_safe"] != false
     }
     fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
         let (protocol, operation) = match event["event_type"].as_str()? {
@@ -133,6 +133,8 @@ mod tests {
             json!({"event_type":"unimplemented_exchange"}),
             json!({"event_type":"mysql_exchange", "parse_warnings":["unsupported result framing"]}),
             json!({"event_type":"redis_exchange", "replay_safe":false}),
+            json!({"event_type":"mysql_exchange", "replay_safe":false}),
+            json!({"event_type":"http_exchange", "replay_safe":false}),
         ] {
             assert!(semantic_replay_unsupported(&event, &case));
             assert!(semantic_replay_unsupported(&event, &process));
