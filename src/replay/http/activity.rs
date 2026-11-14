@@ -35,7 +35,7 @@ pub(crate) fn case_in_flight_diagnostic(exchanges: &[ReplayHttpExchange]) -> ser
         .take(4)
         .map(|(index, e)| {
             serde_json::json!({"index":index, "case_id":e.case_id,
-                "exchange_id":e.record.id, "status":format!("{:?}", e.status)})
+                "exchange_id":e.record.native.id, "status":format!("{:?}", e.status)})
         })
         .collect::<Vec<_>>();
     serde_json::json!({"count":count, "references":references,

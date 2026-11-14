@@ -30,8 +30,8 @@ pub(super) use crate::replay::json_order::canonical_json;
 
 pub(super) fn recorded_fingerprint(record: &RecordedHttpExchange) -> Result<String> {
     Ok(request_fingerprint(
-        &record.uri,
-        &decode_body(&record.request_body)?,
-        &record.request_headers,
+        &record.native.uri,
+        &decode_body(&record.native.request_body)?,
+        &record.native.request_headers,
     ))
 }

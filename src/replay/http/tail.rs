@@ -14,7 +14,13 @@ impl ReplayState {
             if exchange.case_id.as_deref() != Some(case_id) {
                 continue;
             }
-            let Some(id) = exchange.record.id.as_deref().and_then(|id| id.parse().ok()) else {
+            let Some(id) = exchange
+                .record
+                .native
+                .id
+                .as_deref()
+                .and_then(|id| id.parse().ok())
+            else {
                 continue;
             };
             if selected.contains(&id) {
@@ -47,11 +53,15 @@ impl ReplayState {
             .is_some_and(|exchange| {
                 exchange.shared_origin.is_some()
                     && !completion.iter().any(|end| {
-                        exchange.record.method.eq_ignore_ascii_case(&end.method)
+                        exchange
+                            .record
+                            .native
+                            .method
+                            .eq_ignore_ascii_case(&end.method)
                             && exchange.identity.target.host
                                 == super::super::normalize_host(&end.endpoint.host)
                             && exchange.identity.target.port == end.endpoint.port
-                            && uri_path_only(&exchange.record.uri) == end.path
+                            && uri_path_only(&exchange.record.native.uri) == end.path
                     })
             })
     }

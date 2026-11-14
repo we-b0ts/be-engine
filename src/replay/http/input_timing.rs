@@ -18,21 +18,23 @@ pub(in crate::replay) fn source_streams(
     {
         let exchange = &state.protocols.http_exchanges[index];
         let record = &exchange.record;
-        let Some(stream) = &record.response_stream else {
+        let Some(stream) = &record.native.response_stream else {
             continue;
         };
         ensure!(
             stream.complete
                 && record
+                    .native
                     .response_status
                     .is_some_and(|s| (200..300).contains(&s))
                 && record.lifecycle_stop.is_none()
-                && record.outcome == crate::DependencyExchangeOutcome::Response,
+                && record.native.outcome == crate::DependencyExchangeOutcome::Response,
             "shared HTTP timing requires complete successful dependency streams"
         );
         streams.push(SourceStream {
             index,
             started_at: record
+                .native
                 .request_started_at
                 .context("HTTP stream request clock missing")?,
             stream: stream.clone(),

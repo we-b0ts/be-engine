@@ -49,14 +49,18 @@ pub(in crate::replay::http) fn capture(
             || !active_http_case_matches(state.active_case_id.as_deref(), exchange)
             || exchange.identity.scheme != scheme
             || exchange.identity.target != *target
-            || !exchange.record.method.eq_ignore_ascii_case(method.as_str())
-            || uri_mismatch_reason(&exchange.record.uri, &uri.to_string(), &[]).is_some()
-            || exchange.record.error.is_some()
-            || exchange.record.response_status.is_none()
+            || !exchange
+                .record
+                .native
+                .method
+                .eq_ignore_ascii_case(method.as_str())
+            || uri_mismatch_reason(&exchange.record.native.uri, &uri.to_string(), &[]).is_some()
+            || exchange.record.native.error.is_some()
+            || exchange.record.native.response_status.is_none()
         {
             continue;
         }
-        let Ok(recorded_body) = decode_body(&exchange.record.request_body) else {
+        let Ok(recorded_body) = decode_body(&exchange.record.native.request_body) else {
             continue;
         };
         if recorded_body.len() > MAX_BODY_BYTES {

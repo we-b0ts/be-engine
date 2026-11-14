@@ -152,7 +152,7 @@ pub(super) fn preview_request(
         policy.request_contracts.with_hypothesis_context(
             crate::replay::policy::request_contract::HypothesisContext {
                 carrier: "json".into(),
-                source_reference: serde_json::json!({"exchange_id":exchange.record.id}),
+                source_reference: serde_json::json!({"exchange_id":exchange.record.native.id}),
                 target_observation_id: actual.observation_id.map(|id| id.to_string()),
             },
         )
@@ -181,14 +181,14 @@ pub(super) fn preview_request(
     let result = (|| {
         anyhow::ensure!(
             uri_mismatch_reason(
-                &exchange.record.uri,
+                &exchange.record.native.uri,
                 &actual.uri.to_string(),
                 validated_query_params
             )
             .is_none(),
             "HTTP body contract preserves path and unowned query parameters"
         );
-        let source = decode_body(&exchange.record.request_body)?;
+        let source = decode_body(&exchange.record.native.request_body)?;
         if global.fields.is_empty() && source == actual.body {
             owns_body = false;
             return Ok(crate::replay::policy::request_contract::Decision::default());
@@ -209,7 +209,7 @@ pub(super) fn preview_request(
             return Ok(crate::replay::policy::request_contract::Decision::default());
         }
         *diagnostic = Some(serde_json::json!({
-            "source_exchange_id":exchange.record.id,
+            "source_exchange_id":exchange.record.native.id,
             "selected_rule_ids":comparison.evaluated,
             "comparison":comparison,
             "passed":comparison.passed(),
@@ -239,14 +239,14 @@ pub(super) fn materialize_response(
     active_case: Option<&str>,
     request_started_at: chrono::DateTime<Utc>,
 ) -> Result<DependencyRuleDecision> {
-    if exchange.record.cleanup_authorized && exchange.record.response_stream.is_some() {
+    if exchange.record.cleanup_authorized && exchange.record.native.response_stream.is_some() {
         return prefix::materialize(owner, exchange, active_case, request_started_at);
     }
     let mut decision = DependencyRuleDecision::default();
     if owner.compiled_rules().is_none()
         || upstream_failure::is_recorded(&exchange.record)
-        || exchange.record.outcome.is_client_terminated()
-        || exchange.record.outcome.is_server_terminated()
+        || exchange.record.native.outcome.is_client_terminated()
+        || exchange.record.native.outcome.is_server_terminated()
     {
         return Ok(decision);
     }
@@ -274,18 +274,18 @@ pub(super) fn materialize_response(
         Some(case),
         request_headers::time_reference::source(&exchange.record),
         Some(request_started_at),
-        exchange.record.timestamp,
+        exchange.record.native.timestamp,
         Some(delivered_at),
     );
     let value = materialize_value(owner, case, &payload, clocks, delivered_at, &mut decision)?;
     if value != payload {
         anyhow::ensure!(
-            !witness::has_integrity_headers(exchange.record.response_headers.as_ref()),
+            !witness::has_integrity_headers(exchange.record.native.response_headers.as_ref()),
             "HTTP body rebase requires a typed owner for its payload digest or signature headers"
         );
     }
     let mut native_headers = response_headers_for_payload(
-        exchange.record.response_headers.as_ref(),
+        exchange.record.native.response_headers.as_ref(),
         value.len(),
         delivered_at,
     );
@@ -293,7 +293,7 @@ pub(super) fn materialize_response(
     if let Some(validation) = headers::materialize(
         owner,
         case,
-        exchange.record.response_headers.as_ref(),
+        exchange.record.native.response_headers.as_ref(),
         &mut native_headers,
         clocks,
         delivered_at,
@@ -302,7 +302,7 @@ pub(super) fn materialize_response(
     }
     anyhow::ensure!(
         expected_native_headers == request_headers::capture(&native_headers)
-            || !witness::has_integrity_headers(exchange.record.response_headers.as_ref()),
+            || !witness::has_integrity_headers(exchange.record.native.response_headers.as_ref()),
         "HTTP header rebase requires a typed owner for its digest or signature headers"
     );
     let mut target = source.clone();
@@ -340,20 +340,20 @@ pub(super) fn materialize_response(
         )?;
     }
     if value != payload
-        && let Some(stream) = &mut exchange.record.response_stream
+        && let Some(stream) = &mut exchange.record.native.response_stream
     {
         stream::remap(stream, &payload, &value)?;
     }
 
     if payload_slot.is_some() {
-        exchange.record.response_body = Some(RecordedBodyCapture {
+        exchange.record.native.response_body = Some(RecordedBodyCapture {
             encoding: "base64".into(),
             truncated: false,
             stored_len: Some(value.len()),
             data: STANDARD.encode(value),
         });
     }
-    exchange.record.response_headers = Some(request_headers::capture(&native_headers));
+    exchange.record.native.response_headers = Some(request_headers::capture(&native_headers));
     Ok(decision)
 }
 
@@ -420,7 +420,7 @@ pub(in crate::replay) fn observe_source(
         Some(case),
         request_headers::time_reference::source(&record),
         None,
-        record.timestamp,
+        record.native.timestamp,
         None,
     );
     for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
@@ -434,9 +434,9 @@ pub(in crate::replay) fn observe_source(
             .and_then(|policy| policy.http.as_ref())
         {
             let headers = if surface == Surface::DependencyRequest {
-                Some(&record.request_headers)
+                Some(&record.native.request_headers)
             } else {
-                record.response_headers.as_ref()
+                record.native.response_headers.as_ref()
             };
             if let Some(headers) = headers {
                 let validation =
@@ -446,16 +446,17 @@ pub(in crate::replay) fn observe_source(
             }
         }
         if surface == Surface::DependencyResponse
-            && (record.outcome != crate::DependencyExchangeOutcome::Response
-                || record.error.is_some()
+            && (record.native.outcome != crate::DependencyExchangeOutcome::Response
+                || record.native.error.is_some()
                 || record
+                    .native
                     .response_stream
                     .as_ref()
                     .is_some_and(|stream| !stream.complete))
         {
             // Captured prefixes may prove decoded field shapes, but never a
             // complete dependency response for independent plan witnesses.
-            if let Some(body) = &record.response_body {
+            if let Some(body) = &record.native.response_body {
                 observe_known_value(contracts, &decode_body(body)?, clocks)?;
             }
             continue;
@@ -512,6 +513,7 @@ fn metadata(
 ) -> Result<WitnessMetadata> {
     let identity = identity_from_record(record)?;
     let id = record
+        .native
         .id
         .as_deref()
         .filter(|id| !id.is_empty())
@@ -543,7 +545,7 @@ fn metadata(
             database: None,
             username: None,
         }),
-        operation: record.method.to_ascii_uppercase(),
+        operation: record.native.method.to_ascii_uppercase(),
         slot: Slot::Body,
         clocks: crate::policy_evidence::WitnessClocks {
             case: pair(clocks.case),

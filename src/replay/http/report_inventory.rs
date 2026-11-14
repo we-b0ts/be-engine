@@ -55,15 +55,15 @@ pub(crate) fn visit_global_report_range(
             visible: true,
             value: serde_json::to_value(RecordedHttpExchangeSummary {
                 source: exchange.source,
-                source_http_id: exchange.record.id.clone(),
+                source_http_id: exchange.record.native.id.clone(),
                 shared_origin: exchange.shared_origin.clone(),
                 index,
                 case_id: exchange.case_id.clone(),
                 scheme: exchange.identity.scheme,
                 target: exchange.identity.target.clone(),
-                method: exchange.record.method.clone(),
-                uri: uri_path_only(&exchange.record.uri),
-                status: exchange.record.response_status,
+                method: exchange.record.native.method.clone(),
+                uri: uri_path_only(&exchange.record.native.uri),
+                status: exchange.record.native.response_status,
             })?,
         })?;
     }

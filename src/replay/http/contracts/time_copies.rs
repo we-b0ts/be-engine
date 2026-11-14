@@ -16,10 +16,10 @@ pub(super) fn prepare(
     clocks: AnchorClocks,
 ) -> Result<PreparedRead> {
     let mut records = Vec::new();
-    let Some(identity) = exchange.record.id.as_deref() else {
+    let Some(identity) = exchange.record.native.id.as_deref() else {
         return Ok(PreparedRead {
             records,
-            completed: exchange.record.timestamp,
+            completed: exchange.record.native.timestamp,
         });
     };
     let position = TimeCopyPosition::Http {
@@ -78,7 +78,7 @@ pub(super) fn prepare(
     }
     Ok(PreparedRead {
         records,
-        completed: exchange.record.timestamp,
+        completed: exchange.record.native.timestamp,
     })
 }
 

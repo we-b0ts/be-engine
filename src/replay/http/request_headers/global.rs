@@ -67,7 +67,7 @@ pub(super) fn audit_projection(
         None,
     );
     let checked = crate::value_contract::http_headers::compare(
-        &exchange.record.request_headers,
+        &exchange.record.native.request_headers,
         actual,
         plan,
         clocks,
@@ -76,5 +76,6 @@ pub(super) fn audit_projection(
     if !checked.passed() {
         return None;
     }
-    crate::value_contract::http_headers::mask(&exchange.record.request_headers, actual, plan).ok()
+    crate::value_contract::http_headers::mask(&exchange.record.native.request_headers, actual, plan)
+        .ok()
 }

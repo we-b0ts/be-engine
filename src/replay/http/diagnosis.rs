@@ -361,9 +361,9 @@ pub(crate) fn source_summary(event: &Value) -> Result<Option<Value>> {
     let identity = super::identity_from_record(&record)?;
     Ok(Some(
         json!({"host":identity.target.host,"port":identity.target.port,
-        "scheme":identity.scheme,"method":record.method,"path":super::uri_path_only(&record.uri),
-        "exchange_id":record.id,"body_capture_truncated":record.request_body.truncated,
+        "scheme":identity.scheme,"method":record.native.method,"path":super::uri_path_only(&record.native.uri),
+        "exchange_id":record.native.id,"body_capture_truncated":record.native.request_body.truncated,
         "body_original_len":event["request_body"]["original_len"],
-        "body_encoding":record.request_body.encoding}),
+        "body_encoding":record.native.request_body.encoding}),
     ))
 }

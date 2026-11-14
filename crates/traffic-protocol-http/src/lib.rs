@@ -185,3 +185,7 @@ pub mod events;
 pub mod evidence;
 
 pub mod capture;
+
+pub mod recorded;
+pub mod response;
+pub mod uri;

@@ -31,15 +31,16 @@ pub(super) async fn response(
         detail: record.stream_delivery.take(),
         cancellation: None,
     };
-    let Some(stream) = &record.response_stream else {
+    let Some(stream) = &record.native.response_stream else {
         return Ok(full_delivery::response(
-            response_from_record(record)?,
+            traffic_protocol_http::response::from_record(record.native)?,
             completion,
             ordinary_delivery,
         ));
     };
     let payload = Bytes::from(decode_body(
         record
+            .native
             .response_body
             .as_ref()
             .context("stream payload missing")?,
@@ -50,6 +51,7 @@ pub(super) async fn response(
         stream.validate(payload.len())?;
     }
     let status = record
+        .native
         .response_status
         .and_then(|s| StatusCode::from_u16(s).ok())
         .context("stream response status missing")?;
@@ -90,7 +92,7 @@ pub(super) async fn response(
             bound.wait_release().await?;
         }
     } else if timing == crate::replay::ReplayStreamTiming::Fast
-        && record.outcome.is_server_terminated()
+        && record.native.outcome.is_server_terminated()
     {
         cap_stream_intervals(&mut stream, 0);
     } else if timing == crate::replay::ReplayStreamTiming::Fast
@@ -134,7 +136,7 @@ pub(super) async fn response(
     let mut response = Response::new(body.boxed());
     *response.status_mut() = status;
     *response.headers_mut() =
-        response_headers_for_payload(record.response_headers.as_ref(), 0, Utc::now());
+        response_headers_for_payload(record.native.response_headers.as_ref(), 0, Utc::now());
     if record.materialized_proxy_failure {
         // The recording proxy's generated failure uses a Full body with its
         // exact length. Timed delivery must retain that ordinary framing.

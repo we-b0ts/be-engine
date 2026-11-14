@@ -124,7 +124,7 @@ fn consume(state: &mut ReplayState, uri: &str, expected: &str) -> usize {
         panic!("native HTTP request must match {uri}");
     };
     assert_eq!(
-        decode_body(response.response_body.as_ref().unwrap()).unwrap(),
+        decode_body(response.native.response_body.as_ref().unwrap()).unwrap(),
         expected.as_bytes()
     );
     // This projection fixture explicitly supplies the transport completion;

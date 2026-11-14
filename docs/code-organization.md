@@ -107,6 +107,13 @@ positions while projecting interleaved protocol records into that classifier.
 Native capture payloads and physical value locations belong to the HTTP,
 MySQL and Redis libraries. Protocol references retain open identity fields, and
 semantic evidence support is supplied by the registered native evidence owner.
+`traffic-protocol-http::recorded` owns the stored HTTP payload schema and capture
+decoding. Its URI and response modules own native URI parsing, query observations
+and response assembly. Replay supplies query selection and comparison policy.
+Header capture uses the protocol library's shared header representation. Replay's HTTP adapter
+keeps authenticated response references, protected-header provenance, actual
+delivery and lifecycle state beside that native payload. Flat recordings retain
+their stored field layout through deserialization at this boundary.
 `CaptureEvidence` supplies native completeness, references and control facts.
 The ledger owns capture lifetime and sealed persistence through that interface.
 The recording queue holds protocol-independent `CapturedEvent` snapshots.

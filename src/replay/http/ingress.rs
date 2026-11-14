@@ -81,8 +81,8 @@ impl HttpIngress {
                 .entry(key(
                     exchange.identity.scheme,
                     &exchange.identity.target,
-                    &exchange.record.method,
-                    &uri_path_only(&exchange.record.uri),
+                    &exchange.record.native.method,
+                    &uri_path_only(&exchange.record.native.uri),
                 ))
                 .or_default();
             if owners.head_sha256.is_empty() {
@@ -90,8 +90,8 @@ impl HttpIngress {
                     &serde_json::to_vec(&key(
                         exchange.identity.scheme,
                         &exchange.identity.target,
-                        &exchange.record.method,
-                        &uri_path_only(&exchange.record.uri),
+                        &exchange.record.native.method,
+                        &uri_path_only(&exchange.record.native.uri),
                     ))
                     .expect("HTTP head key is serializable"),
                 );

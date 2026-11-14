@@ -40,15 +40,16 @@ impl PendingHttpTermination {
             detail,
             timing: ReplayExchangeTiming::from_recorded(
                 record
+                    .native
                     .duration_ms
                     .as_ref()
                     .and_then(Value::as_u64)
                     .expect("validated HTTP termination duration"),
-                record.outcome,
+                record.native.outcome,
             ),
             started: Instant::now(),
             prefix_delivered: None,
-            expected_termination: record.outcome.termination(),
+            expected_termination: record.native.outcome.termination(),
             server_result: None,
             lifecycle_stop: None,
         }
@@ -193,19 +194,21 @@ impl ServerClose {
 }
 
 pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
-    if record.outcome == crate::DependencyExchangeOutcome::NoResponse {
+    if record.native.outcome == crate::DependencyExchangeOutcome::NoResponse {
         return Err(anyhow!(
             "HTTP does not support a protocol-level no_response outcome"
         ));
     }
-    if !record.outcome.is_client_terminated() && !record.outcome.is_server_terminated() {
+    if !record.native.outcome.is_client_terminated()
+        && !record.native.outcome.is_server_terminated()
+    {
         anyhow::ensure!(
-            record.outcome.termination().is_none(),
+            record.native.outcome.termination().is_none(),
             "HTTP engine-owned termination is not replayable peer evidence"
         );
         return Ok(());
     }
-    if let Some(end) = record.outcome.termination() {
+    if let Some(end) = record.native.outcome.termination() {
         use crate::dependency::{TerminationKind, TerminationScope};
         anyhow::ensure!(
             matches!(
@@ -217,16 +220,16 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
         );
     }
     anyhow::ensure!(
-        record.error.is_none(),
+        record.native.error.is_none(),
         "HTTP client termination contains an upstream/capture error"
     );
-    if let Some(stream) = &record.response_stream {
+    if let Some(stream) = &record.native.response_stream {
         anyhow::ensure!(
-            stream.version == 2 && record.outcome.termination().is_some(),
+            stream.version == 2 && record.native.outcome.termination().is_some(),
             "HTTP cancelled response prefixes require version-2 termination evidence; re-record this case"
         );
         anyhow::ensure!(
-            record.response_status.is_some() && record.response_headers.is_some(),
+            record.native.response_status.is_some() && record.native.response_headers.is_some(),
             "HTTP cancelled response prefix has no response headers"
         );
         anyhow::ensure!(
@@ -234,6 +237,7 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
             "HTTP cancelled response prefix cannot contain terminal trailers"
         );
         let body = record
+            .native
             .response_body
             .as_ref()
             .context("HTTP cancelled response prefix has no payload")?;
@@ -245,16 +249,17 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
         };
         stream.validate(payload_len)?;
         anyhow::ensure!(
-            record.duration_ms.as_ref().and_then(Value::as_u64) == Some(stream.end_ms),
+            record.native.duration_ms.as_ref().and_then(Value::as_u64) == Some(stream.end_ms),
             "HTTP cancelled stream duration and termination time disagree"
         );
     } else {
         anyhow::ensure!(
-            record.response_status.is_none() && record.response_headers.is_none(),
+            record.native.response_status.is_none() && record.native.response_headers.is_none(),
             "HTTP client termination contains response headers"
         );
         anyhow::ensure!(
             record
+                .native
                 .response_body
                 .as_ref()
                 .map(decode_body)
@@ -265,6 +270,7 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
     }
     anyhow::ensure!(
         record
+            .native
             .duration_ms
             .as_ref()
             .and_then(Value::as_u64)

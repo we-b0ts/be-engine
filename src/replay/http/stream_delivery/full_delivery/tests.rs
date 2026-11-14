@@ -113,7 +113,7 @@ async fn ordinary_body_cancellation_before_and_after_queue_never_consumes() {
 #[tokio::test]
 async fn empty_body_keeps_its_header_delivery_obligation_when_hyper_skips_body_polling() {
     let (_temp, state, mut record, serving) = selected("").await;
-    record.response_status = Some(204);
+    record.native.response_status = Some(204);
     let progress = DeliveryProgress::default();
     let (_finished, receiver) = tokio::sync::watch::channel(false);
     let response = body(state.clone(), record, progress.clone(), receiver).await;

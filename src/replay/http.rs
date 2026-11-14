@@ -27,7 +27,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{CONNECTION, CONTENT_LENGTH, HOST, TRANSFER_ENCODING};
+use hyper::header::{CONTENT_LENGTH, HOST};
 use hyper::http::uri::Authority;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri};
@@ -40,7 +40,6 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
 use tracing::info;
-use url::form_urlencoded;
 
 use super::{
     CaseExchangeIndex, DependencyRuleDecision, HttpPolicyContext, MitmCa, ReplayPolicyRuntime,
@@ -66,38 +65,25 @@ mod transport;
 pub(crate) mod unordered;
 pub(crate) use transport::handle_http_replay_connection;
 
-type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 pub(super) use request_headers::HeaderDifferenceReport;
+
+use traffic_protocol_http::{
+    headers::HeaderSnapshot,
+    recorded::{
+        BodyCapture as RecordedBodyCapture, RecordedExchange as RecordedHttpMessage, decode_body,
+    },
+    response::response_headers_for_payload,
+    uri::uri_path_only,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RecordedHttpExchange {
-    #[serde(default)]
-    id: Option<String>,
+    #[serde(flatten)]
+    native: RecordedHttpMessage,
     #[serde(skip)]
     response_evidence: Option<crate::dependency_index::RecordRef>,
-    scheme: String,
-    #[serde(default)]
-    outcome: crate::DependencyExchangeOutcome,
-    #[serde(default)]
-    timestamp: Option<chrono::DateTime<Utc>>,
-    #[serde(default)]
-    request_started_at: Option<chrono::DateTime<Utc>>,
-    // Untrusted optional timing evidence must not prevent ordinary HTTP matching.
-    #[serde(default)]
-    duration_ms: Option<serde_json::Value>,
-    method: String,
-    uri: String,
-    authority: Option<String>,
-    request_body: RecordedBodyCapture,
-    #[serde(default)]
-    request_headers: HeaderSnapshot,
     #[serde(skip)]
     protected_request_headers: BTreeSet<String>,
-    response_status: Option<u16>,
-    response_headers: Option<HeaderSnapshot>,
-    response_body: Option<RecordedBodyCapture>,
-    #[serde(default)]
-    response_stream: Option<crate::http::stream::ResponseStream>,
     #[serde(skip)]
     stream_delivery: Option<MatchedHttpExchangeReport>,
     #[serde(skip)]
@@ -108,18 +94,6 @@ pub(crate) struct RecordedHttpExchange {
     lifecycle_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     #[serde(default)]
     discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
-    #[serde(default)]
-    capture: Option<crate::dependency::observation::CaptureMetadata>,
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RecordedBodyCapture {
-    encoding: String,
-    truncated: bool,
-    #[serde(default)]
-    stored_len: Option<usize>,
-    data: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,7 +254,7 @@ pub(crate) fn register_http_exchange(
             other => {
                 return Err(anyhow!(
                     "http_exchange {} advertises unsupported TCP protocol {other:?}",
-                    record.uri
+                    record.native.uri
                 ));
             }
         };
@@ -300,6 +274,7 @@ pub(crate) fn register_http_exchange(
         termination::validate_record(&record)?;
     }
     let stream_mime = record
+        .native
         .response_headers
         .as_ref()
         .and_then(|headers| {
@@ -317,15 +292,16 @@ pub(crate) fn register_http_exchange(
                 .to_ascii_lowercase()
         });
     anyhow::ensure!(
-        record.response_stream.is_some()
+        record.native.response_stream.is_some()
             || !matches!(
                 stream_mime.as_deref(),
                 Some("text/event-stream" | "application/x-ndjson" | "application/ndjson")
             ),
         "recorded HTTP streaming dependency has no chunk timing evidence; re-record this case"
     );
-    if let Some(stream) = &record.response_stream {
+    if let Some(stream) = &record.native.response_stream {
         let body = record
+            .native
             .response_body
             .as_ref()
             .context("HTTP stream has no recorded payload")?;
@@ -343,7 +319,7 @@ pub(crate) fn register_http_exchange(
         } else {
             stream.validate(payload_len)?;
             anyhow::ensure!(
-                record.error.is_none(),
+                record.native.error.is_none(),
                 "HTTP stream contains a capture error"
             );
         }
@@ -354,22 +330,23 @@ pub(crate) fn register_http_exchange(
         HttpReplayScheme::Https => ReplayProtocol::Https,
     };
     register_replay_target(targets, &identity.target, protocol)?;
-    if record.request_body.truncated {
+    if record.native.request_body.truncated {
         return Err(anyhow!(
             "http_exchange {} {} has a truncated request body",
-            record.method,
-            record.uri
+            record.native.method,
+            record.native.uri
         ));
     }
     if record
+        .native
         .response_body
         .as_ref()
         .is_some_and(|body| body.truncated)
     {
         return Err(anyhow!(
             "http_exchange {} {} has a truncated response body",
-            record.method,
-            record.uri
+            record.native.method,
+            record.native.uri
         ));
     }
     exchanges.push(ReplayHttpExchange {
@@ -432,21 +409,22 @@ pub(crate) fn observe_recorded_policy_exchanges(
         policy.observe_recorded_http_exchange(
             exchange.case_id.as_deref(),
             &exchange.identity.target,
-            &exchange.record.method,
-            &exchange.record.uri,
+            &exchange.record.native.method,
+            &exchange.record.native.uri,
         );
     }
 }
 
 fn identity_from_record(record: &RecordedHttpExchange) -> Result<HttpDependencyIdentity> {
-    let scheme = normalize_scheme(&record.scheme)?;
+    let scheme = normalize_scheme(&record.native.scheme)?;
     let authority = record
+        .native
         .authority
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("http_exchange {} has no authority", record.uri))?
+        .ok_or_else(|| anyhow!("http_exchange {} has no authority", record.native.uri))?
         .parse::<Authority>()
-        .with_context(|| format!("invalid recorded HTTP authority for {}", record.uri))?;
+        .with_context(|| format!("invalid recorded HTTP authority for {}", record.native.uri))?;
     let port = authority.port_u16().unwrap_or(match scheme {
         HttpReplayScheme::Http => 80,
         HttpReplayScheme::Https => 443,
@@ -602,15 +580,15 @@ impl ReplayState {
             })
             .map(move |(index, exchange)| RecordedHttpExchangeSummary {
                 source: exchange.source,
-                source_http_id: exchange.record.id.clone(),
+                source_http_id: exchange.record.native.id.clone(),
                 shared_origin: exchange.shared_origin.clone(),
                 index,
                 case_id: exchange.case_id.clone(),
                 scheme: exchange.identity.scheme,
                 target: exchange.identity.target.clone(),
-                method: exchange.record.method.clone(),
-                uri: uri_path_only(&exchange.record.uri),
-                status: exchange.record.response_status,
+                method: exchange.record.native.method.clone(),
+                uri: uri_path_only(&exchange.record.native.uri),
+                status: exchange.record.native.response_status,
             })
     }
     pub(super) fn unused_http_exchanges(
@@ -634,9 +612,10 @@ impl ReplayHttpExchange {
     }
     fn is_repeatable_preflight_probe(&self) -> bool {
         self.source.is_run_owned()
-            && self.record.outcome == crate::DependencyExchangeOutcome::Response
+            && self.record.native.outcome == crate::DependencyExchangeOutcome::Response
             && self
                 .record
+                .native
                 .capture
                 .as_ref()
                 .and_then(|capture| capture.initialization_unit())
@@ -657,26 +636,33 @@ fn http_request_comparison(
     body: &[u8],
     ignored_query_params: &[String],
 ) -> (Option<String>, Option<Vec<u8>>) {
-    if !exchange.record.method.eq_ignore_ascii_case(method.as_str()) {
+    if !exchange
+        .record
+        .native
+        .method
+        .eq_ignore_ascii_case(method.as_str())
+    {
         return (
             Some(format!(
                 "HTTP method mismatch: recorded {} actual {}",
-                exchange.record.method, method
+                exchange.record.native.method, method
             )),
             None,
         );
     }
-    if let Some(reason) =
-        uri_mismatch_reason(&exchange.record.uri, &uri.to_string(), ignored_query_params)
-    {
+    if let Some(reason) = uri_mismatch_reason(
+        &exchange.record.native.uri,
+        &uri.to_string(),
+        ignored_query_params,
+    ) {
         return (Some(reason), None);
     }
-    match decode_body(&exchange.record.request_body) {
+    match decode_body(&exchange.record.native.request_body) {
         Ok(recorded_body) => {
             let mismatch = (!bodies_match(&recorded_body, body))
                 .then(|| "HTTP request body did not match the recorded body".to_string());
-            let multipart_body = (!exchange.record.request_body.truncated
-                && multipart::supports_headers(&exchange.record.request_headers))
+            let multipart_body = (!exchange.record.native.request_body.truncated
+                && multipart::supports_headers(&exchange.record.native.request_headers))
             .then_some(recorded_body);
             (mismatch, multipart_body)
         }
@@ -706,34 +692,13 @@ fn host_matches_target(host: &str, target: &TargetKey) -> bool {
 }
 
 fn normalize_uri(value: &str, ignored_query_params: &[String]) -> (String, Vec<(String, String)>) {
-    let parsed = value.parse::<Uri>().ok();
-    let path = parsed
-        .as_ref()
-        .map(|uri| uri.path())
-        .unwrap_or_else(|| value.split('?').next().unwrap_or(value));
-    let raw_query = parsed
-        .as_ref()
-        .and_then(Uri::query)
-        .or_else(|| value.split_once('?').map(|(_, query)| query))
-        .unwrap_or_default();
-    let mut query = form_urlencoded::parse(raw_query.as_bytes())
-        .filter(|(key, _)| {
-            !ignored_query_params
-                .iter()
-                .any(|ignored| ignored.eq_ignore_ascii_case(key))
-        })
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
-    query.sort();
-    (path.to_string(), query)
-}
-
-fn uri_path_only(value: &str) -> String {
-    value
-        .parse::<Uri>()
-        .ok()
-        .map(|uri| uri.path().to_string())
-        .unwrap_or_else(|| value.split('?').next().unwrap_or(value).to_string())
+    let (path, mut query) = traffic_protocol_http::uri::normalize_uri(value);
+    query.retain(|(key, _)| {
+        !ignored_query_params
+            .iter()
+            .any(|ignored| ignored.eq_ignore_ascii_case(key))
+    });
+    (path, query)
 }
 
 pub(in crate::replay) fn uri_mismatch_reason(
@@ -810,15 +775,7 @@ fn query_values(query: &[(String, String)], key: &str) -> Vec<String> {
 }
 
 fn query_param_count(uri: &str, key: &str) -> usize {
-    let parsed = uri.parse::<Uri>().ok();
-    let query = parsed
-        .as_ref()
-        .and_then(Uri::query)
-        .or_else(|| uri.split_once('?').map(|(_, query)| query))
-        .unwrap_or_default();
-    form_urlencoded::parse(query.as_bytes())
-        .filter(|(part_key, _)| part_key.eq_ignore_ascii_case(key))
-        .count()
+    traffic_protocol_http::uri::count_query_parameters(uri, |name| name.eq_ignore_ascii_case(key))
 }
 
 fn bodies_match(recorded: &[u8], actual: &[u8]) -> bool {
@@ -829,83 +786,6 @@ fn bodies_match(recorded: &[u8], actual: &[u8]) -> bool {
         (Ok(recorded), Ok(actual)) => recorded == actual,
         _ => recorded == actual,
     }
-}
-
-fn decode_body(body: &RecordedBodyCapture) -> Result<Vec<u8>> {
-    if body.truncated {
-        return Err(anyhow!("recorded HTTP body is truncated"));
-    }
-    match body.encoding.as_str() {
-        "utf8" => Ok(body.data.as_bytes().to_vec()),
-        "base64" => STANDARD
-            .decode(&body.data)
-            .context("failed to decode recorded HTTP body base64"),
-        other => Err(anyhow!("unsupported recorded HTTP body encoding {other}")),
-    }
-}
-
-fn response_from_record(record: RecordedHttpExchange) -> Result<Response<Full<Bytes>>> {
-    let status = record
-        .response_status
-        .and_then(|status| StatusCode::from_u16(status).ok())
-        .context("recorded HTTP response has no valid status")?;
-    let body = record
-        .response_body
-        .as_ref()
-        .map(decode_body)
-        .transpose()?
-        .unwrap_or_default();
-    let body_length = body.len();
-    let mut response = Response::new(Full::new(Bytes::from(body)));
-    *response.status_mut() = status;
-    *response.headers_mut() =
-        response_headers_for_payload(record.response_headers.as_ref(), body_length, Utc::now());
-    Ok(response)
-}
-
-fn response_headers_for_payload(
-    headers: Option<&HeaderSnapshot>,
-    body_length: usize,
-    delivered_at: chrono::DateTime<Utc>,
-) -> hyper::HeaderMap {
-    let mut output = hyper::HeaderMap::new();
-    if let Some(headers) = headers {
-        for (name, values) in headers {
-            if is_hop_by_hop_header(name) {
-                continue;
-            }
-            let Ok(name) = hyper::header::HeaderName::from_bytes(name.as_bytes()) else {
-                continue;
-            };
-            for value in values {
-                if let Ok(value) = hyper::header::HeaderValue::from_str(value) {
-                    output.append(name.clone(), value);
-                }
-            }
-        }
-    }
-    output.insert(
-        CONTENT_LENGTH,
-        hyper::header::HeaderValue::from(body_length),
-    );
-    if !output.contains_key(hyper::header::DATE) {
-        output.insert(
-            hyper::header::DATE,
-            hyper::header::HeaderValue::from_str(
-                &delivered_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
-            )
-            .expect("UTC HTTP dates are valid header values"),
-        );
-    }
-    output
-}
-
-fn is_hop_by_hop_header(name: &str) -> bool {
-    name.eq_ignore_ascii_case(CONNECTION.as_str())
-        || name.eq_ignore_ascii_case(CONTENT_LENGTH.as_str())
-        || name.eq_ignore_ascii_case(TRANSFER_ENCODING.as_str())
-        || name.eq_ignore_ascii_case("keep-alive")
-        || name.eq_ignore_ascii_case("proxy-connection")
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
@@ -936,8 +816,8 @@ pub(crate) fn release_consumed_payloads(
                     .is_some_and(|case| case.status == super::ReplayCaseStatus::Ended)
             })
         {
-            exchange.record.request_body.data = String::new();
-            if let Some(body) = &mut exchange.record.response_body {
+            exchange.record.native.request_body.data = String::new();
+            if let Some(body) = &mut exchange.record.native.response_body {
                 body.data = String::new();
             }
         }

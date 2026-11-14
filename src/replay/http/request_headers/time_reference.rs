@@ -3,11 +3,11 @@ use super::*;
 use chrono::{DateTime, TimeDelta};
 
 pub(in crate::replay) fn source(record: &RecordedHttpExchange) -> Option<DateTime<Utc>> {
-    if let Some(request_started_at) = record.request_started_at {
+    if let Some(request_started_at) = record.native.request_started_at {
         return Some(request_started_at);
     }
-    let completed_at = record.timestamp?;
-    let duration_ms = record.duration_ms.as_ref()?.as_u64()?;
+    let completed_at = record.native.timestamp?;
+    let duration_ms = record.native.duration_ms.as_ref()?.as_u64()?;
     let duration = TimeDelta::try_milliseconds(i64::try_from(duration_ms).ok()?)?;
     completed_at.checked_sub_signed(duration)
 }

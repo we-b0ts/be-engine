@@ -397,8 +397,8 @@ async fn handle_http_request(
     };
     let mut server_close = None;
     let client_prefix = if record.lifecycle_stop.is_some()
-        || record.outcome.is_client_terminated()
-        || record.outcome.is_server_terminated()
+        || record.native.outcome.is_client_terminated()
+        || record.native.outcome.is_server_terminated()
     {
         let delivered = Arc::new(crate::http::termination::PrefixDelivery::new(
             transport.delivery,
@@ -421,13 +421,17 @@ async fn handle_http_request(
             state.lock().await.protocols.http_exchanges[exchange.detail.index].lifecycle_prefix =
                 Some(delivered.clone());
         }
-        if record.lifecycle_stop.is_none() && record.outcome.is_server_terminated() {
+        if record.lifecycle_stop.is_none() && record.native.outcome.is_server_terminated() {
             server_close = Some(termination::ServerClose::new(
                 transport.control,
                 transport.observation,
                 pending_exchange.clone(),
                 transport.closed,
-                record.outcome.termination().expect("server termination"),
+                record
+                    .native
+                    .outcome
+                    .termination()
+                    .expect("server termination"),
                 exchange.timing.termination_deadline(started),
             ));
         }

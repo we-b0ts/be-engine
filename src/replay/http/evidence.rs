@@ -16,7 +16,7 @@ pub(crate) fn register_global_exchange(
         .last_mut()
         .expect("registered HTTP exchange")
         .record;
-    if let Some(body) = &mut record.response_body {
+    if let Some(body) = &mut record.native.response_body {
         body.data = String::new();
     }
     Ok(())
@@ -25,10 +25,14 @@ pub(crate) fn register_global_exchange(
 impl RecordedHttpExchange {
     pub(super) fn materialize_response(&mut self) -> Result<()> {
         if let Some(reference) = self.response_evidence.take() {
-            self.response_body = reference.load::<RecordedHttpExchange>()?.response_body;
+            self.native.response_body = reference
+                .load::<RecordedHttpExchange>()?
+                .native
+                .response_body;
         }
-        if let Some(stream) = &self.response_stream {
+        if let Some(stream) = &self.native.response_stream {
             let body = self
+                .native
                 .response_body
                 .as_ref()
                 .context("HTTP stream has no materialized payload")?;

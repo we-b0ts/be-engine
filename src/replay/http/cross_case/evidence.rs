@@ -115,8 +115,8 @@ fn discover_selected(
                     r.case_id.as_deref() != Some(origin.as_str())
                         && r.scheme == identity.scheme
                         && r.target == identity.target
-                        && r.method.eq_ignore_ascii_case(&record.method)
-                        && uri_path_only(&r.uri) == uri_path_only(&record.uri)
+                        && r.method.eq_ignore_ascii_case(&record.native.method)
+                        && uri_path_only(&r.uri) == uri_path_only(&record.native.uri)
                 })
                 .collect();
             if relevant.is_empty() || require_replayable(&record).is_err() {
@@ -150,9 +150,9 @@ fn discover_selected(
                     "origin_case_id": origin,
                     "origin_api_path": api_path,
                     "selector": {"host": identity.target.host, "port": identity.target.port,
-                        "method": record.method, "path": uri_path_only(&record.uri)},
+                        "method": record.native.method, "path": uri_path_only(&record.native.uri)},
                     "scheme": identity.scheme,
-                    "response_status": record.response_status,
+                    "response_status": record.native.response_status,
                     "request_match": if request.request_fingerprint.is_some() { "verified" } else { "unavailable" },
                     "record": {"path": file.strip_prefix(&root).unwrap_or(file), "line": line},
                 }));

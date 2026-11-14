@@ -35,21 +35,8 @@ struct HeaderObservation {
     protected: bool,
 }
 
-pub(super) fn capture(headers: &hyper::HeaderMap) -> HeaderSnapshot {
-    let mut snapshot = HeaderSnapshot::new();
-    for (name, value) in headers {
-        snapshot.entry(name.as_str().to_string()).or_default().push(
-            value
-                .to_str()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|_| STANDARD.encode(value.as_bytes())),
-        );
-    }
-    snapshot
-}
-
 pub(in crate::replay) use traffic_protocol_http::headers::{
-    Mode, exact_contract_match, mode, native_contract_match, normalized, protected,
+    Mode, capture, exact_contract_match, mode, native_contract_match, normalized, protected,
 };
 
 fn observation(name: &str, values: Option<&Vec<String>>, encrypted: bool) -> HeaderObservation {
@@ -85,7 +72,7 @@ impl ReplayState {
     ) {
         let projected = global::audit_projection(self, exchange, actual, request_started_at);
         let actual = projected.as_ref().unwrap_or(actual);
-        let expected = normalized(&exchange.record.request_headers);
+        let expected = normalized(&exchange.record.native.request_headers);
         let actual = normalized(actual);
         let source_time_reference = time_reference::source(&exchange.record);
         let mut witness_fingerprint = None;
@@ -158,8 +145,8 @@ impl ReplayState {
                 target_event_index,
                 scheme: exchange.identity.scheme,
                 target: exchange.identity.target.clone(),
-                method: exchange.record.method.clone(),
-                uri: uri_path_only(&exchange.record.uri),
+                method: exchange.record.native.method.clone(),
+                uri: uri_path_only(&exchange.record.native.uri),
                 header: name.clone(),
                 reason: format!("{kind}: {name}"),
                 kind,

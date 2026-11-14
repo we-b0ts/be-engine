@@ -6,7 +6,7 @@ const ENGINE_CLEANUP: &str =
 
 impl RecordedHttpExchange {
     pub(crate) fn exchange_id(&self) -> Option<uuid::Uuid> {
-        self.id.as_deref()?.parse().ok()
+        self.native.id.as_deref()?.parse().ok()
     }
 
     /// Called only for a case's exact, validated async cleanup reference.
@@ -19,11 +19,12 @@ impl RecordedHttpExchange {
 
 pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
     anyhow::ensure!(
-        !record.request_body.truncated,
+        !record.native.request_body.truncated,
         "async HTTP cleanup request was truncated"
     );
     anyhow::ensure!(
         record
+            .native
             .duration_ms
             .as_ref()
             .and_then(Value::as_u64)
@@ -31,23 +32,24 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
         "async HTTP cleanup needs bounded request timing"
     );
     anyhow::ensure!(
-        record.outcome != crate::DependencyExchangeOutcome::NoResponse,
+        record.native.outcome != crate::DependencyExchangeOutcome::NoResponse,
         "HTTP cleanup cannot claim a protocol no-response command"
     );
     anyhow::ensure!(
         record
+            .native
             .outcome
             .termination()
             .is_none_or(|end| end.side != crate::dependency::TerminationSide::Engine),
         "async cleanup preserves Source evidence instead of inventing engine peer outcomes"
     );
-    if let Some(stream) = &record.response_stream {
+    if let Some(stream) = &record.native.response_stream {
         anyhow::ensure!(
             stream.version == 2,
             "async HTTP cleanup prefix requires flushed-prefix evidence version 2"
         );
         anyhow::ensure!(
-            record.response_status.is_some() && record.response_headers.is_some(),
+            record.native.response_status.is_some() && record.native.response_headers.is_some(),
             "async HTTP cleanup prefix has no headers"
         );
         anyhow::ensure!(
@@ -56,12 +58,14 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
         );
         anyhow::ensure!(
             record
+                .native
                 .error
                 .as_deref()
                 .is_none_or(|error| error == ENGINE_CLEANUP),
             "async HTTP cleanup prefix contains an independent capture error"
         );
         let body = record
+            .native
             .response_body
             .as_ref()
             .context("async HTTP cleanup prefix has no payload")?;
@@ -74,16 +78,17 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
         };
         stream.validate_prefix(payload_len)?;
         anyhow::ensure!(
-            record.duration_ms.as_ref().and_then(Value::as_u64) == Some(stream.end_ms),
+            record.native.duration_ms.as_ref().and_then(Value::as_u64) == Some(stream.end_ms),
             "async HTTP cleanup duration disagrees with its captured prefix"
         );
     } else {
         anyhow::ensure!(
-            record.response_status.is_none() && record.response_headers.is_none(),
+            record.native.response_status.is_none() && record.native.response_headers.is_none(),
             "async HTTP cleanup without stream evidence cannot claim response headers"
         );
         anyhow::ensure!(
             record
+                .native
                 .response_body
                 .as_ref()
                 .map(decode_body)
@@ -92,7 +97,7 @@ pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
             "async HTTP cleanup has untracked response bytes"
         );
         anyhow::ensure!(
-            record.outcome.termination().is_some() || upstream_failure::is_recorded(record),
+            record.native.outcome.termination().is_some() || upstream_failure::is_recorded(record),
             "async HTTP cleanup has no incomplete transport evidence"
         );
     }

@@ -63,8 +63,8 @@ impl HttpCrossCaseSelector {
                 .as_ref()
                 .is_none_or(|host| identity.target.host == super::super::normalize_host(host))
                 && self.port.is_none_or(|port| identity.target.port == port)
-                && record.method.eq_ignore_ascii_case(&self.method)
-                && uri_path_only(&record.uri) == self.path
+                && record.native.method.eq_ignore_ascii_case(&self.method)
+                && uri_path_only(&record.native.uri) == self.path
         })
     }
 
@@ -102,15 +102,17 @@ pub(super) struct SharedOrigin {
 
 fn require_replayable(record: &RecordedHttpExchange) -> Result<()> {
     ensure!(
-        record.error.is_none()
+        record.native.error.is_none()
             && record
+                .native
                 .response_status
                 .is_some_and(|s| (200..300).contains(&s)),
         "cross-case requires a successful recorded exchange"
     );
-    decode_body(&record.request_body)?;
+    decode_body(&record.native.request_body)?;
     decode_body(
         record
+            .native
             .response_body
             .as_ref()
             .context("cross-case response body is unavailable")?,
@@ -220,7 +222,7 @@ pub(in crate::replay) fn load(
             exchange
                 .shared_origin
                 .as_ref()
-                .and(exchange.record.timestamp),
+                .and(exchange.record.native.timestamp),
         )
     });
     Ok(())

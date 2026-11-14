@@ -1,4 +1,5 @@
 //! Native HTTP header normalization and comparison modes.
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::{BTreeMap, BTreeSet};
 pub type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 
@@ -125,4 +126,17 @@ pub fn protected(name: &str) -> bool {
         ]
         .iter()
         .any(|part| name.contains(part))
+}
+
+pub fn capture(headers: &hyper::HeaderMap) -> HeaderSnapshot {
+    let mut snapshot = HeaderSnapshot::new();
+    for (name, value) in headers {
+        snapshot.entry(name.as_str().to_string()).or_default().push(
+            value
+                .to_str()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|_| STANDARD.encode(value.as_bytes())),
+        );
+    }
+    snapshot
 }

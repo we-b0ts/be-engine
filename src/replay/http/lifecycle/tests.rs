@@ -104,11 +104,15 @@ async fn exercise(prefix: bool, early: bool) {
         let mut state = runtime.state.lock().await;
         assert_eq!(state.protocols.http_events.matched_count, 0);
         assert_eq!(
-            state.protocols.http_exchanges[0].record.outcome,
+            state.protocols.http_exchanges[0].record.native.outcome,
             crate::DependencyExchangeOutcome::Response
         );
         assert_eq!(
-            state.protocols.http_exchanges[0].record.error.as_deref(),
+            state.protocols.http_exchanges[0]
+                .record
+                .native
+                .error
+                .as_deref(),
             original["error"].as_str()
         );
         if !early {
@@ -174,11 +178,11 @@ fn cleanup_authorization_does_not_accept_capture_limits_or_complete_business_err
             serde_json::from_value(dependency(uuid::Uuid::new_v4(), prefix)).unwrap();
         record.authorize_lifecycle_cleanup().unwrap();
         if prefix {
-            record.error =
+            record.native.error =
                 Some("HTTP dependency stream exceeded its byte or chunk capture limit".into());
         } else {
-            record.response_status = Some(502);
-            record.response_headers = Some(Default::default());
+            record.native.response_status = Some(502);
+            record.native.response_headers = Some(Default::default());
         }
         assert!(record.authorize_lifecycle_cleanup().is_err());
     }
@@ -251,6 +255,7 @@ async fn cleanup_prefix_reuses_staged_request_identity_and_keeps_incomplete_sour
     assert!(
         !state.protocols.http_exchanges[0]
             .record
+            .native
             .response_stream
             .as_ref()
             .unwrap()
@@ -260,6 +265,7 @@ async fn cleanup_prefix_reuses_staged_request_identity_and_keeps_incomplete_sour
         decode_body(
             state.protocols.http_exchanges[0]
                 .record
+                .native
                 .response_body
                 .as_ref()
                 .unwrap()

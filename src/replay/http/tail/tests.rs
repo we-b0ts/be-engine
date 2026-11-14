@@ -135,7 +135,7 @@ async fn fixture(shared: bool, end_path: &str, captured_scope: bool) -> Fixture 
         .protocols
         .http_exchanges
         .iter_mut()
-        .find(|x| x.record.id.as_deref() == Some(&completed.to_string()))
+        .find(|x| x.record.native.id.as_deref() == Some(&completed.to_string()))
         .unwrap()
         .status = ReplayExchangeStatus::Consumed;
     Fixture {
@@ -150,7 +150,7 @@ fn index(state: &ReplayState, cache: Uuid) -> usize {
         .protocols
         .http_exchanges
         .iter()
-        .position(|x| x.record.id.as_deref() == Some(&cache.to_string()))
+        .position(|x| x.record.native.id.as_deref() == Some(&cache.to_string()))
         .unwrap()
 }
 

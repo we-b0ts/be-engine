@@ -24,8 +24,8 @@ impl Candidates {
                 exchange.case_id.as_deref(),
                 exchange.identity.scheme,
                 &exchange.identity.target,
-                &exchange.record.method,
-                Some(&uri_path_only(&exchange.record.uri)),
+                &exchange.record.native.method,
+                Some(&uri_path_only(&exchange.record.native.uri)),
             );
             let mut coarse = exact.clone();
             coarse.path = None;
@@ -67,8 +67,8 @@ impl Candidates {
                 exchange.case_id.as_deref(),
                 exchange.identity.scheme,
                 &exchange.identity.target,
-                &exchange.record.method,
-                Some(&uri_path_only(&exchange.record.uri)),
+                &exchange.record.native.method,
+                Some(&uri_path_only(&exchange.record.native.uri)),
             );
             let mut coarse = exact.clone();
             coarse.path = None;
@@ -199,7 +199,7 @@ mod tests {
                     (exchange.source.matches_scope(source)
                         || source.is_run_owned() && exchange.shared_origin.is_some())
                         && active_http_case_matches(Some("active"), exchange)
-                        && uri_path_only(&exchange.record.uri) == "/x/source-id"
+                        && uri_path_only(&exchange.record.native.uri) == "/x/source-id"
                 })
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>();

@@ -1,13 +1,17 @@
 //! HTTP event traversal within immutable recording evidence.
 use super::*;
+#[cfg(test)]
+mod tests;
 pub(super) use crate::replay::recording_evidence::{case_id, files};
 use std::path::Path;
 
 impl RecordedHttpExchange {
     pub(crate) fn decrypt_request_headers(&mut self, file: &Path) -> Result<()> {
-        self.protected_request_headers =
-            crate::request_headers::decrypt_dependency_headers(&mut self.request_headers, file)
-                .context("failed to decrypt recorded HTTP dependency headers")?;
+        self.protected_request_headers = crate::request_headers::decrypt_dependency_headers(
+            &mut self.native.request_headers,
+            file,
+        )
+        .context("failed to decrypt recorded HTTP dependency headers")?;
         Ok(())
     }
 }
@@ -49,7 +53,7 @@ impl super::ReplayHttpExchange {
     pub(in crate::replay) fn recorded_owner(
         &self,
     ) -> Option<traffic_model::attribution::DependencyOwner> {
-        Some(self.record.capture.as_ref()?.attribution.clone())
+        Some(self.record.native.capture.as_ref()?.attribution.clone())
     }
     pub(in crate::replay) fn run_sequence(&self) -> Option<u64> {
         (self.source.is_run_owned()
@@ -59,7 +63,7 @@ impl super::ReplayHttpExchange {
         .flatten()
     }
     pub(in crate::replay) fn recorded_sequence(&self) -> Option<u64> {
-        let capture = self.record.capture.as_ref()?;
+        let capture = self.record.native.capture.as_ref()?;
         (capture.semantic_required
             && self.shared_origin.is_none()
             && !self.is_repeatable_preflight_probe())

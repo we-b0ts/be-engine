@@ -2,16 +2,18 @@
 use super::*;
 
 pub(super) fn is_recorded(record: &RecordedHttpExchange) -> bool {
-    record.outcome == crate::DependencyExchangeOutcome::Response
+    record.native.outcome == crate::DependencyExchangeOutcome::Response
         && record
+            .native
             .error
             .as_ref()
             .is_some_and(|error| !error.is_empty() && error.len() <= 65_536)
-        && record.response_status.is_none()
-        && record.response_headers.is_none()
-        && record.response_body.is_none()
-        && record.response_stream.is_none()
+        && record.native.response_status.is_none()
+        && record.native.response_headers.is_none()
+        && record.native.response_body.is_none()
+        && record.native.response_stream.is_none()
         && record
+            .native
             .duration_ms
             .as_ref()
             .and_then(Value::as_u64)
@@ -25,25 +27,27 @@ pub(super) fn materialize(record: &mut RecordedHttpExchange) {
     );
     record.materialized_proxy_failure = true;
     let error = record
+        .native
         .error
         .as_ref()
         .expect("validated HTTP upstream failure");
     // proxy::http::record_http_error returns these bytes to Source. They are a
     // dependency delivery, never an independently generated Target request.
-    record.response_status = Some(StatusCode::BAD_GATEWAY.as_u16());
-    record.response_headers = Some(HeaderSnapshot::new());
-    record.response_body = Some(RecordedBodyCapture {
+    record.native.response_status = Some(StatusCode::BAD_GATEWAY.as_u16());
+    record.native.response_headers = Some(HeaderSnapshot::new());
+    record.native.response_body = Some(RecordedBodyCapture {
         encoding: "utf8".into(),
         data: error.clone(),
         truncated: false,
         stored_len: Some(error.len()),
     });
     let at_ms = record
+        .native
         .duration_ms
         .as_ref()
         .and_then(Value::as_u64)
         .expect("validated duration");
-    record.response_stream = Some(crate::http::stream::ResponseStream {
+    record.native.response_stream = Some(crate::http::stream::ResponseStream {
         version: 2,
         headers_ms: at_ms,
         chunks: vec![crate::http::stream::ResponseChunk {

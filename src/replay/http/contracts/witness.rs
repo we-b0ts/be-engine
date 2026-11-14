@@ -22,12 +22,14 @@ pub(crate) fn witness_metadata_matches(event: &Value, metadata: &WitnessMetadata
     let record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
     let identity = identity_from_record(&record)?;
     ensure!(
-        record.id.as_deref().is_some_and(|id| !id.is_empty())
-            && metadata.source.exchange_id == record.id
+        record.native.id.as_deref().is_some_and(|id| !id.is_empty())
+            && metadata.source.exchange_id == record.native.id
             && metadata.source.connection_id.is_none()
             && metadata.source.sequence.is_none()
             && metadata.slot == Slot::Body
-            && metadata.operation.eq_ignore_ascii_case(&record.method)
+            && metadata
+                .operation
+                .eq_ignore_ascii_case(&record.native.method)
             && metadata
                 .resource
                 .as_ref()
@@ -48,18 +50,24 @@ pub(crate) fn witness_metadata_matches(event: &Value, metadata: &WitnessMetadata
 
 pub(super) fn from_record(record: &RecordedHttpExchange, surface: Surface) -> Result<Value> {
     let identity = identity_from_record(record)?;
-    let mut value = serde_json::json!({"protocol":"http","exchange_id":record.id,"scheme":identity.scheme,
-        "endpoint":{"host":identity.target.host,"port":identity.target.port},"method":record.method.to_ascii_uppercase(),
-        "uri":record.uri,"request_headers":record.request_headers,"request_body":encode_body(&record.request_body)?,
+    let mut value = serde_json::json!({"protocol":"http","exchange_id":record.native.id,"scheme":identity.scheme,
+        "endpoint":{"host":identity.target.host,"port":identity.target.port},"method":record.native.method.to_ascii_uppercase(),
+        "uri":record.native.uri,"request_headers":record.native.request_headers,"request_body":encode_body(&record.native.request_body)?,
         "request_started_at":request_headers::time_reference::source(record)});
     if surface == Surface::DependencyResponse {
-        value["response_status"] = serde_json::to_value(record.response_status)?;
-        value["response_headers"] = serde_json::to_value(&record.response_headers)?;
-        value["response_body"] =
-            serde_json::to_value(record.response_body.as_ref().map(encode_body).transpose()?)?;
-        value["response_delivered_at"] = serde_json::to_value(record.timestamp)?;
-        value["outcome"] = serde_json::to_value(record.outcome)?;
-        value["error"] = serde_json::to_value(&record.error)?;
+        value["response_status"] = serde_json::to_value(record.native.response_status)?;
+        value["response_headers"] = serde_json::to_value(&record.native.response_headers)?;
+        value["response_body"] = serde_json::to_value(
+            record
+                .native
+                .response_body
+                .as_ref()
+                .map(encode_body)
+                .transpose()?,
+        )?;
+        value["response_delivered_at"] = serde_json::to_value(record.native.timestamp)?;
+        value["outcome"] = serde_json::to_value(record.native.outcome)?;
+        value["error"] = serde_json::to_value(&record.native.error)?;
     } else {
         ensure!(
             surface == Surface::DependencyRequest,
