@@ -89,30 +89,6 @@ pub(crate) fn compare_with_time_copies(
     compare_all(source, target, fields, &[], &[], clocks, copies)
 }
 
-pub(crate) fn compare_values(
-    source: &traffic_value::Value,
-    target: &traffic_value::Value,
-    fields: &[Field<'_>],
-    verified: &[VerifiedField<'_>],
-    clocks: AnchorClocks,
-    copies: &[VerifiedTimeCopy],
-) -> Comparison {
-    let copies = copies
-        .iter()
-        .map(|proof| proof as &dyn kernel::ValueCopyProof)
-        .collect::<Vec<_>>();
-    kernel::compare_logical_all(
-        source,
-        target,
-        fields,
-        &[],
-        verified,
-        clocks,
-        &copies,
-        &PolicyMetadata,
-    )
-}
-
 fn compare_all(
     source: &Value,
     target: &Value,

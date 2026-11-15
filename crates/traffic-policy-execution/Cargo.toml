@@ -1,0 +1,22 @@
+[package]
+name = "traffic-policy-execution"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+traffic-contract = { path = "../traffic-contract" }
+traffic-policy-value = { path = "../traffic-policy-value" }
+traffic-value = { path = "../traffic-value" }
+
+[dev-dependencies]
+chrono = "0.4"
+serde_yaml = "0.9"
+traffic-extensions = { path = "../traffic-extensions" }
+traffic-codec-string = { path = "../traffic-codec-string" }
+traffic-policy = { path = "../traffic-policy" }
+traffic-jwt = { path = "../traffic-jwt" }

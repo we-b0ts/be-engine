@@ -152,14 +152,6 @@ impl CompiledJsonPolicy {
     ) -> Result<Vec<(String, FieldContract)>> {
         self.plan().comparison_fields(source, target, clocks)
     }
-    pub(crate) fn selected_value_fields_with_clocks(
-        &self,
-        source: &traffic_value::Value,
-        clocks: traffic_contract::compare::AnchorClocks,
-    ) -> Result<Vec<SelectedGlobalField>> {
-        self.plan()
-            .selected_value_fields_with_clocks(source, clocks)
-    }
 }
 
 pub use traffic_contract::rule::is_schema_clock_group;

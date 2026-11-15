@@ -129,7 +129,8 @@ impl Delivery {
             // Recognition alone never translates a textual time. An exact
             // counterpart from a proven preceding write/read is a stored copy,
             // independent of whether its format was authored or recognized.
-            if selected.rule_id == crate::value_contract::time::automatic::RULE_ID && copy.is_none()
+            if selected.origin == traffic_policy_value::fields::FieldOrigin::Inferred
+                && copy.is_none()
             {
                 continue;
             }

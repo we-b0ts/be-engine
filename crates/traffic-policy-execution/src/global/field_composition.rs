@@ -1,8 +1,10 @@
 //! Expand existing Source selections once while preserving declaration order and conflicts.
-use crate::policy::{FieldContract, SelectedGlobalField};
-use crate::value_contract::{delivery, json::Field};
+use crate::delivery;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use traffic_contract::compare::Field;
+use traffic_contract::rule::FieldContract;
+use traffic_policy_value::fields::SelectedGlobalField;
 
 type Owners<'a> = BTreeMap<String, Vec<&'a FieldContract>>;
 

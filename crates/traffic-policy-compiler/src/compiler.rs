@@ -22,6 +22,18 @@ pub struct CompiledRule {
     pub execution_plan: std::sync::Arc<crate::plan::RuleExecutionPlan>,
 }
 
+impl traffic_contract::rule::ValueRule for CompiledRule {
+    fn binding(&self) -> traffic_contract::rule::RuleBinding<'_> {
+        traffic_contract::rule::RuleBinding {
+            id: &self.rule.id,
+            codec: &self.rule.codec,
+            codec_plan: &self.codec_plan,
+            fields: &self.rule.contract,
+            delivery_time: &self.delivery_time,
+        }
+    }
+}
+
 impl PartialEq for CompiledRule {
     fn eq(&self, other: &Self) -> bool {
         self.rule == other.rule

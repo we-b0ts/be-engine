@@ -200,3 +200,5 @@ mod recording_summary;
 
 pub mod limits;
 pub mod witness;
+
+pub mod data_stream;

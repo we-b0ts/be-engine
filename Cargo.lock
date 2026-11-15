@@ -2981,6 +2981,8 @@ dependencies = [
  "traffic-policy",
  "traffic-policy-compiler",
  "traffic-policy-document",
+ "traffic-policy-execution",
+ "traffic-policy-generated",
  "traffic-policy-schema",
  "traffic-policy-value",
  "traffic-protocol",
@@ -3098,6 +3100,44 @@ dependencies = [
  "traffic-protocol-http",
  "traffic-protocol-mysql",
  "traffic-response-rewrite",
+]
+
+[[package]]
+name = "traffic-policy-execution"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde_json",
+ "serde_yaml",
+ "traffic-codec-string",
+ "traffic-contract",
+ "traffic-extensions",
+ "traffic-jwt",
+ "traffic-policy",
+ "traffic-policy-value",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-policy-generated"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "traffic-contract",
+ "traffic-extensions",
+ "traffic-policy",
+ "traffic-policy-compiler",
+ "traffic-policy-execution",
+ "traffic-policy-schema",
+ "traffic-policy-value",
+ "uuid",
 ]
 
 [[package]]

@@ -2,12 +2,12 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::policy::native::{Proven, TemplateToken};
+use traffic_policy_schema::native::{Proven, TemplateToken};
 
 #[cfg(test)]
-pub(crate) use traffic_contract::template::validate_template;
+pub use traffic_contract::template::validate_template;
 
-pub(crate) fn extract<'a>(
+pub fn extract<'a>(
     value: &'a str,
     template: &str,
 ) -> Result<BTreeMap<String, &'a str>, GeneratedError> {
@@ -19,7 +19,7 @@ pub(crate) fn extract<'a>(
     })
 }
 
-pub(crate) fn valid_token(value: &str, token: &TemplateToken) -> bool {
+pub fn valid_token(value: &str, token: &TemplateToken) -> bool {
     if random_value(value, &token.format, token.length).is_err() {
         return false;
     }
@@ -80,8 +80,8 @@ pub(super) fn compare(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::native::GeneratedResponse;
     use serde_json::json;
+    use traffic_policy_schema::native::GeneratedResponse;
 
     fn field(bytes: usize) -> Proven<TemplateToken> {
         super::super::tests::proof(TemplateToken {

@@ -1,29 +1,26 @@
-//! Application policy bindings for shared derived-value delivery.
+//! Application bindings for rule-owned derived-value delivery.
+#[cfg(test)]
 use super::json::AnchorClocks;
+#[cfg(test)]
 use crate::policy::CompiledRule;
+#[cfg(test)]
 use anyhow::Result;
+#[cfg(test)]
 use serde_json::Value;
+pub(crate) use traffic_contract::delivery::{select, shift};
 
-pub(crate) use traffic_contract::delivery::{select, shift, value_quantum};
-
+#[cfg(test)]
 pub(crate) fn materialize(
     source: &Value,
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Value> {
-    let fields = rules
-        .iter()
-        .flat_map(|rule| {
-            rule.delivery_time.iter().map(move |(pointer, contract)| {
-                traffic_contract::delivery::TimeField {
-                    rule_id: &rule.rule.id,
-                    pointer,
-                    contract,
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    traffic_contract::delivery::materialize(source, &fields, clocks, &super::json::PolicyMetadata)
+    traffic_policy_execution::delivery::materialize(
+        &super::execution_context(),
+        source,
+        rules,
+        clocks,
+    )
 }
 
 #[cfg(test)]

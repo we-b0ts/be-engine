@@ -5,7 +5,9 @@ pub use traffic_policy::ValueScope as ClockScope;
 pub use traffic_time::declaration::{
     DurationUnit, TimeAnchor, TimeContract, TimeRelation, TimestampFormat, is_schema_clock_group,
 };
+mod binding;
 mod condition;
+pub use binding::{RuleBinding, ValueRule};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

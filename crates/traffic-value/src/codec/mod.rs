@@ -7,7 +7,7 @@ use crate::Value;
 
 mod registry;
 mod schema;
-pub use registry::{CodecProbe, CodecRegistry, PreparedCodec};
+pub use registry::{CodecIdentity, CodecProbe, CodecRegistry, PreparedCodec};
 pub use schema::{FieldSchema, ValueType};
 
 #[derive(Debug, Clone, serde::Serialize)]

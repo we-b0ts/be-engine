@@ -31,6 +31,13 @@ pub struct SelectedGlobalField {
     pub pointer: String,
     pub contract: FieldContract,
     pub rule_id: &'static str,
+    pub origin: FieldOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldOrigin {
+    Declared,
+    Inferred,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +640,7 @@ impl<'a> FieldPlan<'a> {
                     pointer,
                     contract,
                     rule_id: inferred.rule_id,
+                    origin: FieldOrigin::Inferred,
                 },
             );
         }
@@ -667,6 +675,7 @@ impl<'a> FieldPlan<'a> {
                                     format: IdentityFormat::Jwt,
                                 },
                                 rule_id: GLOBAL_JSON_ID,
+                                origin: FieldOrigin::Declared,
                             });
                         } else if !value.is_null() && !value.is_array() && !value.is_object() {
                             fields.push(SelectedGlobalField {
@@ -674,6 +683,7 @@ impl<'a> FieldPlan<'a> {
                                 pointer,
                                 contract: FieldContract::IdentityAnchor,
                                 rule_id: GLOBAL_JSON_ID,
+                                origin: FieldOrigin::Declared,
                             });
                         }
                     }
@@ -711,6 +721,7 @@ impl<'a> FieldPlan<'a> {
                     pointer,
                     contract,
                     rule_id: GLOBAL_JSON_ID,
+                    origin: FieldOrigin::Declared,
                 });
             }
         }

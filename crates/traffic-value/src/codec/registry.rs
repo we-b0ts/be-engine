@@ -10,6 +10,18 @@ pub struct CodecRegistry {
     providers: BTreeMap<String, Arc<dyn CodecProvider>>,
 }
 
+/// Retain the installed implementation while prepared groups refer to its identity.
+#[derive(Clone)]
+pub struct CodecIdentity(Arc<dyn CodecProvider>);
+
+impl PartialEq for CodecIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for CodecIdentity {}
+
 #[derive(Debug, Clone)]
 pub struct CodecProbe {
     pub descriptor: CodecDescriptor,
@@ -17,6 +29,10 @@ pub struct CodecProbe {
 }
 
 impl CodecRegistry {
+    pub fn installation_identity(&self, id: &str) -> Option<CodecIdentity> {
+        self.providers.get(id).cloned().map(CodecIdentity)
+    }
+
     pub fn field_schema(
         &self,
         id: &str,

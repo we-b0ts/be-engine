@@ -79,6 +79,24 @@ Source-proof inheritance, canonical rendering and completion declarations.
 port. Runtime key snapshots and complete compilation round-trip verification
 retain their application owner. The application adapts its prepared global
 formats at this document boundary.
+`traffic-policy-execution` owns codec-group preparation, field composition,
+strict document comparison and derived value materialization over prepared rules.
+`ExecutionContext` supplies codec installations and comparison metadata, while
+`FormatHost` supplies field declarations and frozen signing-key access.
+The shared `ValueRule` port exposes borrowed field contracts and prepared codec
+bindings. Compilation implements this port beside its carrier selectors.
+Selected fields retain declared or inferred origins, so explicit ownership and
+delivery permissions apply to every registered implementation. Codec-group caches
+retain installation identities alongside their prepared inputs.
+`traffic-policy-generated` owns typed UUID, random, named-template and encrypted
+document value contracts. It receives the codec installations, comparison
+metadata, plaintext format host and frozen key bytes explicitly. Its field
+verifier composes through the shared comparison port, including plaintext
+identity proposals and response-local IV relationships.
+`traffic-protocol-http::data_stream` owns complete SSE/JSON-line event framing,
+physical data ranges, byte-offset correspondence and lossless data replacement.
+Application stream bindings compare those projected data values through the shared
+execution library.
 `traffic-jwt` owns compact JWS authentication, NumericDate comparisons and nonce
 formats. Signing-key source validation is pure there. Startup resolution and
 immutable key witnesses retain application ownership.
