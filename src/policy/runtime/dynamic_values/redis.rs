@@ -14,43 +14,7 @@ pub(crate) struct RedisIdentity<'a> {
     pub username: Option<&'a str>,
 }
 
-impl DynamicDecision {
-    pub(crate) fn differs(&self, rule: &str) -> bool {
-        self.pairs
-            .iter()
-            .any(|(id, pair)| id == rule && pair.source != pair.target)
-    }
-}
-
 impl DynamicValues {
-    pub(crate) fn validate_report_decision(
-        &self,
-        case: &str,
-        decision: &DynamicDecision,
-        report: &serde_json::Value,
-    ) -> Result<()> {
-        for (id, pair) in &decision.pairs {
-            let source = super::super::config::fingerprint(pair.source.as_bytes());
-            let target = super::super::config::fingerprint(pair.target.as_bytes());
-            for proof in report["replay_policy"]["dynamic_bindings"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|proof| proof["case_id"] == case && proof["rule_id"] == *id)
-            {
-                ensure!(
-                    proof["source_fingerprint"] != source || proof["target_fingerprint"] == target,
-                    "dynamic identity changed its previously proven target reference"
-                );
-                ensure!(
-                    proof["target_fingerprint"] != target || proof["source_fingerprint"] == source,
-                    "distinct dynamic identities collapsed into a previously proven target"
-                );
-            }
-        }
-        Ok(())
-    }
-
     #[cfg(test)]
     pub(crate) fn redis(
         &self,
@@ -313,5 +277,45 @@ pub(super) fn capture(
         )
     } else {
         strings::capture(bytes, pointer)
+    }
+}
+
+#[cfg(test)]
+impl DynamicDecision {
+    pub(crate) fn differs(&self, rule: &str) -> bool {
+        self.pairs
+            .iter()
+            .any(|(id, pair)| id == rule && pair.source != pair.target)
+    }
+}
+
+#[cfg(test)]
+impl DynamicValues {
+    pub(crate) fn validate_report_decision(
+        &self,
+        case: &str,
+        decision: &DynamicDecision,
+        report: &serde_json::Value,
+    ) -> Result<()> {
+        for (id, pair) in &decision.pairs {
+            let source = super::super::config::fingerprint(pair.source.as_bytes());
+            let target = super::super::config::fingerprint(pair.target.as_bytes());
+            for proof in report["replay_policy"]["dynamic_bindings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|proof| proof["case_id"] == case && proof["rule_id"] == *id)
+            {
+                ensure!(
+                    proof["source_fingerprint"] != source || proof["target_fingerprint"] == target,
+                    "dynamic identity changed its previously proven target reference"
+                );
+                ensure!(
+                    proof["target_fingerprint"] != target || proof["source_fingerprint"] == source,
+                    "distinct dynamic identities collapsed into a previously proven target"
+                );
+            }
+        }
+        Ok(())
     }
 }

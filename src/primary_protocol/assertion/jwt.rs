@@ -60,21 +60,6 @@ impl<'a> JwtComparison<'a> {
         }
     }
 
-    pub(crate) fn key_witnesses(&self) -> impl Iterator<Item = &(std::path::PathBuf, String)> {
-        self.keys
-            .values()
-            .filter_map(|key| key.as_ref().ok()?.witness.as_ref())
-    }
-
-    pub(crate) fn ensure_keys_available(&self) -> anyhow::Result<()> {
-        for key in self.keys.values() {
-            if let Err(error) = key {
-                anyhow::bail!("response_jwt_key_unavailable: {error}");
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) fn compare(
         &mut self,
         field: &ResponseField,

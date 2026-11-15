@@ -139,6 +139,18 @@ Registered evidence adapters project native Source request and response
 envelopes. The host supplies authenticated storage and secret access through
 `RecordSource` and `EvidenceSecrets`. Policy evidence delegates envelope
 construction to the registered native owner.
+Native HTTP header occurrences and Redis scalar representations live beside their
+protocol libraries. These projections receive the policy registry and comparison
+metadata. Implicit scalar applicability delegates to the shared field plan and its
+installed implementations. Historical planner DTOs retain their existing rejection
+contract, while frozen-evidence checks continue serving pending journals.
+Native MySQL value selection, physical column origins, observed native temporal
+metadata and scalar output representations live in `traffic-protocol-mysql::value_rules`.
+Its `ValuePolicy` port receives the shared execution context, document formats and
+optional scalar declarations. `DeliveryHost` supplies identity decisions without
+publishing them. Protected witness authorization, Case state and delivery commit
+remain application responsibilities. Shared delivered-time field enumeration and
+domain-separated declaration fingerprints retain their value-contract owners.
 Native MySQL semantic decoding and prepared-statement state belong to its
 protocol library. Its capture queue owns request/response FIFO correlation,
 continuation assembly, logical response boundaries and native termination-prefix

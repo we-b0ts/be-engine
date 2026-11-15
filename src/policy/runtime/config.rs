@@ -1,17 +1,24 @@
 mod mysql;
 mod mysql_time;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 mod document;
+#[cfg(test)]
 pub(crate) use document::BindingEntry;
 
-use super::response::{ResponseRules, validate_response_rules};
+use super::response::ResponseRules;
+#[cfg(test)]
+use super::response::validate_response_rules;
 
+#[cfg(test)]
 const MIN_POLICY_VERSION: u8 = 1;
+#[cfg(test)]
 const MAX_POLICY_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -397,6 +404,7 @@ pub(crate) fn load_replay_policy(path: &Path) -> Result<LoadedReplayPolicy> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     super::dynamic_values::validate(&document.dynamic_values)?;
     ensure!(
@@ -463,6 +471,7 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn dynamic_fields(rule: &ReplayDependencyRule) -> Vec<&DynamicValueRule> {
     match rule.protocol {
         DependencyProtocol::Mysql => rule
@@ -479,6 +488,7 @@ fn dynamic_fields(rule: &ReplayDependencyRule) -> Vec<&DynamicValueRule> {
     }
 }
 
+#[cfg(test)]
 fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
     ensure_identifier(&rule.id, "rule id")?;
     if rule.replay_scope == ReplayScope::RecordingRun {
@@ -700,6 +710,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_source_evidence(value: &str) -> Result<()> {
     if value.is_empty() {
         return Ok(());
@@ -715,6 +726,7 @@ fn validate_source_evidence(value: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_dynamic_value(rule: &DynamicValueRule) -> Result<()> {
     ensure!(
         rule.bind.is_some()
@@ -756,6 +768,7 @@ fn validate_dynamic_value(rule: &DynamicValueRule) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_identifier(value: &str, name: &str) -> Result<()> {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {

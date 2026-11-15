@@ -40,6 +40,27 @@ pub enum FieldOrigin {
     Inferred,
 }
 
+/// A physical carrier supplies a value while the selected format chooses its contract.
+pub trait ScalarFormat: Send + Sync {
+    fn select(
+        &self,
+        source: &Value,
+        clock: Option<chrono::DateTime<chrono::Utc>>,
+        policies: &PolicyRegistry,
+    ) -> Result<FieldContract>;
+}
+
+impl ScalarFormat for GlobalField {
+    fn select(
+        &self,
+        source: &Value,
+        clock: Option<chrono::DateTime<chrono::Utc>>,
+        policies: &PolicyRegistry,
+    ) -> Result<FieldContract> {
+        self.select_contract_with_registry(source, clock, policies)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GlobalField {
@@ -519,6 +540,16 @@ impl<'a> FieldPlan<'a> {
             policies,
         }
     }
+    /// Ask installed implementations whether Source has an implicit scalar contract.
+    pub fn inferred_contract(&self, source: &Value) -> Result<Option<FieldContract>> {
+        let source = serde_json::from_value(source.clone())?;
+        let facts = serde_json::from_value(serde_json::json!({"settings":{"time":self.time}}))?;
+        self.policies
+            .infer(&source, &facts)?
+            .map(crate::inference::contract)
+            .transpose()
+    }
+
     pub fn identity_fields(&self, source: &Value) -> Result<Vec<(String, FieldContract)>> {
         Ok(self
             .select_authored_fields(source, None, true, None)?

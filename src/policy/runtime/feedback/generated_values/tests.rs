@@ -24,9 +24,7 @@ fn retired_pending_generated_plan_cannot_apply_after_an_upgrade() {
     let plan = GeneratedValueRulePlan {
         policy_path: fixture.policy.clone(),
         original: fs::read_to_string(&fixture.policy).unwrap(),
-        updated: "must never replace the unified policy".into(),
         witnesses: vec![],
-        key_witnesses: vec![],
         report: GeneratedValueRuleReport {
             kind: "dynamic_value".into(),
             api: "GET /api".into(),

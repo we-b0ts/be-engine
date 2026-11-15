@@ -4,7 +4,9 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use traffic_policy_document as document;
 
-pub(crate) use document::authoring::{require_source_proof, retired_authoring};
+pub(crate) use document::authoring::{
+    legacy_authoring_error, require_source_proof, retired_authoring,
+};
 
 pub(crate) fn context() -> document::AuthoringContext<'static> {
     document::AuthoringContext {

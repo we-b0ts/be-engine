@@ -17,10 +17,15 @@ mod redis;
 mod redis_json;
 mod scopes;
 mod source;
+#[cfg(test)]
+pub(crate) use audit::from_report;
+#[cfg(test)]
+pub(crate) use source::from_event as recorded_capture;
 mod source_coverage;
 mod strings;
-pub(crate) use audit::{DynamicBindingReport, from_native_report, from_report};
+pub(crate) use audit::{DynamicBindingReport, from_native_report};
 pub(crate) use candidates::CaptureCandidate;
+#[cfg(test)]
 pub(crate) use config::validate;
 pub use config::{
     DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
@@ -29,8 +34,6 @@ pub use config::{
 };
 pub(crate) use http::HttpInput;
 pub(crate) use redis::RedisIdentity;
-pub(crate) use source::from_event as recorded_capture;
-pub(crate) use strings::capture as capture_string;
 
 use crate::replay::TargetKey;
 use anyhow::{Result, ensure};

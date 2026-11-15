@@ -20,6 +20,7 @@ pub(crate) mod native_projection;
 mod signing_keys;
 mod value_decision;
 pub(crate) use key::KeyBindingReport;
+#[cfg(test)]
 mod overlap;
 mod read_back;
 mod redis;
@@ -44,6 +45,7 @@ mod source_session;
 mod time;
 mod time_copies;
 mod unified;
+#[cfg(test)]
 pub(crate) use overlap::validate as validate_overlaps;
 pub(crate) use unified::RedisRequestContext;
 #[cfg(test)]
@@ -525,6 +527,7 @@ pub(crate) fn is_request_rule(rule: &ReplayDependencyRule) -> bool {
         Some(super::redis_value::RedisSelector::Requests(_))
     ) || rule.http.as_ref().is_some_and(|h| h.multipart.is_some())
 }
+#[cfg(test)]
 pub(crate) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
     if !is_request_rule(rule) {
         return Ok(());

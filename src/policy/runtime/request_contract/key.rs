@@ -347,6 +347,10 @@ impl RequestContracts {
             })
             .collect()
     }
+}
+
+#[cfg(test)]
+impl RequestContracts {
     pub(super) fn restore_key_binding_proofs(&self, report: &Value) -> Result<()> {
         let mut state = self.state.lock().expect("request contracts");
         let mut proofs = state.key_binding_proofs.clone();

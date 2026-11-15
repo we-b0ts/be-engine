@@ -144,6 +144,7 @@ impl DynamicValues {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn from_report(
     rules: &[DynamicValueRule],
     report: &Value,

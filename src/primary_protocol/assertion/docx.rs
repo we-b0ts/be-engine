@@ -172,27 +172,6 @@ fn compare_packages(
     })
 }
 
-pub(crate) fn timestamp_values(
-    expected: &[u8],
-    actual: &[u8],
-    rule: &DocxTimestampRule,
-) -> Result<Option<(String, String)>> {
-    let expected = package(expected).context("expected response is not a valid DOCX package")?;
-    let actual = package(actual).context("actual response is not a valid DOCX package")?;
-    match (expected.get(&rule.part), actual.get(&rule.part)) {
-        (None, None) => Ok(None),
-        (Some(expected), Some(actual)) => {
-            let mut expected = expected.clone();
-            let mut actual = actual.clone();
-            Ok(Some((
-                normalize_xml_timestamp(&mut expected, &rule.element, b"__timestamp__")?,
-                normalize_xml_timestamp(&mut actual, &rule.element, b"__timestamp__")?,
-            )))
-        }
-        _ => anyhow::bail!("DOCX timestamp part is present on only one side"),
-    }
-}
-
 fn difference(
     part: &str,
     element: Option<&str>,

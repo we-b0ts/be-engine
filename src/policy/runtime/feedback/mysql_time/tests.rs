@@ -16,8 +16,6 @@ fn retired_sql_time_plan_and_pending_apply_cannot_change_policy_or_source() {
         })
     });
     let plan = MysqlTimeRulePlan {
-        original: fs::read_to_string(&fixture.policy).unwrap(),
-        updated: "must not be written".into(),
         report: MysqlTimeRuleReport {
             policy: fixture.policy.clone(),
             policy_fingerprint: "old-plan".into(),

@@ -1,14 +1,8 @@
-//! Evidence-gated policy authoring for finite cross-case HTTP consumption.
-use super::document::{render_dependency_rules, replace_dependency_rules};
-use crate::policy::runtime::config::{
-    DependencyProtocol, HttpSelector, ReplayDependencyRule, ReplayScope, TargetSelector,
-    load_replay_policy, validate_document,
-};
-use crate::{HttpCrossCaseSelector, protocols::replay::http_cross_case};
-use anyhow::{Result, ensure};
+//! Historical cross-case plan DTOs retain the unified-authoring boundary.
+use crate::HttpCrossCaseSelector;
+use anyhow::Result;
 use serde::Serialize;
-use std::{fs, path::PathBuf};
-
+use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct HttpCrossCaseFeedback {
     pub policy_path: PathBuf,
@@ -34,9 +28,6 @@ pub struct HttpCrossCaseReport {
 }
 
 pub struct HttpCrossCasePlan {
-    feedback: HttpCrossCaseFeedback,
-    original: String,
-    updated: String,
     report: HttpCrossCaseReport,
 }
 
@@ -45,115 +36,10 @@ impl HttpCrossCasePlan {
         &self.report
     }
     pub fn apply(self) -> Result<HttpCrossCaseReport> {
-        crate::policy::retired_authoring()?;
-        ensure!(
-            fs::read_to_string(&self.feedback.policy_path)? == self.original,
-            "policy changed after planning; rerun cross-case plan"
-        );
-        let current = http_cross_case::verify_candidate(
-            &self.feedback.case_source,
-            &self.feedback.replay_report_path,
-            &self.feedback.selector,
-        )?;
-        ensure!(
-            current == self.report.candidates,
-            "cross-case evidence changed after planning"
-        );
-        if self.report.changed {
-            crate::config::edit::write_atomic(&self.feedback.policy_path, self.updated.as_bytes())?;
-        }
-        Ok(HttpCrossCaseReport {
-            applied: true,
-            ..self.report
-        })
+        Err(crate::policy::legacy_authoring_error())
     }
 }
 
-pub fn plan_http_cross_case(feedback: HttpCrossCaseFeedback) -> Result<HttpCrossCasePlan> {
-    crate::policy::retired_authoring()?;
-    feedback.selector.validate()?;
-    crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
-    let original = fs::read_to_string(&feedback.policy_path)?;
-    let mut loaded = load_replay_policy(&feedback.policy_path)?;
-    let proposed = ReplayDependencyRule {
-        id: feedback.rule_id.clone(),
-        replay_scope: ReplayScope::RecordingRun,
-        source_evidence: feedback.source_evidence.clone(),
-        when: None,
-        case_selector: None,
-        redis: None,
-        protocol: DependencyProtocol::Http,
-        target: TargetSelector {
-            host: feedback.selector.host.clone(),
-            port: feedback.selector.port,
-        },
-        http: Some(HttpSelector {
-            multipart: None,
-            method: feedback.selector.method.clone(),
-            path: feedback.selector.path.clone(),
-            query: Default::default(),
-        }),
-        mysql: None,
-        memcached: None,
-    };
-    let mut document = loaded.document.clone();
-    document.dependency_rules = vec![proposed.clone()];
-    validate_document(&document)?;
-    let candidates = http_cross_case::verify_candidate(
-        &feedback.case_source,
-        &feedback.replay_report_path,
-        &feedback.selector,
-    )?;
-    let existing = loaded.document.dependency_rules.iter().find(|r| {
-        r.replay_scope == ReplayScope::RecordingRun
-            && r.target.host == proposed.target.host
-            && r.target.port == proposed.target.port
-            && r.http.as_ref().is_some_and(|h| {
-                h.method == feedback.selector.method && h.path == feedback.selector.path
-            })
-    });
-    let reused_existing = existing.is_some();
-    let effective_rule_id = existing
-        .map(|r| r.id.clone())
-        .unwrap_or_else(|| feedback.rule_id.clone());
-    ensure!(
-        loaded
-            .document
-            .dependency_rules
-            .iter()
-            .all(|r| r.id != feedback.rule_id || r.id == effective_rule_id && reused_existing),
-        "cross-case rule id already selects another rule"
-    );
-    if !reused_existing {
-        loaded.document.dependency_rules.push(proposed);
-    }
-    validate_document(&loaded.document)?;
-    let updated = replace_dependency_rules(&original, &loaded.document)?;
-    let changed = original != updated;
-    let diff = if changed {
-        format!(
-            "@@ dependency_rules @@\n{}",
-            render_dependency_rules(&loaded.document)?
-        )
-    } else {
-        String::new()
-    };
-    let report = HttpCrossCaseReport {
-        policy: feedback.policy_path.clone(),
-        effective_rule_id,
-        selector: feedback.selector.clone(),
-        source_evidence: feedback.source_evidence.clone(),
-        candidates,
-        reused_existing,
-        changed,
-        applied: false,
-        requires_replay: true,
-        diff,
-    };
-    Ok(HttpCrossCasePlan {
-        feedback,
-        original,
-        updated,
-        report,
-    })
+pub fn plan_http_cross_case(_feedback: HttpCrossCaseFeedback) -> Result<HttpCrossCasePlan> {
+    Err(crate::policy::legacy_authoring_error())
 }

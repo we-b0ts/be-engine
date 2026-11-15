@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
-pub const GLOBAL_HTTP_ID: &str = "global.http";
+pub use traffic_protocol_http::header_values::GLOBAL_HTTP_ID;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpPolicy {

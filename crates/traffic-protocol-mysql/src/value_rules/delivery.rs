@@ -1,7 +1,8 @@
 //! Materialize selected native and JSON values without changing immutable Source.
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-pub(in crate::protocols::replay::mysql::contracts) fn write_value(
+pub fn write_value(
     original: &RecordedMysqlValue,
     logical: Value,
     scalar: bool,
@@ -9,7 +10,7 @@ pub(in crate::protocols::replay::mysql::contracts) fn write_value(
     let mut output = original.clone();
     if scalar {
         if output.raw.is_some() {
-            output.raw = Some(ReplayBodyCapture {
+            output.raw = Some(crate::model::ValueCapture {
                 truncated: false,
                 encoding: "utf8".into(),
                 data: logical
@@ -20,11 +21,11 @@ pub(in crate::protocols::replay::mysql::contracts) fn write_value(
         }
         output.value = Some(logical);
     } else {
-        let original_bytes = super::super::value_bytes(original)?
+        let original_bytes = fields::encoded_bytes(original)?
             .context("MySQL JSON delivery lost its original bytes")?;
-        let bytes = crate::json_value::render::derived(&original_bytes, &logical)?;
+        let bytes = traffic_contract::json::render::derived(&original_bytes, &logical)?;
         if output.raw.is_some() {
-            output.raw = Some(ReplayBodyCapture {
+            output.raw = Some(crate::model::ValueCapture {
                 truncated: false,
                 encoding: "base64".into(),
                 data: STANDARD.encode(bytes),
@@ -37,17 +38,14 @@ pub(in crate::protocols::replay::mysql::contracts) fn write_value(
     Ok(output)
 }
 
-pub(in crate::protocols::replay::mysql::contracts) fn translate_selection(
-    owner: &policy::request_contract::RequestContracts,
+pub fn translate_selection(
+    owner: &dyn DeliveryHost,
     case: &str,
     selected: &Selection,
     clocks: AnchorClocks,
-) -> Result<(
-    Value,
-    Option<crate::value_contract::identities::IdentityDecision>,
-)> {
+) -> Result<(Value, Option<traffic_contract::identity::IdentityDecision>)> {
     let mut logical = selected.source.clone();
-    let mut pending: Option<crate::value_contract::identities::IdentityDecision> = None;
+    let mut pending: Option<traffic_contract::identity::IdentityDecision> = None;
     if selected.date
         && clocks
             .dependency
@@ -65,9 +63,8 @@ pub(in crate::protocols::replay::mysql::contracts) fn translate_selection(
             "%Y-%m-%d",
         )?;
         let (a, b) = clocks.dependency.require()?;
-        let days = (crate::value_contract::time::date_nanos(b)
-            - crate::value_contract::time::date_nanos(a))
-        .div_euclid(86_400_000_000_000);
+        let days = (traffic_contract::time::date_nanos(b) - traffic_contract::time::date_nanos(a))
+            .div_euclid(86_400_000_000_000);
         logical = source
             .checked_add_signed(
                 chrono::TimeDelta::try_days(i64::try_from(days)?)
@@ -79,10 +76,13 @@ pub(in crate::protocols::replay::mysql::contracts) fn translate_selection(
             .into();
     }
     let authored;
-    let fields = if selected.id == crate::policy::GLOBAL_JSON_ID {
+    let fields = if selected.id == GLOBAL_JSON_ID {
         authored = owner
-            .global_json()
-            .map(|plan| plan.delivery_fields_with_clocks(&selected.source, clocks))
+            .format_host()
+            .map(|plan| {
+                plan.field_plan()
+                    .delivery_fields_with_clocks(&selected.source, clocks)
+            })
             .transpose()?
             .unwrap_or_default();
         &authored
@@ -99,9 +99,10 @@ pub(in crate::protocols::replay::mysql::contracts) fn translate_selection(
                 continue;
             }
             let (a, b) = clocks.dependency.require()?;
-            let mut delta = crate::value_contract::time::date_nanos(b)
-                - crate::value_contract::time::date_nanos(a);
-            if selected.id == MYSQL_ID && time.format == crate::policy::TimestampFormat::SqlDatetime
+            let mut delta =
+                traffic_contract::time::date_nanos(b) - traffic_contract::time::date_nanos(a);
+            if selected.id == MYSQL_ID
+                && time.format == traffic_contract::rule::TimestampFormat::SqlDatetime
             {
                 let digits = original
                     .as_str()
@@ -110,29 +111,28 @@ pub(in crate::protocols::replay::mysql::contracts) fn translate_selection(
                 let quantum = 10_i128.pow(9 - u32::try_from(digits)?);
                 delta = delta / quantum * quantum;
             }
-            let changed = if time.format == crate::policy::TimestampFormat::CalendarDate {
-                crate::value_contract::time::calendar::rebase(
+            let changed = if time.format == traffic_contract::rule::TimestampFormat::CalendarDate {
+                traffic_contract::time::calendar::rebase(
                     original,
                     time.offset()?.context("calendar date requires offset")?,
                     clocks.dependency,
                 )?
             } else {
-                crate::value_contract::delivery::shift(original, &time, delta)?
+                traffic_contract::delivery::shift(original, &time, delta)?
             };
             *logical
                 .pointer_mut(pointer)
                 .context("SQL delivery time disappeared")? = changed;
         }
     }
-    if selected.id == crate::policy::GLOBAL_JSON_ID {
-        let (decision, _) =
-            owner.translate_global_identity_logical(case, &selected.source, &mut logical)?;
+    if selected.id == GLOBAL_JSON_ID {
+        let decision = owner.translate_document_identity(case, &selected.source, &mut logical)?;
         pending = Some(decision);
         return Ok((logical, pending));
     }
     for (pointer, contract) in &selected.fields {
         if let FieldContract::Identity { prefix, format } = contract {
-            let entry = crate::value_contract::identities::IdentityDelivery {
+            let entry = traffic_contract::identity::IdentityDelivery {
                 prefix,
                 format: *format,
                 value: selected
@@ -158,10 +158,11 @@ pub(in crate::protocols::replay::mysql::contracts) fn translate_selection(
             )?;
             let decision = owner.preview_identity_pairs(
                 case,
-                &[crate::value_contract::identities::IdentityPair {
+                &[traffic_contract::identity::IdentityPair {
                     source: encoded.clone(),
                     target: encoded,
                 }],
+                true,
             )?;
             if let Some(previous) = &mut pending {
                 previous.merge(decision)?;
@@ -175,20 +176,20 @@ pub(in crate::protocols::replay::mysql::contracts) fn translate_selection(
 
 fn fresh_native_time(
     value: &Value,
-    time: &crate::policy::TimeContract,
+    time: &traffic_contract::rule::TimeContract,
     clocks: AnchorClocks,
 ) -> bool {
     let Some((source, _)) = clocks.dependency.source.zip(clocks.dependency.target) else {
         return false;
     };
-    if time.format == crate::policy::TimestampFormat::CalendarDate {
+    if time.format == traffic_contract::rule::TimestampFormat::CalendarDate {
         return time.offset().ok().flatten().is_some_and(|offset| {
-            crate::value_contract::time::calendar::compare(
+            traffic_contract::time::calendar::compare(
                 value,
                 value,
                 offset,
-                crate::value_contract::time::TimeMode::RequestWindow,
-                crate::value_contract::time::ClockPair {
+                traffic_contract::time::TimeMode::RequestWindow,
+                traffic_contract::time::ClockPair {
                     source: Some(source),
                     target: Some(source),
                 },
@@ -196,7 +197,7 @@ fn fresh_native_time(
             .is_ok()
         });
     }
-    crate::value_contract::json::parse_time_pair(value, value, time).is_ok_and(|(value, _)| {
-        crate::value_contract::time::validate_request_window(value, source).is_ok()
+    traffic_contract::compare::parse_time_pair(value, value, time).is_ok_and(|(value, _)| {
+        traffic_contract::time::validate_request_window(value, source).is_ok()
     })
 }

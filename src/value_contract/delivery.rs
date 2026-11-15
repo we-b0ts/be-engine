@@ -7,7 +7,9 @@ use crate::policy::CompiledRule;
 use anyhow::Result;
 #[cfg(test)]
 use serde_json::Value;
-pub(crate) use traffic_contract::delivery::{select, shift};
+pub(crate) use traffic_contract::delivery::select;
+#[cfg(test)]
+use traffic_contract::delivery::shift;
 
 #[cfg(test)]
 pub(crate) fn materialize(

@@ -7,25 +7,6 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 impl UrlField {
-    pub(super) fn validate_source(&self, value: &Value) -> Result<()> {
-        let names = self.url.keys().map(String::as_str).collect();
-        let selected = crate::value_contract::url_query::select(value, &names)?;
-        for (name, field) in &self.url {
-            let value = &selected.values[name];
-            match field {
-                UrlQueryField::UtcDateSegment {
-                    utc_date_segment: segment,
-                } => {
-                    self.date_remainder(value, segment, &selected.values)?;
-                }
-                UrlQueryField::Time(time) => {
-                    super::time::timestamp(value, time)?;
-                }
-                UrlQueryField::Random(field) => field.random.compare(value, value)?,
-            }
-        }
-        Ok(())
-    }
     pub(super) fn compare(
         &self,
         source: &Value,
@@ -82,6 +63,29 @@ impl UrlField {
             segment.index,
             nanos,
         )
+    }
+}
+
+#[cfg(test)]
+impl UrlField {
+    pub(super) fn validate_source(&self, value: &Value) -> Result<()> {
+        let names = self.url.keys().map(String::as_str).collect();
+        let selected = crate::value_contract::url_query::select(value, &names)?;
+        for (name, field) in &self.url {
+            let value = &selected.values[name];
+            match field {
+                UrlQueryField::UtcDateSegment {
+                    utc_date_segment: segment,
+                } => {
+                    self.date_remainder(value, segment, &selected.values)?;
+                }
+                UrlQueryField::Time(time) => {
+                    super::time::timestamp(value, time)?;
+                }
+                UrlQueryField::Random(field) => field.random.compare(value, value)?,
+            }
+        }
+        Ok(())
     }
 }
 

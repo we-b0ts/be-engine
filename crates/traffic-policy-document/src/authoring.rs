@@ -42,8 +42,12 @@ pub fn require_source_proofs(document: &crate::TrafficPolicy) -> anyhow::Result<
     Ok(())
 }
 
-pub fn retired_authoring() -> anyhow::Result<()> {
-    anyhow::bail!(
+pub fn legacy_authoring_error() -> anyhow::Error {
+    anyhow::anyhow!(
         "legacy rule authoring is retired; use backend-rewrite rule plan/apply with traffic-policy/v3"
     )
+}
+
+pub fn retired_authoring() -> anyhow::Result<()> {
+    Err(legacy_authoring_error())
 }

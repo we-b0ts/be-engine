@@ -60,7 +60,7 @@ fn provided_id_cannot_change_in_the_first_sql_predicate_update_or_insert() {
     ] {
         let source = template.replace("ID", SOURCE);
         let target = template.replace("ID", TARGET);
-        let record = serde_json::from_value(
+        let record: crate::protocols::replay::mysql::RecordedMysqlExchange = serde_json::from_value(
             json!({"command":"COM_QUERY","database":"app","sql":source,"response":{"status":"ok"}}),
         )
         .unwrap();

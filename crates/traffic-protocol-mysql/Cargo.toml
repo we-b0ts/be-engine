@@ -7,6 +7,10 @@ edition = "2024"
 test-support = []
 
 [dependencies]
+traffic-contract = { path = "../traffic-contract" }
+traffic-policy-execution = { path = "../traffic-policy-execution" }
+traffic-policy-value = { path = "../traffic-policy-value" }
+
 chrono = { version = "0.4", features = ["serde"] }
 traffic-model = { path = "../traffic-model" }
 base64 = "0.22"

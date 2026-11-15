@@ -1,18 +1,22 @@
 //! Compatibility entrypoints for Source-selected registered value semantics.
+#[cfg(test)]
 use crate::policy::{FieldContract, TimePolicy};
 #[cfg(test)]
 use crate::policy::{TimeAnchor, TimestampFormat};
 #[cfg(test)]
 use anyhow::Result;
+#[cfg(test)]
 use serde_json::Value;
 
 pub(crate) const RULE_ID: &str = "builtin.time";
 
+#[cfg(test)]
 fn facts(settings: &TimePolicy) -> traffic_value::Value {
     serde_json::from_value(serde_json::json!({"settings":{"time":settings}}))
         .expect("time settings are serializable logical values")
 }
 
+#[cfg(test)]
 pub(crate) fn contract(source: &Value, settings: &TimePolicy) -> Option<FieldContract> {
     let source = serde_json::from_value(source.clone()).ok()?;
     let inferred = traffic_extensions::policies()

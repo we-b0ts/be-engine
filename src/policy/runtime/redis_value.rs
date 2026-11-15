@@ -1,5 +1,7 @@
 //! Redis request-value and response-time policy schema and overlap validation.
+#[cfg(test)]
 use super::config::{DependencyProtocol, ReplayDependencyRule, ReplayScope};
+#[cfg(test)]
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,7 @@ pub(super) enum RedisSelector {
     #[cfg(test)]
     TimeShift(super::test_fixture::redis_time::RedisTimeShiftRead),
 }
+#[cfg(test)]
 pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
     let redis = rule
         .redis
@@ -59,6 +62,7 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn validate_overlaps(rules: &[ReplayDependencyRule]) -> Result<()> {
     for (i, rule) in rules.iter().enumerate() {
         if rule.protocol != DependencyProtocol::Redis {

@@ -7,6 +7,7 @@ pub mod key_selector;
 pub mod key_slots;
 pub mod keys;
 pub mod message;
+pub mod scalar;
 pub mod subject;
 pub mod values;
 use anyhow::{Context, Result, anyhow};

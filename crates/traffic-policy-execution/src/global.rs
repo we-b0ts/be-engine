@@ -510,3 +510,38 @@ fn retain_automatic_fields<R: ValueRule + ?Sized>(
     });
     Ok(selected)
 }
+
+/// Retain Source field patterns while projecting bounded delivered-value provenance.
+pub fn time_leaves(
+    source: &Value,
+    plan: &dyn FormatHost,
+    clocks: AnchorClocks,
+) -> Result<Vec<traffic_contract::provenance::TimeCopyLeaf>> {
+    use traffic_contract::provenance::{MAX_CASE_COPIES, TimeCopyLeaf};
+    let mut output = Vec::new();
+    for selected in plan
+        .field_plan()
+        .selected_fields_with_clocks(source, clocks)?
+    {
+        let pointer = selected.pointer;
+        let Some(value) = source.pointer(&pointer) else {
+            continue;
+        };
+        let Some(time) = selected.contract.time() else {
+            continue;
+        };
+        traffic_contract::compare::parse_time_pair(value, value, &time)?;
+        output.push(TimeCopyLeaf {
+            rule_id: selected.rule_id,
+            pattern: selected.pattern,
+            pointer,
+            value: value.clone(),
+            time,
+        });
+        ensure!(
+            output.len() <= MAX_CASE_COPIES,
+            "global time copy leaf enumeration exceeds its bound"
+        );
+    }
+    Ok(output)
+}

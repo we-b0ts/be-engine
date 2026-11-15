@@ -83,6 +83,7 @@ impl RedisSharedRead {
                 .as_ref()
                 .is_none_or(|field| field.matches(&args[1]))
     }
+    #[cfg(test)]
     pub(crate) fn overlaps(&self, other: &Self) -> bool {
         self.command == other.command
             && self

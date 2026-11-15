@@ -1,9 +1,10 @@
 //! Application rule authorization and global field projection for shared read provenance.
 use super::time::ClockPair;
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use serde_json::Value;
-
+#[cfg(test)]
 use traffic_contract::provenance::MAX_CASE_COPIES;
+
 pub(crate) use traffic_contract::provenance::{PhysicalOrigin, TimeCopyLeaf, TimeCopyRecord};
 
 #[derive(Clone, Debug, Default)]
@@ -55,29 +56,7 @@ pub(crate) fn global_leaves(
     plan: &crate::policy::CompiledJsonPolicy,
     clocks: super::json::AnchorClocks,
 ) -> Result<Vec<TimeCopyLeaf>> {
-    let mut output = Vec::new();
-    for selected in plan.selected_fields_with_clocks(root, clocks)? {
-        let pointer = selected.pointer;
-        let Some(value) = root.pointer(&pointer) else {
-            continue;
-        };
-        let Some(time) = selected.contract.time() else {
-            continue;
-        };
-        super::json::parse_time_pair(value, value, &time)?;
-        output.push(TimeCopyLeaf {
-            rule_id: selected.rule_id,
-            pattern: selected.pattern,
-            pointer,
-            value: value.clone(),
-            time,
-        });
-        ensure!(
-            output.len() <= MAX_CASE_COPIES,
-            "global time copy leaf enumeration exceeds its bound"
-        );
-    }
-    Ok(output)
+    traffic_policy_execution::global::time_leaves(root, plan, clocks)
 }
 
 #[cfg(test)]

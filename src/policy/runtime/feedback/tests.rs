@@ -1,5 +1,4 @@
 //! Retired authoring cannot overwrite a current policy or immutable evidence.
-use super::evidence::DifferenceEvidence;
 use super::*;
 use serde_json::json;
 #[path = "tests/json_arrays.rs"]
@@ -106,58 +105,8 @@ fn retired_pending_response_plan_cannot_overwrite_a_unified_policy() {
         diff: String::new(),
     };
     let plan = ResponseRulePlan {
-        policy_path: fixture.policy.clone(),
-        original: fs::read_to_string(&fixture.policy).unwrap(),
-        updated: "must not overwrite the unified policy".into(),
         report,
         witnesses: vec![],
     };
     fixture.check(|| plan.apply());
-}
-
-#[test]
-fn unordered_evidence_rejects_content_differences() {
-    let requested = BTreeSet::from(["/content".to_string()]);
-    let content_difference = DifferenceEvidence {
-        pointer: "/content".to_string(),
-        kind: "value_mismatch".to_string(),
-        expected_type: Some("string".to_string()),
-        actual_type: Some("string".to_string()),
-    };
-    let wrong_array = DifferenceEvidence {
-        pointer: "/other".to_string(),
-        kind: "array_order_mismatch".to_string(),
-        expected_type: Some("array".to_string()),
-        actual_type: Some("array".to_string()),
-    };
-
-    assert!(!difference_supports_rule(
-        ResponseRuleKind::Unordered,
-        &content_difference,
-        &requested
-    ));
-    assert!(!difference_supports_rule(
-        ResponseRuleKind::Unordered,
-        &wrong_array,
-        &requested
-    ));
-}
-
-#[test]
-fn generated_rule_requires_auditable_source_evidence() {
-    let error = justification::validate(ResponseRuleKind::Uuid, None, None, None, None, None)
-        .err()
-        .expect("missing UUID evidence must fail");
-    assert!(error.to_string().contains("--source-evidence"));
-
-    let justification = justification::validate(
-        ResponseRuleKind::Random,
-        None,
-        Some("src/token.rs:generate uses a random nonce".to_string()),
-        Some("<source random token>".to_string()),
-        Some("<target random token>".to_string()),
-        None,
-    )
-    .unwrap();
-    assert!(justification.source_evidence.is_some());
 }

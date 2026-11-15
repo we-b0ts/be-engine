@@ -21,6 +21,7 @@ pub(crate) fn sign(context: &Path, label: &str, bytes: &[u8]) -> Result<String> 
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn verify(context: &Path, label: &str, bytes: &[u8], signature: &str) -> Result<()> {
     signature_mac(context, label, bytes)?
         .verify_slice(&STANDARD.decode(signature)?)

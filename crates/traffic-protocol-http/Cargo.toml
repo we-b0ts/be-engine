@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+traffic-contract = { path = "../traffic-contract" }
+traffic-policy-value = { path = "../traffic-policy-value" }
 bytes = "1"
 base64 = "0.22"
 flate2 = "1"

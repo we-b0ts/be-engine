@@ -542,21 +542,3 @@ fn projected_response(
         })
         .context("SQL statement changes require a complete native projection proof")
 }
-fn value_bytes(value: &RecordedMysqlValue) -> Result<Option<Vec<u8>>> {
-    if value.kind == "null" {
-        return Ok(None);
-    }
-    if value.raw.is_some() {
-        return Ok(Some(values::mysql_value_bytes(value)?));
-    }
-    let text = value
-        .value
-        .as_ref()
-        .and_then(Value::as_str)
-        .context("encoded SQL value must retain byte/string type")?;
-    ensure!(
-        matches!(value.kind.as_str(), "string" | "json" | "binary"),
-        "encoded SQL value changed its native value family"
-    );
-    Ok(Some(text.as_bytes().to_vec()))
-}

@@ -1,9 +1,12 @@
 //! Joint Redis JSON identity/time authoring over protected, same-case requests.
+#[cfg(test)]
 use super::*;
+#[cfg(test)]
 use crate::policy::runtime::{
     config::ReplayDependencyRule, dynamic_values::DynamicValueCapture, request_contract,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +25,7 @@ pub struct DynamicValueRedisTimeRule {
     pub source_evidence: String,
 }
 
+#[cfg(test)]
 impl DynamicValueRedisTimeRule {
     pub(super) fn proposed(&self, identity: &DynamicValueRule) -> Result<ReplayDependencyRule> {
         let DynamicValueCapture::Redis {
@@ -100,39 +104,6 @@ impl DynamicValueRedisTimeRule {
         crate::config::process_owned_dependencies::validate_source_evidence(&self.source_evidence)?;
         Ok(rule)
     }
-}
-
-pub(super) fn verify(
-    feedback: &DynamicValueRuleFeedback,
-    proposed: &ReplayDependencyRule,
-    document: &crate::policy::runtime::config::ReplayPolicyDocument,
-    policy_fingerprint: &str,
-    witnesses: &mut Vec<(PathBuf, String)>,
-) -> Result<usize> {
-    let report: Value =
-        serde_json::from_slice(&evidence::read(feedback.replay_report.clone(), witnesses)?)?;
-    ensure!(
-        report["finalized"] == true,
-        "joint Redis planning requires finalized Replay"
-    );
-    crate::replay::policy::ReplayEvidencePolicyFreshness::new(
-        report["replay_policy"]["fingerprint"].as_str(),
-        policy_fingerprint,
-    )
-    .ensure_current("joint Redis evidence")?;
-    let runtime = request_contract::RequestContracts::load(
-        std::slice::from_ref(proposed),
-        &feedback.policy_path,
-        &Default::default(),
-    )?;
-    request_contract::evidence::verify_capture(
-        &runtime,
-        proposed,
-        &report,
-        document,
-        witnesses,
-        Some(&feedback.rule.id),
-    )
 }
 
 #[cfg(test)]

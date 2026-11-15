@@ -19,14 +19,14 @@ pub(crate) mod time_copies;
 pub(crate) mod url_query;
 
 /// Application composition supplies the installed catalog and metadata semantics.
-fn execution_context() -> traffic_policy_execution::ExecutionContext<'static> {
+pub(crate) fn execution_context() -> traffic_policy_execution::ExecutionContext<'static> {
     traffic_policy_execution::ExecutionContext {
         codecs: traffic_extensions::codecs(),
         metadata: &json::PolicyMetadata,
     }
 }
 
-fn copy_proofs(
+pub(crate) fn copy_proofs(
     copies: &[json::VerifiedTimeCopy],
 ) -> Vec<&dyn traffic_contract::compare::ValueCopyProof> {
     copies

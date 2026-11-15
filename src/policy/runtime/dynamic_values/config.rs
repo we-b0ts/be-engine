@@ -260,6 +260,7 @@ impl DynamicValueRule {
         self.api.is_empty() || super::super::pattern::path_pattern_matches(&self.api, path)
     }
 
+    #[cfg(test)]
     fn overlaps_route(&self, other: &Self) -> bool {
         self.api.is_empty()
             || other.api.is_empty()
@@ -356,6 +357,7 @@ impl DynamicValueRule {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
     let mut ids = std::collections::BTreeSet::new();
     ensure!(

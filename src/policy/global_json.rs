@@ -144,6 +144,7 @@ impl CompiledJsonPolicy {
     ) -> Result<Vec<SelectedGlobalField>> {
         self.plan().selected_fields_with_clocks(source, clocks)
     }
+    #[cfg(test)]
     pub(crate) fn comparison_fields(
         &self,
         source: &Value,

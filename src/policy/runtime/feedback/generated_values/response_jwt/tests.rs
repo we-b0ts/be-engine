@@ -1,4 +1,5 @@
 use super::*;
+use crate::policy::runtime::load_replay_policy;
 use crate::{
     primary_protocol::assertion::ResponseAssertionOptions,
     primary_protocol::assertion::ResponseDifferenceKind,

@@ -15,9 +15,8 @@ const MAX_NODES: usize = 1_000_000;
 const MAX_DISCOVERED_PATHS: usize = 32;
 const MAX_DIFFERENCES: usize = 32;
 
+#[cfg(test)]
 mod selection;
-
-pub(crate) use selection::selected_paths_match;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Hessian2OrderDiscovery {

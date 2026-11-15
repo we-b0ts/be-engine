@@ -1,8 +1,12 @@
 //! Configuration validation for explicit MySQL SQL time slots.
+#[cfg(test)]
 use super::*;
+#[cfg(test)]
 use crate::mysql::sql::Token;
+#[cfg(test)]
 use crate::policy::runtime::sql_template::SqlValueTemplate;
 
+#[cfg(test)]
 fn validate_time_field(field: &MysqlTimeFieldRule) -> Result<()> {
     if !field.source_evidence.is_empty() {
         crate::config::process_owned_dependencies::validate_source_evidence(
@@ -27,6 +31,7 @@ pub(super) fn is_default_command(command: &str) -> bool {
     command == "COM_QUERY"
 }
 
+#[cfg(test)]
 pub(crate) fn validate_selector(mysql: &MysqlSelector) -> Result<()> {
     ensure!(
         mysql.params.is_empty(),

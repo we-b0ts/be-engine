@@ -1,18 +1,14 @@
 //! Plan explicit SQL time slots from failed replay and immutable MySQL evidence.
-mod evidence;
-use super::document::{render_dependency_rules, replace_dependency_rules};
-use crate::config::edit::write_atomic;
+#[cfg(test)]
 use crate::policy::runtime::config::{
     DependencyProtocol, MysqlSelector, MysqlTimeFieldRule, MysqlTimeValueRule,
-    ReplayDependencyRule, TargetSelector, TimeReference, TimeRule, load_replay_policy,
+    ReplayDependencyRule, TargetSelector, TimeReference, TimeRule,
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, btree_map::Entry},
-    fs,
-    path::PathBuf,
-};
+#[cfg(test)]
+use std::collections::{BTreeMap, btree_map::Entry};
+use std::path::PathBuf;
 
 fn default_tolerance() -> String {
     "5s".into()
@@ -46,6 +42,7 @@ pub struct MysqlTimeValueSelector {
     pub timezone: String,
 }
 
+#[cfg(test)]
 impl MysqlTimeValueSelector {
     fn time_rule(&self) -> TimeRule {
         TimeRule {
@@ -227,14 +224,6 @@ pub struct MysqlTimeRuleFeedback {
     pub source_evidence: String,
 }
 
-fn dynamic_policy_stale(
-    loaded: &super::super::config::LoadedReplayPolicy,
-    report: &serde_json::Value,
-) -> bool {
-    !loaded.document.dynamic_values.is_empty()
-        && report["replay_policy"]["fingerprint"].as_str() != Some(loaded.fingerprint.as_str())
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct MysqlTimeRuleReport {
     pub policy: PathBuf,
@@ -251,11 +240,10 @@ pub struct MysqlTimeRuleReport {
 }
 
 pub struct MysqlTimeRulePlan {
-    original: String,
-    updated: String,
     report: MysqlTimeRuleReport,
 }
 
+#[cfg(test)]
 pub(crate) fn configured_sql_values(
     selector: &MysqlTimeSelector,
 ) -> Result<BTreeMap<usize, MysqlTimeValueRule>> {
@@ -310,87 +298,15 @@ impl MysqlTimeRulePlan {
         &self.report
     }
     pub fn apply(self) -> Result<MysqlTimeRuleReport> {
-        crate::policy::retired_authoring()?;
-        ensure!(
-            fs::read_to_string(&self.report.policy)? == self.original,
-            "replay policy changed after planning; rerun plan before applying"
-        );
-        if self.report.changed {
-            write_atomic(&self.report.policy, self.updated.as_bytes())?;
-        }
-        Ok(MysqlTimeRuleReport {
-            applied: true,
-            ..self.report
-        })
+        Err(crate::policy::legacy_authoring_error())
     }
 }
 
-pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTimeRulePlan> {
-    crate::policy::retired_authoring()?;
-    let original = fs::read_to_string(&feedback.policy_path)?;
-    let mut loaded = load_replay_policy(&feedback.policy_path)?;
-    let s = &feedback.selector;
-    ensure!(
-        !s.database.trim().is_empty() && s.target_port > 0,
-        "SQL time rule requires a database and a valid evidence endpoint port"
-    );
-    crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
-    let sql_values = configured_sql_values(s)?;
-    let proposed = proposed_rule(&feedback.rule_id, s)?;
-    // Validate before opening evidence so invalid slots cannot index values.
-    let mut document = loaded.document.clone();
-    document.dependency_rules = vec![proposed.clone()];
-    super::super::config::validate_document(&document)?;
-    let evidence_case_id = evidence::validate(&feedback, &sql_values)?;
-    let mut shape = serde_json::to_value(&proposed)?;
-    shape.as_object_mut().unwrap().remove("id");
-    let reusable = loaded.document.dependency_rules.iter().find_map(|rule| {
-        let mut other = serde_json::to_value(rule).ok()?;
-        other.as_object_mut()?.remove("id");
-        (other == shape).then_some(rule.id.clone())
-    });
-    ensure!(
-        loaded.document.dependency_rules.iter().all(
-            |rule| rule.id != feedback.rule_id || reusable.as_deref() == Some(rule.id.as_str())
-        ),
-        "SQL time rule id already selects different fields or validation"
-    );
-    let reused_existing = reusable.is_some();
-    let effective_rule_id = reusable.unwrap_or_else(|| feedback.rule_id.clone());
-    if !reused_existing {
-        loaded.document.dependency_rules.push(proposed);
-    }
-    let updated = replace_dependency_rules(&original, &loaded.document)?;
-    let changed = original != updated;
-    let diff = if changed {
-        format!(
-            "--- {}\n+++ {}\n@@ dependency_rules @@\n{}",
-            feedback.policy_path.display(),
-            feedback.policy_path.display(),
-            render_dependency_rules(&loaded.document)?
-        )
-    } else {
-        String::new()
-    };
-    Ok(MysqlTimeRulePlan {
-        original,
-        updated,
-        report: MysqlTimeRuleReport {
-            policy: feedback.policy_path,
-            policy_fingerprint: loaded.fingerprint,
-            requested_rule_id: feedback.rule_id,
-            effective_rule_id,
-            selector: feedback.selector,
-            source_evidence: feedback.source_evidence,
-            evidence_case_id,
-            reused_existing,
-            changed,
-            applied: false,
-            diff,
-        },
-    })
+pub fn plan_mysql_time_rule(_feedback: MysqlTimeRuleFeedback) -> Result<MysqlTimeRulePlan> {
+    Err(crate::policy::legacy_authoring_error())
 }
 
+#[cfg(test)]
 pub(crate) fn proposed_rule(id: &str, s: &MysqlTimeSelector) -> Result<ReplayDependencyRule> {
     Ok(ReplayDependencyRule {
         id: id.into(),

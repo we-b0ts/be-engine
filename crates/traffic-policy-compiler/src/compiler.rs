@@ -2,7 +2,6 @@
 use super::*;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 mod field_selection;
 pub mod interaction;
@@ -646,13 +645,7 @@ fn text(value: &str, name: &str, max: usize) -> Result<()> {
     Ok(())
 }
 
-pub fn digest<T: Serialize + ?Sized>(domain: &str, value: &T) -> Result<String> {
-    let mut hash = Sha256::new();
-    hash.update(domain.as_bytes());
-    hash.update([0]);
-    hash.update(serde_json::to_vec(value)?);
-    Ok(format!("sha256:{:x}", hash.finalize()))
-}
+pub use traffic_contract::fingerprint::digest;
 
 pub fn compile_codec(
     codec: &Codec,

@@ -30,6 +30,7 @@ pub mod sql_match;
 pub mod transaction_delivery;
 pub mod transaction_source;
 pub mod types;
+pub mod value_rules;
 pub mod values;
 
 use std::io;

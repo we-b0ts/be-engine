@@ -79,6 +79,7 @@ pub(crate) fn compare_with_verified_time_copies(
     compare_all(source, target, fields, &[], verified, clocks, copies)
 }
 
+#[cfg(test)]
 pub(crate) fn compare_with_time_copies(
     source: &Value,
     target: &Value,

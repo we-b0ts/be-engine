@@ -6,7 +6,6 @@ use serde_json::Value;
 
 pub(crate) struct SourceCapture {
     pub value: String,
-    pub payload: Vec<u8>,
 }
 
 pub(crate) fn from_event(
@@ -81,7 +80,6 @@ pub(crate) fn from_event(
                     json_pointer.as_deref(),
                     value_type,
                 )?,
-                payload: serde_json::to_vec(&args)?,
             }))
         }
         DynamicValueCapture::Http {
@@ -116,14 +114,6 @@ pub(crate) fn from_event(
                             .context("source capture pointer absent")?,
                         value_type,
                     )?
-                },
-                payload: if path_segment.is_some() {
-                    path_payload(
-                        event["uri"].as_str().context("source URI absent")?,
-                        &payload,
-                    )?
-                } else {
-                    payload
                 },
             }))
         }
