@@ -341,27 +341,14 @@ pub(crate) fn record_unanchored_target(
 }
 
 pub(crate) fn source_witness(event: &Value, surface: Surface) -> Result<Vec<u8>> {
-    let record: RecordedMysqlExchange = serde_json::from_value(event.clone())?;
-    source_witness_from_record(&record, surface)
+    traffic_protocol_mysql::witness::source_payload(event, surface.dependency_side()?)
 }
 
 pub(crate) fn source_witness_from_record(
     record: &RecordedMysqlExchange,
     surface: Surface,
 ) -> Result<Vec<u8>> {
-    if surface == Surface::DependencyRequest {
-        return Ok(serde_json::to_vec(&RequestEnvelope::recorded(record))?);
-    }
-    ensure!(
-        surface == Surface::DependencyResponse,
-        "invalid SQL witness surface"
-    );
-    response_witness(
-        RequestEnvelope::recorded(record),
-        record.timestamp,
-        record.outcome,
-        &record.response,
-    )
+    traffic_protocol_mysql::witness::from_record(record, surface.dependency_side()?)
 }
 
 fn response_witness(

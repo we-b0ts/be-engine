@@ -124,7 +124,7 @@ fn discover_fields(expected: &[u8], actual: &[u8]) -> Vec<RedisUnorderedField> {
             }
         }
         if pointers.is_empty() {
-            crate::replay::json_order::order_paths(&a, &b, "", &mut pointers);
+            pointers = crate::value_extensions::policy_locations("unordered", &a, &b, false);
         }
         for p in &pointers {
             normalize_json(&mut a, &mut b, p);

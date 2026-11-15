@@ -58,3 +58,54 @@ pub fn decode_body(body: &BodyCapture) -> Result<Vec<u8>> {
         other => Err(anyhow!("unsupported recorded HTTP body encoding {other}")),
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpScheme {
+    Http,
+    Https,
+}
+
+impl HttpScheme {
+    pub fn from_recorded(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "http" | "fake_ip_http" | "http_gateway" => Ok(Self::Http),
+            "https" | "fake_ip_https" => Ok(Self::Https),
+            other => Err(anyhow!("unsupported recorded HTTP scheme {other}")),
+        }
+    }
+}
+
+impl RecordedExchange {
+    pub fn identity(&self) -> Result<(HttpScheme, traffic_protocol::connection::Endpoint)> {
+        let scheme = HttpScheme::from_recorded(&self.scheme)?;
+        let authority = self
+            .authority
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("http_exchange {} has no authority", self.uri))?
+            .parse::<hyper::http::uri::Authority>()
+            .with_context(|| format!("invalid recorded HTTP authority for {}", self.uri))?;
+        let port = authority.port_u16().unwrap_or(match scheme {
+            HttpScheme::Http => 80,
+            HttpScheme::Https => 443,
+        });
+        Ok((
+            scheme,
+            traffic_protocol::connection::Endpoint {
+                host: traffic_protocol::observation::normalize_host(authority.host()),
+                port,
+            },
+        ))
+    }
+    pub fn source_started_at(&self) -> Option<DateTime<Utc>> {
+        if let Some(started) = self.request_started_at {
+            return Some(started);
+        }
+        let completed = self.timestamp?;
+        let duration = self.duration_ms.as_ref()?.as_u64()?;
+        completed.checked_sub_signed(chrono::TimeDelta::try_milliseconds(
+            i64::try_from(duration).ok()?,
+        )?)
+    }
+}

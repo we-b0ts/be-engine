@@ -184,9 +184,9 @@ impl RequestContracts {
                     }
                 }
                 Some(ArgumentRule::Json(fields)) => {
-                    let mut source = crate::replay::json_order::parse(source)
+                    let mut source = crate::json_value::parse(source)
                         .context("source value requires bounded complete unique-member JSON")?;
-                    let mut actual = crate::replay::json_order::parse(actual)
+                    let mut actual = crate::json_value::parse(actual)
                         .context("target value requires bounded complete unique-member JSON")?;
                     let source_original = source.clone();
                     let actual_original = actual.clone();

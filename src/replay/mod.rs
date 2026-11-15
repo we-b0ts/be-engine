@@ -577,6 +577,5 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
     Ok(SocketAddr::new(IpAddr::V4(ip), port))
 }
 
-pub(crate) mod json_order;
 pub(crate) mod recording_evidence;
 pub(crate) use recording_evidence::dependency_started_at;

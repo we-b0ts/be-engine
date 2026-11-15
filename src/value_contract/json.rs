@@ -148,28 +148,6 @@ fn compare_all(
     )
 }
 
-impl kernel::TimeCopyProof for VerifiedTimeCopy {
-    fn scope(&self) -> (&str, &str) {
-        self.scope()
-    }
-    fn permits_value(
-        &self,
-        rule: &str,
-        source_pointer: &str,
-        target_pointer: &str,
-        source: &Value,
-        target: &Value,
-        requirement: &traffic_value::Value,
-    ) -> bool {
-        serde_json::to_value(requirement)
-            .ok()
-            .and_then(|value| serde_json::from_value::<crate::policy::TimeContract>(value).ok())
-            .is_some_and(|time| {
-                self.permits_value(rule, source_pointer, target_pointer, source, target, &time)
-            })
-    }
-}
-
 #[cfg(test)]
 mod composition;
 #[cfg(test)]

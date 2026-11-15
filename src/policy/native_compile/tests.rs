@@ -8,7 +8,7 @@ mod identity_delivery;
 mod mysql_json;
 mod read_commutation;
 mod redis_sequence;
-use crate::policy::{Database, Endpoint, Resource};
+use crate::policy::{Database, Endpoint, Resource, compile_native};
 
 fn proven<T>(contract: T) -> Proven<T> {
     Proven {

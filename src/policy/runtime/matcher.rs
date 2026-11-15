@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 mod cross_resource_tests;
 mod http_native;
 mod memcached;
-pub(crate) mod mysql_contract;
 pub(crate) mod mysql_native;
 pub(crate) mod mysql_selectors;
 pub(super) mod mysql_values;

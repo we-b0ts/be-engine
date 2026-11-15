@@ -13,8 +13,17 @@ pub(in crate::protocols::replay::http) struct HttpUnorderedLocation {
     pub pointer: String,
 }
 
-use crate::replay::json_order::normalize_arrays;
-use crate::replay::json_order::order_paths;
+fn normalize_arrays(source: &mut Value, target: &mut Value, pattern: &str) -> bool {
+    crate::value_extensions::normalize_policy_locations("unordered", source, target, pattern)
+}
+
+fn order_paths(source: &Value, target: &Value, pointer: &str, paths: &mut Vec<String>) {
+    paths.extend(
+        crate::value_extensions::policy_locations("unordered", source, target, !pointer.is_empty())
+            .into_iter()
+            .map(|path| format!("{pointer}{path}")),
+    );
+}
 
 #[cfg(test)]
 mod tests;

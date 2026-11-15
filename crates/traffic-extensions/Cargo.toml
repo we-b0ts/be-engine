@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["codec-json", "codec-protobuf", "codec-string", "codec-bytes", "policy-unordered", "policy-time", "policy-identity", "policy-response-rewrite"]
+default = ["codec-json", "codec-protobuf", "codec-string", "codec-bytes", "policy-unordered", "policy-time", "policy-identity", "policy-response-rewrite", "protocol-http", "protocol-mysql", "protocol-redis"]
 codec-json = ["dep:traffic-codec-json"]
 codec-protobuf = ["dep:traffic-codec-protobuf"]
 codec-string = ["dep:traffic-codec-string"]
@@ -13,11 +13,21 @@ policy-unordered = ["dep:traffic-policy-unordered"]
 policy-time = ["dep:traffic-policy-time"]
 policy-identity = ["dep:traffic-policy-identity"]
 policy-response-rewrite = ["dep:traffic-response-rewrite"]
+protocol-http = ["dep:traffic-protocol-http"]
+protocol-mysql = ["dep:traffic-protocol-mysql"]
+protocol-redis = ["dep:traffic-protocol-redis"]
+protocol-fixture = ["dep:traffic-protocol-fixture"]
 
 [dependencies]
 anyhow = "1"
+serde_json = "1"
 traffic-value = { path = "../traffic-value" }
 traffic-policy = { path = "../traffic-policy" }
+traffic-protocol = { path = "../traffic-protocol" }
+traffic-protocol-http = { path = "../traffic-protocol-http", optional = true }
+traffic-protocol-mysql = { path = "../traffic-protocol-mysql", optional = true }
+traffic-protocol-redis = { path = "../traffic-protocol-redis", optional = true }
+traffic-protocol-fixture = { path = "../traffic-protocol-fixture", optional = true }
 traffic-codec-json = { path = "../traffic-codec-json", optional = true }
 traffic-codec-protobuf = { path = "../traffic-codec-protobuf", optional = true }
 traffic-codec-string = { path = "../traffic-codec-string", optional = true }

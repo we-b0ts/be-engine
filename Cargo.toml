@@ -10,6 +10,10 @@ edition = "2024"
 default-run = "traffic-e2e"
 
 [dependencies]
+traffic-policy-document = { path = "crates/traffic-policy-document" }
+traffic-policy-compiler = { path = "crates/traffic-policy-compiler" }
+traffic-jwt = { path = "crates/traffic-jwt" }
+traffic-policy-schema = { path = "crates/traffic-policy-schema", features = ["cli"] }
 traffic-contract = { path = "crates/traffic-contract" }
 traffic-policy-value = { path = "crates/traffic-policy-value" }
 traffic-policy = { path = "crates/traffic-policy" }
@@ -80,6 +84,7 @@ x509-parser = "0.16"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+traffic-recording = { path = "crates/traffic-recording", features = ["test-support"] }
 traffic-protocol-fixture = { path = "crates/traffic-protocol-fixture" }
 traffic-contract = { path = "crates/traffic-contract", features = ["test-support"] }
 traffic-protocol-mysql = { path = "crates/traffic-protocol-mysql", features = ["test-support"] }

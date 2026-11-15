@@ -179,7 +179,13 @@ fn compare_inner(
     for rule in value_rules {
         let positions = match &rule.rule.slot {
             Slot::SqlValue(slot) => {
-                let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
+                let selector = &rule.rule.selector;
+                let template = SqlValueTemplate::new(
+                    selector.sql.as_deref().context("SQL template is absent")?,
+                    &selector.tables,
+                    &selector.table_patterns,
+                    selector.table_series.as_ref(),
+                )?;
                 vec![position(&template, &source, &actual, *slot)?]
             }
             _ => anyhow::bail!("internal SQL value contract requires a value slot"),

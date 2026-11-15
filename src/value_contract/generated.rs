@@ -23,23 +23,7 @@ pub(crate) mod template;
 const MAX_CIPHERTEXT: usize = 1024 * 1024;
 
 /// Independent Redis values require an explicit encoded length or string bound.
-pub(crate) fn validate_bounded_random(
-    format: &RandomEncoding,
-    length: Option<usize>,
-    max_length: Option<usize>,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        match (format, length, max_length) {
-            (RandomEncoding::Hex | RandomEncoding::Base64url, Some(length), None) =>
-                (1..=1024).contains(&length),
-            (RandomEncoding::Uuid, Some(36), None) => true,
-            (RandomEncoding::String, None, Some(max)) => (1..=1024).contains(&max),
-            _ => false,
-        },
-        "random Redis fields require hex/base64url length 1..1024, uuid length 36, or string max_length 1..1024"
-    );
-    Ok(())
-}
+pub(crate) use traffic_policy_compiler::validation::bounded_random as validate_bounded_random;
 
 pub(crate) fn compare_bounded_random(
     source: &Value,

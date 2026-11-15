@@ -13,6 +13,62 @@ pub struct PolicyRegistry {
 }
 
 impl PolicyRegistry {
+    pub fn select(
+        &self,
+        definitions: &[PolicyDefinition],
+        source: &Value,
+        facts: &Value,
+    ) -> Result<Option<usize>> {
+        let mut selected = None;
+        let mut rank = 0;
+        let mut ambiguous = false;
+        let mut candidates = 0;
+        let mut unranked = false;
+        for (index, definition) in definitions.iter().enumerate() {
+            let policy = self.prepare_definition(definition)?;
+            match policy.implementation.source_match(source, facts)? {
+                crate::SourceMatch::Inapplicable => (),
+                crate::SourceMatch::Applicable => return Ok(Some(index)),
+                crate::SourceMatch::Ranked(score) => {
+                    candidates += 1;
+                    unranked |= score.is_none();
+                    let score = score.unwrap_or(0);
+                    if selected.is_none() || score > rank {
+                        selected = Some(index);
+                        rank = score;
+                        ambiguous = false;
+                    } else if score == rank
+                        && selected.is_some_and(|previous| definitions[previous] != *definition)
+                    {
+                        ambiguous = true;
+                    }
+                }
+            }
+        }
+        Ok(selected.filter(|_| !ambiguous && (!unranked || candidates == 1)))
+    }
+    pub fn infer(&self, source: &Value, facts: &Value) -> Result<Option<crate::PolicyInference>> {
+        let mut selected = None;
+        for provider in self.providers.values() {
+            if !provider.descriptor().actions.contains(&PolicyAction::Infer) {
+                continue;
+            }
+            let Some(inferred) = provider.infer(source, facts)? else {
+                continue;
+            };
+            ensure!(
+                inferred.definition.id == provider.descriptor().id,
+                "policy inference changed its registered identity"
+            );
+            self.prepare_definition(&inferred.definition)?;
+            ensure!(
+                selected.is_none(),
+                "multiple installed policies infer the same Source value"
+            );
+            selected = Some(inferred);
+        }
+        Ok(selected)
+    }
     pub fn compatible(&self, left: &PolicyDefinition, right: &PolicyDefinition) -> Result<bool> {
         if left.id != right.id || left.version != right.version {
             return Ok(false);
@@ -156,6 +212,13 @@ impl PreparedTransform {
     }
 }
 impl PreparedPolicy {
+    pub fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+        self.implementation.validate_schema(schema)
+    }
+
+    pub fn canonical_value(&self, value: &Value) -> Result<Option<Value>> {
+        self.implementation.canonical_value(value)
+    }
     pub fn entity_key(&self, source: &Value) -> Result<Option<[u8; 32]>> {
         self.implementation.entity_key(source)
     }

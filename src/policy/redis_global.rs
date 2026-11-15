@@ -1,5 +1,6 @@
 //! Physical Redis scalar formats; structured values use the global JSON strategy.
 use super::GlobalField;
+use crate::policy::GlobalFieldRuntime;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -27,11 +28,12 @@ impl RedisPolicy {
             ensure!(
                 matches!(
                     field,
-                    GlobalField::Time { .. }
+                    GlobalField::Policy(_)
+                        | GlobalField::Time { .. }
                         | GlobalField::Identity { .. }
                         | GlobalField::Duration { .. }
                 ),
-                "Redis scalar keys accept time, identity or duration; JSON protocols and arrays use json.fields"
+                "Redis scalar keys accept registered policies and time, identity or duration formats"
             );
         }
         let keys = self.keys.iter().collect::<Vec<_>>();

@@ -8,3 +8,5 @@ pub use patch::validate_patch;
 pub use value::{Number, Value};
 
 pub const MAX_VALUE_BYTES: usize = 64 * 1024 * 1024;
+
+pub mod selector_map;

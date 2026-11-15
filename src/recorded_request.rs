@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use hyper::header::{HeaderName, HeaderValue};
-use hyper::{Method, Request, StatusCode, Uri};
+use hyper::{Method, Request, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -329,34 +329,7 @@ fn build_request(origin: &str, recorded: &RecordedRequest) -> Result<Request<Ful
     Ok(builder.body(Full::new(Bytes::from(decode_body(&recorded.body)?)))?)
 }
 
-pub(crate) fn target_uri(origin: &str, recorded_uri: &str) -> Result<Uri> {
-    let origin = Uri::from_str(origin).context("invalid HTTP request origin")?;
-    let recorded = Uri::from_str(recorded_uri).context("invalid recorded request URI")?;
-    let path_and_query = recorded
-        .path_and_query()
-        .map(|value| value.as_str())
-        .unwrap_or("/");
-    ensure!(
-        path_and_query.starts_with('/'),
-        "recorded request URI must have an absolute path"
-    );
-    Uri::builder()
-        .scheme(
-            origin
-                .scheme()
-                .context("HTTP request origin has no scheme")?
-                .clone(),
-        )
-        .authority(
-            origin
-                .authority()
-                .context("HTTP request origin has no authority")?
-                .clone(),
-        )
-        .path_and_query(path_and_query)
-        .build()
-        .context("failed to build recorded request URI")
-}
+pub(crate) use traffic_protocol_http::uri::target_uri;
 
 fn decode_body(body: &RecordedBody) -> Result<Vec<u8>> {
     ensure!(!body.truncated, "recorded request body is truncated");

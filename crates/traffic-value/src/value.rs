@@ -48,6 +48,22 @@ impl Value {
         }
     }
 
+    pub fn pointer_mut(&mut self, pointer: &str) -> Option<&mut Self> {
+        let mut value = self;
+        if pointer.is_empty() {
+            return Some(value);
+        }
+        for segment in pointer.strip_prefix('/')?.split('/') {
+            let key = segment.replace("~1", "/").replace("~0", "~");
+            value = match value {
+                Self::Object(fields) => fields.get_mut(&key)?,
+                Self::Array(values) => values.get_mut(array_index(&key)?)?,
+                _ => return None,
+            };
+        }
+        Some(value)
+    }
+
     pub fn as_array(&self) -> Option<&[Self]> {
         match self {
             Self::Array(values) => Some(values),

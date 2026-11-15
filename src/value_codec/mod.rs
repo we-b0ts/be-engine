@@ -1,6 +1,8 @@
 //! Shared content strategies plus the primary SSE carrier adapter.
 pub(crate) mod sse;
-pub(crate) use traffic_contract::codec::{CodecKind, CodecPlan, DecodedValue};
+#[cfg(test)]
+pub(crate) use traffic_contract::codec::CodecKind;
+pub(crate) use traffic_contract::codec::{CodecPlan, DecodedValue};
 #[cfg(test)]
 use traffic_contract::codec::{Presence, ValueCodec};
 #[cfg(test)]
@@ -19,27 +21,7 @@ pub(crate) fn try_recognize(
     CodecPlan::try_recognize(source, metadata, traffic_extensions::codecs())
 }
 
-pub(crate) fn fields_overlap(
-    left: &crate::policy::Codec,
-    left_path: &str,
-    right: &crate::policy::Codec,
-    right_path: &str,
-) -> anyhow::Result<bool> {
-    anyhow::ensure!(
-        left.id() == right.id(),
-        "overlapping values use different codecs"
-    );
-    let left_configuration = serde_json::from_value(left.configuration().clone())?;
-    let right_configuration = serde_json::from_value(right.configuration().clone())?;
-    traffic_extensions::codecs().fields_overlap(
-        left.id(),
-        &left_configuration,
-        left_path,
-        &right_configuration,
-        right_path,
-    )
-}
-
+#[cfg(test)]
 pub(crate) fn protobuf(schema: traffic_codec_protobuf::ProtobufCodec) -> crate::policy::Codec {
     crate::policy::Codec::registered(
         "protobuf",
@@ -51,10 +33,7 @@ pub(crate) fn protobuf(schema: traffic_codec_protobuf::ProtobufCodec) -> crate::
 pub(crate) fn protobuf_schema(
     codec: &crate::policy::Codec,
 ) -> Option<traffic_codec_protobuf::ProtobufCodec> {
-    if codec.id() != "protobuf" {
-        return None;
-    }
-    serde_json::from_value(codec.configuration().clone()).ok()
+    traffic_policy_compiler::native_compile::codec_binding::protobuf_schema(codec)
 }
 
 pub(crate) struct CodecView;

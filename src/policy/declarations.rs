@@ -1,11 +1,4 @@
-//! Named endpoint aliases. Content formats belong to the root JSON/MySQL policy.
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ResourceDeclaration {
-    pub resource: super::Resource,
-}
-
+//! Persisted endpoint aliases share the authoring document owner.
+pub use traffic_policy_document::ResourceDeclaration;
 #[cfg(test)]
 mod tests;

@@ -17,6 +17,18 @@ pub struct CodecProbe {
 }
 
 impl CodecRegistry {
+    pub fn field_schema(
+        &self,
+        id: &str,
+        configuration: &Value,
+        path: &str,
+    ) -> Result<super::FieldSchema> {
+        self.providers
+            .get(id)
+            .with_context(|| format!("codec {id:?} is not installed"))?
+            .field_schema(configuration, path)
+    }
+
     pub fn register(&mut self, provider: Arc<dyn CodecProvider>) -> Result<()> {
         let descriptor = provider.descriptor();
         ensure!(!descriptor.id.is_empty(), "codec identity is empty");

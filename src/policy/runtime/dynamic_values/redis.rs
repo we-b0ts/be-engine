@@ -250,9 +250,9 @@ impl DynamicValues {
                 } else if rule.value_type == DynamicValueType::Integer {
                     let pointer = json_pointer.as_deref().expect("validated integer pointer");
                     let source_json =
-                        crate::replay::json_order::parse(source_value).expect("validated capture");
+                        crate::json_value::parse(source_value).expect("validated capture");
                     let mut actual_json =
-                        crate::replay::json_order::parse(actual_value).expect("validated capture");
+                        crate::json_value::parse(actual_value).expect("validated capture");
                     *actual_json.pointer_mut(pointer).expect("validated pointer") =
                         serde_json::from_str(&pair.source)?;
                     // Canonicalize only complete, explicitly selected JSON arguments.

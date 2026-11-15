@@ -8,9 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::model::*;
 
-pub(crate) fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
+pub(crate) use traffic_recording::source::digest;
 
 pub(crate) fn http_key(host: &str, port: u16, method: &str, path: &str) -> String {
     digest(

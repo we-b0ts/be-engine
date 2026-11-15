@@ -1,14 +1,10 @@
 //! Connection-scoped input transcripts, protocol observations and bounded lifetimes.
 
 pub(crate) mod artifact;
-mod heartbeat;
-pub mod lifecycle;
-pub mod model;
-pub mod observation;
+pub(crate) use traffic_protocol_http::interaction::websocket_transport;
+pub use traffic_protocol_http::interaction::{
+    lifecycle, model, observation, policy, socketio, stream,
+};
 mod ownership;
-pub mod policy;
 pub(crate) mod private;
 pub(crate) mod replay;
-pub mod socketio;
-pub mod stream;
-pub(crate) mod websocket_transport;

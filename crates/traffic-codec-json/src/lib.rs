@@ -13,10 +13,35 @@ pub mod render;
 
 pub const MAX_VALUE_BYTES: usize = traffic_value::MAX_VALUE_BYTES;
 
+/// Stable JSON object spelling for native document fingerprints.
+pub fn canonical(value: &serde_json::Value) -> Vec<u8> {
+    fn ordered(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(fields) => serde_json::Value::Object(
+                fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), ordered(value)))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    .into_iter()
+                    .collect(),
+            ),
+            serde_json::Value::Array(values) => {
+                serde_json::Value::Array(values.iter().map(ordered).collect())
+            }
+            value => value.clone(),
+        }
+    }
+    serde_json::to_vec(&ordered(value)).expect("JSON values are serializable")
+}
+
 pub struct JsonCodec;
 pub struct JsonScalarCodec;
 
 impl CodecProvider for JsonScalarCodec {
+    fn field_schema(&self, _: &Value, _: &str) -> Result<traffic_value::codec::FieldSchema> {
+        Ok(traffic_value::codec::FieldSchema::Scalar)
+    }
+
     fn descriptor(&self) -> CodecDescriptor {
         CodecDescriptor {
             id: "scalar",

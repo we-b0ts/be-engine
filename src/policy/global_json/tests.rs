@@ -273,3 +273,4 @@ fn authored_opaque_jwt_identity_formats_are_retired_in_every_scalar_carrier() {
         }
     }
 }
+use crate::policy::IdentityFormat;

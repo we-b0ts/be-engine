@@ -37,8 +37,42 @@ impl PolicyProvider for TimestampPolicy {
             id: "time",
             version: 1,
             description: "Validate timestamp representations, observation deltas and clock relationships",
-            actions: &[PolicyAction::Compare, PolicyAction::Analyze],
+            actions: &[
+                PolicyAction::Compare,
+                PolicyAction::Analyze,
+                PolicyAction::Infer,
+            ],
         }
+    }
+
+    fn infer(
+        &self,
+        source: &Value,
+        facts: &Value,
+    ) -> Result<Option<traffic_policy::PolicyInference>> {
+        let Some(text) = source.as_str() else {
+            return Ok(None);
+        };
+        let offset = facts
+            .pointer("/settings/time/default_utc_offset")
+            .and_then(Value::as_str)
+            .unwrap_or("+08:00");
+        let Some(config) = traffic_time::declaration::recognize_timestamp(
+            &serde_json::Value::String(text.into()),
+            offset,
+        ) else {
+            return Ok(None);
+        };
+        let mut declaration = serde_json::to_value(&config)?;
+        declaration["kind"] = "time".into();
+        Ok(Some(traffic_policy::PolicyInference {
+            rule_id: "builtin.time",
+            definition: traffic_policy::PolicyDefinition {
+                options: serde_json::json!({"config":config,"clock":"observation","accept_exact":true}),
+                ..traffic_policy::PolicyDefinition::new("time")
+            },
+            declaration: Some(serde_json::from_value(declaration)?),
+        }))
     }
 
     fn prepare(&self, configuration: &Value) -> Result<Arc<dyn ComparisonPolicy>> {
@@ -85,6 +119,43 @@ impl PolicyProvider for TimestampPolicy {
 }
 
 impl ComparisonPolicy for Configuration {
+    fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+        use traffic_value::codec::{FieldSchema, ValueType};
+        if matches!(schema, FieldSchema::Dynamic | FieldSchema::Scalar) {
+            return Ok(());
+        }
+        let required = match self.config.format {
+            TimestampFormat::Rfc3339
+            | TimestampFormat::AmzDate
+            | TimestampFormat::Iso8601Naive
+            | TimestampFormat::SqlDatetime
+            | TimestampFormat::CalendarDate => ValueType::String,
+            _ => ValueType::Number,
+        };
+        ensure!(
+            schema == &FieldSchema::Typed(required),
+            "timestamp format requires a compatible scalar field type"
+        );
+        Ok(())
+    }
+
+    fn source_match(&self, source: &Value, facts: &Value) -> Result<traffic_policy::SourceMatch> {
+        let Ok(instant) = parse_time_value(&serde_json::to_value(source)?, &self.config) else {
+            return Ok(traffic_policy::SourceMatch::Inapplicable);
+        };
+        if !matches!(source, Value::Number(_)) {
+            return Ok(traffic_policy::SourceMatch::Applicable);
+        }
+        let clock = facts
+            .pointer("/clocks")
+            .and_then(Value::as_object)
+            .and_then(|clocks| clocks.get(&self.clock))
+            .and_then(|clock| clock.pointer("/source"))
+            .and_then(Value::as_str)
+            .and_then(|clock| clock.parse::<chrono::DateTime<chrono::Utc>>().ok());
+        let rank = clock.map(|clock| u128::MAX - instant.abs_diff(traffic_time::date_nanos(clock)));
+        Ok(traffic_policy::SourceMatch::Ranked(rank))
+    }
     fn compatible(&self, other: &Value) -> Result<bool> {
         let other: Configuration = serde_json::from_value(serde_json::to_value(other)?)?;
         let mut left = self.config.clone();

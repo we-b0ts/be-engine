@@ -100,8 +100,7 @@ impl DynamicValues {
                 self.check_pair(case, rule, &pair, &decision)?;
                 if rule.value_type == DynamicValueType::Integer {
                     let body = integer_body.get_or_insert_with(|| {
-                        crate::replay::json_order::parse(actual_body)
-                            .expect("validated JSON capture")
+                        crate::json_value::parse(actual_body).expect("validated JSON capture")
                     });
                     *body
                         .pointer_mut(json_pointer.as_deref().expect("integer capture pointer"))
@@ -140,7 +139,7 @@ pub(super) fn capture(body: &[u8], pointer: &str, value_type: DynamicValueType) 
     if value_type == DynamicValueType::String {
         return strings::capture(body, Some(pointer));
     }
-    let body = crate::replay::json_order::parse(body)
+    let body = crate::json_value::parse(body)
         .context("dynamic integer requires complete unique-member JSON")?;
     let value = body
         .pointer(pointer)

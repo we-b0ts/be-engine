@@ -36,14 +36,7 @@ pub(super) fn paired_values<'a>(
 }
 
 pub(super) fn normalize_json(a: &mut Value, b: &mut Value, pointer: &str) {
-    if pointer.is_empty() {
-        if let (Value::Array(a), Value::Array(b)) = (a, b) {
-            a.sort_by_cached_key(crate::replay::json_order::canonical_json);
-            b.sort_by_cached_key(crate::replay::json_order::canonical_json);
-        }
-    } else {
-        crate::replay::json_order::normalize_arrays(a, b, pointer);
-    }
+    crate::value_extensions::normalize_policy_locations("unordered", a, b, pointer);
 }
 
 /// Guessed JSON keeps strict logical equality. Unknown bytes never acquire a

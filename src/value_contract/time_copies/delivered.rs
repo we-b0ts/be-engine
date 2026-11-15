@@ -1,55 +1,16 @@
-//! Later carriers may retain the exact typed times actually delivered by dependencies.
-//! These private fingerprints do not grant a new time format or a clock fallback.
+//! Application projection of compiled field formats onto delivered provenance.
 use super::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct DeliveredTimeCopies {
-    pairs: Vec<ResponseTimeCopy>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ResponseTimeCopy {
-    source: [u8; 32],
-    target: [u8; 32],
-    deliveries: Vec<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
-}
-
-impl TimeCopyStore {
-    pub(crate) fn delivered_copies(&self, case: &str) -> DeliveredTimeCopies {
-        let pairs = self
-            .cases
-            .get(case)
-            .into_iter()
-            .flat_map(|case| &case.entries)
-            .filter(|(_, value)| !value.deliveries.is_empty())
-            .filter_map(|(key, value)| {
-                Some(ResponseTimeCopy {
-                    source: key.source,
-                    target: value.target?,
-                    deliveries: value
-                        .deliveries
-                        .iter()
-                        .map(|delivery| delivery.clocks)
-                        .collect(),
-                })
-            })
-            .collect();
-        DeliveredTimeCopies { pairs }
-    }
-}
+#[serde(transparent)]
+pub(crate) struct DeliveredTimeCopies(
+    pub(super) traffic_contract::provenance::DeliveredTimeCopies<SchemaCopyRules>,
+);
 
 impl DeliveredTimeCopies {
     pub(crate) fn validate(&self) -> Result<()> {
-        ensure!(
-            self.pairs
-                .iter()
-                .map(|pair| pair.deliveries.len().max(1))
-                .sum::<usize>()
-                <= MAX_CASE_COPIES,
-            "delivered time provenance exceeds its bound"
-        );
-        Ok(())
+        self.0.validate()
     }
 
     pub(crate) fn proofs(
@@ -59,44 +20,15 @@ impl DeliveredTimeCopies {
         clocks: super::super::json::AnchorClocks,
         observed: ClockPair,
     ) -> Result<Vec<VerifiedTimeCopy>> {
-        self.validate()?;
-        if self.pairs.is_empty() {
-            return Ok(vec![]);
-        }
-        let Ok(observed) = observed.require() else {
-            return Ok(vec![]);
-        };
-        let mut proofs = Vec::new();
-        for leaf in global_leaves(source, plan, clocks)? {
-            let source = time_hash(&leaf.value, &leaf.time)?;
-            for pair in self.pairs.iter().filter(|pair| {
-                pair.source == source
-                    && pair
-                        .deliveries
-                        .iter()
-                        .any(|&(a, b)| a <= observed.0 && b <= observed.1)
-            }) {
-                proofs.push(VerifiedTimeCopy {
-                    rule_id: leaf.rule_id.into(),
-                    source_pointer: leaf.pointer.clone(),
-                    target_pattern: leaf.pattern.clone(),
-                    source,
-                    target: pair.target,
-                    typed: true,
-                });
-                ensure!(
-                    proofs.len() <= MAX_CASE_COPIES,
-                    "delivered time proof expansion exceeds its bound"
-                );
-            }
-        }
-        Ok(proofs)
+        self.0
+            .proofs_with(|| global_leaves(source, plan, clocks), observed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::GlobalFieldRuntime;
     #[cfg(test)]
     use crate::policy::runtime::native_origin::TimeCopyPosition;
     use crate::value_contract::{global, json::AnchorClocks};

@@ -81,5 +81,3 @@ pub(crate) trait RequestRuleRuntime: Debug + Clone + Send + Sync + 'static {
     fn pre_match_reports(&self) -> Vec<crate::value_contract::pre_match::Candidate>;
     fn await_hypotheses_durable(&self) -> NativeFuture<'_, ()>;
 }
-
-pub(crate) mod json_pointer;

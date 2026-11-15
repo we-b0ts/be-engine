@@ -1,5 +1,6 @@
 //! Cross-carrier delivered time pairs retain their original clock at SQL writes.
 use super::*;
+use crate::policy::GlobalFieldRuntime;
 use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::policy::runtime::{MysqlTimeCopyProofs, request_contract::RequestContracts};
 use crate::policy::{CompiledPolicy, RedisContainer};

@@ -189,7 +189,7 @@ impl NativeResponseContext {
                 NativeEffect::ResponseBody(effect) if effect.codec == BodyCodec::Protobuf => {
                     output.add_codec(
                         effect
-                            .value_codec()?
+                            .value_codec(traffic_extensions::codecs())?
                             .context("native Protobuf codec is absent")?,
                     )?;
                     for value in &effect.fields {

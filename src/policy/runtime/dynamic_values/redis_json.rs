@@ -110,9 +110,9 @@ pub(super) fn project(
     else {
         anyhow::bail!("explicit Redis JSON projection requires a declared capture");
     };
-    let source = crate::replay::json_order::parse(source)
+    let source = crate::json_value::parse(source)
         .context("source capture requires complete unique-member JSON")?;
-    let mut actual = crate::replay::json_order::parse(actual)
+    let mut actual = crate::json_value::parse(actual)
         .context("target capture requires complete unique-member JSON")?;
     if let Some(derived) = derived_from {
         for (json, value) in [(&source, &pair.source), (&actual, &pair.target)] {

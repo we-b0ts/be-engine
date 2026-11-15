@@ -51,6 +51,18 @@ impl PolicyProvider for IdentityPolicy {
 }
 
 impl ComparisonPolicy for Configuration {
+    fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+        ensure!(
+            matches!(
+                schema,
+                traffic_value::codec::FieldSchema::Dynamic
+                    | traffic_value::codec::FieldSchema::Scalar
+            ),
+            "identity contracts require JSON or a physical SQL scalar"
+        );
+        Ok(())
+    }
+
     fn applies(&self, source: &Value, _: &Value) -> Result<bool> {
         Ok(identity::token(
             &serde_json::to_value(source)?,

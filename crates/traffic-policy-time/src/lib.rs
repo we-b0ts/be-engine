@@ -77,6 +77,18 @@ impl PolicyProvider for DurationPolicy {
 }
 
 impl ComparisonPolicy for Configuration {
+    fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+        use traffic_value::codec::{FieldSchema, ValueType};
+        ensure!(
+            matches!(
+                schema,
+                FieldSchema::Dynamic | FieldSchema::Scalar | FieldSchema::Typed(ValueType::Number)
+            ),
+            "duration requires a numeric scalar field"
+        );
+        Ok(())
+    }
+
     fn applies(&self, source: &Value, _: &Value) -> Result<bool> {
         Ok(
             traffic_time::parse_duration(&serde_json::to_value(source)?, self.unit.native())

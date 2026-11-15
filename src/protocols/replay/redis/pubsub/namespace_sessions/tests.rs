@@ -4,7 +4,8 @@ use crate::interaction::{
     model::{InputAction, InputActionKind, InputTranscript, Protocol, WireMessage},
     policy::InteractionPolicy,
 };
-use serde_json::json;
+use chrono::Utc;
+use serde_json::{Value, json};
 
 fn fixture() -> (InputTranscript, Value) {
     let mut input = InputTranscript::new(Protocol::SocketIo, InteractionPolicy::default());
@@ -90,8 +91,8 @@ fn protected_source_namespace_metadata_is_authenticated_without_changing_recordi
         },
     )]);
     let mut sessions = NamespaceSessions::default();
-    sessions.prepare(&cases).unwrap();
-    assert_eq!(sessions.source["case"].sids["/chat"], "source-sid");
+    prepare(&mut sessions, &cases).unwrap();
+    assert_eq!(sessions.source_sid("case", "/chat").unwrap(), "source-sid");
     assert_eq!(std::fs::read(&request_path).unwrap(), request_bytes);
     assert_eq!(std::fs::read(&output_path).unwrap(), output_bytes);
     let encrypted = output["interaction"]["events"][0]["message"]["data"]
@@ -104,7 +105,7 @@ fn protected_source_namespace_metadata_is_authenticated_without_changing_recordi
         format!("{prefix}:{}", String::from_utf8(data).unwrap()).into();
     std::fs::write(&output_path, output.to_string()).unwrap();
     assert!(
-        NamespaceSessions::default().prepare(&cases).is_err(),
+        prepare(&mut NamespaceSessions::default(), &cases).is_err(),
         "tampered Source output cannot establish protocol identity"
     );
 }
@@ -113,13 +114,13 @@ fn protected_source_namespace_metadata_is_authenticated_without_changing_recordi
 fn room_mapping_requires_live_observation_and_cannot_escape_case_namespace_or_epoch() {
     let (input, output) = fixture();
     let mut sessions = NamespaceSessions::default();
-    sessions.source.insert(
+    sessions.install_source(BTreeMap::from([(
         "case".into(),
         Source {
             sids: source_sessions(&input, &output),
             window: None,
         },
-    );
+    )]));
     let epoch = Utc::now();
     let matches = |sessions: &NamespaceSessions, case, namespace, target| {
         sessions.matches_sid(

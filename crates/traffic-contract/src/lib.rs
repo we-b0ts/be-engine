@@ -13,3 +13,7 @@ pub const MAX_VALUE_BYTES: usize = 64 * 1024 * 1024;
 
 pub mod compare;
 pub mod hypothesis;
+
+pub mod provenance;
+
+pub mod template;

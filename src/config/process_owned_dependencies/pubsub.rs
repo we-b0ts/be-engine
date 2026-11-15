@@ -3,8 +3,8 @@ use anyhow::{Result, ensure};
 use base64::Engine as _;
 use serde_json::Value;
 
+use crate::policy::Database;
 use crate::policy::native::{RedisPubsubKind, RedisPubsubSelector};
-use crate::policy::{Database, Protocol};
 use crate::protocols::recording::events::RedisPubSubPushEvent;
 use crate::redis::{RedisPubSubPush, RedisSubscriptionKind, parse_pubsub_push};
 
@@ -121,33 +121,7 @@ pub(crate) fn validate_subscription(
 }
 
 pub(crate) fn validate(selector: &RedisPubsubSelector) -> Result<()> {
-    ensure!(
-        selector.resource.protocol == Protocol::Redis
-            && matches!(selector.resource.database, Some(Database::Index(n)) if n >= 0),
-        "Redis Pub/Sub ownership requires a Redis endpoint and exact nonnegative database"
-    );
-    selector.resource.endpoint.validate()?;
-    for value in std::iter::once(&selector.channel).chain(selector.pattern.iter()) {
-        ensure!(
-            !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control),
-            "Redis Pub/Sub channel and pattern require bounded exact bytes"
-        );
-    }
-    ensure!(
-        (selector.kind == RedisPubsubKind::Pmessage) == selector.pattern.is_some(),
-        "Redis Pub/Sub pmessage requires its exact subscription pattern; other kinds do not"
-    );
-    ensure!(
-        selector
-            .resource
-            .username
-            .as_ref()
-            .is_none_or(|name| !name.is_empty()
-                && name.len() <= 1024
-                && !name.chars().any(char::is_control)),
-        "Redis Pub/Sub ownership username must be bounded; absence selects anonymous authentication"
-    );
-    Ok(())
+    traffic_policy_compiler::validation::pubsub(selector)
 }
 
 fn realm(

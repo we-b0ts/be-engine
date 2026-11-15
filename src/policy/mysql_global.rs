@@ -1,4 +1,5 @@
 //! Global physical MySQL scalar declarations. Payload codecs are inferred separately.
+use crate::policy::GlobalFieldRuntime;
 use std::collections::BTreeMap;
 
 use anyhow::{Result, ensure};
@@ -13,13 +14,7 @@ pub struct MysqlPolicy {
     pub tables: BTreeMap<String, GlobalMysqlTable>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GlobalMysqlTable {
-    pub pattern: String,
-    #[serde(deserialize_with = "super::strict_map::unique_map")]
-    pub fields: BTreeMap<String, GlobalField>,
-}
+pub use traffic_policy_document::GlobalMysqlTable;
 
 impl MysqlPolicy {
     pub(crate) fn validate(&self) -> Result<()> {
@@ -49,11 +44,12 @@ impl MysqlPolicy {
                 ensure!(
                     matches!(
                         field,
-                        GlobalField::Time { .. }
+                        GlobalField::Policy(_)
+                            | GlobalField::Time { .. }
                             | GlobalField::Identity { .. }
                             | GlobalField::Duration { .. }
                     ),
-                    "MySQL scalar columns accept time, identity or duration; JSON protocols and arrays use json.fields"
+                    "MySQL scalar columns accept registered policies and time, identity or duration formats"
                 );
             }
         }

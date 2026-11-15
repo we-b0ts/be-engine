@@ -38,3 +38,35 @@ pub fn count_query_parameters(uri: &str, key_matches: impl Fn(&str) -> bool) -> 
         .filter(|(part_key, _)| key_matches(part_key))
         .count()
 }
+
+use anyhow::{Context, Result, ensure};
+use std::str::FromStr as _;
+
+pub fn target_uri(origin: &str, recorded_uri: &str) -> Result<Uri> {
+    let origin = Uri::from_str(origin).context("invalid HTTP request origin")?;
+    let recorded = Uri::from_str(recorded_uri).context("invalid recorded request URI")?;
+    let path_and_query = recorded
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/");
+    ensure!(
+        path_and_query.starts_with('/'),
+        "recorded request URI must have an absolute path"
+    );
+    Uri::builder()
+        .scheme(
+            origin
+                .scheme()
+                .context("HTTP request origin has no scheme")?
+                .clone(),
+        )
+        .authority(
+            origin
+                .authority()
+                .context("HTTP request origin has no authority")?
+                .clone(),
+        )
+        .path_and_query(path_and_query)
+        .build()
+        .context("failed to build recorded request URI")
+}

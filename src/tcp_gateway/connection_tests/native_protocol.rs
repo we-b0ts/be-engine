@@ -16,12 +16,14 @@ const NATIVE: &str = traffic_protocol_fixture::NAME;
 
 fn providers() -> Arc<DependencyProviders> {
     let mut providers = crate::protocols::default_providers().as_ref().clone();
-    providers
-        .register(
-            DependencyProtocol::new(NATIVE),
-            Arc::new(traffic_protocol_fixture::Provider),
-        )
-        .unwrap();
+    if providers.provider(DependencyProtocol::new(NATIVE)).is_err() {
+        providers
+            .register(
+                DependencyProtocol::new(NATIVE),
+                Arc::new(traffic_protocol_fixture::Provider),
+            )
+            .unwrap();
+    }
     let rule = Arc::new(ValueRule {
         id: "generated_entity".into(),
         contract: FieldContract::Identity {
@@ -546,7 +548,9 @@ async fn registered_protocol_uses_authored_global_json_rules_through_normal_repl
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut recording = record().await;
         let mut providers = crate::protocols::default_providers().as_ref().clone();
-        providers.register(DependencyProtocol::new(NATIVE), Arc::new(traffic_protocol_fixture::Provider)).unwrap();
+        if providers.provider(DependencyProtocol::new(NATIVE)).is_err() {
+            providers.register(DependencyProtocol::new(NATIVE), Arc::new(traffic_protocol_fixture::Provider)).unwrap();
+        }
         recording.providers = Arc::new(providers);
         let policy = "format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [decimal]}\n";
         for lazy in [false, true] {

@@ -1,4 +1,4 @@
-use super::*;
+use crate::policy::CompiledJsonPolicy;
 use crate::value_contract::{global, json::AnchorClocks, time::ClockPair};
 use serde_json::json;
 use traffic_contract::identity::PreparedIdentityDelivery;

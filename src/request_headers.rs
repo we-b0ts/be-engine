@@ -11,6 +11,8 @@ use hyper::HeaderMap;
 use serde_json::Value;
 
 pub(crate) mod evidence;
+mod secrets;
+pub(crate) use secrets::SourceSecrets;
 
 pub(crate) const ENCRYPTION_KEY_ENV: &str = "TRAFFIC_E2E_ENCRYPTION_KEY_B64";
 

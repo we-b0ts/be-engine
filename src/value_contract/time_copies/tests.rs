@@ -253,7 +253,7 @@ fn chronology_requires_one_real_earlier_read_in_both_executions() {
             .proof_for_source("case", p, p, "/t", "/t", &json!(10), RULE)
             .is_some()
     );
-    assert_eq!(store.total, 2);
+    assert_eq!(store.retained_count(), 2);
     // A genuinely earlier read dominates both prior observations and reclaims
     // their capacity without composing their clocks.
     store.set_record_clocks(ClockPair {
@@ -263,7 +263,7 @@ fn chronology_requires_one_real_earlier_read_in_both_executions() {
     store
         .record("case", p, p, "/t", "/t", &json!(10), &json!(10))
         .unwrap();
-    assert_eq!(store.total, 1);
+    assert_eq!(store.retained_count(), 1);
     store.set_lookup_clocks(ClockPair {
         source: at(10),
         target: at(10),
@@ -322,7 +322,7 @@ fn delivery_frontier_is_included_in_the_atomic_capacity_bound() {
             .record("case", p, p, "/t", "/t", &json!(10), &json!(10))
             .unwrap();
     }
-    assert_eq!(store.total, MAX_CASE_COPIES);
+    assert_eq!(store.retained_count(), MAX_CASE_COPIES);
     store.set_record_clocks(ClockPair {
         source: at(MAX_CASE_COPIES as i64),
         target: at(0),
@@ -332,7 +332,7 @@ fn delivery_frontier_is_included_in_the_atomic_capacity_bound() {
             .record("case", p, p, "/t", "/t", &json!(10), &json!(10))
             .is_err()
     );
-    assert_eq!(store.total, MAX_CASE_COPIES);
+    assert_eq!(store.retained_count(), MAX_CASE_COPIES);
     store.set_lookup_clocks(ClockPair {
         source: at(MAX_CASE_COPIES as i64),
         target: at(0),
@@ -519,7 +519,7 @@ fn provenance_capacity_fails_closed_and_case_reset_reclaims_it() {
             &json!(MAX_CASE_COPIES),
         )
         .unwrap();
-    assert_eq!(store.total, 1);
+    assert_eq!(store.retained_count(), 1);
 }
 
 #[test]
@@ -609,5 +609,5 @@ fn rejected_batch_never_publishes_partial_values_or_ambiguity() {
             .proof_for_source("case", p, p, "/t", "/t", &json!(MAX_CASE_COPIES), RULE)
             .is_none()
     );
-    assert_eq!(store.total, MAX_CASE_COPIES - 1);
+    assert_eq!(store.retained_count(), MAX_CASE_COPIES - 1);
 }

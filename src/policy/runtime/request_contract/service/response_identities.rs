@@ -1,5 +1,6 @@
 //! Validate response constraints against the compiled format declarations.
 use super::*;
+use crate::policy::GlobalFieldRuntime;
 
 impl RequestContracts {
     pub(super) fn validate_response_identity_formats(&self, pairs: &[IdentityPair]) -> Result<()> {

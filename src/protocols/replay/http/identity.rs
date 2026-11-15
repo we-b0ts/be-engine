@@ -26,7 +26,7 @@ pub(super) fn request_fingerprint(uri: &str, body: &[u8], headers: &HeaderSnapsh
     format!("sha256:{:x}", digest.finalize())
 }
 
-pub(super) use crate::replay::json_order::canonical_json;
+pub(super) use traffic_contract::json::canonical as canonical_json;
 
 pub(super) fn recorded_fingerprint(record: &RecordedHttpExchange) -> Result<String> {
     Ok(request_fingerprint(

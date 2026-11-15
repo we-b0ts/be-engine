@@ -1,5 +1,6 @@
 //! Redis scalars retain their Source wire form and use the shared field kernel.
 use super::json::{self, AnchorClocks, Comparison, Field, VerifiedTimeCopy};
+use crate::policy::GlobalFieldRuntime;
 use crate::policy::{GLOBAL_REDIS_ID, GlobalField};
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;

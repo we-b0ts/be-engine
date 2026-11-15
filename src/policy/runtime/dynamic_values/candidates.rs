@@ -187,8 +187,8 @@ fn json_differences(
     target: &[u8],
 ) -> Option<Vec<(String, String, String, DynamicValueType)>> {
     let (source, target) = (
-        crate::replay::json_order::parse(source)?,
-        crate::replay::json_order::parse(target)?,
+        crate::json_value::parse(source)?,
+        crate::json_value::parse(target)?,
     );
     let mut differences = Vec::new();
     fn visit(

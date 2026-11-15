@@ -24,6 +24,26 @@ impl EvidenceAdapter for ExistingEvidence {
             "kafka_delivery",
         ]
     }
+    fn source_payload(
+        &self,
+        protocol: &str,
+        event: &Value,
+        side: traffic_protocol::evidence::MessageSide,
+        _secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+    ) -> Result<Option<Vec<u8>>> {
+        if protocol != "memcached" || event["event_type"] != "memcached_exchange" {
+            return Ok(None);
+        }
+        let surface = match side {
+            traffic_protocol::evidence::MessageSide::Request => {
+                crate::policy::Surface::DependencyRequest
+            }
+            traffic_protocol::evidence::MessageSide::Response => {
+                crate::policy::Surface::DependencyResponse
+            }
+        };
+        crate::protocols::replay::memcached::contracts::source_witness(event, surface).map(Some)
+    }
     fn recording_safety_issue(&self, value: &Value) -> Option<String> {
         let event_type = value["event_type"].as_str().unwrap_or_default();
         if matches!(

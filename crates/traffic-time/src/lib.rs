@@ -354,3 +354,5 @@ pub fn numeric_nanos_scaled(value: &Value, scale: i32, multiplier: i128) -> Opti
 
 #[cfg(test)]
 mod tests;
+mod utc_offset;
+pub use utc_offset::parse_utc_offset;

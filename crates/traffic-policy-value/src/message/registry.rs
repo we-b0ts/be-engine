@@ -5,11 +5,7 @@ use anyhow::{Result, ensure};
 
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageSide {
-    Request,
-    Response,
-}
+pub use traffic_protocol::evidence::MessageSide;
 
 #[derive(Clone, Default)]
 pub struct BindingRegistry {

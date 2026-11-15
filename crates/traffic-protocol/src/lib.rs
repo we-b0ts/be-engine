@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 pub mod connection;
 pub mod evidence;
+pub mod execution;
 mod identity;
 pub mod io;
 pub mod message;

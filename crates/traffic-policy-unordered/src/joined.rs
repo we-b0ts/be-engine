@@ -82,6 +82,18 @@ impl PolicyProvider for JoinedStringPolicy {
 }
 
 impl ComparisonPolicy for Configuration {
+    fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+        use traffic_value::codec::{FieldSchema, ValueType};
+        ensure!(
+            matches!(
+                schema,
+                FieldSchema::Dynamic | FieldSchema::Scalar | FieldSchema::Typed(ValueType::String)
+            ),
+            "joined-string policy requires a string field"
+        );
+        Ok(())
+    }
+
     fn applies(&self, source: &Value, _: &Value) -> Result<bool> {
         Ok(source.as_str().is_some())
     }

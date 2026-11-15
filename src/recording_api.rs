@@ -72,20 +72,7 @@ impl FromStr for RecordingApi {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self> {
-        let (method, path_pattern) = value.split_once(' ').with_context(|| {
-            format!("recording API must use 'METHOD path-or-pattern': {value:?}")
-        })?;
-        ensure!(
-            format!("{method} {path_pattern}") == value,
-            "recording API must use one canonical separator: {value:?}"
-        );
-        let method = method
-            .parse::<Method>()
-            .with_context(|| format!("recording API has invalid HTTP method: {value:?}"))?;
-        ensure!(
-            method.as_str() == method.as_str().to_ascii_uppercase(),
-            "recording API method must use canonical uppercase form: {value:?}"
-        );
+        let (method, path_pattern) = traffic_protocol_http::path_pattern::api_selector(value)?;
         let validation = if method.as_str() == "MOTAN" {
             if path_pattern == "/" {
                 Ok(())

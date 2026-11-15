@@ -34,7 +34,7 @@ mod connection_scope;
 mod request_identity;
 pub(crate) use request_identity::request_fingerprint;
 pub(crate) mod cross_case;
-use crate::replay::json_order as json;
+use crate::json_value as json;
 pub(crate) use cross_case::load as load_cross_case;
 pub(crate) mod activity;
 mod api_origin;

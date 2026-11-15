@@ -1,5 +1,12 @@
 use super::*;
+use crate::dependency::observation::{SCOPE_SCHEMA, ScopeIndex};
 use crate::dependency::observation::{ScopeKind, ScopeRecordLocation};
+use crate::dependency_index::{FileStamp, RecordLocation};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 fn fixture() -> (tempfile::TempDir, PathBuf, Vec<ScopeRecordLocation>) {
@@ -168,23 +175,10 @@ fn overlap_and_view_changes_are_explicit_evidence_errors() {
 }
 
 fn evict_projection(scope: &Path) {
-    SCOPES.get().unwrap().lock().unwrap().retain(|entry| {
-        entry
-            .source
-            .view
-            .as_ref()
-            .is_none_or(|(path, _)| path != scope)
-    });
+    traffic_recording::source::scoped::evict_projection(scope);
 }
-
 fn projection_is_cached(scope: &Path) -> bool {
-    SCOPES.get().unwrap().lock().unwrap().iter().any(|entry| {
-        entry
-            .source
-            .view
-            .as_ref()
-            .is_some_and(|(path, _)| path == scope)
-    })
+    traffic_recording::source::scoped::projection_is_cached(scope)
 }
 
 #[test]

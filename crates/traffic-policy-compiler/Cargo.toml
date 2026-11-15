@@ -1,0 +1,22 @@
+[package]
+name = "traffic-policy-compiler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hyper = "1"
+traffic-policy = { path = "../traffic-policy" }
+traffic-policy-value = { path = "../traffic-policy-value" }
+traffic-value = { path = "../traffic-value" }
+traffic-contract = { path = "../traffic-contract" }
+traffic-policy-schema = { path = "../traffic-policy-schema" }
+traffic-protocol-mysql = { path = "../traffic-protocol-mysql" }
+traffic-protocol-http = { path = "../traffic-protocol-http" }
+traffic-codec-protobuf = { path = "../traffic-codec-protobuf" }
+
+[dev-dependencies]
+traffic-codec-string = { path = "../traffic-codec-string" }

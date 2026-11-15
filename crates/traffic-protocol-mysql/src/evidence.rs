@@ -43,6 +43,18 @@ impl EvidenceAdapter for NativeEvidence {
             crate::recording_summary::MysqlDependencySummary::default(),
         ))
     }
+    fn source_payload(
+        &self,
+        protocol: &str,
+        event: &Value,
+        side: traffic_protocol::evidence::MessageSide,
+        _secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+    ) -> Result<Option<Vec<u8>>> {
+        if protocol != "mysql" || event["event_type"] != "mysql_exchange" {
+            return Ok(None);
+        }
+        crate::witness::source_payload(event, side).map(Some)
+    }
     fn supports_replay(&self, event: &Value) -> bool {
         event["event_type"] == "mysql_exchange"
             && event["replay_safe"] != false

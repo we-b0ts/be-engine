@@ -23,6 +23,18 @@ impl EvidenceAdapter for NativeEvidence {
             crate::recording_summary::HttpDependencySummary::default(),
         ))
     }
+    fn source_payload(
+        &self,
+        protocol: &str,
+        event: &Value,
+        side: traffic_protocol::evidence::MessageSide,
+        secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+    ) -> Result<Option<Vec<u8>>> {
+        if protocol != "http" || event["event_type"] != "http_exchange" {
+            return Ok(None);
+        }
+        crate::witness::source_payload(event, side, secrets).map(Some)
+    }
     fn supports_replay(&self, event: &Value) -> bool {
         event["event_type"] == "http_exchange" && event["replay_safe"] != false
     }

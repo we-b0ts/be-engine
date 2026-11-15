@@ -17,6 +17,33 @@ pub const REMAINDER_KEY: &str = wire_document::INTERNAL_KEY;
 pub struct ProtobufProvider;
 
 impl CodecProvider for ProtobufProvider {
+    fn field_schema(
+        &self,
+        configuration: &Value,
+        path: &str,
+    ) -> Result<traffic_value::codec::FieldSchema> {
+        use traffic_value::codec::{FieldSchema, ValueType};
+        let configuration: ProtobufCodec =
+            serde_json::from_value(serde_json::to_value(configuration)?)?;
+        let field = configuration.field(path).ok_or_else(|| {
+            anyhow::anyhow!("Protobuf contract {path:?} requires an explicit typed field binding")
+        })?;
+        let value_type = match field.field_type {
+            ProtobufType::String => ValueType::String,
+            ProtobufType::Message => ValueType::Object,
+            ProtobufType::Bytes => ValueType::Bytes,
+            ProtobufType::Bool => ValueType::Boolean,
+            ProtobufType::Enum => ValueType::Enumeration,
+            _ => ValueType::Number,
+        };
+        let scalar = FieldSchema::Typed(value_type);
+        Ok(if field.repeated {
+            FieldSchema::Sequence(Box::new(scalar))
+        } else {
+            scalar
+        })
+    }
+
     fn descriptor(&self) -> CodecDescriptor {
         CodecDescriptor {
             id: "protobuf",

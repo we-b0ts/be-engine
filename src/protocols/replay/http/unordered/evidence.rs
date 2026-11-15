@@ -1,10 +1,10 @@
 //! Bounded read-only observations of complete HTTP array-order differences.
 use super::*;
-use crate::replay::json_order::canonical_json;
 use anyhow::ensure;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
+use traffic_contract::json::canonical as canonical_json;
 
 const MAX_CANDIDATES: usize = 64;
 const MAX_BODY_BYTES: usize = 1024 * 1024;

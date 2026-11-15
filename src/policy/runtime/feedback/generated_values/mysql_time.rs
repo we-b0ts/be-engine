@@ -221,8 +221,8 @@ impl<'a> JointEvidence<'a> {
                 let Token::Bytes(bytes) = &values[*value_index] else {
                     return Ok(false);
                 };
-                let mut json = crate::replay::json_order::parse(bytes)
-                    .context("joint identity JSON is incomplete")?;
+                let mut json =
+                    crate::json_value::parse(bytes).context("joint identity JSON is incomplete")?;
                 let field = json
                     .pointer_mut(pointer)
                     .context("joint identity pointer is absent")?;

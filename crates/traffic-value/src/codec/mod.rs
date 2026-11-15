@@ -6,7 +6,9 @@ use anyhow::Result;
 use crate::Value;
 
 mod registry;
+mod schema;
 pub use registry::{CodecProbe, CodecRegistry, PreparedCodec};
+pub use schema::{FieldSchema, ValueType};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodecDescriptor {
@@ -32,6 +34,9 @@ pub trait CodecProvider: Send + Sync {
     fn descriptor(&self) -> CodecDescriptor;
     fn recognize(&self, source: &[u8], metadata: &Value) -> Result<Recognition>;
     fn prepare(&self, configuration: &Value) -> Result<Arc<dyn ValueCodec>>;
+    fn field_schema(&self, _configuration: &Value, _path: &str) -> Result<FieldSchema> {
+        Ok(FieldSchema::Dynamic)
+    }
     fn fields_overlap(
         &self,
         _left_configuration: &Value,

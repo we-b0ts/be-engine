@@ -95,8 +95,8 @@ impl RequestContracts {
             super::unified::value_index(command, source.len())
         })
         .is_some_and(|index| {
-            crate::replay::json_order::parse(&source[index]).is_some()
-                && crate::replay::json_order::parse(&actual[index]).is_some()
+            crate::json_value::parse(&source[index]).is_some()
+                && crate::json_value::parse(&actual[index]).is_some()
         }) {
             "redis_json_request"
         } else if matches!(command, "ZADD" | "ZREMRANGEBYSCORE") && source.len() == 3 {
@@ -669,7 +669,7 @@ fn validate_source_commands(
                     super::time::timestamp(&serde_json::from_slice(bytes)?, field)?;
                 }
                 config::ArgumentRule::Json(fields) => {
-                    let json = crate::replay::json_order::parse(bytes)
+                    let json = crate::json_value::parse(bytes)
                         .context("source JSON request incomplete")?;
                     for (pattern, field) in &fields.json {
                         let pointers = crate::policy::runtime::response::select_json_pointers(

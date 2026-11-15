@@ -9,13 +9,11 @@ pub(crate) fn source_witness(
     surface: Surface,
     key_context: &Path,
 ) -> Result<Vec<u8>> {
-    ensure!(
-        event["event_type"] == "http_exchange",
-        "not an HTTP semantic exchange"
-    );
-    let mut record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
-    record.decrypt_request_headers(key_context)?;
-    Ok(serde_json::to_vec(&from_record(&record, surface)?)?)
+    traffic_protocol_http::witness::source_payload(
+        event,
+        surface.dependency_side()?,
+        &crate::request_headers::SourceSecrets::new(key_context),
+    )
 }
 
 pub(crate) fn witness_metadata_matches(event: &Value, metadata: &WitnessMetadata) -> Result<()> {
@@ -49,32 +47,7 @@ pub(crate) fn witness_metadata_matches(event: &Value, metadata: &WitnessMetadata
 }
 
 pub(super) fn from_record(record: &RecordedHttpExchange, surface: Surface) -> Result<Value> {
-    let identity = identity_from_record(record)?;
-    let mut value = serde_json::json!({"protocol":"http","exchange_id":record.native.id,"scheme":identity.scheme,
-        "endpoint":{"host":identity.target.host,"port":identity.target.port},"method":record.native.method.to_ascii_uppercase(),
-        "uri":record.native.uri,"request_headers":record.native.request_headers,"request_body":encode_body(&record.native.request_body)?,
-        "request_started_at":request_headers::time_reference::source(record)});
-    if surface == Surface::DependencyResponse {
-        value["response_status"] = serde_json::to_value(record.native.response_status)?;
-        value["response_headers"] = serde_json::to_value(&record.native.response_headers)?;
-        value["response_body"] = serde_json::to_value(
-            record
-                .native
-                .response_body
-                .as_ref()
-                .map(encode_body)
-                .transpose()?,
-        )?;
-        value["response_delivered_at"] = serde_json::to_value(record.native.timestamp)?;
-        value["outcome"] = serde_json::to_value(record.native.outcome)?;
-        value["error"] = serde_json::to_value(&record.native.error)?;
-    } else {
-        ensure!(
-            surface == Surface::DependencyRequest,
-            "HTTP dependency witness has no API response surface"
-        );
-    }
-    Ok(value)
+    traffic_protocol_http::witness::from_record(&record.native, surface.dependency_side()?)
 }
 
 pub(crate) fn witness_value(bytes: &[u8], surface: Surface) -> Result<Option<Vec<u8>>> {
@@ -285,14 +258,6 @@ fn capture(value: &Value) -> Result<Vec<u8>> {
         "HTTP witness body exceeds 64 MiB"
     );
     Ok(body)
-}
-fn encode_body(capture: &RecordedBodyCapture) -> Result<String> {
-    let body = decode_body(capture)?;
-    ensure!(
-        body.len() <= MAX_BODY_BYTES,
-        "HTTP witness body exceeds 64 MiB"
-    );
-    Ok(STANDARD.encode(body))
 }
 fn parse(bytes: &[u8]) -> Result<Value> {
     ensure!(

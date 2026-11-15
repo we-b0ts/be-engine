@@ -76,7 +76,7 @@ impl RedisRequestCommand {
         if self.command == "PUBLISH" {
             let Some(json) = args
                 .get(1)
-                .and_then(|bytes| crate::replay::json_order::parse(bytes))
+                .and_then(|bytes| crate::json_value::parse(bytes))
             else {
                 return false;
             };

@@ -7,6 +7,43 @@ use traffic_replay::rules::RuleRuntime;
 
 pub(crate) struct ValueRules;
 
+pub(crate) fn policy_locations(
+    policy: &str,
+    source: &serde_json::Value,
+    target: &serde_json::Value,
+    include_root: bool,
+) -> Vec<String> {
+    (|| {
+        let policy = traffic_extensions::policies().prepare(policy, &traffic_value::Value::Null)?;
+        traffic_policy_value::diagnosis::discover(
+            &policy,
+            &serde_json::from_value(source.clone())?,
+            &serde_json::from_value(target.clone())?,
+            include_root,
+        )
+    })()
+    .unwrap_or_default()
+}
+
+pub(crate) fn normalize_policy_locations(
+    policy: &str,
+    source: &mut serde_json::Value,
+    target: &mut serde_json::Value,
+    pattern: &str,
+) -> bool {
+    (|| -> Result<bool> {
+        let policy = traffic_extensions::policies().prepare(policy, &traffic_value::Value::Null)?;
+        let mut left = serde_json::from_value(source.clone())?;
+        let mut right = serde_json::from_value(target.clone())?;
+        let matches =
+            traffic_policy_value::diagnosis::normalize(&policy, &mut left, &mut right, pattern)?;
+        *source = serde_json::to_value(left)?;
+        *target = serde_json::to_value(right)?;
+        Ok(matches)
+    })()
+    .unwrap_or(false)
+}
+
 pub(crate) fn strict_values() -> std::sync::Arc<dyn crate::replay::policy::ValueRuleHost> {
     std::sync::Arc::new(crate::value_contract::state::ValueState::default())
 }

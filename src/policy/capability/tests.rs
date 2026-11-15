@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::policy::{ProtobufCodec, ProtobufField, TimeAnchor, TimeRelation};
+use crate::policy::{
+    FieldContract, ProtobufCodec, ProtobufField, ProtobufType, TimeAnchor, TimeRelation,
+    TimestampFormat,
+};
 
 #[test]
 fn repeated_scalar_elements_keep_their_declared_type_without_changing_collection_ownership() {

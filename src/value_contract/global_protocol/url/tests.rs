@@ -1,6 +1,7 @@
 use super::*;
+use crate::policy::CompiledJsonPolicy;
 use crate::value_contract::{global, json::AnchorClocks, time::ClockPair};
-use serde_json::json;
+use serde_json::{Value, json};
 
 const A: &str = "11111111-1111-4111-8111-111111111111";
 const X: &str = "22222222-2222-4222-8222-222222222222";

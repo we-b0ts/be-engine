@@ -1,85 +1,22 @@
 //! Literal-preserving generated strings with automatic case-local token identities.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::*;
 use crate::policy::native::{Proven, TemplateToken};
 
-type TemplateParts<'a> = (Vec<(&'a str, &'a str)>, &'a str);
-
-fn parts(template: &str) -> Result<TemplateParts<'_>, GeneratedError> {
-    if template.is_empty() || template.len() > 4096 {
-        return Err(GeneratedError::InvalidShape);
-    }
-    let mut rest = template;
-    let mut output = vec![];
-    let mut names = BTreeSet::new();
-    while let Some(start) = rest.find('{') {
-        let literal = &rest[..start];
-        if literal.contains('}') || !output.is_empty() && literal.is_empty() {
-            return Err(GeneratedError::InvalidShape);
-        }
-        let tail = &rest[start + 1..];
-        let end = tail.find('}').ok_or(GeneratedError::InvalidShape)?;
-        let name = &tail[..end];
-        if name.is_empty()
-            || name.len() > 64
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-            || !names.insert(name)
-        {
-            return Err(GeneratedError::InvalidShape);
-        }
-        output.push((literal, name));
-        if output.len() > 16 {
-            return Err(GeneratedError::InvalidShape);
-        }
-        rest = &tail[end + 1..];
-    }
-    if rest.contains('}') || output.is_empty() {
-        return Err(GeneratedError::InvalidShape);
-    }
-    Ok((output, rest))
-}
-
-pub(crate) fn validate_template(template: &str) -> anyhow::Result<BTreeSet<String>> {
-    let (slots, _) = parts(template)
-        .map_err(|_| anyhow::anyhow!("template requires bounded, unambiguous named slots"))?;
-    Ok(slots.into_iter().map(|(_, name)| name.into()).collect())
-}
+#[cfg(test)]
+pub(crate) use traffic_contract::template::validate_template;
 
 pub(crate) fn extract<'a>(
     value: &'a str,
     template: &str,
 ) -> Result<BTreeMap<String, &'a str>, GeneratedError> {
-    let (slots, suffix) = parts(template)?;
-    if value.len() > 16 * 1024 {
-        return Err(GeneratedError::InvalidShape);
-    }
-    let mut rest = value;
-    let mut output = BTreeMap::new();
-    for (index, (literal, name)) in slots.iter().enumerate() {
-        rest = rest
-            .strip_prefix(literal)
-            .ok_or(GeneratedError::ContractMismatch)?;
-        let delimiter = slots.get(index + 1).map_or(suffix, |(literal, _)| literal);
-        let end = if delimiter.is_empty() {
-            rest.len()
-        } else {
-            let mut offsets = rest.match_indices(delimiter);
-            let (offset, _) = offsets.next().ok_or(GeneratedError::ContractMismatch)?;
-            if offsets.next().is_some() {
-                return Err(GeneratedError::InvalidShape);
-            }
-            offset
-        };
-        output.insert((*name).into(), &rest[..end]);
-        rest = &rest[end..];
-    }
-    if rest != suffix {
-        return Err(GeneratedError::ContractMismatch);
-    }
-    Ok(output)
+    traffic_contract::template::extract(value, template).map_err(|error| match error {
+        traffic_contract::template::TemplateError::InvalidShape => GeneratedError::InvalidShape,
+        traffic_contract::template::TemplateError::ContractMismatch => {
+            GeneratedError::ContractMismatch
+        }
+    })
 }
 
 pub(crate) fn valid_token(value: &str, token: &TemplateToken) -> bool {

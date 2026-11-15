@@ -1,6 +1,7 @@
-use super::*;
+use crate::policy::{CompiledJsonPolicy, GlobalField};
+use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde_json::json;
+use serde_json::{Value, json};
 
 const FIELDS: &str = r#"
   /session_id: {kind: identity, formats: [{prefix: vnc-, base64url: 24}]}

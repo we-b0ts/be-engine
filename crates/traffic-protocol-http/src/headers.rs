@@ -140,3 +140,23 @@ pub fn capture(headers: &hyper::HeaderMap) -> HeaderSnapshot {
     }
     snapshot
 }
+
+pub const X_REQUEST_ID: &str = "x-request-id";
+
+pub const STANDARD_RESPONSE_HEADERS: [&str; 15] = [
+    "access-control-allow-credentials",
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-expose-headers",
+    "access-control-max-age",
+    "allow",
+    "cache-control",
+    "content-disposition",
+    "content-type",
+    "location",
+    "sec-websocket-protocol",
+    "vary",
+    "www-authenticate",
+    X_REQUEST_ID,
+];

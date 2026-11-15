@@ -79,21 +79,44 @@ fn unsupported_cells_are_explicit_instead_of_claiming_protocol_equivalence() {
         slot: SlotKind::Value,
         codec: CodecKind::Protobuf,
     };
+    value_capability_support(query.clone(), CapabilityId::Identity)
+        .require()
+        .unwrap();
+    let codec = crate::value_codec::protobuf(crate::policy::ProtobufCodec {
+        fields: std::collections::BTreeMap::from([(
+            "/id".into(),
+            crate::policy::ProtobufField {
+                field_path: vec![1],
+                field_type: crate::policy::ProtobufType::String,
+                repeated: false,
+            },
+        )]),
+    });
     assert!(
-        value_capability_support(query.clone(), CapabilityId::Identity)
-            .require()
-            .unwrap_err()
-            .to_string()
-            .contains("Protobuf identity")
+        crate::policy::validate_contract_binding(
+            &codec,
+            "/id",
+            &crate::policy::FieldContract::Identity {
+                prefix: String::new(),
+                format: crate::policy::IdentityFormat::Uuid,
+            }
+        )
+        .is_err()
     );
     value_capability_support(query.clone(), CapabilityId::RelativeTime)
         .require()
         .unwrap();
     query.codec = CodecKind::Scalar;
+    value_capability_support(query.clone(), CapabilityId::Unordered)
+        .require()
+        .unwrap();
     assert!(
-        value_capability_support(query.clone(), CapabilityId::Unordered)
-            .require()
-            .is_err()
+        crate::policy::validate_contract_binding(
+            &crate::policy::Codec::Scalar,
+            "",
+            &crate::policy::FieldContract::Unordered
+        )
+        .is_err()
     );
     query.codec = CodecKind::Json;
     assert!(

@@ -4,6 +4,21 @@ use super::*;
 fn catalog_features_control_the_complete_installation_set() {
     let codecs = build_codecs().unwrap();
     let policies = build_policies().unwrap();
+    let mut protocols = traffic_protocol::ProviderRegistry::default();
+    install_protocols(&mut protocols, traffic_protocol::ProtocolId::new).unwrap();
+    for (name, installed) in [
+        ("http", cfg!(feature = "protocol-http")),
+        ("mysql", cfg!(feature = "protocol-mysql")),
+        ("redis", cfg!(feature = "protocol-redis")),
+        ("fixture-rpc", cfg!(feature = "protocol-fixture")),
+    ] {
+        assert_eq!(
+            protocols
+                .provider(traffic_protocol::ProtocolId::new(name))
+                .is_ok(),
+            installed
+        );
+    }
     for (id, installed) in [
         ("json", cfg!(feature = "codec-json")),
         ("scalar", cfg!(feature = "codec-json")),

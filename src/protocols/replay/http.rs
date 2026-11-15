@@ -98,12 +98,7 @@ pub(crate) struct RecordedHttpExchange {
     discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum HttpReplayScheme {
-    Http,
-    Https,
-}
+use traffic_protocol_http::recorded::HttpScheme as HttpReplayScheme;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HttpDependencyIdentity {
@@ -418,34 +413,8 @@ pub(crate) fn observe_recorded_policy_exchanges(
 }
 
 fn identity_from_record(record: &RecordedHttpExchange) -> Result<HttpDependencyIdentity> {
-    let scheme = normalize_scheme(&record.native.scheme)?;
-    let authority = record
-        .native
-        .authority
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("http_exchange {} has no authority", record.native.uri))?
-        .parse::<Authority>()
-        .with_context(|| format!("invalid recorded HTTP authority for {}", record.native.uri))?;
-    let port = authority.port_u16().unwrap_or(match scheme {
-        HttpReplayScheme::Http => 80,
-        HttpReplayScheme::Https => 443,
-    });
-    Ok(HttpDependencyIdentity {
-        scheme,
-        target: TargetKey {
-            host: crate::replay::normalize_host(authority.host()),
-            port,
-        },
-    })
-}
-
-fn normalize_scheme(value: &str) -> Result<HttpReplayScheme> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "http" | "fake_ip_http" | "http_gateway" => Ok(HttpReplayScheme::Http),
-        "https" | "fake_ip_https" => Ok(HttpReplayScheme::Https),
-        other => Err(anyhow!("unsupported recorded HTTP scheme {other}")),
-    }
+    let (scheme, target) = record.native.identity()?;
+    Ok(HttpDependencyIdentity { scheme, target })
 }
 
 impl ReplayState {

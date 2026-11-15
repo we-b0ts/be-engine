@@ -1,6 +1,5 @@
 //! Source-verified translation of a bounded signed JSON timestamp. This module
 //! never reads response or dependency values and never repairs invalid signatures.
-use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -11,59 +10,6 @@ use subtle::ConstantTimeEq as _;
 
 use super::{RequestRuleObservation, jwt, keys::SigningKeySource};
 use crate::policy::native::{InputSignedTimestampEffect, StartupKey};
-
-pub(crate) fn validate(effect: &InputSignedTimestampEffect) -> Result<()> {
-    ensure!(
-        (1..=8).contains(&effect.fields.len()),
-        "signed timestamp requires 1..8 fields"
-    );
-    let mut pointers = BTreeSet::new();
-    for (name, pointer) in &effect.fields {
-        parameter(name)?;
-        crate::policy::validate_pointer(pointer, false)?;
-        ensure!(
-            !pointer.is_empty() && pointers.insert(pointer),
-            "signed fields require distinct non-root JSON pointers"
-        );
-    }
-    ensure!(
-        pointers.contains(&effect.timestamp_pointer),
-        "signed fields must include the timestamp pointer"
-    );
-    parameter(&effect.secret_parameter)?;
-    ensure!(
-        !effect.fields.contains_key(&effect.secret_parameter),
-        "secret parameter duplicates a signed field"
-    );
-    crate::policy::validate_pointer(&effect.signature_pointer, false)?;
-    ensure!(
-        !effect.signature_pointer.is_empty(),
-        "signature pointer must not select the root"
-    );
-    let mut all = pointers.into_iter().collect::<Vec<_>>();
-    all.push(&effect.signature_pointer);
-    for (index, pointer) in all.iter().enumerate() {
-        for other in &all[index + 1..] {
-            ensure!(
-                *pointer != *other
-                    && !pointer.starts_with(&format!("{other}/"))
-                    && !other.starts_with(&format!("{pointer}/")),
-                "signed timestamp fields overlap"
-            );
-        }
-    }
-    Ok(())
-}
-
-fn parameter(name: &str) -> Result<()> {
-    ensure!(
-        !name.is_empty()
-            && name.len() <= 64
-            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
-        "signature parameter must be 1..64 ASCII letters, digits or underscores"
-    );
-    Ok(())
-}
 
 pub(crate) fn key_source(effect: &InputSignedTimestampEffect) -> SigningKeySource {
     match &effect.signing_key {

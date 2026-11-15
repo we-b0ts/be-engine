@@ -77,6 +77,34 @@ fn context_hint(input: &AnalysisInput<'_>) -> Vec<Finding> {
 }
 
 impl ComparisonPolicy for UnorderedPolicy {
+    fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+        use traffic_value::codec::{FieldSchema, ValueType};
+        match schema {
+            FieldSchema::Dynamic => Ok(()),
+            FieldSchema::Sequence(element) => {
+                ensure!(
+                    element.as_ref() != &FieldSchema::Typed(ValueType::Bytes),
+                    "unordered bytes require an explicit payload codec"
+                );
+                Ok(())
+            }
+            _ => anyhow::bail!("unordered requires a collection field"),
+        }
+    }
+
+    fn canonical_value(&self, value: &Value) -> Result<Option<Value>> {
+        let Some(values) = value.as_array() else {
+            return Ok(None);
+        };
+        let mut ordered = values
+            .iter()
+            .map(|value| Ok((canonical::key(value)?, value.clone())))
+            .collect::<Result<Vec<_>>>()?;
+        ordered.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(Some(Value::Array(
+            ordered.into_iter().map(|(_, value)| value).collect(),
+        )))
+    }
     fn applies(&self, source: &Value, _: &Value) -> Result<bool> {
         Ok(source.as_array().is_some())
     }

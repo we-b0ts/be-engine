@@ -3,14 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SigningKeySource {
-    TargetEnv { name: String },
-    TargetFile { path: PathBuf, field: String },
-}
+pub use traffic_jwt::key::SigningKeySource;
+pub(crate) use traffic_jwt::key::{validate_reference, validate_source};
 
 /// Private, immutable key snapshot. It is deliberately neither Debug nor Serialize.
 #[derive(Clone)]
@@ -52,28 +47,6 @@ impl ResolvedSigningKey {
             },
             value: value.into(),
             witnesses: vec![],
-        }
-    }
-}
-
-pub(crate) fn validate_reference(reference: &str) -> Result<()> {
-    ensure!(
-        !reference.is_empty()
-            && reference.len() <= 128
-            && reference
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')),
-        "invalid JWT rule id or signing key reference"
-    );
-    Ok(())
-}
-
-pub(crate) fn validate_source(source: &SigningKeySource) -> Result<()> {
-    match source {
-        SigningKeySource::TargetEnv { name } => validate_reference(name),
-        SigningKeySource::TargetFile { path, field } => {
-            ensure!(path.is_absolute(), "JWT key file path must be absolute");
-            validate_reference(field)
         }
     }
 }

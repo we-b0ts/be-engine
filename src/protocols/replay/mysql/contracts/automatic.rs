@@ -1,6 +1,7 @@
 //! Source-driven MySQL payload and native temporal inference.
 use super::*;
 use crate::mysql::sql::field_bindings::FieldIdentity;
+use crate::policy::GlobalFieldRuntime;
 use crate::policy::{CompiledPolicy, FieldContract};
 use crate::value_contract::json::{self, Field};
 

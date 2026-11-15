@@ -120,24 +120,8 @@ pub fn default_providers() -> Arc<DependencyProviders> {
     static PROVIDERS: OnceLock<Arc<DependencyProviders>> = OnceLock::new();
     Arc::clone(PROVIDERS.get_or_init(|| {
         let mut providers = DependencyProviders::default();
-        for (kind, provider) in [
-            (
-                DependencyProtocol::Http,
-                Arc::new(traffic_protocol_http::HttpProvider) as Arc<dyn DependencyProvider>,
-            ),
-            (
-                DependencyProtocol::Mysql,
-                Arc::new(traffic_protocol_mysql::MysqlProvider) as Arc<dyn DependencyProvider>,
-            ),
-            (
-                DependencyProtocol::Redis,
-                Arc::new(traffic_protocol_redis::RedisProvider) as Arc<dyn DependencyProvider>,
-            ),
-        ] {
-            providers
-                .register(kind, provider)
-                .expect("unique built-in dependency provider");
-        }
+        traffic_extensions::install_protocols(&mut providers.providers, DependencyProtocol::new)
+            .expect("extension catalog has unique protocol identities");
         providers
             .register_evidence("existing", Arc::new(evidence::ExistingEvidence))
             .expect("unique existing evidence adapter");

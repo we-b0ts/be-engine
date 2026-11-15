@@ -584,3 +584,9 @@ pub mod report;
 pub mod candidate;
 
 mod recording_summary;
+pub mod savepoint_binding;
+pub mod table_selector;
+
+pub mod value_template;
+
+pub mod witness;

@@ -16,45 +16,17 @@ pub(crate) use dependency::generated;
 mod identity;
 mod response;
 pub(crate) use response::{dynamic_claim, project_jwt};
-mod scope;
+pub(crate) use traffic_policy_schema::scope::NativeScopeGuard;
 mod source;
 mod source_validation;
 pub(crate) use source::validate_finite_sharing;
 pub(crate) use source_validation::{NativeSourceCase, validate_native_source_dependencies};
-
-/// A scope stays attached to its native identity until the domain owner installs it.
-/// Returning a document alone would silently discard method/database/auth guards.
-#[derive(Debug, Clone)]
-pub(crate) struct NativeScopeGuard {
-    pub id: String,
-    pub selector: n::NativeMatch,
-    pub when: Option<SourceCondition>,
-    pub references: Vec<crate::policy::Resource>,
-}
 
 #[derive(Debug)]
 pub(crate) struct NativeRuntimeProjection {
     pub document: ReplayPolicyDocument,
     /// Domain owner ids are projected back to the complete user rule in reports.
     pub response_aliases: BTreeMap<String, String>,
-}
-
-impl NativeScopeGuard {
-    pub(crate) fn from_rule(rule: &n::NativeRule) -> Self {
-        Self {
-            id: rule.id.clone(),
-            selector: rule.selector.clone(),
-            when: rule.when.clone(),
-            references: match &rule.effect {
-                n::NativeEffect::Identity(effect) => effect
-                    .references
-                    .iter()
-                    .map(|reference| reference.contract.resource.clone())
-                    .collect(),
-                _ => vec![],
-            },
-        }
-    }
 }
 
 /// Compiler admission and runtime construction share this typed adapter.

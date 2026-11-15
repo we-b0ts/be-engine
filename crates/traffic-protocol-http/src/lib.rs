@@ -2,8 +2,12 @@
 pub mod body_capture;
 pub mod content_encoding;
 pub mod headers;
+pub mod interaction;
 pub mod message;
 pub mod multipart;
+pub mod path_pattern;
+pub mod query_token;
+pub mod response_headers;
 pub mod sse;
 use traffic_protocol::{Peer, Probe, Recognition};
 
@@ -193,3 +197,6 @@ pub mod uri;
 pub mod candidate;
 
 mod recording_summary;
+
+pub mod limits;
+pub mod witness;

@@ -1,6 +1,6 @@
 //! HTTP header formats apply to every API and dependency endpoint.
 use super::GlobalField;
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
@@ -17,51 +17,12 @@ fn header_formats<'de, D: Deserializer<'de>>(
     let raw = super::strict_map::unique_map(deserializer)?;
     normalize(raw).map_err(serde::de::Error::custom)
 }
-fn normalize(raw: BTreeMap<String, GlobalField>) -> Result<BTreeMap<String, GlobalField>> {
-    let mut headers = BTreeMap::new();
-    ensure!(raw.len() <= 4096, "http.headers exceeds 4096 entries");
-    for (name, field) in raw {
-        ensure!(
-            name.len() <= 256 && !name.contains('*'),
-            "HTTP header strategy requires a bounded exact header name"
-        );
-        let name = hyper::header::HeaderName::from_bytes(name.as_bytes())?
-            .as_str()
-            .to_owned();
-        ensure!(
-            !matches!(
-                name.as_str(),
-                "content-length"
-                    | "transfer-encoding"
-                    | "connection"
-                    | "trailer"
-                    | "content-encoding"
-                    | "content-md5"
-                    | "digest"
-                    | "content-digest"
-                    | "repr-digest"
-                    | "signature"
-                    | "signature-input"
-            ),
-            "HTTP framing and integrity headers cannot declare value formats"
-        );
-        field.validate()?;
-        ensure!(
-            matches!(
-                field,
-                GlobalField::Time { .. }
-                    | GlobalField::Identity { .. }
-                    | GlobalField::Duration { .. }
-            ),
-            "HTTP headers accept time, identity or duration formats"
-        );
-        ensure!(
-            headers.insert(name, field).is_none(),
-            "HTTP header declarations repeat a case-insensitive name"
-        );
-    }
-    Ok(headers)
+fn normalize(headers: BTreeMap<String, GlobalField>) -> Result<BTreeMap<String, GlobalField>> {
+    Ok(traffic_policy_document::HttpPolicy { headers }
+        .compile(&super::authoring::context())?
+        .headers)
 }
+
 impl HttpPolicy {
     pub(crate) fn compile(&self) -> Result<Self> {
         Ok(Self {

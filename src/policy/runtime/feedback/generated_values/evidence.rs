@@ -157,9 +157,9 @@ pub(super) fn dynamic(
                 continue;
             };
             let (source_value, target_value) = if let Some(pointer) = json_pointer {
-                let mut source_json = crate::replay::json_order::parse(source_bytes)
+                let mut source_json = crate::json_value::parse(source_bytes)
                     .context("dynamic capture JSON has duplicate members or is incomplete")?;
-                let mut target_json = crate::replay::json_order::parse(target_bytes)
+                let mut target_json = crate::json_value::parse(target_bytes)
                     .context("dynamic capture JSON has duplicate members or is incomplete")?;
                 let source_value = source_json
                     .pointer(pointer)

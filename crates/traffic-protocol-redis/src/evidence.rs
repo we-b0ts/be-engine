@@ -57,6 +57,40 @@ impl EvidenceAdapter for NativeEvidence {
             crate::recording_summary::RedisSummaryBuilder::default(),
         ))
     }
+    fn source_payload(
+        &self,
+        protocol: &str,
+        event: &Value,
+        side: traffic_protocol::evidence::MessageSide,
+        _secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+    ) -> Result<Option<Vec<u8>>> {
+        if protocol != "redis" || event["event_type"] != "redis_exchange" {
+            return Ok(None);
+        }
+        let decode = |value: &Value| -> Result<Vec<u8>> {
+            use anyhow::{Context, ensure};
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            ensure!(value["truncated"] == false, "Source payload is incomplete");
+            let data = value["data"].as_str().context("Source payload missing")?;
+            match value["encoding"].as_str() {
+                Some("base64") => Ok(STANDARD.decode(data)?),
+                Some("utf8") => Ok(data.as_bytes().to_vec()),
+                _ => anyhow::bail!("unsupported Source payload encoding"),
+            }
+        };
+        let payload = if side == traffic_protocol::evidence::MessageSide::Request {
+            let args = event["args"]
+                .as_array()
+                .context("Source Redis arguments missing")?
+                .iter()
+                .map(decode)
+                .collect::<Result<Vec<_>>>()?;
+            serde_json::to_vec(&args)?
+        } else {
+            decode(&event["response"])?
+        };
+        Ok(Some(payload))
+    }
     fn supports_replay(&self, event: &Value) -> bool {
         event["replay_safe"] != false
             && matches!(

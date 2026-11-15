@@ -22,6 +22,7 @@ pub enum PolicyAction {
     Compare,
     Transform,
     Analyze,
+    Infer,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -130,7 +131,29 @@ pub trait EvaluationHost {
 
 impl EvaluationHost for () {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceMatch {
+    Inapplicable,
+    Applicable,
+    Ranked(Option<u128>),
+}
+
 pub trait ComparisonPolicy: Send + Sync {
+    fn validate_schema(&self, _schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+        Ok(())
+    }
+
+    fn source_match(&self, source: &Value, facts: &Value) -> Result<SourceMatch> {
+        Ok(if self.applies(source, facts)? {
+            SourceMatch::Applicable
+        } else {
+            SourceMatch::Inapplicable
+        })
+    }
+    /// An optional representative of this policy's equality class for diagnostics.
+    fn canonical_value(&self, _value: &Value) -> Result<Option<Value>> {
+        Ok(None)
+    }
     fn entity_key(&self, _source: &Value) -> Result<Option<[u8; 32]>> {
         Ok(None)
     }
@@ -149,6 +172,13 @@ pub trait ComparisonPolicy: Send + Sync {
 pub struct AnalysisInput<'a> {
     pub values: Option<ValuePair<'a>>,
     pub facts: &'a Value,
+}
+
+/// Source-selected semantics supplied by an installed implementation.
+pub struct PolicyInference {
+    pub rule_id: &'static str,
+    pub definition: PolicyDefinition,
+    pub declaration: Option<Value>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -174,6 +204,9 @@ pub trait EvidenceAccess {
 
 pub trait PolicyProvider: Send + Sync {
     fn descriptor(&self) -> PolicyDescriptor;
+    fn infer(&self, _source: &Value, _facts: &Value) -> Result<Option<PolicyInference>> {
+        Ok(None)
+    }
     fn prepare(&self, _configuration: &Value) -> Result<Arc<dyn ComparisonPolicy>> {
         anyhow::bail!("policy has no comparison capability")
     }
