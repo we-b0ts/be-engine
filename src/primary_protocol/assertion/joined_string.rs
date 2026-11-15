@@ -1,28 +1,55 @@
-/// Separators considered when diagnosing string values that encode an
-/// unordered collection. Rules may use any validated separator; discovery is
-/// deliberately limited to common source-level join separators.
-pub(super) const DISCOVERY_SEPARATORS: [&str; 3] = [",", ";", "|"];
+//! Compatibility entrypoints delegate joined collection semantics to the catalog.
+use serde_json::json;
+use std::collections::BTreeMap;
 
 pub(super) fn canonicalize(value: &str, separator: &str) -> String {
-    let mut parts = value.split(separator).collect::<Vec<_>>();
-    parts.sort_unstable();
-    parts.join(separator)
+    let canonical = || -> anyhow::Result<String> {
+        let options = serde_json::from_value(json!({"separator":separator}))?;
+        let transformation = traffic_extensions::policies()
+            .prepare_transform("unordered-joined-string", &options)?;
+        let context = traffic_value::Value::Null;
+        let plan = transformation
+            .inspect(&traffic_policy::TransformInput {
+                bytes: value.as_bytes(),
+                context: &context,
+            })?
+            .ok_or_else(|| anyhow::anyhow!("joined collection has no transformation"))?;
+        Ok(String::from_utf8(
+            plan.materialize(&BTreeMap::new())?.bytes,
+        )?)
+    };
+    canonical().unwrap_or_else(|_| value.into())
 }
 
 pub(super) fn equal(expected: &str, actual: &str, separator: &str) -> bool {
-    canonicalize(expected, separator) == canonicalize(actual, separator)
+    crate::value_extensions::compare_registered(
+        "unordered-joined-string",
+        &json!({"separator":separator}),
+        &json!(expected),
+        &json!(actual),
+    )
+    .is_ok_and(|evaluation| evaluation.passed())
 }
 
 pub(super) fn matching_discovery_separators(expected: &str, actual: &str) -> Vec<String> {
-    DISCOVERY_SEPARATORS
-        .into_iter()
-        .filter(|separator| {
-            let expected_parts = expected.split(separator).count();
-            let actual_parts = actual.split(separator).count();
-            (expected_parts >= 2 || actual_parts >= 2) && equal(expected, actual, separator)
-        })
-        .map(str::to_string)
-        .collect()
+    crate::value_extensions::analyze_values(
+        traffic_extensions::policies(),
+        &traffic_value::Value::String(expected.into()),
+        &traffic_value::Value::String(actual.into()),
+        "",
+        &json!({}),
+    )
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|finding| finding.policy == "unordered-joined-string")
+    .filter_map(|finding| match finding.proposal? {
+        traffic_policy::Proposal::Field(value) => value
+            .pointer("/options/separator")?
+            .as_str()
+            .map(str::to_owned),
+        traffic_policy::Proposal::Document(_) => None,
+    })
+    .collect()
 }
 
 #[cfg(test)]

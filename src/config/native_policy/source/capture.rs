@@ -70,9 +70,16 @@ pub(super) fn validate(
         }
         n::NativeEffect::CaptureHttpResponse(effect) => {
             let projected = super::super::capture_response(rule, effect);
-            let documents = match &effect.contract {
+            let transformation = match &effect.contract {
+                n::CaptureResponseContract::Policy(definition) => {
+                    Some(traffic_extensions::policies().prepare_transform_definition(definition)?)
+                }
                 n::CaptureResponseContract::Documents { rules } => {
-                    Some(traffic_response_rewrite::CompiledRewrite::compile(rules)?)
+                    let configuration = serde_json::from_value(serde_json::json!({"rules":rules}))?;
+                    Some(
+                        traffic_extensions::policies()
+                            .prepare_transform("documents", &configuration)?,
+                    )
                 }
                 _ => None,
             };
@@ -103,17 +110,18 @@ pub(super) fn validate(
                     )?
                     .context("capture response has no complete body slot")?;
                     let decoded = original_body(event, &headers, &body)?;
-                    if let Some(documents) = &documents {
+                    if let Some(transformation) = &transformation {
                         let uri: hyper::Uri = event["uri"]
                             .as_str()
                             .context("capture response has no request URI")?
                             .parse()?;
-                        if documents
-                            .inspect_with_query(
-                                &decoded,
-                                traffic_response_rewrite::RewriteBudget::default(),
-                                uri.query(),
-                            )?
+                        let context =
+                            serde_json::from_value(serde_json::json!({"query":uri.query()}))?;
+                        if transformation
+                            .inspect(&traffic_policy::TransformInput {
+                                bytes: &decoded,
+                                context: &context,
+                            })?
                             .is_some()
                         {
                             count += 1;

@@ -1,5 +1,6 @@
 //! Case-local identity equality and injectivity, independent of payload text.
 use super::*;
+#[cfg(test)]
 use crate::rule::IdentityFormat;
 use sha2::{Digest, Sha256};
 
@@ -86,44 +87,6 @@ impl Bijection {
                 target: target.clone(),
             })
     }
-}
-
-pub(super) fn compare(
-    source: &Value,
-    target: &Value,
-    prefix: &str,
-    format: IdentityFormat,
-    pointer: &str,
-    decisions: &mut Decisions,
-) -> Result<(), Difference> {
-    if source == target {
-        return decisions
-            .identities
-            .observe(source, target)
-            .map_err(|reason| difference(pointer, reason));
-    }
-    if source.is_string() != target.is_string() || source.is_number() != target.is_number() {
-        return Err(difference(
-            pointer,
-            "identity scalar representation changed",
-        ));
-    }
-    token(source, prefix, format, pointer)?;
-    token(target, prefix, format, pointer)?;
-    decisions
-        .identities
-        .observe(source, target)
-        .map_err(|reason| difference(pointer, reason))
-}
-
-pub(super) fn fingerprint(
-    value: &Value,
-    prefix: &str,
-    format: IdentityFormat,
-    pointer: &str,
-) -> Result<[u8; 32], Difference> {
-    token(value, prefix, format, pointer)?;
-    Ok(Sha256::digest(key(value, pointer)?.as_bytes()).into())
 }
 
 pub use crate::identity::{key, token};

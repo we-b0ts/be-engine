@@ -118,6 +118,12 @@ fn capture_response(
         n::CapturePath::Pattern { value } => (String::new(), Some(value.clone())),
     };
     let (pointers, plugin) = match &effect.contract {
+        n::CaptureResponseContract::Policy(definition) => (
+            vec![],
+            Some(super::HttpResponseRewritePluginConfig::Policy(
+                definition.clone(),
+            )),
+        ),
         n::CaptureResponseContract::Urls { pointers } => (
             pointers
                 .iter()

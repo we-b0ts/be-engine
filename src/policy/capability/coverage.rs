@@ -15,7 +15,7 @@ use crate::{
 use anyhow::Context;
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ValueCoordinate {
     pub(crate) protocol: ProtocolKind,
     pub(crate) role: ProtocolRole,
@@ -80,37 +80,14 @@ pub(crate) fn value_capability_support(
             reason: "derived timestamp delivery is installed only on dependency.response",
         };
     }
-    // Deliberately exhaust both closed axes: adding a codec or a semantic
-    // capability must register its support instead of inheriting a default.
-    match (codec, capability) {
-        (
-            CodecKind::Json,
-            CapabilityId::Unordered
-            | CapabilityId::RelativeTime
-            | CapabilityId::Duration
-            | CapabilityId::RebaseTime
-            | CapabilityId::Identity,
-        )
-        | (
-            CodecKind::Scalar,
-            CapabilityId::RelativeTime
-            | CapabilityId::Duration
-            | CapabilityId::RebaseTime
-            | CapabilityId::Identity,
-        )
-        | (
-            CodecKind::Protobuf,
-            CapabilityId::Unordered
-            | CapabilityId::RelativeTime
-            | CapabilityId::Duration
-            | CapabilityId::RebaseTime,
-        ) => Supported,
-        (CodecKind::Scalar, CapabilityId::Unordered) => Unsupported {
+    match (codec.as_str(), capability) {
+        ("scalar", CapabilityId::Unordered) => Unsupported {
             reason: "unordered requires a structured collection; the scalar codec rejects containers",
         },
-        (CodecKind::Protobuf, CapabilityId::Identity) => Unsupported {
+        ("protobuf", CapabilityId::Identity) => Unsupported {
             reason: "identity contracts require JSON or a physical SQL scalar; Protobuf identity is unsupported",
         },
+        _ => Supported,
     }
 }
 
@@ -146,7 +123,7 @@ pub(crate) fn validate_rule_coverage(rule: &Rule) -> Result<RuleExecutionPlan> {
         capabilities.insert(CapabilityId::RebaseTime);
     }
     for capability in &capabilities {
-        value_capability_support(coordinate, *capability)
+        value_capability_support(coordinate.clone(), *capability)
             .require()
             .with_context(|| format!(
                 "rule {:?} has unsupported value binding: protocol={}, role={role:?}, surface={:?}, slot={:?}, codec={:?}, capability={capability:?}",
@@ -227,6 +204,7 @@ pub(crate) fn validate_actual_protocol(
         slot: plan.slot.context("value plan lacks its physical slot")?,
         codec: plan
             .codec
+            .clone()
             .context("value plan lacks its prepared payload codec")?,
     };
     ensure!(
@@ -234,7 +212,7 @@ pub(crate) fn validate_actual_protocol(
         "value plan has no declared semantic capabilities"
     );
     for capability in &plan.capabilities {
-        value_capability_support(coordinate, *capability)
+        value_capability_support(coordinate.clone(), *capability)
             .require()
             .with_context(|| format!(
                 "actual value adapter does not support protocol={}, role={role:?}, surface={:?}, slot={:?}, codec={:?}, capability={capability:?}",

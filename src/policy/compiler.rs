@@ -1,4 +1,4 @@
-//! Pure validation and compilation into closed typed effects; no legacy YAML lowering.
+//! Validate native effects and registered value-policy declarations.
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
@@ -328,6 +328,9 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
             );
         }
         validate_pointer(path, true)?;
+        if let Some(definition) = contract.unconditional().registered_definition(false) {
+            traffic_extensions::policies().prepare_definition(&definition)?;
+        }
         validate_contract_binding(&rule.codec, path, contract)?;
         if let Some(time) = contract.unconditional().time() {
             time.clock_scope.validate(path)?;
@@ -356,6 +359,8 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
             time.offset()?;
         }
         match contract.unconditional() {
+            FieldContract::Exact => {}
+            FieldContract::Policy(_) => {}
             FieldContract::Time { anchor, .. } | FieldContract::Duration { anchor, .. } => {
                 ensure!(
                     matches!(
@@ -426,7 +431,7 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
             .keys()
             .map(|path| (path.clone(), rule.proof.clone()))
             .collect(),
-        codec_plan: std::sync::Arc::new(crate::value_codec::CodecPlan::compile(&rule.codec)?),
+        codec_plan: std::sync::Arc::new(crate::value_codec::compile(&rule.codec)?),
         execution_plan: std::sync::Arc::new(super::validate_rule_coverage(rule)?),
     })
 }
@@ -614,60 +619,7 @@ fn validate_key(key: &KeySelector) -> Result<()> {
 }
 
 pub(crate) fn validate_codec(codec: &Codec) -> Result<()> {
-    let Codec::Protobuf(codec) = codec else {
-        return Ok(());
-    };
-    ensure!(
-        codec.fields.len() <= 256,
-        "Protobuf accepts at most 256 explicit field bindings"
-    );
-    let mut paths = BTreeSet::new();
-    for (name, field) in &codec.fields {
-        validate_pointer(name, true)?;
-        ensure!(
-            !name.is_empty(),
-            "Protobuf field bindings require non-root named selectors"
-        );
-        ensure!(
-            !field.field_path.is_empty() && field.field_path.len() <= 32,
-            "Protobuf field_path requires 1..32 field numbers"
-        );
-        ensure!(
-            field
-                .field_path
-                .iter()
-                .all(|number| (1..=536_870_911).contains(number)
-                    && !(19_000..=19_999).contains(number)),
-            "invalid or reserved Protobuf field number"
-        );
-        ensure!(
-            paths.insert(&field.field_path),
-            "two named Protobuf bindings select the same wire field"
-        );
-    }
-    for (parent_name, parent) in &codec.fields {
-        for (child_name, child) in &codec.fields {
-            if child.field_path.len() <= parent.field_path.len()
-                || !child.field_path.starts_with(&parent.field_path)
-            {
-                continue;
-            }
-            ensure!(
-                parent.field_type == ProtobufType::Message,
-                "Protobuf scalar binding {parent_name:?} cannot have a descendant wire field"
-            );
-            let prefix = if parent.repeated {
-                format!("{parent_name}/*/")
-            } else {
-                format!("{parent_name}/")
-            };
-            ensure!(
-                child_name.starts_with(&prefix),
-                "Protobuf descendant {child_name:?} must retain the explicit message scope of {parent_name:?}"
-            );
-        }
-    }
-    Ok(())
+    crate::value_codec::compile(codec).map(|_| ())
 }
 
 fn validate_condition(rule: &Rule) -> Result<()> {
@@ -725,7 +677,7 @@ fn validate_field_overlaps(fields: &BTreeMap<String, FieldContract>) -> Result<(
             };
             let parent_length = pointer_segments(parent).len();
             ensure!(
-                matches!(fields[parent], FieldContract::Unordered)
+                fields[parent].supports_child_rules(traffic_extensions::policies())?
                     && child_segments[parent_length] == "*",
                 "overlapping contracts at {left:?} and {right:?}; child contracts require unordered element scope"
             );
@@ -756,17 +708,12 @@ fn validate_rule_overlaps(rules: &[CompiledRule]) -> Result<()> {
             );
             for left_path in left.rule.contract.keys() {
                 for right_path in right.rule.contract.keys() {
-                    let overlap = match (&left.rule.codec, &right.rule.codec) {
-                        (Codec::Protobuf(a), Codec::Protobuf(b)) => {
-                            let a = &a.fields[left_path].field_path;
-                            let b = &b.fields[right_path].field_path;
-                            a.iter().zip(b).all(|(a, b)| a == b)
-                        }
-                        _ => pointer_prefixes_overlap(
-                            &pointer_segments(left_path),
-                            &pointer_segments(right_path),
-                        ),
-                    };
+                    let overlap = crate::value_codec::fields_overlap(
+                        &left.rule.codec,
+                        left_path,
+                        &right.rule.codec,
+                        right_path,
+                    )?;
                     ensure!(
                         !overlap,
                         "rules {:?} and {:?} own overlapping fields {left_path:?}/{right_path:?}; combine contracts in one rule",
@@ -870,20 +817,8 @@ fn optional_paths_overlap(left: Option<&str>, right: Option<&str>, api: bool) ->
 }
 
 fn codecs_compatible(left: &Codec, right: &Codec) -> bool {
-    match (left, right) {
-        (Codec::Json, Codec::Json) | (Codec::Scalar, Codec::Scalar) => true,
-        (Codec::Protobuf(left), Codec::Protobuf(right)) => {
-            left.fields.iter().all(|(name, field)| {
-                right.fields.get(name).is_none_or(|other| field == other)
-                    && right.fields.values().all(|other| {
-                        field.field_path != other.field_path
-                            || field.field_type == other.field_type
-                                && field.repeated == other.repeated
-                    })
-            })
-        }
-        _ => false,
-    }
+    let mut merged = left.clone();
+    crate::value_contract::encoded::merge_codec(&mut merged, right).is_ok()
 }
 
 pub(crate) fn disjoint_conditions(

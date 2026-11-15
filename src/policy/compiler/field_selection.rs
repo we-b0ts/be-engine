@@ -70,7 +70,7 @@ pub(super) fn validate(rule: &Rule, resource: &Resource) -> Result<bool> {
                 "Redis database must be a nonnegative integer"
             );
             ensure!(
-                !matches!(rule.codec, Codec::Scalar),
+                !(rule.codec == Codec::Scalar),
                 "Redis values require an explicit JSON or Protobuf codec"
             );
             Ok(true)
@@ -80,7 +80,7 @@ pub(super) fn validate(rule: &Rule, resource: &Resource) -> Result<bool> {
 }
 
 pub(super) fn scalar(rule: &Rule) -> Result<()> {
-    if !matches!(rule.codec, Codec::Scalar) {
+    if !(rule.codec == Codec::Scalar) {
         return Ok(());
     }
     ensure!(
@@ -103,6 +103,8 @@ pub(super) fn scalar(rule: &Rule) -> Result<()> {
             FieldContract::Time { .. }
                 | FieldContract::Duration { .. }
                 | FieldContract::Identity { .. }
+                | FieldContract::Policy(_)
+                | FieldContract::Exact
         ),
         "scalar codec supports timestamp, duration and identity contracts"
     );

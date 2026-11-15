@@ -329,7 +329,7 @@ impl BodyEffect {
                         "duplicate native Protobuf alias"
                     );
                 }
-                let codec = Codec::Protobuf(ProtobufCodec { fields });
+                let codec = crate::value_codec::protobuf(ProtobufCodec { fields });
                 crate::policy::compiler::validate_codec(&codec)?;
                 Ok(Some(codec))
             }

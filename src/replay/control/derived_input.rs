@@ -30,7 +30,7 @@ pub(crate) async fn register(
         &serde_json::json!({"command":"derived_input","case_id":case,"derived_input":{"request_sent_at":sent_at,"request":request}}),
     )?;
     ensure!(
-        payload.len() < identity::MAX_CONTROL_BYTES,
+        payload.len() < MAX_CONTROL_BYTES,
         "derived input exceeds private control bound"
     );
     payload.push(b'\n');

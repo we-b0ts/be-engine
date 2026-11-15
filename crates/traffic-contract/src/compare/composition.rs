@@ -4,7 +4,7 @@ use super::*;
 
 impl Comparator<'_> {
     pub(super) fn global_native_leaf(
-        &self,
+        &mut self,
         context: LeafContext<'_>,
         selected: (usize, &Field<'_>),
         native_fields: &[(usize, &NativeField<'_>)],
@@ -39,6 +39,14 @@ impl Comparator<'_> {
             Some(field.contract)
         };
         match contract {
+            Some(FieldContract::Exact) => {
+                if context.source != context.target {
+                    return Err(difference(
+                        context.source_pointer,
+                        "exact field contract requires equal values",
+                    ));
+                }
+            }
             Some(FieldContract::IdentityAnchor) => {
                 if context.source != context.target {
                     return Err(difference(
@@ -51,37 +59,20 @@ impl Comparator<'_> {
                     .observe(context.source, context.target)
                     .map_err(|reason| difference(context.source_pointer, reason))?;
             }
-            Some(FieldContract::Identity { prefix, format }) => identity::compare(
-                context.source,
-                context.target,
-                prefix,
-                *format,
-                context.source_pointer,
-                &mut staged,
-            )?,
-            Some(contract @ FieldContract::Time { .. }) => {
-                if context.source != context.target {
-                    self.time_field(
-                        context.source,
-                        context.target,
-                        context.source_pointer,
-                        context.target_pointer,
-                        field,
-                        contract,
-                        &mut staged,
-                    )?;
-                }
-            }
-            Some(FieldContract::Duration { unit, anchor }) => {
-                if context.source != context.target {
-                    compare_duration(
-                        context.source,
-                        context.target,
-                        *unit,
-                        context.clocks.get(*anchor),
-                    )
-                    .map_err(|error| difference(context.source_pointer, &error.to_string()))?;
-                }
+            Some(contract) if contract.registered_definition(true).is_some() => {
+                let definition = contract
+                    .registered_definition(true)
+                    .expect("registered scalar contract");
+                self.registered_policy(
+                    &definition,
+                    field,
+                    context.source,
+                    context.target,
+                    context.source_pointer,
+                    context.target_pointer,
+                    &mut staged,
+                    0,
+                )?;
             }
             None => {}
             _ => {

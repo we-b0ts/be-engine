@@ -157,7 +157,7 @@ pub(crate) struct RequestContracts {
     rule_catalogue: Arc<case_plan::RuleCatalogue>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
     state: Arc<Mutex<State>>,
-    pub(crate) values: crate::replay::policy::values::ValueState,
+    pub(crate) values: crate::value_contract::state::ValueState,
     pub(crate) mysql_automatic:
         Arc<Mutex<crate::protocols::replay::mysql::contracts::automatic::Metadata>>,
 }

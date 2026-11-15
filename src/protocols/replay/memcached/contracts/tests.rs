@@ -441,7 +441,7 @@ fn json_get_delivery_preserves_native_key_flags_cas_and_text_framing() {
     let source = serde_json::to_vec(&json!({"expires_at":1000,"stable":7})).unwrap();
     let plan = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    /expires_at: {kind: time, formats: [unix_seconds]}\n").unwrap().global_json.unwrap();
     let target_at = DateTime::from_timestamp(2000, 0).unwrap();
-    let delivery = crate::replay::contract_value::Delivery::prepare_global(
+    let delivery = crate::value_contract::response_delivery::Delivery::prepare_global(
         &source,
         &plan,
         AnchorClocks {

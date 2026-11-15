@@ -1,4 +1,4 @@
-//! Structural JSON draft paths and bounded witness aggregation.
+//! Logical value draft paths and bounded witness aggregation.
 use super::*;
 
 #[derive(Default)]
@@ -8,6 +8,21 @@ pub(super) struct JsonLocation {
 }
 
 impl JsonLocation {
+    fn from_source(source: &traffic_value::Value, pointer: &str) -> Result<Self> {
+        traffic_value::path::validate(pointer, false)?;
+        let mut location = Self::default();
+        let mut value = source;
+        for part in pointer.split('/').skip(1) {
+            location = match value {
+                traffic_value::Value::Array(_) => location.element(part.parse()?),
+                _ => location.key(&part.replace("~1", "/").replace("~0", "~")),
+            };
+            value = value
+                .pointer(&format!("/{part}"))
+                .context("policy Source location is absent")?;
+        }
+        Ok(location)
+    }
     fn key(&self, key: &str) -> Self {
         let key = key.replace('~', "~0").replace('/', "~1");
         Self {
@@ -25,11 +40,33 @@ impl JsonLocation {
 }
 
 impl Drafts {
+    pub(super) fn source_findings(
+        &mut self,
+        bytes: &[u8],
+        source: &traffic_value::Value,
+        base: &Value,
+        witness: &str,
+        clocks: AnchorClocks,
+    ) -> Result<()> {
+        let mut facts = base.clone();
+        facts["clocks"] = clocks.observations();
+        facts["settings"] = json!({"time":self.time});
+        for finding in
+            crate::value_extensions::analyze_source(&self.policies, source, bytes, &facts)?
+        {
+            self.record_finding(&finding, base, witness)?;
+            if let Some(proposal) = &finding.proposal {
+                let location = JsonLocation::from_source(source, &finding.source_path)?;
+                self.push(&location, proposal, witness, &finding)?;
+            }
+        }
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)] // One bounded walk retains immutable decoding and clock context.
     pub(super) fn collect(
         &mut self,
-        source: &Value,
-        target: &Value,
+        source: &traffic_value::Value,
+        target: &traffic_value::Value,
         location: &JsonLocation,
         base: &Value,
         witness: &str,
@@ -48,62 +85,25 @@ impl Drafts {
             return Ok(());
         }
         self.examined += 1;
-        if let Some(contract) = crate::value_contract::time::automatic::contract(source, &self.time)
-            && crate::value_contract::json::compare(
-                source,
-                target,
-                &[Field {
-                    rule_id: crate::value_contract::time::automatic::RULE_ID,
-                    pointer: "",
-                    contract: &contract,
-                }],
-                clocks,
-            )
-            .passed()
-        {
+        let mut facts = base.clone();
+        facts["clocks"] = clocks.observations();
+        facts["settings"] = json!({"time":self.time});
+        let findings = crate::value_extensions::analyze_values(
+            &self.policies,
+            source,
+            target,
+            &location.pointer,
+            &facts,
+        )?;
+        let proposed = findings.iter().any(|finding| finding.proposal.is_some());
+        for finding in findings {
+            self.record_finding(&finding, base, witness)?;
+            if let Some(proposal) = &finding.proposal {
+                self.push(location, proposal, witness, &finding)?;
+            }
+        }
+        if proposed {
             return Ok(());
-        }
-        if let (Some(source), Some(target)) = (source.as_array(), target.as_array()) {
-            let sorted = |items: &[Value]| {
-                let mut values = items.iter().map(Value::to_string).collect::<Vec<_>>();
-                values.sort();
-                values
-            };
-            if sorted(source) == sorted(target) {
-                self.push(base, location, json!({"kind":"unordered"}), witness)?;
-                return Ok(());
-            }
-        }
-        let formats: &[&str] = if source.is_number() && target.is_number() {
-            match source.as_i64().unwrap_or(0) {
-                946_684_800_000_000.. => &["unix_microseconds"],
-                946_684_800_000.. => &["unix_milliseconds"],
-                946_684_800.. => &["unix_seconds"],
-                _ => &[],
-            }
-        } else if source.is_string() && target.is_string() {
-            &["rfc3339", "sql_datetime", "iso8601_naive"]
-        } else {
-            &[]
-        };
-        for format in formats {
-            let contract = json!({"kind":"time","format":format,"relation":"preserve_offset"});
-            let typed: FieldContract = serde_json::from_value(contract.clone())?;
-            if crate::value_contract::json::compare(
-                source,
-                target,
-                &[Field {
-                    rule_id: "draft",
-                    pointer: "",
-                    contract: &typed,
-                }],
-                clocks,
-            )
-            .passed()
-            {
-                self.push(base, location, contract, witness)?;
-                return Ok(());
-            }
         }
         if let (Some(source), Some(target)) = (source.as_object(), target.as_object()) {
             for (key, value) in source {
@@ -148,19 +148,46 @@ impl Drafts {
         Ok(())
     }
 
-    fn push(
+    fn record_finding(
         &mut self,
-        _base: &Value,
-        location: &JsonLocation,
-        contract: Value,
+        finding: &traffic_policy::Finding,
+        location: &Value,
         witness: &str,
     ) -> Result<()> {
-        let contract = if contract["kind"] == "time" {
-            json!({"kind":"time","formats":[contract["format"]]})
-        } else {
-            contract
+        let mut value = serde_json::to_value(finding)?;
+        value["location"] = location.clone();
+        value["witness_id"] = json!(witness);
+        let identity = serde_json::to_string(&value)?;
+        if self.finding_ids.insert(identity) && self.findings.len() < LIMIT {
+            self.findings.push(value);
+        }
+        Ok(())
+    }
+
+    fn push(
+        &mut self,
+        location: &JsonLocation,
+        proposal: &traffic_policy::Proposal,
+        witness: &str,
+        finding: &traffic_policy::Finding,
+    ) -> Result<()> {
+        let (identity, draft_policy) = match proposal {
+            traffic_policy::Proposal::Field(contract) => {
+                let contract = serde_json::to_value(contract)?;
+                (
+                    serde_json::to_string(&(&location.pattern, &contract))?,
+                    json!({"format":"traffic-policy/v3","json":{"fields":{&location.pattern:contract}}}),
+                )
+            }
+            traffic_policy::Proposal::Document(document) => {
+                let document = serde_json::to_value(document)?;
+                anyhow::ensure!(
+                    document.is_object() && document["format"] == "traffic-policy/v3",
+                    "registered proposal requires a complete policy fragment"
+                );
+                (serde_json::to_string(&("document", &document))?, document)
+            }
         };
-        let identity = serde_json::to_string(&(&location.pattern, &contract))?;
         let id = format!(
             "draft-{}",
             super::super::super::fingerprint::id(&[&identity]).trim_start_matches("fnv1a64:")
@@ -175,10 +202,12 @@ impl Drafts {
         {
             return Ok(());
         }
-        self.values.push(json!({"candidate_id":id,"witness_id":witness,"mechanism":contract["kind"],
-            "draft_policy":{"format":"traffic-policy/v3","json":{"fields":{&location.pattern:contract}}},
+        let candidate = json!({"candidate_id":id,"witness_id":witness,"mechanism":finding.policy,
+            "draft_policy":draft_policy,
             "section_update":"add",
-            "source_proof_required":true,"plan_ready":false}));
+            "source_proof_required":true,"plan_ready":false,
+            "hint":finding.hint,"summary":finding.summary,"requirements":finding.requirements});
+        self.values.push(candidate);
         Ok(())
     }
 

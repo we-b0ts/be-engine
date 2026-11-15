@@ -1,7 +1,7 @@
 //! Recorded Redis storage values and explicit delivery copies with exact RESP remainder.
 use super::*;
 use crate::policy::Surface;
-use crate::replay::contract_value::Delivery;
+use crate::value_contract::response_delivery::Delivery;
 mod contextual;
 
 #[derive(Debug, Clone)]

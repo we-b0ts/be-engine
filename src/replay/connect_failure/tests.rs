@@ -9,7 +9,7 @@ fn command(command: &str) -> super::super::control::ReplayControlRequest {
         case_id: Some("case-a".into()),
         fail_on_dirty: false,
         fail_on_incomplete: false,
-        identity_pairs: Vec::new(),
+        parameters: Default::default(),
         derived_input: None,
         native_event: None,
         input_timing: None,

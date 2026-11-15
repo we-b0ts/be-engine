@@ -21,12 +21,12 @@ use crate::http::content_encoding;
 
 #[cfg(test)]
 mod document_tests;
-mod documents;
 #[cfg(test)]
 mod json_url_tests;
 mod json_urls;
 mod kubectl_proxy;
 mod pluto;
+mod registered;
 
 pub(crate) use json_urls::{UrlTarget, inspect_url_target};
 pub(crate) use kubectl_proxy::KubectlProxyManager;
@@ -56,16 +56,27 @@ trait Plugin: Send + Sync {
 enum PluginResult {
     Unchanged,
     Rewritten {
-        body: Box<RewrittenBody>,
+        body: Box<dyn ResponseBody>,
         targets: Vec<DiscoveredTarget>,
         kubectl_proxy: Option<KubectlProxySpec>,
     },
 }
 
-enum RewrittenBody {
-    Complete(Vec<u8>),
-    Documents(traffic_response_rewrite::RewritePlan),
-    JsonUrls(json_urls::ResponsePlan),
+trait ResponseBody: Send + Sync {
+    fn materialize(
+        self: Box<Self>,
+        registered: &BTreeMap<String, crate::dns_mock::FakeDnsEntry>,
+    ) -> Result<(Vec<u8>, Vec<DiscoveredTcpTarget>)>;
+}
+
+struct CompleteBody(Vec<u8>);
+impl ResponseBody for CompleteBody {
+    fn materialize(
+        self: Box<Self>,
+        _registered: &BTreeMap<String, crate::dns_mock::FakeDnsEntry>,
+    ) -> Result<(Vec<u8>, Vec<DiscoveredTcpTarget>)> {
+        Ok((self.0, Vec::new()))
+    }
 }
 
 struct DiscoveredTarget {
@@ -78,17 +89,26 @@ struct DiscoveredTarget {
 pub(crate) struct CompiledRewrites {
     fingerprint: String,
     config: HttpResponseRewriteConfig,
-    documents: BTreeMap<String, documents::Documents>,
+    strategies: BTreeMap<String, registered::RegisteredRewrite>,
 }
 
 impl CompiledRewrites {
     pub(crate) fn new(config: &HttpResponseRewriteConfig) -> Result<Self> {
-        let documents = config
+        let strategies = config
             .rules
             .iter()
             .filter_map(|rule| match &rule.plugin {
+                Some(HttpResponseRewritePluginConfig::Policy(definition)) => Some(
+                    registered::RegisteredRewrite::from_definition(definition)
+                        .map(|compiled| (rule.name.clone(), compiled)),
+                ),
                 Some(HttpResponseRewritePluginConfig::Documents { rules }) => Some(
-                    documents::Documents::new(rules).map(|compiled| (rule.name.clone(), compiled)),
+                    serde_json::from_value(serde_json::json!({"rules":rules}))
+                        .map_err(anyhow::Error::from)
+                        .and_then(|configuration| {
+                            registered::RegisteredRewrite::new("documents", &configuration)
+                        })
+                        .map(|compiled| (rule.name.clone(), compiled)),
                 ),
                 _ => None,
             })
@@ -96,7 +116,7 @@ impl CompiledRewrites {
         Ok(Self {
             fingerprint: format!("{:x}", Sha256::digest(serde_json::to_vec(config)?)),
             config: config.clone(),
-            documents,
+            strategies,
         })
     }
 }
@@ -165,8 +185,11 @@ pub(crate) async fn apply(
             )?);
             owned.as_ref()
         }
-        Some(HttpResponseRewritePluginConfig::Documents { .. }) => compiled
-            .documents
+        Some(
+            HttpResponseRewritePluginConfig::Documents { .. }
+            | HttpResponseRewritePluginConfig::Policy(_),
+        ) => compiled
+            .strategies
             .get(&rule.name)
             .ok_or_else(|| anyhow!("response rewrite rule was not compiled"))?,
         None => {
@@ -227,11 +250,7 @@ pub(crate) async fn apply(
         );
         registered_aliases.insert(target.alias, entry.clone());
     }
-    let (body, discovered_tcp_targets) = match *body {
-        RewrittenBody::Complete(body) => (body, Vec::new()),
-        RewrittenBody::Documents(plan) => documents::render(plan, &registered_aliases)?,
-        RewrittenBody::JsonUrls(plan) => plan.render(&registered_aliases)?,
-    };
+    let (body, discovered_tcp_targets) = body.materialize(&registered_aliases)?;
 
     let mut headers = input.headers.clone();
     normalize_rewritten_headers(&mut headers, body.len())?;

@@ -80,31 +80,31 @@ fn unsupported_cells_are_explicit_instead_of_claiming_protocol_equivalence() {
         codec: CodecKind::Protobuf,
     };
     assert!(
-        value_capability_support(query, CapabilityId::Identity)
+        value_capability_support(query.clone(), CapabilityId::Identity)
             .require()
             .unwrap_err()
             .to_string()
             .contains("Protobuf identity")
     );
-    value_capability_support(query, CapabilityId::RelativeTime)
+    value_capability_support(query.clone(), CapabilityId::RelativeTime)
         .require()
         .unwrap();
     query.codec = CodecKind::Scalar;
     assert!(
-        value_capability_support(query, CapabilityId::Unordered)
+        value_capability_support(query.clone(), CapabilityId::Unordered)
             .require()
             .is_err()
     );
     query.codec = CodecKind::Json;
     assert!(
-        value_capability_support(query, CapabilityId::RebaseTime)
+        value_capability_support(query.clone(), CapabilityId::RebaseTime)
             .require()
             .is_err()
     );
     for protocol in [ProtocolKind::Motan, ProtocolKind::Kafka] {
         query.protocol = protocol;
         assert!(
-            value_capability_support(query, CapabilityId::RelativeTime)
+            value_capability_support(query.clone(), CapabilityId::RelativeTime)
                 .require()
                 .unwrap_err()
                 .to_string()
@@ -113,7 +113,7 @@ fn unsupported_cells_are_explicit_instead_of_claiming_protocol_equivalence() {
     }
     query.protocol = ProtocolKind::Mysql;
     assert!(
-        value_capability_support(query, CapabilityId::Identity)
+        value_capability_support(query.clone(), CapabilityId::Identity)
             .require()
             .is_err(),
         "SQL cannot silently use a key/value slot"

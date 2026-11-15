@@ -2,6 +2,8 @@
 use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint};
 use super::*;
 mod generated_values;
+#[cfg(test)]
+mod registered_tests;
 mod resource_fields;
 mod stateful_dependencies;
 pub(super) use generated_values::has_response_jwt;
@@ -45,11 +47,28 @@ fn complete_candidates(facts: &Value, name: &str) -> bool {
     nonempty(&facts[name]["candidates"]) && facts[name]["omitted_candidates"] == 0
 }
 
-pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
+pub(super) fn try_rule_hints(
+    root: &Path,
+    query: &str,
+    facts: &Value,
+) -> Result<Vec<RewriteRuleHint>> {
     if let Some(hint) = super::policy_freshness::refresh_hint(root, facts) {
-        return vec![hint];
+        return Ok(vec![hint]);
     }
-    let mut hints = generated_values::hints(root, query, facts);
+    let mut hints = registered_hints(root, facts);
+    let mut context = facts.clone();
+    context["query"] = json!(query);
+    for finding in
+        crate::value_extensions::analyze_context(traffic_extensions::policies(), &context)?
+    {
+        hints.push(RewriteRuleHint {
+            capability: finding.policy.clone(),
+            rule: finding.policy,
+            hint: finding.hint,
+            help: help(root),
+        });
+    }
+    hints.extend(generated_values::hints(root, query, facts));
     hints.extend(resource_fields::hints(root, query, facts));
     hints.extend(stateful_dependencies::hints(root, query, facts));
     let mut add = |capability: &str, rule: &str, instruction: &str| {
@@ -95,15 +114,10 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
                 },
             );
         }
-        return hints;
+        return Ok(hints);
     }
     if query == QUERY_IP_CAPTURE {
-        add(
-            "http_response_url",
-            "recorder_capture",
-            "Trace the reported IP to the exact Source response and URL location. If Source confirms a learned address, review http.response_rewrite in docs/content-policy-layout.md and preserve the original capture identity and scope. A capture change requires fresh recording; static addresses need Source configuration or a Source mock.",
-        );
-        return hints;
+        return Ok(hints);
     }
     if query == QUERY_JWT_TIME_VALIDITY && nonempty(&facts["candidates"]) {
         add(
@@ -111,7 +125,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "input_token_rebase",
             "Trace the inbound token location and signing key in the frozen startup inputs. A named signature profile and API request position authorize re-signing with preserved relative time. Source signature and lifetime evidence are required; consult docs/signature-profiles.md for the supported declaration.",
         );
-        return hints;
+        return Ok(hints);
     }
     if query == QUERY_SOURCE_PROCESS_TRAFFIC && has_redis_bootstrap_traffic(facts) {
         add(
@@ -119,10 +133,10 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "process_ownership",
             "Trace the named Source startup task and complete initialization inventory before proposing process_dependencies. Inspect existing lifetime declarations; unused calls alone do not prove process ownership.",
         );
-        return hints;
+        return Ok(hints);
     }
     if query != QUERY_DIRTY_CLUSTERS {
-        return hints;
+        return Ok(hints);
     }
     if cluster(facts, "redis", "unused_recorded") || cluster(facts, "mysql", "unused_recorded") {
         add(
@@ -131,16 +145,8 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "Unused dependency calls are not evidence of process ownership and can be detached API work. Prove the unique API origin, typed request-body predicates and captured SQL identity; linked scripts, transaction members and resource calls retain their own proof. process_owned is an ownership effect and cannot be inferred from a value codec or a shared task ID. Target failures and finite consumption stay required.",
         );
     }
-    for (protocol, capability) in [
-        ("http", "resource_field_contract"),
-        ("redis", "resource_field_contract"),
-    ] {
+    for protocol in ["http", "redis"] {
         if cluster(facts, protocol, "unmatched_target") {
-            add(
-                capability,
-                "unordered",
-                "Inspect protected Source/Target differences and declare the collection once in root json.fields with kind: unordered. The same JSON path applies to requests, responses and stored JSON across APIs and transports. Preserve element associations, duplicate counts and unselected business fields. Native HTTP method, endpoint, path, query, headers and finite consumption stay checked. Use the returned planner with an additive proposal.",
-            );
             add(
                 if protocol == "http" {
                     "http_cross_case"
@@ -152,16 +158,6 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             );
         }
     }
-    if facts["egress_rejections"]["rejected_packets_in_samples"]
-        .as_u64()
-        .is_some_and(|n| n > 0)
-    {
-        add(
-            "http_response_url",
-            "recorder_capture",
-            "Packet rejection counts identify neither an IP nor its origin. Inspect Source calls and use route --cause unrecorded-ip with current evidence when the endpoint is known. Review any learned-response address through http.response_rewrite only with Source URL provenance; capture changes require fresh recording.",
-        );
-    }
     if facts["clusters"]
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["protocol"] == "memcached"))
@@ -172,7 +168,37 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "Investigate Memcached SET value differences through the same JSON or typed PB value contract used by Redis. Choose an explicit operation/key and logical field; protocol presence alone proves neither a time strategy nor an ordering exemption.",
         );
     }
-    hints
+    Ok(hints)
+}
+
+#[cfg(test)]
+pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
+    try_rule_hints(root, query, facts).expect("registered evidence analysis succeeds")
+}
+
+fn registered_hints(root: &Path, facts: &Value) -> Vec<RewriteRuleHint> {
+    let mut seen = std::collections::BTreeSet::new();
+    facts["policy_findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(facts["candidates"].as_array().into_iter().flatten())
+        .filter_map(|candidate| {
+            let policy = candidate["policy"]
+                .as_str()
+                .or_else(|| candidate["mechanism"].as_str())?;
+            let hint = candidate["hint"].as_str()?;
+            if !seen.insert((policy, hint)) {
+                return None;
+            }
+            Some(RewriteRuleHint {
+                capability: policy.into(),
+                rule: policy.into(),
+                hint: hint.into(),
+                help: help(root),
+            })
+        })
+        .collect()
 }
 
 pub(super) fn applicable_rule_planners(
@@ -317,7 +343,7 @@ mod tests {
         let facts = serde_json::json!({"egress_rejections":{"rejected_packets_in_samples":2},"clusters":[]});
         let hints = rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts);
         assert_eq!(hints.len(), 1);
-        assert_eq!(hints[0].capability, "http_response_url");
+        assert_eq!(hints[0].capability, "documents");
         assert!(hints[0].help.argv.contains(&"rule".into()));
         assert!(hints[0].hint.contains("route --cause unrecorded-ip"));
         assert!(

@@ -75,8 +75,9 @@ mod tcp_gateway;
 mod tcp_listener;
 mod tls;
 mod udp_gateway;
-pub(crate) mod value_codec;
+mod value_codec;
 pub(crate) mod value_contract;
+pub(crate) mod value_extensions;
 mod value_limits;
 mod verification_progress;
 

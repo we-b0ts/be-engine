@@ -70,6 +70,9 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                 text(content_type, "capture content type", 128)?;
             }
             match &effect.contract {
+                CaptureResponseContract::Policy(definition) => {
+                    traffic_extensions::policies().prepare_transform_definition(definition)?;
+                }
                 CaptureResponseContract::Urls { pointers } => {
                     ensure!(
                         (1..=128).contains(&pointers.len()),
@@ -92,7 +95,9 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                     );
                 }
                 CaptureResponseContract::Documents { rules } => {
-                    traffic_response_rewrite::CompiledRewrite::compile(rules)?;
+                    let configuration = serde_json::from_value(serde_json::json!({"rules":rules}))?;
+                    traffic_extensions::policies()
+                        .prepare_transform("documents", &configuration)?;
                 }
             }
         }

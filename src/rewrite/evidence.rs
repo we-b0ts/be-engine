@@ -37,8 +37,10 @@ mod response_body;
 mod rule_guidance;
 mod unified_discovery;
 mod witness;
+#[cfg(test)]
+use rule_guidance::rule_hints;
 pub(super) use rule_guidance::supports_response_body_codec;
-use rule_guidance::{applicable_rule_planners, rule_hints};
+use rule_guidance::{applicable_rule_planners, try_rule_hints};
 pub use witness::query_rewrite_witness_for_scope;
 
 const QUERY_JWT_TIME_VALIDITY: &str = "jwt_time_validity";
@@ -187,7 +189,7 @@ pub(super) fn query(
             ),
         });
     }
-    let mut hints = rule_hints(target_root, kind, &facts);
+    let mut hints = try_rule_hints(target_root, kind, &facts)?;
     if let Some(hint) = unified_rule_hint(target_root, state) {
         hints.push(hint);
     }

@@ -84,6 +84,9 @@ pub(crate) fn compare_hessian2(
     unordered_paths: &[Hessian2UnorderedPath],
     joined_string_paths: &[Hessian2JoinedStringPath],
 ) -> Result<bool> {
+    if !unordered_paths.is_empty() {
+        traffic_extensions::policies().prepare("unordered", &traffic_value::Value::Null)?;
+    }
     let (_, mut expected, mut actual) = parse_bodies(expected, actual)?;
     for path in unordered_paths {
         canonicalize_path(&mut expected, &path.value_path.0, &path.value_path)?;
@@ -526,7 +529,11 @@ fn discover_paths(
             let mut actual_sorted = actual_values.iter().collect::<Vec<_>>();
             expected_sorted.sort();
             actual_sorted.sort();
-            if expected_values != actual_values && expected_sorted == actual_sorted {
+            if expected_values != actual_values
+                && expected_sorted == actual_sorted
+                && traffic_extensions::policies()
+                    .supports("unordered", traffic_policy::PolicyAction::Analyze)
+            {
                 discovered.insert(Hessian2ValuePath(path.clone()));
                 return;
             }

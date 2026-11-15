@@ -24,7 +24,7 @@ pub(crate) struct PreparedFormat {
     pub format: &'static str,
     pub declared_fields: usize,
     pub eligible_protocols: Vec<crate::protocol_contract::ProtocolKind>,
-    pub semantic_kinds: std::collections::BTreeSet<&'static str>,
+    pub semantic_kinds: std::collections::BTreeSet<String>,
 }
 
 impl PreparedCaseRules {

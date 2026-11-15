@@ -13,7 +13,7 @@ pub(super) use report::ProtocolReport;
 
 #[derive(Debug)]
 pub(crate) struct Inventory {
-    pub core: ExchangeInventory,
+    pub core: ExchangeInventory<crate::value_extensions::ValueRules>,
     global_usage: BTreeMap<ProtocolId, traffic_replay::report::Usage>,
     pub providers: Arc<crate::protocols::DependencyProviders>,
     pub contracts: Arc<dyn policy::ValueRuleHost>,
@@ -31,7 +31,7 @@ impl Inventory {
             core: Default::default(),
             global_usage: Default::default(),
             providers,
-            contracts: Arc::new(policy::values::ValueState::default()),
+            contracts: crate::value_extensions::strict_values(),
             order: Default::default(),
             failures: Default::default(),
             matched: Default::default(),
@@ -129,7 +129,7 @@ impl Inventory {
                 position: u64::try_from(position)?,
                 capture: capture.clone(),
             },
-            rules,
+            crate::value_extensions::replay_rules(rules),
         )?;
         self.core.exchanges[index].request = prepared.0;
         self.core.exchanges[index].response = prepared.1;
@@ -160,8 +160,8 @@ impl Inventory {
         capture: Option<&CaptureMetadata>,
         contracts: &dyn policy::ValueRuleHost,
     ) -> Result<(
-        traffic_replay::rules::PreparedMessage,
-        traffic_replay::rules::PreparedMessage,
+        traffic_policy_value::PreparedMessage,
+        traffic_policy_value::PreparedMessage,
     )> {
         let start = capture.map(|capture| capture.started_at);
         let delivered = start.and_then(|start| {
@@ -182,12 +182,12 @@ impl Inventory {
         });
         let response_policy = contracts.document_policy(response_clocks);
         Ok((
-            traffic_replay::rules::PreparedMessage::compile_with_policy(
+            crate::value_extensions::prepare_message_with_policy(
                 exchange.request.as_ref(),
                 &rules.request,
                 request_policy,
             )?,
-            traffic_replay::rules::PreparedMessage::compile_with_policy(
+            crate::value_extensions::prepare_message_with_policy(
                 exchange.response.as_ref(),
                 &rules.response,
                 response_policy,

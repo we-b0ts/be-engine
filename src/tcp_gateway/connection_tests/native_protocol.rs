@@ -10,7 +10,7 @@ use traffic_contract::{
     codec::Codec,
     rule::{FieldContract, IdentityFormat},
 };
-use traffic_replay::rules::{MessageSide, RuleBinding, ValueRule};
+use traffic_policy_value::{MessageSide, RuleBinding, ValueRule};
 
 const NATIVE: &str = traffic_protocol_fixture::NAME;
 

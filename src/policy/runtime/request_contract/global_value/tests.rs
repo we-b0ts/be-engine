@@ -59,7 +59,7 @@ fn url_query_delivery_shares_one_uncommitted_identity_with_root_and_other_urls()
         "links":[format!("https://auth.test/other?session_id={A}")]
     });
     let bytes = serde_json::to_vec(&original).unwrap();
-    let delivery = crate::replay::contract_value::Delivery::prepare_global(
+    let delivery = crate::value_contract::response_delivery::Delivery::prepare_global(
         &bytes,
         owner.global_json().unwrap(),
         Default::default(),
@@ -244,7 +244,7 @@ fn global_time_delivery_and_optional_fields_preserve_unselected_values() {
         None,
     );
     let source = br#"{ "created_at": 1005, "stable": "unchanged" }"#;
-    let delivery = crate::replay::contract_value::Delivery::prepare_global(
+    let delivery = crate::value_contract::response_delivery::Delivery::prepare_global(
         source,
         owner.global_json().unwrap(),
         clocks,
@@ -257,7 +257,7 @@ fn global_time_delivery_and_optional_fields_preserve_unselected_values() {
     assert_eq!(parsed["created_at"], 2005);
     assert_eq!(parsed["stable"], "unchanged");
     let absent = br#"{ "stable": true }"#;
-    let delivery = crate::replay::contract_value::Delivery::prepare_global(
+    let delivery = crate::value_contract::response_delivery::Delivery::prepare_global(
         absent,
         owner.global_json().unwrap(),
         Default::default(),

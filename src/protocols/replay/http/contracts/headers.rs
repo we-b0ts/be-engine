@@ -46,7 +46,7 @@ pub(super) fn materialize(
         }
     }
     let plan = crate::policy::JsonPolicy { fields }.compile()?;
-    let delivery = crate::replay::contract_value::Delivery::prepare_global(
+    let delivery = crate::value_contract::response_delivery::Delivery::prepare_global(
         &serde_json::to_vec(&values)?,
         &plan,
         clocks,

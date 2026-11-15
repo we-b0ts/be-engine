@@ -90,7 +90,7 @@ fn convert_document(
             continue;
         };
         ensure!(
-            matches!(rule.codec, p::Codec::Json),
+            rule.codec.is_json(),
             "retired codec fixture requires a native projection or exact opaque comparison"
         );
         for (pointer, contract) in rule.contract {

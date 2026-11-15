@@ -1,8 +1,8 @@
 //! Application binding of shared request, clock and value-rule capabilities.
 use super::*;
-use crate::replay::policy::IdentityDeliveryHost;
 use crate::replay::policy::RequestRuleRuntime;
 use crate::replay::policy::ValueRuleHost;
+use crate::value_contract::response_delivery::IdentityDeliveryHost;
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
     identity::{IdentityDecision, IdentityDelivery, IdentityPair},
@@ -10,6 +10,7 @@ use traffic_contract::{
 };
 use traffic_protocol::connection::NativeFuture;
 
+mod response_constraints;
 mod response_identities;
 
 impl IdentityDeliveryHost for RequestContracts {
@@ -28,8 +29,8 @@ struct GlobalDocumentPolicy {
     owner: RequestContracts,
     clocks: AnchorClocks,
 }
-impl traffic_replay::rules::DocumentPolicy for GlobalDocumentPolicy {
-    fn paths(&self, source: &Value) -> Result<Vec<String>> {
+impl traffic_policy_value::DocumentPolicy for GlobalDocumentPolicy {
+    fn paths(&self, source: &traffic_value::Value) -> Result<Vec<String>> {
         crate::value_contract::global::policy_paths(
             source,
             self.owner
@@ -40,8 +41,8 @@ impl traffic_replay::rules::DocumentPolicy for GlobalDocumentPolicy {
     }
     fn compare(
         &self,
-        source: &Value,
-        target: &Value,
+        source: &traffic_value::Value,
+        target: &traffic_value::Value,
         fields: &[traffic_contract::compare::Field<'_>],
         clocks: AnchorClocks,
     ) -> Result<Comparison> {
@@ -88,18 +89,19 @@ impl ValueRuleHost for RequestContracts {
     fn document_policy(
         &self,
         clocks: AnchorClocks,
-    ) -> Option<Arc<dyn traffic_replay::rules::DocumentPolicy>> {
+    ) -> Option<Arc<dyn traffic_policy_value::DocumentPolicy>> {
         self.global_json().map(|_| {
             Arc::new(GlobalDocumentPolicy {
                 owner: self.clone(),
                 clocks,
-            }) as Arc<dyn traffic_replay::rules::DocumentPolicy>
+            }) as Arc<dyn traffic_policy_value::DocumentPolicy>
         })
     }
     fn begin_case(&self, case: &str) {
         Self::begin_case(self, case);
     }
-    fn clear_identities(&self, case: &str) {
+    fn clear_case_values(&self, case: &str) {
+        Self::clear_time_copies(self, case);
         Self::clear_identities(self, case);
     }
 
@@ -181,24 +183,26 @@ impl RequestRuleRuntime for RequestContracts {
     fn request_times(&self, case: &str) -> ClockPair {
         Self::request_times(self, case)
     }
-    fn delivered_time_copies(
-        &self,
-        case: &str,
-    ) -> crate::value_contract::time_copies::DeliveredTimeCopies {
-        Self::delivered_time_copies(self, case)
+    fn case_flags(&self, case: &str) -> BTreeMap<String, Value> {
+        BTreeMap::from([(
+            "has_response_time_copies".into(),
+            serde_json::json!(self.has_time_copies(case)),
+        )])
     }
-    fn has_time_copies(&self, case: &str) -> bool {
-        Self::has_time_copies(self, case)
-    }
-    fn clear_time_copies(&self, case: &str) {
+    fn clear_case_values(&self, case: &str) {
         Self::clear_time_copies(self, case);
-    }
-    fn clear_identities(&self, case: &str) {
         Self::clear_identities(self, case);
     }
-    fn accept_response_identities(&self, case: &str, pairs: &[IdentityPair]) -> Result<()> {
-        self.validate_response_identity_formats(pairs)?;
-        Self::commit_identity(self, Self::preview_identity_pairs(self, case, pairs)?)
+    fn control_is_read_only(&self, command: &str) -> bool {
+        command == "response_time_copies"
+    }
+    fn control(
+        &self,
+        case: Option<&str>,
+        command: &str,
+        parameters: &BTreeMap<String, traffic_value::Value>,
+    ) -> Result<Option<Value>> {
+        response_constraints::control(self, case, command, parameters)
     }
     fn prepare_derived_inputs(
         &self,

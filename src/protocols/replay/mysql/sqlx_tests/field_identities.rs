@@ -174,14 +174,22 @@ async fn mysql_field_ids_survive_reads_and_response_control_without_sql_template
             .identity_pairs()
         };
         assert!(
-            crate::replay::check_response_identities(&session, "case-id", &compare(TARGET))
-                .await
-                .is_ok()
+            crate::value_contract::response_constraints::check_response_identities(
+                &session,
+                "case-id",
+                &compare(TARGET)
+            )
+            .await
+            .is_ok()
         );
         assert!(
-            crate::replay::check_response_identities(&session, "case-id", &compare(WRONG))
-                .await
-                .is_err()
+            crate::value_contract::response_constraints::check_response_identities(
+                &session,
+                "case-id",
+                &compare(WRONG)
+            )
+            .await
+            .is_err()
         );
         server.await.unwrap();
         let _ = std::fs::remove_file(socket);

@@ -57,7 +57,7 @@ fn template_only_delivery_reuses_complete_accepted_session_without_early_publica
         .unwrap();
 
     let source = json!({"url": url(&source_session), "stable": true});
-    let prepared = crate::replay::contract_value::Delivery::prepare_global(
+    let prepared = crate::value_contract::response_delivery::Delivery::prepare_global(
         source.to_string().as_bytes(),
         owner.global_json().unwrap(),
         Default::default(),
@@ -116,7 +116,7 @@ fn malformed_matched_template_cannot_be_prepared_even_when_bytes_equal() {
         json!({"url":format!("{}=", url(&session(1)))}),
     ] {
         assert!(
-            crate::replay::contract_value::Delivery::prepare_global(
+            crate::value_contract::response_delivery::Delivery::prepare_global(
                 source.to_string().as_bytes(),
                 owner.global_json().unwrap(),
                 Default::default(),
@@ -131,7 +131,6 @@ fn malformed_matched_template_cannot_be_prepared_even_when_bytes_equal() {
 fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_store() {
     use crate::replay::policy::ValueRuleHost;
     use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessage};
-    use traffic_replay::rules::PreparedMessage;
 
     struct Message(Value);
     impl ProtocolMessage for Message {
@@ -158,7 +157,8 @@ fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_stor
     let source = Message(json!({"session_id":source_session}));
     let target = Message(json!({"session_id":target_session}));
     let policy = owner.document_policy(Default::default());
-    let request = PreparedMessage::compile_with_policy(&source, &[], policy).unwrap();
+    let request =
+        crate::value_extensions::prepare_message_with_policy(&source, &[], policy).unwrap();
     let comparison = request
         .compare(
             &target,
@@ -182,7 +182,8 @@ fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_stor
         Default::default(),
     );
     let policy = owner.document_policy(clocks);
-    let prepared = PreparedMessage::compile_with_policy(&response, &[], policy).unwrap();
+    let prepared =
+        crate::value_extensions::prepare_message_with_policy(&response, &[], policy).unwrap();
     let rendered = prepared
         .render_delivery_with_documents(
             clocks,

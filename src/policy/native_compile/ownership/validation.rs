@@ -214,30 +214,31 @@ pub(super) fn value_claims(compiled: &CompiledRule) -> Result<Vec<NativeFieldCla
     rule.contract
         .iter()
         .map(|(pointer, contract)| {
-            let location = match &rule.codec {
-                Codec::Scalar => OwnedLocation::Scalar,
-                Codec::Json => OwnedLocation::JsonPointer {
-                    pointer: pointer.clone(),
-                },
-                Codec::Protobuf(codec) => {
-                    let field = crate::policy::resolve_protobuf_field(codec, pointer)
-                        .context("compiled Protobuf field has no typed binding")?;
-                    let element = if codec.fields.contains_key(pointer) {
-                        None
+            let location = if rule.codec == Codec::Scalar {
+                OwnedLocation::Scalar
+            } else if let Some(codec) = crate::value_codec::protobuf_schema(&rule.codec) {
+                let field = codec
+                    .field(pointer)
+                    .context("compiled Protobuf field has no typed binding")?;
+                let element = if codec.fields.contains_key(pointer) {
+                    None
+                } else {
+                    let (_, element) = pointer
+                        .rsplit_once('/')
+                        .context("invalid bound scalar element")?;
+                    Some(if element == "*" {
+                        OwnedElement::Any
                     } else {
-                        let (_, element) = pointer
-                            .rsplit_once('/')
-                            .context("invalid bound scalar element")?;
-                        Some(if element == "*" {
-                            OwnedElement::Any
-                        } else {
-                            OwnedElement::Index(element.parse()?)
-                        })
-                    };
-                    OwnedLocation::Protobuf {
-                        field_path: field.field_path,
-                        element,
-                    }
+                        OwnedElement::Index(element.parse()?)
+                    })
+                };
+                OwnedLocation::Protobuf {
+                    field_path: field.field_path,
+                    element,
+                }
+            } else {
+                OwnedLocation::JsonPointer {
+                    pointer: pointer.clone(),
                 }
             };
             Ok(NativeFieldClaim {
@@ -261,7 +262,7 @@ pub(super) fn value_claims(compiled: &CompiledRule) -> Result<Vec<NativeFieldCla
                     Slot::RedisValue(container) => NativeOwnedSlot::RedisValue(*container),
                 },
                 location,
-                collection: matches!(contract, FieldContract::Unordered),
+                collection: contract.supports_child_rules(traffic_extensions::policies())?,
                 contract: Some(contract.clone()),
             })
         })

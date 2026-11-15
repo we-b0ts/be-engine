@@ -207,7 +207,7 @@ impl RequestContracts {
                 && self.has_time_copies(case)
                 && crate::json_value::parse(source).is_some()
             {
-                let plan = crate::value_codec::CodecPlan::compile(&crate::policy::Codec::Json)?;
+                let plan = crate::value_codec::compile(&crate::policy::Codec::Json)?;
                 let expected = plan.decode(source)?;
                 let observed = plan.decode(actual)?;
                 let lookups = super::time_copies::redis_global_time_write_lookups(

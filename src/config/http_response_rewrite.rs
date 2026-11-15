@@ -47,6 +47,7 @@ pub struct HttpResponseRewriteRuleConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum HttpResponseRewritePluginConfig {
+    Policy(traffic_policy::PolicyDefinition),
     PlutoEciKubeconfig {
         kubectl_binary: String,
         proxy_listen: SocketAddr,
@@ -126,6 +127,10 @@ fn validate_pointers(name: &str, pointers: &[String]) -> Result<()> {
 impl HttpResponseRewritePluginConfig {
     fn validate(&self, rule_name: &str) -> Result<()> {
         match self {
+            Self::Policy(definition) => {
+                traffic_extensions::policies().prepare_transform_definition(definition)?;
+                Ok(())
+            }
             Self::PlutoEciKubeconfig {
                 kubectl_binary,
                 proxy_listen,
@@ -147,7 +152,8 @@ impl HttpResponseRewritePluginConfig {
                 Ok(())
             }
             Self::Documents { rules } => {
-                traffic_response_rewrite::CompiledRewrite::compile(rules)?;
+                let configuration = serde_json::from_value(serde_json::json!({"rules":rules}))?;
+                traffic_extensions::policies().prepare_transform("documents", &configuration)?;
                 Ok(())
             }
         }

@@ -229,7 +229,7 @@ impl Inventory {
         let rendered = exchange.response.render_delivery_with_documents(
             clocks,
             &crate::value_contract::json::PolicyMetadata,
-            &exchange.rebase_time,
+            &exchange.delivery,
             |selected| {
                 self.contracts
                     .identity_deliveries(&scope, selected)

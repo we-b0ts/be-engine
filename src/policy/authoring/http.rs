@@ -166,8 +166,11 @@ fn capture(
         "HTTP response capture exceeds URL, status or content-type bounds"
     );
     ensure!(
-        capture.capture_urls.is_empty() != capture.documents.is_empty(),
-        "response rewrite requires exactly one json_urls or documents declaration"
+        usize::from(!capture.capture_urls.is_empty())
+            + usize::from(!capture.documents.is_empty())
+            + usize::from(capture.policy.is_some())
+            == 1,
+        "response rewrite requires exactly one json_urls, documents or policy declaration"
     );
     let proof = inherit(entry.proof.as_ref(), None)?;
     let mut seen = BTreeSet::new();
@@ -213,7 +216,9 @@ fn capture(
             },
             status_codes: capture.status_codes.clone(),
             content_types: capture.content_types.clone(),
-            contract: if capture.documents.is_empty() {
+            contract: if let Some(definition) = &capture.policy {
+                CaptureResponseContract::Policy(definition.clone())
+            } else if capture.documents.is_empty() {
                 CaptureResponseContract::Urls { pointers }
             } else {
                 CaptureResponseContract::Documents {

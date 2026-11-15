@@ -28,7 +28,6 @@ pub(crate) mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
 pub(crate) mod connect_failure;
-pub(crate) mod contract_value;
 pub(crate) mod control;
 pub(crate) mod lifecycle_cleanup;
 pub(crate) mod native;
@@ -197,8 +196,8 @@ pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
 pub(crate) use control::{
-    FinalizationScope, check_response_identities, input_timing_observer, native_event_observer,
-    primary_close_observer, register_derived_input,
+    FinalizationScope, input_timing_observer, native_event_observer, primary_close_observer,
+    register_derived_input,
 };
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {

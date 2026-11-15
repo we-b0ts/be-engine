@@ -1,0 +1,17 @@
+[package]
+name = "traffic-policy-value"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+traffic-contract = { path = "../traffic-contract" }
+traffic-value = { path = "../traffic-value" }
+traffic-protocol = { path = "../traffic-protocol" }
+anyhow = "1"
+bytes = "1"
+serde_json = "1"
+
+[dev-dependencies]
+traffic-policy = { path = "../traffic-policy" }
+chrono = "0.4"
+traffic-extensions = { path = "../traffic-extensions", features = ["codec-json", "codec-protobuf", "policy-unordered"] }

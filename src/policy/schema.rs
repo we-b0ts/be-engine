@@ -364,8 +364,9 @@ impl KeySelector {
     }
 }
 
+pub use traffic_codec_protobuf::{ProtobufCodec, ProtobufField, ProtobufType};
+pub use traffic_contract::codec::Codec;
 use traffic_contract::codec::unique_map;
-pub use traffic_contract::codec::{Codec, ProtobufCodec, ProtobufField, ProtobufType};
 
 pub use traffic_contract::rule::{
     DurationUnit, FieldCondition, FieldContract, IdentityFormat, TimeAnchor, TimeContract,

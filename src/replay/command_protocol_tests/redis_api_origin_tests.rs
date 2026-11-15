@@ -164,7 +164,7 @@ impl Fixture {
                 case_id: Some("victim".into()),
                 fail_on_dirty: true,
                 fail_on_incomplete: true,
-                identity_pairs: Vec::new(),
+                parameters: Default::default(),
                 derived_input: None,
                 native_event: None,
                 input_timing: None,

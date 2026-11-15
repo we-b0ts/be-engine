@@ -56,7 +56,7 @@ fn pagination_and_binary_prefix_changes_keep_exact_offsets() {
 #[test]
 fn rule_evaluation_reuses_the_shared_comparator_and_raw_diffs_remain_distinct() {
     use crate::{
-        compare::{AnchorClocks, Field, compare},
+        compare::{AnchorClocks, Field, RegisteredRules, compare_all},
         rule::FieldContract,
     };
     let source = json!({"items":[1,2],"stable":"same"});
@@ -67,7 +67,17 @@ fn rule_evaluation_reuses_the_shared_comparator_and_raw_diffs_remain_distinct() 
         pointer: "/items",
         contract: &contract,
     }];
-    let result = compare(&source, &target, &fields, AnchorClocks::default());
+    let metadata = RegisteredRules(traffic_extensions::policies());
+    let result = compare_all(
+        &source,
+        &target,
+        &fields,
+        &[],
+        &[],
+        AnchorClocks::default(),
+        &[],
+        &metadata,
+    );
     assert!(result.passed());
     assert!(result.evaluated.contains("source-proven-set"));
     assert!(
@@ -80,11 +90,15 @@ fn rule_evaluation_reuses_the_shared_comparator_and_raw_diffs_remain_distinct() 
             .unwrap()
             > 0
     );
-    let failed = compare(
+    let failed = compare_all(
         &source,
         &json!({"items":[2,1],"stable":"changed"}),
         &fields,
+        &[],
+        &[],
         AnchorClocks::default(),
+        &[],
+        &metadata,
     );
     assert!(!failed.passed());
     assert_eq!(failed.differences[0].pointer, "/stable");

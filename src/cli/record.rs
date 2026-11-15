@@ -134,7 +134,11 @@ fn check_plugin_commands(config: &AppConfig, search_path: Option<&OsStr>) -> Res
                     )
                 })?;
             }
-            Some(HttpResponseRewritePluginConfig::Documents { .. }) | None => {}
+            Some(
+                HttpResponseRewritePluginConfig::Documents { .. }
+                | HttpResponseRewritePluginConfig::Policy(_),
+            )
+            | None => {}
         }
     }
     Ok(())

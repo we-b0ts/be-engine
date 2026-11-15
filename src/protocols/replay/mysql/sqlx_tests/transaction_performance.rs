@@ -112,7 +112,7 @@ async fn measure(root: &Path, artifacts: &Path, lazy: bool) -> Measurement {
         case_id: Some(selected.clone()),
         fail_on_dirty: true,
         fail_on_incomplete: false,
-        identity_pairs: Vec::new(),
+        parameters: Default::default(),
         derived_input: None,
         native_event: None,
         input_timing: None,

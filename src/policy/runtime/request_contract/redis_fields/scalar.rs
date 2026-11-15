@@ -3,7 +3,7 @@ use super::*;
 use crate::policy::{
     CompiledJsonPolicy, GLOBAL_JSON_ID, GLOBAL_REDIS_ID, GlobalField, RedisPolicy,
 };
-use crate::replay::contract_value::Delivery;
+use crate::value_contract::response_delivery::Delivery;
 use crate::value_contract::{
     json::{AnchorClocks, Comparison},
     redis_scalar::{self, Scalar},

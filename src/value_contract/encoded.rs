@@ -76,21 +76,25 @@ pub(crate) fn compare_decoded_with_time_copies(
                 })
         })
         .collect::<Vec<_>>();
-    let source_view = source.comparison_view(&comparison_paths(source.view().logical(), rules)?);
+    let source_view =
+        source.logical_comparison_view(&comparison_paths(source.view().logical(), rules)?);
     if std::ptr::eq(source, target) {
-        return Ok(json::compare_with_time_copies(
+        return Ok(json::compare_values(
             &source_view,
             &source_view,
             &fields,
+            &[],
             clocks,
             copies,
         ));
     }
-    let target_view = target.comparison_view(&comparison_paths(target.view().logical(), rules)?);
-    Ok(json::compare_with_time_copies(
+    let target_view =
+        target.logical_comparison_view(&comparison_paths(target.view().logical(), rules)?);
+    Ok(json::compare_values(
         &source_view,
         &target_view,
         &fields,
+        &[],
         clocks,
         copies,
     ))
@@ -120,28 +124,16 @@ pub(crate) fn comparison_paths(
 }
 
 pub(crate) fn merge_codec(codec: &mut Codec, next: &Codec) -> Result<()> {
-    match (codec, next) {
-        (Codec::Json, Codec::Json) | (Codec::Scalar, Codec::Scalar) => (),
-        (Codec::Protobuf(merged), Codec::Protobuf(next)) => {
-            for (path, field) in &next.fields {
-                if let Some(current) = merged.fields.get(path) {
-                    ensure!(
-                        current == field,
-                        "selected rules disagree on a typed Protobuf field"
-                    );
-                } else {
-                    ensure!(
-                        merged
-                            .fields
-                            .values()
-                            .all(|current| current.field_path != field.field_path),
-                        "selected rules alias a Protobuf wire field"
-                    );
-                    merged.fields.insert(path.clone(), field.clone());
-                }
-            }
-        }
-        _ => anyhow::bail!("selected rules disagree on the payload codec"),
+    if codec == next {
+        return Ok(());
     }
+    ensure!(
+        codec.id() == next.id(),
+        "selected rules disagree on the payload codec"
+    );
+    let left = serde_json::from_value(codec.configuration().clone())?;
+    let right = serde_json::from_value(next.configuration().clone())?;
+    let configuration = traffic_extensions::codecs().merge(codec.id(), &[&left, &right])?;
+    *codec = Codec::registered(codec.id().to_owned(), serde_json::to_value(configuration)?)?;
     Ok(())
 }

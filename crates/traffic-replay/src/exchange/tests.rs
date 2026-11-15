@@ -2,7 +2,6 @@ use super::*;
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use traffic_contract::compare::ExplicitRules;
 use traffic_model::recording::ProtocolRef;
 use traffic_protocol::message::{MessageEncoder, ProjectedMessage, ProjectedValue};
 
@@ -71,9 +70,9 @@ fn select(inventory: &ExchangeInventory, source: ReplaySource, value: &'static s
                 endpoint: &endpoint(),
                 active_case: (source == ReplaySource::Case).then_some("case"),
                 request: &Message(value),
-                metadata: &ExplicitRules,
+                metadata: &(),
             },
-            |_| AnchorClocks::default(),
+            |_| (),
             |_, _| Ok(()),
         )
         .unwrap()

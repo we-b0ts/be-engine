@@ -203,7 +203,7 @@ pub(super) fn convert(
                         ..Default::default()
                     },
                     p::Slot::Value,
-                    p::Codec::Protobuf(p::ProtobufCodec { fields }),
+                    crate::value_codec::protobuf(p::ProtobufCodec { fields }),
                     contract,
                     value_semantics(&rule.source_evidence, when, None),
                 )

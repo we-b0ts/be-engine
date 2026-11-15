@@ -1,4 +1,4 @@
-//! Carrier-independent global JSON comparison and derived delivery. Source
+//! Carrier-independent value comparison and derived delivery. Source
 //! chooses the codec and format; a known contract failure never becomes opaque.
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
@@ -12,14 +12,11 @@ use super::{
 #[cfg(test)]
 use crate::policy::GLOBAL_JSON_ID;
 use crate::{
-    policy::{
-        Codec, CompiledJsonPolicy, CompiledRule, FieldContract, SelectedGlobalField,
-        TimestampFormat,
-    },
-    value_codec::{CodecView, DecodedValue},
+    policy::{CompiledJsonPolicy, CompiledRule, SelectedGlobalField, TimestampFormat},
+    value_codec::DecodedValue,
 };
 
-/// Unknown Source bytes remain strict. Valid Source JSON fixes the codec even
+/// Unknown Source bytes remain strict. Recognized Source fixes the codec even
 /// if Target is malformed or does not satisfy a declared field format.
 pub(crate) fn compare(
     source: &[u8],
@@ -38,14 +35,14 @@ pub(crate) fn compare(
             clocks,
         );
     }
-    let Ok(source_value) = CodecView::decode(&Codec::Json, source) else {
-        if let Ok(source) = crate::value_codec::sse::Document::decode(source) {
-            let target = crate::value_codec::sse::Document::decode(target)
-                .context("Target payload changed from Source SSE encoding")?;
-            return crate::value_codec::sse::compare(&source, &target, plan, clocks);
-        }
-        let mut comparison = Comparison::default();
-        comparison.differences = if source == target {
+    if let Ok(source) = crate::value_codec::sse::Document::decode(source) {
+        let target = crate::value_codec::sse::Document::decode(target)
+            .context("Target payload changed from Source SSE encoding")?;
+        return crate::value_codec::sse::compare(&source, &target, plan, clocks);
+    }
+    let Some(codec) = crate::value_codec::try_recognize(source, &traffic_value::Value::Null)?
+    else {
+        let differences = if source == target {
             vec![]
         } else {
             vec![json::Difference {
@@ -53,10 +50,15 @@ pub(crate) fn compare(
                 reason: "opaque payload bytes changed".into(),
             }]
         };
-        return Ok(comparison);
+        return Ok(Comparison {
+            differences,
+            ..Default::default()
+        });
     };
-    let target_value = CodecView::decode(&Codec::Json, target)
-        .context("Target payload changed from Source JSON encoding")?;
+    let source_value = codec.decode(source)?;
+    let target_value = codec
+        .decode(target)
+        .context("Target payload violates the Source content codec")?;
     compare_decoded(&source_value, &target_value, plan, rules, clocks)
 }
 
@@ -80,7 +82,7 @@ pub(crate) fn compare_decoded_with_time_copies(
 ) -> Result<Comparison> {
     if plan.fields.is_empty()
         && rules.is_empty()
-        && source.comparison_view(&[]) == target.comparison_view(&[])
+        && source.logical_comparison_view(&[]) == target.logical_comparison_view(&[])
     {
         return Ok(Comparison::default());
     }
@@ -99,9 +101,14 @@ pub(crate) fn compare_source_coverage(
         let codec = encoded::prepared_codec(rules)?;
         return compare_decoded_source_coverage(&codec.decode(source)?, plan, rules, clocks);
     }
-    let Ok(decoded) = CodecView::decode(&Codec::Json, source) else {
+    if crate::value_codec::sse::Document::decode(source).is_ok() {
+        return compare(source, source, plan, rules, clocks);
+    }
+    let Some(codec) = crate::value_codec::try_recognize(source, &traffic_value::Value::Null)?
+    else {
         return compare(source, source, plan, rules, clocks);
     };
+    let decoded = codec.decode(source)?;
     compare_decoded_source_coverage(&decoded, plan, rules, clocks)
 }
 
@@ -124,21 +131,29 @@ fn compare_decoded_selected(
 ) -> Result<Comparison> {
     let protocols = super::global_protocol::checks(plan, &source.logical)?;
     let verified = protocols.fields();
-    let selected = selected_fields(&source.logical, plan, rules, clocks)?;
+    let selected = retain_automatic_fields(
+        &source.logical,
+        plan.selected_value_fields_with_clocks(source.value(), clocks)?,
+        rules,
+    )?;
     let mut paths = encoded::comparison_paths(&source.logical, rules)?;
     paths.extend(selected.iter().map(|field| field.pointer.clone()));
     paths.extend(verified.iter().map(|field| field.pointer.to_owned()));
-    let source_view = source.comparison_view(&paths);
-    let target_view = target.comparison_view(&paths);
-    compare_selected_with_time_copies(
+    let source_view = source.logical_comparison_view(&paths);
+    let target_view = target.logical_comparison_view(&paths);
+    let fields = comparison_fields(&source.logical, &selected, rules);
+    let mut comparison = json::compare_values(
         &source_view,
         &target_view,
-        &selected,
-        rules,
+        &fields,
+        &verified,
         clocks,
         copies,
-        &verified,
-    )
+    );
+    comparison
+        .evaluated
+        .extend(selected.iter().map(|field| field.rule_id.into()));
+    Ok(comparison)
 }
 
 #[cfg(test)]
@@ -178,12 +193,13 @@ pub(crate) fn compare_logical_with_time_copies(
 
 /// The same global fields and native leaf checks compose over any decoded carrier.
 pub(crate) fn policy_paths(
-    source: &Value,
+    source: &traffic_value::Value,
     plan: &CompiledJsonPolicy,
     clocks: AnchorClocks,
 ) -> Result<Vec<String>> {
-    let selected = selected_fields(source, plan, &[], clocks)?;
-    let native = super::global_protocol::checks(plan, source)?;
+    let selected = plan.selected_value_fields_with_clocks(source, clocks)?;
+    let projection = serde_json::to_value(source)?;
+    let native = super::global_protocol::checks(plan, &projection)?;
     Ok(selected
         .into_iter()
         .map(|field| field.pointer)
@@ -192,17 +208,26 @@ pub(crate) fn policy_paths(
 }
 
 pub(crate) fn compare_fields(
-    source: &Value,
-    target: &Value,
+    source: &traffic_value::Value,
+    target: &traffic_value::Value,
     plan: &CompiledJsonPolicy,
     fields: &[Field<'_>],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
-    let selected = selected_fields(source, plan, &[], clocks)?;
-    let native = super::global_protocol::checks(plan, source)?;
-    let fields = field_composition::append(source, fields.to_vec(), &selected);
-    let mut compared =
-        json::compare_with_verified(source, target, &fields, &[], &native.fields(), clocks);
+    let projection = serde_json::to_value(source)?;
+    let selected = plan.selected_value_fields_with_clocks(source, clocks)?;
+    let native = super::global_protocol::checks(plan, &projection)?;
+    let fields = field_composition::append(&projection, fields.to_vec(), &selected);
+    let mut compared = traffic_contract::compare::compare_logical_all(
+        source,
+        target,
+        &fields,
+        &[],
+        &native.fields(),
+        clocks,
+        &[],
+        &json::PolicyMetadata,
+    );
     compared
         .evaluated
         .extend(selected.iter().map(|field| field.rule_id.into()));
@@ -248,6 +273,20 @@ fn compare_selected_with_time_copies(
     copies: &[json::VerifiedTimeCopy],
     verified: &[json::VerifiedField<'_>],
 ) -> Result<Comparison> {
+    let fields = comparison_fields(source, selected, rules);
+    let mut comparison =
+        json::compare_with_verified_time_copies(source, target, &fields, verified, clocks, copies);
+    comparison
+        .evaluated
+        .extend(selected.iter().map(|field| field.rule_id.into()));
+    Ok(comparison)
+}
+
+fn comparison_fields<'a>(
+    source: &Value,
+    selected: &'a [SelectedGlobalField],
+    rules: &[&'a CompiledRule],
+) -> Vec<Field<'a>> {
     let fields = rules
         .iter()
         .flat_map(|rule| {
@@ -261,13 +300,7 @@ fn compare_selected_with_time_copies(
                 })
         })
         .collect::<Vec<_>>();
-    let fields = field_composition::append(source, fields, selected);
-    let mut comparison =
-        json::compare_with_verified_time_copies(source, target, &fields, verified, clocks, copies);
-    comparison
-        .evaluated
-        .extend(selected.iter().map(|field| field.rule_id.into()));
-    Ok(comparison)
+    field_composition::append(source, fields, selected)
 }
 
 #[cfg(test)]
@@ -281,9 +314,11 @@ pub(crate) fn materialize(
         let codec = encoded::prepared_codec(rules)?;
         return materialize_decoded(&codec.decode(source)?, plan, rules, clocks);
     }
-    let Ok(decoded) = CodecView::decode(&Codec::Json, source) else {
+    let Some(codec) = crate::value_codec::try_recognize(source, &traffic_value::Value::Null)?
+    else {
         return Ok(source.to_vec());
     };
+    let decoded = codec.decode(source)?;
     materialize_decoded(&decoded, plan, rules, clocks)
 }
 
@@ -390,7 +425,18 @@ fn selected_fields(
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Vec<SelectedGlobalField>> {
-    let mut selected = plan.selected_fields_with_clocks(source, clocks)?;
+    retain_automatic_fields(
+        source,
+        plan.selected_fields_with_clocks(source, clocks)?,
+        rules,
+    )
+}
+
+fn retain_automatic_fields(
+    source: &Value,
+    mut selected: Vec<SelectedGlobalField>,
+    rules: &[&CompiledRule],
+) -> Result<Vec<SelectedGlobalField>> {
     if rules.is_empty() {
         return Ok(selected);
     }
@@ -399,7 +445,7 @@ fn selected_fields(
         for (pattern, contract) in &rule.rule.contract {
             // Unordered authorizes array pairing; its scalar descendants still
             // retain their ordinary standard timestamp semantics.
-            if !matches!(contract, FieldContract::Unordered) {
+            if !contract.supports_child_rules(traffic_extensions::policies())? {
                 owned.extend(delivery::select(pattern, source)?);
             }
         }

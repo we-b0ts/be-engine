@@ -9,7 +9,7 @@ pub(crate) mod dependency_tail;
 mod derived_input;
 mod finalization;
 pub(crate) use finalization::FinalizationScope;
-mod identity;
+mod extensions;
 pub(crate) mod input_timing;
 mod native_event;
 pub(crate) mod primary_close;
@@ -21,7 +21,7 @@ mod interaction;
 mod interruption;
 mod server;
 mod target_stop;
-pub(crate) use identity::check_response_identities;
+pub(crate) const MAX_CONTROL_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(test)]
 pub(crate) use server::handle_control_stream;
 pub(crate) use server::run_control_socket;
@@ -37,8 +37,8 @@ pub(crate) struct ReplayControlRequest {
     pub(crate) fail_on_dirty: bool,
     #[serde(default)]
     pub(crate) fail_on_incomplete: bool,
-    #[serde(default)]
-    pub(crate) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
+    #[serde(flatten, deserialize_with = "traffic_contract::codec::unique_map")]
+    pub(crate) parameters: BTreeMap<String, traffic_value::Value>,
     #[serde(default)]
     pub(crate) derived_input: Option<derived_input::Registration>,
     #[serde(default)]
@@ -274,24 +274,6 @@ pub(crate) async fn handle_control_request<P: ReplayProtocolSet>(
                 Err(error) => serde_json::json!({"ok":false,"error":format!("{error:#}")}),
             }
         }
-        "response_identities" => identity::accept(&request, &state).await,
-        "response_time_copies" => {
-            let state = state.lock().await;
-            if let Some(case) = request
-                .case_id
-                .as_deref()
-                .filter(|case| state.active_case_id.as_deref() == Some(*case))
-            {
-                let copies = state
-                    .replay_policy
-                    .as_ref()
-                    .map(|policy| policy.contracts().delivered_time_copies(case))
-                    .unwrap_or_default();
-                serde_json::json!({"ok":true, "time_copies":copies})
-            } else {
-                serde_json::json!({"ok":false, "error":"response time provenance requires the active case"})
-            }
-        }
         "derived_input" => derived_input::accept(&request, &state).await,
         "native_event_begin" | "native_event" | "native_connected" | "native_input_ack" => {
             native_event::accept(&request, &state).await
@@ -353,10 +335,7 @@ pub(crate) async fn handle_control_request<P: ReplayProtocolSet>(
                 ),
             })
         }
-        other => serde_json::json!({
-            "ok": false,
-            "error": format!("unknown replay control command {other}"),
-        }),
+        _ => extensions::accept(&request, &state).await,
     };
     let should_stop = command == "stop"
         || (matches!(command, "finalize" | "finalize_cases" | "interrupt")
@@ -722,10 +701,9 @@ pub(crate) async fn end_case<P: ReplayProtocolSet>(
             case.status = ReplayCaseStatus::Ended;
         }
         if let Some(policy) = &state.replay_policy {
-            policy.contracts().clear_time_copies(case_id);
-            policy.contracts().clear_identities(case_id);
+            policy.contracts().clear_case_values(case_id);
         } else {
-            state.native.contracts.clear_identities(case_id);
+            state.native.contracts.clear_case_values(case_id);
         }
         deferred::release_consumed_payloads(&mut state);
         sample

@@ -8,9 +8,7 @@ use url::Url;
 
 use crate::dns_mock::FakeDnsUpstreamProtocol;
 
-use super::{
-    DiscoveredTarget, KubectlProxySpec, Plugin, PluginResult, RewriteInput, RewrittenBody,
-};
+use super::{CompleteBody, DiscoveredTarget, KubectlProxySpec, Plugin, PluginResult, RewriteInput};
 
 const PLUGIN_NAME: &str = "pluto-eci-kubeconfig";
 const PLUTO_ECI_ALIAS: &str = "k8s-c142fe56e07d04a749c1630fb5f1b680b.pluto-eci.trp.test";
@@ -85,7 +83,7 @@ impl Plugin for EciKubeconfig {
             .context("failed to serialize rewritten Pluto response")?;
 
         Ok(PluginResult::Rewritten {
-            body: Box::new(RewrittenBody::Complete(body)),
+            body: Box::new(CompleteBody(body)),
             targets: vec![DiscoveredTarget {
                 alias: PLUTO_ECI_ALIAS.to_string(),
                 connect_ip: self.connect_ip,
@@ -187,9 +185,9 @@ mod tests {
         else {
             panic!("expected rewritten response");
         };
-        let RewrittenBody::Complete(body) = *body else {
-            panic!("expected complete body");
-        };
+        let (body, _) = body
+            .materialize(&std::collections::BTreeMap::new())
+            .unwrap();
         let target = &targets[0];
         let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let config = response["config"].as_str().unwrap();

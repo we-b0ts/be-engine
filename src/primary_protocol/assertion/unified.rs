@@ -15,6 +15,15 @@ pub(super) fn compare(
 ) -> Result<()> {
     let global = global.context("global JSON field strategy missing")?;
     let (source_payload, target_payload) = (source.body(), target.body());
+    let codec = crate::value_codec::try_recognize(source_payload, &traffic_value::Value::Null)?;
+    report.body_codec = if codec
+        .as_ref()
+        .is_some_and(|codec| codec.declaration().is_ok_and(|codec| codec.id() == "json"))
+    {
+        ResponseBodyCodec::Json
+    } else {
+        ResponseBodyCodec::ExactBytes
+    };
     let comparison = match crate::value_contract::global::compare(
         source_payload,
         target_payload,
@@ -24,12 +33,12 @@ pub(super) fn compare(
     ) {
         Ok(comparison) => comparison,
         Err(_)
-            if crate::json_value::parse(source_payload).is_some()
-                && crate::json_value::parse(target_payload).is_none() =>
+            if codec
+                .as_ref()
+                .is_some_and(|codec| codec.decode(target_payload).is_err()) =>
         {
             // A complete primary response can carry a body outside the Source
             // codec. Preserve the response and its independent status evidence.
-            report.body_codec = ResponseBodyCodec::Json;
             report
                 .differences
                 .push(ResponseDifference::body_value_mismatch());
@@ -38,11 +47,6 @@ pub(super) fn compare(
         Err(error) => return Err(error),
     };
     report.identity_pairs.extend(comparison.identity_pairs());
-    report.body_codec = if crate::json_value::parse(source_payload).is_some() {
-        ResponseBodyCodec::Json
-    } else {
-        ResponseBodyCodec::ExactBytes
-    };
     report.applied_body_rule_ids.extend(comparison.evaluated);
     for diff in comparison.differences {
         report.differences.push(contract_difference(diff));

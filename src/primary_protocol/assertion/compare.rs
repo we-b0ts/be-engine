@@ -255,23 +255,13 @@ fn compare_value(
 }
 
 fn unordered_arrays_equal(expected: &[Value], actual: &[Value]) -> bool {
-    if expected == actual {
-        return true;
-    }
-    if expected.len() != actual.len() {
-        return false;
-    }
-    let mut matched = vec![false; actual.len()];
-    expected.iter().all(|expected| {
-        actual
-            .iter()
-            .enumerate()
-            .find(|(index, actual)| !matched[*index] && expected == *actual)
-            .is_some_and(|(index, _)| {
-                matched[index] = true;
-                true
-            })
-    })
+    crate::value_extensions::compare_registered(
+        "unordered",
+        &Value::Null,
+        &Value::Array(expected.to_vec()),
+        &Value::Array(actual.to_vec()),
+    )
+    .is_ok_and(|evaluation| evaluation.passed())
 }
 
 fn difference(

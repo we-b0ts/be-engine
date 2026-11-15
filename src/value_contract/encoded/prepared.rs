@@ -43,7 +43,7 @@ pub(super) fn codec(rules: &[&CompiledRule]) -> Result<Arc<CodecPlan>> {
         return Ok(plan);
     }
     let merged = merged_codec(rules)?;
-    let plan = Arc::new(CodecPlan::compile(&merged)?);
+    let plan = Arc::new(crate::value_codec::compile(&merged)?);
     let mut unique = std::collections::BTreeMap::new();
     for rule in rules {
         unique
@@ -86,15 +86,11 @@ pub(super) fn clear() {
 }
 
 fn estimated_bytes(codec: &Codec) -> usize {
-    match codec {
-        Codec::Protobuf(codec) => codec
-            .fields
-            .iter()
-            .map(|(alias, field)| alias.len() + field.field_path.len() * 128 + 256)
-            .sum(),
-        Codec::Json | Codec::Scalar => 0,
-    }
+    serde_json::to_vec(codec.configuration()).map_or(MAX_BYTES + 1, |configuration| {
+        configuration.len().saturating_mul(128)
+    })
 }
+
 #[cfg(test)]
 pub(super) fn occupancy() -> (usize, usize) {
     CACHE.with(|cache| {

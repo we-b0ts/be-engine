@@ -235,7 +235,7 @@ pub(super) fn evaluate_response(
             let codec = context.payload_codec(&[])?;
             ensure!(
                 body_rules.is_empty()
-                    || matches!(codec, crate::policy::Codec::Protobuf(_))
+                    || crate::value_codec::protobuf_schema(&codec).is_some()
                         && body_rules
                             .iter()
                             .all(|rule| rule.codec == ResponseBodyCodec::Protobuf),
@@ -252,7 +252,7 @@ pub(super) fn evaluate_response(
                 clocks,
             )?;
             applicable_ids.extend(context.rule_ids());
-            report.body_codec = if matches!(codec, crate::policy::Codec::Protobuf(_)) {
+            report.body_codec = if crate::value_codec::protobuf_schema(&codec).is_some() {
                 ResponseBodyCodec::Protobuf
             } else {
                 ResponseBodyCodec::Json

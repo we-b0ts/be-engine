@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use traffic_contract::codec::pointer_matches;
 
 fn codec(fields: &[(&str, &[u32], Type, bool)]) -> Codec {
-    Codec::Protobuf(ProtobufCodec {
+    crate::value_codec::protobuf(ProtobufCodec {
         fields: fields
             .iter()
             .map(|(name, path, kind, repeated)| {
@@ -180,7 +180,7 @@ fn delivery_recomputes_message_lengths_and_preserves_every_unselected_byte() {
     edited["items"][0]["id"] = json!(8);
     assert!(decoded.encode(&edited, &allowed).is_err());
     let mut edited = decoded.logical.clone();
-    edited[traffic_contract::codec::PROTOBUF_REMAINDER_KEY] = json!({});
+    edited[traffic_codec_protobuf::REMAINDER_KEY] = json!({});
     assert!(decoded.encode(&edited, &["".into()]).is_err());
     let mut edited = decoded.logical.clone();
     edited["added"] = json!(1);
@@ -370,7 +370,7 @@ fn json_uses_duplicate_rejecting_decode_and_the_same_authorized_delivery_api() {
 
 #[test]
 fn comparison_views_borrow_exact_json_and_only_copy_authorized_protobuf_views() {
-    let json = CodecPlan::compile(&Codec::Json)
+    let json = crate::value_codec::compile(&Codec::Json)
         .unwrap()
         .decode(br#"{"time":1,"stable":[1,2,3]}"#)
         .unwrap();
@@ -380,7 +380,7 @@ fn comparison_views_borrow_exact_json_and_only_copy_authorized_protobuf_views() 
     ));
     let codec = codec(&[("/value", &[1], Type::Uint64, false)]);
     let original = [8, 0x81, 0, 0x10, 0x87, 0];
-    let decoded = CodecPlan::compile(&codec)
+    let decoded = crate::value_codec::compile(&codec)
         .unwrap()
         .decode(&original)
         .unwrap();
@@ -399,7 +399,7 @@ fn comparison_views_borrow_exact_json_and_only_copy_authorized_protobuf_views() 
 #[test]
 fn reusable_codec_plans_keep_payload_validation_and_wire_identity_independent() {
     let codec = codec(&[("/value", &[1], Type::Uint64, false)]);
-    let plan = CodecPlan::compile(&codec).unwrap();
+    let plan = crate::value_codec::compile(&codec).unwrap();
     let first = plan.decode(&[8, 0x81, 0, 0x10, 7]).unwrap();
     let second = plan.decode(&[8, 2, 0x10, 8]).unwrap();
     assert_eq!(first.logical["value"], json!(1));
@@ -435,7 +435,7 @@ fn codec_pointer_matching_retains_canonical_array_indexes_and_escaped_names() {
 
 #[test]
 fn scalar_codec_retains_native_types_and_rejects_containers() {
-    let plan = CodecPlan::compile(&Codec::Scalar).unwrap();
+    let plan = crate::value_codec::compile(&Codec::Scalar).unwrap();
     assert_eq!(
         plan.decode(br#""2026-10-23 12:00:00""#).unwrap().logical,
         json!("2026-10-23 12:00:00")
@@ -458,7 +458,7 @@ fn static_codec_providers_share_a_borrowed_view_without_erasing_presence_or_wire
         (Codec::Json, &br#"{"value":null}"#[..], CodecKind::Json),
         (pb, &[8, 0, 0x10, 0x87, 0][..], CodecKind::Protobuf),
     ] {
-        let plan = CodecPlan::compile(&definition).unwrap();
+        let plan = crate::value_codec::compile(&definition).unwrap();
         assert_eq!(ValueCodec::kind(&plan), expected_kind);
         let document = ValueCodec::decode(&plan, payload).unwrap();
         let view = document.view();
@@ -504,7 +504,7 @@ fn json_and_pb_apply_one_time_relation_while_preserving_their_unselected_remaind
         ),
     ] {
         crate::policy::validate_contract_binding(&definition, "/at", &contract).unwrap();
-        let plan = CodecPlan::compile(&definition).unwrap();
+        let plan = crate::value_codec::compile(&definition).unwrap();
         let source = plan.decode(&source).unwrap();
         let paths = vec!["/at".to_owned()];
         let fields = [Field {
@@ -542,7 +542,7 @@ fn pb_identity_remains_an_explicit_unsupported_capability() {
             .to_string()
             .contains("identity contracts require JSON or a physical SQL scalar")
     );
-    let plan = CodecPlan::compile(&pb).unwrap();
+    let plan = crate::value_codec::compile(&pb).unwrap();
     let source = bytes(1, b"captured-identity");
     let document = plan.decode(&source).unwrap();
     assert_eq!(document.encode(&document.logical, &[]).unwrap(), source);

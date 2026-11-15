@@ -1,5 +1,5 @@
 use super::*;
-use crate::policy::{Codec, CompiledJsonPolicy, JsonPolicy};
+use crate::policy::{CompiledJsonPolicy, JsonPolicy};
 use crate::value_codec::CodecView;
 use crate::value_contract::{global, json::AnchorClocks, time::ClockPair};
 use serde_json::json;
@@ -257,7 +257,7 @@ fn builtin_time_compares_mixed_precision_but_never_changes_delivered_source_byte
 
 #[test]
 fn typed_protobuf_string_times_reuse_the_same_automatic_kernel_and_protect_unknown_wire() {
-    let codec = Codec::Protobuf(crate::policy::ProtobufCodec {
+    let codec = crate::value_codec::protobuf(crate::policy::ProtobufCodec {
         fields: std::collections::BTreeMap::from([(
             "/at".into(),
             crate::policy::ProtobufField {

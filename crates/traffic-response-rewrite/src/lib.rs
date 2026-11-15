@@ -1,7 +1,9 @@
 //! Declarative address acquisition in JSON and explicitly decoded embedded documents.
 //! The caller owns matching HTTP resources, route registration, I/O and evidence.
+mod policy;
 mod selector;
 mod transform;
+pub use policy::ResponseRewritePolicy;
 pub use transform::Transform;
 
 use std::collections::{BTreeMap, HashMap};

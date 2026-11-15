@@ -1,4 +1,5 @@
 use super::*;
+use crate::{policy::Codec, value_codec::CodecView};
 use chrono::DateTime;
 use serde_json::json;
 
@@ -17,6 +18,144 @@ fn clocks() -> AnchorClocks {
         },
         ..Default::default()
     }
+}
+
+#[test]
+fn registered_global_policy_preserves_byte_scalars_and_logical_arrays() {
+    let plan = plan("  '': {kind: policy, id: unordered}\n");
+    let bytes = Codec::registered("bytes", serde_json::Value::Null).unwrap();
+    let source = CodecView::decode(&bytes, b"ab").unwrap();
+    let target = CodecView::decode(&bytes, b"ba").unwrap();
+    assert!(
+        !compare_decoded(&source, &target, &plan, &[], AnchorClocks::default())
+            .unwrap()
+            .passed()
+    );
+    assert!(
+        compare(b"[1,2]", b"[2,1]", &plan, &[], AnchorClocks::default())
+            .unwrap()
+            .passed()
+    );
+    assert!(
+        !compare(b"ab", b"ba", &plan, &[], AnchorClocks::default())
+            .unwrap()
+            .passed()
+    );
+}
+
+#[test]
+fn automatic_codec_selection_applies_registered_rules_to_plain_strings() {
+    let plan =
+        plan("  '': {kind: policy, id: unordered-joined-string, options: {separator: ','}}\n");
+    assert!(
+        compare(b"a,b,a", b"b,a,a", &plan, &[], AnchorClocks::default())
+            .unwrap()
+            .passed()
+    );
+    assert!(
+        !compare(b"a,b,a", b"b,a", &plan, &[], AnchorClocks::default())
+            .unwrap()
+            .passed()
+    );
+}
+
+#[test]
+fn registered_policy_options_load_and_use_the_standard_global_value_path() {
+    let plan = plan(
+        "  /elapsed: {kind: policy, id: duration, version: 1, options: {unit: seconds, clock: dependency}}\n",
+    );
+    let source = br#"{"elapsed":10,"stable":7}"#;
+    let target = br#"{"elapsed":1010,"stable":7}"#;
+    let result = compare(source, target, &plan, &[], clocks()).unwrap();
+    assert!(result.passed(), "{:?}", result.differences);
+    assert!(result.evaluated.contains(GLOBAL_JSON_ID));
+    assert!(
+        !compare(
+            source,
+            br#"{"elapsed":1010,"stable":8}"#,
+            &plan,
+            &[],
+            clocks()
+        )
+        .unwrap()
+        .passed()
+    );
+    assert!(
+        !compare(
+            source,
+            br#"{"elapsed":"1010","stable":7}"#,
+            &plan,
+            &[],
+            clocks()
+        )
+        .unwrap()
+        .passed()
+    );
+    assert!(
+        !compare(source, target, &plan, &[], AnchorClocks::default())
+            .unwrap()
+            .passed()
+    );
+    assert!(
+        compare(
+            br#"{"elapsed":{"state":"fixed"}}"#,
+            br#"{"elapsed":{"state":"fixed"}}"#,
+            &plan,
+            &[],
+            AnchorClocks::default()
+        )
+        .unwrap()
+        .passed()
+    );
+    assert!(
+        !compare(
+            br#"{"elapsed":{"state":"fixed"}}"#,
+            br#"{"elapsed":{"state":"changed"}}"#,
+            &plan,
+            &[],
+            AnchorClocks::default()
+        )
+        .unwrap()
+        .passed()
+    );
+
+    for declaration in [
+        "{kind: policy, id: missing-policy}",
+        "{kind: policy, id: duration, version: 2, options: {unit: seconds}}",
+        "{kind: policy, id: duration, options: {unit: invented}}",
+        "{kind: policy, id: duration, options: {unit: seconds, unknown: true}}",
+    ] {
+        let policy: crate::policy::JsonPolicy =
+            serde_yaml::from_str(&format!("fields: {{/elapsed: {declaration}}}")).unwrap();
+        assert!(policy.compile().is_err(), "{declaration}");
+    }
+}
+
+#[test]
+fn legacy_duration_declarations_use_registered_comparison_and_keep_equal_values_exact() {
+    let plan = plan("  /elapsed: {kind: duration, formats: [seconds]}\n");
+    assert!(
+        compare(
+            br#"{"elapsed":10}"#,
+            br#"{"elapsed":1010}"#,
+            &plan,
+            &[],
+            clocks()
+        )
+        .unwrap()
+        .passed()
+    );
+    assert!(
+        compare(
+            br#"{"elapsed":10}"#,
+            br#"{"elapsed":10}"#,
+            &plan,
+            &[],
+            AnchorClocks::default()
+        )
+        .unwrap()
+        .passed()
+    );
 }
 
 #[test]

@@ -11,9 +11,9 @@ use serde_json::{Value, json};
 
 use super::super::model::RewriteState;
 use crate::{
-    policy::{Codec, CompiledPolicy, FieldContract, Protocol, Surface},
+    policy::{CompiledPolicy, Protocol, Surface},
     policy_evidence::{TargetRole, WitnessManifest},
-    value_contract::json::{AnchorClocks, Field},
+    value_contract::json::AnchorClocks,
 };
 mod dependency;
 mod headers;
@@ -31,6 +31,9 @@ const SOURCE_CACHE_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Default)]
 struct Drafts {
+    policies: traffic_policy::PolicyRegistry,
+    findings: Vec<Value>,
+    finding_ids: BTreeSet<String>,
     time: crate::policy::TimePolicy,
     values: Vec<Value>,
     seen: BTreeSet<String>,
@@ -73,6 +76,7 @@ pub(in crate::rewrite) fn facts(
         .transpose()?;
     let mut next = cursor;
     let mut drafts = Drafts {
+        policies: traffic_extensions::policies().clone(),
         summary_offset: cursor.summary,
         time: schemas
             .as_ref()
@@ -134,6 +138,9 @@ pub(in crate::rewrite) fn facts(
     let candidates = drafts.candidates();
     Ok(
         json!({"format":"traffic-policy/v3","api":state.api,"candidates":candidates,
+        "extensions":{"policies":drafts.policies.descriptors().collect::<Vec<_>>(),
+            "codecs":traffic_extensions::codecs().descriptors().collect::<Vec<_>>()},
+        "policy_findings":drafts.findings,"policy_findings_omitted":drafts.finding_ids.len().saturating_sub(drafts.findings.len()),
         "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(candidates.len()),
         "pagination":{"scope":"bounded_scan_window","summary_offset":cursor.summary,"summary_limit":LIMIT,"scan_remaining":!primary_done || !dependency_done,"next_page_cursor":next_page,"next_scan_cursor":next_scan},
         "bounded_analysis":{"scan_order":if cursor.primary_first { ["api.response", "dependency"] } else { ["dependency", "api.response"] },"limited":drafts.limited || drafts.summary_limited(),"summary_limited":drafts.summary_limited(),"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false,"nonresumable_limits":drafts.nonresumable_limits},
@@ -162,13 +169,31 @@ impl Drafts {
         schemas: Option<&CompiledPolicy>,
         _sql_scope: Option<&BTreeSet<&str>>,
     ) -> Result<()> {
-        let decoded_source = crate::value_codec::CodecView::decode(&Codec::Json, source).ok();
-        let decoded_target = target
-            .and_then(|target| crate::value_codec::CodecView::decode(&Codec::Json, target).ok());
-        let codec = decoded_source.as_ref().map(|_| Codec::Json);
+        let metadata = serde_json::from_value(base.clone())?;
+        let prepared = crate::value_codec::try_recognize(source, &metadata)?;
+        let decoded_source = prepared
+            .as_ref()
+            .map(|codec| codec.decode(source))
+            .transpose()?;
+        let decoded_target = prepared
+            .as_ref()
+            .zip(target)
+            .and_then(|(codec, target)| codec.decode(target).ok());
+        let codec = prepared
+            .as_ref()
+            .map(|codec| codec.declaration())
+            .transpose()?;
         if let Some(codec) = &codec {
             base["codec"] = serde_json::to_value(codec)?;
         }
+        let opaque;
+        let logical = if let Some(decoded) = &decoded_source {
+            decoded.value()
+        } else {
+            opaque = traffic_value::Value::Bytes(source.into());
+            &opaque
+        };
+        self.source_findings(source, logical, &base, witness, clocks)?;
         if let Some(((source, target), global)) = decoded_source
             .as_ref()
             .zip(decoded_target.as_ref())
@@ -193,18 +218,12 @@ impl Drafts {
         let identity = serde_json::to_string(&base)?;
         self.add_entry(identity, json!({"location":base,"witness_id":witness,"needs_schema":codec.is_none(),"source_intent_required":true,
                 "instruction":if codec.is_none(){"Unrecognized Source encoding stays exact. Trace Source serialization before requesting schema or an explicit decode binding; absent drafts do not prove a missing capability. Consult docs/content-policy-layout.md only when Source establishes the format. An opaque or equal value does not prove generation."}else if base["slot"].get("sse_data").is_some(){"Pointers address the SSE data JSON and share the root json.fields formats. Trace Source before changing a declaration. Keep event presence/order, envelopes and unselected text strict; see docs/sse-value-contracts.md."}else{"Decoding alone authorizes no changes. Inspect these locations and existing global JSON fields, then trace Source generation and data flow. Supported compound formats and explicit decode bindings are documented in docs/content-policy-layout.md; do not infer them from field names, equal values or nulls."}}));
-        let (Some(codec), Some(source), Some(target)) = (codec, decoded_source, decoded_target)
-        else {
+        let (Some(source), Some(target)) = (decoded_source, decoded_target) else {
             return Ok(());
         };
-        let paths = match &codec {
-            Codec::Json => Vec::new(),
-            Codec::Scalar => vec![String::new()],
-            Codec::Protobuf(codec) => codec.fields.keys().cloned().collect(),
-        };
         self.collect(
-            &source.comparison_value(&paths),
-            &target.comparison_value(&paths),
+            source.value(),
+            target.value(),
             &values::JsonLocation::default(),
             &base,
             witness,
@@ -249,12 +268,20 @@ impl Drafts {
 }
 
 #[cfg(test)]
+fn installed_drafts() -> Drafts {
+    Drafts {
+        policies: traffic_extensions::policies().clone(),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn unknown_wire_encoding_has_no_legacy_schema_draft() {
-        let mut drafts = Drafts::default();
+    fn unstructured_string_uses_registered_codec_without_a_schema_draft() {
+        let mut drafts = installed_drafts();
         drafts
             .observe(
                 b"opaque",
@@ -267,16 +294,17 @@ mod tests {
             )
             .unwrap();
         assert!(drafts.values.is_empty());
-        assert_eq!(drafts.entries[0]["needs_schema"], true);
+        assert_eq!(drafts.entries[0]["needs_schema"], false);
+        assert_eq!(drafts.entries[0]["location"]["codec"], "string");
     }
 
     #[test]
     fn only_observed_mechanisms_become_drafts() {
-        let mut drafts = Drafts::default();
+        let mut drafts = installed_drafts();
         drafts
             .collect(
-                &json!({"members":[1,2,2],"business":"source"}),
-                &json!({"members":[2,1,2],"business":"wrong"}),
+                &serde_json::from_value(json!({"members":[1,2,2],"business":"source"})).unwrap(),
+                &serde_json::from_value(json!({"members":[2,1,2],"business":"wrong"})).unwrap(),
                 &values::JsonLocation::default(),
                 &json!({}),
                 "witness",

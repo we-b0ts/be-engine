@@ -42,15 +42,19 @@ fn entry(rule: &NativeRule, named: &BTreeMap<String, ResourceDeclaration>) -> Op
             let [method] = effect.methods.as_slice() else {
                 return None;
             };
-            let (capture_urls, documents) = match &effect.contract {
+            let (capture_urls, documents, policy) = match &effect.contract {
+                CaptureResponseContract::Policy(definition) => {
+                    (vec![], vec![], Some(definition.clone()))
+                }
                 CaptureResponseContract::Urls { pointers } => (
                     pointers
                         .iter()
                         .map(|pointer| Annotated::Bare(pointer.contract.clone()))
                         .collect(),
                     vec![],
+                    None,
                 ),
-                CaptureResponseContract::Documents { rules } => (vec![], rules.clone()),
+                CaptureResponseContract::Documents { rules } => (vec![], rules.clone(), None),
                 _ => return None,
             };
             let path = match &effect.path {
@@ -66,6 +70,7 @@ fn entry(rule: &NativeRule, named: &BTreeMap<String, ResourceDeclaration>) -> Op
                     name: None,
                     capture_urls,
                     documents,
+                    policy,
                     status_codes: effect.status_codes.clone(),
                     content_types: effect.content_types.clone(),
                 }),
@@ -179,6 +184,7 @@ pub(super) fn compact(
             path: entry.path,
             json_urls: capture.capture_urls,
             documents: capture.documents,
+            policy: capture.policy,
             status_codes: capture.status_codes,
             content_types: capture.content_types,
             proof: None,

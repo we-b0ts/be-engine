@@ -1,0 +1,10 @@
+//! Format-independent values and extension contracts for traffic execution.
+pub mod codec;
+mod patch;
+pub mod path;
+mod value;
+
+pub use patch::validate_patch;
+pub use value::{Number, Value};
+
+pub const MAX_VALUE_BYTES: usize = 64 * 1024 * 1024;

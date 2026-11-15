@@ -8,7 +8,7 @@ use url::{Host, Url};
 use crate::dependency::DiscoveredTcpTarget;
 use crate::dns_mock::{FakeDnsEntry, FakeDnsUpstreamProtocol};
 
-use super::{DiscoveredTarget, Plugin, PluginResult, RewriteInput, RewrittenBody};
+use super::{DiscoveredTarget, Plugin, PluginResult, ResponseBody, RewriteInput};
 
 pub(super) struct JsonUrls {
     pointers: Vec<String>,
@@ -77,7 +77,7 @@ impl Plugin for JsonUrls {
             return Ok(PluginResult::Unchanged);
         }
         Ok(PluginResult::Rewritten {
-            body: Box::new(RewrittenBody::JsonUrls(ResponsePlan { document, fields })),
+            body: Box::new(ResponsePlan { document, fields }),
             targets: targets.into_values().collect(),
             kubectl_proxy: None,
         })
@@ -167,9 +167,9 @@ pub(super) struct ResponsePlan {
     fields: Vec<Field>,
 }
 
-impl ResponsePlan {
-    pub(super) fn render(
-        mut self,
+impl ResponseBody for ResponsePlan {
+    fn materialize(
+        mut self: Box<Self>,
         registered: &BTreeMap<String, FakeDnsEntry>,
     ) -> Result<(Vec<u8>, Vec<DiscoveredTcpTarget>)> {
         let mut discovered = BTreeMap::new();

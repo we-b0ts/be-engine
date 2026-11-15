@@ -9,11 +9,12 @@ pub(super) struct FormatRequirement {
     name: &'static str,
     protocol: Option<ProtocolKind>,
     fields: usize,
-    semantics: BTreeSet<&'static str>,
+    semantics: BTreeSet<String>,
 }
 
-fn kind(field: &GlobalField) -> &'static str {
+fn kind(field: &GlobalField) -> &str {
     match field {
+        GlobalField::Policy(definition) => &definition.id,
         GlobalField::Time { .. } => "time",
         GlobalField::Identity { .. } => "identity",
         GlobalField::Duration { .. } => "duration",
@@ -32,7 +33,10 @@ pub(super) fn compile(policy: &crate::policy::CompiledPolicy) -> Vec<FormatRequi
                 name,
                 protocol,
                 fields: fields.len(),
-                semantics: fields.into_iter().map(kind).collect(),
+                semantics: fields
+                    .into_iter()
+                    .map(|field| kind(field).to_owned())
+                    .collect(),
             });
         }
     };
@@ -120,7 +124,7 @@ impl RuleCatalogue {
             if requirement
                 .semantics
                 .iter()
-                .any(|kind| matches!(*kind, "identity" | "jwt" | "url" | "template"))
+                .any(|kind| matches!(kind.as_str(), "identity" | "jwt" | "url" | "template"))
             {
                 result
                     .requirements

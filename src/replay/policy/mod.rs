@@ -12,7 +12,7 @@ use super::{ReplayCase, execution_plan::PreparedCaseRules};
 mod hypotheses;
 pub(crate) use hypotheses::{HypothesisAttempt, HypothesisContext, await_durable};
 pub(crate) mod values;
-pub(crate) use values::{IdentityDeliveryHost, ValueRuleHost};
+pub(crate) use values::ValueRuleHost;
 mod evidence_policy;
 pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
 
@@ -55,18 +55,17 @@ pub(crate) trait RequestRuleRuntime: Debug + Clone + Send + Sync + 'static {
     fn prepare_case_rules(&self, case: &str) -> Result<PreparedCaseRules>;
     fn request_begin(&self, case: &str) -> Result<()>;
     fn request_times(&self, case: &str) -> traffic_contract::time::ClockPair;
-    fn delivered_time_copies(
+    fn case_flags(&self, case: &str) -> BTreeMap<String, Value>;
+    fn clear_case_values(&self, case: &str);
+    fn control_is_read_only(&self, _command: &str) -> bool {
+        false
+    }
+    fn control(
         &self,
-        case: &str,
-    ) -> crate::value_contract::time_copies::DeliveredTimeCopies;
-    fn has_time_copies(&self, case: &str) -> bool;
-    fn clear_time_copies(&self, case: &str);
-    fn clear_identities(&self, case: &str);
-    fn accept_response_identities(
-        &self,
-        case: &str,
-        pairs: &[traffic_contract::identity::IdentityPair],
-    ) -> Result<()>;
+        case: Option<&str>,
+        command: &str,
+        parameters: &BTreeMap<String, traffic_value::Value>,
+    ) -> Result<Option<Value>>;
     fn prepare_derived_inputs(
         &self,
         case: &str,

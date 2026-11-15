@@ -117,6 +117,44 @@ fn new_capture_and_expanded_capture_scope_keep_fresh_recording_obligations() {
 }
 
 #[test]
+fn registered_capture_policy_uses_public_plan_apply_and_requires_fresh_recording() {
+    let fixture = fixture(false);
+    proposal(
+        &fixture,
+        json!({
+            "name":"registered-addresses", "host":"service.test:8080", "method":"GET", "path":"/sandbox/1",
+            "policy":{"id":"documents","version":1,"options":{"rules":[{
+                "fields":[{"path":"/base_url","format":"url"}]
+            }]}},
+            "proof":{"source":"sandbox.py:12","fact":"Source uses the response address for a later dependency request"}
+        }),
+    );
+    fixture.confirm();
+    let planned = fixture.plan().unwrap();
+    assert_eq!(planned.traffic_e2e_report["requires_fresh_recording"], true);
+    assert!(
+        planned.traffic_e2e_report["preflight"]["rules"]["registered-addresses"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let applied = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
+    assert_eq!(
+        applied.traffic_e2e_report["status"],
+        "applied_pending_recording"
+    );
+    assert_scoped_capture_pending(&fixture);
+    let document =
+        crate::policy::parse_policy(&fs::read_to_string(fixture.policy()).unwrap()).unwrap();
+    let rendered = crate::policy::render_policy(&document).unwrap();
+    let value: Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(
+        value["http"]["response_rewrite"][0]["policy"]["id"],
+        "documents"
+    );
+}
+
+#[test]
 fn retained_capture_does_not_clear_an_earlier_unfinished_scoped_capture_obligation() {
     let fixture = fixture(true);
     let mut state = fixture.state();

@@ -39,6 +39,7 @@ pub(crate) struct SelectedGlobalField {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GlobalField {
+    Policy(traffic_policy::PolicyDefinition),
     Time {
         formats: Vec<GlobalTimeFormat>,
     },
@@ -205,6 +206,9 @@ impl GlobalField {
     }
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::Policy(definition) => {
+                traffic_extensions::policies().prepare_definition(definition)?;
+            }
             Self::Time { formats } => {
                 ensure!(
                     !formats.is_empty() && formats.len() <= 16,
@@ -228,6 +232,11 @@ impl GlobalField {
                         "only calendar and naive time formats accept utc_offset"
                     );
                     contract.offset()?;
+                    let definition = format
+                        .contract()
+                        .registered_definition(true)
+                        .expect("timestamp has a registered implementation");
+                    traffic_extensions::policies().prepare_definition(&definition)?;
                 }
             }
             Self::Identity { formats } => {
@@ -258,6 +267,13 @@ impl GlobalField {
                         ),
                         _ => {}
                     }
+                    let definition = FieldContract::Identity {
+                        prefix: format.prefix.clone(),
+                        format: format.format,
+                    }
+                    .registered_definition(false)
+                    .expect("identity has a registered implementation");
+                    traffic_extensions::policies().prepare_definition(&definition)?;
                 }
             }
             Self::Url { formats } => {
@@ -276,11 +292,22 @@ impl GlobalField {
                 !signature.is_empty() && signature.len() <= 128,
                 "JWT requires a bounded named signature"
             ),
-            Self::Duration { formats } => ensure!(
-                formats.len() == 1,
-                "duration requires exactly one unambiguous unit format"
-            ),
-            Self::Unordered => {}
+            Self::Duration { formats } => {
+                ensure!(
+                    formats.len() == 1,
+                    "duration requires exactly one unambiguous unit format"
+                );
+                let definition = FieldContract::Duration {
+                    unit: formats[0],
+                    anchor: TimeAnchor::Observation,
+                }
+                .registered_definition(true)
+                .expect("duration has a registered implementation");
+                traffic_extensions::policies().prepare_definition(&definition)?;
+            }
+            Self::Unordered => {
+                traffic_extensions::policies().prepare("unordered", &traffic_value::Value::Null)?;
+            }
         }
         Ok(())
     }
@@ -296,6 +323,10 @@ impl GlobalField {
         source: &Value,
         source_clock: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<FieldContract> {
+        if matches!(self, Self::Policy(_)) {
+            let value = serde_json::from_value(source.clone())?;
+            return self.select_value_contract(&value, source_clock);
+        }
         self.select_strict_contract(source, source_clock)
             .map(|contract| {
                 if self.is_identity()
@@ -316,9 +347,28 @@ impl GlobalField {
                 Ok(if self.is_identity() && !source.is_null() {
                     FieldContract::IdentityAnchor
                 } else {
-                    exact_scalar(source)
+                    FieldContract::Exact
                 })
             })
+    }
+
+    fn select_value_contract(
+        &self,
+        source: &traffic_value::Value,
+        source_clock: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<FieldContract> {
+        let Self::Policy(definition) = self else {
+            return self.select_contract_with_clock(&serde_json::to_value(source)?, source_clock);
+        };
+        let prepared = traffic_extensions::policies().prepare_definition(definition)?;
+        let facts = serde_json::from_value(serde_json::json!({
+            "clocks":{"observation":{"source":source_clock,"target":null}}
+        }))?;
+        Ok(if prepared.applies(source, &facts)? {
+            FieldContract::Policy(definition.clone())
+        } else {
+            FieldContract::Exact
+        })
     }
 
     fn select_strict_contract(
@@ -329,9 +379,12 @@ impl GlobalField {
         // Null is a complete scalar value, distinct from a missing field. It
         // creates neither a timestamp observation nor an identity mapping.
         if source.is_null() && !matches!(self, Self::Unordered) {
-            return Ok(exact_scalar(source));
+            return Ok(FieldContract::Exact);
         }
         match self {
+            Self::Policy(_) => {
+                unreachable!("registered policies select their own Source applicability")
+            }
             Self::Time { formats } => {
                 let mut choices = formats
                     .iter()
@@ -355,7 +408,7 @@ impl GlobalField {
                 // Numeric epoch encodings overlap syntactically. Infer units
                 // only from immutable Source and its independent request clock.
                 let Some(clock) = source_clock else {
-                    return Ok(exact_scalar(source));
+                    return Ok(FieldContract::Exact);
                 };
                 let anchor = crate::value_contract::time::date_nanos(clock);
                 choices.sort_by_key(|(instant, _)| instant.abs_diff(anchor));
@@ -363,7 +416,7 @@ impl GlobalField {
                 if choices.iter().skip(1).any(|other| {
                     other.0.abs_diff(anchor) == best.0.abs_diff(anchor) && other.1 != best.1
                 }) {
-                    return Ok(exact_scalar(source));
+                    return Ok(FieldContract::Exact);
                 }
                 Ok(choices.remove(0).1)
             }
@@ -404,27 +457,6 @@ impl GlobalField {
                 Ok(FieldContract::Unordered)
             }
         }
-    }
-}
-
-// The condition is internal IR only. Its Source branch is always inactive,
-// so the existing comparator preserves the complete scalar exactly without
-// creating a timestamp observation or an identity correspondence.
-fn exact_scalar(source: &Value) -> FieldContract {
-    let scalar = match source {
-        Value::Null => super::SourceScalar::Null,
-        Value::Number(value) => super::SourceScalar::Number(value.clone()),
-        Value::String(value) => super::SourceScalar::String(value.clone()),
-        Value::Bool(value) => super::SourceScalar::Bool(*value),
-        _ => unreachable!("exact global format branches contain scalar values"),
-    };
-    FieldContract::Conditional {
-        when: super::FieldCondition {
-            relative_pointer: ".".into(),
-            equals: None,
-            not_in: vec![scalar],
-        },
-        contract: Box::new(FieldContract::Unordered),
     }
 }
 
@@ -502,7 +534,7 @@ impl CompiledJsonPolicy {
 
     pub(crate) fn identity_fields(&self, source: &Value) -> Result<Vec<(String, FieldContract)>> {
         Ok(self
-            .select_authored_fields(source, None, true)?
+            .select_authored_fields(source, None, true, None)?
             .into_iter()
             .map(|field| (field.pointer, field.contract))
             .collect())
@@ -539,7 +571,7 @@ impl CompiledJsonPolicy {
         source: &Value,
         clocks: crate::value_contract::json::AnchorClocks,
     ) -> Result<Vec<SelectedGlobalField>> {
-        self.select_authored_fields(source, clocks.observation().source, false)
+        self.select_authored_fields(source, clocks.observation().source, false, None)
     }
 
     pub(crate) fn comparison_fields(
@@ -558,7 +590,25 @@ impl CompiledJsonPolicy {
         source: &Value,
         clocks: crate::value_contract::json::AnchorClocks,
     ) -> Result<Vec<SelectedGlobalField>> {
-        let authored = self.select_authored_fields(source, clocks.observation().source, false)?;
+        self.select_fields(source, clocks, None)
+    }
+
+    pub(crate) fn selected_value_fields_with_clocks(
+        &self,
+        source: &traffic_value::Value,
+        clocks: crate::value_contract::json::AnchorClocks,
+    ) -> Result<Vec<SelectedGlobalField>> {
+        self.select_fields(&serde_json::to_value(source)?, clocks, Some(source))
+    }
+
+    fn select_fields(
+        &self,
+        source: &Value,
+        clocks: crate::value_contract::json::AnchorClocks,
+        values: Option<&traffic_value::Value>,
+    ) -> Result<Vec<SelectedGlobalField>> {
+        let authored =
+            self.select_authored_fields(source, clocks.observation().source, false, values)?;
         let mut selected = authored
             .into_iter()
             .map(|field| (field.pointer.clone(), field))
@@ -605,6 +655,7 @@ impl CompiledJsonPolicy {
         source: &Value,
         source_clock: Option<chrono::DateTime<chrono::Utc>>,
         identity_only: bool,
+        values: Option<&traffic_value::Value>,
     ) -> Result<Vec<SelectedGlobalField>> {
         let mut fields = Vec::new();
         for (pattern, field) in &self.fields {
@@ -647,9 +698,16 @@ impl CompiledJsonPolicy {
                 let value = source
                     .pointer(&pointer)
                     .context("selected Source field disappeared")?;
-                let mut contract = field
-                    .select_contract_with_clock(value, source_clock)
-                    .with_context(|| format!("global JSON field {pointer:?}"))?;
+                let selected = if let Some(values) = values {
+                    let Some(value) = values.pointer(&pointer) else {
+                        continue;
+                    };
+                    field.select_value_contract(value, source_clock)
+                } else {
+                    field.select_contract_with_clock(value, source_clock)
+                };
+                let mut contract =
+                    selected.with_context(|| format!("global JSON field {pointer:?}"))?;
                 if identity_only
                     && !matches!(
                         contract,

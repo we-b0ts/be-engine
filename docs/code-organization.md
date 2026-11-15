@@ -38,10 +38,41 @@ owns immutable event plans, ordered candidate postings, finite claims, bounded
 pending admissions, shared request waiting, scope/lane candidate selection and
 actual delivery receipts. Its value-rule preparation binds protocol-projected
 locations to shared field contracts and codecs.
-`traffic-contract` owns Scalar/JSON/Protobuf strategies, strict JSON rendering,
-field-contract types, strict whole-document comparison, temporal arithmetic and
-shared identity proposals/stores. Native leaf verification and authenticated
-read provenance enter that comparator through capabilities supplied by callers.
+`traffic-value` owns format-independent values, codec recognition, prepared
+document access and logical edit authorization. `traffic-codec-json` owns
+duplicate-rejecting decoding and token-preserving JSON rendering.
+`traffic-codec-protobuf` owns typed projections, schema preparation and original
+wire remainders. String and opaque-byte codecs retain independent implementations.
+`traffic-policy` owns registered comparison, transformation and evidence-analysis
+contracts. Open policy definitions persist implementation identity, version and
+options. Implementations choose Source applicability and expose child-rule
+composition. `traffic-policy-time` owns registered duration and timestamp
+comparison, temporal analysis and scoped cross-message observation state over
+standard observed-clock facts. `traffic-time` owns exact temporal arithmetic,
+textual grammar recognition and temporal declarations shared by those
+implementations and compatibility adapters.
+`traffic-policy-identity` owns registered identity format comparison and entity
+key projection. The comparison host retains shared equality and injectivity
+through its value-correspondence service.
+`traffic-policy-unordered` owns multiset comparison, joined-string collection
+comparison and canonicalization, and speculative child pairing through
+transactional host checkpoints. `traffic-extensions` is the
+application extension catalog, with feature-selected installations in one file.
+Framework crates depend on the extension contracts and receive their execution
+owners through application composition.
+`traffic-replay::rules::RuleRuntime` supplies message preparation, comparison and
+opaque delivery settings to the finite inventory. `traffic-policy-value` owns the
+application's field-rule message preparation and delivery implementation.
+`traffic-contract` retains field-contract compatibility, strict whole-document
+comparison and shared identity proposals/stores. Its codec
+compatibility entrypoints receive the application's codec registry. Comparison
+metadata supplies the policy registry. Neither path loads the extension catalog.
+Legacy identity, time, duration and unordered declarations lower to the registered execution
+port. Registered implementations own observation merge and scope behavior, while
+the framework owns atomic checkpoints and aggregate publication. Exact fallback
+is a framework equality contract. Native leaf verification
+and authenticated read provenance enter the comparator through
+capabilities supplied by callers.
 Native MySQL semantic decoding and prepared-statement state belong to its
 protocol library. Its capture queue owns request/response FIFO correlation,
 continuation assembly, logical response boundaries and native termination-prefix
@@ -141,6 +172,18 @@ and model libraries.
 address discovery and materialization. The root HTTP adapter owns route
 registration, managed processes and provenance. See
 [dependency protocols and response rules](dependency-provider.md).
+Its registered document transformation requests `network.route` resources before
+materializing addresses. Recording's HTTP adapter supplies actual route results,
+normalizes native headers and retains original/delivered body provenance.
+An open recording policy declaration carries the same implementation identity,
+version and options through authoring, Source preflight, plan/apply and recording.
+Value discovery receives registered analyzers and retains findings independently
+of rule proposals. API hint rendering consumes those findings' policy identity,
+explanation and requirements through one path.
+Source-only observations expose logical values and original bytes through the
+same evidence port, including observations with an equal or unavailable Target.
+Proposals carry either a field definition or a complete additive policy fragment,
+so acquisition and comparison suggestions use the same discovery pipeline.
 
 `RuntimeState<P>` owns shared Replay session context and an application-supplied
 protocol set. `protocols/replay` supplies native connection dispatch, Source record
@@ -168,9 +211,11 @@ in `policy/runtime` application bindings. The framework loads and publishes
 policies, anchors request clocks, waits for durable hypothesis evidence and
 admits private response constraints through these ports. Registered native
 inventories consume `ValueRuleHost` for comparison commits, clocks and identity
-deliveries. `replay/policy/values` retains the shared correspondence store across
-those carriers. Native policy bindings validate physical inputs before invoking
-that store. Shared value matching, codecs and finite execution retain their
+deliveries. `value_contract/state` supplies the application correspondence and
+read-provenance stores across those carriers. Native policy bindings validate
+physical inputs before invoking that store. The control transport dispatches
+open parameters and receives application-owned status flags, query results and
+case cleanup through the same runtime port. Shared value matching, codecs and finite execution retain their
 `traffic-contract` and `traffic-replay` owners.
 Command diagnostics and reports accept typed native extensions. Redis owns its
 state-observation/APPEND diagnostic variants, Pub/Sub summaries and native audit
@@ -313,7 +358,7 @@ retain the same responsibility and 1000-line requirements as `src/`.
   response-event clocks through `AnchorClocks`; explicit request and delivery
   provenance remain separate. Protocol adapters retain native value framing.
   Built-in validation never supplies positive coverage for an authored rule.
-  `replay/contract_value` renders stored time counterparts only with authenticated
+  `value_contract/response_delivery` renders stored time counterparts only with authenticated
   preceding write/read proofs, including recognized textual times; recognition
   alone still permits comparison without generating delivery translations.
 
@@ -855,10 +900,11 @@ retain the same responsibility and 1000-line requirements as `src/`.
   Case response oracle, CA or listener. `global_evidence/preparation` owns portable
   source/policy/version binding and prewarm import; failure remains explicit and
   does not change Recorder's original completion contract.
-- `value_codec` prepares immutable typed codec plans and bounded schema reuse;
-  its Scalar/JSON/Protobuf providers statically dispatch decoding, comparison
-  views and authorized encoding. Decoded documents retain original bytes and
-  native Protobuf presence/unknown fields independently of logical JSON views.
+- `value_codec` composes registered implementations into immutable codec plans.
+  Providers own schema validation and physical-field overlap. The JSON provider
+  also supplies explicit native scalar decoding. Decoded documents retain
+  original bytes and native Protobuf presence/unknown fields independently of
+  logical JSON views.
   `value_contract/encoded/prepared` caches only bounded immutable overlapping
   schema plans, never live clocks, Target values or comparison decisions;
   decoded Source values may be shared within a comparison. The pure value kernel
@@ -2187,16 +2233,18 @@ explicit repository-wide audit.
   nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do
   not enter errors or reports.
   `policy/time_scope` validates explicit shared, array-element and identity-bound
-  clock scopes. `value_contract/json/clock_scope` resolves immutable array
-  coordinates or identity fingerprints; the existing comparison owner retains
-  relation budgets and cross-message validation.
+  clock scopes. `traffic-contract::compare::scope` resolves immutable array
+  coordinates or identity fingerprints. Registered temporal observation state
+  owns relationship budgets and cross-message validation.
   `value_contract/identities` owns bounded case/domain renaming proposals,
   equality and injectivity, and historical input anchors. The request-contract
   identity adapter commits accepted proposals and translates only declared
   physical leaves. MySQL result and Redis RESP owners retain wire framing and
   publish complete delivery batches before bytes become visible. The private
-  `replay/control/identity` bridge joins runner-owned response constraints to
-  dependency state before case cleanup; generated tokens never enter reports.
+  `value_contract/response_constraints` client and request-contract service join
+  runner-owned response constraints to dependency state before case cleanup.
+  Replay's extension dispatcher supplies active-case isolation and bounded
+  transport for these application-owned operations.
 - `policy/runtime/native_projection` translates typed effects to existing domain
   data. Its SourceSession exercises a complete immutable Source trace in private
   state; it cannot claim live Target work or certify Target correctness.

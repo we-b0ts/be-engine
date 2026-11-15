@@ -2,9 +2,9 @@
 use anyhow::{Result, ensure};
 use serde_json::Value;
 
-use crate::policy::{
-    ClockScope, FieldContract, TimeAnchor, TimePolicy, TimeRelation, TimestampFormat,
-};
+use crate::policy::{FieldContract, TimePolicy};
+#[cfg(test)]
+use crate::policy::{TimeAnchor, TimestampFormat};
 
 pub(crate) const RULE_ID: &str = "builtin.time";
 const MAX_NODES: usize = 16_384;
@@ -14,89 +14,21 @@ const MAX_FIELDS: usize = 4096;
 /// Numeric epochs require authored semantics. A standard string fixes its
 /// grammar independently of any differing Target value or available clock.
 pub(crate) fn contract(source: &Value, settings: &TimePolicy) -> Option<FieldContract> {
-    let text = source.as_str()?;
-    let format = classify(text)?;
-    let utc_offset = matches!(
-        format,
-        TimestampFormat::Iso8601Naive
-            | TimestampFormat::SqlDatetime
-            | TimestampFormat::CalendarDate
-    )
-    .then(|| settings.default_utc_offset.clone());
-    let contract = FieldContract::Time {
-        format,
-        relation: TimeRelation::PreserveOffset,
-        anchor: TimeAnchor::Observation,
-        utc_offset,
-        clock_group: None,
-        clock_scope: ClockScope::default(),
-    };
-    super::super::json::parse_time_value(source, &contract.time()?).ok()?;
-    Some(contract)
-}
-
-fn classify(text: &str) -> Option<TimestampFormat> {
-    let bytes = text.as_bytes();
-    if !(10..=35).contains(&bytes.len())
-        || !bytes[..10]
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| match index {
-                4 | 7 => *byte == b'-',
-                _ => byte.is_ascii_digit(),
-            })
+    if !traffic_extensions::policies()
+        .descriptors()
+        .any(|policy| policy.id == "time")
     {
         return None;
     }
-    if bytes.len() == 10 {
-        return Some(TimestampFormat::CalendarDate);
-    }
-    if bytes.len() < 19
-        || !matches!(bytes[10], b'T' | b't' | b' ')
-        || !bytes[11..19]
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| match index {
-                2 | 5 => *byte == b':',
-                _ => byte.is_ascii_digit(),
-            })
-    {
-        return None;
-    }
-    let zoned = bytes.last().is_some_and(|byte| matches!(byte, b'Z' | b'z'))
-        || bytes.len() >= 25
-            && matches!(bytes[bytes.len() - 6], b'+' | b'-')
-            && bytes[bytes.len() - 3] == b':';
-    if zoned {
-        if !matches!(bytes[10], b'T' | b't') {
-            return None;
-        }
-        let end = bytes.len()
-            - if matches!(bytes[bytes.len() - 1], b'Z' | b'z') {
-                1
-            } else {
-                6
-            };
-        if !fraction(&bytes[19..end]) {
-            return None;
-        }
-        Some(TimestampFormat::Rfc3339)
-    } else if fraction(&bytes[19..]) {
-        match bytes[10] {
-            b'T' => Some(TimestampFormat::Iso8601Naive),
-            b' ' => Some(TimestampFormat::SqlDatetime),
-            _ => None,
-        }
-    } else {
-        None
-    }
-}
-
-fn fraction(bytes: &[u8]) -> bool {
-    bytes.is_empty()
-        || (2..=10).contains(&bytes.len())
-            && bytes[0] == b'.'
-            && bytes[1..].iter().all(u8::is_ascii_digit)
+    let contract = super::declaration::recognize_timestamp(source, &settings.default_utc_offset)?;
+    Some(FieldContract::Time {
+        format: contract.format,
+        relation: contract.relation,
+        anchor: contract.anchor,
+        utc_offset: contract.utc_offset,
+        clock_group: contract.clock_group,
+        clock_scope: contract.clock_scope,
+    })
 }
 
 pub(crate) fn fields(
@@ -193,7 +125,7 @@ fn needs_visit(value: &Value) -> bool {
         || value.is_array()
         || value
             .as_str()
-            .is_some_and(|value| classify(value).is_some())
+            .is_some_and(|value| super::declaration::timestamp_format(value).is_some())
 }
 
 /// Generalize only Source array coordinates. Numeric object member names keep

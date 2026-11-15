@@ -3,7 +3,6 @@
 use super::*;
 use crate::policy::native::{NativeKeyContract, NativeKeySelector};
 use crate::policy::runtime::native_origin::TimeCopyPosition;
-use crate::value_codec::CodecPlan;
 use crate::value_contract::time_copies::TimeCopyLookup;
 mod script_times;
 
@@ -249,7 +248,7 @@ fn compare_value(
     let Some((store, case)) = context.copies else {
         return compare_bytes(source, target, plan, context.clocks);
     };
-    let codec = CodecPlan::compile(&crate::policy::Codec::Json)?;
+    let codec = crate::value_codec::compile(&crate::policy::Codec::Json)?;
     let Ok(expected) = codec.decode(source) else {
         return compare_bytes(source, target, plan, context.clocks);
     };

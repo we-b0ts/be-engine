@@ -97,7 +97,7 @@ async fn serve<P: ReplayProtocolSet>(
     use tokio::io::AsyncReadExt;
     let read = tokio::time::timeout(FRAME_TIMEOUT, async {
         (&mut reader)
-            .take(identity::MAX_CONTROL_BYTES as u64 + 1)
+            .take(MAX_CONTROL_BYTES as u64 + 1)
             .read_line(&mut line)
             .await
     })
@@ -113,7 +113,7 @@ async fn serve<P: ReplayProtocolSet>(
         }
     }
     let mut stream = reader.into_inner();
-    if line.len() > identity::MAX_CONTROL_BYTES {
+    if line.len() > MAX_CONTROL_BYTES {
         write_control_response(
             &mut stream,
             "oversized_request",
@@ -142,10 +142,17 @@ async fn serve<P: ReplayProtocolSet>(
 
     let command = request.command.clone();
     let queued_at = Instant::now();
-    let _mutation = if matches!(
+    let read_only = matches!(
         command.as_str(),
-        "status" | "wait_ready" | "cases" | "case_execution_status" | "response_time_copies"
-    ) {
+        "status" | "wait_ready" | "cases" | "case_execution_status"
+    ) || {
+        let state = state.lock().await;
+        match &state.replay_policy {
+            Some(policy) => policy.contracts().control_is_read_only(&command),
+            None => state.native.contracts.control_is_read_only(&command),
+        }
+    };
+    let _mutation = if read_only {
         None
     } else {
         Some(mutation.lock().await)

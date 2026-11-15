@@ -2862,6 +2862,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "traffic-codec-bytes"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-codec-json"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "traffic-codec-bytes",
+ "traffic-codec-protobuf",
+ "traffic-codec-string",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-codec-protobuf"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "serde",
+ "serde_json",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-codec-string"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "traffic-value",
+]
+
+[[package]]
 name = "traffic-contract"
 version = "0.1.0"
 dependencies = [
@@ -2871,6 +2911,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "traffic-codec-json",
+ "traffic-extensions",
+ "traffic-policy",
+ "traffic-time",
+ "traffic-value",
  "uuid",
 ]
 
@@ -2928,8 +2973,12 @@ dependencies = [
  "tower-service",
  "tracing",
  "tracing-subscriber",
+ "traffic-codec-protobuf",
  "traffic-contract",
+ "traffic-extensions",
  "traffic-model",
+ "traffic-policy",
+ "traffic-policy-value",
  "traffic-protocol",
  "traffic-protocol-fixture",
  "traffic-protocol-http",
@@ -2938,11 +2987,29 @@ dependencies = [
  "traffic-recording",
  "traffic-replay",
  "traffic-response-rewrite",
+ "traffic-value",
  "url",
  "uuid",
  "webpki-roots 1.0.8",
  "x509-parser",
  "zip",
+]
+
+[[package]]
+name = "traffic-extensions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "traffic-codec-bytes",
+ "traffic-codec-json",
+ "traffic-codec-protobuf",
+ "traffic-codec-string",
+ "traffic-policy",
+ "traffic-policy-identity",
+ "traffic-policy-time",
+ "traffic-policy-unordered",
+ "traffic-response-rewrite",
+ "traffic-value",
 ]
 
 [[package]]
@@ -2956,6 +3023,68 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "traffic-policy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-policy-identity"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
+ "traffic-contract",
+ "traffic-policy",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-policy-time"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
+ "traffic-policy",
+ "traffic-time",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-policy-unordered"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "traffic-policy",
+ "traffic-value",
+]
+
+[[package]]
+name = "traffic-policy-value"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "serde_json",
+ "traffic-contract",
+ "traffic-extensions",
+ "traffic-policy",
+ "traffic-protocol",
+ "traffic-value",
 ]
 
 [[package]]
@@ -3071,7 +3200,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "traffic-contract",
  "traffic-model",
  "traffic-protocol",
  "uuid",
@@ -3086,7 +3214,28 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "traffic-policy",
+ "traffic-value",
  "url",
+]
+
+[[package]]
+name = "traffic-time"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "traffic-policy",
+]
+
+[[package]]
+name = "traffic-value"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
 ]
 
 [[package]]

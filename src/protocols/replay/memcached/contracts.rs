@@ -219,8 +219,9 @@ pub(super) fn materialize_response(
         if crate::json_value::parse(payload).is_none() {
             continue;
         }
-        let delivery =
-            crate::replay::contract_value::Delivery::prepare_global(payload, global, clocks)?;
+        let delivery = crate::value_contract::response_delivery::Delivery::prepare_global(
+            payload, global, clocks,
+        )?;
         let mut validation =
             crate::policy::runtime::request_contract::Decision::from_value_comparison(
                 delivery.validation().clone(),
@@ -341,8 +342,9 @@ pub(crate) fn source_observation(
         if let (Some(value), Some(global)) = (&value, contracts.global_json())
             && crate::json_value::parse(value).is_some()
         {
-            let checked =
-                crate::replay::contract_value::Delivery::prepare_global(value, global, clocks)?;
+            let checked = crate::value_contract::response_delivery::Delivery::prepare_global(
+                value, global, clocks,
+            )?;
             contracts.observe_value_slot_applicable(checked.validation().evaluated.clone());
         }
         contracts.record_value_witness(
@@ -387,8 +389,9 @@ pub(crate) fn source_observation(
             else {
                 continue;
             };
-            let checked =
-                crate::replay::contract_value::Delivery::prepare_global(payload, global, clocks)?;
+            let checked = crate::value_contract::response_delivery::Delivery::prepare_global(
+                payload, global, clocks,
+            )?;
             applicable.extend(checked.validation().evaluated.iter().cloned());
         }
         contracts.observe_value_slot_applicable(applicable);

@@ -527,6 +527,41 @@ pub struct ResponseField {
 }
 
 pub(crate) fn validate_response_rules(rules: &ResponseRules) -> Result<()> {
+    let unordered = rules
+        .json
+        .values()
+        .map(|rules| rules.unordered.len())
+        .chain(rules.protobuf.values().map(|rules| rules.unordered.len()))
+        .chain(rules.hessian2.values().map(|rules| rules.unordered.len()))
+        .sum::<usize>();
+    if unordered > 0 {
+        traffic_extensions::policies().prepare("unordered", &traffic_value::Value::Null)?;
+    }
+    let separators = rules
+        .json
+        .values()
+        .flat_map(|rules| {
+            rules
+                .unordered_joined_string
+                .iter()
+                .map(|field| &field.separator)
+        })
+        .chain(rules.protobuf.values().flat_map(|rules| {
+            rules
+                .unordered_joined_string
+                .iter()
+                .map(|field| &field.separator)
+        }))
+        .chain(rules.hessian2.values().flat_map(|rules| {
+            rules
+                .unordered_joined_string
+                .iter()
+                .map(|field| &field.separator)
+        }));
+    for separator in separators {
+        let options = serde_json::from_value(serde_json::json!({"separator":separator}))?;
+        traffic_extensions::policies().prepare("unordered-joined-string", &options)?;
+    }
     super::response_headers::validate(&rules.headers)?;
     let mut locations = Vec::new();
     validate_json_rule_map(&rules.json, &mut locations)?;

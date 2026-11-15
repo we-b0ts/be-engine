@@ -357,7 +357,7 @@ async fn load_state<P: ReplayProtocolSet>(
         replay_policy
             .as_ref()
             .map(|policy| policy.contracts().native_rules())
-            .unwrap_or_else(|| Arc::new(policy::values::ValueState::default())),
+            .unwrap_or_else(|| crate::value_extensions::strict_values()),
     )?;
     let mut state = RuntimeState {
         providers,

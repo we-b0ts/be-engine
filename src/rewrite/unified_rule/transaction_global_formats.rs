@@ -2,6 +2,44 @@
 use super::*;
 
 #[test]
+fn registered_policy_definitions_use_the_public_plan_apply_transaction() {
+    let fixture = Fixture::new();
+    write(
+        &fixture.proposal,
+        json!({"format":"traffic-policy/v3","json":{"fields":{
+            "/members":{"kind":"policy","id":"unordered","version":1}
+        }}}),
+    );
+    fixture.confirm();
+    let planned = fixture.plan().unwrap();
+    assert_eq!(
+        planned.traffic_e2e_report["json"]["fields"]["/members"]["id"],
+        "unordered"
+    );
+    assert_eq!(
+        planned.traffic_e2e_report["json"]["fields"]["/members"]["version"],
+        1
+    );
+    assert!(
+        planned.traffic_e2e_report["preflight"]["source_validations"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let applied = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
+    assert_eq!(
+        applied.traffic_e2e_report["status"],
+        "applied_pending_replay"
+    );
+    let published =
+        crate::policy::parse_and_compile_policy(&fs::read_to_string(fixture.policy()).unwrap())
+            .unwrap();
+    assert!(
+        matches!(&published.global_json.unwrap().fields["/members"], crate::policy::GlobalField::Policy(definition) if definition.id == "unordered")
+    );
+}
+
+#[test]
 fn global_format_failure_identifies_primary_case_and_independent_target_phase() {
     let fixture = Fixture::new();
     fixture.replace_response_bodies(

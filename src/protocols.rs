@@ -37,11 +37,23 @@ impl DependencyProtocol {
     pub const Redis: Self = Self::new("redis");
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DependencyProviders {
     providers: ProviderRegistry<DependencyProtocol>,
-    bindings: traffic_replay::rules::BindingRegistry,
+    bindings: traffic_policy_value::BindingRegistry,
     report_codecs: traffic_protocol::report::CodecRegistry,
+}
+
+impl Default for DependencyProviders {
+    fn default() -> Self {
+        Self {
+            providers: ProviderRegistry::default(),
+            bindings: traffic_policy_value::BindingRegistry::new(
+                traffic_extensions::codecs().clone(),
+            ),
+            report_codecs: traffic_protocol::report::CodecRegistry::default(),
+        }
+    }
 }
 
 impl std::ops::Deref for DependencyProviders {
@@ -72,10 +84,10 @@ impl DependencyProviders {
     ) -> Option<Arc<dyn traffic_protocol::report::ReportCodec>> {
         self.report_codecs.codec(protocol)
     }
-    pub fn bindings(&self) -> &traffic_replay::rules::BindingRegistry {
+    pub fn bindings(&self) -> &traffic_policy_value::BindingRegistry {
         &self.bindings
     }
-    pub fn bindings_mut(&mut self) -> &mut traffic_replay::rules::BindingRegistry {
+    pub fn bindings_mut(&mut self) -> &mut traffic_policy_value::BindingRegistry {
         &mut self.bindings
     }
 }

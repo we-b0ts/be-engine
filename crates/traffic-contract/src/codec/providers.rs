@@ -1,25 +1,26 @@
-//! Closed codec providers share one result type and dispatch without a vtable.
-use super::{AuthorizedPatch, DecodedDocument, protobuf};
-use anyhow::{Context, Result, ensure};
+//! Compatibility bindings delegate decoding and rendering to registered codecs.
+use super::{AuthorizedPatch, Codec, DecodedDocument};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
-use std::sync::Arc;
+use traffic_value::codec::{CodecRegistry, PreparedCodec};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CodecKind {
-    Scalar,
-    Json,
-    Protobuf,
-}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CodecKind(std::borrow::Cow<'static, str>);
 impl CodecKind {
-    pub fn of(codec: &crate::codec::Codec) -> Self {
-        match codec {
-            crate::codec::Codec::Scalar => Self::Scalar,
-            crate::codec::Codec::Json => Self::Json,
-            crate::codec::Codec::Protobuf(_) => Self::Protobuf,
-        }
+    #[allow(non_upper_case_globals)]
+    pub const Json: Self = Self(std::borrow::Cow::Borrowed("json"));
+    #[allow(non_upper_case_globals)]
+    pub const Scalar: Self = Self(std::borrow::Cow::Borrowed("scalar"));
+    #[allow(non_upper_case_globals)]
+    pub const Protobuf: Self = Self(std::borrow::Cow::Borrowed("protobuf"));
+    pub fn of(codec: &Codec) -> Self {
+        Self(std::borrow::Cow::Owned(codec.id().into()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -30,163 +31,93 @@ pub trait ValueCodec {
     fn encode(document: &DecodedDocument, patch: &AuthorizedPatch<'_>) -> Result<Vec<u8>>;
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ScalarCodec;
-#[derive(Debug, Clone, Copy)]
-pub struct JsonCodec;
-#[derive(Debug, Clone)]
-pub struct ProtobufCodec {
-    schema: Arc<protobuf::Schema>,
+#[derive(Clone)]
+pub struct CodecPlan {
+    kind: CodecKind,
+    codec: PreparedCodec,
 }
-
-/// Contains immutable schema preparation only. Permissions, clocks, bindings
-/// and decoded payloads never enter a reusable codec plan.
-#[derive(Debug, Clone)]
-pub enum CodecPlan {
-    Scalar(ScalarCodec),
-    Json(JsonCodec),
-    Protobuf(ProtobufCodec),
+impl std::fmt::Debug for CodecPlan {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CodecPlan")
+            .field("kind", &self.kind)
+            .finish()
+    }
 }
 impl CodecPlan {
-    pub fn compile(codec: &crate::codec::Codec) -> Result<Self> {
+    pub fn recognize(
+        source: &[u8],
+        metadata: &traffic_value::Value,
+        registry: &CodecRegistry,
+    ) -> Result<Self> {
+        let codec = registry.recognize(source, metadata)?;
+        Ok(Self {
+            kind: CodecKind(std::borrow::Cow::Owned(codec.descriptor().id.into())),
+            codec,
+        })
+    }
+    pub fn try_recognize(
+        source: &[u8],
+        metadata: &traffic_value::Value,
+        registry: &CodecRegistry,
+    ) -> Result<Option<Self>> {
+        Ok(registry.try_recognize(source, metadata)?.map(|codec| Self {
+            kind: CodecKind(std::borrow::Cow::Owned(codec.descriptor().id.into())),
+            codec,
+        }))
+    }
+    pub fn declaration(&self) -> Result<Codec> {
+        Codec::registered(
+            self.codec.descriptor().id,
+            serde_json::to_value(self.codec.configuration())?,
+        )
+    }
+    pub fn compile(codec: &Codec, registry: &CodecRegistry) -> Result<Self> {
         #[cfg(any(test, feature = "test-support"))]
         COMPILE_CALLS.with(|calls| calls.set(calls.get() + 1));
-        Ok(match codec {
-            crate::codec::Codec::Scalar => Self::Scalar(ScalarCodec),
-            crate::codec::Codec::Json => Self::Json(JsonCodec),
-            crate::codec::Codec::Protobuf(codec) => Self::Protobuf(ProtobufCodec {
-                schema: protobuf::schema(codec)?,
-            }),
+        let configuration = serde_json::from_value(codec.configuration().clone())?;
+        let prepared = registry.prepare(codec.id(), &configuration)?;
+        Ok(Self {
+            kind: CodecKind::of(codec),
+            codec: prepared,
         })
     }
     pub fn decode(&self, bytes: &[u8]) -> Result<DecodedDocument> {
         ValueCodec::decode(self, bytes)
     }
 }
+
 impl ValueCodec for CodecPlan {
     fn comparison_view<'a>(document: &'a DecodedDocument, paths: &[String]) -> Cow<'a, Value> {
-        match document.kind {
-            CodecKind::Scalar => ScalarCodec::comparison_view(document, paths),
-            CodecKind::Json => JsonCodec::comparison_view(document, paths),
-            CodecKind::Protobuf => ProtobufCodec::comparison_view(document, paths),
+        let view = document.document.comparison_view(paths);
+        if std::ptr::eq(view.as_ref(), document.document.value()) {
+            Cow::Borrowed(&document.logical)
+        } else {
+            Cow::Owned(serde_json::to_value(view).expect("decoded content is serializable"))
         }
     }
     fn encode(document: &DecodedDocument, patch: &AuthorizedPatch<'_>) -> Result<Vec<u8>> {
-        match document.kind {
-            CodecKind::Scalar => ScalarCodec::encode(document, patch),
-            CodecKind::Json => JsonCodec::encode(document, patch),
-            CodecKind::Protobuf => ProtobufCodec::encode(document, patch),
-        }
+        document.document.encode(patch.logical, patch.allowed)
     }
     fn kind(&self) -> CodecKind {
-        match self {
-            Self::Scalar(codec) => codec.kind(),
-            Self::Json(codec) => codec.kind(),
-            Self::Protobuf(codec) => codec.kind(),
-        }
+        self.kind.clone()
     }
     fn decode(&self, bytes: &[u8]) -> Result<DecodedDocument> {
-        match self {
-            Self::Scalar(codec) => codec.decode(bytes),
-            Self::Json(codec) => codec.decode(bytes),
-            Self::Protobuf(codec) => codec.decode(bytes),
-        }
-    }
-}
-fn validate_payload(bytes: &[u8]) -> Result<()> {
-    #[cfg(any(test, feature = "test-support"))]
-    super::DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-    ensure!(
-        bytes.len() <= crate::MAX_VALUE_BYTES,
-        "payload exceeds the 64 MiB codec limit"
-    );
-    Ok(())
-}
-fn json(bytes: &[u8], kind: CodecKind) -> Result<DecodedDocument> {
-    validate_payload(bytes)?;
-    let logical = crate::json::parse(bytes)
-        .context("payload requires complete JSON without duplicate members")?;
-    ensure!(
-        kind != CodecKind::Scalar || (!logical.is_array() && !logical.is_object()),
-        "native scalar codec rejects structured payloads"
-    );
-    Ok(DecodedDocument {
-        logical,
-        original: bytes.to_vec(),
-        protobuf: None,
-        kind,
-    })
-}
-impl ValueCodec for ScalarCodec {
-    fn comparison_view<'a>(document: &'a DecodedDocument, _paths: &[String]) -> Cow<'a, Value> {
-        Cow::Borrowed(&document.logical)
-    }
-    fn encode(document: &DecodedDocument, patch: &AuthorizedPatch<'_>) -> Result<Vec<u8>> {
-        ensure!(
-            document.kind == CodecKind::Scalar,
-            "codec provider does not own this document"
-        );
-        crate::json::render::derived(&document.original, patch.logical())
-    }
-    fn kind(&self) -> CodecKind {
-        CodecKind::Scalar
-    }
-    fn decode(&self, bytes: &[u8]) -> Result<DecodedDocument> {
-        json(bytes, self.kind())
-    }
-}
-impl ValueCodec for JsonCodec {
-    fn comparison_view<'a>(document: &'a DecodedDocument, _paths: &[String]) -> Cow<'a, Value> {
-        Cow::Borrowed(&document.logical)
-    }
-    fn encode(document: &DecodedDocument, patch: &AuthorizedPatch<'_>) -> Result<Vec<u8>> {
-        ensure!(
-            document.kind == CodecKind::Json,
-            "codec provider does not own this document"
-        );
-        crate::json::render::derived(&document.original, patch.logical())
-    }
-    fn kind(&self) -> CodecKind {
-        CodecKind::Json
-    }
-    fn decode(&self, bytes: &[u8]) -> Result<DecodedDocument> {
-        json(bytes, self.kind())
-    }
-}
-impl ValueCodec for ProtobufCodec {
-    fn comparison_view<'a>(document: &'a DecodedDocument, paths: &[String]) -> Cow<'a, Value> {
-        if paths.is_empty() {
-            return Cow::Borrowed(&document.logical);
-        }
-        let mut logical = document.logical.clone();
-        protobuf::prepare_comparison(&mut logical, "", paths);
-        Cow::Owned(logical)
-    }
-    fn encode(document: &DecodedDocument, patch: &AuthorizedPatch<'_>) -> Result<Vec<u8>> {
-        ensure!(
-            document.kind == CodecKind::Protobuf,
-            "codec provider does not own this document"
-        );
-        document
-            .protobuf
-            .as_ref()
-            .context("Protobuf document lacks its original wire remainder")?
-            .encode(patch.logical())
-    }
-    fn kind(&self) -> CodecKind {
-        CodecKind::Protobuf
-    }
-    fn decode(&self, bytes: &[u8]) -> Result<DecodedDocument> {
-        validate_payload(bytes)?;
-        let (document, logical) = self.schema.decode(bytes)?;
+        #[cfg(any(test, feature = "test-support"))]
+        super::DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
+        let document = self.codec.decode(bytes)?;
+        let logical = serde_json::to_value(document.value())?;
         Ok(DecodedDocument {
             logical,
-            original: bytes.to_vec(),
-            protobuf: Some(document),
-            kind: self.kind(),
+            document,
+            kind: self.kind.clone(),
         })
     }
 }
+
+#[cfg(test)]
+mod tests;
+
 #[cfg(any(test, feature = "test-support"))]
 thread_local! { static COMPILE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 #[cfg(any(test, feature = "test-support"))]

@@ -313,7 +313,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
             case_id,
             fail_on_dirty: false,
             fail_on_incomplete: false,
-            identity_pairs: Vec::new(),
+            parameters: Default::default(),
             derived_input: None,
             native_event: None,
             input_timing: None,

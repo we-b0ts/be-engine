@@ -15,7 +15,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     vec![RewriteRuleHint {
         capability: "resource_field_contract".into(),
         rule: "resource-fields".into(),
-        hint: "Inspect source_entry.locations and trace Source construction, even when no draft exists. Root json.fields supports time, identity, unordered collections, JWT/URL and string templates. Explicit carrier bindings cover encrypted content, DOCX, HTTP paths and learned-response addresses when Source proves them; consult docs/content-policy-layout.md for syntax. Submit only the needed additions with Source proof and the current evidence ID. Equal/null observations grant no permission. Review complete plan coverage and residual differences, then complete genuine Replay.".into(),
+        hint: "Inspect source_entry.locations and trace Source construction, including locations without a draft. Review extensions.policies and extensions.codecs for installed implementations and their supported actions. Declare shared logical field semantics under json.fields and use explicit carrier bindings for encoded content and native locations. Consult docs/content-policy-layout.md for syntax, submit the needed additions with Source proof and the current evidence ID, then review complete plan coverage and residual differences before genuine Replay.".into(),
         help: help(root),
     }]
 }

@@ -45,6 +45,9 @@ pub(super) fn rules(
     }
     for capture in &config.http_response_rewrite {
         let contract = match &capture.plugin {
+            Some(super::super::HttpResponseRewritePluginConfig::Policy(definition)) => {
+                n::CaptureResponseContract::Policy(definition.clone())
+            }
             None => n::CaptureResponseContract::Urls {
                 pointers: capture
                     .pointers

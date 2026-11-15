@@ -12,25 +12,29 @@ pub(super) fn failed<P: ReplayProtocolSet>(state: &RuntimeState<P>, case: &str) 
 }
 
 pub(super) fn status<P: ReplayProtocolSet>(state: &RuntimeState<P>, case: Option<&str>) -> Value {
-    let has_response_time_copies = case.is_some_and(|case| {
-        state
-            .replay_policy
-            .as_ref()
-            .is_some_and(|policy| policy.contracts().has_time_copies(case))
-    });
+    let flags = case
+        .map(|case| match &state.replay_policy {
+            Some(policy) => policy.contracts().case_flags(case),
+            None => state.native.contracts.case_flags(case),
+        })
+        .unwrap_or_default();
     if let Some(case) = case
         && let Some(failure) = state.dependency_tails.failure(case)
     {
-        return serde_json::json!({"ok":true,"case_id":case,"failed":true,
-            "kind":failure["kind"],"failures":[failure],
-            "has_response_time_copies":has_response_time_copies});
+        return with_flags(
+            serde_json::json!({"ok":true,"case_id":case,"failed":true,
+            "kind":failure["kind"],"failures":[failure]}),
+            flags,
+        );
     }
     let Some(case) = case.filter(|case| state.active_case_id.as_deref() == Some(*case)) else {
         return serde_json::json!({"ok":false,"error":"case_execution_status requires the active Case"});
     };
     if !failed(state, case) {
-        return serde_json::json!({"ok":true,"case_id":case,"failed":false,"failures":[],
-            "has_response_time_copies":has_response_time_copies});
+        return with_flags(
+            serde_json::json!({"ok":true,"case_id":case,"failed":false,"failures":[]}),
+            flags,
+        );
     }
     let mut failures = state.native.failures_for_case(case, MAX_FAILURES);
     state
@@ -46,6 +50,33 @@ pub(super) fn status<P: ReplayProtocolSet>(state: &RuntimeState<P>, case: Option
             .iter()
             .filter(|entry| entry.case_id.as_deref() == Some(case)),
     );
-    serde_json::json!({"ok":true,"case_id":case,"failed":true,"failures":failures,
-        "has_response_time_copies":has_response_time_copies})
+    with_flags(
+        serde_json::json!({"ok":true,"case_id":case,"failed":true,"failures":failures}),
+        flags,
+    )
+}
+
+fn with_flags(mut status: Value, flags: BTreeMap<String, Value>) -> Value {
+    let object = status.as_object_mut().expect("case status is an object");
+    for (name, value) in flags {
+        object.entry(name).or_insert(value);
+    }
+    status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn policy_flags_preserve_framework_execution_facts() {
+        let status = with_flags(
+            serde_json::json!({"ok":true,"failed":true}),
+            BTreeMap::from([
+                ("failed".into(), Value::Bool(false)),
+                ("extension_ready".into(), Value::Bool(true)),
+            ]),
+        );
+        assert_eq!(status["failed"], true);
+        assert_eq!(status["extension_ready"], true);
+    }
 }

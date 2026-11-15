@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use traffic_contract::compare::{AnchorClocks, Comparison, RuleMetadata};
 use traffic_model::recording::{CaptureMetadata, ProtocolRef};
 use traffic_protocol::{
     ProtocolId,
@@ -22,7 +21,7 @@ use crate::{
         CandidateCursor, CandidateIndex, CaseMembership, LaneIndex, LaneKey, LaneOwner,
         ScopePartition,
     },
-    rules::{PreparedMessage, RuleBinding},
+    rules::{ExactRules, RuleRuntime},
 };
 
 #[derive(Debug, Clone)]
@@ -33,26 +32,25 @@ pub struct SourceContext {
     pub capture: Option<CaptureMetadata>,
 }
 
-#[derive(Default)]
-pub struct ExchangeRules {
-    pub request: Vec<RuleBinding>,
-    pub response: Vec<RuleBinding>,
-    pub rebase_time: std::collections::BTreeSet<String>,
+pub struct ExchangeRules<R: RuleRuntime = ExactRules> {
+    pub request: R::Bindings,
+    pub response: R::Bindings,
+    pub delivery: R::Delivery,
 }
 
-pub struct PreparedExchange {
+pub struct PreparedExchange<R: RuleRuntime = ExactRules> {
     pub index: usize,
     pub protocol: ProtocolId,
     pub native: RecordedExchange,
     pub source: SourceContext,
-    pub request: PreparedMessage,
-    pub response: PreparedMessage,
-    pub rebase_time: std::collections::BTreeSet<String>,
+    pub request: R::Prepared,
+    pub response: R::Prepared,
+    pub delivery: R::Delivery,
     pub status: ReplayExchangeStatus,
     lane_id: Uuid,
 }
 
-impl std::fmt::Debug for PreparedExchange {
+impl<R: RuleRuntime> std::fmt::Debug for PreparedExchange<R> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PreparedExchange")
@@ -63,7 +61,7 @@ impl std::fmt::Debug for PreparedExchange {
     }
 }
 
-impl CommandExchangeScope for PreparedExchange {
+impl<R: RuleRuntime> CommandExchangeScope for PreparedExchange<R> {
     fn source(&self) -> ReplaySource {
         self.source.source
     }
@@ -100,9 +98,8 @@ struct CandidateKey {
 
 type LaneIdentity = (ScopePartition, ProtocolId, Endpoint, String);
 
-#[derive(Debug, Default)]
-pub struct ExchangeInventory {
-    pub exchanges: Vec<PreparedExchange>,
+pub struct ExchangeInventory<R: RuleRuntime = ExactRules> {
+    pub exchanges: Vec<PreparedExchange<R>>,
     pub lifecycle: Lifecycle,
     candidates: CandidateIndex<CandidateKey>,
     lanes: LaneIndex,
@@ -111,32 +108,63 @@ pub struct ExchangeInventory {
     references: BTreeMap<String, BTreeMap<ProtocolRef, Option<usize>>>,
 }
 
-pub struct SelectedExchange {
-    pub index: usize,
-    pub comparison: Comparison,
+impl<R: RuleRuntime> Default for ExchangeRules<R> {
+    fn default() -> Self {
+        Self {
+            request: Default::default(),
+            response: Default::default(),
+            delivery: Default::default(),
+        }
+    }
+}
+impl<R: RuleRuntime> Default for ExchangeInventory<R> {
+    fn default() -> Self {
+        Self {
+            exchanges: Default::default(),
+            lifecycle: Default::default(),
+            candidates: Default::default(),
+            lanes: Default::default(),
+            lane_ids: Default::default(),
+            cases: Default::default(),
+            references: Default::default(),
+        }
+    }
+}
+impl<R: RuleRuntime> std::fmt::Debug for ExchangeInventory<R> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExchangeInventory")
+            .field("exchanges", &self.exchanges.len())
+            .finish()
+    }
 }
 
-pub enum Selection {
-    Matched(Box<SelectedExchange>),
+pub struct SelectedExchange<C = bool> {
+    pub index: usize,
+    pub comparison: C,
+}
+
+pub enum Selection<C = bool> {
+    Matched(Box<SelectedExchange<C>>),
     LaneBlocked { candidate: usize, blocker: usize },
     NotFound,
 }
 
-pub struct MatchContext<'a> {
+pub struct MatchContext<'a, R: RuleRuntime = ExactRules> {
     pub protocol: ProtocolId,
     pub endpoint: &'a Endpoint,
     pub active_case: Option<&'a str>,
     pub request: &'a dyn ProtocolMessage,
-    pub metadata: &'a dyn RuleMetadata,
+    pub metadata: &'a R::Metadata,
 }
 
-impl ExchangeInventory {
+impl<R: RuleRuntime> ExchangeInventory<R> {
     pub fn register(
         &mut self,
         protocol: ProtocolId,
         native: RecordedExchange,
         source: SourceContext,
-        rules: ExchangeRules,
+        rules: ExchangeRules<R>,
     ) -> Result<usize> {
         ensure!(
             native.reference.protocol() == protocol.as_str(),
@@ -147,8 +175,8 @@ impl ExchangeInventory {
             "Case exchange has no owner"
         );
         let index = self.exchanges.len();
-        let request = PreparedMessage::compile(native.request.as_ref(), &rules.request)?;
-        let response = PreparedMessage::compile(native.response.as_ref(), &rules.response)?;
+        let request = R::prepare(native.request.as_ref(), &rules.request)?;
+        let response = R::prepare(native.response.as_ref(), &rules.response)?;
         let scope = ScopePartition::new(source.source, source.case_id.as_deref());
         let lane_id = native
             .lane
@@ -169,7 +197,7 @@ impl ExchangeInventory {
             scope,
             protocol,
             endpoint: native.endpoint.clone(),
-            structure: serde_json::to_vec(request.structure())?,
+            structure: serde_json::to_vec(R::structure(&request))?,
         };
         if native.lane.is_some() {
             self.lanes.register(
@@ -201,7 +229,7 @@ impl ExchangeInventory {
             source,
             request,
             response,
-            rebase_time: rules.rebase_time,
+            delivery: rules.delivery,
             status: ReplayExchangeStatus::Available,
             lane_id,
         });
@@ -248,10 +276,10 @@ impl ExchangeInventory {
 
     pub fn select(
         &self,
-        context: MatchContext<'_>,
-        clocks: impl Fn(&PreparedExchange) -> AnchorClocks,
-        validate: impl Fn(&PreparedExchange, &Comparison) -> Result<()>,
-    ) -> Result<Selection> {
+        context: MatchContext<'_, R>,
+        clocks: impl Fn(&PreparedExchange<R>) -> R::Context,
+        validate: impl Fn(&PreparedExchange<R>, &R::Comparison) -> Result<()>,
+    ) -> Result<Selection<R::Comparison>> {
         let structure = serde_json::to_vec(&context.request.project()?.structure)?;
         let key = CandidateKey {
             scope: ScopePartition::new(ReplaySource::Case, context.active_case),
@@ -290,12 +318,14 @@ impl ExchangeInventory {
                     ));
                     return false;
                 }
-                match exchange
-                    .request
-                    .compare(context.request, clocks(exchange), context.metadata)
-                {
+                match R::compare(
+                    &exchange.request,
+                    context.request,
+                    clocks(exchange),
+                    context.metadata,
+                ) {
                     Ok(comparison)
-                        if comparison.passed() && validate(exchange, &comparison).is_ok() =>
+                        if R::passed(&comparison) && validate(exchange, &comparison).is_ok() =>
                     {
                         previews.borrow_mut().insert(exchange.index, comparison);
                         true

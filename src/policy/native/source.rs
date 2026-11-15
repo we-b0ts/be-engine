@@ -41,6 +41,7 @@ pub enum CapturePath {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CaptureResponseContract {
+    Policy(traffic_policy::PolicyDefinition),
     Urls {
         pointers: Vec<Proven<String>>,
     },

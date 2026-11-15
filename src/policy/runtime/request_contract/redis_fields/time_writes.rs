@@ -1,6 +1,6 @@
 //! Successful stored writes make their exact temporal counterparts available to later reads.
 use super::*;
-use crate::replay::contract_value::CopiedTime;
+use crate::value_contract::response_delivery::CopiedTime;
 use crate::value_contract::{
     json::AnchorClocks,
     time_copies::{self, TimeCopyLookup, TimeCopyRecord},

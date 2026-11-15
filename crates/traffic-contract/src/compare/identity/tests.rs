@@ -9,10 +9,30 @@ fn contract(format: IdentityFormat) -> FieldContract {
 }
 
 #[test]
+fn registered_identity_preserves_bounded_unicode_prefixes() {
+    let prefix = "前缀".repeat(30);
+    let contract = FieldContract::Identity {
+        prefix: prefix.clone(),
+        format: IdentityFormat::String,
+    };
+    let result = crate::compare::test_compare(
+        &json!(format!("{prefix}one")),
+        &json!(format!("{prefix}two")),
+        &[Field {
+            rule_id: "prefix",
+            pointer: "",
+            contract: &contract,
+        }],
+        AnchorClocks::default(),
+    );
+    assert!(result.passed(), "{:?}", result.differences);
+}
+
+#[test]
 fn identities_span_rule_ids_and_preserve_bijection_without_cross_case_state() {
     let contract = contract(IdentityFormat::Decimal);
     let compare = |source: Value, target: Value, id: &str| {
-        super::super::compare(
+        crate::compare::test_compare(
             &source,
             &target,
             &[Field {
@@ -66,7 +86,7 @@ fn identity_strings_validate_uuid_canonical_form_and_decimal_boundaries() {
     ] {
         let contract = contract(format);
         assert_eq!(
-            super::super::compare(
+            crate::compare::test_compare(
                 &json!(source),
                 &json!(target),
                 &[Field {
@@ -99,40 +119,10 @@ fn identity_state_is_bounded_and_existing_entities_remain_valid_at_limit() {
 }
 
 #[test]
-fn repeated_frame_times_do_not_accumulate_duplicate_relationships() {
-    let mut result = Comparison::default();
-    for _ in 0..1000 {
-        let mut frame = Comparison::default();
-        frame.relationships.insert(
-            (
-                TimeAnchor::DependencyRequestStart,
-                Some("response".into()),
-                Default::default(),
-            ),
-            vec![(1, 61)],
-        );
-        result.merge_and_validate(frame);
-    }
-    assert!(result.passed());
-    assert_eq!(result.relationships.values().next().unwrap().len(), 1);
-    let mut wrong = Comparison::default();
-    wrong.relationships.insert(
-        (
-            TimeAnchor::DependencyRequestStart,
-            Some("response".into()),
-            Default::default(),
-        ),
-        vec![(1, 62)],
-    );
-    result.merge_and_validate(wrong);
-    assert!(!result.passed());
-}
-
-#[test]
 fn fixed_hex_identity_validates_both_sides_and_preserves_shared_bijection() {
     let contract = contract(IdentityFormat::Hex(12));
     let compare = |a: &str, b: &str| {
-        super::super::compare(
+        crate::compare::test_compare(
             &json!(a),
             &json!(b),
             &[Field {
@@ -174,7 +164,7 @@ fn numeric_and_string_ids_have_distinct_typed_keys_without_relaxing_scalar_types
         format: IdentityFormat::Decimal,
     };
     let compare = |source: Value, target: Value| {
-        super::super::compare(
+        crate::compare::test_compare(
             &source,
             &target,
             &[Field {
@@ -209,7 +199,7 @@ fn base64url_tokens_require_the_declared_length_and_url_safe_alphabet() {
         format: IdentityFormat::Base64Url(8),
     };
     let compare = |source: &str, target: &str| {
-        super::super::compare(
+        crate::compare::test_compare(
             &json!(source),
             &json!(target),
             &[Field {
@@ -250,7 +240,7 @@ fn full_prefixed_values_are_distinct_and_same_values_link_across_formats_and_pat
         },
     ];
     assert!(
-        super::super::compare(
+        crate::compare::test_compare(
             &json!({"user":"user_11","order":"order_11"}),
             &json!({"user":"user_1011","order":"order_1012"}),
             &fields,
@@ -280,7 +270,7 @@ fn full_prefixed_values_are_distinct_and_same_values_link_across_formats_and_pat
     ];
     let source = json!({"id":"11","item":{"id":"11"}});
     assert!(
-        super::super::compare(
+        crate::compare::test_compare(
             &source,
             &json!({"id":"22","item":{"id":"22"}}),
             &fields,
@@ -289,7 +279,7 @@ fn full_prefixed_values_are_distinct_and_same_values_link_across_formats_and_pat
         .passed()
     );
     assert!(
-        !super::super::compare(
+        !crate::compare::test_compare(
             &source,
             &json!({"id":"22","item":{"id":"33"}}),
             &fields,

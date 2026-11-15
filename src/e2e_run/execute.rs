@@ -764,7 +764,7 @@ pub(super) async fn execute_case(
     };
     if let Ok(report) = &mut response_assertion
         && report.passed
-        && let Err(error) = crate::replay::check_response_identities(
+        && let Err(error) = crate::value_contract::response_constraints::check_response_identities(
             &state.replay_session,
             case_id,
             &report.identity_pairs,

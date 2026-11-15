@@ -267,7 +267,7 @@ impl NativeResponseContext {
         clocks: AnchorClocks,
     ) -> Result<Comparison> {
         let codec = self.payload_codec(rules)?;
-        let (source, target) = if matches!(codec, crate::policy::Codec::Protobuf(_)) {
+        let (source, target) = if crate::value_codec::protobuf_schema(&codec).is_some() {
             super::protobuf::payload_pair(source, target)?
         } else {
             (source, target)

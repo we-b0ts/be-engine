@@ -368,6 +368,9 @@ fn canonicalize_rules(
     rules: &[ProtobufUnorderedPath],
     joined_string_rules: &[ProtobufJoinedStringPath],
 ) -> Result<Vec<u8>> {
+    if !rules.is_empty() {
+        traffic_extensions::policies().prepare("unordered", &traffic_value::Value::Null)?;
+    }
     let mut canonical = payload.to_vec();
     let mut ordered = rules.to_vec();
     ordered.sort_by(|left, right| {
@@ -701,7 +704,11 @@ fn discover_paths(
     depth: usize,
     discovered: &mut BTreeSet<ProtobufFieldPath>,
 ) {
-    if depth >= MAX_NESTING_DEPTH || discovered.len() >= MAX_DISCOVERED_PATHS {
+    if depth >= MAX_NESTING_DEPTH
+        || discovered.len() >= MAX_DISCOVERED_PATHS
+        || !traffic_extensions::policies()
+            .supports("unordered", traffic_policy::PolicyAction::Analyze)
+    {
         return;
     }
     let (Ok(expected_fields), Ok(actual_fields)) = (parse_fields(expected), parse_fields(actual))

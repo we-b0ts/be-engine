@@ -7,7 +7,6 @@ edition = "2024"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros", "io-util"] }
 anyhow = "1"
 traffic-model = { path = "../traffic-model" }
-traffic-contract = { path = "../traffic-contract" }
 traffic-protocol = { path = "../traffic-protocol" }
 bytes = "1"
 serde_json = "1"

@@ -1,8 +1,5 @@
 //! Specialized leaves participate inside the shared whole-element pairing.
-use super::{
-    AnchorClocks, Comparison, Decisions, Difference, MAX_TIME_OBSERVATIONS, difference,
-    validate_relationships,
-};
+use super::{AnchorClocks, Comparison, Decisions, Difference, difference};
 /// An extension validates its own leaf while the kernel retains whole-element pairing.
 #[derive(Clone, Copy)]
 pub struct NativeField<'a> {
@@ -135,24 +132,27 @@ pub(super) fn compare(
     if let Some(error) = comparison.differences.first() {
         return Err(error.clone());
     }
-    merge(decisions, comparison).map_err(|error| difference(pointer, error))?;
-    validate_relationships(decisions).map_err(|error| difference(pointer, &error.to_string()))
+    merge(decisions, comparison).map_err(|error| difference(pointer, &error))
 }
 
-fn merge(decisions: &mut Decisions, comparison: Comparison) -> Result<(), &'static str> {
-    decisions.identities.merge(comparison.identities)?;
+fn merge(decisions: &mut Decisions, comparison: Comparison) -> Result<(), String> {
+    decisions
+        .identities
+        .merge(comparison.identities)
+        .map_err(str::to_owned)?;
     decisions.evaluated.extend(comparison.evaluated);
     for (rule_id, count) in comparison.time_validations {
         *decisions.time_validations.entry(rule_id).or_default() += count;
     }
-    for (scope, values) in comparison.relationships {
-        if !scope.2.is_shared() {
-            decisions.scoped_time_observations += values.len();
-            if decisions.scoped_time_observations > MAX_TIME_OBSERVATIONS {
-                return Err("scoped time relationship exceeds 4096 distinct observations");
-            }
+    decisions
+        .observations
+        .merge(comparison.observations)
+        .map_err(|error| error.to_string())?;
+    for (metric, values) in comparison.policy_counts {
+        let counts = decisions.counts.entry(metric).or_default();
+        for (rule, count) in values {
+            *counts.entry(rule).or_default() += count;
         }
-        decisions.times.entry(scope).or_default().extend(values);
     }
     for (scope, pairs) in comparison.nonce_relationships {
         let values = decisions.nonces.entry(scope).or_default();
@@ -161,7 +161,7 @@ fn merge(decisions: &mut Decisions, comparison: Comparison) -> Result<(), &'stat
                 .iter()
                 .any(|(a, b)| (*a == source && *b != target) || (*b == target && *a != source))
             {
-                return Err("generated binding bijection changed");
+                return Err("generated binding bijection changed".into());
             }
             if !values.contains(&(source, target)) {
                 values.push((source, target));
@@ -179,6 +179,7 @@ mod tests {
 
     #[test]
     fn failed_unordered_candidate_does_not_commit_nonce_or_target_index() {
+        let metadata = super::super::RegisteredRules(traffic_extensions::policies());
         let contract = FieldContract::Unordered;
         let fields = [super::super::Field {
             rule_id: "order",
@@ -212,37 +213,43 @@ mod tests {
             verifier: &verify,
         }];
         assert!(
-            super::super::compare_with_verified(
+            super::super::compare_all(
                 &source,
                 &target,
                 &fields,
                 &[],
                 &verified,
-                AnchorClocks::default()
+                AnchorClocks::default(),
+                &[],
+                &metadata,
             )
             .passed()
         );
         let collapsed = json!({"items":[{"auth":"t1","name":"B"},{"auth":"t1","name":"A"}]});
         assert!(
-            !super::super::compare_with_verified(
+            !super::super::compare_all(
                 &source,
                 &collapsed,
                 &fields,
                 &[],
                 &verified,
-                AnchorClocks::default()
+                AnchorClocks::default(),
+                &[],
+                &metadata,
             )
             .passed()
         );
         let changed = json!({"items":[{"auth":"t2","name":"C"},{"auth":"t1","name":"A"}]});
         assert!(
-            !super::super::compare_with_verified(
+            !super::super::compare_all(
                 &source,
                 &changed,
                 &fields,
                 &[],
                 &verified,
-                AnchorClocks::default()
+                AnchorClocks::default(),
+                &[],
+                &metadata,
             )
             .passed()
         );

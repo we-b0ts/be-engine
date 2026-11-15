@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::value_contract::json::PolicyMetadata;
 use bytes::Bytes;
 use serde_json::{Value, json};
 use traffic_contract::{
@@ -7,8 +8,8 @@ use traffic_contract::{
     compare::{AnchorClocks, Comparison, ExplicitRules},
     rule::{FieldContract, IdentityFormat},
 };
+use traffic_policy_value::{RuleBinding, ValueRule};
 use traffic_protocol::message::{MessageEncoder, ProtocolMessage};
-use traffic_replay::rules::{PreparedMessage, RuleBinding, ValueRule};
 
 fn rule() -> Arc<ValueRule> {
     Arc::new(ValueRule {
@@ -80,18 +81,18 @@ fn comparisons(rule: &Arc<ValueRule>, source: &str, target: &str) -> Vec<Compari
         ),
         binding(rule, json!({"kind":"body"}), Codec::Json, "/owner"),
     ];
-    let http = PreparedMessage::compile(&http(source), &bindings)
+    let http = crate::value_extensions::prepare_message(&http(source), &bindings)
         .unwrap()
-        .compare(&http(target), AnchorClocks::default(), &ExplicitRules)
+        .compare(&http(target), AnchorClocks::default(), &PolicyMetadata)
         .unwrap();
     let bindings = [
         binding(rule, json!({"kind":"key"}), Codec::Scalar, ""),
         binding(rule, json!({"kind":"hash_field"}), Codec::Scalar, ""),
         binding(rule, json!({"kind":"value"}), Codec::Json, "/owner"),
     ];
-    let redis = PreparedMessage::compile(&redis(source), &bindings)
+    let redis = crate::value_extensions::prepare_message(&redis(source), &bindings)
         .unwrap()
-        .compare(&redis(target), AnchorClocks::default(), &ExplicitRules)
+        .compare(&redis(target), AnchorClocks::default(), &PolicyMetadata)
         .unwrap();
     let bindings = [
         binding(
@@ -107,11 +108,81 @@ fn comparisons(rule: &Arc<ValueRule>, source: &str, target: &str) -> Vec<Compari
             "",
         ),
     ];
-    let mysql = PreparedMessage::compile(&mysql(source), &bindings)
+    let mysql = crate::value_extensions::prepare_message(&mysql(source), &bindings)
         .unwrap()
-        .compare(&mysql(target), AnchorClocks::default(), &ExplicitRules)
+        .compare(&mysql(target), AnchorClocks::default(), &PolicyMetadata)
         .unwrap();
     vec![http, redis, mysql]
+}
+
+fn duration_messages(elapsed: i64, stable: i64) -> Vec<(Box<dyn ProtocolMessage>, Value)> {
+    let value = json!({"elapsed":elapsed,"stable":stable});
+    let mut http = http("fixed");
+    http.body = serde_json::to_vec(&value).unwrap().into();
+    let mut redis = redis("fixed");
+    redis.args[2] = serde_json::to_vec(&value).unwrap().into();
+    let mut mysql = mysql("fixed");
+    let parameter = &mut mysql.params.as_mut().unwrap()[0];
+    parameter.kind = "json".into();
+    parameter.value = Some(value);
+    vec![
+        (Box::new(http), json!({"kind":"body"})),
+        (Box::new(redis), json!({"kind":"value"})),
+        (
+            Box::new(mysql),
+            json!({"kind":"field","table":"users","column":"id"}),
+        ),
+    ]
+}
+
+#[test]
+fn registered_policy_definitions_execute_at_existing_http_redis_and_mysql_entrypoints() {
+    let rule = Arc::new(ValueRule {
+        id: "elapsed".into(),
+        contract: serde_json::from_value(json!({"kind":"policy","id":"duration","version":1,
+            "options":{"unit":"seconds","clock":"dependency"}}))
+        .unwrap(),
+    });
+    let clocks = AnchorClocks {
+        dependency: traffic_contract::time::ClockPair {
+            source: chrono::DateTime::from_timestamp(1000, 0),
+            target: chrono::DateTime::from_timestamp(2000, 0),
+        },
+        ..Default::default()
+    };
+    for (((source, selector), (target, _)), (changed, _)) in duration_messages(10, 1)
+        .into_iter()
+        .zip(duration_messages(1010, 1))
+        .zip(duration_messages(1010, 2))
+    {
+        let bindings = [binding(&rule, selector, Codec::Json, "/elapsed")];
+        let prepared =
+            crate::value_extensions::prepare_message(source.as_ref(), &bindings).unwrap();
+        let metadata = crate::value_contract::json::PolicyMetadata;
+        let result = prepared
+            .compare(target.as_ref(), clocks, &metadata)
+            .unwrap();
+        assert!(result.passed(), "{:?}", result.differences);
+        assert!(result.evaluated.contains("elapsed"));
+        assert!(
+            !prepared
+                .compare(changed.as_ref(), clocks, &metadata)
+                .unwrap()
+                .passed()
+        );
+        assert!(
+            !prepared
+                .compare(target.as_ref(), AnchorClocks::default(), &metadata)
+                .unwrap()
+                .passed()
+        );
+        assert!(
+            !prepared
+                .compare(target.as_ref(), clocks, &ExplicitRules)
+                .unwrap()
+                .passed()
+        );
+    }
 }
 
 #[test]
@@ -134,7 +205,7 @@ fn one_rule_executes_at_http_redis_and_mysql_locations_with_shared_identity_prop
 #[test]
 fn native_structure_unselected_values_and_conditional_branches_remain_strict() {
     let rule = rule();
-    let plan = PreparedMessage::compile(
+    let plan = crate::value_extensions::prepare_message(
         &http("id_11"),
         &[
             binding(
@@ -159,7 +230,7 @@ fn native_structure_unselected_values_and_conditional_branches_remain_strict() {
         }
         assert!(
             !plan
-                .compare(&actual, AnchorClocks::default(), &ExplicitRules)
+                .compare(&actual, AnchorClocks::default(), &PolicyMetadata)
                 .unwrap()
                 .passed(),
             "{mutation}"
@@ -173,7 +244,7 @@ fn native_structure_unselected_values_and_conditional_branches_remain_strict() {
         )
         .unwrap(),
     });
-    let plan = PreparedMessage::compile(
+    let plan = crate::value_extensions::prepare_message(
         &http("id_11"),
         &[
             binding(
@@ -188,7 +259,7 @@ fn native_structure_unselected_values_and_conditional_branches_remain_strict() {
     .unwrap();
     assert!(
         !plan
-            .compare(&http("id_1011"), AnchorClocks::default(), &ExplicitRules)
+            .compare(&http("id_1011"), AnchorClocks::default(), &PolicyMetadata)
             .unwrap()
             .passed()
     );
@@ -198,7 +269,7 @@ fn native_structure_unselected_values_and_conditional_branches_remain_strict() {
 fn common_delivery_validation_returns_values_to_the_native_encoder_and_evidence_owner() {
     let source = redis("id_11");
     let rule = rule();
-    let plan = PreparedMessage::compile(
+    let plan = crate::value_extensions::prepare_message(
         &source,
         &[
             binding(&rule, json!({"kind":"key"}), Codec::Scalar, ""),
@@ -213,7 +284,7 @@ fn common_delivery_validation_returns_values_to_the_native_encoder_and_evidence_
         ("/args/2".into(), json!({"owner":"id_1011","stable":1})),
     ]);
     let values = plan
-        .render_values(&updates, AnchorClocks::default(), &ExplicitRules)
+        .render_values(&updates, AnchorClocks::default(), &PolicyMetadata)
         .unwrap();
     let encoded = source.encode(&values).unwrap();
     let actual = traffic_protocol_redis::redis_command(&encoded).unwrap();
@@ -227,13 +298,13 @@ fn common_delivery_validation_returns_values_to_the_native_encoder_and_evidence_
     let mut invalid = updates.clone();
     invalid.insert("/args/2".into(), json!({"owner":"id_1011","stable":2}));
     assert!(
-        plan.render_values(&invalid, AnchorClocks::default(), &ExplicitRules)
+        plan.render_values(&invalid, AnchorClocks::default(), &PolicyMetadata)
             .is_err()
     );
     invalid = updates;
     invalid.insert("/args/1".into(), json!("id_1012"));
     assert!(
-        plan.render_values(&invalid, AnchorClocks::default(), &ExplicitRules)
+        plan.render_values(&invalid, AnchorClocks::default(), &PolicyMetadata)
             .is_err()
     );
     let evidence = source.evidence(&json!({"kind":"hash_field"})).unwrap();

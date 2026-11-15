@@ -11,6 +11,11 @@ default-run = "traffic-e2e"
 
 [dependencies]
 traffic-contract = { path = "crates/traffic-contract" }
+traffic-policy-value = { path = "crates/traffic-policy-value" }
+traffic-policy = { path = "crates/traffic-policy" }
+traffic-value = { path = "crates/traffic-value" }
+traffic-codec-protobuf = { path = "crates/traffic-codec-protobuf" }
+traffic-extensions = { path = "crates/traffic-extensions" }
 traffic-response-rewrite = { path = "crates/traffic-response-rewrite" }
 traffic-model = { path = "crates/traffic-model" }
 traffic-protocol = { path = "crates/traffic-protocol" }

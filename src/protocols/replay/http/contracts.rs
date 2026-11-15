@@ -379,14 +379,15 @@ fn materialize_value(
         .global_json()
         .filter(|_| crate::value_codec::sse::Document::decode(payload).is_ok());
     let value = if let Some(plan) = sse {
-        let delivery = crate::replay::contract_value::SseDelivery::prepare(payload, plan, clocks)?;
+        let delivery =
+            crate::value_contract::response_delivery::SseDelivery::prepare(payload, plan, clocks)?;
         let (value, validation) = delivery.render(delivered_at, owner, case)?;
         decision.value_contracts.push(validation.into());
         value
     } else if global.is_none() {
         payload.to_vec()
     } else {
-        let delivery = crate::replay::contract_value::Delivery::prepare_global(
+        let delivery = crate::value_contract::response_delivery::Delivery::prepare_global(
             payload,
             global.context("JSON field plan missing")?,
             clocks,
@@ -490,15 +491,16 @@ fn observe_known_value(
         .global_json()
         .filter(|_| crate::json_value::parse(payload).is_some())
     {
-        let validation =
-            crate::replay::contract_value::Delivery::prepare_global(payload, global, clocks)?;
+        let validation = crate::value_contract::response_delivery::Delivery::prepare_global(
+            payload, global, clocks,
+        )?;
         contracts.observe_value_slot_applicable(validation.validation().evaluated.iter().cloned());
     } else if let Some(plan) = contracts
         .global_json()
         .filter(|_| crate::value_codec::sse::Document::decode(payload).is_ok())
     {
         let validation =
-            crate::replay::contract_value::SseDelivery::prepare(payload, plan, clocks)?;
+            crate::value_contract::response_delivery::SseDelivery::prepare(payload, plan, clocks)?;
         contracts.observe_value_slot_applicable(validation.validation().evaluated.iter().cloned());
     }
     Ok(())

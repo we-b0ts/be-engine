@@ -66,6 +66,10 @@ mod tests {
     #[test]
     fn many_concrete_fields_preserve_time_checks_and_the_exact_remainder() {
         use super::super::*;
+        use crate::{
+            compare::test_compare as compare,
+            rule::{TimeRelation, TimestampFormat},
+        };
         let source = json!({"blocks":(0..512).map(|_|json!({"timestamp":10,"text":"exact"})).collect::<Vec<_>>()});
         let mut target = source.clone();
         for block in target["blocks"].as_array_mut().unwrap() {

@@ -5,17 +5,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::time::{self, ClockPair, TimeError};
-use crate::rule::{FieldContract, TimeAnchor, TimeRelation, TimestampFormat};
-mod clock_scope;
+use super::time::{self, ClockPair};
+use crate::rule::{FieldContract, TimeAnchor};
 mod composition;
 pub mod diagnosis;
 pub mod identity;
+mod scope;
 pub use identity::{key as identity_key, token as identity_token};
 mod native;
+mod observations;
 mod pointers;
-mod time_fields;
-pub use capabilities::{ExplicitRules, RuleMetadata, TimeCopyProof};
+mod policy;
+pub use ValueCopyProof as TimeCopyProof;
+pub use capabilities::{ExplicitRules, RegisteredRules, RuleMetadata, ValueCopyProof};
 mod capabilities;
 pub use native::{
     LeafContext, LeafObservations, NativeContext, NativeField, NonceIdentity, VerifiedField,
@@ -24,20 +26,6 @@ pub use native::{
 const MAX_COMPARISONS: usize = 16_384;
 const MAX_DEPTH: usize = 128;
 
-type TimeRelationships =
-    BTreeMap<(TimeAnchor, Option<String>, clock_scope::ScopeKey), Vec<(i128, i128)>>;
-const MAX_TIME_OBSERVATIONS: usize = 4096;
-fn time_observation_count(
-    relationships: &TimeRelationships,
-    key: &(TimeAnchor, Option<String>, clock_scope::ScopeKey),
-    scoped_observations: usize,
-) -> usize {
-    if key.2.is_shared() {
-        relationships.get(key).map_or(0, Vec::len)
-    } else {
-        scoped_observations
-    }
-}
 type NonceRelationships = BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -51,6 +39,10 @@ pub struct AnchorClocks {
 }
 
 impl AnchorClocks {
+    pub fn observations(self) -> Value {
+        serde_json::json!({"case":self.case,"dependency":self.dependency,
+            "delivery":self.delivery,"observation":self.observation()})
+    }
     pub fn for_request(case: ClockPair, dependency: ClockPair, delivery: ClockPair) -> Self {
         Self {
             case,
@@ -97,10 +89,10 @@ pub struct Comparison {
     pub evaluated: BTreeSet<String>,
     pub time_validations: BTreeMap<String, usize>,
     pub differences: Vec<Difference>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub policy_counts: BTreeMap<String, BTreeMap<String, usize>>,
     #[serde(skip)]
-    pub relationships: TimeRelationships,
-    #[serde(skip)]
-    scoped_time_observations: usize,
+    pub observations: traffic_policy::Observations,
     #[serde(skip)]
     pub nonce_relationships: NonceRelationships,
     #[serde(skip)]
@@ -126,43 +118,13 @@ impl Comparison {
         for (rule_id, count) in other.time_validations {
             *self.time_validations.entry(rule_id).or_default() += count;
         }
-        for (scope, values) in other.relationships {
-            let scoped = !scope.2.is_shared();
-            let mut observations =
-                time_observation_count(&self.relationships, &scope, self.scoped_time_observations);
-            if !scope.2.is_shared()
-                && !self.relationships.contains_key(&scope)
-                && observations >= MAX_TIME_OBSERVATIONS
-            {
-                self.differences.push(difference(
-                    "",
-                    "scoped time relationship exceeds 4096 distinct observations",
-                ));
-                break;
-            }
-            let existing = self.relationships.entry(scope).or_default();
-            for pair in values {
-                if existing.contains(&pair) {
-                    continue;
-                }
-                if observations >= MAX_TIME_OBSERVATIONS {
-                    self.differences.push(difference(
-                        "",
-                        "time relationship exceeds 4096 distinct observations",
-                    ));
-                    break;
-                }
-                if let Some(error) = existing
-                    .iter()
-                    .find_map(|other| time::validate_relationships(&[*other, pair]).err())
-                {
-                    self.differences.push(difference("", &error.to_string()));
-                }
-                existing.push(pair);
-                observations += 1;
-                if scoped {
-                    self.scoped_time_observations += 1;
-                }
+        if let Err(error) = self.observations.merge(other.observations) {
+            self.differences.push(difference("", &error.to_string()));
+        }
+        for (metric, values) in other.policy_counts {
+            let counts = self.policy_counts.entry(metric).or_default();
+            for (rule, count) in values {
+                *counts.entry(rule).or_default() += count;
             }
         }
         for (scope, pairs) in other.nonce_relationships {
@@ -188,19 +150,11 @@ struct Decisions {
     evaluated: BTreeSet<String>,
     selected: BTreeSet<usize>,
     selected_native: BTreeSet<usize>,
-    times: TimeRelationships,
-    scoped_time_observations: usize,
+    observations: traffic_policy::Observations,
+    counts: BTreeMap<String, BTreeMap<String, usize>>,
     time_validations: BTreeMap<String, usize>,
     nonces: NonceRelationships,
     identities: identity::Bijection,
-}
-
-struct MultisetSlice<'a> {
-    source: &'a [Value],
-    target: &'a [Value],
-    source_pointer: &'a str,
-    target_pointer: &'a str,
-    depth: usize,
 }
 
 struct Comparator<'a> {
@@ -216,6 +170,7 @@ struct Comparator<'a> {
     remaining: usize,
     source_root: &'a Value,
     target_root: &'a Value,
+    logical_roots: Option<(&'a traffic_value::Value, &'a traffic_value::Value)>,
 }
 
 pub fn compare(
@@ -307,6 +262,66 @@ pub fn compare_all(
     time_copies: &[&dyn TimeCopyProof],
     rule_metadata: &dyn RuleMetadata,
 ) -> Comparison {
+    compare_inputs(
+        source,
+        target,
+        fields,
+        native,
+        verified,
+        clocks,
+        time_copies,
+        rule_metadata,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // Logical documents retain native verifiers and authenticated copy capabilities.
+pub fn compare_logical_all(
+    source: &traffic_value::Value,
+    target: &traffic_value::Value,
+    fields: &[Field<'_>],
+    native: &[NativeField<'_>],
+    verified: &[VerifiedField<'_>],
+    clocks: AnchorClocks,
+    copies: &[&dyn ValueCopyProof],
+    metadata: &dyn RuleMetadata,
+) -> Comparison {
+    let (Ok(source_projection), Ok(target_projection)) =
+        (serde_json::to_value(source), serde_json::to_value(target))
+    else {
+        return Comparison {
+            differences: vec![difference(
+                "",
+                "logical values cannot enter the compatibility projection",
+            )],
+            ..Default::default()
+        };
+    };
+    compare_inputs(
+        &source_projection,
+        &target_projection,
+        fields,
+        native,
+        verified,
+        clocks,
+        copies,
+        metadata,
+        Some((source, target)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // The optional typed roots preserve codec scalar categories beside legacy adapters.
+fn compare_inputs(
+    source: &Value,
+    target: &Value,
+    fields: &[Field<'_>],
+    native: &[NativeField<'_>],
+    verified: &[VerifiedField<'_>],
+    clocks: AnchorClocks,
+    time_copies: &[&dyn ValueCopyProof],
+    rule_metadata: &dyn RuleMetadata,
+    logical_roots: Option<(&traffic_value::Value, &traffic_value::Value)>,
+) -> Comparison {
     let mut comparator = Comparator {
         rule_metadata,
         fields,
@@ -325,6 +340,7 @@ pub fn compare_all(
         remaining: MAX_COMPARISONS,
         source_root: source,
         target_root: target,
+        logical_roots,
     };
     let mut decisions = Decisions::default();
     let result = comparator
@@ -352,38 +368,22 @@ pub fn compare_all(
                     "selected native field was not observed",
                 ));
             }
-            validate_relationships(&decisions).map_err(|e| difference("", &e.to_string()))
+            Ok(())
         });
+    let mut policy_counts = decisions.counts;
+    for (rule, count) in policy_counts.remove("time_validations").unwrap_or_default() {
+        *decisions.time_validations.entry(rule).or_default() += count;
+    }
     Comparison {
         pre_matches: Vec::new(),
         evaluated: decisions.evaluated,
         time_validations: decisions.time_validations,
         differences: result.err().into_iter().collect(),
-        relationships: decisions.times,
-        scoped_time_observations: decisions.scoped_time_observations,
+        observations: decisions.observations,
+        policy_counts,
         nonce_relationships: decisions.nonces,
         identities: decisions.identities,
     }
-}
-
-fn compare_duration(
-    source: &Value,
-    target: &Value,
-    unit: crate::rule::DurationUnit,
-    clocks: ClockPair,
-) -> Result<(), TimeError> {
-    use crate::rule::DurationUnit as U;
-    let unit = match unit {
-        U::Seconds => time::DurationUnit::Seconds,
-        U::Milliseconds => time::DurationUnit::Milliseconds,
-        U::Microseconds => time::DurationUnit::Microseconds,
-        U::Minutes => time::DurationUnit::Minutes,
-        U::Hours => time::DurationUnit::Hours,
-    };
-    time::validate_numeric_category(source, target)?;
-    let source = time::parse_duration(source, unit)?;
-    let target = time::parse_duration(target, unit)?;
-    time::compare_duration_nanos(source, target, clocks)
 }
 
 fn difference(pointer: &str, reason: &str) -> Difference {
@@ -439,14 +439,23 @@ fn escape(value: &str) -> String {
     value.replace('~', "~0").replace('/', "~1")
 }
 
-fn validate_relationships(decisions: &Decisions) -> Result<(), TimeError> {
-    for times in decisions.times.values() {
-        time::validate_relationships(times)?;
-    }
-    Ok(())
-}
-
 impl Comparator<'_> {
+    fn equal_values(
+        &self,
+        source: &Value,
+        target: &Value,
+        source_path: &str,
+        target_path: &str,
+    ) -> bool {
+        match self.logical_roots {
+            Some((left, right)) => {
+                left.pointer(source_path).is_some()
+                    && left.pointer(source_path) == right.pointer(target_path)
+            }
+            None => source == target,
+        }
+    }
+
     fn node(
         &mut self,
         source: &Value,
@@ -542,7 +551,11 @@ impl Comparator<'_> {
             if native.is_empty()
                 && verified.is_empty()
                 && selected.iter().all(|(_, field)| {
-                    time_fields::compatible(selected[0].1.contract, field.contract)
+                    policy::compatible(
+                        selected[0].1.contract,
+                        field.contract,
+                        self.rule_metadata.policies(),
+                    )
                 })
             {
                 let mut inactive = false;
@@ -561,7 +574,7 @@ impl Comparator<'_> {
                     }
                 }
                 if inactive {
-                    if source != target {
+                    if !self.equal_values(source, target, pointer, target_pointer) {
                         return Err(difference(
                             pointer,
                             "inactive field contract requires exact equality",
@@ -576,14 +589,20 @@ impl Comparator<'_> {
                 for (index, field) in selected {
                     decisions.selected.insert(index);
                     decisions.evaluated.insert(field.rule_id.into());
-                    self.time_field(
+                    let definition = field
+                        .contract
+                        .unconditional()
+                        .registered_definition(self.rule_metadata.accepts_exact_time(field.rule_id))
+                        .expect("compatible registered declaration");
+                    self.registered_policy(
+                        &definition,
+                        field,
                         source,
                         target,
                         pointer,
                         target_pointer,
-                        field,
-                        field.contract.unconditional(),
                         decisions,
+                        depth,
                     )?;
                 }
                 return Ok(());
@@ -625,7 +644,7 @@ impl Comparator<'_> {
                         )
                     })?
                 {
-                    return if source == target {
+                    return if self.equal_values(source, target, pointer, target_pointer) {
                         Ok(())
                     } else {
                         Err(difference(
@@ -638,9 +657,33 @@ impl Comparator<'_> {
             } else {
                 field.contract
             };
+            if let Some(definition) =
+                contract.registered_definition(self.rule_metadata.accepts_exact_time(field.rule_id))
+            {
+                return self.registered_policy(
+                    &definition,
+                    field,
+                    source,
+                    target,
+                    pointer,
+                    target_pointer,
+                    decisions,
+                    depth,
+                );
+            }
             match contract {
+                FieldContract::Exact => {
+                    return if self.equal_values(source, target, pointer, target_pointer) {
+                        Ok(())
+                    } else {
+                        Err(difference(
+                            pointer,
+                            "exact field contract requires equal values",
+                        ))
+                    };
+                }
                 FieldContract::IdentityAnchor => {
-                    if source != target {
+                    if !self.equal_values(source, target, pointer, target_pointer) {
                         return Err(difference(pointer, "exact identity value changed"));
                     }
                     return decisions
@@ -648,93 +691,38 @@ impl Comparator<'_> {
                         .observe(source, target)
                         .map_err(|reason| difference(pointer, reason));
                 }
-                FieldContract::Identity { prefix, format } => {
-                    return identity::compare(source, target, prefix, *format, pointer, decisions);
-                }
                 FieldContract::Conditional { .. } => {
                     return Err(difference(
                         pointer,
                         "nested field conditions are unsupported",
                     ));
                 }
-                FieldContract::Unordered => {
-                    let (Some(source), Some(target)) = (source.as_array(), target.as_array())
-                    else {
-                        return Err(difference(pointer, "unordered requires two arrays"));
-                    };
-                    if source.len() != target.len() {
-                        return Err(difference(pointer, "array cardinality changed"));
-                    }
-                    let parent_segments = pointer.split('/').count();
-                    if !self
-                        .fields
-                        .iter()
-                        .map(|field| field.pointer)
-                        .chain(self.native.iter().map(|field| field.pointer))
-                        .chain(self.verified.iter().map(|field| field.pointer))
-                        .any(|pointer_pattern| {
-                            let segments = pointer_pattern.split('/').collect::<Vec<_>>();
-                            segments.len() > parent_segments
-                                && pointer_matches(
-                                    &segments[..parent_segments].join("/"),
-                                    pointer,
-                                    self.source_root,
-                                )
-                        })
-                    {
-                        let counts = |values: &[Value]| {
-                            let mut counts = BTreeMap::new();
-                            for value in values {
-                                *counts.entry(value.to_string()).or_insert(0usize) += 1;
-                            }
-                            counts
-                        };
-                        return if counts(source) == counts(target) {
-                            Ok(())
-                        } else {
-                            Err(difference(pointer, "unordered multiset changed"))
-                        };
-                    }
-                    if source.len() > 128 {
-                        return Err(difference(
-                            pointer,
-                            "unordered collection exceeds 128 elements",
-                        ));
-                    }
-                    return self.pair(
-                        &MultisetSlice {
-                            source,
-                            target,
-                            source_pointer: pointer,
-                            target_pointer,
-                            depth: depth + 1,
-                        },
-                        0,
-                        &mut vec![false; target.len()],
-                        decisions,
-                    );
+                FieldContract::Unordered
+                | FieldContract::Identity { .. }
+                | FieldContract::Time { .. }
+                | FieldContract::Policy(_)
+                | FieldContract::Duration { .. } => {
+                    unreachable!("registered definitions execute through the policy port")
                 }
-                FieldContract::Time { .. } => {
-                    if self.rule_metadata.accepts_exact_time(field.rule_id) && source == target {
-                        return Ok(());
-                    }
-                    return self.time_field(
-                        source,
-                        target,
-                        pointer,
-                        target_pointer,
-                        field,
-                        contract,
-                        decisions,
-                    );
-                }
-                FieldContract::Duration { unit, anchor } => {
-                    if self.rule_metadata.accepts_exact_time(field.rule_id) && source == target {
-                        return Ok(());
-                    }
-                    let result = compare_duration(source, target, *unit, self.clocks.get(*anchor));
-                    return result.map_err(|e| difference(pointer, &e.to_string()));
-                }
+            }
+        }
+        if let Some((source, target)) = self.logical_roots {
+            let source = source.pointer(pointer);
+            let target = target.pointer(target_pointer);
+            let scalar = |value: Option<&traffic_value::Value>| {
+                value.is_some_and(|value| {
+                    !matches!(
+                        value,
+                        traffic_value::Value::Array(_) | traffic_value::Value::Object(_)
+                    )
+                })
+            };
+            if scalar(source) || scalar(target) {
+                return if source.is_some() && source == target {
+                    Ok(())
+                } else {
+                    Err(difference(pointer, "unselected value or type changed"))
+                };
             }
         }
         match (source, target) {
@@ -786,139 +774,30 @@ impl Comparator<'_> {
         }
         Ok(())
     }
-
-    fn pair(
-        &mut self,
-        values: &MultisetSlice<'_>,
-        index: usize,
-        used: &mut [bool],
-        decisions: &mut Decisions,
-    ) -> Result<(), Difference> {
-        if index == values.source.len() {
-            return Ok(());
-        }
-        // Matching whole elements preserves associations between their fields.
-        // Each speculative branch owns a copy of its decisions; failed branches
-        // neither capture bindings nor leak time relationships to another match.
-        for candidate in 0..values.target.len() {
-            if used[candidate] {
-                continue;
-            }
-            let mut staged = decisions.clone();
-            if self
-                .node(
-                    &values.source[index],
-                    &values.target[candidate],
-                    &format!("{}/{index}", values.source_pointer),
-                    &format!("{}/{candidate}", values.target_pointer),
-                    &mut staged,
-                    values.depth,
-                )
-                .is_err()
-            {
-                continue;
-            }
-            used[candidate] = true;
-            if self.pair(values, index + 1, used, &mut staged).is_ok() {
-                *decisions = staged;
-                return Ok(());
-            }
-            used[candidate] = false;
-            if self.remaining == 0 {
-                break;
-            }
-        }
-        Err(difference(
-            values.source_pointer,
-            "no bounded multiset pairing preserves all contracts",
-        ))
-    }
 }
+
+pub use traffic_time::declaration::{core_format, parse_time_pair, parse_time_value};
 
 fn same_type(source: &Value, target: &Value) -> bool {
     std::mem::discriminant(source) == std::mem::discriminant(target)
         && (!source.is_number() || time::validate_numeric_category(source, target).is_ok())
 }
 
-pub fn core_format(format: TimestampFormat) -> Result<time::TimestampFormat, TimeError> {
-    Ok(match format {
-        TimestampFormat::UnixSeconds => time::TimestampFormat::UnixSeconds,
-        TimestampFormat::UnixMilliseconds => time::TimestampFormat::UnixMilliseconds,
-        TimestampFormat::UnixMicroseconds => time::TimestampFormat::UnixMicroseconds,
-        TimestampFormat::Rfc3339 => time::TimestampFormat::Rfc3339,
-        TimestampFormat::AmzDate => time::TimestampFormat::AmzDate,
-        TimestampFormat::Iso8601Naive => time::TimestampFormat::Iso8601Naive,
-        TimestampFormat::SqlDatetime => time::TimestampFormat::SqlDatetime,
-        TimestampFormat::CalendarDate => return Err(TimeError::InvalidValue),
-    })
-}
-
-fn compare_time(
+#[cfg(test)]
+fn test_compare(
     source: &Value,
     target: &Value,
-    config: &crate::rule::TimeContract,
-    context: AnchorClocks,
-    anchor: TimeAnchor,
-) -> Result<(i128, i128), TimeError> {
-    let pair = parse_time_pair(source, target, config)?;
-    let clocks = context.get(anchor);
-    let mode = match config.relation {
-        TimeRelation::RequestWindow => time::TimeMode::RequestWindow,
-        TimeRelation::PreserveOffset => time::TimeMode::PreserveRelative,
-    };
-    if config.format == TimestampFormat::CalendarDate {
-        return time::calendar::compare(
-            source,
-            target,
-            config
-                .offset()
-                .map_err(|_| TimeError::InvalidValue)?
-                .ok_or(TimeError::InvalidValue)?,
-            mode,
-            clocks,
-        );
-    }
-    let tolerance_nanos = time::timestamp_tolerance_nanos(context.case, clocks);
-    let clocks = time::timestamp_clocks(source, target, core_format(config.format)?, clocks);
-    time::compare_timestamp_nanos_with_tolerance(pair.0, pair.1, mode, clocks, tolerance_nanos)?;
-    Ok(pair)
-}
-
-pub fn parse_time_pair(
-    source: &Value,
-    target: &Value,
-    config: &crate::rule::TimeContract,
-) -> Result<(i128, i128), TimeError> {
-    if !same_type(source, target) {
-        return Err(TimeError::NumericCategoryChanged);
-    }
-    if config.format != TimestampFormat::CalendarDate {
-        time::validate_representation(source, target, core_format(config.format)?)?;
-    }
-    Ok((
-        parse_time_value(source, config)?,
-        parse_time_value(target, config)?,
-    ))
-}
-
-pub fn parse_time_value(
-    value: &Value,
-    config: &crate::rule::TimeContract,
-) -> Result<i128, TimeError> {
-    if matches!(
-        config.format,
-        TimestampFormat::UnixSeconds
-            | TimestampFormat::UnixMilliseconds
-            | TimestampFormat::UnixMicroseconds
-    ) && !value.is_number()
-    {
-        return Err(TimeError::InvalidValue);
-    }
-    let offset = config.offset().map_err(|_| TimeError::InvalidValue)?;
-    if config.format == TimestampFormat::CalendarDate {
-        use chrono::Datelike;
-        offset.ok_or(TimeError::InvalidValue)?;
-        return Ok(i128::from(time::calendar::parse(value)?.num_days_from_ce()));
-    }
-    time::parse_timestamp(value, core_format(config.format)?, offset)
+    fields: &[Field<'_>],
+    clocks: AnchorClocks,
+) -> Comparison {
+    compare_all(
+        source,
+        target,
+        fields,
+        &[],
+        &[],
+        clocks,
+        &[],
+        &RegisteredRules(traffic_extensions::policies()),
+    )
 }

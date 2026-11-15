@@ -177,7 +177,9 @@ fn prepare_global_values(
             plan: if scalar {
                 ReadPlan::Scalar { json: false }
             } else {
-                ReadPlan::Json(Arc::new(CodecPlan::compile(&crate::policy::Codec::Json)?))
+                ReadPlan::Json(Arc::new(crate::value_codec::compile(
+                    &crate::policy::Codec::Json,
+                )?))
             },
             leaves,
         });

@@ -7,11 +7,13 @@ pub(crate) use coverage::{
     validate_actual_protocol, validate_native_coverage, validate_rule_coverage,
 };
 
-use super::{Codec, FieldContract, ProtobufCodec, ProtobufField, ProtobufType, TimestampFormat};
+use super::{Codec, FieldContract, ProtobufType, TimestampFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityId {
+    Exact,
+    Registered,
     Unordered,
     RelativeTime,
     Duration,
@@ -22,6 +24,7 @@ pub enum CapabilityId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldRequirement {
+    PolicyDefined,
     Collection,
     Timestamp,
     Number,
@@ -38,6 +41,18 @@ pub struct Capability {
 }
 
 const CAPABILITIES: &[Capability] = &[
+    Capability {
+        id: CapabilityId::Exact,
+        version: 1,
+        field_requirement: FieldRequirement::PolicyDefined,
+        source_proof: &[],
+    },
+    Capability {
+        id: CapabilityId::Registered,
+        version: 1,
+        field_requirement: FieldRequirement::PolicyDefined,
+        source_proof: &["Source semantics and the registered policy's configuration requirements"],
+    },
     Capability {
         id: CapabilityId::Identity,
         version: 1,
@@ -89,6 +104,8 @@ pub fn capabilities() -> &'static [Capability] {
 impl CapabilityId {
     pub fn for_contract(contract: &FieldContract) -> Self {
         match contract {
+            FieldContract::Exact => Self::Exact,
+            FieldContract::Policy(_) => Self::Registered,
             FieldContract::Conditional { contract, .. } => Self::for_contract(contract),
             FieldContract::Unordered => Self::Unordered,
             FieldContract::Time { .. } => Self::RelativeTime,
@@ -106,6 +123,8 @@ impl CapabilityId {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Exact => "exact",
+            Self::Registered => "registered",
             Self::Unordered => "unordered",
             Self::RelativeTime => "relative_time",
             Self::Duration => "duration",
@@ -123,11 +142,11 @@ pub fn validate_contract_binding(
     contract: &FieldContract,
 ) -> Result<()> {
     if let FieldContract::Conditional { when, contract } = contract {
-        if let Codec::Protobuf(codec) = codec {
+        if let Some(codec) = crate::value_codec::protobuf_schema(codec) {
             let pointer = when
                 .peer_pointer(path)
                 .ok_or_else(|| anyhow::anyhow!("conditional field has no parent"))?;
-            let peer = resolve_protobuf_field(codec, &pointer).ok_or_else(|| {
+            let peer = codec.field(&pointer).ok_or_else(|| {
                 anyhow::anyhow!(
                     "Source condition sibling requires an explicit typed Protobuf binding"
                 )
@@ -148,13 +167,17 @@ pub fn validate_contract_binding(
         }
         return validate_contract_binding(codec, path, contract);
     }
-    let Codec::Protobuf(codec) = codec else {
+    let Some(codec) = crate::value_codec::protobuf_schema(codec) else {
         return Ok(());
     };
-    let field = resolve_protobuf_field(codec, path).ok_or_else(|| {
+    let field = codec.field(path).ok_or_else(|| {
         anyhow::anyhow!("Protobuf contract {path:?} requires an explicit typed field binding")
     })?;
     match contract {
+        FieldContract::Exact => {}
+        FieldContract::Policy(definition) => {
+            traffic_extensions::policies().prepare_definition(definition)?;
+        }
         FieldContract::Unordered => {
             ensure!(
                 field.repeated,
@@ -193,30 +216,6 @@ pub fn validate_contract_binding(
         }
     }
     Ok(())
-}
-
-/// A scalar collection has one declared wire/type binding; selecting its immediate
-/// elements does not need another artificial wire path. Message descendants still
-/// need their own typed aliases because a parent proves no child field type.
-pub fn resolve_protobuf_field(codec: &ProtobufCodec, path: &str) -> Option<ProtobufField> {
-    if let Some(field) = codec.fields.get(path) {
-        return Some(field.clone());
-    }
-    let (parent, element) = path.rsplit_once('/')?;
-    let indexed = element
-        .parse::<usize>()
-        .ok()
-        .is_some_and(|index| index.to_string() == element);
-    if element != "*" && !indexed {
-        return None;
-    }
-    let field = codec.fields.get(parent)?;
-    if !field.repeated || field.field_type == ProtobufType::Message {
-        return None;
-    }
-    let mut scalar = field.clone();
-    scalar.repeated = false;
-    Some(scalar)
 }
 
 fn numeric(kind: ProtobufType) -> bool {

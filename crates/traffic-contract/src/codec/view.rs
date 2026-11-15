@@ -9,7 +9,7 @@ pub enum Presence {
     Present,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ValueView<'a> {
     kind: CodecKind,
     value: &'a Value,
@@ -18,21 +18,21 @@ impl<'a> ValueView<'a> {
     pub(super) fn new(kind: CodecKind, value: &'a Value) -> Self {
         Self { kind, value }
     }
-    pub fn kind(self) -> CodecKind {
-        self.kind
+    pub fn kind(&self) -> CodecKind {
+        self.kind.clone()
     }
-    pub fn logical(self) -> &'a Value {
+    pub fn logical(&self) -> &'a Value {
         self.value
     }
     #[cfg(any(test, feature = "test-support"))]
-    pub fn at(self, pointer: &str) -> Option<Self> {
+    pub fn at(&self, pointer: &str) -> Option<Self> {
         self.value.pointer(pointer).map(|value| Self {
-            kind: self.kind,
+            kind: self.kind.clone(),
             value,
         })
     }
     #[cfg(any(test, feature = "test-support"))]
-    pub fn presence(self, pointer: &str) -> Presence {
+    pub fn presence(&self, pointer: &str) -> Presence {
         if self.at(pointer).is_some() {
             Presence::Present
         } else {

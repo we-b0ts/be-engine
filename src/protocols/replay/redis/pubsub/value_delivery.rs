@@ -126,7 +126,7 @@ pub(super) fn render<'a>(
         delivery: event,
         observation: Some(event),
     };
-    let value = crate::replay::contract_value::Delivery::prepare_decoded_global(
+    let value = crate::value_contract::response_delivery::Delivery::prepare_decoded_global(
         prepared.decoded,
         global,
         clocks,

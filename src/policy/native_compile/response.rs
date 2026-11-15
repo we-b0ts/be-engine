@@ -115,7 +115,10 @@ pub(super) fn validate_body_field(codec: BodyCodec, field: &BodyField) -> Result
             );
             return Ok(());
         }
-        BodyField::Unordered { selector } => selector,
+        BodyField::Unordered { selector } => {
+            traffic_extensions::policies().prepare("unordered", &traffic_value::Value::Null)?;
+            selector
+        }
         BodyField::JoinedString {
             selector,
             separator,
@@ -124,6 +127,8 @@ pub(super) fn validate_body_field(codec: BodyCodec, field: &BodyField) -> Result
                 !separator.is_empty() && separator.len() <= 16 && !separator.contains(['\r', '\n']),
                 "joined-string separator exceeds bounds"
             );
+            let options = serde_json::from_value(serde_json::json!({"separator":separator}))?;
+            traffic_extensions::policies().prepare("unordered-joined-string", &options)?;
             selector
         }
     };

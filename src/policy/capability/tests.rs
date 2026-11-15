@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::policy::{TimeAnchor, TimeRelation};
+use crate::policy::{ProtobufCodec, ProtobufField, TimeAnchor, TimeRelation};
 
 #[test]
 fn repeated_scalar_elements_keep_their_declared_type_without_changing_collection_ownership() {
-    let codec = Codec::Protobuf(ProtobufCodec {
+    let codec = crate::value_codec::protobuf(ProtobufCodec {
         fields: BTreeMap::from([(
             "/numbers".into(),
             ProtobufField {
@@ -35,7 +35,7 @@ fn repeated_scalar_elements_keep_their_declared_type_without_changing_collection
 
 #[test]
 fn repeated_messages_never_infer_a_scalar_type_for_an_unbound_descendant() {
-    let codec = Codec::Protobuf(ProtobufCodec {
+    let codec = crate::value_codec::protobuf(ProtobufCodec {
         fields: BTreeMap::from([(
             "/rows".into(),
             ProtobufField {

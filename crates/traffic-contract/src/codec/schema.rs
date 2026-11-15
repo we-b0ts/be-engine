@@ -1,108 +1,96 @@
-//! Content strategy declarations are independent of physical protocol locations.
-use serde::{Deserialize, Deserializer, Serialize};
-use std::{collections::BTreeMap, fmt};
+//! Open codec declarations with compatibility constructors for existing policies.
+use anyhow::{Result, ensure};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
+use serde_json::Value;
+use std::{borrow::Cow, collections::BTreeMap, fmt};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "CodecDocument", into = "CodecDocument")]
-pub enum Codec {
-    Scalar,
-    Json,
-    Protobuf(ProtobufCodec),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Codec {
+    id: Cow<'static, str>,
+    configuration: Value,
 }
 
 impl Codec {
+    #[allow(non_upper_case_globals)] // Preserve existing declaration constructors.
+    pub const Json: Self = Self {
+        id: Cow::Borrowed("json"),
+        configuration: Value::Null,
+    };
+    #[allow(non_upper_case_globals)]
+    pub const Scalar: Self = Self {
+        id: Cow::Borrowed("scalar"),
+        configuration: Value::Null,
+    };
+
+    pub fn registered(id: impl Into<Cow<'static, str>>, configuration: Value) -> Result<Self> {
+        let id = id.into();
+        ensure!(
+            !id.is_empty() && id.len() <= 128,
+            "codec requires a bounded identity"
+        );
+        ensure!(
+            configuration.is_null() || configuration.is_object(),
+            "codec configuration requires named options"
+        );
+        ensure!(
+            configuration.get("kind").is_none(),
+            "codec options contain the reserved kind field"
+        );
+        Ok(Self { id, configuration })
+    }
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn configuration(&self) -> &Value {
+        &self.configuration
+    }
     pub fn is_json(&self) -> bool {
-        matches!(self, Self::Json)
+        self.id == "json"
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtobufCodec {
-    pub fields: BTreeMap<String, ProtobufField>,
+impl Serialize for Codec {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let Some(options) = self.configuration.as_object() else {
+            return serializer.serialize_str(self.id());
+        };
+        let mut map = serializer.serialize_map(Some(options.len() + 1))?;
+        map.serialize_entry("kind", self.id())?;
+        for (name, value) in options {
+            map.serialize_entry(name, value)?;
+        }
+        map.end()
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProtobufField {
-    pub field_path: Vec<u32>,
-    pub field_type: ProtobufType,
-    #[serde(default)]
-    pub repeated: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProtobufType {
-    String,
-    Message,
-    Bytes,
-    Int32,
-    Int64,
-    Uint32,
-    Uint64,
-    Sint32,
-    Sint64,
-    Fixed32,
-    Fixed64,
-    Sfixed32,
-    Sfixed64,
-    Bool,
-    Enum,
-    Float,
-    Double,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(untagged)]
 enum CodecDocument {
-    Builtin(BuiltinCodecName),
-    Protobuf(ProtobufDocument),
+    Named(String),
+    Options(traffic_value::Value),
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum BuiltinCodecName {
-    #[serde(rename = "scalar")]
-    Scalar,
-    #[serde(rename = "json")]
-    Json,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum ProtobufCodecName {
-    #[serde(rename = "protobuf")]
-    Protobuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProtobufDocument {
-    kind: ProtobufCodecName,
-    #[serde(deserialize_with = "unique_map")]
-    fields: BTreeMap<String, ProtobufField>,
-}
-
-impl From<CodecDocument> for Codec {
-    fn from(value: CodecDocument) -> Self {
-        match value {
-            CodecDocument::Builtin(BuiltinCodecName::Json) => Self::Json,
-            CodecDocument::Builtin(BuiltinCodecName::Scalar) => Self::Scalar,
-            CodecDocument::Protobuf(value) => Self::Protobuf(ProtobufCodec {
-                fields: value.fields,
-            }),
-        }
-    }
-}
-
-impl From<Codec> for CodecDocument {
-    fn from(value: Codec) -> Self {
-        match value {
-            Codec::Json => Self::Builtin(BuiltinCodecName::Json),
-            Codec::Scalar => Self::Builtin(BuiltinCodecName::Scalar),
-            Codec::Protobuf(value) => Self::Protobuf(ProtobufDocument {
-                kind: ProtobufCodecName::Protobuf,
-                fields: value.fields,
-            }),
-        }
+impl<'de> Deserialize<'de> for Codec {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let (id, configuration) = match CodecDocument::deserialize(deserializer)? {
+            CodecDocument::Named(id) => (id, Value::Null),
+            CodecDocument::Options(traffic_value::Value::Object(mut options)) => {
+                let Some(traffic_value::Value::String(id)) = options.remove("kind") else {
+                    return Err(serde::de::Error::custom("codec requires a kind identity"));
+                };
+                let configuration = if options.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::to_value(options).map_err(serde::de::Error::custom)?
+                };
+                (id, configuration)
+            }
+            CodecDocument::Options(_) => {
+                return Err(serde::de::Error::custom(
+                    "codec requires a name or named options",
+                ));
+            }
+        };
+        Self::registered(id, configuration).map_err(serde::de::Error::custom)
     }
 }
 
