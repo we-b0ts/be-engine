@@ -3,50 +3,50 @@ use std::time::{Duration, Instant};
 use super::*;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
-pub(super) mod case_cleanup;
+pub(crate) mod case_cleanup;
 mod case_execution;
-pub(super) mod dependency_tail;
+pub(crate) mod dependency_tail;
 mod derived_input;
 mod finalization;
 pub(crate) use finalization::FinalizationScope;
-pub(in crate::replay) mod http_input_timing;
 mod identity;
-pub(in crate::replay) mod input_timing;
+pub(crate) mod input_timing;
 mod native_event;
+pub(crate) mod primary_close;
 pub(crate) use derived_input::register as register_derived_input;
-pub(crate) use http_input_timing::connect as http_input_timing_observer;
 pub(crate) use input_timing::connect as input_timing_observer;
 pub(crate) use native_event::connect as native_event_observer;
+pub(crate) use primary_close::connect as primary_close_observer;
 mod interaction;
 mod interruption;
 mod server;
 mod target_stop;
 pub(crate) use identity::check_response_identities;
 #[cfg(test)]
-pub(super) use server::handle_control_stream;
-pub(super) use server::run_control_socket;
+pub(crate) use server::handle_control_stream;
+pub(crate) use server::run_control_socket;
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READY_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ReplayControlRequest {
-    pub(super) command: String,
+pub(crate) struct ReplayControlRequest {
+    pub(crate) command: String,
     #[serde(default)]
-    pub(super) case_id: Option<String>,
+    pub(crate) case_id: Option<String>,
     #[serde(default)]
-    pub(super) fail_on_dirty: bool,
+    pub(crate) fail_on_dirty: bool,
     #[serde(default)]
-    pub(super) fail_on_incomplete: bool,
+    pub(crate) fail_on_incomplete: bool,
     #[serde(default)]
-    pub(super) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
+    pub(crate) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
     #[serde(default)]
-    pub(super) derived_input: Option<derived_input::Registration>,
+    pub(crate) derived_input: Option<derived_input::Registration>,
     #[serde(default)]
-    pub(super) native_event: Option<native_event::Observation>,
+    pub(crate) native_event: Option<native_event::Observation>,
     #[serde(default)]
-    pub(super) input_timing: Option<input_timing::Query>,
+    pub(crate) input_timing: Option<input_timing::Query>,
     #[serde(default)]
-    pub(super) socketio_timing: Option<crate::interaction::replay::timing::SocketIoTiming>,
+    pub(crate) socketio_timing: Option<crate::interaction::replay::timing::SocketIoTiming>,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -88,7 +88,7 @@ pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Re
     send_control_request_once(config).await
 }
 
-pub(super) async fn send_control_request_once(config: MysqlReplayControlConfig) -> Result<Value> {
+pub(crate) async fn send_control_request_once(config: MysqlReplayControlConfig) -> Result<Value> {
     let session_raw = tokio::fs::read_to_string(&config.session_path)
         .await
         .with_context(|| {
@@ -167,7 +167,7 @@ fn control_failure_message(response: &Value, session: &Value) -> String {
     message
 }
 
-pub(super) fn process_exists(pid: u64) -> bool {
+pub(crate) fn process_exists(pid: u64) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
@@ -175,9 +175,9 @@ pub(super) fn process_exists(pid: u64) -> bool {
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-pub(super) async fn handle_control_request(
+pub(crate) async fn handle_control_request<P: ReplayProtocolSet>(
     request: ReplayControlRequest,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
     report_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
 ) -> (Value, bool) {
@@ -221,32 +221,17 @@ pub(super) async fn handle_control_request(
                 match state
                     .replay_policy
                     .as_ref()
-                    .map(|policy| policy.request_contracts.request_begin(case))
+                    .map(|policy| policy.contracts().request_begin(case))
                     .transpose()
                 {
                     Ok(_) => {
                         state.close_startup_phase(case);
                         let epoch = state
-                            .protocols
-                            .redis
-                            .request_contracts
-                            .request_times(case)
-                            .target
+                            .replay_policy
+                            .as_ref()
+                            .and_then(|policy| policy.contracts().request_times(case).target)
                             .unwrap_or_else(Utc::now);
-                        match state
-                            .protocols
-                            .redis
-                            .pubsub
-                            .native_clock
-                            .request_begin(case, epoch)
-                            .and_then(|()| {
-                                state
-                                    .protocols
-                                    .redis
-                                    .pubsub
-                                    .namespace_sessions
-                                    .request_begin(case, epoch)
-                            }) {
+                        match state.protocols.native_events().request_begin(case, epoch) {
                             Ok(()) => {
                                 state.advance_admission_epoch();
                                 serde_json::json!({"ok":true})
@@ -300,7 +285,7 @@ pub(super) async fn handle_control_request(
                 let copies = state
                     .replay_policy
                     .as_ref()
-                    .map(|policy| policy.request_contracts.delivered_time_copies(case))
+                    .map(|policy| policy.contracts().delivered_time_copies(case))
                     .unwrap_or_default();
                 serde_json::json!({"ok":true, "time_copies":copies})
             } else {
@@ -316,7 +301,7 @@ pub(super) async fn handle_control_request(
         | "input_timing_tail"
         | "input_timing_native_prefix" => input_timing::accept(&request, &state).await,
         "http_input_timing_begin" | "http_input_timing_wait" | "http_input_timing_closed" => {
-            http_input_timing::accept(&request, &state).await
+            primary_close::accept(&request, &state).await
         }
         "prepare_end" => target_stop::prepare(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,
@@ -395,7 +380,8 @@ pub(super) async fn handle_control_request(
         let publication = async {
             let details = report::global_evidence::prepare(state.clone(), &path).await?;
             report["global_evidence"] = details.manifests.clone();
-            write_final_report_value(path, report).await?;
+            let providers = state.lock().await.providers.clone();
+            write_final_report_value(path, report, providers.report_codecs()).await?;
             details.commit();
             Ok::<_, anyhow::Error>(())
         }
@@ -411,11 +397,11 @@ pub(super) async fn handle_control_request(
     (response, should_stop)
 }
 
-async fn finalize_replay(
+async fn finalize_replay<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
 ) -> (Value, Option<Value>) {
-    if let Err(error) = policy::request_contract::hypotheses::await_durable(&state).await {
+    if let Err(error) = policy::await_durable(&state).await {
         tracing::warn!(error=%error,"finalizing incomplete hypothesis evidence");
     }
     let mut state = state.lock().await;
@@ -427,7 +413,8 @@ async fn finalize_replay(
     }
     let mut report = state.snapshot_report();
     let complete = report_is_complete(&report);
-    let dirty = FinalizationScope::from_command(&request.command).is_dirty(&report);
+    let dirty = FinalizationScope::from_command(&request.command)
+        .is_dirty(&report, state.providers.report_codecs());
     if request.fail_on_incomplete && !complete {
         return (
             serde_json::json!({
@@ -495,9 +482,9 @@ async fn finalize_replay(
     )
 }
 
-pub(super) async fn begin_case(
+pub(crate) async fn begin_case<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
 ) -> Value {
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "begin requires case_id"});
@@ -582,6 +569,9 @@ pub(super) async fn begin_case(
     state.advance_admission_epoch();
     state.set_active_case(Some(case_id.to_string()));
     state.input_timing = None;
+    if let Some(timeline) = state.primary_close_timing.take() {
+        timeline.abort();
+    }
     state.protocols.begin_case(case_id);
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
@@ -603,16 +593,16 @@ pub(super) async fn begin_case(
             dependencies_path: case.dependencies_path.display().to_string(),
             status: case.status,
             source_request_started_at: state.replay_policy.as_ref()
-                .and_then(|policy| policy.request_contracts.request_times(case_id).source),
+                .and_then(|policy| policy.contracts().request_times(case_id).source),
             target_request_started_at: state.replay_policy.as_ref()
-                .and_then(|policy| policy.request_contracts.request_times(case_id).target),
+                .and_then(|policy| policy.contracts().request_times(case_id).target),
         }),
     })
 }
 
-pub(super) async fn end_case(
+pub(crate) async fn end_case<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
 ) -> Value {
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "end requires case_id"});
@@ -732,8 +722,8 @@ pub(super) async fn end_case(
             case.status = ReplayCaseStatus::Ended;
         }
         if let Some(policy) = &state.replay_policy {
-            policy.request_contracts.clear_time_copies(case_id);
-            policy.request_contracts.clear_identities(case_id);
+            policy.contracts().clear_time_copies(case_id);
+            policy.contracts().clear_identities(case_id);
         } else {
             state.native.contracts.clear_identities(case_id);
         }
@@ -794,8 +784,8 @@ async fn write_control_response(
     }
 }
 
-pub(super) async fn write_session_snapshot(
-    state: Arc<Mutex<ReplayState>>,
+pub(crate) async fn write_session_snapshot<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
     session_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
     report_path: Option<PathBuf>,
@@ -826,8 +816,8 @@ pub(super) async fn write_session_snapshot(
         .with_context(|| format!("failed to write replay session {}", session_path.display()))
 }
 
-fn session_discovery_snapshot(
-    state: &ReplayState,
+fn session_discovery_snapshot<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
     control_socket_path: Option<&PathBuf>,
     report_path: Option<&PathBuf>,
     ready: bool,
@@ -842,8 +832,8 @@ fn session_discovery_snapshot(
     })
 }
 
-pub(super) fn session_snapshot(
-    state: &ReplayState,
+pub(crate) fn session_snapshot<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
     control_socket_path: Option<&PathBuf>,
     report_path: Option<&PathBuf>,
     ready: bool,
@@ -863,7 +853,7 @@ pub(super) fn session_snapshot(
         "dns_listen": state.dns_listen.to_string(),
         "tcp_listen": state.tcp_listen.to_string(),
         "ca_cert_path": state.ca_cert_path.display().to_string(),
-        "replay_policy": state.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
+        "replay_policy": state.replay_policy.as_ref().map(ReplayPolicy::report),
         "active_case_id": state.active_case_id.clone(),
         "cases": state.case_reports(),
         "selected_case_ids": state.cases.keys().cloned().collect::<Vec<_>>(),
@@ -871,11 +861,15 @@ pub(super) fn session_snapshot(
     })
 }
 
-pub(super) fn report_is_dirty(report: &ReplayReport) -> bool {
+pub(crate) fn report_is_dirty<S: traffic_replay::report::SessionSnapshot>(
+    report: &ReplayReport<S>,
+) -> bool {
     report.is_dirty()
 }
 
-pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
+pub(crate) fn report_is_complete<S: traffic_replay::report::SessionSnapshot>(
+    report: &ReplayReport<S>,
+) -> bool {
     report.is_complete()
 }
 

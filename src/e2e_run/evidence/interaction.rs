@@ -114,7 +114,7 @@ fn unavailable() -> Value {
 fn summarize_event(event: &Value) -> (Value, Option<Value>) {
     let decoded = (|| {
         let message = serde_json::from_value(event.get("message")?.clone()).ok()?;
-        crate::replay::decode_sse(&message).ok()
+        crate::primary_protocol::assertion::decode_sse(&message).ok()
     })();
     let Some(sse) = decoded else {
         return socketio::summarize(event);

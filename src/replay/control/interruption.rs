@@ -1,7 +1,10 @@
 //! Freeze diagnostic observations without releasing cases or finalizing Replay.
 use super::*;
 
-pub(super) async fn publish(state: Arc<Mutex<ReplayState>>, path: Option<&Path>) -> Value {
+pub(super) async fn publish<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
+    path: Option<&Path>,
+) -> Value {
     match snapshot(state, path).await {
         Ok(()) => serde_json::json!({
             "ok":true,"interrupted":true,"finalized":false,"complete":false
@@ -12,9 +15,12 @@ pub(super) async fn publish(state: Arc<Mutex<ReplayState>>, path: Option<&Path>)
     }
 }
 
-async fn snapshot(state: Arc<Mutex<ReplayState>>, path: Option<&Path>) -> Result<()> {
+async fn snapshot<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
+    path: Option<&Path>,
+) -> Result<()> {
     let path = path.context("interrupted Replay requires a configured report path")?;
-    if let Err(error) = policy::request_contract::hypotheses::await_durable(&state).await {
+    if let Err(error) = policy::await_durable(&state).await {
         tracing::warn!(error=%error,"publishing incomplete interrupted hypothesis evidence");
     }
     let report = {
@@ -32,5 +38,6 @@ async fn snapshot(state: Arc<Mutex<ReplayState>>, path: Option<&Path>) -> Result
         report["complete"] = false.into();
         report
     };
-    write_final_report_value(path.to_path_buf(), &report).await
+    let providers = state.lock().await.providers.clone();
+    write_final_report_value(path.to_path_buf(), &report, providers.report_codecs()).await
 }

@@ -6,8 +6,8 @@ use anyhow::{Result, anyhow};
 use tokio::net::TcpStream;
 
 use super::{
-    ReplayProtocol, ReplayState, ReplayTarget, TargetKey, find_upward, normalize_host,
-    register_replay_target,
+    ReplayProtocol, ReplayProtocolSet, ReplayTarget, RuntimeState, TargetKey, find_upward,
+    normalize_host, register_replay_target,
 };
 use crate::recording_network::{RECORDING_NETWORK_FILENAME, RecordingNetworkManifest};
 
@@ -77,7 +77,7 @@ pub(super) fn apply_recorded_network_contract(
 #[cfg(test)]
 mod dns_tests;
 
-impl ReplayState {
+impl<P: ReplayProtocolSet> RuntimeState<P> {
     pub(super) fn fake_ip_for_dns(&mut self, domain: &str) -> Result<Option<Ipv4Addr>> {
         if self.recorded_dns_only_domains.contains(domain) {
             return Ok(None);

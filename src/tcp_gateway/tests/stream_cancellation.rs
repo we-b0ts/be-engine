@@ -156,7 +156,12 @@ async fn capture(httpx: bool) {
             "an independently observed reset should complete capture: {failure:?}"
         );
         assert_eq!(failure.reason, "http_stream_capture_incomplete");
-        let diagnosis = failure.context.unwrap().http_stream.unwrap();
+        let diagnosis = failure
+            .context
+            .unwrap()
+            .native
+            .remove("http_stream")
+            .unwrap();
         assert_eq!(diagnosis["exchange_id"], event["id"]);
         assert_eq!(diagnosis["client"]["engine_stopped"], false);
         assert!(

@@ -413,7 +413,8 @@ impl DetailBuilder {
         increment(&mut self.commands, command);
         match protocol {
             "http" if self.http.len() < MAX_REPRESENTATIVES => {
-                if let Some(summary) = crate::replay::http_request_diagnosis::source_summary(event)?
+                if let Some(summary) =
+                    crate::protocols::replay::http_request_diagnosis::source_summary(event)?
                 {
                     self.http.push(summary);
                 }
@@ -620,7 +621,8 @@ pub(super) fn read_events(path: &Path, mut visit: impl FnMut(&Value) -> Result<(
 
 fn target_identity(event: &Value) -> Option<TargetIdentity> {
     if event["event_type"] == "http_exchange" {
-        let summary = crate::replay::http_request_diagnosis::source_summary(event).ok()??;
+        let summary =
+            crate::protocols::replay::http_request_diagnosis::source_summary(event).ok()??;
         return Some(TargetIdentity {
             protocol: "http".into(),
             host: summary["host"].as_str()?.into(),

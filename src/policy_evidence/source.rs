@@ -62,9 +62,13 @@ impl SourcePayload {
         let bytes = self.record.read()?;
         let event: Value = serde_json::from_slice(&bytes)?;
         match self.protocol {
-            Protocol::Mysql => crate::replay::mysql_source_witness(&event, self.surface),
-            Protocol::Http => crate::replay::http_source_witness(&event, self.surface, context),
-            Protocol::Memcached => crate::replay::memcached_source_witness(&event, self.surface),
+            Protocol::Mysql => crate::protocols::replay::mysql_source_witness(&event, self.surface),
+            Protocol::Http => {
+                crate::protocols::replay::http_source_witness(&event, self.surface, context)
+            }
+            Protocol::Memcached => {
+                crate::protocols::replay::memcached::contracts::source_witness(&event, self.surface)
+            }
             Protocol::Redis if self.surface == Surface::DependencyRequest => {
                 let args = event["args"]
                     .as_array()

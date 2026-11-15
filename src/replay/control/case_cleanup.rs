@@ -7,7 +7,7 @@ mod pending;
 pub(super) use client_abort::{lock_for_abort_release, mark_client_aborted};
 
 #[derive(Debug, Default)]
-pub(in crate::replay) struct CaseCleanup {
+pub(crate) struct CaseCleanup {
     failed: BTreeMap<String, TokioInstant>,
     client_abort: Option<(String, TokioInstant)>,
 }
@@ -64,7 +64,7 @@ pub(super) async fn failure_description<P: ReplayProtocolSet>(
     format!("{error}; pending={}", pending::snapshot(&state))
 }
 
-pub(in crate::replay) fn has_started<P: ReplayProtocolSet>(state: &RuntimeState<P>) -> bool {
+pub(crate) fn has_started<P: ReplayProtocolSet>(state: &RuntimeState<P>) -> bool {
     state.has_protocol_io(InFlightScope::Case)
 }
 

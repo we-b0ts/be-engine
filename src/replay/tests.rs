@@ -2,6 +2,7 @@ use super::*;
 use crate::mysql::wire::{
     CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, MysqlPacket, read_packet,
 };
+use crate::protocols::replay::mysql::*;
 
 #[cfg(test)]
 mod tests {
@@ -583,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn collection_replay_uses_begin_end_case_lifecycle() {
-        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+        let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
         let collection_dir = temp.path().join("api-user");
         let case_a = collection_dir.join("case-a");
         let case_b = collection_dir.join("case-b");

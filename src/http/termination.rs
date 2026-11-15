@@ -12,14 +12,13 @@ use crate::dependency::TerminationSide;
 pub(crate) use crate::dependency::termination::ObservedTermination;
 use crate::dependency::termination::{ConnectionControl, ConnectionTermination};
 use crate::dependency::{DependencyTermination, TerminationKind, TerminationScope};
-mod delivery;
 mod diagnosis;
 pub(crate) use diagnosis::observed_since;
 use diagnosis::{IoDiagnosis, IoLayer, IoOperation};
 #[cfg(test)]
 mod tests;
-pub(crate) use delivery::{DeliveryProgress, FlushReceipt, PrefixDelivery};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+pub(crate) use traffic_protocol::io::delivery::{DeliveryProgress, FlushReceipt, PrefixDelivery};
 
 #[derive(Clone)]
 pub(crate) struct ClientTermination {

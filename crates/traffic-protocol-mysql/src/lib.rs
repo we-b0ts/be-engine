@@ -1,6 +1,7 @@
 pub mod access;
 pub mod autocommit;
 pub mod builtin;
+pub mod completion;
 pub mod diagnostics;
 pub mod isolation;
 pub mod isolation_session;
@@ -577,3 +578,9 @@ pub mod evidence;
 
 pub mod capture;
 pub mod maintenance;
+
+pub mod report;
+
+pub mod candidate;
+
+mod recording_summary;

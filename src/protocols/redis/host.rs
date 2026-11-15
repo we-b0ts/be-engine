@@ -1,4 +1,5 @@
 //! Application recording policy, immutable ownership and storage for native Redis capture.
+use crate::protocols::recording::events::{ProxyErrorEvent, RecorderEvent};
 use anyhow::Result;
 use bytes::Bytes;
 use chrono::Utc;
@@ -16,7 +17,6 @@ use crate::{
     access_policy::AccessDecision,
     active_case::DependencyTargets,
     recorder::{
-        ProxyErrorEvent, RecorderEvent,
         cache_snapshot::CacheSnapshotReservation,
         capture_health::{ConnectionCaptureHealth, RawTrafficDirection},
     },
@@ -161,7 +161,7 @@ impl CaptureHost for Host {
                     .snapshot_key(rule, &command.name, &command.args)
             });
             let targets = self.state.capture_dependency_request(
-                crate::recorder::request::DependencyRequest::Redis {
+                crate::protocols::recording::request::DependencyRequest::Redis {
                     target_port: self.context.target_port,
                     command: &command.name,
                     args: &command.args,

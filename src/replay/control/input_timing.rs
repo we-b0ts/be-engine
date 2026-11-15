@@ -11,29 +11,30 @@ mod source;
 pub(crate) use client::connect;
 
 #[derive(Debug)]
-pub(in crate::replay) struct PreparedSource {
+pub(crate) struct PreparedSource {
     case: String,
     plan: Result<source::Plan>,
 }
 
 impl PreparedSource {
-    pub(in crate::replay) fn load(
+    pub(crate) fn load(
         recording: &ReplayCase,
         fast_cap: Option<u64>,
         dependencies: Option<&[u8]>,
+        evidence: &traffic_protocol::evidence::EvidenceRegistry,
     ) -> Self {
         Self {
             case: recording.id.clone(),
-            plan: source::load(recording, fast_cap, dependencies),
+            plan: source::load(recording, fast_cap, dependencies, evidence),
         }
     }
 }
 
-pub(in crate::replay) async fn prepare_source(
-    shared: &Arc<Mutex<ReplayState>>,
+pub(crate) async fn prepare_source<P: ReplayProtocolSet>(
+    shared: &Arc<Mutex<RuntimeState<P>>>,
     case: &str,
 ) -> Result<()> {
-    let (recording, fast_cap) = {
+    let (recording, fast_cap, evidence) = {
         let state = shared.lock().await;
         if state
             .prepared_socketio_input
@@ -43,17 +44,22 @@ pub(in crate::replay) async fn prepare_source(
             return Ok(());
         }
         let recording = state.cases.get(case).context("input timing case missing")?;
-        (recording.clone(), source_fast_cap(&state))
+        (
+            recording.clone(),
+            source_fast_cap(&state),
+            state.providers.evidence().clone(),
+        )
     };
-    let prepared =
-        tokio::task::spawn_blocking(move || PreparedSource::load(&recording, fast_cap, None))
-            .await
-            .context(SourcePlanUnavailable)?;
+    let prepared = tokio::task::spawn_blocking(move || {
+        PreparedSource::load(&recording, fast_cap, None, &evidence)
+    })
+    .await
+    .context(SourcePlanUnavailable)?;
     shared.lock().await.prepared_socketio_input = Some(prepared);
     Ok(())
 }
 
-pub(in crate::replay) fn source_fast_cap<P: crate::replay::ReplayProtocolSet>(
+pub(crate) fn source_fast_cap<P: crate::replay::ReplayProtocolSet>(
     state: &crate::replay::RuntimeState<P>,
 ) -> Option<u64> {
     (state.stream_timing == Some(ReplayStreamTiming::Fast)).then_some(state.stream_interval_cap_ms)
@@ -68,14 +74,14 @@ impl std::fmt::Display for SourcePlanUnavailable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::replay) enum DeliveryReference {
-    RedisResponse(RecordedReference),
-    NativePush(redis::pubsub::PushId),
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DeliveryReference {
+    Exchange(RecordedReference),
+    Native(Arc<RecordedReference>),
 }
 
 #[derive(Debug)]
-pub(in crate::replay) struct Evidence {
+pub(crate) struct Evidence {
     pub reference: DeliveryReference,
     pub completed_at: DateTime<Utc>,
     /// Native effects retain their own retiming/coverage authority. They can
@@ -84,8 +90,14 @@ pub(in crate::replay) struct Evidence {
     pub individual: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CandidateWindow {
+    pub minimum_inputs: usize,
+    pub minimum_duration: Duration,
+}
+
 #[derive(Debug)]
-pub(in crate::replay) struct Live {
+pub(crate) struct Live {
     case: String,
     epoch: DateTime<Utc>,
     admission_epoch: u64,
@@ -101,7 +113,7 @@ pub(in crate::replay) struct Live {
 }
 
 impl Live {
-    pub(in crate::replay) fn heartbeat_close_window(
+    pub(crate) fn heartbeat_close_window(
         &self,
         case: &str,
     ) -> Option<(DateTime<Utc>, MonoInstant)> {
@@ -114,17 +126,17 @@ impl Live {
         ))
     }
 
-    pub(in crate::replay) fn mysql_dispatch_prefix(
+    pub(crate) fn active_dispatch_prefix(
         &self,
         case: &str,
     ) -> Option<std::ops::Range<DateTime<Utc>>> {
         if self.case != case {
             return None;
         }
-        self.fast.as_ref()?.mysql_dispatch_prefix(self)
+        self.fast.as_ref()?.active_dispatch_prefix(self)
     }
 
-    pub(in crate::replay) fn mysql_candidate_anchor(
+    pub(crate) fn candidate_anchor(
         &self,
         case: &str,
         last_matched: Option<DateTime<Utc>>,
@@ -132,23 +144,22 @@ impl Live {
         if self.case != case {
             return None;
         }
-        self.fast
-            .as_ref()?
-            .mysql_candidate_anchor(self, last_matched)
+        self.fast.as_ref()?.candidate_anchor(self, last_matched)
     }
 
-    pub(in crate::replay) fn mysql_candidate_cutoff(
+    pub(crate) fn candidate_cutoff(
         &self,
         case: &str,
         anchor: Option<DateTime<Utc>>,
+        window: CandidateWindow,
     ) -> Option<DateTime<Utc>> {
         if self.case != case {
             return None;
         }
-        self.fast.as_ref()?.mysql_candidate_cutoff(self, anchor)
+        self.fast.as_ref()?.candidate_cutoff(self, anchor, window)
     }
 
-    pub(in crate::replay) fn mysql_prefix_window(
+    pub(crate) fn prefix_window(
         &self,
         case: &str,
         request_at: DateTime<Utc>,
@@ -167,15 +178,18 @@ impl Live {
             .then_some((boundary, push_boundary))
     }
 
-    pub(in crate::replay) fn native_fast_setup_ready(&self, state: &ReplayState) -> bool {
+    pub(crate) fn native_fast_setup_ready<P: ReplayProtocolSet>(
+        &self,
+        state: &RuntimeState<P>,
+    ) -> bool {
         self.fast
             .as_ref()
             .is_some_and(|plan| plan.native_fast_setup_ready(state, &self.case))
     }
 
-    pub(in crate::replay) fn native_dispatch_cap(
+    pub(crate) fn native_dispatch_cap<P: ReplayProtocolSet>(
         &self,
-        state: &ReplayState,
+        state: &RuntimeState<P>,
         case: &str,
         epoch: DateTime<Utc>,
         offset: chrono::TimeDelta,
@@ -189,7 +203,7 @@ impl Live {
     }
 
     /// None leaves unrelated or unsupported native scheduling unchanged.
-    pub(in crate::replay) fn reached(
+    pub(crate) fn reached(
         &self,
         case: &str,
         epoch: DateTime<Utc>,
@@ -205,7 +219,7 @@ impl Live {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::replay) struct Query {
+pub(crate) struct Query {
     pub(super) epoch: DateTime<Utc>,
     pub(super) sequence: u64,
     pub(super) completed: Vec<u64>,
@@ -215,9 +229,9 @@ pub(in crate::replay) struct Query {
     pub(super) closed_at: Option<DateTime<Utc>>,
 }
 
-pub(super) async fn accept(
+pub(super) async fn accept<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    shared: &Arc<Mutex<ReplayState>>,
+    shared: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Value {
     let result = async {
         let case = request
@@ -240,8 +254,8 @@ pub(super) async fn accept(
                 .plan
                 .context(SourcePlanUnavailable)?;
             let epoch = state
-                .protocols.redis
-                .native_request_epoch(case)
+                .protocols.native_events()
+                .request_epoch(case)
                 .unwrap_or_else(Utc::now);
             let fast = plan
                 .fast
@@ -251,7 +265,7 @@ pub(super) async fn accept(
             let fast_tail = fast.as_ref().and_then(fast::Plan::tail);
             let ordered_fast = fast.is_some();
             let native_push_times = plan.source_start.filter(|_| ordered_fast).and_then(|start| {
-                let (pushes, covered) = state.protocols.redis.pubsub.timing_evidence(case, start);
+                let (pushes, covered) = state.protocols.input_timing().notifications(case, start);
                 covered.then(|| {
                     let mut times: Vec<_> = pushes.into_iter().map(|push| push.completed_at).collect();
                     times.sort_unstable();
@@ -260,7 +274,7 @@ pub(super) async fn accept(
             });
             let (mut evidence, covered) = match (fast.is_some(), plan.source_start) {
                 (true, _) => (Vec::new(), false),
-                (false, Some(start)) => state.protocols.redis.timing_evidence(case, start)?,
+                (false, Some(start)) => state.protocols.input_timing_mut().evidence(case, start)?,
                 (false, None) => (Vec::new(), false),
             };
             evidence.sort_unstable_by_key(|entry| entry.completed_at);
@@ -326,7 +340,7 @@ pub(super) async fn accept(
             "input timing request epoch changed"
         );
         if request.command == "input_timing_native_prefix" {
-            let active = state.protocols.redis.pubsub.native_clock.fast_prefix_active(
+            let active = state.protocols.input_timing().prefix_active(
                 case,
                 live.epoch,
                 MonoInstant::now(),
@@ -356,13 +370,13 @@ pub(super) async fn accept(
         });
         let delivered = |e: &Evidence| {
             state
-                .protocols.redis
-                .timing_delivered(case, live.admission_epoch, e.reference)
-                || match e.reference {
-                    DeliveryReference::RedisResponse(reference) => {
-                        dependency_tail::timing_optional(&state, case, reference)
+                .protocols.input_timing()
+                .delivered(case, live.admission_epoch, &e.reference)
+                || match &e.reference {
+                    DeliveryReference::Exchange(reference) => {
+                        dependency_tail::timing_optional(&state, case, reference.clone())
                     }
-                    DeliveryReference::NativePush(_) => false,
+                    DeliveryReference::Native(_) => false,
                 }
         };
         let prefix_end = cutoff.map_or(0, |cutoff| {
@@ -446,7 +460,7 @@ pub(super) async fn accept(
     })
 }
 
-fn ensure_live(state: &ReplayState, case: &str) -> Result<()> {
+fn ensure_live<P: ReplayProtocolSet>(state: &RuntimeState<P>, case: &str) -> Result<()> {
     ensure!(
         state.active_case_id.as_deref() == Some(case)
             && state.finalized_at.is_none()

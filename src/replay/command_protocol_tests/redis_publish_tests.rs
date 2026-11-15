@@ -77,7 +77,7 @@ async fn http_request(address: SocketAddr, id: &str) -> hyper::StatusCode {
 
 #[tokio::test]
 async fn global_publish_formats_preserve_order_stable_fields_and_cross_protocol_identities() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("apis/publish/case");
     std::fs::create_dir_all(&case).unwrap();
     let connection = Uuid::new_v4();
@@ -211,7 +211,7 @@ async fn protocol_listeners(
 
 #[tokio::test]
 async fn unknown_pickle_payload_is_exact_bytes_without_publisher_substring_rewriting() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir_all(&case).unwrap();
     let binary = |id: &str| {

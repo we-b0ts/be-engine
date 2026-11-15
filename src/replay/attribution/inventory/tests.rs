@@ -1,5 +1,6 @@
 use super::*;
-use crate::recorder::{DependencyConnectFailureEvent, Recorder, RecorderEvent};
+use crate::protocols::recording::events::{DependencyConnectFailureEvent, RecorderEvent};
+use crate::recorder::Recorder;
 use serde_json::{Value, json};
 
 async fn recording() -> (tempfile::TempDir, Recorder) {
@@ -96,7 +97,9 @@ async fn real_process_connection_failure_cannot_certify_a_complete_session() {
         actual["batch_reconciliation"]["dependency_inventory_verified"],
         false
     );
-    assert!(crate::replay::validate_completed_receipt(&actual).is_err());
+    assert!(
+        crate::protocols::replay::report::validation::validate_completed_receipt(&actual).is_err()
+    );
 }
 
 #[tokio::test]
@@ -237,7 +240,8 @@ async fn mandatory_closure_does_not_materialize_a_second_complete_payload_select
 
 #[tokio::test]
 async fn associated_shutdown_has_authenticated_scope_without_entering_primary_inventory() {
-    use crate::recorder::{CaseContext, HttpExchangeEvent, capture_body};
+    use crate::protocols::recording::events::HttpExchangeEvent;
+    use crate::recorder::{CaseContext, capture_body};
     let temp = tempfile::tempdir().unwrap();
     let mut config = crate::AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");

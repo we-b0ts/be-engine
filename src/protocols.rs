@@ -56,6 +56,9 @@ impl std::ops::DerefMut for DependencyProviders {
     }
 }
 impl DependencyProviders {
+    pub(crate) fn report_codecs(&self) -> &traffic_protocol::report::CodecRegistry {
+        &self.report_codecs
+    }
     pub fn register_report_codec(
         &mut self,
         protocol: traffic_protocol::ProtocolId,
@@ -80,6 +83,8 @@ impl DependencyProviders {
 mod capture;
 pub(crate) mod evidence;
 pub(crate) mod mysql;
+pub(crate) mod recording;
+pub(crate) mod recording_preparation;
 pub(crate) mod redis;
 pub(crate) mod replay;
 

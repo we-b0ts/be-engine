@@ -15,11 +15,13 @@ use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
 use crate::memcached::MemcachedWireProtocol;
-use crate::recorder::kafka::{KafkaConnectionContext, handle_connected as handle_connected_kafka};
-use crate::recorder::memcached::{
+use crate::protocols::recording::kafka::{
+    KafkaConnectionContext, handle_connected as handle_connected_kafka,
+};
+use crate::protocols::recording::memcached::{
     ConnectionContext as MemcachedConnectionContext, handle_connected as handle_connected_memcached,
 };
-use crate::recorder::motan::{
+use crate::protocols::recording::motan::{
     ConnectionContext as MotanConnectionContext, handle_connected as handle_connected_motan,
 };
 use crate::recording_control::RecordingListener;

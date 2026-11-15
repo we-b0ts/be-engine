@@ -90,7 +90,8 @@ fn install_rows(fixture: &Fixture, ids: &[i64], targets: &[Value]) {
         let mut metadata = metadata.clone();
         metadata.source.sequence = event["query_sequence"].as_u64();
         let source =
-            crate::replay::mysql_source_witness(&event, Surface::DependencyRequest).unwrap();
+            crate::protocols::replay::mysql_source_witness(&event, Surface::DependencyRequest)
+                .unwrap();
         if targets.is_empty() {
             metadata.target_role = TargetRole::Unavailable;
             store.record(metadata, &case, &source, None).unwrap();

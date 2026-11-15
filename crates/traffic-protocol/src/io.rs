@@ -1,4 +1,5 @@
 //! Framework-owned buffering, bounds and EOF behavior shared by native codecs.
+pub mod delivery;
 use crate::EventHandler;
 use crate::FrameDecoder;
 

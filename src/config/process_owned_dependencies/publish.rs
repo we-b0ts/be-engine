@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::policy::native::RedisPublishPredicate;
-use crate::recorder::RedisExchangeEvent;
+use crate::protocols::recording::events::RedisExchangeEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

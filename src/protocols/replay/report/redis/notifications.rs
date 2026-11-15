@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::shared::{SharedInventory, SharedReference};
 use crate::dependency_index::{PageManifest, Paged, global::NotificationEntry};
-use crate::replay::redis::pubsub::{NotificationDelta, NotificationSessionEvidence};
+use crate::protocols::replay::redis::pubsub::{NotificationDelta, NotificationSessionEvidence};
 use crate::replay::report::command::CommandUnusedReport;
 use traffic_replay::ReplaySource;
 

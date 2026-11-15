@@ -3,8 +3,9 @@
 use std::borrow::Cow;
 
 use super::*;
+use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::policy_evidence::{SourceRole, WitnessEntry, WitnessRef};
-use crate::value_contract::time_copies::{TimeCopyPosition, TimeCopyRecord, TimeCopyStore};
+use crate::value_contract::time_copies::{TimeCopyRecord, TimeCopyStore};
 
 pub(super) struct ReadEvidence<'a> {
     pub private: &'a Path,
@@ -239,7 +240,7 @@ pub(super) fn observe_global_with_retiming(
         let clocks = witness.metadata.clocks.comparison();
         match resource.protocol {
             Protocol::Mysql => {
-                crate::replay::mysql_global_delivered_time_copies(
+                crate::protocols::replay::mysql_global_delivered_time_copies(
                     source,
                     &target,
                     policy,
@@ -256,7 +257,7 @@ pub(super) fn observe_global_with_retiming(
                     continue;
                 };
                 let args = arguments(event)?;
-                let read = crate::replay::RedisTimeRead {
+                let read = crate::policy::runtime::RedisTimeRead {
                     host: &resource.endpoint.host,
                     port: resource.endpoint.port,
                     database: event["database"]
@@ -271,7 +272,7 @@ pub(super) fn observe_global_with_retiming(
                     delivered_response: &target,
                 };
                 if let Some(redis) = &policy.redis {
-                    crate::replay::redis_delivered_scalar_time_copies(
+                    crate::policy::runtime::redis_delivered_scalar_time_copies(
                         read,
                         redis,
                         &policy
@@ -284,7 +285,7 @@ pub(super) fn observe_global_with_retiming(
                     )?;
                 }
                 if let Some(plan) = &policy.global_json {
-                    crate::replay::redis_delivered_global_time_copies(
+                    crate::policy::runtime::redis_delivered_global_time_copies(
                         read,
                         plan,
                         policy.redis.as_ref(),

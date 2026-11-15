@@ -46,9 +46,12 @@ pub(super) fn compare(
         .ok()
         .and_then(|bytes| crate::json_value::parse(&bytes));
     let mut owned = Vec::new();
-    for rule in
-        crate::replay::native_response_selected(context.policy, method, uri.path(), body.as_ref())
-    {
+    for rule in crate::primary_protocol::assertion::native::selected(
+        context.policy,
+        method,
+        uri.path(),
+        body.as_ref(),
+    ) {
         let selected = &rule.rule.selector;
         let NativeEffect::RedisSequence(effect) = &rule.rule.effect else {
             continue;

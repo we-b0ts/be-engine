@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use traffic_protocol::ProtocolId;
 
 #[derive(Debug)]
-pub(in crate::replay) struct RunBindings {
-    pub(in crate::replay) runtimes: Vec<Arc<SequenceRuntime>>,
+pub(crate) struct RunBindings {
+    pub(crate) runtimes: Vec<Arc<SequenceRuntime>>,
     protocols: BTreeMap<ProtocolId, Binding>,
     registered: Binding,
 }
@@ -26,7 +26,7 @@ fn task_scope(
 }
 
 impl<P: ReplayProtocolSet> RuntimeState<P> {
-    pub(in crate::replay) fn prepare_run_sequence(&mut self) -> Result<()> {
+    pub(crate) fn prepare_run_sequence(&mut self) -> Result<()> {
         let Some(catalog) = &self.sequence_catalog else {
             return Ok(());
         };
@@ -84,7 +84,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
         Ok(())
     }
 
-    pub(in crate::replay) fn attach_run_sequence(&mut self) {
+    pub(crate) fn attach_run_sequence(&mut self) {
         if let Some(run) = &self.run_sequence {
             self.protocols.attach_run_sequence(&run.protocols);
             self.native

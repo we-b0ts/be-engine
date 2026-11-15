@@ -1,11 +1,15 @@
 //! Best-effort derived indexes, isolated from recording completion semantics.
 use super::*;
 
-#[derive(Clone)]
-pub(super) struct GlobalPreparation {
-    pub rules: Vec<crate::BackgroundDependencyRuleConfig>,
-    pub fingerprint: Option<String>,
+use traffic_protocol::connection::NativeFuture;
+
+pub(crate) trait SourcePreparation: Send + Sync {
+    fn validate_record(&self, value: &serde_json::Value) -> Result<()>;
+    fn safety_issue(&self, value: &serde_json::Value) -> Option<String>;
+    fn indexes<'a>(&'a self, run: &'a Path) -> NativeFuture<'a, Vec<PathBuf>>;
+    fn global_report<'a>(&'a self, run: &'a Path) -> NativeFuture<'a, ()>;
 }
+
 impl Recorder {
     pub(super) async fn seal_case_dependency_indexes(&self) {
         let run = self.run_dir.clone();
@@ -28,11 +32,11 @@ impl Recorder {
 
     pub(super) async fn seal_global_dependency_indexes(&self) {
         let run = self.run_dir.clone();
+        let preparation = self.source_preparation.clone();
         let result = tokio::task::spawn_blocking(move || {
-            crate::dependency_index::global::seal_recording_scopes(
-                &run,
-                crate::protocols::replay::source::validate_index_record,
-            )
+            crate::dependency_index::global::seal_recording_scopes(&run, |value| {
+                preparation.validate_record(value)
+            })
         })
         .await
         .context("recording dependency index task failed")
@@ -42,59 +46,25 @@ impl Recorder {
         }
     }
 
-    pub(super) async fn prepare_mysql_ownership(&self) {
-        let run = self.run_dir.clone();
-        let rules = self
-            .global_preparation
-            .as_ref()
-            .map(|p| p.rules.clone())
-            .unwrap_or_default();
-        let result =
-            tokio::task::spawn_blocking(move || crate::api_trigger::seal(&run, &rules)).await;
-        match result {
-            Ok(Ok(())) => {
+    pub(super) async fn prepare_source_indexes(&self) {
+        match self.source_preparation.indexes(&self.run_dir).await {
+            Ok(paths) => {
                 if let Some(owner) = self.artifact_owner {
-                    for name in [
-                        crate::dependency_index::mysql_transactions::FRAGMENT,
-                        ".mysql-ownership.json",
-                    ] {
-                        let path = self.run_dir.join(name);
-                        if path.is_file()
-                            && let Err(error) = owner.assign_to(&path).await
-                        {
-                            tracing::warn!(error=%error, "MySQL preparation ownership assignment failed");
+                    for path in paths {
+                        if let Err(error) = owner.assign_to(&path).await {
+                            tracing::warn!(error=%error, "Source index ownership assignment failed");
                         }
                     }
                 }
             }
-            error => {
-                tracing::warn!(error=?error, "MySQL transaction preparation failed; first Replay will rebuild it")
+            Err(error) => {
+                tracing::warn!(error=%error, "Source index preparation failed; Replay will rebuild derived indexes");
             }
         }
     }
 
-    pub(crate) async fn with_global_preparation(
-        mut self,
-        config: &crate::AppConfig,
-    ) -> Result<Self> {
-        self.register_capture_policy(config).await?;
-        self.global_preparation = Some(Arc::new(GlobalPreparation {
-            rules: config.process_owned_dependencies.clone(),
-            fingerprint: config.global_projection_policy.clone(),
-        }));
-        Ok(self)
-    }
     pub(super) async fn prepare_global_report(&self) {
-        let Some(options) = &self.global_preparation else {
-            return;
-        };
-        if let Err(error) = crate::replay::report::prewarm_global_report(
-            &self.run_dir,
-            &options.rules,
-            options.fingerprint.as_deref(),
-        )
-        .await
-        {
+        if let Err(error) = self.source_preparation.global_report(&self.run_dir).await {
             tracing::warn!(run_dir=%self.run_dir.display(), error=%error,
                 "optional Global report preparation status could not be published; original recording is preserved");
         }

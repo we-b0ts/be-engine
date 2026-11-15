@@ -20,7 +20,7 @@ use super::super::HttpClient;
 use crate::http::response_headers;
 use crate::interaction::model::ClientTransportEnd;
 use crate::interaction::model::{MessageKind, WireMessage};
-use crate::recorder::HeaderMapSnapshot;
+use crate::protocols::recording::events::HeaderMapSnapshot;
 
 mod termination;
 

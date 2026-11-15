@@ -86,7 +86,7 @@ pub(crate) fn validate_source(
             }
             n::NativeEffect::FiniteSharing(_) => {
                 obligations.insert(SourceObligation::Replay);
-                crate::replay::validate_native_finite_sharing(
+                crate::policy::runtime::validate_native_finite_sharing(
                     scope.case_source,
                     scope
                         .replay_report

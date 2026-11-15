@@ -1,7 +1,8 @@
 //! Native traffic observations projected into framework-owned aggregation.
+use serde_json::Value;
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+pub mod termination;
 
 pub struct TrafficInteraction {
     pub protocol: String,
@@ -12,6 +13,11 @@ pub struct TrafficInteraction {
 pub trait NativeSummary: Send + Sync {
     fn observe(&mut self, event: &Value, endpoint: Option<&str>);
     fn value(&self) -> Value;
+}
+
+pub trait RecordingSummary: Send {
+    fn observe(&mut self, event: &Value);
+    fn finish(self: Box<Self>) -> anyhow::Result<BTreeMap<String, Value>>;
 }
 
 #[derive(Default)]
@@ -27,7 +33,6 @@ impl NativeSummaries {
             .collect()
     }
 }
-
 impl std::fmt::Debug for NativeSummaries {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.debug_set().entries(self.values.keys()).finish()
@@ -42,16 +47,13 @@ pub fn format_endpoint(host: &str, port: u16) -> String {
         format!("{host}:{port}")
     }
 }
-
 pub fn normalize_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
-
 pub fn normalize_endpoint(value: &str) -> Option<String> {
     let authority = value.parse::<http::uri::Authority>().ok()?;
     Some(format_endpoint(authority.host(), authority.port_u16()?))
 }
-
 pub fn optional_endpoint(
     host: Option<&str>,
     port: Option<u16>,

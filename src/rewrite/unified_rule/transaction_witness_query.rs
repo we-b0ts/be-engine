@@ -46,7 +46,7 @@ fn protected_mysql_cell_query_reads_large_literal_json_without_exposing_neighbor
             replay["replay_policy"]["fingerprint"].as_str().unwrap(),
         )
         .unwrap();
-        let source = crate::replay::mysql_source_witness(&event, surface).unwrap();
+        let source = crate::protocols::replay::mysql_source_witness(&event, surface).unwrap();
         let request = json!({"request_started_at":later,"command":"COM_STMT_EXECUTE",
             "sql":"INSERT INTO `tasks`(id,payload) VALUES(?,?)",
             "params":[{"kind":"integer","value":7},{"kind":"string","value":payload("target-address")}]});
@@ -435,7 +435,7 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
                 )
                 .unwrap();
         }
-        let fingerprint = crate::replay::redis_request_fingerprint(
+        let fingerprint = crate::protocols::replay::redis_request_fingerprint(
             "cache.test",
             6379,
             2,

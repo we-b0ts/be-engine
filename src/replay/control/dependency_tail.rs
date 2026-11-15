@@ -2,27 +2,29 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+#[cfg(test)]
+use crate::replay::ReplayState;
 use anyhow::{Context, Result, ensure};
 use tokio::time::Instant;
 #[cfg(test)]
 use uuid::Uuid;
 
-use super::super::{ReplayExchangeStatus, ReplayState};
+use super::super::{ReplayExchangeStatus, ReplayProtocolSet, RuntimeState};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 const MAX_SELECTED_REFS: usize = 100_000;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
-pub(in crate::replay) const TARGET_STOP_CLEANUP_GRACE: Duration = Duration::from_secs(30);
+pub(crate) const TARGET_STOP_CLEANUP_GRACE: Duration = Duration::from_secs(30);
 mod metadata;
 pub(super) mod progress;
-pub(in crate::replay) use metadata::load_cleanup_refs;
+pub(crate) use metadata::load_cleanup_refs;
 
 #[derive(Debug)]
-pub(in crate::replay) struct CaseTails {
+pub(crate) struct CaseTails {
     cases: BTreeMap<String, Option<CaseTail>>,
-    async_rules: BTreeMap<String, crate::policy::AsyncApiRules>,
+    async_rules: crate::recorder::async_api::CompletionPolicy,
     request_timeout: Duration,
     no_progress_timeout: Duration,
     waits: BTreeMap<String, serde_json::Value>,
@@ -34,7 +36,7 @@ impl Default for CaseTails {
     fn default() -> Self {
         Self {
             cases: BTreeMap::new(),
-            async_rules: BTreeMap::new(),
+            async_rules: Default::default(),
             request_timeout: crate::replay::ReplayLifecycleConfig::default().request_timeout,
             no_progress_timeout: Duration::from_millis(
                 crate::replay::DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS,
@@ -46,28 +48,28 @@ impl Default for CaseTails {
     }
 }
 impl CaseTails {
-    pub(in crate::replay) fn target_stop_required(&self, case_id: &str) -> bool {
+    pub(crate) fn target_stop_required(&self, case_id: &str) -> bool {
         self.cases
             .get(case_id)
             .and_then(Option::as_ref)
             .is_some_and(|tail| tail.source_stop_required)
     }
-    pub(in crate::replay) fn with_async_rules(
+    pub(crate) fn with_async_rules(
         mut self,
-        rules: BTreeMap<String, crate::policy::AsyncApiRules>,
+        rules: impl Into<crate::recorder::async_api::CompletionPolicy>,
         request_timeout: Duration,
     ) -> Self {
-        self.async_rules = rules;
+        self.async_rules = rules.into();
         self.request_timeout = request_timeout;
         self
     }
 
-    pub(in crate::replay) fn with_no_progress_timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) fn with_no_progress_timeout(mut self, timeout: Duration) -> Self {
         self.no_progress_timeout = timeout;
         self
     }
 
-    pub(in crate::replay) fn failure(&self, case: &str) -> Option<&serde_json::Value> {
+    pub(crate) fn failure(&self, case: &str) -> Option<&serde_json::Value> {
         self.failures.get(case)
     }
 
@@ -77,13 +79,13 @@ impl CaseTails {
         );
     }
 
-    pub(in crate::replay) fn failures(&self) -> Vec<serde_json::Value> {
+    pub(crate) fn failures(&self) -> Vec<serde_json::Value> {
         self.failures.values().cloned().chain(self.source_business_incomplete.iter().map(|case|
             serde_json::json!({"kind":"source_business_incomplete","case_id":case,"requires_new_recording":true,"reason":"Source observation ended without its declared async completion resource"})
         )).collect()
     }
 
-    pub(in crate::replay) fn waiting(&self, case: &str) -> Option<&serde_json::Value> {
+    pub(crate) fn waiting(&self, case: &str) -> Option<&serde_json::Value> {
         self.waits.get(case)
     }
 }
@@ -112,16 +114,17 @@ struct SelectedExchange {
     lifecycle_gate: Option<Arc<AtomicBool>>,
 }
 
-pub(in crate::replay) use crate::replay::adapters::RecordedReference;
+pub(crate) use crate::replay::adapters::RecordedReference;
 
-pub(in crate::replay) fn recorded_reference(
+pub(crate) fn recorded_reference(
     event: &serde_json::Value,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
 ) -> Result<Option<RecordedReference>> {
-    metadata::reference(event)
+    metadata::reference(event, evidence)
 }
 
-pub(in crate::replay) fn references_consumed(
-    state: &ReplayState,
+pub(crate) fn references_consumed<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
     case: &str,
     references: &[RecordedReference],
 ) -> Result<bool> {
@@ -132,8 +135,8 @@ pub(in crate::replay) fn references_consumed(
 
 /// Reuse existing ownership/omission authority without making unused business
 /// exchanges optional merely to accelerate an input.
-pub(in crate::replay) fn timing_optional(
-    state: &ReplayState,
+pub(crate) fn timing_optional<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
     case: &str,
     reference: RecordedReference,
 ) -> bool {
@@ -148,14 +151,17 @@ pub(in crate::replay) fn timing_optional(
         })
 }
 
-fn exchange_status(
-    state: &ReplayState,
+fn exchange_status<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
     exchange: crate::replay::adapters::ExchangeHandle,
 ) -> Option<ReplayExchangeStatus> {
     exchange.delivery_state(state)
 }
 
-fn permits_unstarted_omission(state: &ReplayState, selected: &SelectedExchange) -> bool {
+fn permits_unstarted_omission<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
+    selected: &SelectedExchange,
+) -> bool {
     selected.exchange.permits_unstarted_omission(
         state,
         selected.shared_initialization,
@@ -163,18 +169,21 @@ fn permits_unstarted_omission(state: &ReplayState, selected: &SelectedExchange) 
     )
 }
 
-fn permits_tail_omission(state: &ReplayState, selected: &SelectedExchange) -> bool {
+fn permits_tail_omission<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
+    selected: &SelectedExchange,
+) -> bool {
     selected.exchange.permits_cancelled_omission(state)
         || permits_unstarted_omission(state, selected)
 }
 
 /// Prepare immutable references before activation, without starting a Target
 /// budget for a begin that may still lose concurrent case admission.
-pub(in crate::replay) async fn prepare(
-    state: &Arc<Mutex<ReplayState>>,
+pub(crate) async fn prepare<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case_id: &str,
 ) -> Result<()> {
-    let (case_dir, dependencies, async_rules, request_timeout) = {
+    let (case_dir, dependencies, async_rules, request_timeout, evidence) = {
         let state = state.lock().await;
         if state.dependency_tails.cases.contains_key(case_id) {
             return Ok(());
@@ -194,11 +203,19 @@ pub(in crate::replay) async fn prepare(
                 .clone(),
             state.dependency_tails.async_rules.clone(),
             state.dependency_tails.request_timeout,
+            state.providers.evidence().clone(),
         )
     };
-    let metadata =
-        metadata::load_effective(&case_dir, &dependencies, &async_rules, request_timeout).await?;
-    let http_completion = metadata::http_completion_rules(&case_dir, &async_rules).await?;
+    let metadata = metadata::load_effective(
+        &case_dir,
+        &dependencies,
+        &async_rules,
+        request_timeout,
+        &evidence,
+    )
+    .await?;
+    let completion_requirements =
+        metadata::completion_requirements(&case_dir, &async_rules).await?;
     let mut state = state.lock().await;
     if state.dependency_tails.cases.contains_key(case_id) {
         return Ok(());
@@ -226,7 +243,7 @@ pub(in crate::replay) async fn prepare(
                 selected.strict_reference = metadata.strict_references.contains(reference);
                 selected.shared_initialization = selected
                     .exchange
-                    .shared_initialization(&state, &http_completion);
+                    .shared_initialization(&state, &completion_requirements);
                 selected.lifecycle_cleanup = metadata.cleanup_refs.contains(reference);
                 selected.lifecycle_gate = selected
                     .lifecycle_cleanup
@@ -258,7 +275,10 @@ pub(in crate::replay) async fn prepare(
 
 /// Linearize the monotonic anchor with active-case admission. A repeated begin
 /// on an already active case cannot renew the same deadline.
-pub(in crate::replay) fn activate(state: &mut ReplayState, case_id: &str) -> Result<()> {
+pub(crate) fn activate<P: ReplayProtocolSet>(
+    state: &mut RuntimeState<P>,
+    case_id: &str,
+) -> Result<()> {
     if let Some(Some(tail)) = state.dependency_tails.cases.get_mut(case_id)
         && tail.deadline.is_none()
     {
@@ -271,8 +291,8 @@ pub(in crate::replay) fn activate(state: &mut ReplayState, case_id: &str) -> Res
     Ok(())
 }
 
-pub(in crate::replay) async fn deadline(
-    state: &Arc<Mutex<ReplayState>>,
+pub(crate) async fn deadline<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case_id: &str,
 ) -> Option<Instant> {
     let state = state.lock().await;
@@ -287,7 +307,10 @@ pub(in crate::replay) async fn deadline(
 }
 
 /// The caller keeps this Case active while stopping the corresponding Target.
-pub(super) async fn target_stop_required(state: &Arc<Mutex<ReplayState>>, case_id: &str) -> bool {
+pub(super) async fn target_stop_required<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
+    case_id: &str,
+) -> bool {
     state
         .lock()
         .await
@@ -300,8 +323,8 @@ pub(super) async fn target_stop_required(state: &Arc<Mutex<ReplayState>>, case_i
 
 /// Target stop and accepted I/O finalization share one engine cleanup budget.
 /// Repeated commands cannot move this boundary forward.
-pub(super) async fn cleanup_deadline(
-    state: &Arc<Mutex<ReplayState>>,
+pub(super) async fn cleanup_deadline<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case_id: &str,
 ) -> Option<Instant> {
     let state = state.lock().await;
@@ -319,11 +342,11 @@ pub(super) async fn cleanup_deadline(
     })
 }
 
-impl ReplayState {
+impl<P: ReplayProtocolSet> RuntimeState<P> {
     /// The same delivered failure can make Target close its worker naturally
     /// before the controller's next poll. Accept only the complete ready scope;
     /// admission and the final process-stop receipt remain unchanged.
-    pub(in crate::replay) fn arm_failure_cleanup_if_ready(&self, case: &str) -> bool {
+    pub(crate) fn arm_failure_cleanup_if_ready(&self, case: &str) -> bool {
         if self.failure_cleanup_readiness(case) != Some(true) {
             return false;
         }
@@ -342,7 +365,7 @@ impl ReplayState {
         true
     }
 
-    pub(in crate::replay) fn async_failure_delivery_pending(&self, case: &str) -> bool {
+    pub(crate) fn async_failure_delivery_pending(&self, case: &str) -> bool {
         self.failure_cleanup_readiness(case) == Some(false)
     }
 
@@ -357,10 +380,8 @@ impl ReplayState {
             || self.active_case_id.as_deref() != Some(case)
             || self.finalized_at.is_some()
             || self.unrecorded_case_ids.contains(case)
-            || self.protocols.mysql.events.dirty_case_ids.contains(case)
+            || self.protocols.case_has_runtime_failure(case)
             || self.native.case_has_runtime_failure(case)
-            || self.protocols.redis.case_has_runtime_failure(case)
-            || self.protocols.http_events.case_has_runtime_failure(case)
             || !tail
                 .selected
                 .iter()
@@ -383,7 +404,7 @@ impl ReplayState {
         Some(!pending)
     }
 
-    pub(in crate::replay) fn async_cleanup_gate(
+    pub(crate) fn async_cleanup_gate(
         &self,
         case: &str,
         reference: RecordedReference,
@@ -399,7 +420,7 @@ impl ReplayState {
             .clone()
     }
 
-    pub(in crate::replay) fn async_cleanup_deadline(&self, case: &str) -> Option<Instant> {
+    pub(crate) fn async_cleanup_deadline(&self, case: &str) -> Option<Instant> {
         self.dependency_tails
             .cases
             .get(case)
@@ -411,8 +432,8 @@ impl ReplayState {
     }
 }
 
-fn resolve(
-    state: &ReplayState,
+fn resolve<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
     case_id: &str,
     references: &[RecordedReference],
 ) -> Result<Vec<SelectedExchange>> {
@@ -430,21 +451,24 @@ fn resolve(
 
 /// Normal completion requires real consumption. Failed requests preserve
 /// unstarted entries as unused and drain only their actual accepted I/O.
-pub(super) async fn drain(state: &Arc<Mutex<ReplayState>>, case_id: &str) -> Result<()> {
+pub(super) async fn drain<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
+    case_id: &str,
+) -> Result<()> {
     drain_selected(state, case_id, false).await
 }
 
 /// Already claimed client-terminated I/O must see Target stop before it can
 /// complete. Ordinary finite resources must be consumed before requesting stop.
-pub(super) async fn prepare_target_stop(
-    state: &Arc<Mutex<ReplayState>>,
+pub(super) async fn prepare_target_stop<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case_id: &str,
 ) -> Result<()> {
     drain_selected(state, case_id, true).await
 }
 
-async fn drain_selected(
-    state: &Arc<Mutex<ReplayState>>,
+async fn drain_selected<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case_id: &str,
     before_target_stop: bool,
 ) -> Result<()> {
@@ -497,18 +521,8 @@ async fn drain_selected(
             "Replay finalized while dependency-tail dependencies were pending"
         );
         if state.unrecorded_case_ids.contains(case_id)
-            || state
-                .protocols
-                .mysql
-                .events
-                .dirty_case_ids
-                .contains(case_id)
+            || state.protocols.case_has_runtime_failure(case_id)
             || state.native.case_has_runtime_failure(case_id)
-            || state.protocols.redis.case_has_runtime_failure(case_id)
-            || state
-                .protocols
-                .http_events
-                .case_has_runtime_failure(case_id)
         {
             super::case_cleanup::mark_failed(&mut state, case_id)?;
         }
@@ -623,7 +637,7 @@ async fn drain_selected(
     }
 }
 
-pub(super) fn end(state: &mut ReplayState, case_id: &str) {
+pub(super) fn end<P: ReplayProtocolSet>(state: &mut RuntimeState<P>, case_id: &str) {
     state.dependency_tails.waits.remove(case_id);
     state.dependency_tails.cases.remove(case_id);
 }
@@ -638,7 +652,7 @@ mod no_progress_tests;
 mod tests;
 
 impl<P: crate::replay::ReplayProtocolSet> crate::replay::RuntimeState<P> {
-    pub(in crate::replay) fn async_case_quiescing(&self) -> bool {
+    pub(crate) fn async_case_quiescing(&self) -> bool {
         self.active_case_id
             .as_deref()
             .and_then(|case| self.dependency_tails.cases.get(case))

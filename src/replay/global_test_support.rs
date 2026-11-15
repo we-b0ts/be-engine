@@ -3,7 +3,7 @@ use crate::dependency_index::{RecordReader, RecordRef, RecordSource};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
-pub(super) fn indexed(records: &[Value]) -> (tempfile::TempDir, Vec<(Value, RecordRef)>) {
+pub(crate) fn indexed(records: &[Value]) -> (tempfile::TempDir, Vec<(Value, RecordRef)>) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("global-dependencies.jsonl");
     std::fs::write(

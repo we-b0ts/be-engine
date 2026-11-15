@@ -8,7 +8,7 @@ use crate::value_contract::plan::{EvidenceRequirements, IndexRequirements, RuleE
 /// Eligibility is frozen from Source selectors. Exact key/SQL/value guards still
 /// run against the genuine request; this is never a claim that a rule matched.
 #[derive(Debug, Clone, Default)]
-pub(in crate::replay) struct PreparedCaseRules {
+pub(crate) struct PreparedCaseRules {
     pub plans: Arc<[Arc<RuleExecutionPlan>]>,
     pub requirements: IndexRequirements,
     pub evidence: EvidenceRequirements,
@@ -20,7 +20,7 @@ pub(in crate::replay) struct PreparedCaseRules {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub(in crate::replay) struct PreparedFormat {
+pub(crate) struct PreparedFormat {
     pub format: &'static str,
     pub declared_fields: usize,
     pub eligible_protocols: Vec<crate::protocol_contract::ProtocolKind>,
@@ -28,7 +28,7 @@ pub(in crate::replay) struct PreparedFormat {
 }
 
 impl PreparedCaseRules {
-    pub(super) fn add(&mut self, plan: &RuleExecutionPlan) {
+    pub(crate) fn add(&mut self, plan: &RuleExecutionPlan) {
         self.requirements
             .required
             .extend(plan.indexes.required.iter().copied());
@@ -39,7 +39,7 @@ impl PreparedCaseRules {
         self.evidence.native_delivery |= plan.evidence.native_delivery;
     }
 
-    pub(super) fn summary(&self) -> serde_json::Value {
+    pub(crate) fn summary(&self) -> serde_json::Value {
         serde_json::json!({
             "inventory_scope":"effective_case_source_only_run_inventory_prepared_by_session_owners",
             "selection":"source_selector_eligible_native_guards_retained",
@@ -62,13 +62,13 @@ pub(crate) struct SourceScopeIdentity {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(in crate::replay) struct NativeCaseRefs {
+pub(crate) struct NativeCaseRefs {
     pub registered: Arc<[usize]>,
     pub protocols: traffic_replay::preparation::PreparedProtocols,
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::replay) struct CaseExecutionPlan {
+pub(crate) struct CaseExecutionPlan {
     pub case_id: String,
     pub source: SourceScopeIdentity,
     pub native: NativeCaseRefs,
@@ -77,7 +77,7 @@ pub(in crate::replay) struct CaseExecutionPlan {
 }
 
 impl CaseExecutionPlan {
-    pub(in crate::replay) fn new(
+    pub(crate) fn new(
         case_id: String,
         source: SourceScopeIdentity,
         native: NativeCaseRefs,
@@ -92,7 +92,7 @@ impl CaseExecutionPlan {
     }
 }
 
-pub(in crate::replay) use traffic_replay::index::CaseMembership;
+pub(crate) use traffic_replay::index::CaseMembership;
 
 #[cfg(test)]
 mod tests {

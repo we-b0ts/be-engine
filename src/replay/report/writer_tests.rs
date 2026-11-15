@@ -1,3 +1,4 @@
+use crate::protocols::replay::mysql::*;
 use serde_json::{Value, json};
 
 use super::super::*;
@@ -142,9 +143,13 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
         }
     });
 
-    write_final_report_value(report_path.clone(), &report)
-        .await
-        .unwrap();
+    write_final_report_value(
+        report_path.clone(),
+        &report,
+        crate::protocols::default_providers().report_codecs(),
+    )
+    .await
+    .unwrap();
 
     let evidence = read_dependency_evidence(&report_path).unwrap();
     assert_eq!(evidence.clusters.len(), 3);
@@ -178,9 +183,13 @@ async fn final_report_is_removed_when_dependency_evidence_cannot_be_published() 
     let evidence_path = dependency_evidence_path(&report_path);
     tokio::fs::create_dir(&evidence_path).await.unwrap();
 
-    let error = write_final_report_value(report_path.clone(), &json!({}))
-        .await
-        .unwrap_err();
+    let error = write_final_report_value(
+        report_path.clone(),
+        &json!({}),
+        crate::protocols::default_providers().report_codecs(),
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         error

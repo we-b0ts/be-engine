@@ -1,5 +1,6 @@
 use super::*;
-use crate::recorder::{CaseContext, ProxyErrorEvent, Recorder, RecorderEvent};
+use crate::protocols::recording::events::{ProxyErrorEvent, RecorderEvent};
+use crate::recorder::{CaseContext, Recorder};
 use std::{collections::BTreeMap, os::unix::fs::MetadataExt};
 use uuid::Uuid;
 

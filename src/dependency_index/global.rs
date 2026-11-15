@@ -315,7 +315,7 @@ fn safe_capture(capture: &Value) -> bool {
 
 pub(crate) fn load_global_index(
     path: &Path,
-    validate: fn(&Value) -> Result<()>,
+    validate: impl Fn(&Value) -> Result<()>,
 ) -> Result<(GlobalIndex, PathBuf)> {
     load_global_index_cancellable(path, validate, &AtomicBool::new(false))
 }
@@ -351,7 +351,7 @@ fn load_sealed_index(
 
 pub(crate) fn load_global_index_cancellable(
     path: &Path,
-    validate: fn(&Value) -> Result<()>,
+    validate: impl Fn(&Value) -> Result<()>,
     cancelled: &AtomicBool,
 ) -> Result<(GlobalIndex, PathBuf)> {
     store::check_cancelled(cancelled)?;
@@ -384,7 +384,7 @@ pub(crate) fn load_global_index_cancellable(
         );
         return Ok((index, root));
     }
-    let index = build_index(path, &root, &stamp, validate, cancelled)?;
+    let index = build_index(path, &root, &stamp, &validate, cancelled)?;
     source.validate()?;
     store::write_json(&fragment, &index)?;
     Ok((index, root))
@@ -394,7 +394,7 @@ fn build_index(
     path: &Path,
     root: &Path,
     stamp: &FileStamp,
-    validate: fn(&Value) -> Result<()>,
+    validate: &dyn Fn(&Value) -> Result<()>,
     cancelled: &AtomicBool,
 ) -> Result<GlobalIndex> {
     let mut input = RecordStream::open(path)?;

@@ -1,144 +1,114 @@
-//! Static native dependency adapters expose real inventory and delivery state.
-//! Matching, claims, protocol sessions and consumption remain with native drivers.
-use super::{ReplayExchangeStatus, ReplayState};
-use crate::dependency_provider::{DependencyProvider, ResourceProvider};
-use crate::protocol_contract::{ProtocolContract, ProtocolKind};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+//! Finite references resolve through protocol capabilities and shared delivery state.
+use super::{ReplayExchangeStatus, ReplayProtocolSet, RuntimeState};
+use anyhow::{Result, ensure};
+use traffic_protocol::ProtocolId;
 
-mod inventory;
-#[cfg(test)]
-mod tests;
-pub(in crate::replay) use inventory::resolve_case;
+pub(crate) use traffic_model::recording::ProtocolRef as RecordedReference;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum RecordedReference {
-    Capture { exchange_id: Uuid },
-    Redis { connection_id: Uuid, sequence: u64 },
-    RedisRpcPush { connection_id: Uuid, sequence: u64 },
-    Mysql { connection_id: Uuid, sequence: u64 },
-    Http { exchange_id: Uuid },
-    Connect { event_id: Uuid },
-    Memcached { connection_id: Uuid, sequence: u64 },
-    Motan { connection_id: Uuid, sequence: u64 },
-    KafkaProduce { connection_id: Uuid, sequence: u64 },
-    KafkaFetch { connection_id: Uuid, sequence: u64 },
-    KafkaDelivery { connection_id: Uuid, sequence: u64 },
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ProtocolExchange {
+    pub inventory: ProtocolId,
+    pub index: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(in crate::replay) enum DependencyAdapter {
-    Redis(usize),
-    RedisRpcPush(usize),
-    Mysql(usize),
-    Http(usize),
-    Memcached(usize),
-    Motan(usize),
-    Kafka(super::kafka::FiniteExchange),
-}
-
-pub(in crate::replay) trait NativeDependencyAdapter {
-    fn protocol(self) -> ProtocolKind;
-    fn delivery_state(self, state: &ReplayState) -> Option<ReplayExchangeStatus>;
-    fn permits_cancelled_omission(self, state: &ReplayState) -> bool;
-    fn permits_unstarted_omission(
-        self,
-        state: &ReplayState,
-        shared_initialization: bool,
-        strict_reference: bool,
-    ) -> bool;
-}
-
-impl NativeDependencyAdapter for DependencyAdapter {
-    fn permits_cancelled_omission(self, state: &ReplayState) -> bool {
-        match self {
-            Self::Redis(index) => state
-                .protocols
-                .redis
-                .permits_cancelled_append_omission(index),
-            Self::Http(index) => state.permits_cancelled_http_omission(index),
-            _ => false,
-        }
-    }
-    fn protocol(self) -> ProtocolKind {
-        match self {
-            Self::Redis(_) | Self::RedisRpcPush(_) => ProtocolKind::Redis,
-            Self::Mysql(_) => ProtocolKind::Mysql,
-            Self::Http(_) => ProtocolKind::Http,
-            Self::Memcached(_) => ProtocolKind::Memcached,
-            Self::Motan(_) => ProtocolKind::Motan,
-            Self::Kafka(_) => ProtocolKind::Kafka,
-        }
-    }
-
-    fn delivery_state(self, state: &ReplayState) -> Option<ReplayExchangeStatus> {
-        match self {
-            Self::Redis(index) => state.protocols.redis.exchange_status(index),
-            Self::RedisRpcPush(index) => state.protocols.redis.pubsub.finite_rpc_push_status(index),
-            Self::Mysql(index) => state.protocols.mysql.exchange_status(index),
-            Self::Http(index) => state.http_exchange_status(index),
-            Self::Memcached(index) => state.protocols.memcached.finite_exchange_status(index),
-            Self::Motan(index) => state.protocols.motan.finite_exchange_status(index),
-            Self::Kafka(exchange) => state.protocols.kafka.finite_exchange_status(exchange),
-        }
-    }
-
-    fn permits_unstarted_omission(
-        self,
-        state: &ReplayState,
-        shared_initialization: bool,
-        strict_reference: bool,
-    ) -> bool {
-        match self {
-            // MySQL proves native setup/cleanup and transaction equivalence
-            // independently of the finite async inventory. It never permits an
-            // unobserved business statement or an already started delivery.
-            Self::Mysql(index) => state.protocols.mysql.permits_unstarted_omission(index),
-            Self::Http(index) => {
-                !strict_reference
-                    && shared_initialization
-                    && state.http_exchange_status(index) == Some(ReplayExchangeStatus::Available)
-            }
-            _ => false,
-        }
-    }
-}
-
-/// Transport connection failures retain their original independent finite identity.
+/// Handles retain their inventory owner. Resolving a reference never claims it.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::replay) enum ExchangeHandle {
     Registered(usize),
-    Native(DependencyAdapter),
+    Native(ProtocolExchange),
     Connect(usize),
 }
 
+pub(in crate::replay) fn resolve_case<P: ReplayProtocolSet, T>(
+    state: &RuntimeState<P>,
+    case: &str,
+    references: &[RecordedReference],
+    project: impl Fn(RecordedReference, ExchangeHandle) -> T,
+) -> Result<Vec<T>> {
+    let mut native_indices = Vec::with_capacity(references.len());
+    let mut protocol_refs = Vec::new();
+    for reference in references {
+        let native = state.native.core.resolve_reference(case, reference)?;
+        if native.is_none() && !matches!(reference.protocol(), "capture" | "connect") {
+            protocol_refs.push(reference.clone());
+        }
+        native_indices.push(native);
+    }
+    let resolved = P::resolve_references(state, case, &protocol_refs)?;
+    ensure!(
+        resolved.len() == protocol_refs.len(),
+        "native finite reference resolution returned a different inventory length"
+    );
+    let mut resolved = resolved.into_iter();
+
+    references
+        .iter()
+        .zip(native_indices)
+        .map(|(reference, native)| {
+            let handle = if let Some(index) = native {
+                ExchangeHandle::Registered(index)
+            } else {
+                match reference.protocol() {
+                    "capture" => {
+                        #[derive(serde::Deserialize)]
+                        #[serde(deny_unknown_fields)]
+                        struct Identity {
+                            exchange_id: uuid::Uuid,
+                        }
+                        let identity: Identity = reference.identity()?;
+                        ExchangeHandle::Registered(
+                            state.native.resolve(case, identity.exchange_id)?,
+                        )
+                    }
+                    "connect" => {
+                        #[derive(serde::Deserialize)]
+                        #[serde(deny_unknown_fields)]
+                        struct Identity {
+                            event_id: uuid::Uuid,
+                        }
+                        let identity: Identity = reference.identity()?;
+                        ExchangeHandle::Connect(
+                            state.connect_failures.resolve(case, identity.event_id)?,
+                        )
+                    }
+                    _ => ExchangeHandle::Native(
+                        resolved.next().expect("native reference count checked"),
+                    ),
+                }
+            };
+            Ok(project(reference.clone(), handle))
+        })
+        .collect()
+}
+
 impl ExchangeHandle {
-    pub(in crate::replay) fn permits_cancelled_omission(self, state: &ReplayState) -> bool {
+    pub(in crate::replay) fn permits_cancelled_omission<P: ReplayProtocolSet>(
+        self,
+        state: &RuntimeState<P>,
+    ) -> bool {
         match self {
-            Self::Native(adapter) => adapter.permits_cancelled_omission(state),
+            Self::Native(exchange) => P::permits_cancelled_omission(state, exchange),
             Self::Connect(_) | Self::Registered(_) => false,
         }
     }
-    pub(in crate::replay) fn shared_initialization(
+
+    pub(in crate::replay) fn shared_initialization<P: ReplayProtocolSet>(
         self,
-        state: &ReplayState,
-        http_completion: &[crate::policy::AsyncHttpEnd],
+        state: &RuntimeState<P>,
+        completion: &crate::recorder::async_api::CompletionRequirements,
     ) -> bool {
         match self {
-            Self::Native(DependencyAdapter::Http(index)) => {
-                state.http_shared_initialization(index, http_completion)
-            }
+            Self::Native(exchange) => P::shared_initialization(state, exchange, completion),
             _ => false,
         }
     }
 
-    pub(in crate::replay) fn delivery_state(
+    pub(in crate::replay) fn delivery_state<P: ReplayProtocolSet>(
         self,
-        state: &ReplayState,
+        state: &RuntimeState<P>,
     ) -> Option<ReplayExchangeStatus> {
         match self {
-            Self::Native(adapter) => adapter.delivery_state(state),
+            Self::Native(exchange) => P::exchange_status(state, exchange),
             Self::Connect(index) => state.connect_failures.status(index),
             Self::Registered(index) => state.native.core.exchanges.get(index).map(|exchange| {
                 state
@@ -150,21 +120,23 @@ impl ExchangeHandle {
         }
     }
 
-    pub(in crate::replay) fn permits_unstarted_omission(
+    pub(in crate::replay) fn permits_unstarted_omission<P: ReplayProtocolSet>(
         self,
-        state: &ReplayState,
+        state: &RuntimeState<P>,
         shared_initialization: bool,
         strict_reference: bool,
     ) -> bool {
         match self {
-            Self::Native(adapter) => {
-                adapter.permits_unstarted_omission(state, shared_initialization, strict_reference)
-            }
+            Self::Native(exchange) => P::permits_unstarted_omission(
+                state,
+                exchange,
+                shared_initialization,
+                strict_reference,
+            ),
             Self::Connect(_) | Self::Registered(_) => false,
         }
     }
 }
 
-pub(in crate::replay) fn contract(protocol: ProtocolKind) -> ProtocolContract {
-    ResourceProvider::for_protocol(protocol).contract()
-}
+#[cfg(test)]
+mod tests;

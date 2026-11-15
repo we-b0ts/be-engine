@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use traffic_protocol::{
     capture::{CaptureEvidence, CaptureFacts},
     evidence::{EvidenceAdapter, EvidenceRegistry},
-    observation::{NativeSummary, TrafficInteraction},
+    observation::{NativeSummary, RecordingSummary, TrafficInteraction},
 };
 
 #[derive(Serialize)]
@@ -49,6 +49,9 @@ impl EvidenceAdapter for CustomEvidence {
             operation: event["stream"].as_str()?.to_owned(),
         })
     }
+    fn recording_summary(&self) -> Option<Box<dyn RecordingSummary>> {
+        Some(Box::new(CustomMetrics::default()))
+    }
     fn process_summary_types(&self) -> &'static [&'static str] {
         &["custom_metrics"]
     }
@@ -64,6 +67,17 @@ impl EvidenceAdapter for CustomEvidence {
 #[derive(Default)]
 struct CustomMetrics {
     calls: u64,
+}
+impl RecordingSummary for CustomMetrics {
+    fn observe(&mut self, _: &Value) {
+        self.calls += 1;
+    }
+    fn finish(self: Box<Self>) -> anyhow::Result<std::collections::BTreeMap<String, Value>> {
+        Ok(std::collections::BTreeMap::from([(
+            "custom_metrics".into(),
+            self.value(),
+        )]))
+    }
 }
 impl NativeSummary for CustomMetrics {
     fn observe(&mut self, _event: &Value, _endpoint: Option<&str>) {
@@ -115,7 +129,7 @@ async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_s
             Uuid::new_v4(),
             "custom-capture-policy".into(),
             traffic_recording::RecordingClock::default(),
-            Arc::new(evidence),
+            Arc::new(evidence.clone()),
         );
         let mut files = crate::recorder::jsonl::JsonlWriterPool::new(
             crate::recorder::jsonl::JsonlBufferSettings {
@@ -172,6 +186,17 @@ async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_s
         )
         .unwrap();
         assert!(manifest.sealed && manifest.capture_complete);
+        crate::recorder::summary::write_case_dependency_summary(&case, Arc::new(evidence))
+            .await
+            .unwrap();
+        let summary: Value =
+            serde_json::from_slice(&std::fs::read(case.join("dependencies-summary.json")).unwrap())
+                .unwrap();
+        assert_eq!(summary["total_events"], 1);
+        assert_eq!(summary.get("custom_metrics").is_some(), installed);
+        if installed {
+            assert_eq!(summary["custom_metrics"]["calls"], 1);
+        }
         assert_eq!(manifest.coverage.admitted, 1);
         assert_eq!(manifest.coverage.terminal, 1);
         assert_eq!(manifest.semantic_inventory.total_mandatory, 1);

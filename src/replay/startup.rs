@@ -5,13 +5,13 @@ mod tests;
 
 pub(in crate::replay) use traffic_replay::StartupCounts as Counts;
 #[derive(Debug, Default)]
-pub(super) struct StartupPhase {
+pub(crate) struct StartupPhase {
     inventory: BTreeMap<String, usize>,
     boundary_case_id: Option<String>,
     unstarted: BTreeMap<String, usize>,
 }
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct StartupPhaseReport {
+pub(crate) struct StartupPhaseReport {
     pub status: &'static str,
     pub boundary_case_id: Option<String>,
     pub business_inventory: BTreeMap<String, usize>,
@@ -27,12 +27,12 @@ impl StartupPhaseReport {
     }
 }
 impl StartupPhase {
-    pub(in crate::replay) fn admit_existing_http(&mut self) {
-        if let Some(count) = self.unstarted.get_mut("http") {
+    pub(crate) fn admit_existing(&mut self, protocol: &str) {
+        if let Some(count) = self.unstarted.get_mut(protocol) {
             *count = count.saturating_sub(1);
         }
     }
-    pub(super) fn report(&self) -> StartupPhaseReport {
+    pub(crate) fn report(&self) -> StartupPhaseReport {
         StartupPhaseReport {
             status: if self.inventory.values().all(|n| *n == 0) {
                 "not_required"
@@ -62,7 +62,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
             .map(|(p, c)| (p, c.required))
             .collect();
     }
-    pub(super) fn close_startup_phase(&mut self, case: &str) {
+    pub(crate) fn close_startup_phase(&mut self, case: &str) {
         if self.startup_phase.boundary_case_id.is_some() {
             return;
         }

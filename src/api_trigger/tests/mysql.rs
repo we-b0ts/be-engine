@@ -125,7 +125,7 @@ impl Fixture {
     }
     pub(super) fn mysql_overlay(&self) -> Value {
         let before = fs::read(&self.report).unwrap();
-        crate::replay::reclassify_background_dependencies(
+        crate::protocols::replay::report::ownership::reclassify_background_dependencies(
             &self.policy,
             &self.report,
             &std::collections::BTreeMap::from([
@@ -402,9 +402,10 @@ fn mysql_apply_rejects_source_changes_and_mixed_redis_rules_share_origin_index()
 
 #[tokio::test]
 async fn mysql_recorder_retains_idle_candidates_and_keeps_active_calls_case_owned() {
-    use crate::recorder::{
-        CaseContext, MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, RecorderEvent,
+    use crate::protocols::recording::events::{
+        MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, RecorderEvent,
     };
+    use crate::recorder::CaseContext;
     use uuid::Uuid;
     let temp = tempfile::tempdir().unwrap();
     let mut config = crate::AppConfig::default();

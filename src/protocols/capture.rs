@@ -1,6 +1,6 @@
 //! Application composition of native capture evidence and transport observations.
 use crate::dependency::observation::ProtocolRef;
-use crate::recorder::RecorderEvent;
+use crate::protocols::recording::events::RecorderEvent;
 use traffic_protocol::capture::{CaptureEvidence, CaptureFacts, SemanticRequirement};
 
 impl CaptureEvidence for RecorderEvent {

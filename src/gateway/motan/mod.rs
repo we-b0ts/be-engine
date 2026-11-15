@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::config::MotanGatewayConfig;
-use crate::recorder::{CaseContext, ProxyErrorEvent, RecorderEvent};
+use crate::protocols::recording::events::{ProxyErrorEvent, RecorderEvent};
+use crate::recorder::CaseContext;
 use crate::recording_control::RecordingListener;
 
 mod case;

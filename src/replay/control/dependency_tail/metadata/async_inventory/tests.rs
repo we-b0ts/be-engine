@@ -4,7 +4,7 @@ use serde_json::json;
 #[tokio::test]
 async fn source_response_selects_the_proven_http_end_without_requiring_background() {
     let temp = tempfile::tempdir().unwrap();
-    let rules = BTreeMap::from([("POST /jobs".into(), serde_json::from_value(json!([
+    let rules: BTreeMap<String, crate::policy::AsyncApiRules> = BTreeMap::from([("POST /jobs".into(), serde_json::from_value(json!([
         {"when_response":{"/status":"in_progress"},"end":[{"redis":{"operation":"DEL","key":"done:*","occurrence":2}}]},
         {"when_response":{"/status":"queued"},"end":[{"http":{"method":"POST","endpoint":"executor.test:80","path":"/submit"}}]}
     ])).unwrap())]);
@@ -36,23 +36,33 @@ async fn source_response_selects_the_proven_http_end_without_requiring_backgroun
     tokio::fs::write(temp.path().join("dependencies.jsonl"), event.to_string())
         .await
         .unwrap();
-    let metadata = from_complete_source(temp.path(), &rules, Duration::from_secs(2))
-        .await
-        .unwrap()
-        .unwrap();
+    let metadata = from_complete_source(
+        temp.path(),
+        &rules.clone().into(),
+        Duration::from_secs(2),
+        crate::protocols::default_providers().evidence(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(
         metadata.references,
-        [RecordedReference::Http { exchange_id }]
+        [RecordedReference::exchange("http", exchange_id)]
     );
     assert!(!metadata.source_stop_required);
     event["uri"] = json!("/unrelated");
     tokio::fs::write(temp.path().join("dependencies.jsonl"), event.to_string())
         .await
         .unwrap();
-    let error = from_complete_source(temp.path(), &rules, Duration::from_secs(2))
-        .await
-        .err()
-        .unwrap();
+    let error = from_complete_source(
+        temp.path(),
+        &rules.clone().into(),
+        Duration::from_secs(2),
+        crate::protocols::default_providers().evidence(),
+    )
+    .await
+    .err()
+    .unwrap();
     assert!(error.to_string().contains("no proven completion"));
     tokio::fs::write(
         temp.path().join("expected-response.json"),
@@ -61,16 +71,21 @@ async fn source_response_selects_the_proven_http_end_without_requiring_backgroun
     .await
     .unwrap();
     assert!(
-        from_complete_source(temp.path(), &rules, Duration::from_secs(2))
-            .await
-            .unwrap()
-            .is_none()
+        from_complete_source(
+            temp.path(),
+            &rules.clone().into(),
+            Duration::from_secs(2),
+            crate::protocols::default_providers().evidence()
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
 }
 
 #[test]
 fn end_only_source_inventory_requires_every_native_intermediate_effect() {
-    let rules = BTreeMap::from([(
+    let rules: BTreeMap<String, crate::policy::AsyncApiRules> = BTreeMap::from([(
         "POST /jobs".into(),
         serde_json::from_value(json!([
             {"end":[{"http":{"method":"POST","endpoint":"executor.test:80","path":"/done"}}]}
@@ -102,7 +117,12 @@ fn end_only_source_inventory_requires_every_native_intermediate_effect() {
         .iter()
         .map(|row| format!("{row}\n"))
         .collect::<String>();
-    let (refs, stop) = complete_inventory(&scope, raw.as_bytes()).unwrap();
+    let (refs, stop) = complete_inventory(
+        &scope,
+        raw.as_bytes(),
+        crate::protocols::default_providers().evidence(),
+    )
+    .unwrap();
     assert_eq!(
         refs.len(),
         8,
@@ -110,35 +130,14 @@ fn end_only_source_inventory_requires_every_native_intermediate_effect() {
     );
     assert!(!stop);
     for reference in [
-        RecordedReference::Memcached {
-            connection_id: connection,
-            sequence: 1,
-        },
-        RecordedReference::Motan {
-            connection_id: connection,
-            sequence: 2,
-        },
-        RecordedReference::KafkaProduce {
-            connection_id: connection,
-            sequence: 31,
-        },
-        RecordedReference::KafkaProduce {
-            connection_id: connection,
-            sequence: 32,
-        },
-        RecordedReference::KafkaFetch {
-            connection_id: connection,
-            sequence: 4,
-        },
-        RecordedReference::KafkaDelivery {
-            connection_id: connection,
-            sequence: 41,
-        },
-        RecordedReference::RedisRpcPush {
-            connection_id: connection,
-            sequence: 5,
-        },
-        RecordedReference::Http { exchange_id: end },
+        RecordedReference::connection("memcached", connection, 1),
+        RecordedReference::connection("motan", connection, 2),
+        RecordedReference::connection("kafka_produce", connection, 31),
+        RecordedReference::connection("kafka_produce", connection, 32),
+        RecordedReference::connection("kafka_fetch", connection, 4),
+        RecordedReference::connection("kafka_delivery", connection, 41),
+        RecordedReference::connection("redis_rpc_push", connection, 5),
+        RecordedReference::exchange("http", end),
     ] {
         assert!(refs.contains(&reference));
     }
@@ -149,7 +148,12 @@ fn end_only_source_inventory_requires_every_native_intermediate_effect() {
         .map(|row| format!("{row}\n"))
         .collect::<String>();
     assert!(
-        complete_inventory(&scope, incomplete.as_bytes()).is_err(),
+        complete_inventory(
+            &scope,
+            incomplete.as_bytes(),
+            crate::protocols::default_providers().evidence()
+        )
+        .is_err(),
         "native request sequence cannot stand in for a missing effect identity"
     );
 }

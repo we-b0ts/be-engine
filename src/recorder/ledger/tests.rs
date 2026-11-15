@@ -2,7 +2,8 @@
 use super::*;
 use crate::config::TrafficJsonlMode;
 use crate::dependency::observation::{ProtocolRef, RecordingManifest, ScopeIndex};
-use crate::recorder::{CaseContext, DependencyConnectFailureEvent, RecorderEvent};
+use crate::protocols::recording::events::{DependencyConnectFailureEvent, RecorderEvent};
+use crate::recorder::CaseContext;
 use crate::{AppConfig, AppState};
 use std::time::Duration;
 
@@ -370,7 +371,7 @@ async fn actual_overlapping_http_selectors_require_a_unique_source_task() {
             Some("worker.test"),
         );
         state.record_event_for_targets(
-            RecorderEvent::HttpExchange(crate::recorder::HttpExchangeEvent {
+            RecorderEvent::HttpExchange(crate::protocols::recording::events::HttpExchangeEvent {
                 id: Uuid::new_v4(),
                 timestamp: Utc::now(),
                 request_started_at: Utc::now(),
@@ -451,7 +452,7 @@ async fn compact_semantic_inventory_counts_unsupported_case_effects_without_coun
     let guard = state.try_reserve_active_case(case.clone()).unwrap();
     guard.activate_dependencies().unwrap();
     state.record_event_for_targets(
-        RecorderEvent::UdpDatagram(crate::recorder::UdpDatagramEvent {
+        RecorderEvent::UdpDatagram(crate::protocols::recording::events::UdpDatagramEvent {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             listen_addr: "127.0.0.1:4002".into(),
@@ -492,18 +493,20 @@ async fn compact_semantic_inventory_counts_unsupported_case_effects_without_coun
 async fn unparsed_tcp_payload_remains_a_mandatory_unsupported_obligation() {
     let (_temp, state) = state().await;
     state.record_event_for_targets(
-        RecorderEvent::TcpGatewayConnection(crate::recorder::TcpGatewayConnectionEvent {
-            id: Uuid::new_v4(),
-            timestamp: Utc::now(),
-            client_addr: None,
-            domain: Some("opaque.test".into()),
-            fake_addr: "198.18.0.1:9000".into(),
-            upstream_addr: Some("127.0.0.1:9000".into()),
-            client_to_server_bytes: 1,
-            server_to_client_bytes: 2,
-            duration_ms: 0,
-            error: None,
-        }),
+        RecorderEvent::TcpGatewayConnection(
+            crate::protocols::recording::events::TcpGatewayConnectionEvent {
+                id: Uuid::new_v4(),
+                timestamp: Utc::now(),
+                client_addr: None,
+                domain: Some("opaque.test".into()),
+                fake_addr: "198.18.0.1:9000".into(),
+                upstream_addr: Some("127.0.0.1:9000".into()),
+                client_to_server_bytes: 1,
+                server_to_client_bytes: 2,
+                duration_ms: 0,
+                error: None,
+            },
+        ),
         start(&state),
     );
     state.recorder().finish_run().await.unwrap();

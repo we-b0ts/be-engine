@@ -64,9 +64,11 @@ struct End {
 pub(super) async fn from_complete_source(
     case_dir: &Path,
     execution_allowance: Duration,
+    evidence: &EvidenceRegistry,
 ) -> Result<Option<Metadata>> {
     let directory = case_dir.to_owned();
-    tokio::task::spawn_blocking(move || load(&directory, execution_allowance))
+    let evidence = evidence.clone();
+    tokio::task::spawn_blocking(move || load(&directory, execution_allowance, &evidence))
         .await
         .context("interaction dependency inventory preparation failed")?
 }
@@ -86,7 +88,11 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
         .context("invalid interaction metadata")
 }
 
-fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadata>> {
+fn load(
+    case_dir: &Path,
+    execution_allowance: Duration,
+    evidence: &EvidenceRegistry,
+) -> Result<Option<Metadata>> {
     let Some(request) = read_json::<Request>(&case_dir.join("request.json"))? else {
         return Ok(None);
     };
@@ -164,7 +170,7 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
     }
     let bytes = crate::dependency_index::scoped::read_bytes(&case_dir.join("dependencies.jsonl"))
         .context("interaction completion requires its original dependency inventory")?;
-    let Some(references) = inventory(bytes.as_slice())? else {
+    let Some(references) = inventory(bytes.as_slice(), evidence)? else {
         return Ok(None);
     };
     let budget = execution_allowance
@@ -198,27 +204,20 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
     }))
 }
 
-fn inventory(reader: impl Read) -> Result<Option<BTreeSet<RecordedReference>>> {
+fn inventory(
+    reader: impl Read,
+    evidence: &EvidenceRegistry,
+) -> Result<Option<BTreeSet<RecordedReference>>> {
     let mut references = BTreeSet::new();
     for event in serde_json::Deserializer::from_reader(reader).into_iter::<Value>() {
         let event = event.context("invalid interaction dependency")?;
-        if matches!(
-            event["event_type"].as_str(),
-            Some(
-                "memcached_exchange"
-                    | "motan_exchange"
-                    | "kafka_produce"
-                    | "kafka_fetch"
-                    | "kafka_delivery"
-            )
-        ) || event["lifecycle_cleanup"] == true
-        {
+        if !evidence.supports_interaction_inventory(&event) || event["lifecycle_cleanup"] == true {
             // This automatic legacy fallback cannot prove these obligations.
             // Preserve their existing cleanup path, rather than rejecting a
             // previously replayable interaction or claiming a partial inventory.
             return Ok(None);
         }
-        if let Some(reference) = reference(&event)? {
+        if let Some(reference) = reference(&event, evidence)? {
             ensure!(
                 references.insert(reference),
                 "interaction inventory repeats an exchange"

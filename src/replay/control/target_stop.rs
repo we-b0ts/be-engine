@@ -1,9 +1,9 @@
 //! A Source shutdown is an engine-owned session boundary, before Case release.
 use super::*;
 
-pub(super) async fn prepare(
+pub(super) async fn prepare<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Value {
     let result = async {
         let case = request
@@ -35,9 +35,9 @@ pub(super) async fn prepare(
 
 /// Only the engine's trusted controller sends end_stopped, after its runtime
 /// stop receipt. Ordinary end cannot release this Case or admit another input.
-pub(super) async fn confirm(
+pub(super) async fn confirm<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Result<bool> {
     let case = request.case_id.as_deref().context("end requires case_id")?;
     let mut state = state.lock().await;

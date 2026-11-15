@@ -72,7 +72,7 @@ pub(super) async fn request(client: &mut TcpStream, parts: &[&str], expected: &[
 }
 #[tokio::test]
 async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_policy_usage() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("apis/models/case");
     std::fs::create_dir_all(&case).unwrap();
     std::fs::write(
@@ -111,7 +111,7 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
     }
     task.abort();
     let policy = temp.path().join("policy.yaml");
-    crate::replay::write_policy_fixture(
+    crate::policy::runtime::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

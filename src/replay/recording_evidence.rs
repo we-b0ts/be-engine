@@ -2,11 +2,11 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-pub(in crate::replay) fn files(source: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
+pub(crate) fn files(source: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
     crate::dependency_index::recording_files(source)
 }
 
-pub(in crate::replay) fn case_id(file: &Path) -> Result<String> {
+pub(crate) fn case_id(file: &Path) -> Result<String> {
     Ok(file
         .parent()
         .and_then(Path::file_name)

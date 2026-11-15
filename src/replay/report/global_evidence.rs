@@ -17,28 +17,31 @@ mod compact_tests;
 pub(crate) mod preparation;
 mod projection;
 mod protocol;
-pub(in crate::replay) mod regular;
+pub(crate) mod regular;
 mod regular_store;
-pub(in crate::replay) mod regular_usage;
+pub(crate) mod regular_usage;
 use protocol::{NativeInventory, ProtocolEvidence};
 
 #[cfg(test)]
-use crate::protocols::replay::report::PROTOCOLS;
+use crate::protocols::replay::report::{
+    PROTOCOLS,
+    artifacts::{read_global_dependency_page, stage_global_evidence},
+};
 
-pub(in crate::replay) struct GlobalDetails {
-    pub(in crate::replay) manifests: Value,
+pub(crate) struct GlobalDetails {
+    pub(crate) manifests: Value,
     pages: Vec<Paged<Value>>,
 }
 
 impl GlobalDetails {
-    pub(in crate::replay) fn commit(&self) {
+    pub(crate) fn commit(&self) {
         for pages in &self.pages {
             pages.persist();
         }
     }
 }
 
-pub(in crate::replay) async fn prepare<P: ReplayProtocolSet>(
+pub(crate) async fn prepare<P: ReplayProtocolSet>(
     state: Arc<Mutex<RuntimeState<P>>>,
     report_path: &Path,
 ) -> Result<GlobalDetails> {
@@ -104,11 +107,12 @@ pub struct GlobalDependencyPage {
     pub next_offset: Option<usize>,
 }
 
-pub fn read_global_dependency_page(
+pub(crate) fn read_page(
     report: &Path,
     protocol: &str,
     offset: usize,
     limit: usize,
+    codecs: &traffic_protocol::report::CodecRegistry,
 ) -> Result<GlobalDependencyPage> {
     ensure!(
         (1..=1000).contains(&limit),
@@ -126,13 +130,16 @@ pub fn read_global_dependency_page(
             .is_some_and(|sections| sections.contains_key(protocol)),
         "unsupported Global dependency protocol {protocol:?}"
     );
-    let inventory =
-        NativeInventory::open(report_path, protocol, &report["global_evidence"][protocol])?;
+    let codec = codecs.codec(protocol);
+    let inventory = NativeInventory::open(
+        report_path,
+        protocol,
+        &report["global_evidence"][protocol],
+        codec.as_deref(),
+    )?;
     let native_count = inventory.count()?;
     // Reclassification is reversible and updates the report, while native pages
     // remain immutable. Project its Case witnesses after the native inventory.
-    let providers = crate::protocols::default_providers();
-    let codec = providers.report_codec(protocol);
     let events = codec.as_ref().map_or(
         &report["dependency_protocols"][protocol]["unused_global"],
         |codec| codec.reclassified_rows(&report, protocol),
@@ -171,7 +178,11 @@ pub fn read_global_dependency_page(
     })
 }
 
-pub(crate) fn stage_global_evidence(source: &Path, destination: &Path) -> Result<Option<Value>> {
+pub(crate) fn stage(
+    source: &Path,
+    destination: &Path,
+    codecs: &traffic_protocol::report::CodecRegistry,
+) -> Result<Option<Value>> {
     let mut report: Value = serde_json::from_slice(&std::fs::read(source)?)?;
     let Some(manifests) = report
         .get_mut("global_evidence")
@@ -191,7 +202,13 @@ pub(crate) fn stage_global_evidence(source: &Path, destination: &Path) -> Result
     let mut rebound = false;
     for (protocol, value) in manifests.iter_mut() {
         let original = value.clone();
-        protocol::stage(value, protocol, source, destination)?;
+        protocol::stage(
+            value,
+            protocol,
+            source,
+            destination,
+            codecs.codec(protocol).as_deref(),
+        )?;
         rebound |= *value != original;
     }
     Ok(rebound.then_some(report))

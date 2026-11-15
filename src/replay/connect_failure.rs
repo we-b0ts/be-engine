@@ -68,7 +68,7 @@ pub(super) struct Inventory {
 }
 
 #[derive(Debug, Default, Serialize)]
-pub(super) struct Report {
+pub(crate) struct Report {
     matched_count: usize,
     unused_case: Vec<Observation>,
     failed_case: Vec<Observation>,
@@ -121,9 +121,13 @@ impl Inventory {
                 providers,
             )?;
             ensure!(
-                cleanup.contains(&control::dependency_tail::RecordedReference::Connect {
-                    event_id: record.id
-                }) == (record.failure_kind == "engine_cancelled"),
+                cleanup.contains(
+                    &control::dependency_tail::RecordedReference::new(
+                        "connect",
+                        serde_json::json!({"event_id": record.id})
+                    )
+                    .expect("connection failure identity")
+                ) == (record.failure_kind == "engine_cancelled"),
                 "engine-cancelled connection requires its exact authenticated Source-stop cleanup reference"
             );
             ensure!(
@@ -147,7 +151,7 @@ impl Inventory {
                 predecessors: Vec::new(),
             });
         }
-        order::prepare(self, case_id, path).await?;
+        order::prepare(self, case_id, path, providers.evidence()).await?;
         Ok(())
     }
 
@@ -215,10 +219,10 @@ impl Inventory {
 
 /// Claim a real Target connection once, then reproduce the observed peer
 /// termination. Ordinary protocol dispatch owns connections with no such slot.
-pub(super) async fn deliver(
+pub(super) async fn deliver<P: ReplayProtocolSet>(
     stream: &mut TcpStream,
     target: &ReplayTarget,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Result<bool> {
     let (index, case_id, record) = {
         let mut state = state.lock().await;
@@ -251,9 +255,11 @@ pub(super) async fn deliver(
     let result = if record.failure_kind == "engine_cancelled" {
         let gate = state.lock().await.async_cleanup_gate(
             &case_id,
-            control::dependency_tail::RecordedReference::Connect {
-                event_id: record.id,
-            },
+            control::dependency_tail::RecordedReference::new(
+                "connect",
+                serde_json::json!({"event_id": record.id}),
+            )
+            .expect("connection failure identity"),
         );
         if let Some(gate) = gate {
             state.lock().await.connect_failures.entries[index].status =
@@ -294,10 +300,10 @@ pub(super) async fn deliver(
     Ok(true)
 }
 
-async fn terminate(
+async fn terminate<P: ReplayProtocolSet>(
     stream: &mut TcpStream,
     record: &RecordedFailure,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case: &str,
 ) -> Result<()> {
     let deadline =

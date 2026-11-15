@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::AppState;
 use crate::active_case::DependencyTargets;
-use crate::recorder::RecorderEvent;
+use crate::protocols::recording::events::RecorderEvent;
 
 use traffic_protocol_mysql::capture::MysqlQueryCompletion;
 

@@ -1,8 +1,9 @@
 //! Adapters observe genuine native wire delivery from a current sealed Source.
 use super::*;
-use crate::recorder::{
-    CaseContext, MemcachedExchangeEvent, MotanExchangeEvent, Recorder, RecorderEvent, capture_body,
+use crate::protocols::recording::events::{
+    MemcachedExchangeEvent, MotanExchangeEvent, RecorderEvent,
 };
+use crate::recorder::{CaseContext, Recorder, capture_body};
 use crate::replay::{ReplayConfig, ReplayProtocol, ReplayRuntime, ReplayTarget};
 use anyhow::Result;
 use chrono::Utc;
@@ -13,6 +14,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::Mutex,
 };
+use uuid::Uuid;
 
 const CASE: Uuid = Uuid::from_u128(123);
 
@@ -183,10 +185,10 @@ async fn native_connection(
         };
         match protocol {
             ReplayProtocol::Memcached => {
-                crate::replay::memcached::handle_connection(stream, target, state).await
+                crate::protocols::replay::memcached::handle_connection(stream, target, state).await
             }
             ReplayProtocol::Motan => {
-                crate::replay::motan::handle_connection(stream, target, state).await
+                crate::protocols::replay::motan::handle_connection(stream, target, state).await
             }
             _ => unreachable!(),
         }
@@ -214,14 +216,8 @@ async fn memcached_and_motan_registry_handles_wait_for_real_native_delivery() {
     )
     .await;
     let references = [
-        RecordedReference::Memcached {
-            connection_id: connection,
-            sequence: 1,
-        },
-        RecordedReference::Motan {
-            connection_id: connection,
-            sequence: 2,
-        },
+        RecordedReference::connection("memcached", connection, 1),
+        RecordedReference::connection("motan", connection, 2),
     ];
     let handles = {
         let state = runtime.state.lock().await;

@@ -4,7 +4,7 @@ use crate::interaction::model::Protocol as InteractionProtocol;
 
 pub(super) fn observe(
     drafts: &mut Drafts,
-    pair: &crate::replay::ResponsePayloadPair,
+    pair: &crate::primary_protocol::assertion::ResponsePayloadPair,
     api: &str,
     witness: &str,
     schemas: Option<&CompiledPolicy>,
@@ -41,7 +41,7 @@ pub(super) fn observe(
                 .get(index)
                 .and_then(|event| event_clock(pair.interaction_times.target, event.offset_ms)),
         };
-        let Ok(source) = crate::replay::decode_sse(&source.message) else {
+        let Ok(source) = crate::primary_protocol::assertion::decode_sse(&source.message) else {
             continue;
         };
         let Some(source_json) = crate::json_value::parse(source.data.as_bytes()) else {
@@ -49,7 +49,7 @@ pub(super) fn observe(
         };
         let target = targets
             .get(index)
-            .and_then(|e| crate::replay::decode_sse(&e.message).ok())
+            .and_then(|e| crate::primary_protocol::assertion::decode_sse(&e.message).ok())
             .filter(|e| e.event == source.event);
         let event = source.event.as_deref().unwrap_or("message");
         let selector = source_json

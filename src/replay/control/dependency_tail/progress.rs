@@ -47,45 +47,12 @@ impl NoProgress {
     }
 }
 
-pub(in crate::replay::control) fn counts(state: &ReplayState, case: &str) -> Vec<usize> {
+pub(crate) fn counts<P: ReplayProtocolSet>(state: &RuntimeState<P>, case: &str) -> Vec<usize> {
+    let mut counts = Vec::with_capacity(8);
+    state
+        .protocols
+        .append_matched_dependency_counts(case, &mut counts);
     let case = Some(case);
-    let mut counts = vec![
-        state
-            .protocols
-            .mysql
-            .events
-            .matched_query_details
-            .next_event_index(case),
-        state
-            .protocols
-            .http_events
-            .matched_details
-            .next_event_index(case),
-        state
-            .protocols
-            .redis
-            .events
-            .matched_details
-            .next_event_index(case),
-        state
-            .protocols
-            .memcached
-            .events
-            .matched_details
-            .next_event_index(case),
-        state
-            .protocols
-            .motan
-            .events
-            .matched_details
-            .next_event_index(case),
-        state
-            .protocols
-            .kafka
-            .events
-            .matched_details
-            .next_event_index(case),
-    ];
     if !state.native.core.exchanges.is_empty() {
         counts.push(
             state
@@ -108,9 +75,9 @@ pub(in crate::replay::control) fn counts(state: &ReplayState, case: &str) -> Vec
     counts
 }
 
-pub(super) fn waiting(
+pub(super) fn waiting<P: ReplayProtocolSet>(
     tail: &CaseTail,
-    state: &ReplayState,
+    state: &RuntimeState<P>,
     progress: &NoProgress,
     now: Instant,
     remaining: usize,

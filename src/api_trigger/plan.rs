@@ -157,7 +157,8 @@ pub(super) fn plan(
     let index = super::load(source, &rules)?;
     let original_replay = fs::read(replay_path)?;
     let raw = std::str::from_utf8(&original_replay)?;
-    let replay: Value = crate::replay::report::parse_background_dependency_evidence(raw)?;
+    let replay: Value =
+        crate::protocols::replay::report::ownership::parse_background_dependency_evidence(raw)?;
     ensure!(
         replay["version"].as_u64().is_some_and(|v| v >= 6) && replay["finalized"] == true,
         "API trigger plan requires finalized version-6-or-newer Replay evidence"

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) use traffic_replay::ReplaySource;
+pub(crate) use traffic_replay::ReplaySource;
 
 pub(crate) use traffic_protocol::connection::Endpoint as TargetKey;
 
@@ -33,14 +33,14 @@ impl ReplayProtocol {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ReplayMode {
+pub(crate) enum ReplayMode {
     Single,
     Collection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ReplayCaseStatus {
+pub(crate) enum ReplayCaseStatus {
     Pending,
     Active,
     Ended,
@@ -48,22 +48,31 @@ pub(super) enum ReplayCaseStatus {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReplayCase {
-    pub(super) id: String,
-    pub(super) dir: PathBuf,
-    pub(super) dependencies_path: PathBuf,
-    pub(super) status: ReplayCaseStatus,
+    pub(crate) id: String,
+    pub(crate) dir: PathBuf,
+    pub(crate) dependencies_path: PathBuf,
+    pub(crate) status: ReplayCaseStatus,
+}
+
+impl ReplayCase {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+    pub(crate) fn directory(&self) -> &Path {
+        &self.dir
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct ReplayCaseReport {
-    pub(super) case_id: String,
-    pub(super) case_dir: String,
-    pub(super) dependencies_path: String,
-    pub(super) status: ReplayCaseStatus,
+pub(crate) struct ReplayCaseReport {
+    pub(crate) case_id: String,
+    pub(crate) case_dir: String,
+    pub(crate) dependencies_path: String,
+    pub(crate) status: ReplayCaseStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) source_request_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) source_request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) target_request_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) target_request_started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(crate) fn register_replay_target(
@@ -74,7 +83,7 @@ pub(crate) fn register_replay_target(
     register_replay_target_at(targets, target, protocol, None)
 }
 
-pub(super) fn register_replay_target_at(
+pub(crate) fn register_replay_target_at(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     target: &TargetKey,
     protocol: ReplayProtocol,
@@ -123,7 +132,7 @@ pub(super) fn register_replay_target_at(
     Ok(())
 }
 
-pub(super) async fn discover_replay_cases(
+pub(crate) async fn discover_replay_cases(
     root_dir: &Path,
     selected_case_ids: &BTreeSet<String>,
 ) -> Result<(ReplayMode, BTreeMap<String, ReplayCase>, Option<String>)> {
@@ -297,7 +306,7 @@ fn path_file_name(path: &Path) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(super) fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {
+pub(crate) fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {
     let mut current = Some(start);
     while let Some(dir) = current {
         let candidate = dir.join(filename);
@@ -309,7 +318,7 @@ pub(super) fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
-pub(super) fn assign_fake_ips(
+pub(crate) fn assign_fake_ips(
     targets: BTreeMap<TargetKey, ReplayTarget>,
     fake_cidr: Ipv4Cidr,
 ) -> Result<Vec<ReplayTarget>> {
@@ -383,7 +392,7 @@ pub(super) fn assign_fake_ips(
     Ok(out)
 }
 
-pub(super) use traffic_protocol::observation::normalize_host;
+pub(crate) use traffic_protocol::observation::normalize_host;
 
 #[cfg(test)]
 mod tests {

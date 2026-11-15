@@ -89,10 +89,22 @@ pub(super) fn validate(
                 // reply from the original record before authorizing ownership.
                 return Ok(selector.matches_recorded_request(event));
             }
-            crate::replay::source_owned_match(event, role.case_id(), rule, &ports, &origins)
+            crate::protocols::replay::report::ownership::source_owned_match(
+                event,
+                role.case_id(),
+                rule,
+                &ports,
+                &origins,
+            )
         },
         |path, role, event| {
-            if !crate::replay::source_owned_match(event, role.case_id(), rule, &ports, &origins)? {
+            if !crate::protocols::replay::report::ownership::source_owned_match(
+                event,
+                role.case_id(),
+                rule,
+                &ports,
+                &origins,
+            )? {
                 return Ok(());
             }
             match event["event_type"].as_str() {
@@ -123,16 +135,27 @@ pub(super) fn validate(
                     )?;
                 }
                 Some("http_exchange") => {
-                    crate::replay::http_source_witness(event, Surface::DependencyRequest, path)?;
+                    crate::protocols::replay::http_source_witness(
+                        event,
+                        Surface::DependencyRequest,
+                        path,
+                    )?;
                     // Ownership cannot hide an incomplete or failed dependency.
                     ensure!(
                         event["error"].is_null() && event["response_status"].is_u64(),
                         "Source-owned HTTP response is failed or incomplete"
                     );
-                    crate::replay::http_source_witness(event, Surface::DependencyResponse, path)?;
+                    crate::protocols::replay::http_source_witness(
+                        event,
+                        Surface::DependencyResponse,
+                        path,
+                    )?;
                 }
                 Some("mysql_exchange") => {
-                    crate::replay::mysql_source_witness(event, Surface::DependencyResponse)?;
+                    crate::protocols::replay::mysql_source_witness(
+                        event,
+                        Surface::DependencyResponse,
+                    )?;
                     ensure!(
                         event["outcome"] == "response"
                             && event["parse_warnings"]
@@ -228,8 +251,10 @@ fn validate_native_frames(event: &Value) -> Result<()> {
             crate::redis::frame_kind(&bytes::Bytes::from(response))?;
         }
         Some("memcached_exchange") => {
-            let envelope =
-                crate::replay::memcached_source_witness(event, Surface::DependencyResponse)?;
+            let envelope = crate::protocols::replay::memcached::contracts::source_witness(
+                event,
+                Surface::DependencyResponse,
+            )?;
             crate::memcached::value_slot::witness_values(&envelope, true)?;
         }
         Some("motan_exchange") => {

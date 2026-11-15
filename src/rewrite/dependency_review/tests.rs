@@ -2,7 +2,8 @@
 use super::*;
 use crate::{
     dependency::attribution::AttributionProof,
-    recorder::{HttpExchangeEvent, Recorder, RecorderEvent, RedisExchangeEvent, capture_body},
+    protocols::recording::events::{HttpExchangeEvent, RecorderEvent, RedisExchangeEvent},
+    recorder::{Recorder, capture_body},
 };
 use uuid::Uuid;
 

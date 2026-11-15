@@ -6,9 +6,9 @@ pub(super) struct DnsQuestion {
     pub(super) question_end: usize,
 }
 
-pub(super) async fn handle_dns_query(
+pub(super) async fn handle_dns_query<P: ReplayProtocolSet>(
     socket: Arc<UdpSocket>,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
     query: Vec<u8>,
     peer: SocketAddr,
 ) -> Result<()> {
@@ -128,13 +128,13 @@ pub(super) fn read_dns_name(packet: &[u8], offset: usize) -> Result<(String, usi
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Ipv4Cidr {
+pub(crate) struct Ipv4Cidr {
     pub(super) network: u32,
     pub(super) size: u32,
 }
 
 impl Ipv4Cidr {
-    pub(super) fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         let (ip, prefix) = value
             .split_once('/')
             .ok_or_else(|| anyhow!("CIDR must contain / prefix: {value}"))?;

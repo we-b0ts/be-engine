@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 
-pub(in crate::replay) fn protocol_snapshot(
+pub(crate) fn protocol_snapshot(
     report: &Path,
     protocol: &str,
     layout: Vec<usize>,

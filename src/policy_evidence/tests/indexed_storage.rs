@@ -99,7 +99,7 @@ fn large_source_response_uses_original_record_and_detects_mutation() {
     let bytes = serde_json::to_vec(&event).unwrap();
     let source = artifacts.join("dependencies.jsonl");
     std::fs::write(&source, &bytes).unwrap();
-    let raw = crate::replay::mysql_source_witness(&event, metadata.surface).unwrap();
+    let raw = crate::protocols::replay::mysql_source_witness(&event, metadata.surface).unwrap();
     store
         .register_source_record(
             &metadata.source,

@@ -1,5 +1,6 @@
 use super::*;
-use crate::recorder::{DependencyConnectFailureEvent, Recorder, RecorderEvent};
+use crate::protocols::recording::events::{DependencyConnectFailureEvent, RecorderEvent};
+use crate::recorder::Recorder;
 
 #[tokio::test]
 async fn case_tail_attribution_reuses_unchanged_native_indexes_and_rebuilds_changed_membership() {

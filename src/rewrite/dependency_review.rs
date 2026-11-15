@@ -508,8 +508,12 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
     drop(lock);
     drop(original);
     if let Some(source) = state.case_source.as_deref()
-        && let Err(error) =
-            crate::replay::prewarm_attribution_indexes(&root, source, &changed_scopes)
+        && let Err(error) = crate::replay::prewarm_attribution_indexes(
+            &root,
+            source,
+            &changed_scopes,
+            crate::protocols::replay::source::validate_index_record,
+        )
     {
         tracing::warn!(%error, "attribution saved; Replay will build any missing dependency indexes");
     }

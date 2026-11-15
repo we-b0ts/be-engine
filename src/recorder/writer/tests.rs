@@ -3,9 +3,8 @@ use uuid::Uuid;
 
 use crate::active_case::ActiveCaseRegistry;
 use crate::dependency::DependencyExchangeOutcome;
-use crate::recorder::{
-    GlobalDependencyAttribution, Recorder, RecorderEvent, RedisExchangeEvent, capture_body,
-};
+use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
+use crate::recorder::{GlobalDependencyAttribution, Recorder, capture_body};
 
 #[tokio::test]
 async fn summary_counts_snapshot_reuse_without_creating_another_consumption_slot() {

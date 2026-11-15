@@ -4,7 +4,7 @@ use serde_json::json;
 mod generated_queue;
 
 struct Fixture {
-    _temp: crate::replay::policy::test_fixture::ManagedFixtureDirectory,
+    _temp: crate::policy::runtime::test_fixture::ManagedFixtureDirectory,
     case: PathBuf,
     policy: PathBuf,
     report: PathBuf,
@@ -12,7 +12,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new(records: Vec<Value>) -> Self {
-        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+        let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
         let root = temp.path();
         let local = root.join(".traffic-e2e/local");
         let case = local.join("recordings/run/case");
@@ -37,7 +37,7 @@ impl Fixture {
             .join("\n");
         std::fs::write(case.join("dependencies.jsonl"), &immutable).unwrap();
         let policy = root.join(".traffic-e2e/policy.yaml");
-        crate::replay::write_policy_fixture(
+        crate::policy::runtime::write_policy_fixture(
             &policy,
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
@@ -51,7 +51,7 @@ impl Fixture {
         }
     }
     fn install(&self, id: &str, redis: Value) -> anyhow::Result<()> {
-        crate::replay::install_dependency_rule_fixture(
+        crate::policy::runtime::install_dependency_rule_fixture(
             &self.policy,
             json!({"id":id,"protocol":"redis","target":{"host":"redis.internal","port":6379},
                 "case":{"method":"PUT","path":"/scenario"},"source_evidence":"Session:create declares key/JSON identity references and request-relative expiry","redis":redis}),

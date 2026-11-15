@@ -250,7 +250,8 @@ fn compatible_legacy_time_delivery_is_translated_once_and_conflicts_fail() {
 
 #[test]
 fn authenticated_global_read_copy_does_not_authorize_other_values() {
-    use crate::value_contract::time_copies::{TimeCopyPosition, TimeCopyStore};
+    use crate::policy::runtime::native_origin::TimeCopyPosition;
+    use crate::value_contract::time_copies::TimeCopyStore;
     let policy = plan("  /created_at: {kind: time, formats: [unix_seconds]}\n");
     let position = TimeCopyPosition::Redis {
         host: "cache",

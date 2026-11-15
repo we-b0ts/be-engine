@@ -349,8 +349,10 @@ fn ownership_discovery_and_policy_removal_preserve_all_actual_report_facts() {
     ]);
     for _ in 0..2 {
         let result =
-            crate::replay::reclassify_background_dependencies(&f.policy, &f.report, &cases)
-                .unwrap();
+            crate::protocols::replay::report::ownership::reclassify_background_dependencies(
+                &f.policy, &f.report, &cases,
+            )
+            .unwrap();
         assert_eq!(result.matched_unused_case, 0);
         assert!(result.remaining_dirty_case_ids.contains("origin"));
         assert!(result.remaining_dirty_case_ids.contains("victim"));
@@ -363,8 +365,10 @@ fn ownership_discovery_and_policy_removal_preserve_all_actual_report_facts() {
         SourceTrafficPolicyConfig::empty().render().unwrap(),
     )
     .unwrap();
-    let result =
-        crate::replay::reclassify_background_dependencies(&f.policy, &f.report, &cases).unwrap();
+    let result = crate::protocols::replay::report::ownership::reclassify_background_dependencies(
+        &f.policy, &f.report, &cases,
+    )
+    .unwrap();
     assert_eq!(result.matched_unused_case, 0);
     let report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
     assert!(
@@ -387,7 +391,8 @@ fn unconfigured_rules_have_no_io_and_trigger_rules_never_enable_snapshots() {
     let f = Fixture::new("GET");
     let rules = f.rules("GET");
     let matcher =
-        crate::recorder::background::BackgroundDependencyMatcher::from_rules(&rules).unwrap();
+        crate::protocols::recording::background::BackgroundDependencyMatcher::from_rules(&rules)
+            .unwrap();
     assert!(
         matcher
             .matching_redis_snapshot_rule(6379, "GET", &[b"cancel:12".to_vec()])
@@ -475,7 +480,8 @@ fn percent_encoded_reads_are_report_only_and_duplicate_json_never_proves_origins
 
 #[tokio::test]
 async fn recorder_keeps_active_case_calls_and_retains_idle_candidates_without_snapshots() {
-    use crate::recorder::{CaseContext, RecorderEvent, RedisExchangeEvent, capture_body};
+    use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
+    use crate::recorder::{CaseContext, capture_body};
     use uuid::Uuid;
     let temp = tempfile::tempdir().unwrap();
     let mut config = crate::AppConfig::default();

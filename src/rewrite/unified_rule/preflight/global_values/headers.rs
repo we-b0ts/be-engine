@@ -43,7 +43,7 @@ pub(super) fn primary(
 ) -> Result<()> {
     let super::super::super::manifest::PrimaryResponse { source, target } =
         bundle.primary_response(case, directory)?;
-    let pair = crate::replay::response_payload_pair(request, &source, None)?;
+    let pair = crate::primary_protocol::assertion::response_payload_pair(request, &source, None)?;
     let before = snapshot(&source["headers"])?;
     let clocks = AnchorClocks::for_response(
         crate::value_contract::time::ClockPair {

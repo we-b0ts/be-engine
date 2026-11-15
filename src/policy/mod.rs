@@ -1,8 +1,9 @@
-//! Self-contained traffic contracts and their protocol-independent compiled policy.
+//! Traffic contracts, pure policy compilation and application runtime bindings.
 //! Compilation is pure: evidence authorization and policy persistence belong to
 //! their callers, and protocol adapters retain lane/session/consumption ownership.
 mod authoring;
 mod capability;
+pub(crate) mod runtime;
 pub(crate) use authoring::expanded as expand_policy;
 pub(crate) use authoring::preserves_http_api_scope;
 pub(crate) use authoring::require_source_proof;

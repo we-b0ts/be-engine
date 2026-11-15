@@ -1,8 +1,8 @@
 //! Case admission, dependency observation and publication lifecycle wiring.
 
 use crate::active_case::{DependencyDrainResult, DependencyTargets};
+use crate::protocols::recording::request::DependencyRequest;
 use crate::recorder::readiness::PostReadyWaitOutcome;
-use crate::recorder::request::DependencyRequest;
 use crate::recorder::{CaseContext, CaseInvalidation};
 use crate::recording_control::RecordingListener;
 use crate::{ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRejection, AppState};
@@ -15,7 +15,7 @@ impl AppState {
     pub(crate) fn select_case_response_observation(
         &self,
         case_id: Uuid,
-        body: Option<&crate::recorder::CaseBodyCapture>,
+        body: Option<&crate::protocols::recording::events::CaseBodyCapture>,
     ) {
         use base64::Engine as _;
         if self.config().async_api.is_empty() {

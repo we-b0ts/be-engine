@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::policy::native::{RedisPubsubKind, RedisPubsubSelector};
 use crate::policy::{Database, Protocol};
-use crate::recorder::RedisPubSubPushEvent;
+use crate::protocols::recording::events::RedisPubSubPushEvent;
 use crate::redis::{RedisPubSubPush, RedisSubscriptionKind, parse_pubsub_push};
 
 pub(crate) fn anchor(event: &Value) -> Option<(uuid::Uuid, u64)> {

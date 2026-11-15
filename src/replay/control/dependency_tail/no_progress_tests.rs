@@ -78,7 +78,7 @@ async fn two_second_idle_reports_unconsumed_dependencies_and_preserves_session()
         "case_no_progress"
     );
     assert_eq!(report["case_execution_failures"][0]["reason"], reason);
-    assert!(crate::replay::report_has_case_dirty_events(&report));
+    assert!(crate::protocols::replay::report::evidence::report_has_case_dirty_events(&report));
 }
 
 #[tokio::test]

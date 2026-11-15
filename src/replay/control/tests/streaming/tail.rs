@@ -84,6 +84,7 @@ async fn long_tail_waits_for_real_delayed_http_work_without_repeating_source_idl
             .lock()
             .await
             .snapshot_report()
+            .native
             .matched_http_exchanges
             .len(),
         1
@@ -136,8 +137,8 @@ async fn a_missing_http_call_remains_dirty_after_releasing_the_case() {
     assert!(state.active_case_id.is_none());
     assert!(state.dependency_tails.failure("case-a").is_some());
     let report = state.snapshot_report();
-    assert!(report.matched_http_exchanges.is_empty());
-    assert_eq!(report.unused_case_http_exchanges.len(), 2);
+    assert!(report.native.matched_http_exchanges.is_empty());
+    assert_eq!(report.native.unused_case_http_exchanges.len(), 2);
     drop(state);
     let report_path = temp.path().join("interrupted-report.json");
     let (response, stop) = handle_control_request(
@@ -211,8 +212,21 @@ async fn every_case_tail_obligation_requires_real_delivery() {
     let state = runtime.state.lock().await;
     assert!(state.active_case_id.is_none());
     assert!(state.dependency_tails.failure("case-a").is_some());
-    assert!(state.snapshot_report().matched_http_exchanges.is_empty());
-    assert_eq!(state.snapshot_report().unused_case_http_exchanges.len(), 2);
+    assert!(
+        state
+            .snapshot_report()
+            .native
+            .matched_http_exchanges
+            .is_empty()
+    );
+    assert_eq!(
+        state
+            .snapshot_report()
+            .native
+            .unused_case_http_exchanges
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -257,8 +271,21 @@ async fn legacy_selected_calls_remain_strict_when_a_general_tail_and_process_rul
         let state = runtime.state.lock().await;
         assert!(state.active_case_id.is_none());
         assert!(state.dependency_tails.failure("case-a").is_some());
-        assert!(state.snapshot_report().matched_http_exchanges.is_empty());
-        assert_eq!(state.snapshot_report().unused_case_http_exchanges.len(), 2);
+        assert!(
+            state
+                .snapshot_report()
+                .native
+                .matched_http_exchanges
+                .is_empty()
+        );
+        assert_eq!(
+            state
+                .snapshot_report()
+                .native
+                .unused_case_http_exchanges
+                .len(),
+            2
+        );
     }
 }
 

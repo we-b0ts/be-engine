@@ -1,9 +1,21 @@
 //! Native report adapters bind protocol facts to shared row and visibility contracts.
+pub(crate) mod aggregate;
+#[cfg(test)]
+mod aggregate_tests;
+use crate::protocols::replay::http;
+use crate::protocols::replay::mysql;
+use mysql::MysqlReplayState;
+pub(crate) mod artifacts;
 pub(crate) mod codecs;
+pub(crate) mod evidence;
+pub(crate) mod ownership;
 pub(crate) mod redis;
+pub(crate) mod snapshot;
+pub(super) mod unused_source;
+pub(crate) mod validation;
+use super::redis as redis_state;
 use super::*;
-use replay::redis as redis_state;
-use replay::{http, kafka, memcached, motan, mysql::MysqlReplayState};
+use crate::{protocols::replay::kafka, protocols::replay::memcached, protocols::replay::motan};
 use traffic_replay::report::{
     Change, GlobalReportProjection, GlobalReportRuntime, ReportRows, Row,
 };

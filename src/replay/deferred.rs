@@ -105,7 +105,7 @@ pub(super) fn register_index_targets(
     Ok(())
 }
 
-pub(super) async fn prepare_case<P: ReplayProtocolSet>(
+pub(crate) async fn prepare_case<P: ReplayProtocolSet>(
     state: Arc<Mutex<RuntimeState<P>>>,
     case_id: &str,
 ) -> Result<()> {
@@ -130,7 +130,7 @@ pub(super) async fn prepare_case<P: ReplayProtocolSet>(
     {
         anyhow::bail!("case dependency preparation previously failed: {error}");
     }
-    let (recording, fast_cap) = {
+    let (recording, fast_cap, evidence) = {
         let state = state.lock().await;
         ensure!(
             state.finalized_at.is_none(),
@@ -147,6 +147,7 @@ pub(super) async fn prepare_case<P: ReplayProtocolSet>(
         (
             recording.clone(),
             control::input_timing::source_fast_cap(&state),
+            state.providers.evidence().clone(),
         )
     };
     let path = recording.dependencies_path.clone();
@@ -175,7 +176,12 @@ pub(super) async fn prepare_case<P: ReplayProtocolSet>(
                     .context("selected Source line identity absent")?;
             }
         }
-        let input = control::input_timing::PreparedSource::load(&recording, fast_cap, Some(&raw));
+        let input = control::input_timing::PreparedSource::load(
+            &recording,
+            fast_cap,
+            Some(&raw),
+            &evidence,
+        );
         Ok((inventory, raw, records, input))
     });
     let prepared = match tokio::time::timeout(deferred.timeout, task).await {
@@ -265,12 +271,7 @@ fn install<P: ReplayProtocolSet>(
     );
     state.protocols.index_source(&appended);
     if let Some(policy) = &mut state.replay_policy {
-        policy
-            .request_contracts
-            .observe_source(case_id, raw, Some(&inventory.index))?;
-        if policy.dynamic_values.enabled() {
-            policy.dynamic_values.observe_source(case_id, raw)?;
-        }
+        policy.observe_source(case_id, raw, Some(&inventory.index))?;
         state.protocols.observe_source(&appended, policy);
     }
     state.prepare_native_candidates();

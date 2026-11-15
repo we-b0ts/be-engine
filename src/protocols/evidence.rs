@@ -1,6 +1,8 @@
 //! Application assembly for native and transport evidence capabilities.
 use crate::dependency::attribution::DependencyOwner;
+use anyhow::{Context, Result};
 use serde_json::Value;
+use traffic_model::recording::ProtocolRef;
 use traffic_protocol::evidence::{EvidenceAdapter, EvidenceRegistry};
 use traffic_protocol::observation::{TrafficInteraction, format_endpoint, optional_endpoint};
 
@@ -12,6 +14,9 @@ impl EvidenceAdapter for ExistingEvidence {
     }
     fn event_types(&self) -> &'static [&'static str] {
         &[
+            "memcached_connection",
+            "kafka_connection",
+            "motan_connection",
             "memcached_exchange",
             "motan_exchange",
             "kafka_produce",
@@ -19,8 +24,88 @@ impl EvidenceAdapter for ExistingEvidence {
             "kafka_delivery",
         ]
     }
+    fn recording_safety_issue(&self, value: &Value) -> Option<String> {
+        let event_type = value["event_type"].as_str().unwrap_or_default();
+        if matches!(
+            event_type,
+            "memcached_connection"
+                | "memcached_exchange"
+                | "kafka_connection"
+                | "kafka_produce"
+                | "kafka_fetch"
+                | "kafka_delivery"
+                | "motan_connection"
+                | "motan_exchange"
+        ) && value
+            .get("replay_safe")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+        {
+            let command = value
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            return Some(format!(
+                "{event_type} command {command} contains incomplete or unsupported replay evidence"
+            ));
+        }
+        if event_type == "proxy_error"
+            && matches!(
+                value.get("protocol").and_then(serde_json::Value::as_str),
+                Some("memcached" | "kafka" | "motan")
+            )
+        {
+            return Some(format!(
+                "dependency proxy error: {}",
+                value
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown dependency proxy error")
+            ));
+        }
+        None
+    }
+    fn include_in_recording_summary(&self, event: &Value) -> bool {
+        event["event_type"]
+            .as_str()
+            .is_some_and(|kind| kind.ends_with("_connection"))
+            || event["capture"]["semantic_required"] != false
+    }
+    fn recording_summary(
+        &self,
+    ) -> Option<Box<dyn traffic_protocol::observation::RecordingSummary>> {
+        Some(Box::new(
+            super::recording::summary::ExistingSummary::default(),
+        ))
+    }
     fn supports_replay(&self, event: &Value) -> bool {
         event["replay_safe"] != false
+            && !event["event_type"]
+                .as_str()
+                .is_some_and(|kind| kind.ends_with("_connection"))
+    }
+    fn finite_reference(&self, event: &Value) -> Result<Option<ProtocolRef>> {
+        let protocol = match event["event_type"].as_str() {
+            Some("memcached_exchange") => "memcached",
+            Some("motan_exchange") if event["heartbeat"] != true => "motan",
+            Some("kafka_produce") => "kafka_produce",
+            Some("kafka_fetch") => "kafka_fetch",
+            Some("kafka_delivery") => "kafka_delivery",
+            _ => return Ok(None),
+        };
+        let connection = event["connection_id"]
+            .as_str()
+            .context("Source exchange identity missing")?
+            .parse()?;
+        let sequence = event["sequence"]
+            .as_u64()
+            .context("Source exchange sequence missing")?;
+        Ok(Some(ProtocolRef::connection(
+            protocol, connection, sequence,
+        )))
+    }
+    fn supports_interaction_inventory(&self) -> bool {
+        false
     }
     fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
         let (protocol, operation) = match event["event_type"].as_str()? {
@@ -64,12 +149,32 @@ impl EvidenceAdapter for TransportEvidence {
         "transport/evidence/v1"
     }
     fn event_types(&self) -> &'static [&'static str] {
-        &["udp_datagram"]
+        &["udp_datagram", "tcp_gateway_connection", "proxy_error"]
+    }
+    fn include_in_recording_summary(&self, _event: &Value) -> bool {
+        true
+    }
+    fn recording_summary(
+        &self,
+    ) -> Option<Box<dyn traffic_protocol::observation::RecordingSummary>> {
+        Some(Box::new(
+            super::recording::summary::TransportSummary::default(),
+        ))
     }
     fn supports_replay(&self, _event: &Value) -> bool {
         false
     }
+    fn finite_reference(&self, event: &Value) -> Result<Option<ProtocolRef>> {
+        anyhow::ensure!(
+            event["event_type"] != "udp_datagram",
+            "finite-tail UDP replay is unsupported"
+        );
+        Ok(None)
+    }
     fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
+        if event["event_type"] != "udp_datagram" {
+            return None;
+        }
         let endpoint = optional_endpoint(
             event["target_host"].as_str(),
             event["target_port"]

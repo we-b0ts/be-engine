@@ -5,7 +5,7 @@ use futures_util::future::BoxFuture;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::replay) struct Observation {
+pub(crate) struct Observation {
     epoch: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     event: Option<NativeEvent>,
@@ -131,9 +131,9 @@ pub(super) async fn send_with_response_limit(
     .with_context(|| format!("replay control feedback timed out ({command})"))?
 }
 
-pub(super) async fn accept(
+pub(super) async fn accept<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Value {
     let result = async {
         let mut state = state.lock().await;
@@ -147,24 +147,21 @@ pub(super) async fn accept(
                 && !state.target_session_stopped,
             "native event feedback requires the active live case"
         );
-        if request.command == "native_event_begin"
-            && !state.protocols.redis.needs_native_events(case)
-        {
+        let native = state.protocols.native_events();
+        if request.command == "native_event_begin" && !native.needs_native_events(case) {
             return Ok(serde_json::json!({"ok":true,"enabled":false}));
         }
-        let epoch = state
-            .protocols
-            .redis
-            .native_request_epoch(case)
+        let epoch = native
+            .request_epoch(case)
             .context("native event feedback requires request admission")?;
         if request.command == "native_event_begin" {
-            let enabled = state.protocols.redis.native_events_begin(case, epoch);
+            let capabilities = native.begin(case, epoch);
             return Ok(serde_json::json!({
                 "ok":true,
-                "enabled":enabled,
+                "enabled":capabilities.enabled,
                 "epoch":epoch,
-                "events":state.protocols.redis.needs_ingress_events(case),
-                "input_acks":state.protocols.redis.pubsub.native_clock.needs_input_acks(case),
+                "events":capabilities.events,
+                "input_acks":capabilities.input_acks,
             }));
         }
         let observation = request
@@ -185,12 +182,7 @@ pub(super) async fn accept(
             let sequence = observation
                 .acknowledged
                 .context("native input ACK missing")?;
-            state
-                .protocols
-                .redis
-                .pubsub
-                .native_clock
-                .input_acknowledged(case, epoch, sequence)?;
+            native.input_acknowledged(case, epoch, sequence)?;
             return Ok(serde_json::json!({"ok":true}));
         }
         ensure!(
@@ -206,18 +198,7 @@ pub(super) async fn accept(
                 .namespace
                 .as_deref()
                 .context("native namespace missing")?;
-            state
-                .protocols
-                .redis
-                .pubsub
-                .native_clock
-                .connected(case, epoch, namespace)?;
-            state.protocols.redis.pubsub.namespace_sessions.connected(
-                case,
-                epoch,
-                namespace,
-                observation.sid.as_deref(),
-            )?;
+            native.connected(case, epoch, namespace, observation.sid.as_deref())?;
             return Ok(serde_json::json!({"ok":true}));
         }
         ensure!(
@@ -228,10 +209,7 @@ pub(super) async fn accept(
             .event
             .as_ref()
             .context("native event metadata missing")?;
-        state
-            .protocols
-            .redis
-            .observe_native_event(case, epoch, event)?;
+        native.observe(case, epoch, event)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok":true}))
     }
     .await;

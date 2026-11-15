@@ -160,7 +160,7 @@ async fn status_failure_notifies_cleanup_and_remains_primary_while_body_only_fai
     let representative = report.diagnosis.representative.unwrap();
     assert_eq!(
         representative.difference_kind,
-        crate::replay::ResponseDifferenceKind::StatusMismatch
+        crate::primary_protocol::assertion::ResponseDifferenceKind::StatusMismatch
     );
     assert_eq!(representative.expected.value, Some(json!(200)));
     assert_eq!(representative.actual.value, Some(json!(500)));

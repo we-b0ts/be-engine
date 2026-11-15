@@ -248,9 +248,9 @@ async fn http_predecessors_use_their_physical_authority_and_cannot_be_skipped() 
             assert_eq!(
                 inventory.entries[0].predecessors,
                 [
-                    crate::replay::control::dependency_tail::RecordedReference::Http {
-                        exchange_id: http_id
-                    }
+                    crate::replay::control::dependency_tail::RecordedReference::exchange(
+                        "http", http_id
+                    )
                 ]
             );
         }

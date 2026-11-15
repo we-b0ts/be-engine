@@ -1,6 +1,7 @@
 use super::*;
 use crate::value_contract::{global, json::AnchorClocks, time::ClockPair};
 use serde_json::json;
+use traffic_contract::identity::PreparedIdentityDelivery;
 fn plan(fields: &str) -> CompiledJsonPolicy {
     serde_yaml::from_str::<crate::policy::JsonPolicy>(&format!("fields:\n{fields}"))
         .unwrap()
@@ -81,7 +82,7 @@ fn bounded_string_format_keeps_original_maximum_without_weakening_generic_string
 #[test]
 fn jwt_identity_preserves_large_whole_tokens_during_delivery() {
     use crate::value_contract::identities::{
-        IdentityDecision, IdentityDelivery, IdentityPair, IdentityStore, PreparedIdentityDelivery,
+        IdentityDecision, IdentityDelivery, IdentityPair, IdentityStore,
     };
     let source = crate::request_rules::tests::token(
         json!({"payload":"x".repeat(4096),"iat":1000,"exp":1060}),

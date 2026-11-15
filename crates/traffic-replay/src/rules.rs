@@ -33,6 +33,18 @@ pub struct RuleBinding {
     pub pointer: String,
 }
 
+/// Prepared content rules operate on decoded documents from every native carrier.
+pub trait DocumentPolicy: Send + Sync {
+    fn paths(&self, source: &Value) -> Result<Vec<String>>;
+    fn compare(
+        &self,
+        source: &Value,
+        target: &Value,
+        fields: &[Field<'_>],
+        clocks: AnchorClocks,
+    ) -> Result<Comparison>;
+}
+
 struct FieldBinding {
     rule: Arc<ValueRule>,
     pointer: String,
@@ -52,6 +64,7 @@ struct BoundValue {
 pub struct PreparedMessage {
     projection: ProjectedMessage,
     values: BTreeMap<String, BoundValue>,
+    policy: Option<Arc<dyn DocumentPolicy>>,
 }
 
 impl std::fmt::Debug for PreparedMessage {
@@ -70,6 +83,14 @@ impl PreparedMessage {
     }
 
     pub fn compile(native: &dyn ProtocolMessage, bindings: &[RuleBinding]) -> Result<Self> {
+        Self::compile_with_policy(native, bindings, None)
+    }
+
+    pub fn compile_with_policy(
+        native: &dyn ProtocolMessage,
+        bindings: &[RuleBinding],
+        policy: Option<Arc<dyn DocumentPolicy>>,
+    ) -> Result<Self> {
         let projection = native.project()?;
         let mut values = BTreeMap::<String, BoundValue>::new();
         let mut rules = BTreeMap::<&str, &FieldContract>::new();
@@ -114,7 +135,37 @@ impl PreparedMessage {
                 value.pointers.push(binding.pointer.clone());
             }
         }
-        Ok(Self { projection, values })
+        if let Some(policy) = &policy {
+            for (location, value) in &projection.values {
+                if value.scalar_encoding != ScalarEncoding::Json || values.contains_key(location) {
+                    continue;
+                }
+                let codec = Codec::Json;
+                let plan = CodecPlan::compile(&codec)?;
+                let source = decode(&plan, &codec, value)?;
+                values.insert(
+                    location.clone(),
+                    BoundValue {
+                        codec,
+                        scalar_encoding: value.scalar_encoding,
+                        plan,
+                        source,
+                        fields: Vec::new(),
+                        pointers: Vec::new(),
+                    },
+                );
+            }
+            for value in values.values_mut() {
+                value
+                    .pointers
+                    .extend(policy.paths(value.source.view().logical())?);
+            }
+        }
+        Ok(Self {
+            projection,
+            values,
+            policy,
+        })
     }
 
     pub fn compare(
@@ -184,8 +235,20 @@ impl PreparedMessage {
                     contract: &field.rule.contract,
                 })
                 .collect::<Vec<_>>();
-            let mut comparison =
-                compare::compare_all(&source, &target, &fields, &[], &[], clocks, &[], metadata);
+            let mut comparison = match &self.policy {
+                Some(policy) => match policy.compare(&source, &target, &fields, clocks) {
+                    Ok(comparison) => comparison,
+                    Err(error) => {
+                        result
+                            .differences
+                            .push(difference(location, &error.to_string()));
+                        continue;
+                    }
+                },
+                None => {
+                    compare::compare_all(&source, &target, &fields, &[], &[], clocks, &[], metadata)
+                }
+            };
             comparison.scope_schema_clocks_in(location);
             for difference in &mut comparison.differences {
                 difference.pointer = format!("{location}{}", difference.pointer);

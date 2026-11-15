@@ -7,9 +7,9 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct JsonlBufferSettings {
-    pub(super) capacity: usize,
-    pub(super) flush_interval: Duration,
+pub(crate) struct JsonlBufferSettings {
+    pub(crate) capacity: usize,
+    pub(crate) flush_interval: Duration,
 }
 
 pub(super) struct BufferedJsonlWriter {

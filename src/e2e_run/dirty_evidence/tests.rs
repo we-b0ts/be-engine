@@ -1,8 +1,9 @@
 use super::*;
 use crate::case_group::{CanonicalCase, CanonicalCaseGroup, CaseGroupInventory};
-use crate::replay::report::{
-    ReplayDependencyDifference, ReplayDependencyObservation, ReplayDependencyRepresentative,
-    build_dependency_evidence, dependency_evidence_path,
+use crate::{
+    protocols::replay::report::evidence::build_dependency_evidence,
+    replay::report::ReplayDependencyDifference, replay::report::ReplayDependencyObservation,
+    replay::report::ReplayDependencyRepresentative, replay::report::dependency_evidence_path,
 };
 use serde_json::json;
 

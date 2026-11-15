@@ -396,7 +396,8 @@ fn collect_unused<T: Ord>(
     selected: &BTreeSet<String>,
     mut resolve: impl FnMut(&str, &Value) -> Result<T>,
 ) -> Result<BTreeSet<T>> {
-    crate::replay::report::unused_source::case_unused_rows(report)
+    let providers = crate::protocols::default_providers();
+    crate::replay::report::unused_source::case_unused_rows(report, providers.report_codecs())
         .filter(|(_, event)| {
             event["case_id"]
                 .as_str()

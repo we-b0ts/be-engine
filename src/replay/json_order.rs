@@ -1,10 +1,10 @@
 //! JSON object identity and explicit array-order normalization for dependency values.
-pub(in crate::replay) use crate::json_value::parse;
-use crate::replay::policy::select_json_pointers;
+pub(crate) use crate::json_value::parse;
+use crate::replay::policy::json_pointer::select_json_pointers;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub(in crate::replay) fn canonical_json(value: &Value) -> Vec<u8> {
+pub(crate) fn canonical_json(value: &Value) -> Vec<u8> {
     fn ordered(value: &Value) -> Value {
         match value {
             Value::Object(map) => Value::Object(
@@ -22,11 +22,7 @@ pub(in crate::replay) fn canonical_json(value: &Value) -> Vec<u8> {
 }
 
 /// Sort only the selected array. Nested arrays retain their own ordering.
-pub(in crate::replay) fn normalize_arrays(
-    expected: &mut Value,
-    actual: &mut Value,
-    pattern: &str,
-) -> bool {
+pub(crate) fn normalize_arrays(expected: &mut Value, actual: &mut Value, pattern: &str) -> bool {
     for pointer in select_json_pointers(pattern, expected, actual) {
         let (Some(Value::Array(left)), Some(Value::Array(right))) =
             (expected.pointer_mut(&pointer), actual.pointer_mut(&pointer))
@@ -40,7 +36,7 @@ pub(in crate::replay) fn normalize_arrays(
 }
 
 /// Discover individual order-only locations without making them active rules.
-pub(in crate::replay) fn order_paths(
+pub(crate) fn order_paths(
     expected: &Value,
     actual: &Value,
     pointer: &str,

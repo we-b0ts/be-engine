@@ -1,15 +1,16 @@
 //! Derived copies of upstream SSE data reuse the global JSON field strategy.
 use super::*;
-use crate::replay::policy::request_contract::{Decision, RequestContracts};
+use crate::replay::policy::IdentityDeliveryHost;
+use crate::replay::policy::values::ValueDecision;
 
-pub(in crate::replay) struct SseDelivery {
+pub(crate) struct SseDelivery {
     document: crate::value_codec::sse::Document,
     values: Vec<Option<Delivery>>,
     validation: Comparison,
 }
 
 impl SseDelivery {
-    pub(in crate::replay) fn prepare(
+    pub(crate) fn prepare(
         source: &[u8],
         plan: &crate::policy::CompiledJsonPolicy,
         clocks: AnchorClocks,
@@ -40,17 +41,20 @@ impl SseDelivery {
         })
     }
 
-    pub(in crate::replay) fn validation(&self) -> &Comparison {
+    pub(crate) fn validation(&self) -> &Comparison {
         &self.validation
     }
 
-    pub(in crate::replay) fn render(
+    pub(crate) fn render(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-        owner: &RequestContracts,
+        owner: &dyn IdentityDeliveryHost,
         case: &str,
-    ) -> Result<(Vec<u8>, Decision)> {
-        let mut decision = Decision::from_value_comparison(self.validation.clone());
+    ) -> Result<(Vec<u8>, ValueDecision)> {
+        let mut decision = ValueDecision {
+            comparison: self.validation.clone(),
+            identity: None,
+        };
         let mut values = Vec::new();
         for (event, value) in self.document.events.iter().zip(&self.values) {
             let value = if let Some(value) = value {

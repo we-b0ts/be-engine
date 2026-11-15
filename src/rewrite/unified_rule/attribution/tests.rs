@@ -1,6 +1,7 @@
 //! Public Source-only planning works before any Replay or implementation lease.
 use super::*;
-use crate::recorder::{CaseContext, HttpExchangeEvent, Recorder, RecorderEvent, capture_body};
+use crate::protocols::recording::events::{HttpExchangeEvent, RecorderEvent};
+use crate::recorder::{CaseContext, Recorder, capture_body};
 use crate::rewrite::{apply_rewrite_rule, dependency_attribution_context};
 
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

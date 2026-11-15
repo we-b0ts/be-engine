@@ -13,7 +13,10 @@ struct EndpointHistory {
     completed: Vec<Normal>,
 }
 
-fn endpoint(event: &Value) -> Result<Option<TargetKey>> {
+fn endpoint(
+    event: &Value,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+) -> Result<Option<TargetKey>> {
     if let (Some(host), Some(port)) = (
         event["target_host"].as_str(),
         event["target_port"]
@@ -25,26 +28,20 @@ fn endpoint(event: &Value) -> Result<Option<TargetKey>> {
             port,
         }));
     }
-    if event["event_type"] != "http_exchange" {
-        return Ok(None);
-    }
-    let authority = event["authority"]
-        .as_str()
-        .context("mixed connection failure requires the HTTP physical authority")?
-        .parse::<hyper::http::uri::Authority>()
-        .context("invalid HTTP authority before a failed connect")?;
-    let default_port = match event["scheme"].as_str() {
-        Some("http" | "fake_ip_http" | "http_gateway") => 80,
-        Some("https" | "fake_ip_https") => 443,
-        _ => anyhow::bail!("unsupported HTTP scheme before a failed connect"),
-    };
-    Ok(Some(TargetKey {
-        host: normalize_host(authority.host()),
-        port: authority.port_u16().unwrap_or(default_port),
-    }))
+    Ok(evidence
+        .connection_endpoint(event)?
+        .map(|endpoint| TargetKey {
+            host: normalize_host(&endpoint.host),
+            port: endpoint.port,
+        }))
 }
 
-pub(super) async fn prepare(inventory: &mut Inventory, case: &str, path: &Path) -> Result<()> {
+pub(super) async fn prepare(
+    inventory: &mut Inventory,
+    case: &str,
+    path: &Path,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+) -> Result<()> {
     let selected = inventory
         .entries
         .iter()
@@ -75,7 +72,7 @@ pub(super) async fn prepare(inventory: &mut Inventory, case: &str, path: &Path) 
             continue;
         }
         let event: Value = serde_json::from_str(&line)?;
-        let Some(key) = endpoint(&event)? else {
+        let Some(key) = endpoint(&event, evidence)? else {
             continue;
         };
         let Some(history) = histories.get_mut(&key) else {
@@ -89,7 +86,7 @@ pub(super) async fn prepare(inventory: &mut Inventory, case: &str, path: &Path) 
         if kind == "dependency_connect_failure" {
             continue;
         }
-        let Some(reference) = recorded_reference(&event).with_context(|| {
+        let Some(reference) = recorded_reference(&event, evidence).with_context(|| {
             format!(
                 "cannot prove normal connection ordering before a failed connect at {}:{}",
                 key.host, key.port
@@ -143,9 +140,10 @@ pub(super) async fn prepare(inventory: &mut Inventory, case: &str, path: &Path) 
                     key.host,
                     key.port
                 );
-                vec![RecordedReference::Connect {
-                    event_id: previous.id,
-                }]
+                vec![
+                    RecordedReference::new("connect", serde_json::json!({"event_id": previous.id}))
+                        .expect("connection failure identity"),
+                ]
             } else {
                 let mut predecessors = Vec::with_capacity(history.completed.len());
                 for normal in &history.completed {
@@ -155,7 +153,7 @@ pub(super) async fn prepare(inventory: &mut Inventory, case: &str, path: &Path) 
                         key.host,
                         key.port
                     );
-                    predecessors.push(normal.reference);
+                    predecessors.push(normal.reference.clone());
                 }
                 ensure!(
                     !history.connected || !predecessors.is_empty(),

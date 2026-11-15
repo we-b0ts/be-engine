@@ -1,6 +1,7 @@
 use super::*;
 use crate::active_case::ActiveCaseGuard;
-use crate::recorder::{RedisExchangeEvent, capture_body};
+use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
+use crate::recorder::capture_body;
 
 pub(super) fn active(timeout: Duration) -> (ActiveCaseRegistry, ActiveCaseGuard, Uuid) {
     let registry = ActiveCaseRegistry::default();

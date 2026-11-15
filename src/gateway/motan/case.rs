@@ -4,10 +4,8 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::motan::response_kind_label;
-use crate::recorder::{
-    CaseBodyCapture, CaseContext, CaseInvalidation, PrimaryCaseDescriptor, Recorder,
-    capture_case_body,
-};
+use crate::protocols::recording::events::{CaseBodyCapture, capture_case_body};
+use crate::recorder::{CaseContext, CaseInvalidation, PrimaryCaseDescriptor, Recorder};
 use crate::{ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRejection, AppState};
 
 #[derive(Serialize)]

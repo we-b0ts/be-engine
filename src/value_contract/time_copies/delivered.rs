@@ -97,6 +97,8 @@ impl DeliveredTimeCopies {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use crate::policy::runtime::native_origin::TimeCopyPosition;
     use crate::value_contract::{global, json::AnchorClocks};
     use serde_json::json;
 

@@ -2,7 +2,7 @@
 use super::*;
 
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct RequestFailure {
+pub(crate) struct RequestFailure {
     pub case_id: Option<String>,
     pub protocol: String,
     pub target: TargetKey,
@@ -12,7 +12,7 @@ pub(in crate::replay) struct RequestFailure {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct UnusedExchange {
+pub(crate) struct UnusedExchange {
     pub index: usize,
     pub case_id: Option<String>,
     pub source: ReplaySource,
@@ -23,7 +23,7 @@ pub(in crate::replay) struct UnusedExchange {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(in crate::replay) struct ProtocolReport {
+pub(crate) struct ProtocolReport {
     pub matched_count: usize,
     pub unmatched_count: usize,
     pub unmatched: Vec<RequestFailure>,
@@ -33,6 +33,56 @@ pub(in crate::replay) struct ProtocolReport {
 }
 
 impl Inventory {
+    pub(in crate::replay) fn source_occurrence_rows(
+        &self,
+        report: &Value,
+    ) -> Vec<crate::replay::report::unused_source::SourceRow> {
+        use crate::replay::report::unused_source::{SourceIdentity, SourceRow};
+        let mut rows = Vec::new();
+        for (protocol, section) in report["dependency_protocols"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            for (position, row) in section["unused_case"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let Some(index) = row["index"]
+                    .as_u64()
+                    .and_then(|index| usize::try_from(index).ok())
+                else {
+                    continue;
+                };
+                let Some(exchange) = self.core.exchanges.get(index) else {
+                    continue;
+                };
+                let Some(case) = exchange.source.case_id.as_deref() else {
+                    continue;
+                };
+                let Some(capture) = &exchange.source.capture else {
+                    continue;
+                };
+                if exchange.protocol.as_str() != protocol
+                    || row["case_id"].as_str() != Some(case)
+                    || exchange.source.source != ReplaySource::Case
+                {
+                    continue;
+                }
+                let escaped = protocol.replace('~', "~0").replace('/', "~1");
+                rows.push(SourceRow {
+                    pointer: format!("/dependency_protocols/{escaped}/unused_case/{position}"),
+                    case: case.into(),
+                    exchange_id: capture.exchange_id,
+                    identity: SourceIdentity::Reference(exchange.native.reference.clone()),
+                });
+            }
+        }
+        rows
+    }
+
     pub fn case_has_runtime_failure(&self, case: &str) -> bool {
         self.failure_counts
             .keys()

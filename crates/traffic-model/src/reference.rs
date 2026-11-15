@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+mod order;
+
 /// Reference fields retain their original serialized names. The framework only
 /// uses the protocol identity and compares the complete reference for equality.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

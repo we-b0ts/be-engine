@@ -1,8 +1,9 @@
-//! Ordered lifecycle selection retains each candidate's early resource signals.
+//! Ordered selection and independent retention of early completion signals.
 use super::*;
 use anyhow::Result;
-use hyper::{Method, Uri};
 use serde_json::Value;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AsyncScope {
@@ -10,12 +11,9 @@ pub(crate) struct AsyncScope {
     runtime: Arc<Runtime>,
 }
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug)]
 struct Runtime {
-    candidates: Vec<(usize, ResourceScope)>,
+    candidates: Vec<(usize, Arc<dyn CompletionRule>)>,
     selection: Mutex<Selection>,
 }
 
@@ -29,47 +27,25 @@ struct Selection {
 }
 
 impl AsyncScope {
-    pub(crate) fn for_primary(
-        rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
-        method: &Method,
-        uri: &Uri,
-        body: &[u8],
+    pub(crate) fn new(
+        api: String,
+        candidates: Vec<(usize, Arc<dyn CompletionRule>)>,
     ) -> Option<Self> {
-        let body = crate::json_value::parse_with_limit(body, body.len());
-        rules.iter().find_map(|(api, rules)| {
-            let candidates = rules
-                .iter()
-                .enumerate()
-                .filter(|(_, rule)| {
-                    crate::policy::async_api_matches(
-                        api,
-                        rule,
-                        method.as_str(),
-                        &uri.to_string(),
-                        body.as_ref(),
-                    )
-                })
-                .map(|(index, rule)| (index, ResourceScope::new(rule.clone())))
-                .collect::<Vec<_>>();
-            let (_, first) = candidates.first()?;
-            let decided =
-                first.rule.when_response.is_empty() && first.rule.unless_response.is_empty();
-            let signals = vec![None; candidates.len()];
-            let signal_generations = vec![None; candidates.len()];
-            let observed_matches = vec![BTreeSet::new(); candidates.len()];
-            Some(Self {
-                api: api.clone(),
-                runtime: Arc::new(Runtime {
-                    candidates,
-                    selection: Mutex::new(Selection {
-                        decided,
-                        selected: decided.then_some(0),
-                        signals,
-                        signal_generations,
-                        observed_matches,
-                    }),
+        let (_, first) = candidates.first()?;
+        let decided = !first.requires_response_selection();
+        let count = candidates.len();
+        Some(Self {
+            api,
+            runtime: Arc::new(Runtime {
+                candidates,
+                selection: Mutex::new(Selection {
+                    decided,
+                    selected: decided.then_some(0),
+                    signals: vec![None; count],
+                    signal_generations: vec![None; count],
+                    observed_matches: vec![BTreeSet::new(); count],
                 }),
-            })
+            }),
         })
     }
 
@@ -82,10 +58,11 @@ impl AsyncScope {
             .lock()
             .expect("async scenario selection poisoned");
         if !state.decided {
-            state.selected =
-                self.runtime.candidates.iter().position(|(_, scope)| {
-                    crate::policy::async_response_matches(&scope.rule, body)
-                });
+            state.selected = self
+                .runtime
+                .candidates
+                .iter()
+                .position(|(_, scope)| scope.response_matches(body));
             state.decided = true;
         }
         (
@@ -127,28 +104,20 @@ impl AsyncScope {
             .and_then(|index| state.signal_generations[index])
     }
 
-    #[cfg(test)]
-    pub(crate) fn observe(&self, event: &RecorderEvent) -> Option<AsyncSignal> {
-        self.observe_at(event, 0)
-    }
-
     /// Return only this exchange's new match. Retained early signals are used
     /// by response selection, never replayed for an unrelated later exchange.
-    pub(crate) fn observe_at(&self, event: &RecorderEvent, generation: u64) -> Option<AsyncSignal> {
+    pub(crate) fn observe_at(
+        &self,
+        event: &dyn CompletionEvent,
+        generation: u64,
+    ) -> Option<AsyncSignal> {
         let mut state = self
             .runtime
             .selection
             .lock()
             .expect("async scenario selection poisoned");
-        let identity = match event {
-            RecorderEvent::RedisExchange(event) => Some(event.id),
-            RecorderEvent::MysqlExchange(event) => Some(event.id),
-            RecorderEvent::HttpExchange(event) => Some(event.id),
-            _ => None,
-        };
+        let identity = event.identity();
         let mut selected_signal = None;
-        let redis = redis_event::Event::from_event(event);
-        let actual_sql = OnceCell::new();
         for (index, (_, candidate)) in self.runtime.candidates.iter().enumerate() {
             if state.decided && state.selected != Some(index)
                 || state.signals[index]
@@ -158,7 +127,7 @@ impl AsyncScope {
             {
                 continue;
             }
-            let Some(signal) = candidate.observe_cached(event, redis.as_ref(), &actual_sql) else {
+            let Some(signal) = event.evaluate(candidate.as_ref()) else {
                 continue;
             };
             if signal.end_reason == AsyncEndReason::Resource {

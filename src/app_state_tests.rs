@@ -588,7 +588,9 @@ async fn redis_get_background_rule_records_without_response_role_metadata() {
 
 #[tokio::test]
 async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned() {
-    use crate::recorder::{MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse};
+    use crate::protocols::recording::events::{
+        MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse,
+    };
     let temp = tempfile::tempdir().unwrap();
     let mut config = case_limit_test_config(&temp);
     config.http_gateway.ready.enabled = false;

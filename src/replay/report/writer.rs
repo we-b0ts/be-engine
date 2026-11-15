@@ -10,10 +10,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[cfg(test)]
-use super::super::ReplayState;
+use super::super::{ReplayProtocolSet, RuntimeState};
 use super::dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
 
-pub(in crate::replay) async fn clear_report_artifacts(report_path: Option<&Path>) -> Result<()> {
+pub(crate) async fn clear_report_artifacts(report_path: Option<&Path>) -> Result<()> {
     let Some(report_path) = report_path else {
         return Ok(());
     };
@@ -35,8 +35,8 @@ pub(in crate::replay) async fn clear_report_artifacts(report_path: Option<&Path>
 }
 
 #[cfg(test)]
-pub(in crate::replay) async fn write_report_snapshot(
-    state: Arc<Mutex<ReplayState>>,
+pub(crate) async fn write_report_snapshot<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
     report_path: Option<PathBuf>,
 ) -> Result<()> {
     let Some(report_path) = report_path else {
@@ -46,8 +46,8 @@ pub(in crate::replay) async fn write_report_snapshot(
 }
 
 #[cfg(test)]
-async fn write_report_snapshot_to_path(
-    state: Arc<Mutex<ReplayState>>,
+async fn write_report_snapshot_to_path<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
     report_path: &Path,
 ) -> Result<()> {
     let report = {
@@ -57,12 +57,13 @@ async fn write_report_snapshot_to_path(
     write_report_value(report_path, &report).await
 }
 
-pub(in crate::replay) async fn write_final_report_value(
+pub(crate) async fn write_final_report_value(
     report_path: PathBuf,
     report: &Value,
+    codecs: &traffic_protocol::report::CodecRegistry,
 ) -> Result<()> {
     write_report_value(&report_path, report).await?;
-    let evidence = build_dependency_evidence(report);
+    let evidence = build_dependency_evidence(report, codecs);
     if let Err(error) = write_report_value(&dependency_evidence_path(&report_path), &evidence).await
     {
         let _ = clear_report_artifacts(Some(&report_path)).await;

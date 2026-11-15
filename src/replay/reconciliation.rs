@@ -4,7 +4,7 @@ use crate::dependency::observation::{RecordingManifest, SemanticInventory};
 use serde::{Deserialize, Serialize};
 
 mod validation;
-pub(crate) use validation::validate_completed_receipt;
+pub(crate) use validation::validate_completed_receipt_with;
 
 #[derive(Debug, Clone)]
 pub(super) struct BatchScope {
@@ -68,43 +68,11 @@ impl BatchScope {
         })
     }
 
-    pub(super) fn report(&self, report: &ReplayReport) -> BatchReconciliation {
-        let mut unused_run_dependencies = BTreeMap::from([
-            ("mysql".into(), report.unused_global_exchange_count),
-            ("http".into(), report.unused_global_http_exchange_count),
-            (
-                "redis".into(),
-                report
-                    .protocols
-                    .redis
-                    .unused_global_count
-                    .unwrap_or(report.protocols.redis.unused_global.len()),
-            ),
-            (
-                "memcached".into(),
-                report
-                    .protocols
-                    .memcached
-                    .unused_global_count
-                    .unwrap_or(report.protocols.memcached.unused_global.len()),
-            ),
-            (
-                "motan".into(),
-                report
-                    .protocols
-                    .motan
-                    .unused_global_count
-                    .unwrap_or(report.protocols.motan.unused_global.len()),
-            ),
-            (
-                "kafka".into(),
-                report
-                    .protocols
-                    .kafka
-                    .unused_global_count
-                    .unwrap_or(report.protocols.kafka.unused_global.len()),
-            ),
-        ]);
+    pub(super) fn report<S: traffic_replay::report::SessionSnapshot>(
+        &self,
+        report: &ReplayReport<S>,
+    ) -> BatchReconciliation {
+        let mut unused_run_dependencies = report.native.unused_run_dependencies();
         for (protocol, native) in &report.dependency_protocols {
             *unused_run_dependencies.entry(protocol.clone()).or_default() +=
                 native.unused_global_count;
@@ -122,23 +90,7 @@ impl BatchScope {
                 .insert("shutdown".into(), shutdown.try_into().unwrap_or(usize::MAX));
         }
         // Actual requests outside a primary Case remain independent obligations.
-        let actual_unmatched_or_unsafe = report.unmatched_queries.len()
-            + report.unsupported_commands.len()
-            + report.unmatched_http_requests.len()
-            + report.unsupported_http_exchanges.len()
-            + report.http_request_header_mismatches.len()
-            + report.protocols.redis.unmatched.len()
-            + report.protocols.redis.unsupported.len()
-            + report.protocols.redis.unsafe_events.len()
-            + report.protocols.memcached.unmatched.len()
-            + report.protocols.memcached.unsupported.len()
-            + report.protocols.memcached.unsafe_events.len()
-            + report.protocols.motan.unmatched.len()
-            + report.protocols.motan.unsupported.len()
-            + report.protocols.motan.unsafe_events.len()
-            + report.protocols.kafka.unmatched.len()
-            + report.protocols.kafka.unsupported.len()
-            + report.protocols.kafka.unsafe_events.len()
+        let actual_unmatched_or_unsafe = report.native.unmatched_or_unsafe()
             + report.unrecorded_targets.len()
             + report
                 .dependency_protocols

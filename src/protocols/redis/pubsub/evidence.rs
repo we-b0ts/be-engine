@@ -1,7 +1,7 @@
 //! Preserve real subscription confirmations without changing case ownership.
 use crate::AppState;
 use crate::active_case::DependencyTargets;
-use crate::recorder::RecorderEvent;
+use crate::protocols::recording::events::RecorderEvent;
 
 pub(in crate::protocols::redis) async fn record_subscription(
     state: &AppState,

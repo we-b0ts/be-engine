@@ -1,4 +1,4 @@
-pub(in crate::replay) mod recording;
+pub(crate) mod recording;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -8,7 +8,7 @@ use crate::recording_network::{
     RECORDING_NETWORK_FILENAME, RecordedEndpoint, RecordingNetworkManifest,
 };
 
-pub(super) fn write_test_recording_network_manifest(root_dir: &Path) {
+pub(crate) fn write_test_recording_network_manifest(root_dir: &Path) {
     // Protocol tests author semantic JSONL fixtures directly. Pair those fixtures with the
     // run-level network artifact that the real Recorder now writes.
     if let Some(run) = crate::dependency_index::recording::root(root_dir) {

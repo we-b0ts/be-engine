@@ -4,7 +4,8 @@ use uuid::Uuid;
 use super::*;
 use crate::config::AppConfig;
 use crate::dependency::DependencyExchangeOutcome;
-use crate::recorder::{BodyCapture, HttpExchangeEvent, MotanExchangeEvent};
+use crate::protocols::recording::events::{HttpExchangeEvent, MotanExchangeEvent};
+use crate::recorder::BodyCapture;
 
 fn http_event(authority: &str, method: &str, uri: &str) -> RecorderEvent {
     RecorderEvent::HttpExchange(HttpExchangeEvent {

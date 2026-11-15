@@ -1,9 +1,15 @@
 //! Source registration binds native evidence to the shared execution inventory.
+use crate::protocols::replay::http;
+use crate::protocols::replay::mysql;
+use crate::protocols::replay::redis;
 use crate::replay::{
     self, RecordedProxyError, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol,
     ReplayTarget, TargetKey,
 };
-use crate::replay::{http, kafka, memcached, motan, mysql, native, redis, register_replay_target};
+use crate::{
+    protocols::replay::kafka, protocols::replay::memcached, protocols::replay::motan,
+    replay::native, replay::register_replay_target,
+};
 use anyhow::{Context, Result, anyhow, ensure};
 use mysql::{MysqlReplayState, ReplayExchange};
 use serde::Deserialize;
@@ -20,6 +26,7 @@ type RecordedMysqlExchange =
     traffic_protocol_mysql::recorded::RecordedMysqlExchange<crate::dependency_index::RecordRef>;
 use traffic_protocol_mysql::session_identity::{identity_from_connection, identity_from_exchange};
 use traffic_replay::ReplaySource;
+pub(crate) mod preparation;
 mod record;
 pub(crate) use record::DependencyRecord;
 
@@ -27,61 +34,6 @@ pub(crate) fn validate_index_record(value: &Value) -> Result<()> {
     replay::dependencies::validate_outcome(value)?;
     let _: DependencyRecord = serde_json::from_value(value.clone())?;
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn load_dependency_file(
-    path: &Path,
-    source: ReplaySource,
-    case_id: Option<&str>,
-    mysql: &mut MysqlReplayState,
-    http_exchanges: &mut Vec<http::ReplayHttpExchange>,
-    http_blackholes: &mut Vec<http::ReplayHttpBlackhole>,
-    redis: &mut redis::RedisReplayState,
-    memcached: &mut memcached::MemcachedReplayState,
-    kafka: &mut kafka::KafkaReplayState,
-    motan: &mut motan::MotanReplayState,
-    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
-    connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
-    process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
-    native: &mut native::Inventory,
-) -> Result<(
-    replay::execution_plan::SourceScopeIdentity,
-    Vec<replay::report::unused_source::CaptureFact>,
-)> {
-    let replay::dependencies::SourceRecords {
-        records,
-        scope,
-        facts,
-    } = replay::dependencies::read_dependency_file::<DependencyRecord>(path).await?;
-    let cleanup = if source == ReplaySource::Case {
-        replay::lifecycle_cleanup::load_refs(&crate::dependency_index::scoped::case_directory(
-            path,
-        )?)
-        .await?
-    } else {
-        BTreeSet::new()
-    };
-    register_dependency_records(
-        path,
-        records,
-        &BTreeSet::new(),
-        source,
-        case_id,
-        mysql,
-        http_exchanges,
-        http_blackholes,
-        redis,
-        memcached,
-        kafka,
-        motan,
-        targets,
-        connection_identities,
-        process_owned_dependencies,
-        &cleanup,
-        native,
-    )?;
-    Ok((scope, facts))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -358,10 +310,11 @@ pub(crate) fn authorize(
             DependencyRecord::MysqlExchange(record) => {
                 if record.connection_id.zip(record.query_sequence).is_some_and(
                     |(connection_id, sequence)| {
-                        references.contains(&replay::RecordedReference::Mysql {
+                        references.contains(&replay::RecordedReference::connection(
+                            "mysql",
                             connection_id,
                             sequence,
-                        })
+                        ))
                     },
                 ) {
                     record.authorize_lifecycle_cleanup()?;
@@ -374,7 +327,7 @@ pub(crate) fn authorize(
             }
             DependencyRecord::HttpExchange(record)
                 if record.exchange_id().is_some_and(|exchange_id| {
-                    references.contains(&replay::RecordedReference::Http { exchange_id })
+                    references.contains(&replay::RecordedReference::exchange("http", exchange_id))
                 }) =>
             {
                 record.authorize_lifecycle_cleanup()?;

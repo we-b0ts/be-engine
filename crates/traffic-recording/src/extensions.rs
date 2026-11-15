@@ -9,6 +9,23 @@ pub struct RecordingExtensions {
 }
 
 impl RecordingExtensions {
+    pub fn insert<T: Send + Sync + 'static>(&self, value: T) {
+        self.values
+            .lock()
+            .expect("recording extensions poisoned")
+            .insert(TypeId::of::<T>(), Arc::new(value));
+    }
+
+    pub fn existing<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.values
+            .lock()
+            .expect("recording extensions poisoned")
+            .get(&TypeId::of::<T>())?
+            .clone()
+            .downcast()
+            .ok()
+    }
+
     pub fn get<T: Default + Send + Sync + 'static>(&self) -> Arc<T> {
         self.values
             .lock()

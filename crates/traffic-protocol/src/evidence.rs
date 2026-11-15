@@ -1,9 +1,14 @@
 //! Native evidence capabilities installed by application composition.
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::observation::{NativeSummaries, NativeSummary, TrafficInteraction};
-use anyhow::{Result, ensure};
+use crate::observation::{NativeSummaries, NativeSummary, RecordingSummary, TrafficInteraction};
+use anyhow::{Context, Result, ensure};
 use serde_json::Value;
+use traffic_model::recording::ProtocolRef;
+mod recording_summary;
+mod timing;
+pub use recording_summary::RecordingSummaries;
+pub use timing::SourceTiming;
 
 /// Authenticated storage is owned by the host. Protocol implementations decode
 /// their native payload without depending on its physical location or reader.
@@ -22,6 +27,42 @@ pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
     fn event_types(&self) -> &'static [&'static str];
     fn supports_replay(&self, event: &Value) -> bool;
+    fn include_in_recording_summary(&self, event: &Value) -> bool {
+        event["capture"]["semantic_required"] != false
+    }
+    fn recording_summary(&self) -> Option<Box<dyn RecordingSummary>> {
+        None
+    }
+    fn recording_safety_issue(&self, _event: &Value) -> Option<String> {
+        None
+    }
+    fn supports_input_timing(&self, _event_type: &str) -> bool {
+        false
+    }
+    fn source_timing(&self, _event: &Value) -> SourceTiming {
+        SourceTiming::Unsupported
+    }
+    fn connection_endpoint(&self, event: &Value) -> Result<Option<crate::connection::Endpoint>> {
+        let Some(endpoint) = self
+            .interaction(event)
+            .and_then(|interaction| interaction.endpoint)
+        else {
+            return Ok(None);
+        };
+        let authority = endpoint.parse::<http::uri::Authority>()?;
+        Ok(authority
+            .port_u16()
+            .map(|port| crate::connection::Endpoint {
+                host: crate::observation::normalize_host(authority.host()),
+                port,
+            }))
+    }
+    fn finite_reference(&self, event: &Value) -> Result<Option<ProtocolRef>> {
+        capture_reference(event)
+    }
+    fn supports_interaction_inventory(&self) -> bool {
+        true
+    }
     fn interaction(&self, _event: &Value) -> Option<TrafficInteraction> {
         None
     }
@@ -34,6 +75,17 @@ pub trait EvidenceAdapter: Send + Sync {
     fn process_summary(&self, _name: &str) -> Option<Box<dyn NativeSummary>> {
         None
     }
+}
+
+fn capture_reference(event: &Value) -> Result<Option<ProtocolRef>> {
+    if event["capture"]["semantic_required"] != true {
+        return Ok(None);
+    }
+    let exchange_id = event["capture"]["exchange_id"]
+        .as_str()
+        .context("Source dependency has no framework capture identity")?
+        .parse()?;
+    Ok(Some(ProtocolRef::exchange("capture", exchange_id)))
 }
 
 #[derive(Clone)]
@@ -58,6 +110,65 @@ impl std::fmt::Debug for EvidenceRegistry {
 }
 
 impl EvidenceRegistry {
+    pub fn connection_endpoint(
+        &self,
+        event: &Value,
+    ) -> Result<Option<crate::connection::Endpoint>> {
+        match event["event_type"]
+            .as_str()
+            .and_then(|kind| self.events.get(kind))
+        {
+            Some(index) => self.registrations[*index]
+                .adapter
+                .connection_endpoint(event),
+            None => Ok(None),
+        }
+    }
+    pub fn recording_safety_issue(&self, event: &Value) -> Option<String> {
+        self.registrations
+            .iter()
+            .find_map(|entry| entry.adapter.recording_safety_issue(event))
+    }
+    pub fn supports_input_timing(&self, event_type: &str) -> bool {
+        self.events.get(event_type).is_some_and(|index| {
+            self.registrations[*index]
+                .adapter
+                .supports_input_timing(event_type)
+        })
+    }
+
+    pub fn source_timing(&self, event: &Value) -> SourceTiming {
+        event["event_type"]
+            .as_str()
+            .and_then(|kind| self.events.get(kind))
+            .map_or(SourceTiming::Unsupported, |index| {
+                self.registrations[*index].adapter.source_timing(event)
+            })
+    }
+    pub fn finite_reference(&self, event: &Value) -> Result<Option<ProtocolRef>> {
+        if event["capture"]["semantic_required"] == false {
+            return Ok(None);
+        }
+        match event["event_type"]
+            .as_str()
+            .and_then(|kind| self.events.get(kind))
+        {
+            Some(index) => self.registrations[*index].adapter.finite_reference(event),
+            None => capture_reference(event),
+        }
+    }
+
+    pub fn supports_interaction_inventory(&self, event: &Value) -> bool {
+        event["event_type"]
+            .as_str()
+            .and_then(|kind| self.events.get(kind))
+            .is_none_or(|index| {
+                self.registrations[*index]
+                    .adapter
+                    .supports_interaction_inventory()
+            })
+    }
+
     pub fn register(&mut self, name: &str, adapter: Arc<dyn EvidenceAdapter>) -> Result<()> {
         ensure!(!name.is_empty(), "evidence adapter name is empty");
         ensure!(
@@ -295,5 +406,43 @@ mod tests {
         assert!(
             registry.supports_replay(&json!({"event_type":"custom_call","native_complete":true}))
         );
+    }
+
+    #[test]
+    fn finite_references_use_the_installed_native_evidence_owner() {
+        struct NativeReferences;
+        impl EvidenceAdapter for NativeReferences {
+            fn schema(&self) -> &'static str {
+                "custom-reference/v1"
+            }
+            fn event_types(&self) -> &'static [&'static str] {
+                &["custom_delivery"]
+            }
+            fn supports_replay(&self, _: &Value) -> bool {
+                true
+            }
+            fn finite_reference(&self, event: &Value) -> Result<Option<ProtocolRef>> {
+                Ok(Some(ProtocolRef::new(
+                    "custom",
+                    json!({
+                        "stream":event["native_stream"], "offset":event["native_offset"]
+                    }),
+                )?))
+            }
+        }
+        let event =
+            json!({"event_type":"custom_delivery", "native_stream":"orders", "native_offset":17});
+        let mut registry = EvidenceRegistry::default();
+        assert!(registry.finite_reference(&event).unwrap().is_none());
+        registry
+            .register("custom", Arc::new(NativeReferences))
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(registry.finite_reference(&event).unwrap()).unwrap(),
+            json!({"protocol":"custom", "stream":"orders", "offset":17})
+        );
+        let mut observation = event;
+        observation["capture"] = json!({"semantic_required":false});
+        assert!(registry.finite_reference(&observation).unwrap().is_none());
     }
 }

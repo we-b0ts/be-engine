@@ -189,3 +189,7 @@ pub mod capture;
 pub mod recorded;
 pub mod response;
 pub mod uri;
+
+pub mod candidate;
+
+mod recording_summary;

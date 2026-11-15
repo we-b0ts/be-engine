@@ -10,7 +10,7 @@ mod redis;
 struct CompareContext<'a> {
     policy: &'a CompiledPolicy,
     clocks: AnchorClocks,
-    metadata: &'a crate::replay::MysqlInferenceMetadata,
+    metadata: &'a crate::protocols::replay::MysqlInferenceMetadata,
     copies: Option<(&'a TimeCopyStore, &'a str)>,
     request: Option<&'a Value>,
     native_obligations: &'a mut BTreeSet<String>,
@@ -117,7 +117,7 @@ pub(super) fn verify(
         let request = bundle.request(&directory.join("request.json"))?;
         let trace = bundle.dependency_path(&directory)?;
         bundle.freeze(&trace)?;
-        let mut metadata = crate::replay::MysqlInferenceMetadata::default();
+        let mut metadata = crate::protocols::replay::MysqlInferenceMetadata::default();
         visit(&trace, |event| metadata.observe_event(event))?;
         if selected.contains(crate::policy::GLOBAL_HTTP_ID)
             && let Some(http) = &policy.http
@@ -205,7 +205,7 @@ pub(super) fn verify(
                         }
                         if dependency::protocol(event) == Some(Protocol::Mysql)
                             && surface == Surface::DependencyRequest
-                            && !crate::replay::mysql_request_candidates_related(
+                            && !crate::protocols::replay::mysql_request_candidates_related(
                                 &raw, &target, observed,
                             )?
                         {
@@ -320,7 +320,7 @@ pub(super) fn global_trace(
             continue;
         }
         bundle.freeze(&path)?;
-        let mut metadata = crate::replay::MysqlInferenceMetadata::default();
+        let mut metadata = crate::protocols::replay::MysqlInferenceMetadata::default();
         visit(&path, |event| metadata.observe_event(event))?;
         visit(&path, |event| {
             if dependency::protocol(event).is_none() {
@@ -461,7 +461,8 @@ fn primary(
         .collect::<BTreeSet<_>>();
     let super::super::manifest::PrimaryResponse { source, target } =
         bundle.primary_response(case, directory)?;
-    let source_pair = crate::replay::response_payload_pair(request, &source, None)?;
+    let source_pair =
+        crate::primary_protocol::assertion::response_payload_pair(request, &source, None)?;
     let method = request["method"]
         .as_str()
         .context("global Source method unavailable")?;
@@ -472,11 +473,18 @@ fn primary(
     let body = capture(&request["body"])
         .ok()
         .and_then(|bytes| crate::json_value::parse(&bytes));
-    let native = crate::replay::native_response_selected(policy, method, uri.path(), body.as_ref())
-        .into_iter()
-        .filter(|rule| source_pair.body_available || !rule.rule.effect.is_response_body())
-        .collect::<Vec<_>>();
-    let context = crate::replay::NativeResponseContext::from_rules(&native, root, directory)?;
+    let native = crate::primary_protocol::assertion::native::selected(
+        policy,
+        method,
+        uri.path(),
+        body.as_ref(),
+    )
+    .into_iter()
+    .filter(|rule| source_pair.body_available || !rule.rule.effect.is_response_body())
+    .collect::<Vec<_>>();
+    let context = crate::primary_protocol::assertion::native::NativeResponseContext::from_rules(
+        &native, root, directory,
+    )?;
     for (path, digest) in context.key_witnesses() {
         bundle.freeze(path)?;
         ensure!(
@@ -506,17 +514,19 @@ fn primary(
         }
     };
     let mut comparison = compare_body(&source_pair.source, &source_pair.source, plan, clocks)?;
-    comparison.merge_and_validate(crate::replay::compare_interaction_global(
-        source_pair.source_interaction.as_ref(),
-        source_pair.source_interaction.as_ref(),
-        Some(plan),
-        ClockPair {
-            source: source_pair.interaction_times.source,
-            target: source_pair.interaction_times.source,
-        },
-        clocks.case,
-        source_pair.max_interaction_message_bytes,
-    )?);
+    comparison.merge_and_validate(
+        crate::primary_protocol::assertion::compare_interaction_global(
+            source_pair.source_interaction.as_ref(),
+            source_pair.source_interaction.as_ref(),
+            Some(plan),
+            ClockPair {
+                source: source_pair.interaction_times.source,
+                target: source_pair.interaction_times.source,
+            },
+            clocks.case,
+            source_pair.max_interaction_message_bytes,
+        )?,
+    );
     let relevant = record_source(&comparison, &selected, result)
         .context("phase=source_self_validation, document=body_or_interaction")?;
     if !relevant {
@@ -536,14 +546,16 @@ fn primary(
         .context("global JSON Target body unavailable")?;
     let checked = (|| -> Result<usize> {
         let mut comparison = compare_body(&pair.source, target_body, plan, clocks)?;
-        comparison.merge_and_validate(crate::replay::compare_interaction_global(
-            pair.source_interaction.as_ref(),
-            pair.target_interaction.as_ref(),
-            Some(plan),
-            pair.interaction_times,
-            pair.request_times,
-            pair.max_interaction_message_bytes,
-        )?);
+        comparison.merge_and_validate(
+            crate::primary_protocol::assertion::compare_interaction_global(
+                pair.source_interaction.as_ref(),
+                pair.target_interaction.as_ref(),
+                Some(plan),
+                pair.interaction_times,
+                pair.request_times,
+                pair.max_interaction_message_bytes,
+            )?,
+        );
         valid_count(&comparison, &selected)
     })();
     match checked {
@@ -574,7 +586,7 @@ fn compare(
         &mut CompareContext {
             policy,
             clocks,
-            metadata: &crate::replay::MysqlInferenceMetadata::default(),
+            metadata: &crate::protocols::replay::MysqlInferenceMetadata::default(),
             copies: None,
             request: None,
             native_obligations: &mut BTreeSet::new(),
@@ -593,7 +605,7 @@ fn compare_prepared(
     let clocks = context.clocks;
     if dependency::protocol(event) == Some(Protocol::Mysql) {
         if source == target && context.copies.is_none() {
-            return crate::replay::mysql_validate_global_source_witness(
+            return crate::protocols::replay::mysql_validate_global_source_witness(
                 event["database"].as_str(),
                 source,
                 surface,
@@ -604,7 +616,7 @@ fn compare_prepared(
             );
         }
         if let Some((store, case)) = context.copies {
-            return crate::replay::mysql_validate_global_witness_with_time_copies(
+            return crate::protocols::replay::mysql_validate_global_witness_with_time_copies(
                 event["database"].as_str(),
                 source,
                 target,
@@ -618,7 +630,7 @@ fn compare_prepared(
             );
         }
         let store = TimeCopyStore::default();
-        return crate::replay::mysql_validate_global_witness_with_time_copies(
+        return crate::protocols::replay::mysql_validate_global_witness_with_time_copies(
             event["database"].as_str(),
             source,
             target,
@@ -657,14 +669,21 @@ fn compare_prepared(
     {
         match dependency::protocol(event) {
             Some(Protocol::Http) => {
-                crate::replay::http_validate_witness(source, native_target, surface, clocks)?;
+                crate::protocols::replay::http_validate_witness(
+                    source,
+                    native_target,
+                    surface,
+                    clocks,
+                )?;
             }
             Some(Protocol::Memcached) => {
                 let keys = before
                     .iter()
                     .map(|(key, _)| key.clone())
                     .collect::<Vec<_>>();
-                crate::replay::memcached_validate_witness(source, target, surface, &keys, clocks)?;
+                crate::protocols::replay::memcached::contracts::validate_witness(
+                    source, target, surface, &keys, clocks,
+                )?;
             }
             _ => {}
         }
@@ -674,7 +693,7 @@ fn compare_prepared(
         "global JSON dependency value inventory changed"
     );
     if dependency::protocol(event) == Some(Protocol::Http)
-        && crate::replay::http_multipart_witness_matches(source, native_target, surface)?
+        && crate::protocols::replay::http_multipart_witness_matches(source, native_target, surface)?
     {
         return Ok(comparison);
     }

@@ -167,18 +167,26 @@ async fn dirty_finalization_publishes_mysql_and_redis_source_occurrences_in_both
             serde_json::from_slice(&std::fs::read(&fixture.report).unwrap()).unwrap();
         let selected = BTreeSet::from([case.clone()]);
         let identity = report["unused_source_inventory_id"].as_str().unwrap();
+        let providers = crate::protocols::default_providers();
+        let codecs = providers.report_codecs();
         let published =
-            report::unused_source::published_for_cases(&report, identity, &selected).unwrap();
+            report::unused_source::published_for_cases(&report, identity, &selected, codecs)
+                .unwrap();
         assert_eq!(published.len(), 2);
-        for (protocol, row) in report::unused_source::case_unused_rows(&report) {
+        for (protocol, row) in report::unused_source::case_unused_rows(&report, codecs) {
             assert!(matches!(protocol, "mysql" | "redis"));
             let original = &row["source_occurrence"];
             assert_eq!(original["captured_owner"]["origin_case_id"], case.as_str());
             assert_eq!(original["capture_complete"], true);
         }
         assert!(
-            report::unused_source::published_for_cases(&report, "another recording", &selected)
-                .is_none()
+            report::unused_source::published_for_cases(
+                &report,
+                "another recording",
+                &selected,
+                codecs
+            )
+            .is_none()
         );
         let mut missing = report.clone();
         missing["redis"]["unused_case"][0]
@@ -186,7 +194,8 @@ async fn dirty_finalization_publishes_mysql_and_redis_source_occurrences_in_both
             .unwrap()
             .remove("source_occurrence");
         assert!(
-            report::unused_source::published_for_cases(&missing, identity, &selected).is_none()
+            report::unused_source::published_for_cases(&missing, identity, &selected, codecs)
+                .is_none()
         );
     }
 }
@@ -224,10 +233,10 @@ async fn twenty_clean_cases_finalize_with_startup_debt_but_whole_session_stays_s
         report["batch_reconciliation"]["dependency_inventory_verified"],
         false
     );
-    assert!(!crate::replay::report::report_has_case_dirty_events(
-        &report
-    ));
-    assert!(crate::replay::validate_completed_receipt(&report).is_err());
+    assert!(!crate::protocols::replay::report::evidence::report_has_case_dirty_events(&report));
+    assert!(
+        crate::protocols::replay::report::validation::validate_completed_receipt(&report).is_err()
+    );
 }
 
 #[tokio::test]
@@ -239,7 +248,7 @@ async fn focused_finalization_rejects_actual_case_dependency_failures() {
         .await
         .unwrap();
     let (server, _) = listener.accept().await.unwrap();
-    let task = tokio::spawn(crate::replay::redis::handle_connection(
+    let task = tokio::spawn(crate::protocols::replay::redis::handle_connection(
         server,
         ReplayTarget {
             host: "redis.test".into(),
@@ -284,18 +293,20 @@ async fn focused_finalization_never_ignores_unfinished_http_ingress() {
     let address = listener.local_addr().unwrap();
     let mut client = TcpStream::connect(address).await.unwrap();
     let (server, peer) = listener.accept().await.unwrap();
-    let task = tokio::spawn(crate::replay::http::handle_http_replay_connection(
-        server,
-        peer,
-        ReplayTarget {
-            host: "dependency.test".into(),
-            port: 80,
-            fake_ip: "198.18.0.2".parse().unwrap(),
-            protocol: ReplayProtocol::Http,
-        },
-        fixture.runtime.state.clone(),
-        fixture.runtime.ca.clone(),
-    ));
+    let task = tokio::spawn(
+        crate::protocols::replay::http::handle_http_replay_connection(
+            server,
+            peer,
+            ReplayTarget {
+                host: "dependency.test".into(),
+                port: 80,
+                fake_ip: "198.18.0.2".parse().unwrap(),
+                protocol: ReplayProtocol::Http,
+            },
+            fixture.runtime.state.clone(),
+            fixture.runtime.ca.clone(),
+        ),
+    );
     client
         .write_all(b"POST /startup HTTP/1.1\r\nHost: dependency.test\r\nContent-Length: 1\r\n\r\n")
         .await

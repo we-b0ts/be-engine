@@ -2,10 +2,12 @@
 use super::{MAX_SELECTED_REFS, RecordedReference};
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
+use traffic_protocol::evidence::EvidenceRegistry;
 
 mod async_inventory;
 mod interaction_inventory;
@@ -86,14 +88,16 @@ struct EndingObservation {
 
 pub(super) async fn load(
     case_dir: &Path,
-    async_rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+    async_rules: &crate::recorder::async_api::CompletionPolicy,
     request_timeout: Duration,
+    evidence: &EvidenceRegistry,
 ) -> Result<Option<Metadata>> {
     let mut metadata = if let Some(raw) = read(&case_dir.join("async-api-observation.json")).await?
     {
         Some(async_metadata(&raw)?)
     } else {
-        async_inventory::from_complete_source(case_dir, async_rules, request_timeout).await?
+        async_inventory::from_complete_source(case_dir, async_rules, request_timeout, evidence)
+            .await?
     };
     let general =
         if let Some(raw) = read(&case_dir.join("dependency-tail-observation.json")).await? {
@@ -133,7 +137,7 @@ pub(super) async fn load(
             metadata.references = metadata
                 .references
                 .iter()
-                .copied()
+                .cloned()
                 .chain(general.references)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -142,7 +146,7 @@ pub(super) async fn load(
             // downgraded by older process-owned/quiet-window exemptions.
             metadata
                 .strict_references
-                .extend(metadata.references.iter().copied());
+                .extend(metadata.references.iter().cloned());
         } else {
             metadata = Some(general);
         }
@@ -160,7 +164,7 @@ pub(super) async fn load(
             metadata.references = metadata
                 .references
                 .iter()
-                .copied()
+                .cloned()
                 .chain(legacy.references)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -170,7 +174,8 @@ pub(super) async fn load(
         }
     }
     if metadata.is_none() {
-        metadata = interaction_inventory::from_complete_source(case_dir, request_timeout).await?;
+        metadata = interaction_inventory::from_complete_source(case_dir, request_timeout, evidence)
+            .await?;
     }
     if let Some(metadata) = &metadata {
         validate(metadata)?;
@@ -181,18 +186,20 @@ pub(super) async fn load(
 pub(super) async fn load_effective(
     case_dir: &Path,
     dependencies: &Path,
-    async_rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+    async_rules: &crate::recorder::async_api::CompletionPolicy,
     request_timeout: Duration,
+    evidence: &EvidenceRegistry,
 ) -> Result<Option<Metadata>> {
     let original = crate::dependency_index::scoped::case_path(case_dir);
     let derived = crate::dependency_index::scoped::view_path(dependencies).is_some()
         && dependencies != original
         && dependencies != case_dir.join("dependencies.jsonl");
-    let empty = BTreeMap::new();
+    let empty = crate::recorder::async_api::CompletionPolicy::default();
     let mut metadata = load(
         case_dir,
         if derived { &empty } else { async_rules },
         request_timeout,
+        evidence,
     )
     .await?;
     if !derived {
@@ -202,9 +209,14 @@ pub(super) async fn load_effective(
         .as_ref()
         .is_some_and(|tail| tail.recorded_idle_completion);
     if !recorded_idle
-        && let Some(mut effective) =
-            async_inventory::from_scope(case_dir, dependencies, async_rules, request_timeout)
-                .await?
+        && let Some(mut effective) = async_inventory::from_scope(
+            case_dir,
+            dependencies,
+            async_rules,
+            request_timeout,
+            evidence,
+        )
+        .await?
     {
         if let Some(captured) = metadata {
             effective.source_stop_required |= captured.source_stop_required;
@@ -216,6 +228,7 @@ pub(super) async fn load_effective(
     }
     if let Some(tail) = &mut metadata {
         let path = dependencies.to_owned();
+        let evidence = evidence.clone();
         let references =
             tokio::task::spawn_blocking(move || -> Result<BTreeSet<RecordedReference>> {
                 let mut input = crate::dependency_index::RecordStream::open(&path)?;
@@ -224,7 +237,7 @@ pub(super) async fn load_effective(
                     if raw.iter().all(u8::is_ascii_whitespace) {
                         continue;
                     }
-                    if let Some(item) = reference(&serde_json::from_slice(raw)?)? {
+                    if let Some(item) = reference(&serde_json::from_slice(raw)?, &evidence)? {
                         let inserted = references.insert(item);
                         ensure!(
                             !recorded_idle || inserted,
@@ -318,12 +331,12 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
     let references = observation
         .completed_refs
         .iter()
-        .copied()
+        .cloned()
         .collect::<BTreeSet<_>>();
     let cleanup = observation
         .cleanup_refs
         .iter()
-        .copied()
+        .cloned()
         .collect::<BTreeSet<_>>();
     ensure!(
         observation.cleanup_refs.len() <= MAX_SELECTED_REFS
@@ -364,7 +377,7 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
     Ok(metadata)
 }
 
-pub(in crate::replay) fn load_cleanup_refs(case_dir: &Path) -> Result<BTreeSet<RecordedReference>> {
+pub(crate) fn load_cleanup_refs(case_dir: &Path) -> Result<BTreeSet<RecordedReference>> {
     let path = case_dir.join("async-api-observation.json");
     let metadata = match std::fs::metadata(&path) {
         Ok(metadata) => metadata,
@@ -397,7 +410,7 @@ fn legacy(raw: &[u8]) -> Result<Metadata> {
         strict_references: observation
             .selected_completed_refs
             .iter()
-            .copied()
+            .cloned()
             .collect(),
         references: observation.selected_completed_refs,
 
@@ -427,47 +440,16 @@ fn validate(metadata: &Metadata) -> Result<()> {
     Ok(())
 }
 
-/// Cache permissions never remove a declared HTTP completion requirement.
-/// Captured scenario identity narrows the guard to this Source scenario; older
-/// captures without that identity conservatively retain every possible end.
-pub(super) async fn http_completion_rules(
+/// Native requirements are selected from the captured Source scenario.
+pub(super) async fn completion_requirements(
     case_dir: &Path,
-    rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
-) -> Result<Vec<crate::policy::AsyncHttpEnd>> {
-    if rules.is_empty() {
-        return Ok(vec![]);
-    }
-    #[derive(Deserialize)]
-    struct CapturedScenario {
-        api: Option<String>,
-        scenario_index: Option<usize>,
-    }
+    rules: &crate::recorder::async_api::CompletionPolicy,
+) -> Result<crate::recorder::async_api::CompletionRequirements> {
     let captured = read(&case_dir.join("async-api-observation.json"))
         .await?
-        .map(|raw| serde_json::from_slice::<CapturedScenario>(&raw))
+        .map(|raw| serde_json::from_slice::<serde_json::Value>(&raw))
         .transpose()?;
-    let selected = captured.as_ref().and_then(|capture| {
-        rules
-            .get(capture.api.as_deref()?)?
-            .get(capture.scenario_index?)
-    });
-    let scenarios = selected.map_or_else(
-        || {
-            rules
-                .values()
-                .flat_map(|rules| rules.iter())
-                .collect::<Vec<_>>()
-        },
-        |selected| vec![selected],
-    );
-    Ok(scenarios
-        .into_iter()
-        .flat_map(|rule| &rule.end)
-        .filter_map(|end| match end {
-            crate::policy::AsyncEnd::Http(end) => Some(end.clone()),
-            _ => None,
-        })
-        .collect())
+    Ok(rules.requirements(captured.as_ref()))
 }
 
 async fn read(path: &Path) -> Result<Option<Vec<u8>>> {

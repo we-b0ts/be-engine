@@ -122,7 +122,7 @@ pub fn query_rewrite_witness_for_scope(
                         .clone(),
                 ]);
             }
-            Ok(crate::replay::redis_field_values(
+            Ok(crate::policy::runtime::redis_field_values(
                 &witness.metadata.operation,
                 arguments,
                 (witness.metadata.surface == Surface::DependencyResponse).then_some(raw),

@@ -226,7 +226,10 @@ fn complete_unselected_methods_need_no_implementation_or_case_group_for_workflow
         "policy",
     )
     .unwrap();
-    assert!(crate::replay::validate_completed_receipt(&f.report).is_err());
+    assert!(
+        crate::protocols::replay::report::validation::validate_completed_receipt(&f.report)
+            .is_err()
+    );
 }
 
 #[test]
@@ -235,7 +238,10 @@ fn one_fresh_multimethod_session_can_certify_api_contracts_while_whole_source_re
     let f = fixture(root.path());
     validation::complete_source(&f.manifest).unwrap();
     report_valid(&f, &f.report).unwrap();
-    assert!(crate::replay::validate_completed_receipt(&f.report).is_err());
+    assert!(
+        crate::protocols::replay::report::validation::validate_completed_receipt(&f.report)
+            .is_err()
+    );
     assert!(f.state.aggregate_complete && f.state.aggregate_clean);
     let mut global = f.layout.clone();
     global.run_root = root.path().join("published");

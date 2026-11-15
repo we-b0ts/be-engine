@@ -416,7 +416,7 @@ pub fn apply_rewrite_dependency_rule(
                     .case_source
                     .as_deref()
                     .context("rewrite workflow has no case source for Redis snapshot derivation")?;
-                match crate::replay::inspect_case_source_snapshot_overlay(
+                match crate::protocols::replay::inspect_case_source_snapshot_overlay(
                     case_source,
                     &project.source_traffic_policy,
                     &applied.rule_name,

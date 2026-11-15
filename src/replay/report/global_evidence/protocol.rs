@@ -63,12 +63,7 @@ pub(super) enum NativeInventory {
     },
 }
 impl NativeInventory {
-    pub(super) fn open(report: &Path, protocol: &str, value: &Value) -> Result<Self> {
-        let providers = crate::protocols::default_providers();
-        let codec = providers.report_codec(protocol);
-        Self::open_with_codec(report, protocol, value, codec.as_deref())
-    }
-    pub(super) fn open_with_codec(
+    pub(super) fn open(
         report: &Path,
         protocol: &str,
         value: &Value,
@@ -147,11 +142,10 @@ pub(super) fn stage(
     protocol: &str,
     source: &Path,
     destination: &Path,
+    codec: Option<&dyn ReportCodec>,
 ) -> Result<()> {
-    let providers = crate::protocols::default_providers();
-    let codec = providers.report_codec(protocol);
     if let Some(mut evidence) = ProtocolEvidence::parse(value)? {
-        let extension = evidence.validate(source, protocol, codec.as_deref())?;
+        let extension = evidence.validate(source, protocol, codec)?;
         evidence.regular = evidence.regular.stage(source, destination)?;
         if let Some(section) = extension {
             evidence.extensions = serde_json::from_value(section.stage(source, destination)?)?;
@@ -163,7 +157,7 @@ pub(super) fn stage(
                 "native evidence overlaps shared inventory fields"
             );
         }
-        evidence.validate(destination, protocol, codec.as_deref())?;
+        evidence.validate(destination, protocol, codec)?;
         *value = serde_json::to_value(evidence)?;
     } else if let Some(codec) = codec
         && let Some(section) = codec.decode(source, value)?

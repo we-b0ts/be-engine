@@ -254,12 +254,13 @@ async fn redis_api_origin_unblocks_presence_and_preserves_finite_inventory_and_r
         let mut config = crate::config::SourceTrafficPolicyConfig::empty();
         config.process_owned_dependencies = rules;
         fs::write(&policy, config.render().unwrap()).unwrap();
-        let result = super::super::reclassify_background_dependencies(
-            &policy,
-            &report,
-            &std::collections::BTreeMap::from([("victim".into(), f.victim.clone())]),
-        )
-        .unwrap();
+        let result =
+            crate::protocols::replay::report::ownership::reclassify_background_dependencies(
+                &policy,
+                &report,
+                &std::collections::BTreeMap::from([("victim".into(), f.victim.clone())]),
+            )
+            .unwrap();
         assert_eq!(result.matched_unused_case, 0);
         assert!(result.remaining_dirty_case_ids.contains("victim"));
         let classified: Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
@@ -330,12 +331,13 @@ async fn same_resource_reads_keep_finite_delivery_and_reclassify_only_the_leftov
         let mut config = crate::config::SourceTrafficPolicyConfig::empty();
         config.process_owned_dependencies = f.rules();
         fs::write(&policy, config.render().unwrap()).unwrap();
-        let result = super::super::reclassify_background_dependencies(
-            &policy,
-            &report,
-            &std::collections::BTreeMap::from([("victim".into(), f.victim.clone())]),
-        )
-        .unwrap();
+        let result =
+            crate::protocols::replay::report::ownership::reclassify_background_dependencies(
+                &policy,
+                &report,
+                &std::collections::BTreeMap::from([("victim".into(), f.victim.clone())]),
+            )
+            .unwrap();
         assert_eq!(result.matched_unused_case, 0);
         assert!(result.remaining_dirty_case_ids.contains("victim"));
         let classified: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();

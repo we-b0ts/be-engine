@@ -1,35 +1,31 @@
 //! Projection of immutable inventory and session-owned consumption into reports.
 use super::*;
 
-impl ReplayState {
-    pub(super) fn snapshot_report(&self) -> ReplayReport {
-        let unused_case_http_exchanges = self.unused_http_exchanges(ReplaySource::Case, false);
-        let allowed_unused_case_http_exchanges =
-            self.unused_http_exchanges(ReplaySource::Case, true);
+impl<P: ReplayProtocolSet> RuntimeState<P> {
+    pub(crate) fn snapshot_report(&self) -> ReplayReport<P::ReportSnapshot> {
         let mut report = ReplayReport {
             dependency_protocols: self.native.snapshot(),
             dependency_sequence_missing: self.sequence_missing.clone(),
             batch_reconciliation: None,
             startup_phase: self.startup_phase.report(),
-            http_ingress: self.protocols.http_ingress.report(),
             dependency_attribution_snapshot: self.dependency_attribution_snapshot.clone(),
             dependency_hypothesis_attempts: self
                 .replay_policy
                 .as_ref()
-                .map(|p| p.request_contracts.hypothesis_attempts())
+                .map(|p| p.contracts().hypothesis_attempts())
                 .unwrap_or_default(),
             dependency_hypothesis_coverage_error: self
                 .replay_policy
                 .as_ref()
-                .and_then(|p| p.request_contracts.hypothesis_coverage_error()),
+                .and_then(|p| p.contracts().hypothesis_coverage_error()),
             dependency_hypothesis_journal: self
                 .replay_policy
                 .as_ref()
-                .and_then(|p| p.request_contracts.hypothesis_journal_manifest()),
+                .and_then(|p| p.contracts().hypothesis_journal_manifest()),
             dependency_pre_matches: self
                 .replay_policy
                 .as_ref()
-                .map(|p| p.request_contracts.pre_match_reports())
+                .map(|p| p.contracts().pre_match_reports())
                 .unwrap_or_default(),
             case_execution_failures: self.dependency_tails.failures(),
             connect_failures: self.connect_failures.snapshot(),
@@ -42,7 +38,6 @@ impl ReplayState {
                 .into(),
             egress_rejections: self.egress_rejections.values().cloned().collect(),
             version: 7,
-            mysql_transaction_semantics: MYSQL_TRANSACTION_SEMANTICS,
             session_id: self.session_id.to_string(),
             started_at: self.started_at,
             finalized_at: self.finalized_at,
@@ -72,68 +67,9 @@ impl ReplayState {
             unrecorded_targets: self.unrecorded_targets.clone(),
             success_detail_limit: SUCCESS_DETAIL_LIMIT,
             success_detail_scope: SUCCESS_DETAIL_SCOPE,
-            connections: self.protocols.mysql.events.connections,
-            connection_events: self.protocols.mysql.events.connection_events.clone(),
-            builtin_query_count: self.protocols.mysql.events.builtin_query_count,
-            builtin_queries: self.protocols.mysql.events.builtin_queries.clone(),
-            matched_query_count: self.protocols.mysql.events.matched_query_count,
-            matched_queries: self.protocols.mysql.events.matched_queries.clone(),
-            unmatched_queries: self.protocols.mysql.events.unmatched_queries.clone(),
-            unsupported_commands: self.protocols.mysql.events.unsupported_commands.clone(),
-            metadata_warnings: self.protocols.mysql.events.metadata_warnings.clone(),
-            unused_global_exchanges: self.unused_exchanges(ReplaySource::Startup),
-            unused_global_exchange_count: self.global_mysql_unused_count(),
-            unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
-            process_owned_mysql_exchanges: self.process_owned_mysql(),
-            global_mysql_transaction_exchanges: self.global_mysql_transactions(),
-            allowed_unused_mysql_rollback_exchanges: self.allowed_unused_rollbacks(),
-            allowed_unused_mysql_commit_exchanges: self.allowed_unused_commits(),
-            allowed_unused_mysql_autocommit_exchanges: self.allowed_unused_autocommit(),
-            allowed_unused_mysql_connection_read_committed_exchanges: self
-                .allowed_unused_connection_read_committed(),
-            transaction_equivalent_mysql_autocommit_exchanges: self
-                .transaction_equivalent_autocommit(),
-            mysql_isolation_equivalence: self.protocols.mysql.isolation.audit(),
-            matched_http_exchange_count: self.protocols.http_events.matched_count,
-            cancelled_http_streams: self
-                .protocols
-                .http_events
-                .cancelled
-                .values()
-                .cloned()
-                .collect(),
-            matched_http_exchanges: self.protocols.http_events.matched.clone(),
-            unmatched_http_requests: self.protocols.http_events.unmatched.clone(),
-            unsupported_http_exchanges: self.protocols.http_events.unsupported.clone(),
-            http_request_header_mismatches: self.protocols.http_events.header_mismatches.clone(),
-            http_request_header_observations: self
-                .protocols
-                .http_events
-                .header_observations
-                .clone(),
-            http_request_header_observation_count: self
-                .protocols
-                .http_events
-                .header_observation_count,
-            unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Startup, false),
-            unused_global_http_exchange_count: self.global_http_unused_count(),
-            unused_case_http_exchanges,
-            allowed_unused_case_http_exchanges,
-            protocols: ProtocolsReport {
-                redis: self.protocols.redis.snapshot(),
-                memcached: self.protocols.memcached.snapshot(),
-                kafka: self.protocols.kafka.snapshot(),
-                motan: self.protocols.motan.snapshot(),
-            },
             ca_cert_path: self.ca_cert_path.display().to_string(),
-            replay_policy: self.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
-            http_ignored_query_params: self.protocols.http_ignore_query_params.clone(),
-            allowed_unused_http: self.protocols.allowed_unused_http.as_ref().map(|config| {
-                ReplayAllowedUnusedHttpReport {
-                    config: config.config_path.display().to_string(),
-                    hosts: config.hosts.iter().cloned().collect(),
-                }
-            }),
+            replay_policy: self.replay_policy.as_ref().map(ReplayPolicy::report),
+            native: P::snapshot_report(self),
         };
         report
             .case_execution_failures
@@ -157,7 +93,7 @@ impl ReplayState {
         report
     }
 
-    pub(super) fn case_reports(&self) -> Vec<ReplayCaseReport> {
+    pub(crate) fn case_reports(&self) -> Vec<ReplayCaseReport> {
         self.cases
             .values()
             .map(|case| ReplayCaseReport {
@@ -168,11 +104,11 @@ impl ReplayState {
                 source_request_started_at: self
                     .replay_policy
                     .as_ref()
-                    .and_then(|policy| policy.request_contracts.request_times(&case.id).source),
+                    .and_then(|policy| policy.contracts().request_times(&case.id).source),
                 target_request_started_at: self
                     .replay_policy
                     .as_ref()
-                    .and_then(|policy| policy.request_contracts.request_times(&case.id).target),
+                    .and_then(|policy| policy.contracts().request_times(&case.id).target),
             })
             .collect()
     }

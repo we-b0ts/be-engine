@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 mod usage;
 pub use usage::{Change, Position, Usage};
+pub mod evidence;
+
+/// Native snapshots supply their evidence format and semantic closure counts.
+/// Session lifetime and final acceptance remain owned by Replay.
+pub trait SessionSnapshot: std::fmt::Debug + Serialize + Send + 'static {
+    fn is_dirty(&self) -> bool;
+    fn unused_run_dependencies(&self) -> std::collections::BTreeMap<String, usize>;
+    fn unmatched_or_unsafe(&self) -> usize;
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum ReportRows {

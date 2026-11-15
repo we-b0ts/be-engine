@@ -17,13 +17,13 @@ use crate::AppState;
 use crate::access_policy::AccessDecision;
 use crate::config::{HttpGatewayConfig, HttpGatewayFallbackMode};
 use crate::http::access::classify_method;
-use crate::recorder::http::case::{
+use crate::protocols::recording::events::{
+    HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_case_body,
+};
+use crate::protocols::recording::http::case::{
     CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case,
 };
-use crate::recorder::{
-    CaseContext, HeaderMapSnapshot, HttpExchangeEvent, PrimaryCaseDescriptor, ProxyErrorEvent,
-    RecorderEvent, capture_body, capture_case_body,
-};
+use crate::recorder::{CaseContext, PrimaryCaseDescriptor, capture_body};
 use crate::recording_control::RecordingListener;
 
 mod admission;

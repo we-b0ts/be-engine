@@ -166,7 +166,7 @@ async fn lifecycle_redis_pipeline_requires_every_real_request_and_target_termina
         let state = runtime.state.clone();
         assert_eq!(command(&state, "begin").await["ok"], true);
         let (mut client, server, _) = pair().await;
-        let task = tokio::spawn(crate::replay::redis::handle_connection(
+        let task = tokio::spawn(crate::protocols::replay::redis::handle_connection(
             server,
             ReplayTarget {
                 host: "redis.test".into(),
@@ -225,7 +225,7 @@ async fn lifecycle_mysql_waits_without_fabricating_an_error_or_result() {
         let state = runtime.state.clone();
         assert_eq!(command(&state, "begin").await["ok"], true);
         let (mut client, server, peer) = pair().await;
-        let task = tokio::spawn(crate::replay::mysql::handle_connection(
+        let task = tokio::spawn(crate::protocols::replay::mysql::handle_connection(
             server,
             peer,
             Some(TargetKey {
@@ -359,7 +359,7 @@ async fn dependency_failure_closes_pending_redis_only_after_real_error_delivery(
             protocol: ReplayProtocol::Redis,
         };
         let (mut pending, server, _) = pair().await;
-        let waiting = tokio::spawn(crate::replay::redis::handle_connection(
+        let waiting = tokio::spawn(crate::protocols::replay::redis::handle_connection(
             server,
             target.clone(),
             state.clone(),
@@ -380,7 +380,7 @@ async fn dependency_failure_closes_pending_redis_only_after_real_error_delivery(
         let mut ordinary = None;
         if deliver_failure {
             let (mut client, server, _) = pair().await;
-            let task = tokio::spawn(crate::replay::redis::handle_connection(
+            let task = tokio::spawn(crate::protocols::replay::redis::handle_connection(
                 server,
                 target,
                 state.clone(),

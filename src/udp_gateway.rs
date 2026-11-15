@@ -15,7 +15,8 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
-use crate::recorder::{BodyCapture, RecorderEvent, UdpDatagramEvent, capture_body};
+use crate::protocols::recording::events::{RecorderEvent, UdpDatagramEvent};
+use crate::recorder::{BodyCapture, capture_body};
 use crate::recording_control::RecordingListener;
 
 const UDP_RECV_BUFFER_BYTES: usize = 65_535;

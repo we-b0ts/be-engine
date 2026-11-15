@@ -48,17 +48,17 @@ impl From<anyhow::Error> for Rejected {
 }
 
 fn identity(
-    owner: &policy::request_contract::RequestContracts,
+    owner: &dyn policy::ValueRuleHost,
     inventory: &Inventory,
     index: usize,
     comparison: &Comparison,
 ) -> Result<IdentityDecision> {
     let scope = inventory.scope(index);
-    if inventory.core.exchanges[index].source.source == ReplaySource::Case {
-        owner.preview_identity_pairs(&scope, &comparison.identity_pairs())
-    } else {
-        owner.preview_run_identity_pairs(&scope, &comparison.identity_pairs())
-    }
+    owner.preview_identity_pairs(
+        &scope,
+        &comparison.identity_pairs(),
+        inventory.core.exchanges[index].source.source == ReplaySource::Case,
+    )
 }
 
 impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeState<P>>
@@ -120,7 +120,13 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
             },
             |exchange| native.clocks(exchange.index, self.observed, false),
             |exchange, comparison| {
-                identity(&native.contracts, native, exchange.index, comparison).map(|_| ())
+                identity(
+                    native.contracts.as_ref(),
+                    native,
+                    exchange.index,
+                    comparison,
+                )
+                .map(|_| ())
             },
         )?;
         let selected = match selected {
@@ -140,14 +146,20 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
             }
         };
         let index = selected.index;
-        let request_identity = identity(&native.contracts, native, index, &selected.comparison)?;
+        let request_identity = identity(
+            native.contracts.as_ref(),
+            native,
+            index,
+            &selected.comparison,
+        )?;
         let delay = native.core.exchanges[index].native.response_delay;
         let run_owned = native.core.exchanges[index].source.source.is_run_owned();
-        let mut decision =
-            policy::request_contract::Decision::from_value_comparison(selected.comparison);
-        decision.identity = Some(request_identity);
         let ticket = state.native.core.claim(index)?;
-        if let Err(error) = state.native.contracts.commit(decision) {
+        if let Err(error) = state
+            .native
+            .contracts
+            .commit_comparison(selected.comparison, request_identity)
+        {
             state.native.core.fail(index, &ticket);
             return Err(error.into());
         }
@@ -213,8 +225,9 @@ impl Inventory {
     ) -> Result<Box<dyn traffic_protocol::output::OutputStream>> {
         let exchange = &self.core.exchanges[index];
         let scope = self.scope(index);
-        let rendered = exchange.response.render_delivery(
-            self.clocks(index, observed, true),
+        let clocks = self.clocks(index, observed, true);
+        let rendered = exchange.response.render_delivery_with_documents(
+            clocks,
             &crate::value_contract::json::PolicyMetadata,
             &exchange.rebase_time,
             |selected| {
@@ -222,13 +235,15 @@ impl Inventory {
                     .identity_deliveries(&scope, selected)
                     .map(|(values, _)| values)
             },
+            |source, delivered| {
+                self.contracts
+                    .translate_document(&scope, source, delivered, clocks)
+            },
         )?;
-        let proposed = identity(&self.contracts, self, index, &rendered.comparison)?;
+        let proposed = identity(self.contracts.as_ref(), self, index, &rendered.comparison)?;
         let response = exchange.native.response.output(&rendered.values)?;
-        let mut decision =
-            policy::request_contract::Decision::from_value_comparison(rendered.comparison);
-        decision.identity = Some(proposed);
-        self.contracts.commit(decision)?;
+        self.contracts
+            .commit_comparison(rendered.comparison, proposed)?;
         Ok(response)
     }
 }

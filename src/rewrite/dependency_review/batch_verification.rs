@@ -225,10 +225,10 @@ pub(super) fn validate_api_scope(
                 rule,
                 method,
                 request["uri"].as_str().context("origin URI absent")?,
-                crate::replay::native_source_request_body(&request).as_ref(),
+                crate::primary_protocol::assertion::native::source_request_body(&request).as_ref(),
             ) && crate::policy::async_response_matches(
                 rule,
-                crate::replay::native_source_request_body(&response).as_ref(),
+                crate::primary_protocol::assertion::native::source_request_body(&response).as_ref(),
             );
         }
         ensure!(

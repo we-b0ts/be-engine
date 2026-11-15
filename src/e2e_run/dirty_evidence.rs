@@ -171,27 +171,27 @@ pub(super) fn build(state: &ActiveRunState, complete: bool, dirty: bool) -> Resu
 }
 
 fn source_pre_readiness(state: &ActiveRunState) -> Result<Option<E2eSourcePreReadiness>> {
-    Ok(
-        load_pre_readiness_traffic_summary(&state.case_source)?.map(|value| {
-            E2eSourcePreReadiness {
-                phase: value.phase,
-                role: "reference_only".to_string(),
-                interaction_count: value.data_interactions,
-                endpoints: value
-                    .endpoints
-                    .into_iter()
-                    .map(|endpoint| E2eSourcePreReadinessEndpoint {
-                        endpoint: endpoint.endpoint,
-                        interaction_count: endpoint.interaction_count,
-                        protocols: endpoint.protocols,
-                    })
-                    .collect(),
-                unresolved_interactions: value.unresolved_interactions,
-                omitted_interactions: value.omitted_interactions,
-                truncated: value.truncated,
-            }
-        }),
-    )
+    Ok(load_pre_readiness_traffic_summary(
+        &state.case_source,
+        crate::protocols::default_providers().evidence(),
+    )?
+    .map(|value| E2eSourcePreReadiness {
+        phase: value.phase,
+        role: "reference_only".to_string(),
+        interaction_count: value.data_interactions,
+        endpoints: value
+            .endpoints
+            .into_iter()
+            .map(|endpoint| E2eSourcePreReadinessEndpoint {
+                endpoint: endpoint.endpoint,
+                interaction_count: endpoint.interaction_count,
+                protocols: endpoint.protocols,
+            })
+            .collect(),
+        unresolved_interactions: value.unresolved_interactions,
+        omitted_interactions: value.omitted_interactions,
+        truncated: value.truncated,
+    }))
 }
 
 fn enrich_cluster(

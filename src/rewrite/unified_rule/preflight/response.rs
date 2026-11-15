@@ -16,8 +16,12 @@ pub(super) fn target_pair(
     target: &Value,
     case: &str,
     result: &mut Preflight,
-) -> Result<Option<crate::replay::ResponsePayloadPair>> {
-    let pair = crate::replay::response_rule_payload_pair(request, source, Some(target))?;
+) -> Result<Option<crate::primary_protocol::assertion::ResponsePayloadPair>> {
+    let pair = crate::primary_protocol::assertion::response_rule_payload_pair(
+        request,
+        source,
+        Some(target),
+    )?;
     if let Some((source_status, target_status)) = pair.status_difference {
         result
             .unvalidated_target_witnesses

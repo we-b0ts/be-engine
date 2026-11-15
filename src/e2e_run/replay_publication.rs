@@ -5,7 +5,10 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 use super::{model::ActiveRunState, store};
-use crate::replay::report::{build_dependency_evidence, dependency_evidence_path};
+use crate::{
+    protocols::replay::report::evidence::build_dependency_evidence,
+    replay::report::dependency_evidence_path,
+};
 
 pub(super) fn prepare(
     state: &ActiveRunState,
@@ -29,7 +32,10 @@ pub(super) fn prepare(
     let destination = staging.join("reports/replay-report.json");
     fs::create_dir_all(destination.parent().expect("report directory"))?;
     if source != destination {
-        let rebound = crate::replay::report::stage_global_evidence(&source, &destination)?;
+        let rebound = crate::protocols::replay::report::artifacts::stage_global_evidence(
+            &source,
+            &destination,
+        )?;
         crate::policy_evidence::stage(&source, &destination)?;
         if let Some(report) = rebound {
             store::write_json(&destination, &report)?;

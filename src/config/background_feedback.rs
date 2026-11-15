@@ -298,7 +298,7 @@ fn parse_replay_evidence(
     path_prefix: &str,
 ) -> Result<EvidenceMatch> {
     let report: ReplayEvidenceReport =
-        crate::replay::report::parse_background_dependency_evidence(raw)
+        crate::protocols::replay::report::ownership::parse_background_dependency_evidence(raw)
             .with_context(|| format!("failed to parse replay report {}", path.display()))?;
     ensure!(
         report.finalized,

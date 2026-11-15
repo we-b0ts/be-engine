@@ -26,7 +26,11 @@ use super::{branch, config};
 use crate::case_group::{
     CaseGroupInventory, load_case_group_inventory, load_complete_case_group_inventory,
 };
-use crate::replay::{ResponseAssertionOptions, ResponseAssertionRuntime, validate_replay_policy};
+use crate::policy::runtime::validate_replay_policy;
+use crate::{
+    primary_protocol::assertion::ResponseAssertionOptions,
+    primary_protocol::assertion::ResponseAssertionRuntime,
+};
 
 pub(super) mod timing_guard;
 
@@ -768,7 +772,8 @@ pub(super) async fn execute_case(
         .await
     {
         report.passed = false;
-        let mut difference = crate::replay::ResponseDifference::body_value_mismatch();
+        let mut difference =
+            crate::primary_protocol::assertion::ResponseDifference::body_value_mismatch();
         difference.pointer = "$identity".into();
         report.differences.push(difference);
         state.push_error(format!(
@@ -789,7 +794,7 @@ pub(super) async fn execute_case(
         || state.cases[case_index].execution_failure.is_some()
         || response_assertion.as_ref().is_ok_and(|report| {
             report.differences.iter().any(|difference| {
-                difference.kind == crate::replay::ResponseDifferenceKind::StatusMismatch
+                difference.kind == crate::primary_protocol::assertion::ResponseDifferenceKind::StatusMismatch
             })
         });
     let mut assertion_passed = if config.runner_owned_response_assertions {

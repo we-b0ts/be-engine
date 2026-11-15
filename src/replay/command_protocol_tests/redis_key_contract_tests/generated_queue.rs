@@ -129,8 +129,8 @@ async fn generated_queue_identities_subscribe_lpush_unsubscribe_with_strict_task
         let mut locked = state.lock().await;
         locked.finalized_at = Some(Utc::now());
         let report = locked.snapshot_report();
-        assert_eq!(report.protocols.redis.matched_count, 3);
-        assert!(report.protocols.redis.unused_case.is_empty());
+        assert_eq!(report.native.protocols.redis.matched_count, 3);
+        assert!(report.native.protocols.redis.unused_case.is_empty());
         if !negative {
             assert!(!report.is_dirty());
         }

@@ -29,7 +29,7 @@ fn difference(pointer: &str) -> E2eCaseResponseDifference {
     E2eCaseResponseDifference {
         pointer: pointer.into(),
         pointer_pattern: pointer.into(),
-        difference_kind: crate::replay::ResponseDifferenceKind::ValueMismatch,
+        difference_kind: crate::primary_protocol::assertion::ResponseDifferenceKind::ValueMismatch,
         unavailable_reason: None,
         expected: observation(),
         actual: observation(),

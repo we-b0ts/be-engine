@@ -54,7 +54,7 @@ async fn derived_idle_scope_requires_actual_inventory_without_requiring_a_missin
         .unwrap(),
     )
     .unwrap();
-    let rules = BTreeMap::from([(
+    let rules: BTreeMap<String, crate::policy::AsyncApiRules> = BTreeMap::from([(
         "POST /jobs".into(),
         serde_json::from_value(json!({"end":[{
             "http":{"method":"POST","endpoint":"executor.test:80","path":"/done"}
@@ -89,7 +89,14 @@ async fn derived_idle_scope_requires_actual_inventory_without_requiring_a_missin
             .to_string(),
         )
         .unwrap();
-        let result = load_effective(&case_dir, &scope_path, &rules, Duration::from_secs(1)).await;
+        let result = load_effective(
+            &case_dir,
+            &scope_path,
+            &rules.clone().into(),
+            Duration::from_secs(1),
+            crate::protocols::default_providers().evidence(),
+        )
+        .await;
         if reason != "idle" {
             let error = result.err().unwrap();
             assert!(
@@ -102,8 +109,12 @@ async fn derived_idle_scope_requires_actual_inventory_without_requiring_a_missin
         assert!(metadata.normal_completion);
         assert!(!metadata.source_stop_required);
         assert!(!metadata.failure_completion);
-        let expected = RecordedReference::Http { exchange_id: added };
-        assert_eq!(metadata.references, [expected], "{reason}");
+        let expected = RecordedReference::exchange("http", added);
+        assert_eq!(
+            metadata.references.as_slice(),
+            std::slice::from_ref(&expected),
+            "{reason}"
+        );
         assert_eq!(
             metadata.strict_references,
             BTreeSet::from([expected]),
@@ -117,20 +128,32 @@ async fn derived_idle_scope_requires_actual_inventory_without_requiring_a_missin
         duplicate_scope.locations.push(duplicate);
         std::fs::write(temp.path().join("dependencies.jsonl"), row.repeat(2)).unwrap();
         std::fs::write(&scope_path, serde_json::to_vec(&duplicate_scope).unwrap()).unwrap();
-        let error = load_effective(&case_dir, &scope_path, &rules, Duration::from_secs(1))
-            .await
-            .err()
-            .unwrap();
+        let error = load_effective(
+            &case_dir,
+            &scope_path,
+            &rules.clone().into(),
+            Duration::from_secs(1),
+            crate::protocols::default_providers().evidence(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("repeats an exchange"), "{error}");
         std::fs::write(temp.path().join("dependencies.jsonl"), &row).unwrap();
         std::fs::write(&scope_path, saved_scope).unwrap();
     }
     let prior_failure = std::fs::read(&observation).unwrap();
     std::fs::remove_file(&observation).unwrap();
-    let error = load_effective(&case_dir, &scope_path, &rules, Duration::from_secs(1))
-        .await
-        .err()
-        .unwrap();
+    let error = load_effective(
+        &case_dir,
+        &scope_path,
+        &rules.clone().into(),
+        Duration::from_secs(1),
+        crate::protocols::default_providers().evidence(),
+    )
+    .await
+    .err()
+    .unwrap();
     assert!(
         error.to_string().contains("no proven completion"),
         "{error}"
@@ -144,10 +167,16 @@ async fn derived_idle_scope_requires_actual_inventory_without_requiring_a_missin
         serde_json::from_slice(&std::fs::read(&scope_path).unwrap()).unwrap();
     scope.locations[0].sha256 = format!("{:x}", Sha256::digest(complete_row.as_bytes()));
     std::fs::write(&scope_path, serde_json::to_vec(&scope).unwrap()).unwrap();
-    let repaired = load_effective(&case_dir, &scope_path, &rules, Duration::from_secs(1))
-        .await
-        .unwrap()
-        .unwrap();
+    let repaired = load_effective(
+        &case_dir,
+        &scope_path,
+        &rules.clone().into(),
+        Duration::from_secs(1),
+        crate::protocols::default_providers().evidence(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(repaired.normal_completion);
     assert!(repaired.source_stop_required);
     assert_eq!(repaired.source_stop_after_ms, Some(1000));

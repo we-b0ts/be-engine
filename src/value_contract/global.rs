@@ -176,6 +176,39 @@ pub(crate) fn compare_logical_with_time_copies(
     )
 }
 
+/// The same global fields and native leaf checks compose over any decoded carrier.
+pub(crate) fn policy_paths(
+    source: &Value,
+    plan: &CompiledJsonPolicy,
+    clocks: AnchorClocks,
+) -> Result<Vec<String>> {
+    let selected = selected_fields(source, plan, &[], clocks)?;
+    let native = super::global_protocol::checks(plan, source)?;
+    Ok(selected
+        .into_iter()
+        .map(|field| field.pointer)
+        .chain(native.fields().iter().map(|field| field.pointer.to_owned()))
+        .collect())
+}
+
+pub(crate) fn compare_fields(
+    source: &Value,
+    target: &Value,
+    plan: &CompiledJsonPolicy,
+    fields: &[Field<'_>],
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    let selected = selected_fields(source, plan, &[], clocks)?;
+    let native = super::global_protocol::checks(plan, source)?;
+    let fields = field_composition::append(source, fields.to_vec(), &selected);
+    let mut compared =
+        json::compare_with_verified(source, target, &fields, &[], &native.fields(), clocks);
+    compared
+        .evaluated
+        .extend(selected.iter().map(|field| field.rule_id.into()));
+    Ok(compared)
+}
+
 /// Reuse the ordinary strict remainder and authored owners with independently
 /// checked diagnostic leaves, without serializing or cloning the payload.
 pub(crate) fn compare_logical_with_verified(

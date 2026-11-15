@@ -37,7 +37,7 @@ impl Identity {
     }
 }
 
-pub(in crate::replay) use traffic_replay::report::Row;
+pub(crate) use traffic_replay::report::Row;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

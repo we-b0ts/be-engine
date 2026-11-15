@@ -276,7 +276,7 @@ rules:
     let source = args(&["session:aaaaaaaa", r#"{"id":"11","stable":1}"#]);
     let target = args(&["session:bbbbbbbb", r#"{"id":"22","stable":1}"#]);
     let request = json!({"method":"POST","uri":"/sessions"});
-    let metadata = crate::replay::MysqlInferenceMetadata::default();
+    let metadata = crate::protocols::replay::MysqlInferenceMetadata::default();
     let mut obligations = BTreeSet::new();
     let mut context = CompareContext {
         policy: &policy,

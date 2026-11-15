@@ -21,13 +21,13 @@ use crate::http::{
     forward::{HostHeaderPolicy, append_end_to_end_headers},
     rewrite::{self, RewriteInput},
 };
-use crate::recorder::http::case::{
+use crate::protocols::recording::events::{
+    HeaderMapSnapshot, HttpExchangeEvent, RecorderEvent, capture_case_body, redact_headers,
+};
+use crate::protocols::recording::http::case::{
     CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case,
 };
-use crate::recorder::{
-    CaseContext, HeaderMapSnapshot, HttpExchangeEvent, RecorderEvent, capture_body,
-    capture_body_with_original_len, capture_case_body, redact_headers,
-};
+use crate::recorder::{CaseContext, capture_body, capture_body_with_original_len};
 use crate::{ActiveCaseGuard, AppState, DiscoveredTcpTarget};
 
 mod body;

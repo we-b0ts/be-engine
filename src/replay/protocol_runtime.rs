@@ -1,5 +1,9 @@
 //! Application protocol state is supplied through lifecycle and connection ports.
 use super::*;
+pub(crate) mod events;
+pub(crate) mod input;
+pub(crate) mod loading;
+pub(crate) mod primary_close;
 
 #[derive(Clone, Copy)]
 pub(crate) enum InFlightScope {
@@ -8,8 +12,69 @@ pub(crate) enum InFlightScope {
 }
 
 pub(crate) trait ReplayProtocolSet:
-    std::fmt::Debug + Send + Sized + traffic_replay::report::GlobalReportRuntime + 'static
+    std::fmt::Debug
+    + Send
+    + Sized
+    + traffic_replay::report::GlobalReportRuntime
+    + traffic_replay::case::CaseRuntimeProjection
+    + 'static
 {
+    type Policy: ReplayPolicy;
+    type SourceLoader: loading::ProtocolSourceLoader<Protocols = Self>;
+    type ReportSnapshot: traffic_replay::report::SessionSnapshot;
+    fn snapshot_report(state: &RuntimeState<Self>) -> Self::ReportSnapshot;
+    fn source_occurrence_rows(
+        state: &RuntimeState<Self>,
+        report: &Value,
+    ) -> Vec<report::unused_source::SourceRow>;
+    fn native_events(&mut self) -> &mut dyn events::NativeEventProjection;
+    fn input_timing(&self) -> &dyn input::InputTimingProjection;
+    fn input_timing_mut(&mut self) -> &mut dyn input::InputTimingProjection;
+    type PrimaryClosePreparation: Send + 'static;
+    fn primary_close_input(case: &ReplayCase) -> Result<Option<primary_close::SourceInput>>;
+    fn primary_streams(
+        state: &RuntimeState<Self>,
+        case: &str,
+    ) -> Result<Vec<primary_close::SourceStream>>;
+    fn prepare_primary_close(
+        case: &ReplayCase,
+        source_close_ms: u64,
+    ) -> Result<Self::PrimaryClosePreparation>;
+    fn install_primary_close(
+        &mut self,
+        case: &str,
+        prepared: Self::PrimaryClosePreparation,
+    ) -> Result<()>;
+    fn primary_closed(&mut self, case: &str);
+    fn resolve_references(
+        state: &RuntimeState<Self>,
+        case: &str,
+        references: &[RecordedReference],
+    ) -> Result<Vec<adapters::ProtocolExchange>>;
+    fn exchange_status(
+        state: &RuntimeState<Self>,
+        exchange: adapters::ProtocolExchange,
+    ) -> Option<ReplayExchangeStatus>;
+    fn permits_cancelled_omission(
+        state: &RuntimeState<Self>,
+        exchange: adapters::ProtocolExchange,
+    ) -> bool;
+    fn permits_unstarted_omission(
+        state: &RuntimeState<Self>,
+        exchange: adapters::ProtocolExchange,
+        shared_initialization: bool,
+        strict_reference: bool,
+    ) -> bool;
+    fn shared_initialization(
+        state: &RuntimeState<Self>,
+        exchange: adapters::ProtocolExchange,
+        completion: &crate::recorder::async_api::CompletionRequirements,
+    ) -> bool;
+    fn can_defer_dispatch(
+        state: &RuntimeState<Self>,
+        exchange: adapters::ProtocolExchange,
+        input_at: DateTime<Utc>,
+    ) -> bool;
     fn visit_global_unused(
         state: &RuntimeState<Self>,
         protocol: &str,
@@ -41,7 +106,7 @@ pub(crate) trait ReplayProtocolSet:
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     ) -> Result<Self::SourceAppend>;
     fn index_source(&mut self, appended: &Self::SourceAppend);
-    fn observe_source(&self, appended: &Self::SourceAppend, policy: &mut ReplayPolicyRuntime);
+    fn observe_source(&self, appended: &Self::SourceAppend, policy: &mut Self::Policy);
     fn release_payloads(&mut self, cases: &BTreeMap<String, ReplayCase>);
 
     fn case_is_dirty(&self, case: &str) -> bool;
@@ -51,7 +116,7 @@ pub(crate) trait ReplayProtocolSet:
         &mut self,
         case: &str,
         ordered: bool,
-        contracts: Option<&RequestContracts>,
+        contracts: Option<&<Self::Policy as ReplayPolicy>::Contracts>,
     ) -> Result<PreparedProtocols>;
     fn run_sequence_refs(
         &mut self,
@@ -73,6 +138,8 @@ pub(crate) trait ReplayProtocolSet:
 
     fn startup_counts(&mut self, close: bool) -> BTreeMap<String, traffic_replay::StartupCounts>;
     fn close_startup(&mut self);
+    fn initialize_connections(&mut self, active: Option<&str>);
+    fn start(state: Arc<Mutex<RuntimeState<Self>>>);
     fn has_in_flight(&self, scope: InFlightScope, active_case: Option<&str>) -> bool;
     fn serve(
         stream: TcpStream,
@@ -89,7 +156,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
         &self.protocols
     }
 
-    pub(in crate::replay) fn set_active_case(&mut self, case: Option<String>) {
+    pub(crate) fn set_active_case(&mut self, case: Option<String>) {
         if self.active_case_id != case {
             self.activate_sequence(case.as_deref());
         }

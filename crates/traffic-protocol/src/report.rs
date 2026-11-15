@@ -4,6 +4,8 @@ use anyhow::{Result, ensure};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
+pub mod diagnostics;
+
 pub trait ReportSection: Send + Sync {
     fn count(&self) -> Result<usize>;
     fn read(
@@ -17,6 +19,9 @@ pub trait ReportSection: Send + Sync {
 }
 
 pub trait ReportCodec: Send + Sync {
+    fn diagnostics(&self) -> &dyn diagnostics::DiagnosticSchema {
+        &diagnostics::STANDARD
+    }
     fn decode(&self, report: &Path, value: &Value) -> Result<Option<Box<dyn ReportSection>>>;
     fn decode_extensions(
         &self,
@@ -25,6 +30,15 @@ pub trait ReportCodec: Send + Sync {
     ) -> Result<Box<dyn ReportSection>>;
     fn reclassified_rows<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
         &report["dependency_protocols"][protocol]["unused_global"]
+    }
+    fn unused_case_rows<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
+        &report["dependency_protocols"][protocol]["unused_case"]
+    }
+    fn supports_source_occurrences(&self) -> bool {
+        true
+    }
+    fn requires_source_exchange_id(&self, _row: &Value) -> bool {
+        false
     }
 }
 
@@ -38,6 +52,11 @@ impl std::fmt::Debug for CodecRegistry {
     }
 }
 impl CodecRegistry {
+    pub fn iter(&self) -> impl Iterator<Item = (ProtocolId, &dyn ReportCodec)> {
+        self.codecs
+            .iter()
+            .map(|(protocol, codec)| (*protocol, codec.as_ref()))
+    }
     pub fn register(&mut self, protocol: ProtocolId, codec: Arc<dyn ReportCodec>) -> Result<()> {
         ensure!(
             !protocol.as_str().is_empty() && !self.codecs.contains_key(&protocol),

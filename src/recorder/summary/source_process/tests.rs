@@ -3,7 +3,8 @@ use uuid::Uuid;
 
 use super::*;
 use crate::DependencyExchangeOutcome;
-use crate::recorder::{RecorderEvent, RedisExchangeEvent, capture_body};
+use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
+use crate::recorder::capture_body;
 
 #[test]
 fn separates_bootstrap_and_background_and_counts_snapshot_reuse() {

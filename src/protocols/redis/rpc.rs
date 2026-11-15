@@ -2,7 +2,7 @@
 use super::ConnectionContext;
 use crate::AppState;
 use crate::active_case::DependencyTargets;
-use crate::recorder::RedisRpcRequestRef;
+use crate::protocols::recording::events::RedisRpcRequestRef;
 use crate::redis::{RedisPubSubPush, socketio_rpc as rpc};
 use anyhow::Result;
 use std::collections::HashMap;

@@ -1,1 +1,1 @@
-pub(in crate::replay) use traffic_replay::report::{Change, Position, Usage};
+pub(crate) use traffic_replay::report::{Change, Position, Usage};

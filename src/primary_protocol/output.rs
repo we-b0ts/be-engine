@@ -3,7 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
 use super::{ApiIdentity, CaseClock};
-use crate::recorder::HeaderMapSnapshot;
+use crate::protocols::recording::events::HeaderMapSnapshot;
 
 pub(crate) enum PrimaryObservation {
     Http(Box<crate::recorded_request::RecordedHttpResponse>),

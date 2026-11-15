@@ -108,7 +108,7 @@ pub fn query_rewrite_redis_argument_for_scope(
         let raw = crate::policy_evidence::read_target(&private, &manifest, index, directory)?;
         let args: Vec<Vec<u8>> = serde_json::from_slice(&raw)?;
         if ![2, 3].iter().any(|version| {
-            crate::replay::redis_request_fingerprint(
+            crate::protocols::replay::redis_request_fingerprint(
                 &resource.endpoint.host,
                 resource.endpoint.port,
                 *version,

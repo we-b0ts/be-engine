@@ -27,7 +27,7 @@ impl ReplayExchangeTiming {
         Self::from_duration(Duration::from_millis(duration_ms), outcome)
     }
 
-    pub(super) fn from_duration(duration: Duration, outcome: DependencyExchangeOutcome) -> Self {
+    pub(crate) fn from_duration(duration: Duration, outcome: DependencyExchangeOutcome) -> Self {
         Self {
             duration,
             outcome,
@@ -35,11 +35,11 @@ impl ReplayExchangeTiming {
         }
     }
 
-    pub(super) fn outcome(self) -> DependencyExchangeOutcome {
+    pub(crate) fn outcome(self) -> DependencyExchangeOutcome {
         self.outcome
     }
 
-    pub(super) fn for_replay(mut self, fast: bool) -> Self {
+    pub(crate) fn for_replay(mut self, fast: bool) -> Self {
         if fast && self.outcome.is_server_terminated() {
             self.duration = Duration::ZERO;
             self.fast_server = true;
@@ -47,7 +47,7 @@ impl ReplayExchangeTiming {
         self
     }
 
-    pub(super) fn termination_deadline(self, started: Instant) -> Instant {
+    pub(crate) fn termination_deadline(self, started: Instant) -> Instant {
         if self.fast_server {
             started + super::FAST_CASE_TIMEOUT
         } else {
@@ -55,11 +55,11 @@ impl ReplayExchangeTiming {
         }
     }
 
-    pub(super) fn response_deadline(self, started: Instant) -> Instant {
+    pub(crate) fn response_deadline(self, started: Instant) -> Instant {
         started + self.duration
     }
 
-    pub(super) fn validate_client_termination(self, elapsed: Duration) -> Result<()> {
+    pub(crate) fn validate_client_termination(self, elapsed: Duration) -> Result<()> {
         if elapsed + CLIENT_TERMINATION_EARLY_TOLERANCE < self.duration {
             return Err(anyhow!(
                 "client terminated dependency connection too early: observed {}ms, recorded {}ms",
@@ -75,7 +75,7 @@ impl ReplayExchangeTiming {
         Ok(())
     }
 
-    pub(super) fn validate_client_termination_kind(
+    pub(crate) fn validate_client_termination_kind(
         self,
         kind: TerminationKind,
         scope: TerminationScope,
@@ -89,13 +89,13 @@ impl ReplayExchangeTiming {
         Ok(())
     }
 
-    pub(super) async fn delay_response(self) {
+    pub(crate) async fn delay_response(self) {
         if !self.duration.is_zero() {
             sleep(self.duration).await;
         }
     }
 
-    pub(super) async fn delay_response_from_request(self, started: Instant, fast: bool) {
+    pub(crate) async fn delay_response_from_request(self, started: Instant, fast: bool) {
         if fast {
             return;
         }
@@ -107,7 +107,7 @@ impl ReplayExchangeTiming {
 
     /// Observe Target while a recorded server action is pending. Extra inputs
     /// are returned to the protocol owner rather than silently discarded.
-    pub(super) async fn await_server_deadline<R>(
+    pub(crate) async fn await_server_deadline<R>(
         self,
         reader: &mut R,
         started: Instant,
@@ -144,7 +144,7 @@ impl ReplayExchangeTiming {
     /// The dependency server owns only a recorded server-origin termination.
     /// Client-origin outcomes must instead await the Target's actual action.
     #[cfg(test)]
-    pub(super) async fn terminate_server<W>(
+    pub(crate) async fn terminate_server<W>(
         self,
         writer: &mut W,
         control: &ConnectionControl,
@@ -156,7 +156,7 @@ impl ReplayExchangeTiming {
             .await
     }
 
-    pub(super) async fn terminate_server_at<W>(
+    pub(crate) async fn terminate_server_at<W>(
         self,
         writer: &mut W,
         control: &ConnectionControl,
@@ -182,7 +182,7 @@ impl ReplayExchangeTiming {
     }
 
     #[cfg(test)]
-    pub(super) async fn await_client_termination<R>(self, reader: &mut R) -> Result<Duration>
+    pub(crate) async fn await_client_termination<R>(self, reader: &mut R) -> Result<Duration>
     where
         R: AsyncRead + Unpin + ?Sized,
     {
@@ -190,7 +190,7 @@ impl ReplayExchangeTiming {
             .await
     }
 
-    pub(super) async fn await_client_termination_at<R>(
+    pub(crate) async fn await_client_termination_at<R>(
         self,
         reader: &mut R,
         started: Instant,
@@ -248,7 +248,7 @@ impl ReplayExchangeTiming {
         Ok(elapsed)
     }
 
-    pub(super) async fn await_client_termination_signal_at<F>(
+    pub(crate) async fn await_client_termination_signal_at<F>(
         self,
         termination: F,
         started: Instant,
@@ -276,7 +276,7 @@ impl ReplayExchangeTiming {
     }
 }
 
-pub(super) fn is_connection_termination(kind: ErrorKind) -> bool {
+pub(crate) fn is_connection_termination(kind: ErrorKind) -> bool {
     matches!(
         kind,
         ErrorKind::BrokenPipe
@@ -289,7 +289,7 @@ pub(super) fn is_connection_termination(kind: ErrorKind) -> bool {
 
 /// A failed verification is reported before waiting here. Releasing a test's
 /// resources belongs to its supervisor, not to a simulated peer's watchdog.
-pub(super) async fn retain_connection<R>(reader: &mut R)
+pub(crate) async fn retain_connection<R>(reader: &mut R)
 where
     R: AsyncRead + Unpin + ?Sized,
 {

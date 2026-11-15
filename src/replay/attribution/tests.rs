@@ -58,7 +58,8 @@ async fn actual_replay_receipt_uses_the_streamed_frozen_ownership_identity() {
         assert_eq!(response["ok"], true, "{command}: {response}");
     }
     let actual: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
-    let receipt = crate::replay::validate_completed_receipt(&actual).unwrap();
+    let receipt =
+        crate::protocols::replay::report::validation::validate_completed_receipt(&actual).unwrap();
     assert_eq!(actual["dependency_attribution_snapshot"], expected);
     assert_eq!(
         receipt.dependency_attribution_snapshot.as_deref(),

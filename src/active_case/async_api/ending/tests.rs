@@ -1,6 +1,7 @@
 use super::*;
 use crate::active_case::ActiveCaseGuard;
 use crate::active_case::async_api::tests::{active, drain, event};
+use crate::protocols::recording::events::RecorderEvent;
 use crate::recorder::capture_body;
 use serde_json::json;
 

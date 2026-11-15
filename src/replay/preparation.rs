@@ -13,10 +13,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
         case: &str,
         source: SourceScopeIdentity,
     ) -> Result<()> {
-        let contracts = self
-            .replay_policy
-            .as_ref()
-            .map(|policy| &policy.request_contracts);
+        let contracts = self.replay_policy.as_ref().map(|policy| policy.contracts());
         let rules = contracts
             .map(|contracts| contracts.prepare_case_rules(case))
             .transpose()?

@@ -1,4 +1,10 @@
+use crate::RecordingConfig;
+use crate::protocols::recording::events::{
+    MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent, MysqlValue,
+    RecorderEvent,
+};
 use chrono::Utc;
+use std::time::Duration;
 
 use super::*;
 use crate::active_case::ActiveCaseRegistry;
@@ -432,7 +438,7 @@ async fn case_dependency_summary_skips_successful_prepare() {
         .unwrap();
     assert_eq!(prepare["capture"]["semantic_required"], false);
 
-    summary::write_case_dependency_summary(&case_dir)
+    summary::write_case_dependency_summary(&case_dir, recorder.evidence.clone())
         .await
         .unwrap();
     let summary_raw =

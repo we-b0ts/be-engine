@@ -4,7 +4,8 @@ use uuid::Uuid;
 use super::*;
 use crate::config::AppConfig;
 use crate::dependency::DependencyExchangeOutcome;
-use crate::recorder::{RecorderEvent, RedisExchangeEvent, capture_body};
+use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
+use crate::recorder::capture_body;
 
 fn rule() -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Redis {

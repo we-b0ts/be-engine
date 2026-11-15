@@ -25,7 +25,8 @@ pub fn prepare_dependency_index(source: &std::path::Path) -> anyhow::Result<Depe
     dependency_index::store::prepare(source, protocols::replay::source::validate_index_record)
         .map(|(_, report)| report)
 }
-pub use replay::{GlobalDependencyPage, read_global_dependency_page};
+pub use crate::replay::GlobalDependencyPage;
+pub use protocols::replay::report::artifacts::read_global_dependency_page;
 mod dns_mock;
 mod e2e_run;
 mod engine_binary;
@@ -95,8 +96,8 @@ use crate::active_case::{
 };
 use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
+use crate::protocols::recording::background::BackgroundDependencyMatcher;
 use crate::recorder::CaseInvalidation;
-use crate::recorder::background::BackgroundDependencyMatcher;
 use crate::recorder::cache_snapshot::{CacheSnapshotReservation, CacheSnapshotStore};
 use crate::recorder::connections::DependencyConnections;
 #[cfg(test)]
@@ -113,6 +114,16 @@ pub const TRAFFIC_PROCESS_USER: &str = "998:998";
 pub use artifact_owner::ArtifactOwner;
 pub use build_info::BINARY_VERSION;
 
+pub use crate::protocols::recording::events::{
+    AccessPolicyAllowEvent, CaseBodyCapture, DependencyConnectFailureEvent, HeaderMapSnapshot,
+    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
+    KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
+    MotanConnectionEvent, MotanExchangeEvent, MysqlColumn, MysqlConnectionEvent,
+    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
+    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
+    ReadonlyRejectionEvent, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
+    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_case_body, redact_headers,
+};
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
     ensure_case_group, resolve_recording_api_case_ids, resolve_recording_api_member,
@@ -192,15 +203,7 @@ pub use platform::{
     run_managed_recording_preflight,
 };
 pub use recorder::{
-    AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext,
-    DependencyConnectFailureEvent, HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent,
-    KafkaDeliveryEvent, KafkaFetchEvent, KafkaHeaderCapture, KafkaProduceEvent,
-    MemcachedConnectionEvent, MemcachedExchangeEvent, MotanConnectionEvent, MotanExchangeEvent,
-    MysqlColumn, MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
-    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
-    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
-    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
-    capture_body_with_original_len, capture_case_body, redact_headers,
+    BodyCapture, CaseContext, Recorder, capture_body, capture_body_with_original_len,
 };
 pub use recording_api::RecordingApi;
 pub use recording_control::{
@@ -463,7 +466,7 @@ impl AppState {
         )
         .await
         .context("failed to initialize JSONL recorder")?
-        .with_global_preparation(&config)
+        .with_global_preparation_and_providers(&config, providers.clone())
         .await?;
         let dns_registry = FakeDnsRegistry::load_or_new(
             &config.dns_mock.fake_cidr,

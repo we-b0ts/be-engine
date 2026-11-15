@@ -80,12 +80,18 @@ pub(super) fn observe(
         }
         let request = request_value;
         let expected = expected_value;
-        let Ok(mut source_pair) = crate::replay::response_payload_pair(&request, &expected, None)
+        let Ok(mut source_pair) =
+            crate::primary_protocol::assertion::response_payload_pair(&request, &expected, None)
         else {
             continue;
         };
         if let Some(pair) = actual.as_ref().and_then(|actual| {
-            crate::replay::response_payload_pair(&request, &expected, Some(actual)).ok()
+            crate::primary_protocol::assertion::response_payload_pair(
+                &request,
+                &expected,
+                Some(actual),
+            )
+            .ok()
         }) {
             source_pair = pair;
         }

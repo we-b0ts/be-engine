@@ -1,9 +1,13 @@
 //! Shared finite inventory for protocol-projected dependency exchanges.
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, ensure};
 use traffic_contract::compare::{AnchorClocks, Comparison, RuleMetadata};
-use traffic_model::recording::CaptureMetadata;
+use traffic_model::recording::{CaptureMetadata, ProtocolRef};
 use traffic_protocol::{
     ProtocolId,
     connection::{Endpoint, RecordedExchange},
@@ -104,6 +108,7 @@ pub struct ExchangeInventory {
     lanes: LaneIndex,
     lane_ids: HashMap<LaneIdentity, Uuid>,
     cases: CaseMembership,
+    references: BTreeMap<String, BTreeMap<ProtocolRef, Option<usize>>>,
 }
 
 pub struct SelectedExchange {
@@ -180,6 +185,15 @@ impl ExchangeInventory {
         self.candidates.register(key, index);
         self.cases
             .register(source.source, source.case_id.as_deref(), index);
+        if source.source == ReplaySource::Case {
+            let case = source.case_id.as_ref().expect("Case owner validated");
+            self.references
+                .entry(case.clone())
+                .or_default()
+                .entry(native.reference.clone())
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(index));
+        }
         self.exchanges.push(PreparedExchange {
             index,
             protocol,
@@ -201,6 +215,19 @@ impl ExchangeInventory {
 
     pub fn case_members(&self, case: &str) -> Arc<[usize]> {
         self.cases.for_case(case)
+    }
+
+    pub fn resolve_reference(&self, case: &str, reference: &ProtocolRef) -> Result<Option<usize>> {
+        let Some(index) = self
+            .references
+            .get(case)
+            .and_then(|references| references.get(reference))
+        else {
+            return Ok(None);
+        };
+        index
+            .map(Some)
+            .context("native semantic reference is ambiguous in its Case inventory")
     }
 
     fn candidates(&self, key: CandidateKey, source: ReplaySource) -> CandidateCursor {

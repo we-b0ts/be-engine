@@ -23,13 +23,14 @@ use crate::dns_mock::{FakeDnsEntry, FakeDnsUpstreamProtocol};
 use crate::http::access::classify_method;
 use crate::http::rewrite::{self, RewriteInput};
 use crate::http::termination::{ClientTermination, ObservedClientIo};
-use crate::recorder::connections::DependencyIo;
-use crate::recorder::http::dependency::PendingHttpCapture;
-use crate::recorder::http::stream;
-use crate::recorder::{
+use crate::protocols::recording::events::{
     HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
-    TcpGatewayConnectionEvent, capture_body, redact_headers,
+    TcpGatewayConnectionEvent, redact_headers,
 };
+use crate::protocols::recording::http::dependency::PendingHttpCapture;
+use crate::protocols::recording::http::stream;
+use crate::recorder::capture_body;
+use crate::recorder::connections::DependencyIo;
 
 mod connection;
 mod detection;
@@ -509,7 +510,7 @@ async fn handle_http_request(
                     if let Some(observed) = err.termination
                         && capture_context.forward_server_termination(observed)
                     {
-                        return crate::recorder::http::dependency::closed_response();
+                        return crate::protocols::recording::http::dependency::closed_response();
                     }
                     record_http_error(HttpErrorContext {
                         targets: targets.clone(),
@@ -871,7 +872,7 @@ async fn handle_https_request(
                     if let Some(observed) = err.termination
                         && capture_context.forward_server_termination(observed)
                     {
-                        return crate::recorder::http::dependency::closed_response();
+                        return crate::protocols::recording::http::dependency::closed_response();
                     }
                     record_http_error(HttpErrorContext {
                         targets: targets.clone(),

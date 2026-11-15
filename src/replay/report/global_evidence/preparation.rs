@@ -7,12 +7,24 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
+use traffic_protocol::connection::NativeFuture;
 use traffic_replay::report::{GlobalReportProjection, ReportRows};
 
 const MARKER: &str = ".global-report-preparation.json";
 const VERSION: u32 = 3;
 #[cfg(test)]
 mod tests;
+
+pub(crate) trait PreparedSource: GlobalReportProjection + Send {
+    fn retain_extensions(&self, marker: &Path) -> Result<BTreeMap<String, serde_json::Value>>;
+}
+
+pub(crate) trait SourcePreparation: Send + Sync {
+    fn policy(&self) -> &str;
+    fn validate_record(&self, value: &serde_json::Value) -> Result<()>;
+    fn load<'a>(&'a self, source: &'a Path) -> NativeFuture<'a, Box<dyn PreparedSource>>;
+}
 
 pub(crate) fn read_extension(
     source: &Path,
@@ -56,8 +68,8 @@ struct Preparation {
     reason: Option<String>,
 }
 
-pub(crate) fn policy_identity(
-    rules: &[crate::BackgroundDependencyRuleConfig],
+pub(crate) fn policy_identity<T: Serialize + ?Sized>(
+    rules: &T,
     fingerprint: Option<&str>,
 ) -> Result<String> {
     Ok(crate::policy_evidence::digest(&serde_json::to_vec(&(
@@ -66,12 +78,8 @@ pub(crate) fn policy_identity(
     ))?))
 }
 
-pub(crate) async fn prewarm(
-    run: &Path,
-    rules: &[crate::BackgroundDependencyRuleConfig],
-    fingerprint: Option<&str>,
-) -> Result<()> {
-    let policy = policy_identity(rules, fingerprint)?;
+pub(crate) async fn prewarm(run: &Path, preparation: Arc<dyn SourcePreparation>) -> Result<()> {
+    let policy = preparation.policy().to_owned();
     let source = run.join("global-dependencies.jsonl");
     let mut status = Preparation {
         version: VERSION,
@@ -89,15 +97,13 @@ pub(crate) async fn prewarm(
     }
     let result = async {
         let stamp = crate::dependency_index::FileStamp::read(&source)?;
-        let prepared =
-            crate::protocols::replay::source::projection::GlobalSource::load(&source, rules)
-                .await?;
+        let prepared = preparation.load(&source).await?;
         let run = run.to_owned();
         tokio::task::spawn_blocking(move || -> Result<_> {
-            let (index, _) = crate::dependency_index::global::load_global_index(
-                &source,
-                crate::protocols::replay::source::validate_index_record,
-            )?;
+            let (index, _) =
+                crate::dependency_index::global::load_global_index(&source, |value| {
+                    preparation.validate_record(value)
+                })?;
             ensure!(
                 index.stamp == stamp,
                 "Global Source changed during recording preparation"
@@ -117,7 +123,7 @@ pub(crate) async fn prewarm(
                 index.sha256.clone()
             };
             let marker = run.join(MARKER);
-            let view = prepared.view();
+            let view = prepared.as_ref();
             let mut inventories = BTreeMap::new();
             for protocol in view.global_report_protocols() {
                 let protocol = protocol.as_str();
@@ -144,7 +150,7 @@ pub(crate) async fn prewarm(
                 );
                 inventories.insert(protocol.to_owned(), reference);
             }
-            let extensions = prepared.retain_source_extensions(&marker)?;
+            let extensions = prepared.retain_extensions(&marker)?;
             ensure!(
                 crate::dependency_index::FileStamp::read(&source)? == stamp,
                 "Global Source changed while preparing report projection"

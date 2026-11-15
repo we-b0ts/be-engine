@@ -1,5 +1,5 @@
 //! Real Recorder admissions keep prewarm tests on the sealed central inventory.
-use crate::recorder::{
+use crate::protocols::recording::events::{
     MysqlExchangeEvent, MysqlExchangeResponse, RecorderEvent, RedisExchangeEvent,
     RedisPubSubPushEvent,
 };
@@ -9,16 +9,12 @@ use serde_json::{Value, json};
 use std::{fs, path::Path};
 use uuid::Uuid;
 
-pub(in crate::replay) fn case_path(run: &Path) -> std::path::PathBuf {
+pub(crate) fn case_path(run: &Path) -> std::path::PathBuf {
     let (_, manifest) = crate::dependency_index::recording::manifest(run).unwrap();
     run.join(&manifest.inputs[0].path)
 }
 
-pub(in crate::replay) async fn append(
-    recorder: &crate::recorder::Recorder,
-    value: &Value,
-    process: bool,
-) {
+pub(crate) async fn append(recorder: &crate::recorder::Recorder, value: &Value, process: bool) {
     if value["event_type"] == "http_exchange" {
         append_http(recorder, value, process).await;
         return;
@@ -50,7 +46,7 @@ pub(in crate::replay) async fn append(
         .unwrap();
 }
 
-pub(in crate::replay) fn native_event(value: &Value) -> RecorderEvent {
+pub(crate) fn native_event(value: &Value) -> RecorderEvent {
     let now = Utc::now();
     let host = value["target_host"].as_str().unwrap();
     let port = value["target_port"].as_u64().unwrap() as u16;
@@ -107,8 +103,8 @@ pub(in crate::replay) fn native_event(value: &Value) -> RecorderEvent {
             duration_ms: 0,
             replay_safe: true,
         }),
-        "memcached_exchange" => {
-            RecorderEvent::MemcachedExchange(crate::recorder::MemcachedExchangeEvent {
+        "memcached_exchange" => RecorderEvent::MemcachedExchange(
+            crate::protocols::recording::events::MemcachedExchangeEvent {
                 id: Uuid::new_v4(),
                 connection_id: connection,
                 sequence: value["sequence"].as_u64().unwrap(),
@@ -149,8 +145,8 @@ pub(in crate::replay) fn native_event(value: &Value) -> RecorderEvent {
                 duration_ms: 0,
                 replay_safe: true,
                 parse_warnings: vec![],
-            })
-        }
+            },
+        ),
         "mysql_exchange" => RecorderEvent::MysqlExchange(MysqlExchangeEvent {
             id: Uuid::new_v4(),
             connection_id: connection,
@@ -213,28 +209,29 @@ async fn append_http(recorder: &crate::recorder::Recorder, value: &Value, proces
         };
         crate::recorder::capture_body(&bytes, usize::MAX)
     };
-    let event = RecorderEvent::HttpExchange(crate::recorder::HttpExchangeEvent {
-        outcome: crate::DependencyExchangeOutcome::Response,
-        id: Uuid::new_v4(),
-        timestamp: now,
-        request_started_at: now,
-        client_addr: None,
-        scheme: "http".into(),
-        method: value["method"].as_str().unwrap().into(),
-        uri: value["uri"].as_str().unwrap().into(),
-        authority: Some(authority.to_string()),
-        request_headers: Default::default(),
-        request_body: body(&value["request_body"]),
-        response_status: Some(200),
-        response_headers: Some(Default::default()),
-        response_body: Some(body(&value["response_body"])),
-        response_stream: value
-            .get("response_stream")
-            .map(|stream| serde_json::from_value(stream.clone()).unwrap()),
-        discovered_tcp_targets: vec![],
-        duration_ms: 0,
-        error: None,
-    });
+    let event =
+        RecorderEvent::HttpExchange(crate::protocols::recording::events::HttpExchangeEvent {
+            outcome: crate::DependencyExchangeOutcome::Response,
+            id: Uuid::new_v4(),
+            timestamp: now,
+            request_started_at: now,
+            client_addr: None,
+            scheme: "http".into(),
+            method: value["method"].as_str().unwrap().into(),
+            uri: value["uri"].as_str().unwrap().into(),
+            authority: Some(authority.to_string()),
+            request_headers: Default::default(),
+            request_body: body(&value["request_body"]),
+            response_status: Some(200),
+            response_headers: Some(Default::default()),
+            response_body: Some(body(&value["response_body"])),
+            response_stream: value
+                .get("response_stream")
+                .map(|stream| serde_json::from_value(stream.clone()).unwrap()),
+            discovered_tcp_targets: vec![],
+            duration_ms: 0,
+            error: None,
+        });
     recorder
         .append_global_dependency(
             &event,
@@ -254,7 +251,7 @@ async fn append_http(recorder: &crate::recorder::Recorder, value: &Value, proces
         .unwrap();
 }
 
-pub(in crate::replay) async fn publish_case(recorder: &crate::recorder::Recorder) {
+pub(crate) async fn publish_case(recorder: &crate::recorder::Recorder) {
     let case = crate::recorder::CaseContext {
         id: Uuid::from_u128(123),
         rule_name: "fixture".into(),
@@ -281,10 +278,7 @@ pub(in crate::replay) async fn publish_case(recorder: &crate::recorder::Recorder
 
 /// Existing semantic fixtures enter the same current Recorder pipeline before Replay.
 /// Ownership is explicit at the callsite; legacy annotations have no authority.
-pub(in crate::replay) async fn centralize(
-    case: &Path,
-    process_indices: &[usize],
-) -> std::path::PathBuf {
+pub(crate) async fn centralize(case: &Path, process_indices: &[usize]) -> std::path::PathBuf {
     assert!(
         fs::read_to_string(case.join("dependencies.jsonl"))
             .unwrap()
@@ -320,7 +314,7 @@ pub(in crate::replay) async fn centralize(
 }
 
 /// Explicit Source scopes for pooled native lanes; selectors never assign owners.
-pub(in crate::replay) async fn centralize_partitioned(
+pub(crate) async fn centralize_partitioned(
     case: &Path,
     process_indices: &[usize],
 ) -> std::path::PathBuf {

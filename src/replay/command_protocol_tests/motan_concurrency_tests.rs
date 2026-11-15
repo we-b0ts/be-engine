@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn waits_for_concurrent_motan_predecessors_that_arrive_out_of_order() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     let connection_id = Uuid::new_v4();
@@ -64,7 +64,7 @@ async fn waits_for_concurrent_motan_predecessors_that_arrive_out_of_order() {
 
 #[tokio::test]
 async fn reports_motan_lane_block_when_predecessor_never_arrives() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     let connection_id = Uuid::new_v4();

@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use crate::http::response_headers;
 use crate::http::sse::{SseObservation, SseObservationPolicy};
-use crate::recorder::HeaderMapSnapshot;
+use crate::protocols::recording::events::HeaderMapSnapshot;
 
 mod socketio_order;
 
@@ -219,7 +219,7 @@ impl RecordedHttpClient {
             ) && !transcript.actions.is_empty()
                 && let Some((session, case)) = &self.input_registration
             {
-                crate::replay::http_input_timing_observer(session, case).await?
+                crate::replay::primary_close_observer(session, case).await?
             } else {
                 None
             };

@@ -1,163 +1,86 @@
-pub(crate) mod case_condition;
-mod config;
-pub(crate) mod native_crypto_key;
-pub use case_condition::{CaseCondition, JsonCondition};
+//! Shared Replay policy lifecycle and value-rule services supplied by the application.
+use std::{collections::BTreeMap, fmt::Debug, path::Path, sync::Arc};
+
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use serde_json::Value;
+use traffic_protocol::connection::NativeFuture;
+
+use super::{ReplayCase, execution_plan::PreparedCaseRules};
+
+mod hypotheses;
+pub(crate) use hypotheses::{HypothesisAttempt, HypothesisContext, await_durable};
+pub(crate) mod values;
+pub(crate) use values::{IdentityDeliveryHost, ValueRuleHost};
 mod evidence_policy;
-pub(in crate::replay) mod request_contract;
 pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
-pub(in crate::replay) mod dynamic_values;
-pub use dynamic_values::{
-    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
-    DynamicValueType, PathSegmentCapture, PathSegmentField, RedisCaptureReference,
-    RedisDerivedIdentity,
-};
-mod feedback;
-pub(crate) use feedback::replace_request_rule_section;
-pub use feedback::{
-    DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,
-    GeneratedValueRulePlan, GeneratedValueRuleReport, RedisJsonTimeValueSelector,
-    ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
-    plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
-};
-pub use feedback::{
-    RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,
-};
-mod initialization;
-pub(crate) mod native_projection;
-pub(crate) use native_projection::validate_finite_sharing;
-pub(crate) use native_projection::{NativeSourceCase, validate_native_source_dependencies};
-mod matcher;
-pub(crate) use matcher::mysql_contract::validate_selector as validate_mysql_value_selector;
-pub(in crate::replay) use matcher::mysql_native::compare_with_automatic as compare_mysql_with_automatic;
 
-pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
-mod pattern;
-mod protobuf;
-mod report;
-mod response;
-pub(in crate::replay) mod response_headers;
-pub use response_headers::ResponseHeaderDateRule;
-mod sql_template;
-mod value;
-
-#[cfg(test)]
-pub(crate) mod test_fixture;
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-pub(in crate::replay) use config::ReplayPolicyDocument;
-pub(in crate::replay) use config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
-pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
-pub use feedback::{
-    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
-    MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector,
-    MysqlTimeValueSelector, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
-    ResponseBodyRuleFeedback, ResponseBodyRulePlan, ResponseBodyRuleReport,
-    ResponseBodyRuleVerificationOutcome, ResponseRuleFeedback, ResponseRulePlan,
-    ResponseRuleReport, plan_memcached_timestamp_rule, plan_mysql_time_rule,
-    plan_response_body_rule, plan_response_rule,
-};
-pub use initialization::{
-    ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,
-};
-pub(in crate::replay) use matcher::{
-    DependencyRuleDecision, HttpPolicyContext, MemcachedPolicyContext, MysqlPolicyContext,
-};
-pub(in crate::replay) use pattern::uri_path;
-pub(in crate::replay) use report::ReplayPolicyReport;
-pub(crate) use response::response_locations_overlap;
-pub(in crate::replay) use response::select_json_pointers;
-pub use response::{
-    DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
-    ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
-    ProtobufRepeatedElementType, ProtobufUnorderedPath, ResponseBodyCodec,
-    ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseField,
-    ResponseRuleKind, ResponseTimeRule, ResponseTimestampFormat, ResponseTimestampMode,
-};
-
-/// Read only explicit cross-case selectors before dependency preload.
-pub(in crate::replay) fn http_cross_case_rules(
-    path: &std::path::Path,
-) -> anyhow::Result<Vec<(String, crate::replay::HttpCrossCaseSelector)>> {
-    let loaded = load_replay_policy(path)?;
-    Ok(loaded
-        .document
-        .dependency_rules
-        .into_iter()
-        .filter(|r| {
-            r.replay_scope == config::ReplayScope::RecordingRun
-                && r.protocol == config::DependencyProtocol::Http
-        })
-        .map(|r| {
-            let http = r.http.expect("validated HTTP scope");
-            (
-                r.id,
-                crate::replay::HttpCrossCaseSelector {
-                    host: r.target.host,
-                    port: r.target.port,
-                    method: http.method,
-                    path: http.path,
-                },
-            )
-        })
-        .collect())
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct PolicyReport {
+    pub fingerprint: String,
+    pub unused_applicable_dependency_rule_ids: Vec<String>,
+    #[serde(flatten)]
+    pub details: BTreeMap<String, Value>,
 }
 
-/// Redis sharing retains exact physical read identity and finite inventory.
-pub(in crate::replay) fn redis_cross_case_rules(
-    path: &std::path::Path,
-) -> anyhow::Result<
-    Vec<(
-        String,
-        crate::replay::redis::shared_read::RedisSharedReadSelector,
-    )>,
-> {
-    let loaded = load_replay_policy(path)?;
-    Ok(loaded
-        .document
-        .dependency_rules
-        .into_iter()
-        .filter_map(|rule| {
-            if rule.replay_scope != config::ReplayScope::RecordingRun
-                || rule.protocol != config::DependencyProtocol::Redis
-            {
-                return None;
-            }
-            let redis_value::RedisSelector::SharedRead(read) =
-                rule.redis.expect("validated Redis scope")
-            else {
-                unreachable!("validated Redis scope uses shared read")
-            };
-            Some((
-                rule.id,
-                crate::replay::redis::shared_read::RedisSharedReadSelector {
-                    host: rule.target.host,
-                    port: rule.target.port,
-                    read,
-                },
-            ))
-        })
-        .collect())
+pub(crate) trait ReplayPolicy: Debug + Send + Sized + 'static {
+    type Contracts: RequestRuleRuntime;
+
+    fn load(path: &Path, cases: &BTreeMap<String, ReplayCase>, observe: bool) -> Result<Self>;
+    fn contracts(&self) -> &Self::Contracts;
+    fn contracts_mut(&mut self) -> &mut Self::Contracts;
+    fn fingerprint(&self) -> &str;
+    fn report(&self) -> PolicyReport;
+    fn begin_case(&mut self, case: &str);
+    fn observe_source(
+        &mut self,
+        case: &str,
+        raw: &[u8],
+        index: Option<&crate::dependency_index::FileIndex>,
+    ) -> Result<()>;
+    fn async_rules(&self) -> crate::recorder::async_api::CompletionPolicy;
 }
 
-pub use feedback::{
-    HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
-};
+pub(crate) trait RequestRuleRuntime: Debug + Clone + Send + Sync + 'static {
+    type PreparedInput: Send + 'static;
 
-mod redis_value;
+    fn native_rules(&self) -> Arc<dyn ValueRuleHost>;
+    fn configure_pre_match(&mut self, enabled: bool);
+    fn configure_witnesses(
+        &mut self,
+        witnesses: crate::policy_evidence::WitnessStore,
+        observe: bool,
+    ) -> Result<()>;
+    fn prepare_case_rules(&self, case: &str) -> Result<PreparedCaseRules>;
+    fn request_begin(&self, case: &str) -> Result<()>;
+    fn request_times(&self, case: &str) -> traffic_contract::time::ClockPair;
+    fn delivered_time_copies(
+        &self,
+        case: &str,
+    ) -> crate::value_contract::time_copies::DeliveredTimeCopies;
+    fn has_time_copies(&self, case: &str) -> bool;
+    fn clear_time_copies(&self, case: &str);
+    fn clear_identities(&self, case: &str);
+    fn accept_response_identities(
+        &self,
+        case: &str,
+        pairs: &[traffic_contract::identity::IdentityPair],
+    ) -> Result<()>;
+    fn prepare_derived_inputs(
+        &self,
+        case: &str,
+        sent_at: DateTime<Utc>,
+        actual: &Value,
+    ) -> Result<Self::PreparedInput>;
+    fn commit_derived_inputs(&self, prepared: Self::PreparedInput) -> Result<()>;
+    fn hypothesis_attempts(&self) -> Vec<HypothesisAttempt>;
+    fn hypothesis_coverage_error(&self) -> Option<String>;
+    fn hypothesis_journal_manifest(
+        &self,
+    ) -> Option<crate::policy_evidence::hypotheses::JournalManifest>;
+    fn pre_match_reports(&self) -> Vec<crate::value_contract::pre_match::Candidate>;
+    fn await_hypotheses_durable(&self) -> NativeFuture<'_, ()>;
+}
 
-pub use feedback::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
-
-pub use response::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
-
-pub use feedback::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
-
-pub(in crate::replay) use response::ResponseBodyRuleMatch;
-
-pub(crate) use matcher::mysql_native::{
-    CopyProofs as MysqlTimeCopyProofs,
-    compare_with_time_copies as compare_mysql_contracts_with_time_copies,
-};
-
-pub(crate) use matcher::ReplayPolicyRuntime;
+pub(crate) mod json_pointer;

@@ -13,7 +13,7 @@ pub(crate) struct CaseExchangeIndex {
 }
 
 impl CaseExchangeIndex {
-    pub(super) fn register(&mut self, source: ReplaySource, case_id: Option<&str>, index: usize) {
+    pub(crate) fn register(&mut self, source: ReplaySource, case_id: Option<&str>, index: usize) {
         if source != ReplaySource::Case {
             return;
         }
@@ -25,7 +25,7 @@ impl CaseExchangeIndex {
         }
     }
 
-    pub(super) fn any(&self, case_id: &str, mut predicate: impl FnMut(usize) -> bool) -> bool {
+    pub(crate) fn any(&self, case_id: &str, mut predicate: impl FnMut(usize) -> bool) -> bool {
         self.by_case
             .get(case_id)
             .is_some_and(|indices| indices.iter().copied().any(&mut predicate))

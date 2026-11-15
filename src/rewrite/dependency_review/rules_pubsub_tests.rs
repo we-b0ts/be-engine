@@ -1,8 +1,9 @@
 //! Old immutable notification inputs acquire only independently proven task owners.
 use super::*;
-use crate::recorder::{
-    Recorder, RecorderEvent, RedisExchangeEvent, RedisPubSubPushEvent, capture_body,
+use crate::protocols::recording::events::{
+    RecorderEvent, RedisExchangeEvent, RedisPubSubPushEvent,
 };
+use crate::recorder::{Recorder, capture_body};
 
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 

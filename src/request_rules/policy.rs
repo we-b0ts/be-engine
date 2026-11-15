@@ -6,7 +6,7 @@ use std::path::Path;
 pub(crate) fn load(path: &Path) -> Result<RequestRules> {
     let policy = crate::policy::parse_policy(&std::fs::read_to_string(path)?)?;
     let compiled = crate::policy::compile_policy(&policy)?;
-    crate::replay::compiled_input_rules(&compiled)
+    crate::policy::runtime::compiled_input_rules(&compiled)
 }
 
 pub(crate) fn parse(value: &serde_yaml::Value) -> Result<RequestRules> {
@@ -32,6 +32,6 @@ pub(crate) fn add(original: &str, profile: &JwtProfile, rule: &JwtRule) -> Resul
         "request_rules",
         rules,
     )]))?;
-    crate::replay::replace_request_rule_section(original, &section)
+    crate::policy::runtime::replace_request_rule_section(original, &section)
         .context("cannot update JWT request rules")
 }

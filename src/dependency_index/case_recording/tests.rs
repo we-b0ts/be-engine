@@ -1,5 +1,6 @@
 use super::*;
-use crate::recorder::{CaseContext, DependencyConnectFailureEvent, Recorder, RecorderEvent};
+use crate::protocols::recording::events::{DependencyConnectFailureEvent, RecorderEvent};
+use crate::recorder::{CaseContext, Recorder};
 use uuid::Uuid;
 
 fn copy(source: &Path, destination: &Path) {

@@ -376,7 +376,7 @@ pub(super) async fn adopt_response(
     method: hyper::Method,
     original_uri: Uri,
     api_pattern: String,
-    headers: crate::recorder::HeaderMapSnapshot,
+    headers: crate::protocols::recording::events::HeaderMapSnapshot,
     raw_headers: hyper::HeaderMap,
     request_body: Bytes,
     upstream: String,

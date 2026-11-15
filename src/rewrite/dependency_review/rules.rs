@@ -225,8 +225,9 @@ pub(super) fn bind(
             let response: Value = serde_json::from_slice(
                 &source.read_input(&directory.join("expected-response.json"))?,
             )?;
-            let body = crate::replay::native_source_request_body(&request);
-            let response = crate::replay::native_source_request_body(&response);
+            let body = crate::primary_protocol::assertion::native::source_request_body(&request);
+            let response =
+                crate::primary_protocol::assertion::native::source_request_body(&response);
             ensure!(
                 rules.iter().any(|rule| crate::policy::async_api_matches(
                     api,
@@ -471,7 +472,7 @@ fn process_matches(
     epoch: Option<Uuid>,
 ) -> Result<BTreeSet<Uuid>> {
     let policy = crate::config::native_policy::project_source_policy(rules)?;
-    let matcher = crate::recorder::background::BackgroundDependencyMatcher::from_rules(
+    let matcher = crate::protocols::recording::background::BackgroundDependencyMatcher::from_rules(
         &policy.process_owned_dependencies,
     )?;
     let ports = matcher.resolved_memcached_rule_ports();
@@ -512,7 +513,7 @@ fn process_matches(
         };
         let case = event.capture.observed_case.map(|case| case.to_string());
         for rule in &policy.process_owned_dependencies {
-            if crate::replay::report::source_owned_match(
+            if crate::protocols::replay::report::ownership::source_owned_match(
                 selector,
                 case.as_deref(),
                 rule,

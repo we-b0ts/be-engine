@@ -1,5 +1,9 @@
 use super::*;
+type HttpKey = traffic_protocol_http::candidate::Key<ScopePartition>;
+type RedisKey = traffic_protocol_redis::candidate::Key<ScopePartition>;
+type MysqlKey = traffic_protocol_mysql::candidate::Key<ScopePartition>;
 use std::sync::Arc;
+use traffic_protocol_mysql::candidate::Command as MysqlCommand;
 
 fn http(scope: ScopePartition, path: Option<&str>) -> HttpKey {
     HttpKey {

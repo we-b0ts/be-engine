@@ -97,7 +97,10 @@ fn read_published(
         .filter(|(_, method)| method.as_str() == api)
         .map(|(id, _)| id.to_string())
         .collect();
-    let Some(unused) = unused_source::published_for_cases(report, &identity, &selected) else {
+    let providers = crate::protocols::default_providers();
+    let Some(unused) =
+        unused_source::published_for_cases(report, &identity, &selected, providers.report_codecs())
+    else {
         return Ok(None);
     };
     let case_defaults = load_case_defaults(&root)?;

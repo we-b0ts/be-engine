@@ -23,6 +23,22 @@ pub struct CompiledPolicy {
     pub fingerprints: PolicyFingerprints,
 }
 
+impl CompiledPolicy {
+    pub(crate) fn field_formats(&self) -> impl Iterator<Item = &GlobalField> {
+        self.global_json
+            .iter()
+            .flat_map(|json| json.fields.values())
+            .chain(
+                self.mysql
+                    .iter()
+                    .flat_map(|mysql| mysql.tables.values())
+                    .flat_map(|table| table.fields.values()),
+            )
+            .chain(self.redis.iter().flat_map(|redis| redis.keys.values()))
+            .chain(self.http.iter().flat_map(|http| http.headers.values()))
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CompiledRule {
     /// Fully expanded, self-contained rule, including its Source proof.
@@ -557,7 +573,7 @@ fn validate_match(rule: &Rule) -> Result<()> {
                 "match.sql",
                 65536,
             )?;
-            let values = crate::replay::validate_mysql_value_selector(selector)?;
+            let values = crate::policy::runtime::validate_mysql_value_selector(selector)?;
             if let Slot::SqlValue(index) = &rule.slot {
                 ensure!(
                     *index < values,

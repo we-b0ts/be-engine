@@ -1,4 +1,5 @@
 //! Native RESP capture completeness, controls and session evidence.
+pub mod response;
 use crate::events::{RedisConnectionEvent, RedisExchangeEvent, RedisPubSubPushEvent};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use traffic_model::{DependencyExchangeOutcome, recording::ProtocolRef};

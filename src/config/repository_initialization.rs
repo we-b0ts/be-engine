@@ -821,7 +821,7 @@ mod tests {
             "http://127.0.0.1:8181"
         );
         assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
-        crate::replay::validate_replay_policy(&target.path().join(POLICY_PATH)).unwrap();
+        crate::policy::runtime::validate_replay_policy(&target.path().join(POLICY_PATH)).unwrap();
 
         let error = initialize_repository_config_with(
             RepositoryConfigInitOptions {

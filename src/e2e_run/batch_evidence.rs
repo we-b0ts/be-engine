@@ -102,7 +102,8 @@ fn validate_state(state: &ActiveRunState, required: &BTreeSet<String>) -> Result
 
 pub(super) fn verify_actual_session(state: &ActiveRunState) -> Result<()> {
     let report: Value = serde_json::from_slice(&fs::read(&state.replay_report)?)?;
-    let receipt = crate::replay::validate_completed_receipt(&report)?;
+    let receipt =
+        crate::protocols::replay::report::validation::validate_completed_receipt(&report)?;
     let actual: BTreeSet<_> = state
         .cases
         .iter()
@@ -177,7 +178,8 @@ pub(crate) fn completed_batch_evidence(context: E2eRunContext) -> Result<ActualB
     let report_bytes =
         fs::read(&state.replay_report).context("the actual batch Replay report is unavailable")?;
     let report: Value = serde_json::from_slice(&report_bytes)?;
-    let receipt = crate::replay::validate_completed_receipt(&report)?;
+    let receipt =
+        crate::protocols::replay::report::validation::validate_completed_receipt(&report)?;
     let session = state
         .session_id
         .as_deref()

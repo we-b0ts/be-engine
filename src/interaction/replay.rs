@@ -15,7 +15,7 @@ use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use std::time::Duration;
 
 use super::model::{InputTranscript, OutputObservation, Protocol};
-use crate::recorder::HeaderMapSnapshot;
+use crate::protocols::recording::events::HeaderMapSnapshot;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
 

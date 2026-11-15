@@ -7,8 +7,9 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use super::{ActiveCaseRegistry, DependencyDrainResult, DependencyTargets};
+use crate::recorder::CaseContext;
+use crate::recorder::async_api::CompletionEvent;
 use crate::recorder::async_api::{AsyncEndReason, AsyncScope, AsyncSignal};
-use crate::recorder::{CaseContext, RecorderEvent};
 
 mod ending;
 use ending::Ending;
@@ -118,6 +119,26 @@ impl AsyncObservation {
 }
 
 impl ActiveCaseRegistry {
+    pub(crate) fn observe_async_capture(
+        &self,
+        event: &traffic_protocol::capture::CaptureSnapshot,
+        targets: &DependencyTargets,
+    ) {
+        self.observe_async_completion(
+            &crate::recorder::async_api::CapturedCompletion {
+                event,
+                identity: targets
+                    .capture
+                    .as_ref()
+                    .map(|capture| capture.exchange_id()),
+            },
+            targets,
+            true,
+            event.facts().complete,
+            event.kind(),
+        );
+    }
+
     pub(crate) fn select_async_response(&self, case_id: Uuid, body: Option<&serde_json::Value>) {
         let mut state = self.state.lock().expect("active case registry poisoned");
         let Some(case) = state.active.iter_mut().find(|case| case.case.id == case_id) else {
@@ -181,17 +202,19 @@ impl ActiveCaseRegistry {
         }
     }
 
-    pub(crate) fn observe_async_dependency_event(
+    pub(crate) fn observe_async_completion(
         &self,
-        event: &RecorderEvent,
+        event: &dyn CompletionEvent,
         targets: &DependencyTargets,
         recorded_in_case: bool,
+        capture_complete: bool,
+        event_type: &'static str,
     ) {
         if !recorded_in_case || targets.process_owned_rule.is_some() {
             return;
         }
         let mut state = self.state.lock().expect("active case registry poisoned");
-        if !event.capture_complete()
+        if !capture_complete
             && state.active.iter().any(|case| {
                 case.async_api.is_some()
                     && targets
@@ -216,7 +239,7 @@ impl ActiveCaseRegistry {
             let Some(observation) = case.async_api.as_ref() else {
                 continue;
             };
-            if !event.capture_complete() {
+            if !capture_complete {
                 case.invalidation.get_or_insert_with(|| {
                     crate::recorder::CaseInvalidation::new(
                         "dependency_capture_incomplete",
@@ -228,7 +251,7 @@ impl ActiveCaseRegistry {
                 observation.finish(AsyncSignal {
                     end_reason: AsyncEndReason::DependencyFailure,
                     resource_index: None,
-                    event_type: Some(event.kind()),
+                    event_type: Some(event_type),
                 });
                 continue;
             }

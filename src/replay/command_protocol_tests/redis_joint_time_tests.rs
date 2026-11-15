@@ -18,7 +18,7 @@ fn inbound(mode: &str) -> String {
 #[tokio::test]
 async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references_and_finite_consumption()
  {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let local = temp.path().join(".traffic-e2e/local");
     let case = local.join("recordings/run/case");
     std::fs::create_dir_all(&case).unwrap();
@@ -66,7 +66,7 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
     let dependencies = case.join("dependencies.jsonl");
     std::fs::write(&dependencies, &immutable).unwrap();
     let policy = temp.path().join(".traffic-e2e/policy.yaml");
-    crate::replay::write_policy_fixture(
+    crate::policy::runtime::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -114,7 +114,7 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
         "time_values":[{"json_pointer":"/timestamp","format":"unix_milliseconds"}],
         "source_evidence":"Item:create stores the current request-relative millisecond timestamp"}))
         .unwrap();
-    crate::replay::install_dependency_rule_fixture(&policy, identity.clone()).unwrap();
+    crate::policy::runtime::install_dependency_rule_fixture(&policy, identity.clone()).unwrap();
     let fields = time
         .time_values
         .iter()
@@ -125,7 +125,7 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
             )
         })
         .collect::<serde_json::Map<_, _>>();
-    crate::replay::install_dependency_rule_fixture(&policy,json!({
+    crate::policy::runtime::install_dependency_rule_fixture(&policy,json!({
         "id":time.id,"protocol":"redis","target":identity["capture"]["target"],
         "case":{"method":time.method,"path":identity["api"]},"when":identity["when"],
         "source_evidence":time.source_evidence,"redis":{"database":0,"key":identity["capture"]["key"],
@@ -172,7 +172,7 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
             {
                 let replay = state.lock().await;
                 let report = replay.snapshot_report();
-                assert_eq!(report.protocols.redis.matched_count, 5);
+                assert_eq!(report.native.protocols.redis.matched_count, 5);
                 assert!(!report.is_dirty());
                 let usage = replay.replay_policy.as_ref().unwrap().report();
                 assert!(usage.unused_applicable_dependency_rule_ids.is_empty());
@@ -184,6 +184,7 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
                     .lock()
                     .await
                     .snapshot_report()
+                    .native
                     .protocols
                     .redis
                     .matched_count,
@@ -195,6 +196,7 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
                     .lock()
                     .await
                     .snapshot_report()
+                    .native
                     .protocols
                     .redis
                     .matched_count,
@@ -211,7 +213,7 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
 
 #[tokio::test]
 async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_finite_consumption() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("recordings/run/case");
     std::fs::create_dir_all(&case).unwrap();
     std::fs::write(case.join("request.json"), inbound("generated")).unwrap();
@@ -318,6 +320,7 @@ async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_fin
             .lock()
             .await
             .snapshot_report()
+            .native
             .protocols
             .redis
             .matched_count,
@@ -331,6 +334,7 @@ async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_fin
             .lock()
             .await
             .snapshot_report()
+            .native
             .protocols
             .redis
             .matched_count,

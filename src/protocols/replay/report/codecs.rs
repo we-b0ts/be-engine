@@ -1,4 +1,5 @@
 //! Application bindings retain historical report field locations and native codecs.
+mod diagnostics;
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
@@ -31,6 +32,22 @@ impl ReportSection for Empty {
     }
 }
 impl ReportCodec for Builtin {
+    fn diagnostics(&self) -> &dyn traffic_protocol::report::diagnostics::DiagnosticSchema {
+        self
+    }
+    fn unused_case_rows<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
+        match self.0 {
+            "mysql" => &report["unused_case_exchanges"],
+            "http" => &report["unused_case_http_exchanges"],
+            _ => &report[protocol]["unused_case"],
+        }
+    }
+    fn supports_source_occurrences(&self) -> bool {
+        matches!(self.0, "mysql" | "redis")
+    }
+    fn requires_source_exchange_id(&self, row: &Value) -> bool {
+        self.0 == "redis" && row["command"] == "PUBSUB_PUSH"
+    }
     fn decode(&self, report: &Path, value: &Value) -> Result<Option<Box<dyn ReportSection>>> {
         if self.0 == "redis" {
             super::redis::decode(report, value)

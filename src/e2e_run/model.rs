@@ -13,8 +13,11 @@ const STATE_ERROR_OVERFLOW: &str =
 
 use super::result::E2eResponseUnavailableReason;
 use crate::case_group::CaseGroupInventory;
-use crate::replay::{
-    ResponseBodyAssertionReport, ResponseBodyCodec, ResponseDifference, ResponseGatewayProtocol,
+use crate::policy::runtime::ResponseBodyCodec;
+use crate::{
+    primary_protocol::assertion::ResponseBodyAssertionReport,
+    primary_protocol::assertion::ResponseDifference,
+    primary_protocol::assertion::ResponseGatewayProtocol,
 };
 
 pub(super) const STATE_VERSION: u32 = 3;

@@ -2,8 +2,9 @@
 //! authenticated read-copy facts. Native key relations remain Replay obligations.
 use super::*;
 use crate::policy::native::{NativeKeyContract, NativeKeySelector};
+use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::value_codec::CodecPlan;
-use crate::value_contract::time_copies::{TimeCopyLookup, TimeCopyPosition};
+use crate::value_contract::time_copies::TimeCopyLookup;
 mod script_times;
 
 pub(super) fn compare(
@@ -28,7 +29,7 @@ pub(super) fn compare(
         arguments(event)?
     };
     if surface == Surface::DependencyRequest
-        && let Some(normalized) = crate::replay::normalize_redis_expiration(
+        && let Some(normalized) = crate::protocols::replay::normalize_redis_expiration(
             command,
             &source_args,
             &target_args,
@@ -61,12 +62,12 @@ pub(super) fn compare(
             Ok(Comparison::default())
         };
     }
-    let before = crate::replay::redis_field_values(
+    let before = crate::policy::runtime::redis_field_values(
         command,
         &source_args,
         (surface == Surface::DependencyResponse).then_some(source),
     )?;
-    let after = crate::replay::redis_field_values(
+    let after = crate::policy::runtime::redis_field_values(
         command,
         &target_args,
         (surface == Surface::DependencyResponse).then_some(target),
@@ -161,8 +162,8 @@ pub(super) fn compare(
 
 fn compare_value(
     event: &Value,
-    before: &crate::replay::RedisFieldValue<'_>,
-    after: &crate::replay::RedisFieldValue<'_>,
+    before: &crate::policy::runtime::RedisFieldValue<'_>,
+    after: &crate::policy::runtime::RedisFieldValue<'_>,
     source: &[u8],
     target: &[u8],
     context: &CompareContext<'_>,
@@ -207,13 +208,13 @@ fn compare_value(
             proofs(
                 store,
                 case,
-                crate::replay::redis_time_position(
+                crate::policy::runtime::redis_time_position(
                     &resource.endpoint.host,
                     resource.endpoint.port,
                     database,
                     before,
                 ),
-                crate::replay::redis_time_position(
+                crate::policy::runtime::redis_time_position(
                     &resource.endpoint.host,
                     resource.endpoint.port,
                     database,
@@ -259,13 +260,13 @@ fn compare_value(
     let database = event["database"]
         .as_i64()
         .context("Redis copy lacks observed database")?;
-    let source_position = crate::replay::redis_time_position(
+    let source_position = crate::policy::runtime::redis_time_position(
         &resource.endpoint.host,
         resource.endpoint.port,
         database,
         before,
     );
-    let target_position = crate::replay::redis_time_position(
+    let target_position = crate::policy::runtime::redis_time_position(
         &resource.endpoint.host,
         resource.endpoint.port,
         database,
@@ -296,8 +297,8 @@ fn compare_value(
 
 fn compare_scalar(
     event: &Value,
-    before: &crate::replay::RedisFieldValue<'_>,
-    after: &crate::replay::RedisFieldValue<'_>,
+    before: &crate::policy::runtime::RedisFieldValue<'_>,
+    after: &crate::policy::runtime::RedisFieldValue<'_>,
     source: &[u8],
     target: &[u8],
     field: &crate::policy::GlobalField,
@@ -317,13 +318,13 @@ fn compare_scalar(
         let database = event["database"]
             .as_i64()
             .context("scalar Redis copy lacks database")?;
-        let source_position = crate::replay::redis_time_position(
+        let source_position = crate::policy::runtime::redis_time_position(
             &resource.endpoint.host,
             resource.endpoint.port,
             database,
             before,
         );
-        let target_position = crate::replay::redis_time_position(
+        let target_position = crate::policy::runtime::redis_time_position(
             &resource.endpoint.host,
             resource.endpoint.port,
             database,
@@ -415,7 +416,12 @@ fn native_key_owners(
         .and_then(|bytes| crate::json_value::parse(&bytes));
     let resource = observed_resource(event)?;
     let mut owners = BTreeSet::new();
-    for rule in crate::replay::native_response_selected(policy, method, uri.path(), body.as_ref()) {
+    for rule in crate::primary_protocol::assertion::native::selected(
+        policy,
+        method,
+        uri.path(),
+        body.as_ref(),
+    ) {
         let selected = &rule.rule.selector;
         let primary = selected
             .resource
@@ -505,9 +511,9 @@ pub(super) fn related_candidate(
     if command == "PUBLISH" {
         return Ok(source.first() == target.first());
     }
-    let before = crate::replay::redis_field_values(command, &source, None)?;
+    let before = crate::policy::runtime::redis_field_values(command, &source, None)?;
     // A malformed same-operation candidate stays visible to the strict owner.
-    let Ok(after) = crate::replay::redis_field_values(command, &target, None) else {
+    let Ok(after) = crate::policy::runtime::redis_field_values(command, &target, None) else {
         return Ok(true);
     };
     if before.len() != after.len() {

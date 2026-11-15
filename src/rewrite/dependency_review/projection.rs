@@ -180,7 +180,7 @@ pub(in crate::rewrite) fn information(
             "actual_attempt":last.map(|attempt|attempt.attempt),"receipt":receipt_current.then(||state.dependency_review.receipts.get(api)),
             "batch_verified":batch_current,"complete_batch_receipt":batch_current.then_some(&state.dependency_review.batch_receipt)},
         "gates":last.map(|attempt|&attempt.gates),"response_counts":last.map(|attempt|&attempt.counts),
-        "dependency_counts":(!report.is_null()).then(||crate::replay::report::build_dependency_evidence(&report).case_event_counts),
+        "dependency_counts":(!report.is_null()).then(||crate::protocols::replay::report::evidence::build_dependency_evidence(&report).case_event_counts),
         "dependency_occurrences":occurrence_information,
         "hypotheses":{"total_groups":groups.len(),"total_attempts":report["dependency_hypothesis_attempts"].as_array().map_or(0,Vec::len),
             "coverage_error":report["dependency_hypothesis_coverage_error"],"groups":groups.into_values().skip(offset).take(PAGE).collect::<Vec<_>>(),

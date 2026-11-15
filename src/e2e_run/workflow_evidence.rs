@@ -109,7 +109,7 @@ pub(crate) fn completed_workflow_evidence(
         &layout.case_source,
         &manifest.run_id,
     )?;
-    let policy = crate::replay::validate_replay_policy(&config.replay_policy)?;
+    let policy = crate::policy::runtime::validate_replay_policy(&config.replay_policy)?;
     let mut projection_sha256 = BTreeMap::new();
     let mut states = Vec::new();
     let mut selected_case_ids = BTreeSet::new();
@@ -178,14 +178,14 @@ pub(crate) fn completed_workflow_evidence(
         &snapshot,
         &policy.fingerprint,
     )?;
-    let aggregate = crate::replay::aggregate_runner_replay_report(
+    let aggregate = crate::protocols::replay::report::aggregate::aggregate_runner_replay_report(
         &layout.case_source,
         &state.replay_report,
         state
             .replay_report
             .parent()
             .context("workflow report parent absent")?,
-        &crate::replay::ReplayAggregateOptions {
+        &crate::protocols::replay::report::aggregate::ReplayAggregateOptions {
             case_ids: selected_case_ids.clone(),
             session_ids: BTreeSet::from([state
                 .session_id

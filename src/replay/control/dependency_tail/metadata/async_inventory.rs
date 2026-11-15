@@ -7,14 +7,16 @@ mod tests;
 
 pub(super) async fn from_complete_source(
     case_dir: &Path,
-    rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+    rules: &crate::recorder::async_api::CompletionPolicy,
     request_timeout: Duration,
+    evidence: &EvidenceRegistry,
 ) -> Result<Option<Metadata>> {
     from_scope(
         case_dir,
         &case_dir.join("dependencies.jsonl"),
         rules,
         request_timeout,
+        evidence,
     )
     .await
 }
@@ -22,8 +24,9 @@ pub(super) async fn from_complete_source(
 pub(super) async fn from_scope(
     case_dir: &Path,
     dependency_path: &Path,
-    rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+    rules: &crate::recorder::async_api::CompletionPolicy,
     request_timeout: Duration,
+    evidence: &EvidenceRegistry,
 ) -> Result<Option<Metadata>> {
     if rules.is_empty() {
         return Ok(None);
@@ -32,39 +35,22 @@ pub(super) async fn from_scope(
         .await?
         .context("async API replay requires an original Source request")?;
     let request: Value = serde_json::from_slice(&raw).context("invalid async Source request")?;
-    let method = request["method"]
-        .as_str()
-        .context("async Source method unavailable")?
-        .parse()?;
-    let uri = request["uri"]
-        .as_str()
-        .context("async Source URI unavailable")?
-        .parse()?;
-    let body = crate::replay::native_source_request_body(&request)
-        .map(|body| serde_json::to_vec(&body))
-        .transpose()?
-        .unwrap_or_default();
-    let Some(scope) =
-        crate::recorder::async_api::AsyncScope::for_primary(rules, &method, &uri, &body)
-    else {
-        return Ok(None);
-    };
     let raw_response = read(&case_dir.join("expected-response.json"))
         .await?
         .context("async API fallback requires a complete published Source response")?;
     let response: Value =
         serde_json::from_slice(&raw_response).context("invalid async Source response")?;
-    let response_body = crate::replay::native_source_request_body(&response);
-    if !scope.select_response(response_body.as_ref()).0 {
+    let Some(scope) = rules.select(&request, &response)? else {
         return Ok(None);
-    }
+    };
     let path = dependency_path.to_owned();
     let raw =
         tokio::task::spawn_blocking(move || crate::dependency_index::scoped::read_bytes(&path))
             .await
             .context("async dependency scope read task failed")??;
+    let evidence = evidence.clone();
     let (references, source_stop_required) =
-        tokio::task::spawn_blocking(move || complete_inventory(&scope, &raw))
+        tokio::task::spawn_blocking(move || complete_inventory(&scope, &raw, &evidence))
             .await
             .context("async Source inventory preparation task failed")??;
     let request_timeout_ms = request_timeout
@@ -90,6 +76,7 @@ pub(super) async fn from_scope(
 fn complete_inventory(
     scope: &crate::recorder::async_api::AsyncScope,
     raw: &[u8],
+    evidence: &EvidenceRegistry,
 ) -> Result<(BTreeSet<RecordedReference>, bool)> {
     let mut references = BTreeSet::new();
     let mut completed = false;
@@ -105,7 +92,7 @@ fn complete_inventory(
             source_stop_required |=
                 signal.end_reason != crate::recorder::async_api::AsyncEndReason::Resource;
         }
-        if let Some(reference) = reference(&event)? {
+        if let Some(reference) = reference(&event, evidence)? {
             ensure!(
                 references.insert(reference),
                 "async Source inventory repeats an exchange"

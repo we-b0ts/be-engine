@@ -51,7 +51,7 @@ pub(super) fn selects_native_sql(rule: &CompiledNativeRule, event: &Value) -> Re
     {
         return Ok(false);
     }
-    crate::replay::mysql_native_witness_matches(event, rule)
+    crate::policy::runtime::mysql_native_witness_matches(event, rule)
 }
 
 pub(in crate::rewrite) fn source_witness(
@@ -64,9 +64,13 @@ pub(in crate::rewrite) fn source_witness(
             Ok(serde_json::to_vec(&super::arguments(event)?)?)
         }
         Protocol::Redis => super::capture(&event["response"]),
-        Protocol::Memcached => crate::replay::memcached_source_witness(event, surface),
-        Protocol::Mysql => crate::replay::mysql_source_witness(event, surface),
-        Protocol::Http => crate::replay::http_source_witness(event, surface, key_context),
+        Protocol::Memcached => {
+            crate::protocols::replay::memcached::contracts::source_witness(event, surface)
+        }
+        Protocol::Mysql => crate::protocols::replay::mysql_source_witness(event, surface),
+        Protocol::Http => {
+            crate::protocols::replay::http_source_witness(event, surface, key_context)
+        }
     }
 }
 
@@ -75,7 +79,7 @@ pub(in crate::rewrite::unified_rule) fn validate_metadata(
     event: &Value,
 ) -> Result<()> {
     if protocol(event) == Some(Protocol::Http) {
-        return crate::replay::http_witness_metadata_matches(event, &witness.metadata);
+        return crate::protocols::replay::http_witness_metadata_matches(event, &witness.metadata);
     }
     let resource = witness
         .metadata
@@ -113,7 +117,7 @@ pub(super) fn compare_source(
         surface == Surface::DependencyRequest && protocol(event) == Some(Protocol::Mysql),
         "native value preflight requires a MySQL request"
     );
-    let report = crate::replay::mysql_validate_contract_witness(
+    let report = crate::protocols::replay::mysql_validate_contract_witness(
         event["database"].as_str(),
         raw,
         raw,
@@ -140,7 +144,7 @@ pub(super) fn compare_pair(
         surface == Surface::DependencyRequest && protocol(event) == Some(Protocol::Mysql),
         "native value preflight requires a MySQL request"
     );
-    let Some(report) = crate::replay::mysql_validate_contract_candidate(
+    let Some(report) = crate::protocols::replay::mysql_validate_contract_candidate(
         event["database"].as_str(),
         source,
         target,
@@ -167,7 +171,7 @@ pub(in crate::rewrite) fn values(
     match protocol(event).context("unsupported dependency event")? {
         Protocol::Redis
             if surface == Surface::DependencyResponse
-                && crate::replay::redis_bulk_payload(raw)?.is_none() =>
+                && crate::policy::runtime::redis_bulk_payload(raw)?.is_none() =>
         {
             Ok(vec![])
         }
@@ -182,7 +186,7 @@ pub(in crate::rewrite) fn values(
             raw,
             surface == Surface::DependencyResponse,
         ),
-        Protocol::Http => Ok(crate::replay::http_witness_value(raw, surface)?
+        Protocol::Http => Ok(crate::protocols::replay::http_witness_value(raw, surface)?
             .map(|payload| vec![(Vec::new(), payload)])
             .unwrap_or_default()),
         _ => anyhow::bail!("selected protocol requires its native value-slot extractor"),

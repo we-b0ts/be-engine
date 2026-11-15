@@ -372,7 +372,7 @@ impl RequestRuleRuntime {
         target_root: &Path,
         compiled: &crate::policy::CompiledPolicy,
     ) -> Result<Self> {
-        let configured = crate::replay::compiled_input_rules(compiled)?;
+        let configured = crate::policy::runtime::compiled_input_rules(compiled)?;
         let mut rules = Vec::with_capacity(configured.jwt.rules.len());
         for rule in configured.jwt.rules {
             let profile = configured
@@ -447,7 +447,7 @@ impl RequestRuleRuntime {
             .and_then(|uri| uri.parse::<hyper::Uri>().ok())
             .map(|uri| uri.path().to_string())
             .unwrap_or_default();
-        let source_body = crate::replay::native_source_request_body(request);
+        let source_body = crate::primary_protocol::assertion::native::source_request_body(request);
         for configured in &self.rules {
             if let Some((scope, when)) = &configured.scope
                 && (!scope.api.as_deref().is_none_or(|api| {

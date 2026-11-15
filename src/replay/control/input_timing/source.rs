@@ -20,6 +20,7 @@ pub(super) fn load(
     case: &ReplayCase,
     fast_cap: Option<u64>,
     prepared_dependencies: Option<&[u8]>,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
 ) -> Result<Plan> {
     let raw = crate::request_headers::load_request_file(&case.dir.join("request.json"))?;
     let request: Request = serde_json::from_slice(&raw)?;
@@ -44,12 +45,9 @@ pub(super) fn load(
             return Ok(());
         }
         let kind: Kind = serde_json::from_slice(raw)?;
-        covered &= matches!(
-            kind.event_type.as_str(),
-            "redis_exchange" | "redis_pub_sub_push"
-        );
+        covered &= evidence.supports_input_timing(&kind.event_type);
         if let Some(fast) = fast.as_mut() {
-            fast.record(raw)?;
+            fast.record(raw, evidence)?;
         }
         Ok(())
     };

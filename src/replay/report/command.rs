@@ -4,45 +4,45 @@ use uuid::Uuid;
 use super::{ReplaySource, TargetKey};
 
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct CommandMatchedReport {
-    pub(in crate::replay) case_id: Option<String>,
-    pub(in crate::replay) source: ReplaySource,
-    pub(in crate::replay) index: usize,
-    pub(in crate::replay) target: TargetKey,
-    pub(in crate::replay) connection_id: Uuid,
-    pub(in crate::replay) sequence: u64,
-    pub(in crate::replay) command: String,
+pub(crate) struct CommandMatchedReport {
+    pub(crate) case_id: Option<String>,
+    pub(crate) source: ReplaySource,
+    pub(crate) index: usize,
+    pub(crate) target: TargetKey,
+    pub(crate) connection_id: Uuid,
+    pub(crate) sequence: u64,
+    pub(crate) command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) shared_origin: Option<SharedCommandOrigin>,
+    pub(crate) shared_origin: Option<SharedCommandOrigin>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) target_event_index: Option<usize>,
+    pub(crate) target_event_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct SharedCommandOrigin {
-    pub(in crate::replay) rule_id: String,
-    pub(in crate::replay) case_id: String,
+pub(crate) struct SharedCommandOrigin {
+    pub(crate) rule_id: String,
+    pub(crate) case_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct CommandRequestReport {
+pub(crate) struct CommandRequestReport<D = ()> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) target_observation_id: Option<String>,
+    pub(crate) target_observation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) target_event_index: Option<usize>,
-    pub(in crate::replay) case_id: Option<String>,
-    pub(in crate::replay) target: TargetKey,
-    pub(in crate::replay) command: String,
+    pub(crate) target_event_index: Option<usize>,
+    pub(crate) case_id: Option<String>,
+    pub(crate) target: TargetKey,
+    pub(crate) command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) request_fingerprint: Option<String>,
-    pub(in crate::replay) reason: String,
+    pub(crate) request_fingerprint: Option<String>,
+    pub(crate) reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) diagnostic: Option<CommandMatchDiagnostic>,
+    pub(crate) diagnostic: Option<CommandMatchDiagnostic<D>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(in crate::replay) enum CommandMatchDiagnostic {
+pub(crate) enum CommandMatchDiagnostic<D = ()> {
     EvidenceUnavailable {
         reason: String,
     },
@@ -50,27 +50,15 @@ pub(in crate::replay) enum CommandMatchDiagnostic {
     Mismatch {
         fields: Vec<String>,
     },
-    RedisAppendStreamMismatch {
-        #[serde(flatten)]
-        details: Box<crate::replay::redis::append::AppendMismatch>,
-    },
-    RedisAppendStreamBoundaryMismatch {
-        #[serde(flatten)]
-        details: Box<crate::replay::redis::append::AppendBoundaryMismatch>,
-    },
-    RedisStateObservationMismatch {
-        rule_id: String,
-        source_key_fingerprint: String,
-        source_epoch_mutation: Option<Box<CommandExchangeRefReport>>,
-        reason: String,
-    },
     LaneBlocked {
         candidate: Box<CommandExchangeRefReport>,
         blocked_by: Box<CommandExchangeRefReport>,
     },
+    #[serde(untagged)]
+    Native(D),
 }
 
-pub(in crate::replay) use traffic_replay::command::ExchangeRef as CommandExchangeRefReport;
+pub(crate) use traffic_replay::command::ExchangeRef as CommandExchangeRefReport;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CommandUnusedReport {
@@ -96,57 +84,36 @@ pub(crate) struct CommandSnapshotOverlayReport {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct CommandProtocolReport {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) activity_refreshes: Vec<crate::replay::redis::activity::ActivityAudit>,
-    pub(in crate::replay) activity_refreshes_omitted: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) state_observations:
-        Vec<crate::replay::redis::observations::ObservationAudit>,
-    pub(in crate::replay) state_observations_omitted: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) allowed_state_omissions:
-        Vec<crate::replay::redis::observations::omissions::OmissionAudit>,
-    pub(in crate::replay) allowed_state_omissions_omitted: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) target_event_index_scope: Option<&'static str>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) append_streams: Vec<crate::replay::redis::append::AppendAudit>,
-    pub(in crate::replay) append_streams_omitted: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) allowed_cancelled_cache_tails:
-        Vec<crate::replay::redis::append::cancelled::Audit>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) pubsub: Option<PubSubReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) unordered_value:
-        Option<crate::replay::redis::value::evidence::OrderEvidence>,
-    pub(in crate::replay) connections: usize,
-    pub(in crate::replay) matched_count: usize,
-    pub(in crate::replay) matched: Vec<CommandMatchedReport>,
-    pub(in crate::replay) unmatched: Vec<CommandRequestReport>,
-    pub(in crate::replay) unsupported: Vec<CommandRequestReport>,
-    pub(in crate::replay) unsafe_events: Vec<CommandRequestReport>,
-    pub(in crate::replay) unused_case: Vec<CommandUnusedReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) unused_global_count: Option<usize>,
-    pub(in crate::replay) unused_global: Vec<CommandUnusedReport>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) snapshot_overlays: Vec<CommandSnapshotOverlayReport>,
-    pub(in crate::replay) warnings: Vec<String>,
-}
+pub(crate) struct EmptyReport {}
 
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct PubSubReport {
-    pub recorded_pushes: usize,
-    pub delivered_pushes: usize,
-    pub recorded_rpc_callbacks: usize,
-    pub delivered_rpc_callbacks: usize,
-    pub failed_pushes: usize,
+pub(crate) struct CommandProtocolReport<D = (), E = EmptyReport> {
+    #[serde(flatten)]
+    pub(crate) extensions: E,
+    pub(crate) connections: usize,
+    pub(crate) matched_count: usize,
+    pub(crate) matched: Vec<CommandMatchedReport>,
+    pub(crate) unmatched: Vec<CommandRequestReport<D>>,
+    pub(crate) unsupported: Vec<CommandRequestReport<D>>,
+    pub(crate) unsafe_events: Vec<CommandRequestReport<D>>,
+    pub(crate) unused_case: Vec<CommandUnusedReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) unused_global_count: Option<usize>,
+    pub(crate) unused_global: Vec<CommandUnusedReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) snapshot_overlays: Vec<CommandSnapshotOverlayReport>,
+    pub(crate) warnings: Vec<String>,
 }
 
-impl CommandProtocolReport {
-    pub(in crate::replay) fn is_dirty(&self) -> bool {
+impl<D, E> CommandProtocolReport<D, E> {
+    pub(crate) fn unused_run_count(&self) -> usize {
+        self.unused_global_count.unwrap_or(self.unused_global.len())
+    }
+    pub(crate) fn unmatched_or_unsafe(&self) -> usize {
+        self.unmatched.len() + self.unsupported.len() + self.unsafe_events.len()
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
         self.unmatched
             .iter()
             .any(|request| request.case_id.is_some())
@@ -178,5 +145,31 @@ impl CommandProtocolReport {
                 .unused_case
                 .iter()
                 .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
+    }
+}
+
+impl<D, E: Default> Default for CommandProtocolReport<D, E> {
+    fn default() -> Self {
+        Self {
+            extensions: E::default(),
+            connections: 0,
+            matched_count: 0,
+            matched: Vec::new(),
+            unmatched: Vec::new(),
+            unsupported: Vec::new(),
+            unsafe_events: Vec::new(),
+            unused_case: Vec::new(),
+            unused_global_count: None,
+            unused_global: Vec::new(),
+            snapshot_overlays: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+}
+
+impl<D, E> std::ops::Deref for CommandProtocolReport<D, E> {
+    type Target = E;
+    fn deref(&self) -> &E {
+        &self.extensions
     }
 }

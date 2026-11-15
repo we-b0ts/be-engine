@@ -19,7 +19,10 @@ struct SealedIndex {
     index: GlobalIndex,
 }
 
-pub(crate) fn seal_recording_scopes(run: &Path, validate: fn(&Value) -> Result<()>) -> Result<()> {
+pub(crate) fn seal_recording_scopes(
+    run: &Path,
+    validate: impl Fn(&Value) -> Result<()>,
+) -> Result<()> {
     let (run, _) = recording::manifest(run)?;
     let manifest_path = run.join(MANIFEST_FILE);
     let manifest_stamp = FileStamp::read_native(&manifest_path)?;
@@ -35,7 +38,7 @@ pub(crate) fn seal_recording_scopes(run: &Path, validate: fn(&Value) -> Result<(
         let scope_stamp = FileStamp::read_native(&view)?;
         let output = indexes.join(format!("{scope}-dependencies"));
         store::private_directory(&output)?;
-        let index = build_index(&view, &output, &stamp, validate, &cancelled)?;
+        let index = build_index(&view, &output, &stamp, &validate, &cancelled)?;
         ensure!(
             FileStamp::read_native(&view)? == scope_stamp
                 && FileStamp::read_native(&manifest_path)? == manifest_stamp,

@@ -5,7 +5,7 @@ use hyper::{Method, Uri};
 use crate::AppState;
 use crate::active_case::DependencyTargets;
 use crate::config::BackgroundDependencyRuleConfig;
-use crate::recorder::request::DependencyRequest;
+use crate::protocols::recording::request::DependencyRequest;
 
 impl AppState {
     pub(crate) fn capture_memcached_dependency(

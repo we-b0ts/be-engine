@@ -8,9 +8,11 @@ use super::model::{
 };
 use super::store;
 use crate::case_group::CaseGroupInventory;
-use crate::replay::{
-    ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport,
-    aggregate_runner_replay_report,
+use crate::{
+    protocols::replay::report::aggregate::ReplayAggregateCounts,
+    protocols::replay::report::aggregate::ReplayAggregateOptions,
+    protocols::replay::report::aggregate::ReplayAggregateReport,
+    protocols::replay::report::aggregate::aggregate_runner_replay_report,
 };
 
 pub(super) fn build_final_evidence(

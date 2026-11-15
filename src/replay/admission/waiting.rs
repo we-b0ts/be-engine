@@ -4,15 +4,15 @@ use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RequestAdmission {
-    pub(in crate::replay) case: Option<String>,
-    pub(in crate::replay) event_index: Option<usize>,
-    pub(in crate::replay) observed_at: Option<DateTime<Utc>>,
-    pub(in crate::replay) observation_id: Option<uuid::Uuid>,
-    pub(in crate::replay) observation_retained: bool,
+    pub(crate) case: Option<String>,
+    pub(crate) event_index: Option<usize>,
+    pub(crate) observed_at: Option<DateTime<Utc>>,
+    pub(crate) observation_id: Option<uuid::Uuid>,
+    pub(crate) observation_retained: bool,
     epoch: u64,
 }
 impl RequestAdmission {
-    pub(in crate::replay) fn capture<P: ReplayProtocolSet>(
+    pub(crate) fn capture<P: ReplayProtocolSet>(
         state: &RuntimeState<P>,
         event_index: Option<usize>,
         observed_at: Option<DateTime<Utc>>,
@@ -28,7 +28,7 @@ impl RequestAdmission {
             epoch: state.admission_epoch,
         }
     }
-    pub(in crate::replay) fn cancel_reason<P: ReplayProtocolSet>(
+    pub(crate) fn cancel_reason<P: ReplayProtocolSet>(
         &self,
         state: &RuntimeState<P>,
     ) -> Option<&'static str> {
@@ -46,7 +46,11 @@ impl RequestAdmission {
 }
 
 impl<P: ReplayProtocolSet> RuntimeState<P> {
-    pub(in crate::replay) fn advance_admission_epoch(&mut self) {
+    pub(crate) fn admission_epoch(&self) -> u64 {
+        self.admission_epoch
+    }
+
+    pub(crate) fn advance_admission_epoch(&mut self) {
         if let Some(run) = &self.run_sequence {
             for runtime in &run.runtimes {
                 runtime.wake_requests();

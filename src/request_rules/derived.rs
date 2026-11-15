@@ -7,7 +7,7 @@ impl RuntimeJwtRule {
         let Some((scope, when)) = &self.scope else {
             return true;
         };
-        let body = crate::replay::native_source_request_body(request);
+        let body = crate::primary_protocol::assertion::native::source_request_body(request);
         let method = request["method"].as_str().unwrap_or_default();
         let path = request["uri"]
             .as_str()

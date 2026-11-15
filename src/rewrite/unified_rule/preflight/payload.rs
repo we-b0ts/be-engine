@@ -50,8 +50,12 @@ pub(super) fn verify(
         let source_body = capture(&request["body"])
             .ok()
             .and_then(|bytes| crate::json_value::parse(&bytes));
-        let native_applicable =
-            crate::replay::native_response_selected(policy, method, &path, source_body.as_ref());
+        let native_applicable = crate::primary_protocol::assertion::native::selected(
+            policy,
+            method,
+            &path,
+            source_body.as_ref(),
+        );
         let native_response = native_applicable
             .iter()
             .copied()
@@ -257,8 +261,8 @@ pub(super) fn verify(
                         &native_sql
                     };
                     let normalized = if dependency::protocol(&event) == Some(Protocol::Mysql) {
-                        crate::replay::mysql_normalize_identity_witnesses(
-                            crate::replay::MysqlIdentityPreflight {
+                        crate::protocols::replay::mysql_normalize_identity_witnesses(
+                            crate::protocols::replay::MysqlIdentityPreflight {
                                 policy,
                                 report: &bundle.replay,
                                 case: &case_id,

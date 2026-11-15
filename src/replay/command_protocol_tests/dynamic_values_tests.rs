@@ -6,7 +6,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite_calls() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir(&case).unwrap();
     let lane = Uuid::new_v4();
@@ -28,7 +28,7 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     let policy = temp.path().join("policy.yaml");
-    crate::replay::write_policy_fixture(
+    crate::policy::runtime::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -51,7 +51,7 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
     }
     task.abort();
     let rule = serde_json::from_value(json!({"id":"name","api":"/items","targets":[{"host":"redis.internal","port":6379}],"capture":{"protocol":"redis","target":{"host":"redis.internal","port":6379},"database":0,"command":"SET","key":"anchor","argument_index":1},"source_evidence":"Generator:create chooses a random name used in the later cache key"})).unwrap();
-    crate::replay::policy::test_fixture::install_dynamic_value(DynamicValueRuleFeedback {
+    crate::policy::runtime::test_fixture::install_dynamic_value(DynamicValueRuleFeedback {
         policy_path: policy.clone(),
         rule,
         replay_report: report,
@@ -103,7 +103,7 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
 
 #[tokio::test]
 async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_keys() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir(&case).unwrap();
     let lane = Uuid::new_v4();
@@ -143,7 +143,7 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     let policy = temp.path().join("policy.yaml");
-    crate::replay::write_policy_fixture(
+    crate::policy::runtime::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -216,7 +216,7 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
             .contains("legacy rule authoring is retired")
     );
     assert_eq!(std::fs::read(&dependencies).unwrap(), original);
-    crate::replay::policy::test_fixture::install_dynamic_value(feedback()).unwrap();
+    crate::policy::runtime::test_fixture::install_dynamic_value(feedback()).unwrap();
     let saved = crate::recorder::test_io::read_to_string_sync(&policy).unwrap();
     assert!(saved.contains("prefix: 'task:'") || saved.contains("prefix: task:"));
     assert!(saved.contains("kind: numeric"));

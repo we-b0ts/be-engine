@@ -10,18 +10,18 @@ pub(crate) enum PostReadyWaitOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) struct RedisCacheActivity {
+pub(crate) struct CacheActivity {
     last_request_at: watch::Sender<Option<Instant>>,
 }
 
-impl Default for RedisCacheActivity {
+impl Default for CacheActivity {
     fn default() -> Self {
         let (last_request_at, _) = watch::channel(None);
         Self { last_request_at }
     }
 }
 
-impl RedisCacheActivity {
+impl CacheActivity {
     pub(crate) fn record_request(&self) {
         self.last_request_at.send_replace(Some(Instant::now()));
     }
@@ -73,7 +73,7 @@ mod tests {
 
     #[tokio::test]
     async fn redis_request_slides_the_quiet_deadline() {
-        let activity = RedisCacheActivity::default();
+        let activity = CacheActivity::default();
         let ready_at = Instant::now();
         let wait = activity.wait_for_quiet_period(
             ready_at,
@@ -90,7 +90,7 @@ mod tests {
 
     #[tokio::test]
     async fn continuous_redis_requests_stop_at_the_maximum_wait() {
-        let activity = RedisCacheActivity::default();
+        let activity = CacheActivity::default();
         let ready_at = Instant::now();
         let wait = activity.wait_for_quiet_period(
             ready_at,

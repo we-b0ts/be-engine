@@ -10,7 +10,7 @@ use super::model::{
 };
 use super::project_validation::validate_project_config;
 use super::{E2eRunInitOptions, E2eRunInitResult, branch};
-use crate::replay::validate_replay_policy;
+use crate::policy::runtime::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
 mod cache;

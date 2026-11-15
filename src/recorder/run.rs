@@ -89,7 +89,7 @@ impl Recorder {
         let published_dir = self.case_dir(case);
         self.flush_case_dependency_files(&staging_dir).await?;
         ensure_case_dependency_file(&staging_dir).await?;
-        write_case_dependency_summary(&staging_dir).await?;
+        write_case_dependency_summary(&staging_dir, self.evidence.clone()).await?;
         if let Some(parent) = published_dir.parent() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!(
@@ -283,7 +283,7 @@ impl Recorder {
                     "recording inventory could not be completed; partial ledger was sealed",
                 );
             }
-            write_global_dependency_summary(&self.run_dir).await?;
+            write_global_dependency_summary(&self.run_dir, self.evidence.clone()).await?;
             let mut unfinished = Vec::new();
             for case in self.unfinished_staging_cases().await? {
                 let failed_dir = self.move_case_to_failed(&case).await?;
@@ -360,7 +360,7 @@ impl Recorder {
                     tracing::warn!(error=%error,"Source proof index prewarm failed; first use will rebuild it")
                 }
             }
-            self.prepare_mysql_ownership().await;
+            self.prepare_source_indexes().await;
         }
         Ok(has_failed_cases)
     }

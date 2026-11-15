@@ -1,6 +1,9 @@
 use super::*;
 use crate::active_case::ActiveCaseGuard;
-use crate::recorder::{CaseContext, HttpExchangeEvent};
+use crate::protocols::recording::events::HttpExchangeEvent;
+use crate::protocols::recording::events::RecorderEvent;
+use crate::protocols::recording::tail::NativeReference;
+use crate::recorder::CaseContext;
 
 fn active(idle: Duration, timeout: Duration) -> (ActiveCaseRegistry, ActiveCaseGuard, Uuid) {
     let registry = ActiveCaseRegistry::default();
@@ -42,7 +45,7 @@ fn exchange() -> RecorderEvent {
 fn redis_rpc_push_inventory_uses_publisher_identity_instead_of_subscription_identity() {
     let publisher = Uuid::new_v4();
     let subscription = Uuid::new_v4();
-    let mut push = crate::recorder::RedisPubSubPushEvent {
+    let mut push = crate::protocols::recording::events::RedisPubSubPushEvent {
         timestamp: chrono::Utc::now(),
         target_host: "redis.test".into(),
         target_port: 6379,
@@ -50,7 +53,7 @@ fn redis_rpc_push_inventory_uses_publisher_identity_instead_of_subscription_iden
         username: None,
         connection_id: subscription,
         subscription_sequence: 41,
-        rpc_request: Some(crate::recorder::RedisRpcRequestRef {
+        rpc_request: Some(crate::protocols::recording::events::RedisRpcRequestRef {
             connection_id: publisher,
             sequence: 3,
             case_id: None,
@@ -59,13 +62,14 @@ fn redis_rpc_push_inventory_uses_publisher_identity_instead_of_subscription_iden
         response: crate::recorder::capture_body(b"callback", 1024),
         duration_ms: 1,
     };
-    let reference = CompletedRef::for_event(&RecorderEvent::RedisPubSubPush(push.clone())).unwrap();
+    let reference =
+        NativeReference::for_event(&RecorderEvent::RedisPubSubPush(push.clone())).unwrap();
     assert_eq!(
         serde_json::to_value(reference).unwrap(),
         serde_json::json!({"protocol":"redis_rpc_push", "connection_id":publisher, "sequence":3})
     );
     push.rpc_request = None;
-    assert!(CompletedRef::for_event(&RecorderEvent::RedisPubSubPush(push)).is_none());
+    assert!(NativeReference::for_event(&RecorderEvent::RedisPubSubPush(push)).is_none());
 }
 
 fn drain(

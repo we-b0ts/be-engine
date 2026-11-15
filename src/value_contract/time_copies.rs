@@ -6,97 +6,15 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::time::ClockPair;
-use crate::policy::{RedisContainer, TimeContract};
+use crate::policy::TimeContract;
 
 const MAX_CASE_COPIES: usize = 4096;
 const MAX_TOTAL_COPIES: usize = 32768;
 mod delivered;
 pub(crate) use delivered::DeliveredTimeCopies;
 
-#[derive(Clone, Copy)]
-pub(crate) enum TimeCopyPosition<'a> {
-    Http {
-        host: &'a str,
-        port: u16,
-        exchange: &'a str,
-    },
-    Mysql {
-        host: &'a str,
-        port: u16,
-        database: &'a str,
-        table: &'a str,
-        column: &'a str,
-    },
-    Redis {
-        host: &'a str,
-        port: u16,
-        database: i64,
-        key: &'a [u8],
-        container: RedisContainer,
-        hash_field: Option<&'a [u8]>,
-    },
-}
-
-impl TimeCopyPosition<'_> {
-    fn fingerprint(self) -> [u8; 32] {
-        fn part(hash: &mut Sha256, bytes: &[u8]) {
-            hash.update((bytes.len() as u64).to_be_bytes());
-            hash.update(bytes);
-        }
-        let mut hash = Sha256::new();
-        hash.update(b"traffic/time-copy-position/v1\0");
-        match self {
-            Self::Http {
-                host,
-                port,
-                exchange,
-            } => {
-                part(&mut hash, b"http");
-                part(&mut hash, host.to_ascii_lowercase().as_bytes());
-                part(&mut hash, &port.to_be_bytes());
-                part(&mut hash, exchange.as_bytes());
-            }
-            Self::Mysql {
-                host,
-                port,
-                database,
-                table,
-                column,
-            } => {
-                part(&mut hash, b"mysql");
-                part(&mut hash, host.to_ascii_lowercase().as_bytes());
-                part(&mut hash, &port.to_be_bytes());
-                part(&mut hash, database.as_bytes());
-                part(&mut hash, table.as_bytes());
-                part(&mut hash, column.to_ascii_lowercase().as_bytes());
-            }
-            Self::Redis {
-                host,
-                port,
-                database,
-                key,
-                container,
-                hash_field,
-            } => {
-                part(&mut hash, b"redis");
-                part(&mut hash, host.to_ascii_lowercase().as_bytes());
-                part(&mut hash, &port.to_be_bytes());
-                part(&mut hash, &database.to_be_bytes());
-                part(&mut hash, key);
-                part(
-                    &mut hash,
-                    &[match container {
-                        RedisContainer::String => 0,
-                        RedisContainer::Hash => 1,
-                        RedisContainer::List => 2,
-                    }],
-                );
-                part(&mut hash, &[u8::from(hash_field.is_some())]);
-                part(&mut hash, hash_field.unwrap_or_default());
-            }
-        }
-        hash.finalize().into()
-    }
+pub(crate) trait PhysicalOrigin: Copy {
+    fn fingerprint(self) -> [u8; 32];
 }
 
 fn scalar_hash(value: &Value) -> Option<[u8; 32]> {
@@ -123,14 +41,14 @@ pub(crate) struct TimeCopyRecord {
     origin: CopyOrigin,
 }
 impl TimeCopyRecord {
-    pub(crate) fn with_redis_get(
+    pub(crate) fn with_read(
         mut self,
         payload: [u8; 32],
         source_connection: Option<uuid::Uuid>,
         source_started: Option<chrono::DateTime<chrono::Utc>>,
         target_started: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
-        self.origin = CopyOrigin::RedisGet {
+        self.origin = CopyOrigin::Read {
             payload,
             source_connection,
             source_started,
@@ -139,13 +57,13 @@ impl TimeCopyRecord {
         self
     }
 
-    pub(crate) fn with_redis_set(
+    pub(crate) fn with_write(
         mut self,
         payload: [u8; 32],
         source_connection: Option<uuid::Uuid>,
         source_started: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
-        self.origin = CopyOrigin::RedisSet {
+        self.origin = CopyOrigin::Write {
             payload,
             source_connection,
             source_started,
@@ -155,8 +73,8 @@ impl TimeCopyRecord {
 
     #[cfg(test)]
     pub(crate) fn new(
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: &Value,
@@ -176,8 +94,8 @@ impl TimeCopyRecord {
     }
     pub(crate) fn new_time(
         time: &TimeContract,
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: &Value,
@@ -198,8 +116,8 @@ impl TimeCopyRecord {
         Ok(record)
     }
     fn hashed(
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: [u8; 32],
@@ -244,8 +162,8 @@ fn parsed_hash(value: &Value, parsed: i128) -> [u8; 32] {
     hash.finalize().into()
 }
 fn copy_key(
-    source_position: TimeCopyPosition<'_>,
-    target_position: TimeCopyPosition<'_>,
+    source_position: impl PhysicalOrigin,
+    target_position: impl PhysicalOrigin,
     source_pattern: &str,
     target_pattern: &str,
     source: [u8; 32],
@@ -266,10 +184,10 @@ pub(crate) struct TimeCopyLookup {
     source_pointer: String,
     target_pattern: String,
     typed: bool,
-    redis_get: Option<RedisGetRead>,
+    stored_read: Option<StoredRead>,
 }
 
-struct RedisGetRead {
+struct StoredRead {
     payload: [u8; 32],
     source_connection: Option<uuid::Uuid>,
     completed: chrono::DateTime<chrono::Utc>,
@@ -279,8 +197,8 @@ impl TimeCopyLookup {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_time(
         time: &TimeContract,
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: &Value,
@@ -301,7 +219,7 @@ impl TimeCopyLookup {
             source_pointer: source_pattern.into(),
             target_pattern: target_pattern.into(),
             typed: true,
-            redis_get: None,
+            stored_read: None,
         })
     }
     pub(crate) fn at(mut self, source_pointer: &str, target_pattern: &str) -> Self {
@@ -310,13 +228,13 @@ impl TimeCopyLookup {
         self
     }
 
-    pub(crate) fn with_redis_get(
+    pub(crate) fn with_read(
         mut self,
         payload: [u8; 32],
         source_connection: Option<uuid::Uuid>,
         completed: chrono::DateTime<chrono::Utc>,
     ) -> Self {
-        self.redis_get = Some(RedisGetRead {
+        self.stored_read = Some(StoredRead {
             payload,
             source_connection,
             completed,
@@ -344,8 +262,8 @@ struct CopyValue {
     scalar: Option<Value>,
     deliveries: Vec<CopyDelivery>,
     // Proof lookup can drop redundant deliveries, but supersession must
-    // account for every GET that observed the current counterpart.
-    latest_redis_read_start: Option<chrono::DateTime<chrono::Utc>>,
+    // account for every read that observed the current counterpart.
+    latest_read_start: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Copy)]
@@ -357,13 +275,13 @@ struct CopyDelivery {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CopyOrigin {
     Other,
-    RedisGet {
+    Read {
         payload: [u8; 32],
         source_connection: Option<uuid::Uuid>,
         source_started: Option<chrono::DateTime<chrono::Utc>>,
         target_started: Option<chrono::DateTime<chrono::Utc>>,
     },
-    RedisSet {
+    Write {
         payload: [u8; 32],
         source_connection: Option<uuid::Uuid>,
         source_started: Option<chrono::DateTime<chrono::Utc>>,
@@ -377,13 +295,13 @@ impl CopyDelivery {
         }
         match (self.origin, other.origin) {
             (
-                CopyOrigin::RedisGet {
+                CopyOrigin::Read {
                     payload,
                     source_connection,
                     source_started,
                     ..
                 },
-                CopyOrigin::RedisGet {
+                CopyOrigin::Read {
                     payload: other_payload,
                     source_connection: other_source_connection,
                     source_started: other_source_started,
@@ -401,17 +319,17 @@ impl CopyDelivery {
         }
     }
 
-    fn redis_read_start(self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn read_start(self) -> Option<chrono::DateTime<chrono::Utc>> {
         match self.origin {
-            CopyOrigin::RedisGet { target_started, .. } => {
+            CopyOrigin::Read { target_started, .. } => {
                 Some(target_started.unwrap_or(self.clocks.1))
             }
             _ => None,
         }
     }
 
-    fn redis_set_precedes_read_on_source(self, read: Self) -> bool {
-        let CopyOrigin::RedisGet {
+    fn write_precedes_read_on_source(self, read: Self) -> bool {
+        let CopyOrigin::Read {
             payload,
             source_connection,
             source_started: Some(read_started),
@@ -420,27 +338,22 @@ impl CopyDelivery {
         else {
             return false;
         };
-        self.redis_set_visible_in_source_get(
-            payload,
-            source_connection,
-            read_started,
-            read.clocks.0,
-        )
+        self.write_visible_in_source_read(payload, source_connection, read_started, read.clocks.0)
     }
 
-    fn redis_set_visible_in_source_get(
+    fn write_visible_in_source_read(
         self,
         read_payload: [u8; 32],
         read_connection: Option<uuid::Uuid>,
         read_started: chrono::DateTime<chrono::Utc>,
         read_completed: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        // On different sockets Redis can apply SET before its reply reaches
-        // the recorder. An overlapping GET must return the exact written
-        // bytes, start after SET started, and finish after SET completed.
+        // An adapter supplies authenticated reads and writes of the same stored
+        // payload. Across sockets an overlapping read must observe those bytes,
+        // start after the write started, and finish after its reply completed.
         matches!(
             self.origin,
-            CopyOrigin::RedisSet { payload, source_connection, source_started }
+            CopyOrigin::Write { payload, source_connection, source_started }
                 if payload == read_payload
                     && (self.clocks.0 <= read_started
                         || source_connection.zip(read_connection).is_some_and(|(write, read)| write != read)
@@ -460,23 +373,23 @@ impl CopyValue {
                 // derived timestamp. Once its real SET completes, use the
                 // timestamp that Target wrote for subsequent reads.
                 if self
-                    .latest_redis_read_start
+                    .latest_read_start
                     .is_some_and(|start| start < delivery.clocks.1)
                     && self
                         .deliveries
                         .iter()
-                        .all(|read| delivery.redis_set_precedes_read_on_source(*read))
+                        .all(|read| delivery.write_precedes_read_on_source(*read))
                 {
                     self.target = Some(target);
                     self.scalar = scalar;
                     self.deliveries.clear();
                     self.deliveries.push(delivery);
-                    self.latest_redis_read_start = None;
+                    self.latest_read_start = None;
                     return;
                 }
-                if let Some(start) = delivery.redis_read_start()
+                if let Some(start) = delivery.read_start()
                     && self.deliveries.iter().all(|write| {
-                        start < write.clocks.1 && write.redis_set_precedes_read_on_source(delivery)
+                        start < write.clocks.1 && write.write_precedes_read_on_source(delivery)
                     })
                 {
                     return;
@@ -485,15 +398,13 @@ impl CopyValue {
             self.target = None;
             self.scalar = None;
             self.deliveries.clear();
-            self.latest_redis_read_start = None;
+            self.latest_read_start = None;
             return;
         }
         if self.scalar.is_none() {
             self.scalar = scalar;
         }
-        self.latest_redis_read_start = self
-            .latest_redis_read_start
-            .max(delivery.redis_read_start());
+        self.latest_read_start = self.latest_read_start.max(delivery.read_start());
         // Keep real paired observations; independent minima can invent a read
         // that preceded the write in both executions when none actually did.
         if self
@@ -596,8 +507,8 @@ impl TimeCopyStore {
     pub(crate) fn record(
         &mut self,
         case: &str,
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: &Value,
@@ -640,7 +551,7 @@ impl TimeCopyStore {
                             target: Some(record.target),
                             scalar: record.scalar.clone(),
                             deliveries: vec![],
-                            latest_redis_read_start: None,
+                            latest_read_start: None,
                         })
                 })
                 .observe(
@@ -675,8 +586,8 @@ impl TimeCopyStore {
     pub(crate) fn proof_for_source(
         &self,
         case: &str,
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: &Value,
@@ -700,7 +611,7 @@ impl TimeCopyStore {
                 source_pointer: source_pattern.into(),
                 target_pattern: target_pattern.into(),
                 typed: false,
-                redis_get: None,
+                stored_read: None,
             },
         )
     }
@@ -710,8 +621,8 @@ impl TimeCopyStore {
         &self,
         time: &TimeContract,
         case: &str,
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: &Value,
@@ -744,10 +655,10 @@ impl TimeCopyStore {
                     // Overlapping reads can observe the same stored value.
                     // The same bytes must link either a completed read or a
                     // write that had taken effect before this read completed.
-                    || lookup.redis_get.as_ref().is_some_and(|read| {
-                        (matches!(delivery.origin, CopyOrigin::RedisGet { payload, .. } if payload == read.payload)
+                    || lookup.stored_read.as_ref().is_some_and(|read| {
+                        (matches!(delivery.origin, CopyOrigin::Read { payload, .. } if payload == read.payload)
                             && source <= read.completed)
-                            || delivery.redis_set_visible_in_source_get(
+                            || delivery.write_visible_in_source_read(
                                 read.payload, read.source_connection, cutoff.0, read.completed,
                             )
                     }))
@@ -788,8 +699,8 @@ impl TimeCopyStore {
     pub(crate) fn proof(
         &self,
         case: &str,
-        source_position: TimeCopyPosition<'_>,
-        target_position: TimeCopyPosition<'_>,
+        source_position: impl PhysicalOrigin,
+        target_position: impl PhysicalOrigin,
         source_pattern: &str,
         target_pattern: &str,
         source: &Value,

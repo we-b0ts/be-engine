@@ -45,6 +45,6 @@ impl Dispatch {
     }
 
     pub(super) fn unadmitted(&self) -> Option<DispatchDependency> {
-        *self.unadmitted.borrow()
+        self.unadmitted.borrow().clone()
     }
 }

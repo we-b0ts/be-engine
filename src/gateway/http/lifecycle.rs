@@ -99,7 +99,7 @@ pub(super) fn downstream_disconnected(state: &AppState, case_id: Uuid, started: 
         category: "client_or_network_disconnect".to_string(),
         elapsed_ms,
         recorder_phase: recorder_phase.to_string(),
-        http_stream: None,
+        native: Default::default(),
     });
     if state
         .invalidate_active_case(case_id, invalidation)

@@ -9,6 +9,7 @@ pub(super) async fn write_dependency_summary(
     dir: &Path,
     dependencies_filename: &str,
     summary_filename: &str,
+    evidence: Arc<EvidenceRegistry>,
 ) -> Result<()> {
     let path = dir.join(dependencies_filename);
     let input = match crate::dependency_index::RecordStream::open(&path) {
@@ -45,7 +46,7 @@ pub(super) async fn write_dependency_summary(
         } else {
             Some(GlobalBuilder::new(&dir, stamp.clone())?)
         };
-        let mut summary = DependencySummaryBuilder::default();
+        let mut summary = DependencySummaryBuilder::new((*evidence).clone());
         if scoped && let Some(index) = &mut global_index {
             index.set_scoped();
         }
@@ -77,7 +78,7 @@ pub(super) async fn write_dependency_summary(
                 &index.finish()?,
             )?;
         }
-        let summary = summary.finish();
+        let summary = summary.finish()?;
         let mut payload = serde_json::to_vec_pretty(&summary)?;
         payload.push(b'\n');
         Ok(payload)

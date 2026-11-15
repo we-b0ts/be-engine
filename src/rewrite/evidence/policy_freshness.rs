@@ -1,6 +1,6 @@
 //! Report expired rule evidence before offering authoring commands; never mutate state.
 use super::*;
-use crate::replay::ReplayEvidencePolicyFreshness;
+use crate::replay::policy::ReplayEvidencePolicyFreshness;
 
 pub(super) fn attach(
     root: &Path,

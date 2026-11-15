@@ -15,7 +15,7 @@ use crate::{
     access_policy::{AccessDecision, MysqlAccessContext, evaluate_mysql_access},
     active_case::DependencyTargets,
     mysql::access::analyze_command,
-    recorder::RecorderEvent,
+    protocols::recording::events::RecorderEvent,
 };
 
 pub(super) struct Host {
@@ -64,7 +64,7 @@ impl CaptureHost for Host {
         Box::pin(async move {
             let command = request.command;
             let targets = self.state.capture_dependency_request(
-                crate::recorder::request::DependencyRequest::Mysql {
+                crate::protocols::recording::request::DependencyRequest::Mysql {
                     target_host: self.context.target_host.as_deref(),
                     target_port: self.context.target_port,
                     database: request.database,

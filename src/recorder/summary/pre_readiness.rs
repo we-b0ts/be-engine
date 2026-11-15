@@ -3,9 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use hyper::http::uri::Authority;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
+use traffic_protocol::evidence::EvidenceRegistry;
 
 pub(crate) const SUMMARY_FILENAME: &str = "pre-readiness-traffic-summary.json";
 const GLOBAL_DEPENDENCIES_FILENAME: &str = "global-dependencies.jsonl";
@@ -72,9 +73,9 @@ impl CandidateTracker {
     }
 }
 
-pub(super) async fn write(dir: &Path) -> Result<()> {
+pub(super) async fn write(dir: &Path, evidence: Arc<EvidenceRegistry>) -> Result<()> {
     let dependencies_path = dir.join(GLOBAL_DEPENDENCIES_FILENAME);
-    let summary = tokio::task::spawn_blocking(move || build_file(&dependencies_path))
+    let summary = tokio::task::spawn_blocking(move || build_file(&dependencies_path, &evidence))
         .await
         .context("pre-readiness summary builder failed")??;
     let Some(summary) = summary else {
@@ -94,7 +95,10 @@ pub(super) async fn write(dir: &Path) -> Result<()> {
         })
 }
 
-pub(crate) fn load_or_build(dir: &Path) -> Result<Option<PreReadinessTrafficSummary>> {
+pub(crate) fn load_or_build(
+    dir: &Path,
+    evidence: &EvidenceRegistry,
+) -> Result<Option<PreReadinessTrafficSummary>> {
     let summary_path = dir.join(SUMMARY_FILENAME);
     match std::fs::read(&summary_path) {
         Ok(payload) => {
@@ -117,10 +121,13 @@ pub(crate) fn load_or_build(dir: &Path) -> Result<Option<PreReadinessTrafficSumm
         }
     }
 
-    build_file(&dir.join(GLOBAL_DEPENDENCIES_FILENAME))
+    build_file(&dir.join(GLOBAL_DEPENDENCIES_FILENAME), evidence)
 }
 
-fn build_file(path: &Path) -> Result<Option<PreReadinessTrafficSummary>> {
+fn build_file(
+    path: &Path,
+    evidence: &EvidenceRegistry,
+) -> Result<Option<PreReadinessTrafficSummary>> {
     let stamp = match crate::dependency_index::FileStamp::read(path) {
         Ok(stamp) => stamp,
         Err(error)
@@ -132,7 +139,7 @@ fn build_file(path: &Path) -> Result<Option<PreReadinessTrafficSummary>> {
         }
         Err(error) => return Err(error),
     };
-    let summary = build_with(|visit| {
+    let summary = build_with(evidence, |visit| {
         let mut input = crate::dependency_index::RecordStream::open(path)?;
         while let Some((_, raw)) = input.next()? {
             let line = std::str::from_utf8(raw)?;
@@ -148,7 +155,7 @@ fn build_file(path: &Path) -> Result<Option<PreReadinessTrafficSummary>> {
 
 #[cfg(test)]
 fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
-    build_with(|visit| {
+    build_with(crate::protocols::default_providers().evidence(), |visit| {
         for line in raw_jsonl
             .lines()
             .map(str::trim)
@@ -162,9 +169,10 @@ fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
 }
 
 fn build_with(
+    evidence: &EvidenceRegistry,
     mut lines: impl FnMut(&mut dyn FnMut(&str)) -> Result<()>,
 ) -> Result<PreReadinessTrafficSummary> {
-    let (candidates, discovery_parse_errors) = discover_candidates(&mut lines)?;
+    let (candidates, discovery_parse_errors) = discover_candidates(evidence, &mut lines)?;
     let candidate_endpoints = candidates
         .estimates
         .keys()
@@ -189,16 +197,12 @@ fn build_with(
             return;
         }
         bootstrap_events += 1;
-        let event_type = value
-            .get("event_type")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        if !is_data_interaction(event_type, &value) {
+        let Some(interaction) = evidence.interaction(&value) else {
             excluded_events += 1;
             return;
-        }
+        };
         data_interactions += 1;
-        let Some(endpoint) = endpoint(&value, event_type) else {
+        let Some(endpoint) = interaction.endpoint else {
             unresolved_interactions += 1;
             return;
         };
@@ -207,10 +211,7 @@ fn build_with(
         }
         let counts = exact.entry(endpoint).or_default();
         counts.interactions += 1;
-        *counts
-            .protocols
-            .entry(protocol(event_type).to_string())
-            .or_default() += 1;
+        *counts.protocols.entry(interaction.protocol).or_default() += 1;
     })?;
 
     let resolved_interactions = data_interactions.saturating_sub(unresolved_interactions);
@@ -249,6 +250,7 @@ fn build_with(
 }
 
 fn discover_candidates(
+    evidence: &EvidenceRegistry,
     lines: &mut impl FnMut(&mut dyn FnMut(&str)) -> Result<()>,
 ) -> Result<(CandidateTracker, usize)> {
     let mut candidates = CandidateTracker::default();
@@ -264,128 +266,14 @@ fn discover_candidates(
         if value["capture"]["phase"].as_str() != Some("startup") {
             return;
         }
-        let event_type = value
-            .get("event_type")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        if is_data_interaction(event_type, &value)
-            && let Some(endpoint) = endpoint(&value, event_type)
+        if let Some(endpoint) = evidence
+            .interaction(&value)
+            .and_then(|interaction| interaction.endpoint)
         {
             candidates.observe(endpoint);
         }
     })?;
     Ok((candidates, parse_errors))
-}
-
-fn is_data_interaction(event_type: &str, value: &Value) -> bool {
-    match event_type {
-        "http_exchange" | "udp_datagram" | "kafka_produce" | "kafka_fetch" => true,
-        "redis_exchange" => {
-            value.get("session_setup").and_then(Value::as_bool) != Some(true)
-                && !value
-                    .get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(|command| command.eq_ignore_ascii_case("PING"))
-        }
-        "memcached_exchange" => {
-            !value
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| {
-                    matches!(command.to_ascii_lowercase().as_str(), "version" | "noop")
-                })
-        }
-        "motan_exchange" => value.get("heartbeat").and_then(Value::as_bool) != Some(true),
-        "mysql_exchange" => !super::is_debug_only_mysql_exchange_value(value),
-        _ => false,
-    }
-}
-
-fn protocol(event_type: &str) -> &'static str {
-    if event_type.starts_with("http_") {
-        "http"
-    } else if event_type.starts_with("tcp_gateway_") {
-        "tcp_gateway"
-    } else if event_type.starts_with("udp_") {
-        "udp"
-    } else if event_type.starts_with("redis_") {
-        "redis"
-    } else if event_type.starts_with("memcached_") {
-        "memcached"
-    } else if event_type.starts_with("kafka_") {
-        "kafka"
-    } else if event_type.starts_with("motan_") {
-        "motan"
-    } else if event_type.starts_with("mysql_") {
-        "mysql"
-    } else {
-        "unknown"
-    }
-}
-
-fn endpoint(value: &Value, event_type: &str) -> Option<String> {
-    if let (Some(host), Some(port)) = (
-        value.get("target_host").and_then(Value::as_str),
-        value.get("target_port").and_then(Value::as_u64),
-    ) && let Ok(port) = u16::try_from(port)
-    {
-        return Some(format_endpoint(host, port));
-    }
-    if event_type == "http_exchange"
-        && let Some(authority) = value.get("authority").and_then(Value::as_str)
-    {
-        return http_endpoint(authority, value.get("scheme").and_then(Value::as_str));
-    }
-    if event_type == "tcp_gateway_connection"
-        && let Some(domain) = value.get("domain").and_then(Value::as_str)
-        && let Some(port) = value
-            .get("upstream_addr")
-            .and_then(Value::as_str)
-            .and_then(endpoint_port)
-    {
-        return Some(format_endpoint(domain, port));
-    }
-    for key in ["target_addr", "upstream_addr", "target"] {
-        if let Some(endpoint) = value
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(normalize_endpoint)
-        {
-            return Some(endpoint);
-        }
-    }
-    None
-}
-
-fn http_endpoint(authority: &str, scheme: Option<&str>) -> Option<String> {
-    let authority = authority.parse::<Authority>().ok()?;
-    let port = authority.port_u16().or(match scheme {
-        Some("http") => Some(80),
-        Some("https") => Some(443),
-        _ => None,
-    })?;
-    Some(format_endpoint(authority.host(), port))
-}
-
-fn normalize_endpoint(value: &str) -> Option<String> {
-    let authority = value.parse::<Authority>().ok()?;
-    Some(format_endpoint(authority.host(), authority.port_u16()?))
-}
-
-fn endpoint_port(value: &str) -> Option<u16> {
-    value
-        .parse::<Authority>()
-        .ok()
-        .and_then(|authority| authority.port_u16())
-}
-
-fn format_endpoint(host: &str, port: u16) -> String {
-    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
-    if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    }
 }
 
 #[cfg(test)]

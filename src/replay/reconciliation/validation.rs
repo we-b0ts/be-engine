@@ -1,29 +1,12 @@
 //! A persisted receipt is evidence only when the original session agrees.
 use super::*;
 
-fn array<'a>(value: &'a Value, name: &str) -> Result<&'a Vec<Value>> {
-    value[name]
-        .as_array()
-        .with_context(|| format!("actual Replay report lacks {name} evidence"))
-}
+use traffic_replay::report::evidence::{SessionEvidence, array, empty, number};
 
-fn number(value: &Value, name: &str) -> Result<u64> {
-    value[name]
-        .as_u64()
-        .with_context(|| format!("actual Replay report lacks {name} count"))
-}
-
-fn empty(value: &Value, names: &[&str]) -> Result<()> {
-    for name in names {
-        ensure!(
-            array(value, name)?.is_empty(),
-            "actual Replay still has {name} obligations"
-        );
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_completed_receipt(report: &Value) -> Result<BatchReconciliation> {
+pub(crate) fn validate_completed_receipt_with(
+    report: &Value,
+    native: &dyn SessionEvidence,
+) -> Result<BatchReconciliation> {
     let receipt: BatchReconciliation =
         serde_json::from_value(report["batch_reconciliation"].clone())
             .context("actual session has no current batch reconciliation receipt")?;
@@ -88,19 +71,7 @@ pub(crate) fn validate_completed_receipt(report: &Value) -> Result<BatchReconcil
             == serde_json::to_value(&receipt.dependency_attribution_snapshot)?,
         "batch receipt has a different frozen attribution snapshot"
     );
-    empty(
-        report,
-        &[
-            "unmatched_queries",
-            "unsupported_commands",
-            "unused_case_exchanges",
-            "unmatched_http_requests",
-            "unsupported_http_exchanges",
-            "http_request_header_mismatches",
-            "unused_case_http_exchanges",
-            "unrecorded_targets",
-        ],
-    )?;
+    empty(report, &["unrecorded_targets"])?;
     for optional in ["dependency_pre_matches", "case_execution_failures"] {
         ensure!(
             report
@@ -131,16 +102,7 @@ pub(crate) fn validate_completed_receipt(report: &Value) -> Result<BatchReconcil
             "actual Target evidence coverage is incomplete"
         );
     }
-    let mut unused = BTreeMap::from([
-        (
-            "mysql".into(),
-            number(report, "unused_global_exchange_count")? as usize,
-        ),
-        (
-            "http".into(),
-            number(report, "unused_global_http_exchange_count")? as usize,
-        ),
-    ]);
+    let mut unused = native.validate_session(report)?;
     let shutdown = receipt
         .source_inventory
         .by_owner_kind
@@ -150,35 +112,28 @@ pub(crate) fn validate_completed_receipt(report: &Value) -> Result<BatchReconcil
     if shutdown > 0 {
         unused.insert("shutdown".into(), shutdown.try_into().unwrap_or(usize::MAX));
     }
-    empty(
-        report,
-        &["unused_global_exchanges", "unused_global_http_exchanges"],
-    )?;
-    for protocol in ["redis", "memcached", "motan", "kafka"] {
-        let native = &report[protocol];
-        empty(
-            native,
-            &[
-                "unmatched",
-                "unsupported",
-                "unsafe_events",
-                "unused_case",
-                "unused_global",
-            ],
-        )?;
-        let count = native["unused_global_count"].as_u64().unwrap_or(0) as usize;
-        unused.insert(protocol.into(), count);
+    if let Some(protocols) = report.get("dependency_protocols") {
+        let protocols = protocols
+            .as_object()
+            .context("registered protocol reports are not an object")?;
+        for (protocol, evidence) in protocols {
+            ensure!(
+                !protocol.is_empty() && evidence.is_object(),
+                "registered protocol report has no identity or evidence"
+            );
+            empty(evidence, &["unmatched", "unused_case", "unused_global"])?;
+            ensure!(
+                number(evidence, "unmatched_count")? == 0,
+                "registered protocol still has unmatched requests"
+            );
+            let count = usize::try_from(number(evidence, "unused_global_count")?)?;
+            let total = unused.entry(protocol.clone()).or_default();
+            *total = total
+                .checked_add(count)
+                .context("run dependency count overflow")?;
+        }
     }
     empty(&report["connect_failures"], &["unused_case", "failed_case"])?;
-    let ingress = &report["http_ingress"];
-    ensure!(
-        number(ingress, "omitted")? == 0
-            && number(ingress, "pending")? == 0
-            && array(ingress, "observations")?
-                .iter()
-                .all(|o| o["status"] == "body_complete"),
-        "actual HTTP request ingress remains incomplete or cancelled"
-    );
     let startup = &report["startup_phase"];
     ensure!(
         matches!(
@@ -210,6 +165,7 @@ pub(crate) fn validate_completed_receipt(report: &Value) -> Result<BatchReconcil
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocols::replay::report::validation::validate_completed_receipt;
 
     fn completed() -> Value {
         let cases = BTreeSet::from(["case-a".to_owned(), "case-b".to_owned()]);
@@ -272,6 +228,33 @@ mod tests {
     }
 
     #[test]
+    fn registered_protocol_receipts_include_actual_delivery_debt() {
+        let mut report = completed();
+        report["dependency_protocols"] = serde_json::json!({"custom-native":{
+            "matched_count":3, "unmatched_count":0, "unmatched":[],
+            "unused_case":[], "unused_global":[], "unused_global_count":0
+        }});
+        report["batch_reconciliation"]["unused_run_dependencies"]["custom-native"] = 0.into();
+        assert!(
+            validate_completed_receipt(&report)
+                .unwrap()
+                .dependency_inventory_verified
+        );
+        for (field, value) in [
+            ("unused_case", serde_json::json!([{}])),
+            ("unused_global", serde_json::json!([{}])),
+            ("unused_global_count", serde_json::json!(1)),
+            ("unmatched", serde_json::json!([{}])),
+            ("unmatched_count", serde_json::json!(1)),
+            ("unmatched_count", Value::Null),
+        ] {
+            let mut invalid = report.clone();
+            invalid["dependency_protocols"]["custom-native"][field] = value;
+            assert!(validate_completed_receipt(&invalid).is_err(), "{field}");
+        }
+    }
+
+    #[test]
     fn associated_shutdown_cannot_disappear_into_a_whole_source_pass() {
         let mut report = completed();
         report["batch_reconciliation"]["source_inventory"]["total_mandatory"] =
@@ -291,7 +274,7 @@ mod tests {
             "business_inventory":{"redis":2},
             "unstarted_business_dependencies":{"redis":2}
         });
-        assert!(!crate::replay::report_has_case_dirty_events(&report));
+        assert!(!crate::protocols::replay::report::evidence::report_has_case_dirty_events(&report));
         assert!(
             validate_completed_receipt(&report)
                 .unwrap_err()

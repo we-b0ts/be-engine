@@ -1,4 +1,5 @@
 //! HTTP and HTTP interaction execution delegates to the established native client.
+pub(super) mod close_timing;
 use super::{
     ApiIdentity, CaseClock, CaseExecutionContext, Metadata, NativePrimaryAdapter,
     PrimaryObservation, PrimaryOutput,

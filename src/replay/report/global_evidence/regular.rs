@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::artifact::ArtifactReference;
-pub(in crate::replay) use super::regular_store::Row;
+pub(crate) use super::regular_store::Row;
 use super::regular_store::{Builder, Identity, Inventory};
 #[cfg(test)]
 use super::regular_usage::Usage;
@@ -19,10 +19,10 @@ mod cursor;
 
 #[cfg(test)]
 #[path = "regular_tests.rs"]
-pub(in crate::replay) mod tests;
+pub(crate) mod tests;
 
 #[derive(Debug)]
-pub(in crate::replay) struct RegularBaseline {
+pub(crate) struct RegularBaseline {
     reference: ArtifactReference,
     origin_report: PathBuf,
     visible: usize,
@@ -321,7 +321,7 @@ impl RegularEvidence {
 
 /// Seal before accepting Target traffic. Cache hits do not invoke protocol
 /// visitors, and neither API identity nor session UUID enters the cache key.
-pub(in crate::replay) fn initialize<P: ReplayProtocolSet>(
+pub(crate) fn initialize<P: ReplayProtocolSet>(
     state: &mut RuntimeState<P>,
     report: &Path,
     policy: &str,

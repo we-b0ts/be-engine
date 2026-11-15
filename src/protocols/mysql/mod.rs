@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::dependency::termination::ConnectionTermination;
-use crate::recorder::{ProxyErrorEvent, RecorderEvent};
+use crate::protocols::recording::events::{ProxyErrorEvent, RecorderEvent};
 use crate::recording_control::RecordingListener;
 use crate::{AppState, MysqlRouteConfig};
 pub(crate) use traffic_protocol_mysql::capture::connection::CaptureConnectionContext as MysqlConnectionContext;

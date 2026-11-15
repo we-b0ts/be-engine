@@ -251,7 +251,7 @@ async fn cancelling_within_sse_message_preserves_plaintext_prefix_and_self_repla
         let mut altered: Value = serde_json::from_slice(&std::fs::read(&actual_path).unwrap()).unwrap();
         altered["interaction"]["end"]["partial_message"] = serde_json::to_value(crate::interaction::model::WireMessage::binary(b"data: different\n")).unwrap();
         std::fs::write(&actual_path, serde_json::to_vec(&altered).unwrap()).unwrap();
-        let report = crate::replay::assert_recorded_response(crate::replay::ResponseAssertionOptions {
+        let report = crate::primary_protocol::assertion::assert_recorded_response(crate::primary_protocol::assertion::ResponseAssertionOptions {
             case_id: "different-partial-prefix".into(),
             request: case.join("request.json"), expected_response: expected_path,
             actual_response: actual_path, policy: case.join("test-policy.yaml"),

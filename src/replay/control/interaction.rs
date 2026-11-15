@@ -4,8 +4,8 @@ use super::*;
 use anyhow::{Context, Result};
 use std::time::Duration;
 
-pub(super) async fn drain(
-    state: &Arc<Mutex<ReplayState>>,
+pub(super) async fn drain<P: ReplayProtocolSet>(
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case_id: &str,
     case_dir: &std::path::Path,
     post_response_window: Duration,

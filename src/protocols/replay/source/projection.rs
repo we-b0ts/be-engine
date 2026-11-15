@@ -1,7 +1,7 @@
 //! Source-only Global preparation. No Case oracle, Target, CA, DNS or listener is involved.
 use super::*;
+use crate::protocols::replay::http::HttpReplayEvents;
 use crate::protocols::replay::report::ReportView;
-use crate::replay::http::HttpReplayEvents;
 use std::sync::Arc;
 use traffic_replay::report::{GlobalReportProjection, JoinedProjection, ReportRows, Row};
 
@@ -17,6 +17,7 @@ pub(crate) struct GlobalSource {
 }
 
 impl GlobalSource {
+    #[cfg(test)]
     pub async fn load(
         path: &Path,
         rules: &[crate::BackgroundDependencyRuleConfig],
@@ -156,11 +157,6 @@ pub(crate) fn freeze(
     motan.freeze_global_report_layout();
 }
 
-impl GlobalSource {
-    pub fn view(&self) -> &Self {
-        self
-    }
-}
 impl GlobalReportProjection for GlobalSource {
     fn global_report_protocols(&self) -> Vec<String> {
         JoinedProjection::new(&self.builtin_view(), &self.native).global_report_protocols()

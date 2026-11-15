@@ -1,7 +1,7 @@
 //! API payloads retain the native artifact/carrier and typed field proof owners.
 use super::*;
 use crate::policy::{CompiledNativeRule, NativeEffect, native::BodyCodec};
-use crate::replay::NativeResponseContext;
+use crate::primary_protocol::assertion::native::NativeResponseContext;
 
 pub(super) fn is_response(rule: &CompiledNativeRule) -> bool {
     matches!(
@@ -26,7 +26,8 @@ pub(super) fn verify(
 ) -> Result<()> {
     let super::super::manifest::PrimaryResponse { source, target } =
         bundle.primary_response(case, directory)?;
-    let source_payload = crate::replay::response_payload_pair(request, &source, None)?;
+    let source_payload =
+        crate::primary_protocol::assertion::response_payload_pair(request, &source, None)?;
     let native = native
         .iter()
         .copied()
@@ -77,7 +78,7 @@ pub(super) fn verify(
             let values = header(&source_payload.source_headers, &effect.header);
             if !values.is_empty() {
                 ensure!(
-                    crate::replay::native_response_header(
+                    crate::primary_protocol::assertion::native::compare_header(
                         rule,
                         &values,
                         &values,
@@ -158,7 +159,12 @@ fn compare_payload(
             "opaque API body requires one compiled codec owner"
         );
         ensure!(
-            crate::replay::native_response_body(&opaque, source, target, clocks.observation())?,
+            crate::primary_protocol::assertion::native::compare_body(
+                &opaque,
+                source,
+                target,
+                clocks.observation()
+            )?,
             "Source/Target opaque response contract failed"
         );
         return Ok(opaque.iter().map(|rule| rule.rule.id.clone()).collect());
@@ -176,7 +182,10 @@ fn compare_payload(
     Ok(BTreeSet::new())
 }
 
-fn header(headers: &Option<crate::recorder::HeaderMapSnapshot>, name: &str) -> Vec<String> {
+fn header(
+    headers: &Option<crate::protocols::recording::events::HeaderMapSnapshot>,
+    name: &str,
+) -> Vec<String> {
     headers
         .as_ref()
         .into_iter()
@@ -188,8 +197,8 @@ fn header(headers: &Option<crate::recorder::HeaderMapSnapshot>, name: &str) -> V
 
 fn compare_headers(
     rules: &[&CompiledNativeRule],
-    source_headers: &Option<crate::recorder::HeaderMapSnapshot>,
-    target_headers: &Option<crate::recorder::HeaderMapSnapshot>,
+    source_headers: &Option<crate::protocols::recording::events::HeaderMapSnapshot>,
+    target_headers: &Option<crate::protocols::recording::events::HeaderMapSnapshot>,
     times: crate::value_contract::time::ClockPair,
 ) -> Result<()> {
     for rule in rules {
@@ -200,7 +209,9 @@ fn compare_headers(
                 continue;
             }
             ensure!(
-                crate::replay::native_response_header(rule, &source, &target, times)?,
+                crate::primary_protocol::assertion::native::compare_header(
+                    rule, &source, &target, times
+                )?,
                 "response header-date contract {:?} failed",
                 rule.rule.id
             );

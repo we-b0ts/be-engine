@@ -14,7 +14,7 @@ async fn read_line(client: &mut TcpStream) -> String {
 
 #[tokio::test]
 async fn reports_unobserved_redis_authentication_and_reconnects_before_authenticated_retry() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     let mut dependency = redis_dependency(Uuid::new_v4(), 1, "private-key", b"$1\r\n1\r\n");
@@ -88,7 +88,7 @@ async fn other_redis_mismatches_do_not_claim_missing_authentication() {
         ("username", serde_json::json!("another-user"), true),
         ("username", serde_json::Value::Null, true),
     ] {
-        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+        let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
         let case_dir = temp.path().join("case");
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         let mut dependency = redis_dependency(Uuid::new_v4(), 1, "key", b"$1\r\n1\r\n");

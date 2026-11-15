@@ -22,6 +22,23 @@ impl PreparedMessage {
         rebase_time: &BTreeSet<String>,
         resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
     ) -> Result<RenderedMessage> {
+        self.render_delivery_with_documents(
+            clocks,
+            metadata,
+            rebase_time,
+            resolve_identities,
+            |_, _| Ok(()),
+        )
+    }
+
+    pub fn render_delivery_with_documents(
+        &self,
+        clocks: AnchorClocks,
+        metadata: &dyn RuleMetadata,
+        rebase_time: &BTreeSet<String>,
+        resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
+        translate_document: impl Fn(&Value, &mut Value) -> Result<()>,
+    ) -> Result<RenderedMessage> {
         let mut updates = BTreeMap::new();
         let mut identity_fields = Vec::new();
         let mut identities = Vec::new();
@@ -87,6 +104,9 @@ impl PreparedMessage {
                 .get_mut(&location)
                 .and_then(|logical| logical.pointer_mut(&pointer))
                 .context("derived identity field disappeared")? = value;
+        }
+        for (location, update) in &mut updates {
+            translate_document(self.values[location].source.view().logical(), update)?;
         }
         let (projection, comparison) = self.render_projection(&updates, clocks, metadata)?;
         Ok(RenderedMessage {

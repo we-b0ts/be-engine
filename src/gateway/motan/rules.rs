@@ -1,7 +1,8 @@
 use motan_codec::RequestEnvelope;
 
 use crate::config::MotanGatewayRuleConfig;
-use crate::recorder::{PrimaryCaseDescriptor, PrimarySourceBinding};
+use crate::primary_protocol::recording::PrimarySourceBinding;
+use crate::recorder::PrimaryCaseDescriptor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Match {
@@ -62,13 +63,13 @@ pub(crate) fn api_directory(descriptor: &PrimaryCaseDescriptor) -> String {
 }
 
 fn short_api_name(descriptor: &PrimaryCaseDescriptor) -> String {
-    let PrimarySourceBinding::Motan {
+    let Ok(PrimarySourceBinding::Motan {
         interface,
         method,
         parameter_desc,
         method_sign,
         ..
-    } = &descriptor.source_binding
+    }) = serde_json::from_value::<PrimarySourceBinding>(descriptor.source_binding.clone())
     else {
         return "motan-api".to_string();
     };

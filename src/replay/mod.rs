@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::pending;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, ensure};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,132 +16,100 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::MitmCa;
+pub(crate) use crate::MitmCa;
 use crate::request_headers::validate_request_file;
 mod adapters;
+pub(crate) use adapters::ProtocolExchange;
 pub(crate) use adapters::RecordedReference;
 pub(crate) mod admission;
-mod assertion;
-mod candidate_selection;
-mod case_index;
-mod command_matching;
+pub(crate) mod candidate_selection;
+pub(crate) mod case_index;
+pub(crate) mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
 pub(crate) mod connect_failure;
-mod contract_value;
+pub(crate) mod contract_value;
+pub(crate) mod control;
 pub(crate) mod lifecycle_cleanup;
 pub(crate) mod native;
-pub(crate) use memcached::contracts::{
-    source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
-};
-pub(crate) use policy::validate_finite_sharing as validate_native_finite_sharing;
-pub(crate) use policy::{NativeSourceCase, validate_native_source_dependencies};
-pub(crate) use report::source_owned_match;
-mod control;
-pub(crate) use control::http_input_timing::Timeline as HttpInputTimeline;
-pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
+pub(crate) use control::primary_close::Timeline as PrimaryCloseTimeline;
 mod attribution;
-pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes};
+pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes, run_value_scope};
 mod deferred;
+#[cfg(test)]
+pub(crate) use deferred::prepare_case as prepare_case_dependencies;
 pub(crate) mod dependencies;
 mod loading;
 mod loading_config;
 mod reconciliation;
 pub use loading_config::ReplayDependencyLoading;
-pub(crate) use reconciliation::validate_completed_receipt;
+pub(crate) use reconciliation::{BatchReconciliation, validate_completed_receipt_with};
 mod dns;
 mod egress_counter;
 mod exchange;
 pub(crate) mod global;
 #[cfg(test)]
-mod global_test_support;
+pub(crate) mod global_test_support;
 mod snapshot;
 mod startup;
 mod target_observation;
 pub use egress_counter::{
     ReplayEgressCounterReader, ReplayEgressCounterSnapshot, ReplayEgressRejections,
 };
+pub(crate) use target_observation::TargetObservations;
 #[cfg(test)]
 mod global_dependency_tests;
-pub(crate) mod http;
-pub(crate) use http::contracts::{
-    multipart_witness_matches as http_multipart_witness_matches,
-    source_witness as http_source_witness, validate_witness as http_validate_witness,
-    witness_metadata_matches as http_witness_metadata_matches, witness_value as http_witness_value,
-};
-pub(crate) use http::cross_case as http_cross_case;
-pub use http::cross_case::HttpCrossCaseSelector;
-pub(crate) use http::diagnosis as http_request_diagnosis;
 #[cfg(test)]
-pub(crate) use http::tests::{
+pub(crate) use crate::protocols::replay::http;
+#[cfg(test)]
+pub(crate) use crate::protocols::replay::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
 };
-pub(crate) use http::unordered as http_unordered;
-pub(crate) mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod legacy_tests;
-pub(crate) mod memcached;
 mod model;
-pub(crate) mod motan;
-pub(crate) mod mysql;
-pub(crate) use mysql::contracts::automatic::Metadata as MysqlInferenceMetadata;
-pub(crate) use mysql::contracts::source_witness as mysql_source_witness;
-pub(crate) use mysql::contracts::time_copies::global::delivered_witness_time_copies as mysql_global_delivered_time_copies;
-pub(crate) use mysql::contracts::{
-    IdentityPreflight as MysqlIdentityPreflight, mysql_witness_sql_value,
-    normalize_identity_witnesses as mysql_normalize_identity_witnesses,
-};
-pub(crate) use policy::mysql_native_witness_matches;
-pub(crate) use policy::validate_mysql_value_selector;
+#[cfg(test)]
+pub(crate) use crate::protocols::replay::mysql;
 pub(crate) mod execution_plan;
-mod native_index;
+pub(crate) mod native_index;
 mod network_access;
 pub(crate) mod policy;
 mod preparation;
-pub(crate) use policy::request_contract::RequestContracts;
 pub(crate) use traffic_replay::preparation::{
     PreparedProtocol, PreparedProtocols, RunSequenceReference,
 };
 pub(crate) mod protocol_runtime;
+use policy::{ReplayPolicy, RequestRuleRuntime};
 use protocol_runtime::{InFlightScope, ReplayProtocolSet};
 pub(crate) mod sequence;
-pub(crate) use policy::replace_request_rule_section;
-pub(crate) use policy::request_contract::redis_bulk_payload;
-pub(crate) use policy::request_contract::{
-    RedisFieldValue, RedisTimeRead, redis_delivered_global_time_copies,
-    redis_delivered_scalar_time_copies, redis_field_values, redis_time_position,
-};
-pub(crate) mod redis;
+#[cfg(test)]
+pub(crate) use crate::protocols::replay::redis;
 pub(crate) mod report;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use case_index::CaseExchangeIndex;
-use control::*;
-pub(crate) use dependencies::RecordedProxyError;
-use dependencies::*;
+pub(crate) use control::*;
+pub(crate) use dependencies::{RecordedProxyError, target_from_addr};
+#[cfg(test)]
+pub(crate) use dns::Ipv4Cidr;
 use dns::*;
-use exchange::*;
+pub(crate) use exchange::*;
 pub(crate) use exchange::{ReplayExchangeStatus, ReplayExchangeTiming};
 pub(crate) use model::register_replay_target;
-use model::*;
+pub(crate) use model::*;
 pub(crate) use model::{ReplayCase, TargetKey};
 pub(crate) use model::{ReplayProtocol, ReplayTarget};
-use mysql::*;
-pub(crate) use policy::ReplayPolicyRuntime;
-use policy::*;
+pub(crate) use report::*;
 #[cfg(test)]
-pub(crate) use report::reclassify_background_dependencies;
-use report::*;
-#[cfg(test)]
-use test_support::write_test_recording_network_manifest;
+pub(crate) use test_support::write_test_recording_network_manifest;
 
 const SO_ORIGINAL_DST: libc::c_int = 80;
 pub(crate) const UNRECORDED_ENDPOINT_REASON: &str = "访问了录制时没有访问过的域名:port";
 
 #[derive(Debug, Clone)]
-pub struct ReplayConfig {
+pub(crate) struct RuntimeConfig {
     pub case_dir: PathBuf,
     pub selected_case_ids: Vec<String>,
     pub dns_listen: SocketAddr,
@@ -155,9 +121,7 @@ pub struct ReplayConfig {
     pub ca_cert_path: Option<PathBuf>,
     pub ca_key_path: Option<PathBuf>,
     pub policy_path: Option<PathBuf>,
-    pub http_ignore_query_params: Vec<String>,
     pub process_owned_dependencies: Vec<crate::BackgroundDependencyRuleConfig>,
-    pub allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
 }
 
 pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 0;
@@ -216,12 +180,6 @@ impl Default for ReplayLifecycleConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct ReplayAllowedUnusedHttpConfig {
-    pub config_path: PathBuf,
-    pub hosts: BTreeSet<String>,
-}
-
-#[derive(Debug, Clone)]
 pub struct ReplayControlConfig {
     pub session_path: PathBuf,
     pub command: String,
@@ -233,66 +191,14 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
-pub use assertion::ResponseHeaderDateCandidate;
-pub(crate) use assertion::hessian2::is_hessian2_body;
-pub(crate) use assertion::protobuf::is_protobuf_body;
-pub use assertion::{
-    DocxBodyDifference, DocxBodyDifferenceKind, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
-    Hessian2JoinedStringCandidate, Hessian2ValuePathCandidate, JsonJoinedStringCandidate,
-    ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate,
-    ProtobufJoinedStringCandidate, ResponseAssertionCaseReport, ResponseAssertionOptions,
-    ResponseBodyAssertionReport, ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
-    ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
-    ResponseGatewayProtocol, assert_recorded_response,
-};
-pub(crate) use assertion::{
-    ResponseAssertionRuntime, read_actual_response_body, read_expected_response_body,
-};
-pub(crate) use policy::ReplayEvidencePolicyFreshness;
-pub use policy::ResponseHeaderDateRule;
-pub use policy::{CaseCondition, JsonCondition};
-pub use policy::{
-    DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
-    HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, MemcachedTimestampRuleFeedback,
-    MemcachedTimestampRulePlan, MemcachedTimestampRuleReport, MysqlTimeRuleFeedback,
-    MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector, MysqlTimeValueSelector,
-    ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
-    ProtobufRepeatedElementType, ProtobufUnorderedPath, RedisCrossCaseFeedback, RedisCrossCasePlan,
-    RedisCrossCaseReport, ReplayPolicyInitOptions, ReplayPolicyInitResult,
-    ReplayPolicyValidationReport, ResponseBodyCodec, ResponseBodyJoinedStringPath,
-    ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
-    ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
-    ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, ResponseRuleReport, ResponseTimeRule, ResponseTimestampFormat,
-    ResponseTimestampMode, initialize_replay_policy, plan_http_cross_case,
-    plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_redis_cross_case,
-    plan_response_body_rule, plan_response_rule, validate_replay_policy,
-};
-pub use policy::{
-    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
-    DynamicValueType, PathSegmentCapture, PathSegmentField, RedisCaptureReference,
-    RedisDerivedIdentity,
-};
-pub use policy::{
-    DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,
-    GeneratedValueRulePlan, GeneratedValueRuleReport, RedisJsonTimeValueSelector,
-    ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
-    plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
-};
-pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
-pub(crate) use report::aggregate::aggregate_runner_replay_report;
-pub use report::aggregate::{
-    ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
-    aggregate_replay_reports_with_options,
-};
-pub use report::global_evidence::{GlobalDependencyPage, read_global_dependency_page};
+pub use report::global_evidence::GlobalDependencyPage;
 
 pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
 pub(crate) use control::{
-    FinalizationScope, check_response_identities, http_input_timing_observer,
-    input_timing_observer, native_event_observer, register_derived_input,
+    FinalizationScope, check_response_identities, input_timing_observer, native_event_observer,
+    primary_close_observer, register_derived_input,
 };
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -308,36 +214,12 @@ pub(crate) fn allocate_control_socket() -> PathBuf {
     temporary_root.join(format!("trp-e2e-{}.sock", Uuid::new_v4().simple()))
 }
 
-pub async fn run_replay(config: ReplayConfig) -> Result<()> {
-    run_replay_with_lifecycle(config, ReplayLifecycleConfig::default()).await
-}
-
-pub async fn run_replay_with_lifecycle(
-    config: ReplayConfig,
-    lifecycle: ReplayLifecycleConfig,
-) -> Result<()> {
-    run_replay_with_counters(config, lifecycle, None).await
-}
-
-pub async fn run_replay_with_counters(
-    config: ReplayConfig,
-    lifecycle: ReplayLifecycleConfig,
-    counter_reader: Option<ReplayEgressCounterReader>,
-) -> Result<()> {
-    run_replay_with_providers(
-        config,
-        lifecycle,
-        counter_reader,
-        crate::protocols::default_providers(),
-    )
-    .await
-}
-
-pub async fn run_replay_with_providers(
-    config: ReplayConfig,
+pub(crate) async fn run<P: ReplayProtocolSet>(
+    config: RuntimeConfig,
     lifecycle: ReplayLifecycleConfig,
     counter_reader: Option<ReplayEgressCounterReader>,
     providers: Arc<crate::protocols::DependencyProviders>,
+    loader: P::SourceLoader,
 ) -> Result<()> {
     validate_replay_request_headers(&config).await?;
     let tcp_listener = TcpListener::bind(config.tcp_listen)
@@ -358,7 +240,7 @@ pub async fn run_replay_with_providers(
         .local_addr()
         .context("failed to read dependency replay DNS listen address")?;
     let runtime =
-        ReplayRuntime::load_with_providers(config, dns_listen, tcp_listen, lifecycle, providers)
+        Runtime::<P>::from_source(config, dns_listen, tcp_listen, lifecycle, providers, loader)
             .await?;
     {
         let mut state = runtime.state.lock().await;
@@ -376,23 +258,25 @@ pub async fn run_replay_with_providers(
         result = deferred::prefetch::run(runtime.state.clone()) => result,
     }
 }
+#[cfg(test)]
+pub(crate) use crate::protocols::replay::ReplayState;
+#[cfg(test)]
+pub(crate) use crate::protocols::replay::runtime::{
+    MysqlReplayConfig, ReplayAllowedUnusedHttpConfig, ReplayConfig,
+};
+#[cfg(test)]
+pub(crate) type ReplayRuntime = Runtime<crate::protocols::replay::ReplayProtocols>;
 
-pub type MysqlReplayConfig = ReplayConfig;
-
-pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
-    run_replay(config).await
+pub(crate) struct Runtime<P: ReplayProtocolSet> {
+    pub(crate) state: Arc<Mutex<RuntimeState<P>>>,
+    pub(crate) ca: Arc<MitmCa>,
+    pub(crate) report_path: Option<PathBuf>,
+    pub(crate) session_path: Option<PathBuf>,
+    pub(crate) control_socket_path: Option<PathBuf>,
 }
 
-struct ReplayRuntime {
-    state: Arc<Mutex<ReplayState>>,
-    ca: Arc<MitmCa>,
-    report_path: Option<PathBuf>,
-    session_path: Option<PathBuf>,
-    control_socket_path: Option<PathBuf>,
-}
-
-impl ReplayRuntime {
-    async fn run_tcp(&self, listener: TcpListener) -> Result<()> {
+impl<P: ReplayProtocolSet> Runtime<P> {
+    pub(crate) async fn run_tcp(&self, listener: TcpListener) -> Result<()> {
         loop {
             let (stream, peer_addr) = accept_replay_tcp_connection(&listener).await?;
             let state = self.state.clone();
@@ -405,7 +289,7 @@ impl ReplayRuntime {
         }
     }
 
-    async fn run_dns(&self, socket: UdpSocket) -> Result<()> {
+    pub(crate) async fn run_dns(&self, socket: UdpSocket) -> Result<()> {
         let socket = Arc::new(socket);
         let mut buf = vec![0_u8; 4096];
         loop {
@@ -425,19 +309,19 @@ impl ReplayRuntime {
     }
 
     #[cfg(test)]
-    async fn write_report(&self) -> Result<()> {
+    pub(crate) async fn write_report(&self) -> Result<()> {
         write_report_snapshot(self.state.clone(), self.report_path.clone()).await
     }
 
     #[cfg(test)]
-    async fn run_report_writer(&self) -> Result<()> {
+    pub(crate) async fn run_report_writer(&self) -> Result<()> {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             self.write_report().await?;
         }
     }
 
-    async fn run_control(&self) -> Result<()> {
+    pub(crate) async fn run_control(&self) -> Result<()> {
         run_control_socket(
             self.state.clone(),
             self.report_path.clone(),
@@ -448,7 +332,7 @@ impl ReplayRuntime {
     }
 }
 
-fn find_run_level_dependencies(root: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+pub(crate) fn find_run_level_dependencies(root: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     (
         find_upward(root, "indexes/startup-scope.json").or({
             #[cfg(test)]
@@ -464,7 +348,7 @@ fn find_run_level_dependencies(root: &Path) -> (Option<PathBuf>, Option<PathBuf>
     )
 }
 
-async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
+async fn validate_replay_request_headers(config: &RuntimeConfig) -> Result<()> {
     let selected_case_ids = config
         .selected_case_ids
         .iter()
@@ -482,28 +366,27 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
     Ok(())
 }
 
-type ReplayState = RuntimeState<crate::protocols::replay::ReplayProtocols>;
-
 #[derive(Debug)]
 pub(crate) struct RuntimeState<P: ReplayProtocolSet> {
-    protocols: P,
-    replay_policy: Option<ReplayPolicyRuntime>,
-    providers: Arc<crate::protocols::DependencyProviders>,
-    native: native::Inventory,
+    pub(crate) protocols: P,
+    pub(crate) replay_policy: Option<P::Policy>,
+    pub(crate) providers: Arc<crate::protocols::DependencyProviders>,
+    pub(crate) native: native::Inventory,
     admission_epoch: u64,
-    case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
+    pub(crate) case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
     sequence_catalog: Option<Arc<traffic_replay::SequenceCatalog>>,
-    active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,
-    run_sequence: Option<sequence::RunBindings>,
+    pub(crate) active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,
+    pub(crate) run_sequence: Option<sequence::RunBindings>,
     sequence_missing: Vec<sequence::MissingDependency>,
     batch_scope: Option<reconciliation::BatchScope>,
-    startup_phase: startup::StartupPhase,
+    pub(crate) startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,
     prepared_socketio_input: Option<control::input_timing::PreparedSource>,
-    input_timing: Option<control::input_timing::Live>,
-    stream_timing: Option<ReplayStreamTiming>,
-    stream_interval_cap_ms: u64,
-    target_observations: target_observation::TargetObservations,
+    pub(crate) input_timing: Option<control::input_timing::Live>,
+    pub(crate) primary_close_timing: Option<Arc<PrimaryCloseTimeline>>,
+    pub(crate) stream_timing: Option<ReplayStreamTiming>,
+    pub(crate) stream_interval_cap_ms: u64,
+    pub(crate) target_observations: target_observation::TargetObservations,
     case_cleanup: control::case_cleanup::CaseCleanup,
     connect_failures: connect_failure::Inventory,
     deferred: Option<Arc<deferred::DeferredDependencies>>,
@@ -513,22 +396,22 @@ pub(crate) struct RuntimeState<P: ReplayProtocolSet> {
     egress_counter_starts: BTreeMap<String, egress_counter::Sample>,
     egress_rejections: BTreeMap<String, ReplayEgressRejections>,
     session_id: Uuid,
-    started_at: DateTime<Utc>,
-    finalized_at: Option<DateTime<Utc>>,
+    pub(crate) started_at: DateTime<Utc>,
+    pub(crate) finalized_at: Option<DateTime<Utc>>,
     dns_listen: SocketAddr,
     tcp_listen: SocketAddr,
     mode: ReplayMode,
     root_dir: PathBuf,
-    cases: BTreeMap<String, ReplayCase>,
-    active_case_id: Option<String>,
-    target_stop_prepared: BTreeSet<String>,
-    target_session_stopped: bool,
-    dependency_tails: control::dependency_tail::CaseTails,
-    case_dependency_post_response_window: std::time::Duration,
+    pub(crate) cases: BTreeMap<String, ReplayCase>,
+    pub(crate) active_case_id: Option<String>,
+    pub(crate) target_stop_prepared: BTreeSet<String>,
+    pub(crate) target_session_stopped: bool,
+    pub(crate) dependency_tails: control::dependency_tail::CaseTails,
+    pub(crate) case_dependency_post_response_window: std::time::Duration,
     global_path: Option<PathBuf>,
-    regular_global: BTreeMap<String, report::global_evidence::regular::RegularBaseline>,
-    targets: Vec<ReplayTarget>,
-    ca_cert_path: PathBuf,
+    pub(crate) regular_global: BTreeMap<String, report::global_evidence::regular::RegularBaseline>,
+    pub(crate) targets: Vec<ReplayTarget>,
+    pub(crate) ca_cert_path: PathBuf,
     recording_network_path: Option<PathBuf>,
     recorded_dns_only_domains: BTreeSet<String>,
     fake_cidr: Ipv4Cidr,
@@ -551,10 +434,10 @@ async fn accept_replay_tcp_connection(listener: &TcpListener) -> Result<(TcpStre
     Ok((stream, peer_addr))
 }
 
-async fn handle_gateway_connection(
+async fn handle_gateway_connection<P: ReplayProtocolSet>(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     let stopping = state.lock().await.async_case_quiescing();
@@ -617,9 +500,9 @@ enum ReplayDestination {
     Unknown,
 }
 
-async fn replay_destination_for_stream(
+async fn replay_destination_for_stream<P: ReplayProtocolSet>(
     stream: &TcpStream,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> ReplayDestination {
     let original = original_dst(stream).ok();
     let state = state.lock().await;
@@ -695,47 +578,6 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
     Ok(SocketAddr::new(IpAddr::V4(ip), port))
 }
 
-#[cfg(test)]
-pub(crate) use policy::test_fixture::install_dependency_rule as install_dependency_rule_fixture;
-#[cfg(test)]
-pub(crate) use policy::test_fixture::redis_time::{RedisTimeShiftFeedback, RedisTimeShiftSelector};
-#[cfg(test)]
-pub(crate) use policy::test_fixture::write_policy as write_policy_fixture;
-pub use redis::value::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
-
-pub(crate) use redis::value as redis_value;
-
-mod json_order;
-mod recording_evidence;
+pub(crate) mod json_order;
+pub(crate) mod recording_evidence;
 pub(crate) use recording_evidence::dependency_started_at;
-
-pub use policy::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
-
-pub(crate) use policy::request_contract::discover as discover_dependency_request_candidates;
-
-pub use policy::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
-
-pub use policy::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
-
-pub(crate) use assertion::native::{
-    NativeResponseContext, compare_body as native_response_body,
-    compare_header as native_response_header, selected as native_response_selected,
-};
-pub(crate) use assertion::{
-    ResponsePayloadPair, compare_interaction_global, decode_sse, response_payload_pair,
-    response_rule_payload_pair,
-};
-pub(crate) use mysql::contracts::{
-    request_candidates_related as mysql_request_candidates_related,
-    validate_contract_candidate as mysql_validate_contract_candidate,
-    validate_contract_witness as mysql_validate_contract_witness,
-};
-pub(crate) use policy::native_projection::validate_native_adapter;
-
-pub(crate) use assertion::native::source_request_body as native_source_request_body;
-pub(crate) use policy::native_projection::compiled_input_rules;
-
-pub(crate) use redis::expiration::normalize as normalize_redis_expiration;
-
-pub(crate) use mysql::contracts::automatic::validate_source_witness as mysql_validate_global_source_witness;
-pub(crate) use mysql::contracts::automatic::validate_witness_with_time_copies as mysql_validate_global_witness_with_time_copies;

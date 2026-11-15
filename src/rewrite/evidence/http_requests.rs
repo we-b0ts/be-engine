@@ -1,6 +1,6 @@
 //! Issue-bound cursors for protected HTTP request diagnostics and body pages.
 use super::*;
-use crate::replay::http_request_diagnosis::{self, Query};
+use crate::protocols::replay::http_request_diagnosis::{self, Query};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 pub(super) fn parse(

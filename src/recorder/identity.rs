@@ -2,24 +2,13 @@
 use super::*;
 
 impl Recorder {
-    pub(super) async fn register_capture_policy(
+    pub(crate) async fn register_capture_policy(
         &mut self,
-        config: &crate::AppConfig,
+        identity: String,
+        tasks: std::collections::BTreeMap<String, String>,
     ) -> Result<()> {
-        // Only a digest is persisted: capture configuration may contain private
-        // matching rules or sensitive header names.
-        let bytes = serde_json::to_vec(&(
-            &self.capture_policy_identity,
-            &config.recording,
-            &config.async_api,
-            &config.http_gateway,
-            &config.motan_gateway,
-            &config.process_owned_dependencies,
-            &config.process_dependency_tasks,
-        ))?;
-        let identity = crate::policy_evidence::digest(&bytes);
         self.writer
-            .set_capture_policy_identity(identity.clone(), config.process_dependency_tasks.clone())
+            .set_capture_policy_identity(identity.clone(), tasks)
             .await?;
         self.capture_policy_identity = identity;
         Ok(())

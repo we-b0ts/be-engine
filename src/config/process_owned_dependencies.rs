@@ -13,7 +13,7 @@ use base64::engine::general_purpose::STANDARD;
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
 
-use crate::recorder::RecorderEvent;
+use crate::protocols::recording::events::RecorderEvent;
 
 const MAX_HTTP_AUTHORITIES: usize = 64;
 const MAX_HTTP_PATH_PREFIXES: usize = 64;

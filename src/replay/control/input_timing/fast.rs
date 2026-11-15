@@ -11,7 +11,8 @@ use crate::interaction::{
     },
     socketio::{EngineIoPacket, decode_engine_io_text},
 };
-use crate::replay::adapters::{DependencyAdapter, ExchangeHandle, resolve_case};
+use crate::replay::adapters::{ExchangeHandle, resolve_case};
+use traffic_protocol::evidence::SourceTiming;
 
 const MAX_REQUESTS: usize = 100_000;
 const POLL_MS: u64 = 5;
@@ -88,7 +89,11 @@ impl Source {
         }
     }
 
-    pub(super) fn record(&mut self, raw: &[u8]) -> Result<()> {
+    pub(super) fn record(
+        &mut self,
+        raw: &[u8],
+        evidence: &traffic_protocol::evidence::EvidenceRegistry,
+    ) -> Result<()> {
         if !self.covered {
             return Ok(());
         }
@@ -96,12 +101,13 @@ impl Source {
         if event["capture"]["semantic_required"] == false {
             return Ok(());
         }
-        match event["event_type"].as_str() {
-            Some("mysql_exchange" | "redis_exchange" | "http_exchange") => {}
-            Some("mysql_connection" | "redis_connection") => return Ok(()),
-            Some("redis_pub_sub_push") => {
-                // Native pushes own their delivery clock. Only ordinary
-                // compressed close timing requires a dependency-only tail.
+        let (started_at, completed_at) = match evidence.source_timing(&event) {
+            SourceTiming::Request {
+                started_at,
+                completed_at,
+            } => (started_at, completed_at),
+            SourceTiming::Control => return Ok(()),
+            SourceTiming::Notification => {
                 self.tail = self
                     .tail
                     .take()
@@ -109,12 +115,12 @@ impl Source {
                 self.passive = None;
                 return Ok(());
             }
-            _ => {
+            SourceTiming::Unsupported => {
                 self.covered = false;
                 return Ok(());
             }
-        }
-        let reference = match dependency_tail::recorded_reference(&event) {
+        };
+        let reference = match dependency_tail::recorded_reference(&event, evidence) {
             Ok(Some(reference)) => reference,
             Ok(None) => return Ok(()),
             Err(_) => {
@@ -122,7 +128,7 @@ impl Source {
                 return Ok(());
             }
         };
-        let Some(started) = time(&event["request_started_at"]) else {
+        let Some(started) = started_at else {
             self.covered = false;
             return Ok(());
         };
@@ -139,7 +145,7 @@ impl Source {
             self.covered = false;
             return Ok(());
         }
-        let completed = time(&event["timestamp"]).and_then(|value| offset(self.start, value));
+        let completed = completed_at.and_then(|value| offset(self.start, value));
         self.requests.push(Request {
             reference,
             started_us,
@@ -148,9 +154,9 @@ impl Source {
         Ok(())
     }
 
-    pub(super) fn resolve(
+    pub(super) fn resolve<P: ReplayProtocolSet>(
         mut self,
-        state: &mut ReplayState,
+        state: &mut RuntimeState<P>,
         case: &str,
         input: &InputTranscript,
     ) -> Result<Plan> {
@@ -163,7 +169,7 @@ impl Source {
         let refs = self
             .requests
             .iter()
-            .map(|request| request.reference)
+            .map(|request| request.reference.clone())
             .collect::<Vec<_>>();
         let handles = resolve_case(state, case, &refs, |_, handle| handle)?;
         if let Some(tail) = &mut self.tail
@@ -189,13 +195,12 @@ impl Source {
                 let completed = request.completed?;
                 (completed >= request.started_us / 1_000).then_some(latest.max(completed))
             })
-            && state
-                .protocols
-                .redis
-                .pubsub
-                .native_clock
-                .prepare_fast(case, &passive, self.cap, setup_finished)
-                .is_some()
+            && state.protocols.input_timing_mut().prepare_passive(
+                case,
+                &passive,
+                self.cap,
+                setup_finished,
+            )
         {
             let last_output_ms = passive.outputs.last().expect("proven passive output").0;
             self.tail = Some(Tail {
@@ -248,43 +253,44 @@ impl Source {
 }
 
 impl Plan {
-    pub(super) fn mysql_candidate_cutoff(
+    pub(super) fn candidate_cutoff(
+        &self,
+        live: &Live,
+        anchor: Option<DateTime<Utc>>,
+        window: CandidateWindow,
+    ) -> Option<DateTime<Utc>> {
+        let anchor = self.anchor_us(live, anchor);
+        let cutoff = candidate_cutoff_us(&live.plan.input.actions, anchor, window);
+        self.source_time(cutoff)
+    }
+
+    pub(super) fn candidate_anchor(
         &self,
         live: &Live,
         anchor: Option<DateTime<Utc>>,
     ) -> Option<DateTime<Utc>> {
-        let anchor = self.mysql_anchor_us(live, anchor);
-        let cutoff = mysql_candidate_cutoff_us(&live.plan.input.actions, anchor);
-        self.mysql_source_time(cutoff)
+        self.source_time(self.anchor_us(live, anchor))
     }
 
-    pub(super) fn mysql_candidate_anchor(
-        &self,
-        live: &Live,
-        anchor: Option<DateTime<Utc>>,
-    ) -> Option<DateTime<Utc>> {
-        self.mysql_source_time(self.mysql_anchor_us(live, anchor))
-    }
-
-    pub(super) fn mysql_dispatch_prefix(
+    pub(super) fn active_dispatch_prefix(
         &self,
         live: &Live,
     ) -> Option<std::ops::Range<DateTime<Utc>>> {
         let window = live.native_dispatch?;
         Some(
-            self.mysql_source_time(window.from.latest_us().saturating_add(1))?
-                ..self.mysql_source_time(window.to.earliest_us())?,
+            self.source_time(window.from.latest_us().saturating_add(1))?
+                ..self.source_time(window.to.earliest_us())?,
         )
     }
 
-    fn mysql_anchor_us(&self, live: &Live, anchor: Option<DateTime<Utc>>) -> u64 {
+    fn anchor_us(&self, live: &Live, anchor: Option<DateTime<Utc>>) -> u64 {
         anchor
             .and_then(|at| u64::try_from((at - self.source.start).num_microseconds()?).ok())
             .max(live.native_dispatch.map(|window| window.from.earliest_us()))
             .unwrap_or_default()
     }
 
-    fn mysql_source_time(&self, us: u64) -> Option<DateTime<Utc>> {
+    fn source_time(&self, us: u64) -> Option<DateTime<Utc>> {
         self.source
             .start
             .checked_add_signed(chrono::TimeDelta::microseconds(i64::try_from(us).ok()?))
@@ -306,7 +312,11 @@ impl Plan {
             )?)
     }
 
-    pub(super) fn native_fast_setup_ready(&self, state: &ReplayState, case: &str) -> bool {
+    pub(super) fn native_fast_setup_ready<P: ReplayProtocolSet>(
+        &self,
+        state: &RuntimeState<P>,
+        case: &str,
+    ) -> bool {
         self.source
             .requests
             .iter()
@@ -314,9 +324,9 @@ impl Plan {
             .all(|(request, handle)| Self::request_ready(state, case, request, handle, true))
     }
 
-    pub(super) fn native_dispatch_cap(
+    pub(super) fn native_dispatch_cap<P: ReplayProtocolSet>(
         &self,
-        state: &ReplayState,
+        state: &RuntimeState<P>,
         case: &str,
         window: NativeDispatch,
         offset: chrono::TimeDelta,
@@ -336,9 +346,9 @@ impl Plan {
         (compressible && unadmitted.is_none()).then(|| Duration::from_millis(self.source.cap))
     }
 
-    fn ready(
+    fn ready<P: ReplayProtocolSet>(
         &self,
-        state: &ReplayState,
+        state: &RuntimeState<P>,
         case: &str,
         from: SourceOffset,
         to: SourceOffset,
@@ -365,8 +375,8 @@ impl Plan {
             .take_while(move |(request, _)| request.started_us <= to.latest_us())
     }
 
-    fn request_ready(
-        state: &ReplayState,
+    fn request_ready<P: ReplayProtocolSet>(
+        state: &RuntimeState<P>,
         case: &str,
         request: &Request,
         handle: &ExchangeHandle,
@@ -378,13 +388,13 @@ impl Plan {
                 ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination,
             ) => !tail,
             _ => false,
-        }) || dependency_tail::timing_optional(state, case, request.reference)
+        }) || dependency_tail::timing_optional(state, case, request.reference.clone())
             || handle.permits_unstarted_omission(state, false, true)
     }
 
-    fn dispatch_prefix(
+    fn dispatch_prefix<P: ReplayProtocolSet>(
         &self,
-        state: &ReplayState,
+        state: &RuntimeState<P>,
         case: &str,
         window: NativeDispatch,
     ) -> (bool, Option<DispatchDependency>) {
@@ -412,13 +422,8 @@ impl Plan {
                     compressible = false;
                 }
             } else if !Self::request_ready(state, case, request, handle, false) {
-                if let ExchangeHandle::Native(DependencyAdapter::Mysql(index)) = *handle
-                    && input_at.is_some_and(|at| {
-                        state
-                            .protocols
-                            .mysql
-                            .can_defer_autocommit_for_dispatch(index, at)
-                    })
+                if let ExchangeHandle::Native(exchange) = *handle
+                    && input_at.is_some_and(|at| P::can_defer_dispatch(state, exchange, at))
                 {
                     continue;
                 }
@@ -426,26 +431,7 @@ impl Plan {
                     compressible = false;
                     continue;
                 }
-                let dependency = match request.reference {
-                    RecordedReference::Redis {
-                        connection_id,
-                        sequence,
-                    } => DispatchDependency::Redis {
-                        connection_id,
-                        sequence,
-                    },
-                    RecordedReference::Mysql {
-                        connection_id,
-                        sequence,
-                    } => DispatchDependency::Mysql {
-                        connection_id,
-                        sequence,
-                    },
-                    RecordedReference::Http { exchange_id } => {
-                        DispatchDependency::Http { exchange_id }
-                    }
-                    _ => unreachable!("ordered fast only plans Redis, MySQL, and HTTP requests"),
-                };
+                let dependency = request.reference.clone();
                 return (false, Some(dependency));
             }
         }
@@ -453,7 +439,11 @@ impl Plan {
     }
 }
 
-pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Result<Value> {
+pub(super) fn advance<P: ReplayProtocolSet>(
+    state: &mut RuntimeState<P>,
+    tail: bool,
+    query: &Query,
+) -> Result<Value> {
     if let Some(events_ready) = query.events_ready {
         ensure!(!tail, "event readiness is only valid for input dispatch");
         return advance_dispatch(state, query, events_ready);
@@ -472,10 +462,8 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
         let ready = plan.native_fast_setup_ready(state, &case)
             && state
                 .protocols
-                .redis
-                .pubsub
-                .native_clock
-                .fast_tail_ready(&case, MonoInstant::now());
+                .input_timing_mut()
+                .tail_ready(&case, MonoInstant::now());
         return Ok(
             serde_json::json!({"ok":true,"ready":ready,"wait_ms":POLL_MS,
             "advance": Advance::default()}),
@@ -553,7 +541,11 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
     )
 }
 
-fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) -> Result<Value> {
+fn advance_dispatch<P: ReplayProtocolSet>(
+    state: &mut RuntimeState<P>,
+    query: &Query,
+    events_ready: bool,
+) -> Result<Value> {
     let live = state.input_timing.as_ref().expect("validated timeline");
     let plan = live.fast.as_ref().expect("validated fast plan");
     let action = input_action(live, query.sequence)?;
@@ -570,17 +562,12 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
     let NativeDispatch { from, to, .. } = window;
     let cap = plan.source.cap;
     if live.native_dispatch != Some(window) {
-        state
-            .protocols
-            .redis
-            .pubsub
-            .native_clock
-            .plan_dispatch_pace(
-                &live.case,
-                live.epoch,
-                Duration::from_micros(from.latest_us())..Duration::from_micros(to.earliest_us()),
-                Duration::from_millis(cap),
-            );
+        state.protocols.input_timing_mut().plan_dispatch(
+            &live.case,
+            live.epoch,
+            Duration::from_micros(from.latest_us())..Duration::from_micros(to.earliest_us()),
+            Duration::from_millis(cap),
+        );
     }
     let live = state.input_timing.as_mut().expect("validated timeline");
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -617,13 +604,14 @@ fn input_action(live: &Live, sequence: u64) -> Result<&InputAction> {
     Ok(&actions[index])
 }
 
-fn mysql_candidate_cutoff_us(actions: &[InputAction], anchor: u64) -> u64 {
+fn candidate_cutoff_us(actions: &[InputAction], anchor: u64, window: CandidateWindow) -> u64 {
     let start = actions.partition_point(|action| action.offset_ms <= anchor / 1_000);
-    let minimum = anchor.saturating_add(3_000_000);
+    let duration = u64::try_from(window.minimum_duration.as_micros()).unwrap_or(u64::MAX);
+    let minimum = anchor.saturating_add(duration);
     actions[start..]
         .iter()
         .filter(|action| ordered_input(action))
-        .take(3)
+        .take(window.minimum_inputs)
         .last()
         .map_or(minimum, |action| {
             let offset = SourceOffset {
@@ -640,10 +628,6 @@ fn input_boundary(action: &InputAction) -> bool {
     if message.kind == MessageKind::Text && matches!(
         decode_engine_io_text(&message.data, usize::MAX),
         Ok(EngineIoPacket::Ping(_) | EngineIoPacket::Pong(_))))
-}
-
-fn time(value: &Value) -> Option<DateTime<Utc>> {
-    value.as_str()?.parse().ok()
 }
 
 fn offset(start: DateTime<Utc>, at: DateTime<Utc>) -> Option<u64> {
@@ -789,7 +773,74 @@ mod tests {
     use crate::interaction::{model::WireMessage, observation::Observation};
 
     #[test]
-    fn mysql_window_covers_three_source_events_and_at_least_three_seconds() {
+    fn registered_native_clocks_and_references_prepare_the_shared_schedule() {
+        struct ExternalClock;
+        impl traffic_protocol::evidence::EvidenceAdapter for ExternalClock {
+            fn schema(&self) -> &'static str {
+                "external-clock/v1"
+            }
+            fn event_types(&self) -> &'static [&'static str] {
+                &["external_call"]
+            }
+            fn supports_replay(&self, _: &Value) -> bool {
+                true
+            }
+            fn source_timing(&self, event: &Value) -> SourceTiming {
+                SourceTiming::Request {
+                    started_at: event["native_started"]
+                        .as_str()
+                        .and_then(|value| value.parse().ok()),
+                    completed_at: event["native_completed"]
+                        .as_str()
+                        .and_then(|value| value.parse().ok()),
+                }
+            }
+            fn finite_reference(&self, event: &Value) -> Result<Option<RecordedReference>> {
+                Ok(Some(RecordedReference::new(
+                    "external-clock",
+                    serde_json::json!({
+                        "stream":event["native_stream"], "ordinal":event["ordinal"]
+                    }),
+                )?))
+            }
+        }
+        let mut registry = traffic_protocol::evidence::EvidenceRegistry::default();
+        registry
+            .register("external-clock", Arc::new(ExternalClock))
+            .unwrap();
+        let mut source = Source {
+            start: "2026-11-15T00:00:00Z".parse().unwrap(),
+            cap: 1,
+            covered: true,
+            requests: Vec::new(),
+            tail: None,
+            passive: None,
+        };
+        let event = serde_json::json!({"event_type":"external_call", "native_stream":"orders", "ordinal":7,
+            "native_started":"2026-11-15T00:00:00.002Z", "native_completed":"2026-11-15T00:00:00.003Z"});
+        source
+            .record(&serde_json::to_vec(&event).unwrap(), &registry)
+            .unwrap();
+        assert!(source.covered);
+        assert_eq!(source.requests.len(), 1);
+        let request = &source.requests[0];
+        assert_eq!(request.started_us, 2_000);
+        assert_eq!(request.completed, Some(3));
+        let reference =
+            serde_json::json!({"protocol":"external-clock", "stream":"orders", "ordinal":7});
+        assert_eq!(serde_json::to_value(&request.reference).unwrap(), reference);
+        assert_eq!(
+            serde_json::from_value::<DispatchDependency>(reference).unwrap(),
+            request.reference
+        );
+    }
+
+    #[test]
+    fn candidate_window_obeys_input_count_and_elapsed_bound() {
+        let window = CandidateWindow {
+            minimum_inputs: 3,
+            minimum_duration: Duration::from_secs(3),
+        };
         let inputs = |offsets: [u64; 3]| {
             offsets
                 .into_iter()
@@ -805,20 +856,31 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            mysql_candidate_cutoff_us(&inputs([527, 527, 527]), 451_412),
+            candidate_cutoff_us(&inputs([527, 527, 527]), 451_412, window),
             3_451_412
         );
         assert_eq!(
-            mysql_candidate_cutoff_us(&inputs([527, 4_000, 7_000]), 451_412),
+            candidate_cutoff_us(&inputs([527, 4_000, 7_000]), 451_412, window),
             7_000_999
         );
         assert_eq!(
-            mysql_candidate_cutoff_us(&inputs([527, 4_000, 7_000]), 527_000),
+            candidate_cutoff_us(&inputs([527, 4_000, 7_000]), 527_000, window),
             7_000_999
         );
         assert_eq!(
-            mysql_candidate_cutoff_us(&inputs([527, 527, 527]), 9_000_000),
+            candidate_cutoff_us(&inputs([527, 527, 527]), 9_000_000, window),
             12_000_000
+        );
+        assert_eq!(
+            candidate_cutoff_us(
+                &inputs([527, 4_000, 7_000]),
+                451_412,
+                CandidateWindow {
+                    minimum_inputs: 1,
+                    minimum_duration: Duration::from_millis(10)
+                }
+            ),
+            527_999
         );
     }
 

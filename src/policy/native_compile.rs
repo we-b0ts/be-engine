@@ -67,7 +67,7 @@ pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
             },
         )?),
     };
-    crate::replay::validate_native_adapter(&compiled).with_context(|| {
+    crate::policy::runtime::validate_native_adapter(&compiled).with_context(|| {
         format!(
             "native rule {:?} is unsupported by its typed adapter",
             rule.id

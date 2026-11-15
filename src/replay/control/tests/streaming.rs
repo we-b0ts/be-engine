@@ -23,7 +23,7 @@ async fn runtime_with_background(
 ) -> Arc<ReplayRuntime> {
     for case_id in ["case-a", "case-b"] {
         let case = root.join(case_id);
-        crate::replay::http::tests::write_http_case(
+        crate::protocols::replay::http::tests::write_http_case(
             &case,
             "fake_ip_http",
             "dependency.test",
@@ -267,17 +267,17 @@ async fn consecutive_stream_cases_keep_delayed_dependencies_and_wait_only_for_de
     }
     target.await.unwrap();
     let report = runtime.state.lock().await.snapshot_report();
-    assert_eq!(report.matched_http_exchanges.len(), 2);
+    assert_eq!(report.native.matched_http_exchanges.len(), 2);
     assert_eq!(
-        report.matched_http_exchanges[0].case_id.as_deref(),
+        report.native.matched_http_exchanges[0].case_id.as_deref(),
         Some("case-a")
     );
     assert_eq!(
-        report.matched_http_exchanges[1].case_id.as_deref(),
+        report.native.matched_http_exchanges[1].case_id.as_deref(),
         Some("case-b")
     );
-    assert!(report.unused_case_http_exchanges.is_empty());
-    assert!(report.unmatched_http_requests.is_empty());
+    assert!(report.native.unused_case_http_exchanges.is_empty());
+    assert!(report.native.unmatched_http_requests.is_empty());
     replay_task.abort();
 }
 
@@ -385,11 +385,11 @@ async fn background_spans_cases() {
     .unwrap();
     let state = runtime.state.lock().await;
     let report = state.snapshot_report();
-    assert_eq!(report.matched_http_exchanges.len(), 1);
-    let delivered = serde_json::to_value(&report.matched_http_exchanges[0]).unwrap();
+    assert_eq!(report.native.matched_http_exchanges.len(), 1);
+    let delivered = serde_json::to_value(&report.native.matched_http_exchanges[0]).unwrap();
     assert_eq!(delivered["source"], "process");
     assert_eq!(delivered["case_id"], first);
-    assert!(report.unused_global_http_exchanges.is_empty());
+    assert!(report.native.unused_global_http_exchanges.is_empty());
     drop(state);
     let (finished, report) = finalize_replay(&finalize, runtime.state.clone()).await;
     assert_eq!(finished["ok"], true, "{finished}");

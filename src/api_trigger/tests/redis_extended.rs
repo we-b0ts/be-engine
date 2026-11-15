@@ -159,8 +159,10 @@ fn script_plan_apply_preserves_finite_responses_and_unmatched_calls() {
         ("origin".into(), f.origin.clone()),
         ("victim".into(), f.victim.clone()),
     ]);
-    let result =
-        crate::replay::reclassify_background_dependencies(&f.policy, &f.report, &cases).unwrap();
+    let result = crate::protocols::replay::report::ownership::reclassify_background_dependencies(
+        &f.policy, &f.report, &cases,
+    )
+    .unwrap();
     assert_eq!(result.matched_unused_case, 0);
     assert!(result.remaining_dirty_case_ids.contains("victim"));
     assert!(

@@ -419,5 +419,6 @@ impl SequenceScheduler {
 mod tests;
 
 pub mod candidate_selection;
+pub mod case;
 pub mod command;
 pub mod exchange;

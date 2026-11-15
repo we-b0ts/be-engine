@@ -78,15 +78,16 @@ pub(super) fn verify(
     }
     let inputs = cases
         .iter()
-        .map(|case| crate::replay::NativeSourceCase {
+        .map(|case| crate::policy::runtime::NativeSourceCase {
             id: &case.id,
             dir: &case.dir,
             request: &case.request,
             events: &case.events,
         })
         .collect::<Vec<_>>();
-    let proof =
-        crate::replay::validate_native_source_dependencies(policy, selected, root, &inputs)?;
+    let proof = crate::policy::runtime::validate_native_source_dependencies(
+        policy, selected, root, &inputs,
+    )?;
     for (path, digest) in &proof.key_witnesses {
         // Freeze actual private inputs by SHA256. The plan contains references
         // only; key values and raw startup files are never copied into reports.

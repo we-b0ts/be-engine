@@ -7,14 +7,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::time::Instant as TokioInstant;
 
 #[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct CoverageError {
+pub(crate) struct CoverageError {
     pub code: &'static str,
     pub owner: &'static str,
     pub reason: String,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::replay) struct TargetObservations {
+pub(crate) struct TargetObservations {
     store: WitnessStore,
     session_id: String,
     key_context: PathBuf,
@@ -30,7 +30,7 @@ struct AbortTail {
 }
 
 impl TargetObservations {
-    pub(in crate::replay) fn new(
+    pub(crate) fn new(
         store: WitnessStore,
         session: Uuid,
         key_context: PathBuf,
@@ -70,13 +70,13 @@ impl TargetObservations {
             .lock()
             .expect("abort activity poisoned") = None;
     }
-    pub(in crate::replay) fn key_context(&self) -> &Path {
+    pub(crate) fn key_context(&self) -> &Path {
         &self.key_context
     }
-    pub(in crate::replay) fn policy_fingerprint(&self) -> &str {
+    pub(crate) fn policy_fingerprint(&self) -> &str {
         &self.policy_fingerprint
     }
-    pub(in crate::replay) fn fail(&self, reason: &str) {
+    pub(crate) fn fail(&self, reason: &str) {
         self.fail_code("persistence_failure", "engine_io", reason);
     }
     fn fail_code(&self, code: &'static str, owner: &'static str, reason: &str) {
@@ -89,13 +89,13 @@ impl TargetObservations {
                 reason: reason.into(),
             });
     }
-    pub(in crate::replay) fn coverage_error(&self) -> Option<CoverageError> {
+    pub(crate) fn coverage_error(&self) -> Option<CoverageError> {
         self.failure
             .lock()
             .expect("Target evidence coverage poisoned")
             .clone()
     }
-    pub(in crate::replay) fn retained(&self, result: &Result<ObservationRetention>) -> bool {
+    pub(crate) fn retained(&self, result: &Result<ObservationRetention>) -> bool {
         match result {
             Ok(ObservationRetention::Retained) => true,
             Ok(ObservationRetention::Unavailable) => {
@@ -124,7 +124,7 @@ impl TargetObservations {
         }
     }
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::replay) fn record(
+    pub(crate) fn record(
         &self,
         id: Uuid,
         case: Option<&str>,
@@ -171,7 +171,7 @@ impl TargetObservations {
             payload,
         )
     }
-    pub(in crate::replay) fn manifest(&self) -> Option<crate::policy_evidence::WitnessManifest> {
+    pub(crate) fn manifest(&self) -> Option<crate::policy_evidence::WitnessManifest> {
         match self.store.manifest() {
             Ok(manifest) => Some(manifest),
             Err(_) => {
@@ -180,7 +180,7 @@ impl TargetObservations {
             }
         }
     }
-    pub(in crate::replay) fn seal(&self) -> Result<crate::policy_evidence::WitnessManifest> {
+    pub(crate) fn seal(&self) -> Result<crate::policy_evidence::WitnessManifest> {
         self.store.sealed_manifest()
     }
 }

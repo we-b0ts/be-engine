@@ -111,7 +111,7 @@ impl ProtocolMessage for Message {
     fn project(&self) -> Result<ProjectedMessage> {
         Ok(ProjectedMessage {
             structure: json!({"native_frame":"fixture_document"}),
-            values: BTreeMap::from([("document".into(), ProjectedValue::bytes(self.0.clone()))]),
+            values: BTreeMap::from([("document".into(), ProjectedValue::json(self.0.clone()))]),
         })
     }
     fn locate(&self, selector: &Value) -> Result<Vec<String>> {
@@ -234,6 +234,13 @@ impl EvidenceAdapter for Evidence {
     }
     fn supports_replay(&self, event: &Value) -> bool {
         serde_json::from_value::<capture::Call>(event.clone()).is_ok_and(|call| call.wire_complete)
+    }
+    fn finite_reference(
+        &self,
+        event: &Value,
+    ) -> Result<Option<traffic_model::recording::ProtocolRef>> {
+        let call: capture::Call = serde_json::from_value(event.clone())?;
+        Ok(Some(call.reference()))
     }
     fn interaction(&self, event: &Value) -> Option<TrafficInteraction> {
         let peer: capture::PeerAddress = serde_json::from_value(event["peer"].clone()).ok()?;

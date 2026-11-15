@@ -2,7 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::recorder::{CaseContext, Recorder, RecorderEvent};
+use crate::recorder::{CaseContext, Recorder};
+use traffic_protocol::capture::CaptureEvidence;
 
 pub(super) async fn ensure_case_dependency_file(dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(dir)
@@ -19,19 +20,23 @@ impl Recorder {
     pub async fn append_case_dependency(
         &self,
         case: &CaseContext,
-        event: &RecorderEvent,
+        event: &impl CaptureEvidence,
         matched_by: &str,
     ) -> Result<()> {
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         self.writer
-            .append_case(case.clone(), event.clone(), matched_by)
+            .append_case(
+                case.clone(),
+                traffic_recording::CapturedEvent::capture(event)?,
+                matched_by,
+            )
             .await
     }
 
     pub async fn append_global_dependency(
         &self,
-        event: &RecorderEvent,
+        event: &impl CaptureEvidence,
         reason: &str,
         phase: &str,
         matched_by: &str,
@@ -39,7 +44,12 @@ impl Recorder {
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         self.writer
-            .append_global(event.clone(), reason, phase, matched_by)
+            .append_global(
+                traffic_recording::CapturedEvent::capture(event)?,
+                reason,
+                phase,
+                matched_by,
+            )
             .await
     }
 
@@ -93,58 +103,8 @@ impl Recorder {
                     )));
                 }
             }
-            if event_type == "mysql_exchange" {
-                let terminated = value
-                    .get("outcome")
-                    .is_some_and(|outcome| outcome.is_object());
-                if value["response"]["status"] == "incomplete"
-                    || terminated
-                        && value["parse_warnings"]
-                            .as_array()
-                            .is_some_and(|warnings| !warnings.is_empty())
-                {
-                    return Ok(Some("mysql_exchange contains incomplete or unsupported transport capture evidence".into()));
-                }
-            }
-            if matches!(
-                event_type,
-                "redis_connection"
-                    | "redis_exchange"
-                    | "redis_pub_sub_push"
-                    | "memcached_connection"
-                    | "memcached_exchange"
-                    | "kafka_connection"
-                    | "kafka_produce"
-                    | "kafka_fetch"
-                    | "kafka_delivery"
-                    | "motan_connection"
-                    | "motan_exchange"
-            ) && value
-                .get("replay_safe")
-                .and_then(serde_json::Value::as_bool)
-                != Some(true)
-            {
-                let command = value
-                    .get("command")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown");
-                return Ok(Some(format!(
-                    "{event_type} command {command} contains incomplete or unsupported replay evidence"
-                )));
-            }
-            if event_type == "proxy_error"
-                && matches!(
-                    value.get("protocol").and_then(serde_json::Value::as_str),
-                    Some("redis" | "memcached" | "kafka" | "motan")
-                )
-            {
-                return Ok(Some(format!(
-                    "dependency proxy error: {}",
-                    value
-                        .get("error")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown dependency proxy error")
-                )));
+            if let Some(issue) = self.source_preparation.safety_issue(&value) {
+                return Ok(Some(issue));
             }
         }
         Ok(None)
@@ -165,15 +125,17 @@ impl Recorder {
 
 #[cfg(test)]
 mod tests {
+    use crate::RecorderEvent;
     use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
     use crate::DependencyExchangeOutcome;
-    use crate::recorder::{
+    use crate::protocols::recording::events::{
         MotanExchangeEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent,
-        RedisExchangeEvent, capture_body,
+        RedisExchangeEvent,
     };
+    use crate::recorder::capture_body;
 
     #[tokio::test]
     async fn mysql_peer_failure_can_publish_while_interrupted_capture_cannot() {
@@ -318,7 +280,7 @@ mod tests {
         assert!(debug.contains("SELECT 1"));
         assert!(debug.contains("SELECT 2"));
 
-        super::super::summary::write_case_dependency_summary(&case_dir)
+        super::super::summary::write_case_dependency_summary(&case_dir, recorder.evidence.clone())
             .await
             .unwrap();
         let summary =
@@ -442,7 +404,7 @@ mod tests {
             .unwrap();
         assert_eq!(quit_fact["capture"]["semantic_required"], false);
 
-        super::super::summary::write_case_dependency_summary(&case_dir)
+        super::super::summary::write_case_dependency_summary(&case_dir, recorder.evidence.clone())
             .await
             .unwrap();
         let summary =
@@ -528,7 +490,7 @@ mod tests {
             .unwrap();
         assert_eq!(heartbeat["capture"]["semantic_required"], false);
 
-        super::super::summary::write_case_dependency_summary(&case_dir)
+        super::super::summary::write_case_dependency_summary(&case_dir, recorder.evidence.clone())
             .await
             .unwrap();
         let summary =

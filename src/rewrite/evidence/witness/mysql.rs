@@ -31,7 +31,7 @@ pub(super) fn observation(
     let Ok(index) = index.parse::<usize>() else {
         return json!({"presence":"unavailable","reason":"SQL token index must be a nonnegative integer"});
     };
-    match crate::replay::mysql_witness_sql_value(raw, surface, database, index) {
+    match crate::protocols::replay::mysql_witness_sql_value(raw, surface, database, index) {
         Ok(Some(value)) => super::selected_observation(value.pointer(&format!("/{tail}"))),
         Ok(None) => json!({"presence":"missing",
             "reason":"no scalar value at this lexical SQL token index; this is not a bound-parameter ordinal. Use physical_fields.fields[].observed_positions; /sql_values is a virtual single-cell selector, not an enumerable JSON collection"}),

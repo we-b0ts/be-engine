@@ -263,8 +263,21 @@ impl Replay {
         Self::start_with_startup(recording, lazy, false).await
     }
     async fn start_with_startup(recording: &Recording, lazy: bool, deliver_startup: bool) -> Self {
+        Self::start_with_policy(recording, lazy, deliver_startup, None).await
+    }
+    async fn start_with_policy(
+        recording: &Recording,
+        lazy: bool,
+        deliver_startup: bool,
+        policy: Option<&str>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let session = directory.path().join("session.json");
+        let policy_path = policy.map(|policy| {
+            let path = directory.path().join("policy.yaml");
+            std::fs::write(&path, policy).unwrap();
+            path
+        });
         let config = ReplayConfig {
             case_dir: recording.root.clone(),
             selected_case_ids: vec![recording.case.clone()],
@@ -276,13 +289,13 @@ impl Replay {
             control_socket_path: Some(crate::replay::allocate_control_socket()),
             ca_cert_path: Some(directory.path().join("ca.pem")),
             ca_key_path: Some(directory.path().join("ca-key.pem")),
-            policy_path: None,
+            policy_path,
             http_ignore_query_params: Vec::new(),
             process_owned_dependencies: Vec::new(),
             allowed_unused_http: None,
         };
         let providers = recording.providers.clone();
-        let task = tokio::spawn(crate::replay::run_replay_with_providers(
+        let task = tokio::spawn(crate::run_replay_with_providers(
             config,
             ReplayLifecycleConfig {
                 dependency_loading: ReplayDependencyLoading {
@@ -315,6 +328,10 @@ impl Replay {
         }
         assert_eq!(
             control(&session, "begin", Some(&recording.case)).await["ok"],
+            true
+        );
+        assert_eq!(
+            control(&session, "request_begin", Some(&recording.case)).await["ok"],
             true
         );
         Self {
@@ -430,6 +447,19 @@ async fn registered_protocol_keeps_unselected_fields_strict_and_rejections_uncon
             report["batch_reconciliation"]["dependency_inventory_verified"],
             false
         );
+        let unused = crate::replay::report::unused_source::published_for_cases(
+            &report,
+            report["unused_source_inventory_id"].as_str().unwrap(),
+            &std::collections::BTreeSet::from([recording.case.clone()]),
+            recording.providers.report_codecs(),
+        )
+        .unwrap();
+        assert_eq!(unused.len(), 2);
+        assert!(
+            unused
+                .values()
+                .all(|occurrence| occurrence.capture_complete)
+        );
         assert_eq!(
             std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
             recording.source_bytes
@@ -469,8 +499,14 @@ async fn registered_protocol_global_evidence_uses_native_projection_and_generic_
                 report["dependency_protocols"][NATIVE]["unused_global_count"],
                 usize::from(!delivered)
             );
-            let page =
-                crate::replay::read_global_dependency_page(&report_path, NATIVE, 0, 10).unwrap();
+            let receipt =
+                crate::protocols::replay::report::validation::validate_completed_receipt(&report);
+            assert_eq!(
+                receipt.is_ok(),
+                delivered,
+                "registered native session receipt: {receipt:?}"
+            );
+            let page = crate::read_global_dependency_page(&report_path, NATIVE, 0, 10).unwrap();
             assert_eq!(page.total, usize::from(!delivered));
             assert_eq!(report["global_evidence"][NATIVE]["regular"]["recorded"], 1);
             if delivered {
@@ -482,12 +518,15 @@ async fn registered_protocol_global_evidence_uses_native_projection_and_generic_
                 );
             }
             let staged = published.path().join("report.json");
-            let rebound = crate::replay::report::stage_global_evidence(&report_path, &staged)
-                .unwrap()
-                .unwrap_or(report);
+            let rebound = crate::protocols::replay::report::artifacts::stage_global_evidence(
+                &report_path,
+                &staged,
+            )
+            .unwrap()
+            .unwrap_or(report);
             std::fs::write(&staged, serde_json::to_vec(&rebound).unwrap()).unwrap();
             assert_eq!(
-                crate::replay::read_global_dependency_page(&staged, NATIVE, 0, 10)
+                crate::read_global_dependency_page(&staged, NATIVE, 0, 10)
                     .unwrap()
                     .items,
                 page.items
@@ -500,4 +539,29 @@ async fn registered_protocol_global_evidence_uses_native_projection_and_generic_
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn registered_protocol_uses_authored_global_json_rules_through_normal_replay() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut recording = record().await;
+        let mut providers = crate::protocols::default_providers().as_ref().clone();
+        providers.register(DependencyProtocol::new(NATIVE), Arc::new(traffic_protocol_fixture::Provider)).unwrap();
+        recording.providers = Arc::new(providers);
+        let policy = "format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [decimal]}\n";
+        for lazy in [false, true] {
+            let replay = Replay::start_with_policy(&recording, lazy, false, Some(policy)).await;
+            let mut target = TcpStream::connect(replay.address).await.unwrap();
+            for operation in ["fetch", "next"] {
+                let request = json!({"id":1042,"operation":operation,"fixed":"original"});
+                target.write_all(&traffic_protocol_fixture::encode(&request).unwrap()).await.unwrap();
+                assert_eq!(traffic_protocol_fixture::read(&mut target).await.unwrap(), request);
+            }
+            drop(target);
+            let report = replay.finish().await;
+            assert_eq!(report["dependency_protocols"][NATIVE]["matched_count"], 2);
+            assert_eq!(report["batch_reconciliation"]["dependency_inventory_verified"], true);
+            assert_eq!(std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(), recording.source_bytes);
+        }
+    }).await.unwrap();
 }

@@ -1,10 +1,12 @@
 //! Typed primary inputs use static protocol dispatch and share execution authority.
 //! Adapters execute recorded inputs; they never open expected response evidence.
+pub(crate) mod assertion;
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 
 mod context;
 mod http;
+pub(crate) use http::close_timing::project as close_timing;
 mod identity;
 mod motan;
 mod output;
@@ -116,3 +118,5 @@ pub(crate) fn contract(protocol: ProtocolKind) -> ProtocolContract {
         native_versions,
     }
 }
+
+pub(crate) mod recording;

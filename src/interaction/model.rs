@@ -377,7 +377,7 @@ pub struct MissingPredecessor {
     pub output_sequence: u64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DispatchTimeout {
     pub input_sequence: u64,
@@ -394,21 +394,7 @@ pub enum DispatchStage {
     Send,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "protocol", rename_all = "snake_case")]
-pub enum DispatchDependency {
-    Redis {
-        connection_id: uuid::Uuid,
-        sequence: u64,
-    },
-    Mysql {
-        connection_id: uuid::Uuid,
-        sequence: u64,
-    },
-    Http {
-        exchange_id: uuid::Uuid,
-    },
-}
+pub type DispatchDependency = traffic_model::recording::ProtocolRef;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

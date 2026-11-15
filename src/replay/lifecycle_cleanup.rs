@@ -13,10 +13,10 @@ pub(crate) async fn load_refs(case_dir: &Path) -> Result<BTreeSet<RecordedRefere
 
 /// A stopped Target is an independently observed client termination. Before
 /// the trusted controller arms this gate, the same termination is a failure.
-pub(in crate::replay) async fn await_target_end(
+pub(crate) async fn await_target_end<P: ReplayProtocolSet>(
     io: &mut (impl tokio::io::AsyncRead + Unpin + ?Sized),
     gate: &AtomicBool,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case: &str,
 ) -> Result<()> {
     await_end(io, gate, state, case, false).await
@@ -24,19 +24,19 @@ pub(in crate::replay) async fn await_target_end(
 
 /// Before an upstream connect succeeds, Source has no complete protocol
 /// request observation. Drain its caller's initial bytes without inventing one.
-pub(in crate::replay) async fn await_connection_end(
+pub(crate) async fn await_connection_end<P: ReplayProtocolSet>(
     io: &mut (impl tokio::io::AsyncRead + Unpin + ?Sized),
     gate: &AtomicBool,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case: &str,
 ) -> Result<()> {
     await_end(io, gate, state, case, true).await
 }
 
-async fn await_end(
+async fn await_end<P: ReplayProtocolSet>(
     io: &mut (impl tokio::io::AsyncRead + Unpin + ?Sized),
     gate: &AtomicBool,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case: &str,
     before_request: bool,
 ) -> Result<()> {
@@ -80,9 +80,9 @@ async fn await_end(
 /// Writing the recorded failure and committing its delivery use separate tasks.
 /// Retain an observed EOF only while those already claimed writes are committing;
 /// an absent request or an unflushed cleanup prefix cannot authorize termination.
-pub(in crate::replay) async fn accept_peer_end(
+pub(crate) async fn accept_peer_end<P: ReplayProtocolSet>(
     gate: &AtomicBool,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
     case: &str,
 ) -> Result<()> {
     let deadline = control::dependency_tail::deadline(state, case).await;

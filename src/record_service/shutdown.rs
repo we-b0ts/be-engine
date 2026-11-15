@@ -58,7 +58,7 @@ pub(super) async fn drain<R: Redis + Clone + 'static>(
             category: "recording_shutdown".to_owned(),
             elapsed_ms: started.elapsed().as_millis(),
             recorder_phase: "shutdown_case_drain".to_owned(),
-            http_stream: None,
+            native: Default::default(),
         });
         let cases = state.inner.active_cases.invalidate_shutdown_cases(failure);
         let mut report = Vec::new();

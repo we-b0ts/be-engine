@@ -3,7 +3,7 @@ use super::*;
 use redis_value_tests::{request, spawn};
 #[tokio::test]
 async fn scalar_formats_share_complete_values_with_script_argv_without_special_lock_semantics() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("apis/delete/case");
     std::fs::create_dir_all(&case).unwrap();
     std::fs::write(

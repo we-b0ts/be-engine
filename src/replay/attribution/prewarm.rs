@@ -8,6 +8,7 @@ pub(crate) fn prewarm_attribution_indexes(
     target: &Path,
     source: &Path,
     changed: &BTreeSet<String>,
+    validate: impl Fn(&serde_json::Value) -> Result<()>,
 ) -> Result<()> {
     let selected = changed
         .iter()
@@ -28,10 +29,7 @@ pub(crate) fn prewarm_attribution_indexes(
         let paths = freeze_scopes(&root, &manifest, &stage, selected, &owners, &digest)?;
         for (scope, path) in paths {
             if GLOBAL_SCOPES.contains(&scope.as_str()) {
-                global::load_global_index(
-                    &path,
-                    crate::protocols::replay::source::validate_index_record,
-                )?;
+                global::load_global_index(&path, |value| validate(value))?;
             } else {
                 crate::dependency_index::load_file(&path)?;
             }

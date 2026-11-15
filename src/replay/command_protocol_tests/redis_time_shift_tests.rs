@@ -50,7 +50,7 @@ async fn read_json_response(client: &mut TcpStream) -> Value {
 
 #[tokio::test]
 async fn redis_time_shift_rfc3339_get_plan_apply_preserves_session_expiry_over_real_tcp() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let root = temp.path();
     let case = root.join("apis/sessions/case-1");
     std::fs::create_dir_all(&case).unwrap();
@@ -93,7 +93,7 @@ async fn redis_time_shift_rfc3339_get_plan_apply_preserves_session_expiry_over_r
     }
     task.abort();
     let policy = root.join("policy.yaml");
-    crate::replay::write_policy_fixture(
+    crate::policy::runtime::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -104,7 +104,7 @@ async fn redis_time_shift_rfc3339_get_plan_apply_preserves_session_expiry_over_r
         "response_json":{"/expires_at":{"time":"preserve_relative","format":"rfc3339"}}}
     }))
     .unwrap();
-    crate::replay::policy::test_fixture::install_redis_time_shift(RedisTimeShiftFeedback {
+    crate::policy::runtime::test_fixture::install_redis_time_shift(RedisTimeShiftFeedback {
         policy_path:policy.clone(),case_source:case.clone(),replay_report_path:report,
         rule_id:"session-expiry".into(),selector,
         source_evidence:"session.py: expires_at is an RFC3339 UTC expiry set to now + 1h and compared with UTC now; no signature".into(),
@@ -150,8 +150,8 @@ fn control(command: &str, case: &str) -> ReplayControlRequest {
 
 fn shared_read_recording(
     read_count: usize,
-) -> crate::replay::policy::test_fixture::ManagedFixtureDirectory {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+) -> crate::policy::runtime::test_fixture::ManagedFixtureDirectory {
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let root = temp.path();
     let consumer = root.join("apis/tasks/consumer");
     std::fs::create_dir_all(&consumer).unwrap();
@@ -187,7 +187,7 @@ fn shared_read_recording(
         record["timestamp"] = json!(capture_time);
         std::fs::write(origin.join("dependencies.jsonl"), record.to_string()).unwrap();
     }
-    crate::replay::write_policy_fixture(root.join("policy.yaml"), "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  replay_scope: recording_run\n  source_evidence: module cache shares one token across requests\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
+    crate::policy::runtime::write_policy_fixture(root.join("policy.yaml"), "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  replay_scope: recording_run\n  source_evidence: module cache shares one token across requests\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
     temp
 }
 
@@ -418,7 +418,7 @@ async fn redis_time_shift_scope_plan_apply_shares_a_complete_multi_read_lane() {
     std::fs::write(&second, "").unwrap();
     let immutable = std::fs::read(&origin).unwrap();
     let policy = root.join("policy.yaml");
-    crate::replay::write_policy_fixture(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
+    crate::policy::runtime::write_policy_fixture(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
     super::super::write_test_recording_network_manifest(root);
     let consumer = root.join("apis/tasks/consumer");
     std::fs::copy(
@@ -490,7 +490,7 @@ async fn redis_time_shift_scope_plan_apply_shares_a_complete_multi_read_lane() {
         .is_err()
     );
     std::fs::write(&origin, &immutable).unwrap();
-    crate::replay::policy::test_fixture::promote_redis_sharing(feedback, selector.shared())
+    crate::policy::runtime::test_fixture::promote_redis_sharing(feedback, selector.shared())
         .unwrap();
     for case in [root.to_path_buf(), consumer] {
         let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
@@ -528,7 +528,7 @@ async fn get_token(cache: &mut Option<Value>, client: &mut TcpStream) -> Value {
 }
 #[tokio::test]
 async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real_tcp() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let root = temp.path();
     let api = root.join("apis/playback");
     for id in ["case-1", "case-2"] {
@@ -587,7 +587,7 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
     }
     task.abort();
     let policy = root.join("policy.yaml");
-    crate::replay::write_policy_fixture(
+    crate::policy::runtime::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -596,7 +596,7 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
         "host":"redis.internal","port":6379,"read":{"command":"HGET","key":"token_v2","hash_field":{"numeric":true},
         "response_json":{"/timestamp":{"time":"preserve_relative","format":"unix_milliseconds"}}}
     })).unwrap();
-    crate::replay::policy::test_fixture::install_redis_time_shift(RedisTimeShiftFeedback {policy_path:policy.clone(),case_source:api.clone(),replay_report_path:report,
+    crate::policy::runtime::test_fixture::install_redis_time_shift(RedisTimeShiftFeedback {policy_path:policy.clone(),case_source:api.clone(),replay_report_path:report,
         rule_id:"token-time".into(),selector,source_evidence:"tauth.py:67 _is_token_valid: timestamp milliseconds controls 3h cache; credentials remain unchanged".into()}).unwrap();
     // Fresh Replay returns the same token with its original relative age.
     let (addr, state, task) = redis_value_tests::spawn(&api, Some(policy)).await;
@@ -648,7 +648,7 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
 
 #[tokio::test]
 async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_consumption() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let root = temp.path();
     let origin = root.join("apis/remote-status/origin");
     let consumer = root.join("apis/tasks/consumer");
@@ -677,7 +677,7 @@ async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_cons
     record["timestamp"] = json!(capture_time);
     std::fs::write(origin.join("dependencies.jsonl"), record.to_string()).unwrap();
     let policy = root.join("policy.yaml");
-    crate::replay::write_policy_fixture(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
+    crate::policy::runtime::write_policy_fixture(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
 
     super::super::write_test_recording_network_manifest(root);
     std::fs::copy(
@@ -743,9 +743,9 @@ async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_cons
     )
     .unwrap();
     assert_eq!(proof["candidate"]["origin_case_id"], "origin");
-    crate::replay::policy::test_fixture::promote_redis_sharing(feedback, selector.shared())
+    crate::policy::runtime::test_fixture::promote_redis_sharing(feedback, selector.shared())
         .unwrap();
-    let compiled = super::super::policy::load_replay_policy(&policy)
+    let compiled = crate::policy::runtime::load_replay_policy(&policy)
         .unwrap()
         .compiled
         .unwrap();

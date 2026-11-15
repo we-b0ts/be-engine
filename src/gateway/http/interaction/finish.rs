@@ -2,10 +2,11 @@
 
 use super::SessionRef;
 use crate::interaction::{lifecycle::LifecycleDecision, model::Protocol};
-use crate::recorder::http::case::{
+use crate::protocols::recording::events::{HeaderMapSnapshot, capture_case_body, redact_headers};
+use crate::protocols::recording::http::case::{
     CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case, interaction_invalidation,
 };
-use crate::recorder::{CaseInvalidation, HeaderMapSnapshot, capture_case_body, redact_headers};
+use crate::recorder::CaseInvalidation;
 use crate::{ActiveCaseGuard, AppState};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};

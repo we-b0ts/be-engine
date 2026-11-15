@@ -623,3 +623,7 @@ pub mod report;
 pub mod session_binding;
 
 pub mod recorded;
+
+pub mod candidate;
+
+mod recording_summary;

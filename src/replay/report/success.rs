@@ -1,15 +1,15 @@
 use std::collections::BTreeMap;
 
-pub(in crate::replay) const SUCCESS_DETAIL_LIMIT: usize = 100;
-pub(in crate::replay) const SUCCESS_DETAIL_SCOPE: &str = "case";
+pub(crate) const SUCCESS_DETAIL_LIMIT: usize = 100;
+pub(crate) const SUCCESS_DETAIL_SCOPE: &str = "case";
 
 #[derive(Debug, Default)]
-pub(in crate::replay) struct SuccessDetailBudget {
+pub(crate) struct SuccessDetailBudget {
     observed_by_case: BTreeMap<Option<String>, usize>,
 }
 
 impl SuccessDetailBudget {
-    pub(in crate::replay) fn next_event_index(&self, case_id: Option<&str>) -> usize {
+    pub(crate) fn next_event_index(&self, case_id: Option<&str>) -> usize {
         self.observed_by_case
             .get(&case_id.map(ToOwned::to_owned))
             .copied()
@@ -17,7 +17,7 @@ impl SuccessDetailBudget {
     }
 }
 
-pub(in crate::replay) fn push_success_detail<T, F>(
+pub(crate) fn push_success_detail<T, F>(
     total: &mut usize,
     details: &mut Vec<T>,
     budget: &mut SuccessDetailBudget,

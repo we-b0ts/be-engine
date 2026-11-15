@@ -1,12 +1,9 @@
 //! Generic RESP push evidence and writer admission.
 use super::super::{ConnectionContext, rpc};
 use crate::active_case::DependencyTargets;
-use crate::recorder::RedisPubSubPushEvent;
+use crate::protocols::recording::events::RedisPubSubPushEvent;
 use crate::redis::RedisPubSubPush;
-use crate::{
-    AppState,
-    recorder::{RecorderEvent, capture_body},
-};
+use crate::{AppState, protocols::recording::events::RecorderEvent, recorder::capture_body};
 use anyhow::Result;
 use bytes::Bytes;
 use chrono::Utc;

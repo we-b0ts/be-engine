@@ -3,8 +3,8 @@ use super::*;
 const MAX_CLIENTS: usize = 32;
 const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(in crate::replay) async fn run_control_socket(
-    state: Arc<Mutex<ReplayState>>,
+pub(crate) async fn run_control_socket<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
     report_path: Option<PathBuf>,
     session_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
@@ -85,9 +85,9 @@ pub(in crate::replay) async fn run_control_socket(
     Ok(())
 }
 
-async fn serve(
+async fn serve<P: ReplayProtocolSet>(
     stream: UnixStream,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
     report_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
     mutation: Arc<Mutex<()>>,
@@ -177,9 +177,9 @@ async fn serve(
 }
 
 #[cfg(test)]
-pub(in crate::replay) async fn handle_control_stream(
+pub(crate) async fn handle_control_stream<P: ReplayProtocolSet>(
     stream: UnixStream,
-    state: Arc<Mutex<ReplayState>>,
+    state: Arc<Mutex<RuntimeState<P>>>,
     report_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
 ) -> Result<bool> {

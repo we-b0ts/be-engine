@@ -14,6 +14,9 @@ const MAX_OPERATIONS: usize = 8;
 const MAX_TEXT_CHARS: usize = 256;
 const MAX_TARGET_MATCHES: usize = 100;
 
+#[cfg(test)]
+mod extension_tests;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ReplayDependencyEvidence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -77,19 +80,13 @@ pub(crate) struct ReplayDependencyTargetMatch {
     pub(crate) sql_fingerprint: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ReplayDependencyDifference {
-    pub(crate) kind: String,
-    pub(crate) expected: ReplayDependencyObservation,
-    pub(crate) actual: ReplayDependencyObservation,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ReplayDependencyObservation {
-    pub(crate) presence: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) signature: Option<Value>,
-}
+pub(crate) use traffic_protocol::report::diagnostics::{
+    Difference as ReplayDependencyDifference, Observation as ReplayDependencyObservation,
+};
+use traffic_protocol::report::{
+    CodecRegistry,
+    diagnostics::{DiagnosticSchema, Direction as DifferenceDirection, STANDARD},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ClusterKey {
@@ -108,123 +105,92 @@ struct ClusterBuilder {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum DifferenceDirection {
-    Provisional,
-    UnusedRecorded,
-    TargetOnly,
-    HeaderMismatch,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct EventArray {
-    protocol: &'static str,
+struct EventArray<'a> {
+    protocol: &'a str,
     field: &'static str,
     reason: &'static str,
     direction: DifferenceDirection,
+    label: Option<&'static str>,
 }
 
-const MYSQL_EVENTS: &[EventArray] = &[
-    EventArray {
-        protocol: "mysql",
-        field: "unmatched_queries",
-        reason: "unmatched_target",
-        direction: DifferenceDirection::TargetOnly,
-    },
-    EventArray {
-        protocol: "mysql",
-        field: "unsupported_commands",
-        reason: "unsupported_target",
-        direction: DifferenceDirection::TargetOnly,
-    },
-    EventArray {
-        protocol: "mysql",
-        field: "unused_case_exchanges",
-        reason: "unused_recorded",
-        direction: DifferenceDirection::UnusedRecorded,
-    },
-];
+const RULE_EVENTS: &[EventArray<'_>] = &[EventArray {
+    protocol: "rule",
+    field: "dependency_pre_matches",
+    reason: "rule_candidate_requires_source_proof",
+    direction: DifferenceDirection::Provisional,
+    label: None,
+}];
 
-const HTTP_EVENTS: &[EventArray] = &[
-    EventArray {
-        protocol: "rule",
-        field: "dependency_pre_matches",
-        reason: "rule_candidate_requires_source_proof",
-        direction: DifferenceDirection::Provisional,
-    },
-    EventArray {
-        protocol: "http",
-        field: "http_request_header_mismatches",
-        reason: "request_header_mismatch",
-        direction: DifferenceDirection::HeaderMismatch,
-    },
-    EventArray {
-        protocol: "http",
-        field: "unmatched_http_requests",
-        reason: "unmatched_target",
-        direction: DifferenceDirection::TargetOnly,
-    },
-    EventArray {
-        protocol: "http",
-        field: "unsupported_http_exchanges",
-        reason: "unsupported_target",
-        direction: DifferenceDirection::TargetOnly,
-    },
-    EventArray {
-        protocol: "http",
-        field: "unused_case_http_exchanges",
-        reason: "unused_recorded",
-        direction: DifferenceDirection::UnusedRecorded,
-    },
-];
-
-const NETWORK_EVENTS: &[EventArray] = &[EventArray {
+const NETWORK_EVENTS: &[EventArray<'_>] = &[EventArray {
     protocol: "network",
     field: "unrecorded_targets",
     reason: "unrecorded_endpoint",
     direction: DifferenceDirection::TargetOnly,
+    label: None,
 }];
 
-const CONNECT_EVENTS: &[EventArray] = &[
+const CONNECT_EVENTS: &[EventArray<'_>] = &[
     EventArray {
         protocol: "network",
         field: "unused_case",
         reason: "unused_recorded_connection_failure",
         direction: DifferenceDirection::UnusedRecorded,
+        label: None,
     },
     EventArray {
         protocol: "network",
         field: "failed_case",
         reason: "connection_failure_delivery_failed",
         direction: DifferenceDirection::TargetOnly,
+        label: None,
     },
 ];
 
-const COMMAND_EVENTS: &[EventArray] = &[
-    EventArray {
-        protocol: "",
-        field: "unmatched",
-        reason: "unmatched_target",
-        direction: DifferenceDirection::TargetOnly,
-    },
-    EventArray {
-        protocol: "",
-        field: "unsupported",
-        reason: "unsupported_target",
-        direction: DifferenceDirection::TargetOnly,
-    },
-    EventArray {
-        protocol: "",
-        field: "unsafe_events",
-        reason: "unsafe_target",
-        direction: DifferenceDirection::TargetOnly,
-    },
-    EventArray {
-        protocol: "",
-        field: "unused_case",
-        reason: "unused_recorded",
-        direction: DifferenceDirection::UnusedRecorded,
-    },
-];
+struct DiagnosticSource<'a> {
+    protocol: &'a str,
+    section: &'a Value,
+    schema: &'a dyn DiagnosticSchema,
+}
+
+impl DiagnosticSource<'_> {
+    fn arrays(&self) -> impl Iterator<Item = EventArray<'_>> {
+        self.schema.fields().iter().map(|field| EventArray {
+            protocol: self.protocol,
+            field: field.name,
+            reason: field.reason,
+            direction: field.direction,
+            label: field.label,
+        })
+    }
+}
+
+fn diagnostic_sources<'a>(
+    report: &'a Value,
+    codecs: &'a CodecRegistry,
+) -> Vec<DiagnosticSource<'a>> {
+    let mut sources = codecs
+        .iter()
+        .map(|(protocol, codec)| DiagnosticSource {
+            protocol: protocol.as_str(),
+            section: codec.diagnostics().section(report, protocol.as_str()),
+            schema: codec.diagnostics(),
+        })
+        .collect::<Vec<_>>();
+    for (protocol, section) in report["dependency_protocols"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        if !sources.iter().any(|source| source.protocol == protocol) {
+            sources.push(DiagnosticSource {
+                protocol,
+                section,
+                schema: &STANDARD,
+            });
+        }
+    }
+    sources
+}
 
 pub(crate) fn dependency_evidence_path(report_path: &Path) -> PathBuf {
     let stem = report_path
@@ -258,22 +224,43 @@ pub(crate) fn read_dependency_evidence(report_path: &Path) -> Result<ReplayDepen
     Ok(evidence)
 }
 
-pub(crate) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvidence {
+pub(crate) fn build_dependency_evidence(
+    report: &Value,
+    codecs: &CodecRegistry,
+) -> ReplayDependencyEvidence {
     let mut builders = BTreeMap::<ClusterKey, ClusterBuilder>::new();
-    collect_arrays(report, NETWORK_EVENTS.iter().copied(), true, &mut builders);
-    collect_arrays(report, MYSQL_EVENTS.iter().copied(), false, &mut builders);
-    collect_arrays(report, HTTP_EVENTS.iter().copied(), false, &mut builders);
+    let sources = diagnostic_sources(report, codecs);
+    collect_arrays(
+        report,
+        NETWORK_EVENTS.iter().copied(),
+        true,
+        &mut builders,
+        &STANDARD,
+    );
+    collect_arrays(
+        report,
+        RULE_EVENTS.iter().copied(),
+        false,
+        &mut builders,
+        &STANDARD,
+    );
     if let Some(report) = report.get("connect_failures") {
-        collect_arrays(report, CONNECT_EVENTS.iter().copied(), false, &mut builders);
+        collect_arrays(
+            report,
+            CONNECT_EVENTS.iter().copied(),
+            false,
+            &mut builders,
+            &STANDARD,
+        );
     }
-    for protocol in ["redis", "memcached", "kafka", "motan"] {
-        let Some(protocol_report) = report.get(protocol) else {
-            continue;
-        };
-        let arrays = COMMAND_EVENTS
-            .iter()
-            .map(|event| EventArray { protocol, ..*event });
-        collect_arrays(protocol_report, arrays, false, &mut builders);
+    for source in &sources {
+        collect_arrays(
+            source.section,
+            source.arrays(),
+            false,
+            &mut builders,
+            source.schema,
+        );
     }
 
     let mut case_event_counts = BTreeMap::<String, BTreeMap<String, usize>>::new();
@@ -285,7 +272,7 @@ pub(crate) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
                 .or_default()
                 .entry(key.reason.clone())
                 .or_default() += builder.count;
-            finish_cluster(report, key, builder)
+            finish_cluster(report, key, builder, &sources)
         })
         .collect::<Vec<_>>();
     clusters.sort_by(|left, right| {
@@ -328,20 +315,11 @@ pub(crate) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
     }
 }
 
-pub(crate) fn report_has_case_dirty_events(report: &Value) -> bool {
+pub(crate) fn report_has_case_dirty_events(report: &Value, codecs: &CodecRegistry) -> bool {
     !report["target_observation_coverage_error"].is_null()
         || report
             .get("dependency_hypothesis_coverage_error")
             .is_some_and(|v| !v.is_null())
-        || report.get("http_ingress").is_some_and(|ingress| {
-            ingress["pending"].as_u64().is_none_or(|n| n > 0)
-                || ingress["omitted"].as_u64().is_none_or(|n| n > 0)
-                || ingress["observations"]
-                    .as_array()
-                    .is_none_or(|observations| {
-                        observations.iter().any(|o| o["status"] != "body_complete")
-                    })
-        })
         || report
             .get("case_execution_failures")
             .and_then(Value::as_array)
@@ -350,19 +328,21 @@ pub(crate) fn report_has_case_dirty_events(report: &Value) -> bool {
             .get("unrecorded_targets")
             .and_then(Value::as_array)
             .is_some_and(|targets| !targets.is_empty())
-        || arrays_have_case_event(report, MYSQL_EVENTS)
-        || arrays_have_case_event(report, HTTP_EVENTS)
+        || arrays_have_case_event(report, RULE_EVENTS.iter().copied())
         || report
             .get("connect_failures")
-            .is_some_and(|report| arrays_have_case_event(report, CONNECT_EVENTS))
-        || ["redis", "memcached", "kafka", "motan"]
-            .into_iter()
-            .filter_map(|protocol| report.get(protocol))
-            .any(|protocol_report| arrays_have_case_event(protocol_report, COMMAND_EVENTS))
+            .is_some_and(|report| arrays_have_case_event(report, CONNECT_EVENTS.iter().copied()))
+        || diagnostic_sources(report, codecs).iter().any(|source| {
+            source.schema.additional_dirty(report)
+                || arrays_have_case_event(source.section, source.arrays())
+        })
 }
 
-fn arrays_have_case_event(report: &Value, arrays: &[EventArray]) -> bool {
-    arrays.iter().any(|array| {
+fn arrays_have_case_event<'a>(
+    report: &Value,
+    mut arrays: impl Iterator<Item = EventArray<'a>>,
+) -> bool {
+    arrays.any(|array| {
         report
             .get(array.field)
             .and_then(Value::as_array)
@@ -374,11 +354,12 @@ fn arrays_have_case_event(report: &Value, arrays: &[EventArray]) -> bool {
     })
 }
 
-fn collect_arrays(
+fn collect_arrays<'a>(
     report: &Value,
-    arrays: impl IntoIterator<Item = EventArray>,
+    arrays: impl IntoIterator<Item = EventArray<'a>>,
     include_unscoped: bool,
     builders: &mut BTreeMap<ClusterKey, ClusterBuilder>,
+    schema: &dyn DiagnosticSchema,
 ) {
     for array in arrays {
         let Some(events) = report.get(array.field).and_then(Value::as_array) else {
@@ -396,19 +377,13 @@ fn collect_arrays(
             let key = ClusterKey {
                 protocol: array.protocol.to_string(),
                 endpoint: endpoint_key(endpoint.as_ref()),
-                reason: if matches!(array.direction, DifferenceDirection::HeaderMismatch) {
-                    format!(
+                reason: match array.label {
+                    Some(field) => format!(
                         "{}: {}",
                         array.reason,
-                        bounded(
-                            event
-                                .get("header")
-                                .and_then(Value::as_str)
-                                .unwrap_or("unknown")
-                        )
-                    )
-                } else {
-                    array.reason.to_string()
+                        bounded(event[field].as_str().unwrap_or("unknown"))
+                    ),
+                    None => array.reason.to_owned(),
                 },
             };
             let builder = builders.entry(key).or_insert_with(|| ClusterBuilder {
@@ -424,14 +399,14 @@ fn collect_arrays(
             }
             *builder
                 .operations
-                .entry(operation_label(event))
+                .entry(bounded(&schema.operation(event)))
                 .or_default() += 1;
             if let Some(case_id) = case_id {
                 builder
                     .representative
                     .get_or_insert_with(|| ReplayDependencyRepresentative {
                         case_id,
-                        difference: event_difference(array.direction, event),
+                        difference: event_difference(array.direction, event, schema),
                         target_matches: Vec::new(),
                         target_matches_may_be_truncated: false,
                     });
@@ -444,10 +419,11 @@ fn finish_cluster(
     report: &Value,
     key: ClusterKey,
     mut builder: ClusterBuilder,
+    sources: &[DiagnosticSource<'_>],
 ) -> ReplayDependencyCluster {
     if let Some(representative) = &mut builder.representative {
         let (matches, may_be_truncated) =
-            target_matches(report, &key.protocol, &representative.case_id);
+            target_matches(report, &key.protocol, &representative.case_id, sources);
         representative.target_matches = matches;
         representative.target_matches_may_be_truncated = may_be_truncated;
     }
@@ -480,16 +456,13 @@ fn target_matches(
     report: &Value,
     protocol: &str,
     case_id: &str,
+    sources: &[DiagnosticSource<'_>],
 ) -> (Vec<ReplayDependencyTargetMatch>, bool) {
-    let events = match protocol {
-        "mysql" => report.get("matched_queries"),
-        "http" => report.get("matched_http_exchanges"),
-        "redis" | "memcached" | "kafka" | "motan" => {
-            report.get(protocol).and_then(|value| value.get("matched"))
-        }
-        _ => None,
-    }
-    .and_then(Value::as_array);
+    let schema = sources
+        .iter()
+        .find(|source| source.protocol == protocol)
+        .map_or(&STANDARD as &dyn DiagnosticSchema, |source| source.schema);
+    let events = schema.matched_rows(report, protocol).as_array();
     let Some(events) = events else {
         return (Vec::new(), false);
     };
@@ -506,7 +479,7 @@ fn target_matches(
             ReplayDependencyTargetMatch {
                 target_event_index,
                 endpoint: dependency_endpoint(event.get("target")),
-                operation: operation_label(event),
+                operation: bounded(&schema.operation(event)),
                 recorded_source: event
                     .get("source")
                     .and_then(Value::as_str)
@@ -525,10 +498,7 @@ fn target_matches(
                     .and_then(Value::as_str)
                     .unwrap_or("matched")
                     .to_string(),
-                sql_fingerprint: event
-                    .get("sql")
-                    .and_then(Value::as_str)
-                    .map(|sql| super::model::fnv1a64(sql.as_bytes())),
+                sql_fingerprint: schema.fingerprint(event),
             }
         })
         .collect::<Vec<_>>();
@@ -561,62 +531,17 @@ fn endpoint_key(endpoint: Option<&ReplayDependencyEndpoint>) -> String {
     )
 }
 
-fn operation_label(event: &Value) -> String {
-    let mut parts = Vec::new();
-    for field in ["command", "method", "operation", "topic"] {
-        if let Some(value) = event.get(field).and_then(Value::as_str) {
-            parts.push(value);
-        }
+fn signature(event: &Value, schema: &dyn DiagnosticSchema) -> Value {
+    match schema.signature(event) {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .take(32)
+                .map(|(field, value)| (field, bounded_value(&value)))
+                .collect(),
+        ),
+        value => bounded_value(&value),
     }
-    if let Some(uri) = event.get("uri").and_then(Value::as_str) {
-        parts.push(uri);
-    }
-    if parts.is_empty() {
-        "unknown".to_string()
-    } else {
-        bounded(&parts.join(" "))
-    }
-}
-
-fn signature(event: &Value) -> Value {
-    let mut signature = serde_json::Map::new();
-    for field in [
-        "command",
-        "method",
-        "uri",
-        "operation",
-        "topic",
-        "database",
-        "sql",
-        "sql_summary",
-        "index",
-        "connection_id",
-        "query_sequence",
-        "row_count",
-        "status",
-        "reason",
-        "diagnostic",
-        "target_event_index",
-        "failure_kind",
-        "client_outcome",
-        "duration_ms",
-    ] {
-        if let Some(value) = event.get(field) {
-            signature.insert(field.to_string(), bounded_value(value));
-        }
-    }
-    // Target query reports carry the original SQL, unlike Source inventory
-    // rows, which already carry a summary. Derive the diagnostic before the
-    // public signature truncates SQL to its projection-only prefix.
-    if !signature.contains_key("sql_summary")
-        && let Some(sql) = event.get("sql").and_then(Value::as_str)
-    {
-        signature.insert(
-            "sql_summary".into(),
-            serde_json::json!(super::SqlSummary::new(sql)),
-        );
-    }
-    Value::Object(signature)
 }
 
 fn bounded_value(value: &Value) -> Value {
@@ -644,7 +569,11 @@ fn bounded(value: &str) -> String {
     }
 }
 
-fn event_difference(direction: DifferenceDirection, event: &Value) -> ReplayDependencyDifference {
+fn event_difference(
+    direction: DifferenceDirection,
+    event: &Value,
+    schema: &dyn DiagnosticSchema,
+) -> ReplayDependencyDifference {
     if matches!(direction, DifferenceDirection::Provisional) {
         let observation = |side: &str| ReplayDependencyObservation {
             presence: "present".into(),
@@ -658,39 +587,27 @@ fn event_difference(direction: DifferenceDirection, event: &Value) -> ReplayDepe
             actual: observation("actual"),
         };
     }
-    if matches!(direction, DifferenceDirection::HeaderMismatch) {
-        let observation = |side: &str| {
-            let value = &event[side];
-            ReplayDependencyObservation {
-                presence: value
-                    .get("presence")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unavailable")
-                    .to_string(),
-                signature: Some(bounded_value(&serde_json::json!({
-                    "header": event.get("header"),
-                    "method": event.get("method"),
-                    "uri": event.get("uri"),
-                    "values": value.get("values"),
-                    "protected": value.get("protected"),
-                    "comparison": event.get("comparison"),
-                    "rule_id": event.get("rule_id"),
-                    "validation_error": event.get("validation_error"),
-                    "request_started_at": event.get(if side == "expected" { "source_request_started_at" } else { "target_request_started_at" }),
-                }))),
-            }
-        };
-        return ReplayDependencyDifference {
-            kind: event
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("header_mismatch")
-                .to_string(),
-            expected: observation("expected"),
-            actual: observation("actual"),
-        };
+    if matches!(direction, DifferenceDirection::Paired) {
+        let mut difference =
+            schema
+                .paired_difference(event)
+                .unwrap_or_else(|| ReplayDependencyDifference {
+                    kind: "native_difference_unavailable".into(),
+                    expected: ReplayDependencyObservation {
+                        presence: "unavailable".into(),
+                        signature: None,
+                    },
+                    actual: ReplayDependencyObservation {
+                        presence: "unavailable".into(),
+                        signature: None,
+                    },
+                });
+        for observation in [&mut difference.expected, &mut difference.actual] {
+            observation.signature = observation.signature.as_ref().map(bounded_value);
+        }
+        return difference;
     }
-    difference(direction, signature(event))
+    difference(direction, signature(event, schema))
 }
 
 fn difference(direction: DifferenceDirection, signature: Value) -> ReplayDependencyDifference {
@@ -713,8 +630,8 @@ fn difference(direction: DifferenceDirection, signature: Value) -> ReplayDepende
             expected: missing,
             actual: present,
         },
-        DifferenceDirection::HeaderMismatch | DifferenceDirection::Provisional => {
-            unreachable!("header differences carry two observations")
+        DifferenceDirection::Paired | DifferenceDirection::Provisional => {
+            unreachable!("paired differences carry two observations")
         }
     }
 }
@@ -724,6 +641,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::protocols::replay::report::evidence::{
+        build_dependency_evidence, report_has_case_dirty_events,
+    };
 
     #[test]
     fn keeps_only_case_scoped_dirty_events_and_ignores_global_arrays() {
@@ -931,7 +851,9 @@ mod tests {
 
 #[cfg(test)]
 mod egress_tests {
-    use super::*;
+    use crate::protocols::replay::report::evidence::{
+        build_dependency_evidence, report_has_case_dirty_events,
+    };
     #[test]
     fn rejection_counts_are_evidence_without_creating_dirty_events() {
         let now = chrono::Utc::now();

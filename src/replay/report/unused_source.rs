@@ -16,17 +16,12 @@ pub(crate) struct SourceOccurrence {
 pub(crate) struct CaptureFact {
     capture: CaptureMetadata,
     complete: bool,
-    notification: bool,
+    event_type: String,
 }
 
 impl CaptureFact {
-    pub(in crate::replay) fn from_record(record: &Value) -> Option<Self> {
-        if !(matches!(
-            record["capture"]["protocol_ref"]["protocol"].as_str(),
-            Some("mysql" | "redis")
-        ) || record["event_type"] == "redis_pub_sub_push")
-            || !crate::dependency_index::proof::is_evidence(record)
-        {
+    pub(crate) fn from_record(record: &Value) -> Option<Self> {
+        if !crate::dependency_index::proof::is_evidence(record) {
             return None;
         }
         Self::parse(
@@ -39,69 +34,49 @@ impl CaptureFact {
         Some(Self {
             capture: serde_json::from_value(record.get("capture")?.clone()).ok()?,
             complete,
-            notification: record["event_type"] == "redis_pub_sub_push",
+            event_type: record["event_type"].as_str()?.into(),
         })
     }
 }
 
-pub(crate) fn case_unused_rows(report: &Value) -> impl Iterator<Item = (&'static str, &Value)> {
-    [
-        ("mysql", &report["unused_case_exchanges"]),
-        ("http", &report["unused_case_http_exchanges"]),
-        ("redis", &report["redis"]["unused_case"]),
-        ("memcached", &report["memcached"]["unused_case"]),
-        ("motan", &report["motan"]["unused_case"]),
-        ("kafka", &report["kafka"]["unused_case"]),
-        ("network", &report["connect_failures"]["unused_case"]),
-    ]
-    .into_iter()
-    .flat_map(|(protocol, rows)| {
-        rows.as_array()
+pub(crate) fn case_unused_rows<'a>(
+    report: &'a Value,
+    codecs: &traffic_protocol::report::CodecRegistry,
+) -> impl Iterator<Item = (&'a str, &'a Value)> {
+    let mut rows = Vec::new();
+    for (protocol, codec) in codecs.iter() {
+        rows.extend(
+            codec
+                .unused_case_rows(report, protocol.as_str())
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|row| (protocol.as_str(), row)),
+        );
+    }
+    for (protocol, section) in report["dependency_protocols"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        if codecs.codec(protocol).is_none() {
+            rows.extend(
+                section["unused_case"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|row| (protocol.as_str(), row)),
+            );
+        }
+    }
+    rows.extend(
+        report["connect_failures"]["unused_case"]
+            .as_array()
             .into_iter()
             .flatten()
-            .map(move |row| (protocol, row))
-    })
-}
-
-#[derive(Clone, Copy)]
-enum Section {
-    Mysql,
-    Redis,
-}
-
-impl Section {
-    fn rows(self, report: &Value) -> &Value {
-        match self {
-            Self::Mysql => &report["unused_case_exchanges"],
-            Self::Redis => &report["redis"]["unused_case"],
-        }
-    }
-
-    fn row_mut(self, report: &mut Value, position: usize) -> &mut Value {
-        match self {
-            Self::Mysql => &mut report["unused_case_exchanges"][position],
-            Self::Redis => &mut report["redis"]["unused_case"][position],
-        }
-    }
-
-    fn exchange_id(self, state: &ReplayState, case: &str, row: &Value) -> Option<Uuid> {
-        if matches!(self, Self::Redis) && row["command"] == "PUBSUB_PUSH" {
-            return explicit_exchange_id(row)?.parse().ok();
-        }
-        let index = usize::try_from(row["index"].as_u64()?).ok()?;
-        match self {
-            Self::Mysql => {
-                let exchange = state.protocols.mysql.exchanges.get(index)?;
-                if !exchange.source.matches_scope(ReplaySource::Case)
-                    || exchange.case_id.as_deref() != Some(case)
-                {
-                    return None;
-                }
-                Some(exchange.record.capture.as_ref()?.exchange_id)
-            }
-            Self::Redis => state.protocols.redis.case_exchange_id(case, index),
-        }
-    }
+            .map(|row| ("network", row)),
+    );
+    rows.into_iter()
 }
 
 fn explicit_exchange_id(row: &Value) -> Option<&str> {
@@ -133,7 +108,7 @@ fn fold(facts: impl Iterator<Item = CaptureFact>) -> BTreeMap<Uuid, Option<Captu
                 previous.complete &= fact.complete;
                 if fact.capture.semantic_required && !previous.capture.semantic_required {
                     previous.capture = fact.capture;
-                    previous.notification = fact.notification;
+                    previous.event_type = fact.event_type;
                 }
             }
         }
@@ -141,8 +116,8 @@ fn fold(facts: impl Iterator<Item = CaptureFact>) -> BTreeMap<Uuid, Option<Captu
     by_id
 }
 
-fn select_case(
-    state: &ReplayState,
+fn select_case<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
     case: &str,
     wanted: &BTreeSet<Uuid>,
 ) -> BTreeMap<Uuid, Option<CaptureFact>> {
@@ -175,43 +150,55 @@ fn select_case(
     }
 }
 
-pub(in crate::replay) fn attach(state: &ReplayState, report: &mut Value) -> usize {
+/// A native adapter supplies report locations and the expected Source evidence kind.
+pub(crate) struct SourceRow {
+    pub pointer: String,
+    pub case: String,
+    pub exchange_id: Uuid,
+    pub identity: SourceIdentity,
+}
+
+pub(crate) enum SourceIdentity {
+    Reference(RecordedReference),
+    EventType(&'static str),
+}
+
+pub(crate) fn attach<P: ReplayProtocolSet>(state: &RuntimeState<P>, report: &mut Value) -> usize {
     let Some(identity) = &state.source_inventory_id else {
         return 0;
     };
-    let mut cases = BTreeMap::<String, Vec<_>>::new();
-    for section in [Section::Mysql, Section::Redis] {
-        for (position, row) in section
-            .rows(report)
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            if let Some(case) = row["case_id"].as_str()
-                && let Some(id) = section.exchange_id(state, case, row)
-            {
-                cases
-                    .entry(case.into())
-                    .or_default()
-                    .push((section, position, id));
-            }
-        }
+    let mut cases = BTreeMap::<String, Vec<SourceRow>>::new();
+    for row in state
+        .native
+        .source_occurrence_rows(report)
+        .into_iter()
+        .chain(P::source_occurrence_rows(state, report))
+    {
+        cases.entry(row.case.clone()).or_default().push(row);
     }
     let mut published = 0;
     for (case, rows) in cases {
-        let wanted = rows.iter().map(|(_, _, id)| *id).collect();
+        let wanted = rows.iter().map(|row| row.exchange_id).collect();
         let facts = select_case(state, &case, &wanted);
-        for (section, position, id) in rows {
-            let Some(Some(fact)) = facts.get(&id) else {
+        for source in rows {
+            let Some(Some(fact)) = facts.get(&source.exchange_id) else {
                 continue;
             };
-            let row = section.row_mut(report, position);
-            if (row["command"] == "PUBSUB_PUSH") != fact.notification {
+            let matches = match source.identity {
+                SourceIdentity::Reference(reference) => reference == fact.capture.protocol_ref,
+                SourceIdentity::EventType(event_type) => event_type == fact.event_type,
+            };
+            if !matches {
+                continue;
+            }
+            let Some(row) = report.pointer_mut(&source.pointer) else {
+                continue;
+            };
+            if row["case_id"].as_str() != Some(&case) {
                 continue;
             }
             row[OCCURRENCE] = serde_json::json!(SourceOccurrence {
-                source_exchange_id: id,
+                source_exchange_id: source.exchange_id,
                 captured_owner: fact.capture.attribution.clone(),
                 capture_complete: fact.complete,
             });
@@ -230,19 +217,24 @@ pub(crate) fn published_for_cases(
     report: &Value,
     inventory: &str,
     cases: &BTreeSet<String>,
+    codecs: &traffic_protocol::report::CodecRegistry,
 ) -> Option<BTreeMap<Uuid, SourceOccurrence>> {
     if !has_published_occurrences(report) || report[INVENTORY] != inventory {
         return None;
     }
     let mut result = BTreeMap::new();
-    for (protocol, row) in case_unused_rows(report) {
+    for (protocol, row) in case_unused_rows(report, codecs) {
         if !row["case_id"]
             .as_str()
             .is_some_and(|case| cases.contains(case))
         {
             continue;
         }
-        if !matches!(protocol, "mysql" | "redis") {
+        let codec = codecs.codec(protocol);
+        if codec
+            .as_ref()
+            .is_some_and(|codec| !codec.supports_source_occurrences())
+        {
             return None;
         }
         let occurrence: SourceOccurrence =
@@ -251,7 +243,10 @@ pub(crate) fn published_for_cases(
             if id.parse::<Uuid>().ok()? != occurrence.source_exchange_id {
                 return None;
             }
-        } else if row["command"] == "PUBSUB_PUSH" {
+        } else if codec
+            .as_ref()
+            .is_some_and(|codec| codec.requires_source_exchange_id(row))
+        {
             return None;
         }
         if let Some(previous) = result.insert(occurrence.source_exchange_id, occurrence.clone())

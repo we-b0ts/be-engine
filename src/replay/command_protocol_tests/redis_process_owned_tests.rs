@@ -4,7 +4,7 @@ use super::*;
 
 #[tokio::test]
 async fn finite_process_get_unblocks_recorded_case_in_a_loaded_replay() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     let lane = Uuid::new_v4();
@@ -67,7 +67,7 @@ async fn finite_process_get_unblocks_recorded_case_in_a_loaded_replay() {
 
 #[tokio::test]
 async fn background_hscan_does_not_block_a_following_mget_in_the_source_lane() {
-    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let temp = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     tokio::fs::write(case_dir.join("dependencies.jsonl"), b"")

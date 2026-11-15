@@ -1,6 +1,6 @@
 //! Bounded selectors for source-proven process-owned MySQL reads.
 use crate::mysql::sql::{Token, table_template, tokens};
-use crate::recorder::MysqlExchangeEvent;
+use crate::protocols::recording::events::MysqlExchangeEvent;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 

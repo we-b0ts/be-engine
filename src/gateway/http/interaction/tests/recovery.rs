@@ -90,7 +90,10 @@ async fn recover(failure: Failure) {
             category: "http_stream_capture".into(),
             elapsed_ms: 1,
             recorder_phase: "recording".into(),
-            http_stream: Some(serde_json::json!({"client": {"engine_stopped": false}})),
+            native: std::collections::BTreeMap::from([(
+                "http_stream".into(),
+                serde_json::json!({"client": {"engine_stopped": false}}),
+            )]),
         }),
     );
     if lease_loss {

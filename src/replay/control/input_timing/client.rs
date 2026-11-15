@@ -121,6 +121,7 @@ impl Observer {
             if let Some((events, unadmitted)) = &mut dispatch {
                 let missing: Option<DispatchDependency> =
                     serde_json::from_value(response["unadmitted_request"].clone())?;
+                let waiting_for_request = missing.is_some();
                 unadmitted.send_if_modified(|previous| {
                     if *previous == missing {
                         return false;
@@ -128,7 +129,7 @@ impl Observer {
                     *previous = missing;
                     true
                 });
-                if query.events_ready == Some(false) && missing.is_none() {
+                if query.events_ready == Some(false) && !waiting_for_request {
                     events.wait_for(|ready| *ready).await?;
                     continue;
                 }

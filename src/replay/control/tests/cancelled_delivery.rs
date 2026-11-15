@@ -1,5 +1,6 @@
 //! A cancelled native claim must publish a final failed report, rather than hang.
 use super::*;
+use crate::protocols::replay::mysql::ReplaySessionIdentity;
 use serde_json::json;
 
 fn command(name: &str, case: Option<&str>) -> ReplayControlRequest {
@@ -18,7 +19,7 @@ fn command(name: &str, case: Option<&str>) -> ReplayControlRequest {
 
 #[tokio::test]
 async fn finalize_after_cancelled_mysql_delivery_seals_dirty_evidence() {
-    let root = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let root = crate::policy::runtime::test_fixture::managed_tempdir().unwrap();
     let source = root.path().join("source");
     std::fs::create_dir_all(&source).unwrap();
     let sql = "UPDATE jobs SET active=1 WHERE id=7";

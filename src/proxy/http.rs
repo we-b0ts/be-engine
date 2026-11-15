@@ -23,11 +23,12 @@ use crate::http::access::classify_method;
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 use crate::http::rewrite::{self, RewriteInput};
 use crate::http::termination::{ClientTermination, ObservedClientIo};
-use crate::recorder::connections::DependencyIo;
-use crate::recorder::http::dependency::PendingHttpCapture;
-use crate::recorder::{
-    HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_body, redact_headers,
+use crate::protocols::recording::events::{
+    HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, redact_headers,
 };
+use crate::protocols::recording::http::dependency::PendingHttpCapture;
+use crate::recorder::capture_body;
+use crate::recorder::connections::DependencyIo;
 use crate::recording_control::RecordingListener;
 
 type ProxyBody = BoxBody<Bytes, std::io::Error>;
@@ -51,7 +52,7 @@ impl ConnectionOwnership {
     }
 }
 
-use crate::recorder::http::stream;
+use crate::protocols::recording::http::stream;
 mod network;
 #[cfg(test)]
 mod stream_tests;
@@ -537,7 +538,7 @@ async fn forward_and_record(
                     if let Some(observed) = err.termination
                         && capture_context.forward_server_termination(observed)
                     {
-                        return crate::recorder::http::dependency::closed_response();
+                        return crate::protocols::recording::http::dependency::closed_response();
                     }
                     record_http_error(HttpErrorContext {
                         targets: targets.clone(),
@@ -570,7 +571,7 @@ struct HttpErrorContext {
     method: Method,
     original_uri: Uri,
     authority: Option<String>,
-    request_headers: crate::recorder::HeaderMapSnapshot,
+    request_headers: crate::protocols::recording::events::HeaderMapSnapshot,
     request_body: Bytes,
     started: Instant,
     request_started_at: chrono::DateTime<Utc>,

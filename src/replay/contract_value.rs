@@ -5,9 +5,9 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 mod sse;
-pub(in crate::replay) use sse::SseDelivery;
+pub(crate) use sse::SseDelivery;
 #[derive(Debug, Clone)]
-pub(in crate::replay) struct Delivery {
+pub(crate) struct Delivery {
     decoded: DecodedValue,
     global: crate::policy::CompiledJsonPolicy,
     clocks: AnchorClocks,
@@ -16,14 +16,14 @@ pub(in crate::replay) struct Delivery {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::replay) struct CopiedTime {
+pub(crate) struct CopiedTime {
     pub pointer: String,
     pub value: serde_json::Value,
     pub proof: crate::value_contract::json::VerifiedTimeCopy,
 }
 
 impl Delivery {
-    pub(in crate::replay) fn prepare_global(
+    pub(crate) fn prepare_global(
         source: &[u8],
         global: &crate::policy::CompiledJsonPolicy,
         clocks: AnchorClocks,
@@ -33,7 +33,7 @@ impl Delivery {
         Self::prepare_decoded_global(decoded, global, clocks)
     }
 
-    pub(in crate::replay) fn prepare_decoded_global(
+    pub(crate) fn prepare_decoded_global(
         decoded: DecodedValue,
         global: &crate::policy::CompiledJsonPolicy,
         clocks: AnchorClocks,
@@ -70,7 +70,7 @@ impl Delivery {
         })
     }
 
-    pub(in crate::replay) fn render(&self, now: chrono::DateTime<chrono::Utc>) -> Result<Vec<u8>> {
+    pub(crate) fn render(&self, now: chrono::DateTime<chrono::Utc>) -> Result<Vec<u8>> {
         let mut clocks = self.clocks;
         clocks.delivery.target = Some(now);
         if self.copies.is_empty() {
@@ -85,7 +85,7 @@ impl Delivery {
         self.decoded.encode(&logical, &allowed)
     }
 
-    pub(in crate::replay) fn with_copies(mut self, copies: Vec<CopiedTime>) -> Self {
+    pub(crate) fn with_copies(mut self, copies: Vec<CopiedTime>) -> Self {
         self.copies = copies;
         self
     }
@@ -143,11 +143,11 @@ impl Delivery {
         Ok((logical, allowed))
     }
 
-    pub(in crate::replay) fn validation(&self) -> &Comparison {
+    pub(crate) fn validation(&self) -> &Comparison {
         &self.source_validation
     }
 
-    pub(in crate::replay) fn has_identities(&self) -> bool {
+    pub(crate) fn has_identities(&self) -> bool {
         self.global.fields.values().any(|field| field.is_identity()
             || matches!(field, crate::policy::GlobalField::Template { .. })
             || matches!(field,crate::policy::GlobalField::Url {formats} if formats == &[crate::policy::GlobalUrlFormat::Url]))
@@ -155,10 +155,10 @@ impl Delivery {
 
     /// Render both derived time and identity fields from one immutable decode.
     /// The protocol owner commits the returned proposal before exposing bytes.
-    pub(in crate::replay) fn render_with_identities(
+    pub(crate) fn render_with_identities(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-        owner: &crate::replay::policy::request_contract::RequestContracts,
+        owner: &dyn crate::replay::policy::IdentityDeliveryHost,
         case: &str,
     ) -> Result<(Vec<u8>, crate::value_contract::identities::IdentityDecision)> {
         let mut clocks = self.clocks;

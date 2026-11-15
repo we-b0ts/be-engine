@@ -3,7 +3,7 @@ use super::*;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::replay) struct Registration {
+pub(crate) struct Registration {
     pub request_sent_at: chrono::DateTime<chrono::Utc>,
     pub request: Value,
 }
@@ -49,9 +49,9 @@ pub(crate) async fn register(
     Ok(())
 }
 
-pub(super) async fn accept(
+pub(super) async fn accept<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Value {
     let outcome = async {
         let case = request
@@ -73,7 +73,7 @@ pub(super) async fn accept(
                 .replay_policy
                 .as_ref()
                 .context("derived input requires a policy")?
-                .request_contracts
+                .contracts()
                 .clone()
         };
         let sent_at = registration.request_sent_at;

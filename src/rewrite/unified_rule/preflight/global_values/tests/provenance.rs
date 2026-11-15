@@ -219,7 +219,7 @@ fn protected_global_read_copy_requires_real_delivery_matching_request_and_both_c
             &mut CompareContext {
                 policy: &policy,
                 clocks,
-                metadata: &crate::replay::MysqlInferenceMetadata::default(),
+                metadata: &crate::protocols::replay::MysqlInferenceMetadata::default(),
                 copies: Some((
                     &store,
                     if mode == "wrong_case" {

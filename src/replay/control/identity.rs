@@ -46,9 +46,9 @@ pub(crate) async fn check_response_identities(
     Ok(())
 }
 
-pub(super) async fn accept(
+pub(super) async fn accept<P: ReplayProtocolSet>(
     request: &ReplayControlRequest,
-    state: &Arc<Mutex<ReplayState>>,
+    state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Value {
     let outcome = async {
         ensure!(
@@ -64,106 +64,12 @@ pub(super) async fn accept(
             state.active_case_id.as_deref() == Some(case),
             "response identities require the active case"
         );
-        let owner = &state
+        let owner = state
             .replay_policy
             .as_ref()
             .context("response identities require a policy")?
-            .request_contracts;
-        let compiled = owner.compiled_rules();
-        let formats = compiled
-            .into_iter()
-            .flat_map(|policy| &policy.rules)
-            .flat_map(|rule| rule.rule.contract.values())
-            .filter_map(|contract| match contract.unconditional() {
-                crate::policy::FieldContract::Identity { prefix, format } => {
-                    Some((prefix.as_str(), *format))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let global_fields = compiled
-            .into_iter()
-            .flat_map(|policy| {
-                policy
-                    .global_json
-                    .iter()
-                    .flat_map(|json| json.fields.values())
-                    .chain(
-                        policy
-                            .mysql
-                            .iter()
-                            .flat_map(|mysql| mysql.tables.values())
-                            .flat_map(|table| table.fields.values()),
-                    )
-                    .chain(policy.redis.iter().flat_map(|redis| redis.keys.values()))
-                    .chain(policy.http.iter().flat_map(|http| http.headers.values()))
-            })
-            .filter(|field| field.is_identity())
-            .collect::<Vec<_>>();
-        let template_tokens = compiled
-            .into_iter()
-            .flat_map(|policy| &policy.native)
-            .flat_map(|rule| match &rule.rule.effect {
-                crate::policy::NativeEffect::ResponseGenerated(effect) => effect
-                    .fields
-                    .values()
-                    .filter_map(|field| match &field.contract {
-                        crate::policy::native::GeneratedResponse::Template { fields, .. } => Some(
-                            fields
-                                .values()
-                                .map(|field| &field.contract)
-                                .collect::<Vec<_>>(),
-                        ),
-                        _ => None,
-                    })
-                    .flatten()
-                    .collect::<Vec<_>>(),
-                _ => vec![],
-            })
-            .collect::<Vec<_>>();
-        for pair in &request.identity_pairs {
-            let source: Value = serde_json::from_str(&pair.source)?;
-            let target: Value = serde_json::from_str(&pair.target)?;
-            ensure!(
-                (!global_fields.is_empty()
-                    && source == target
-                    && crate::value_contract::json::identity_key(&source, "").is_ok())
-                    || formats.iter().any(|(prefix, format)| {
-                        [&source, &target].into_iter().all(|value| {
-                            crate::value_contract::json::identity_token(value, prefix, *format, "")
-                                .is_ok()
-                        })
-                    })
-                    || global_fields.iter().any(|field| {
-                        match field.select_contract(&source) {
-                            Ok(crate::policy::FieldContract::Identity { prefix, format }) => {
-                                crate::value_contract::json::identity_token(
-                                    &target, &prefix, format, "",
-                                )
-                                .is_ok()
-                            }
-                            _ => false,
-                        }
-                    })
-                    || template_tokens.iter().any(|token| {
-                        source
-                            .as_str()
-                            .zip(target.as_str())
-                            .is_some_and(|(source, target)| {
-                                (token.length.is_some() || source.len() == target.len())
-                                    && crate::value_contract::generated::template::valid_token(
-                                        source, token,
-                                    )
-                                    && crate::value_contract::generated::template::valid_token(
-                                        target, token,
-                                    )
-                            })
-                    }),
-                "response identity representation has no declared format"
-            );
-        }
-        let decision = owner.preview_identity_pairs(case, &request.identity_pairs)?;
-        owner.commit_identity(decision)
+            .contracts();
+        owner.accept_response_identities(case, &request.identity_pairs)
     }
     .await;
     match outcome {

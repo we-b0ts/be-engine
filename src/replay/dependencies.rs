@@ -108,7 +108,7 @@ pub(super) fn parse_dependency_records<R: DeserializeOwned>(
     Ok(records)
 }
 
-pub(super) use traffic_protocol::connection::endpoint_from_addr as target_from_addr;
+pub(crate) use traffic_protocol::connection::endpoint_from_addr as target_from_addr;
 
 pub(crate) struct SourceBatch<'a, R> {
     pub path: &'a Path,

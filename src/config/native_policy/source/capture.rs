@@ -92,14 +92,16 @@ pub(super) fn validate(
                     let Some(headers) = matching_headers(&projected, event)? else {
                         return Ok(());
                     };
-                    let envelope = crate::replay::http_source_witness(
+                    let envelope = crate::protocols::replay::http_source_witness(
                         event,
                         Surface::DependencyResponse,
                         path,
                     )?;
-                    let body =
-                        crate::replay::http_witness_value(&envelope, Surface::DependencyResponse)?
-                            .context("capture response has no complete body slot")?;
+                    let body = crate::protocols::replay::http_witness_value(
+                        &envelope,
+                        Surface::DependencyResponse,
+                    )?
+                    .context("capture response has no complete body slot")?;
                     let decoded = original_body(event, &headers, &body)?;
                     if let Some(documents) = &documents {
                         let uri: hyper::Uri = event["uri"]

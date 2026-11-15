@@ -113,7 +113,7 @@ pub(super) fn freeze(
     Ok(frozen)
 }
 
-pub(in crate::replay) fn run_value_scope(owner: &DependencyOwner) -> Option<String> {
+pub(crate) fn run_value_scope(owner: &DependencyOwner) -> Option<String> {
     match owner {
         DependencyOwner::Process {
             process_epoch,

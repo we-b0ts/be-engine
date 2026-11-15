@@ -1,5 +1,7 @@
 use super::*;
 use crate::policy::FieldContract;
+#[cfg(test)]
+use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::value_contract::json::{self, AnchorClocks, Field};
 use crate::value_contract::time::ClockPair;
 use serde_json::json;

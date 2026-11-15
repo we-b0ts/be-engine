@@ -91,7 +91,8 @@ fn reject_rescan(_: &Value) -> Result<()> {
 
 #[tokio::test]
 async fn recording_process_index_survives_copy_and_missing_pages_fall_back_locally() {
-    use crate::recorder::{DependencyConnectFailureEvent, Recorder, RecorderEvent};
+    use crate::protocols::recording::events::{DependencyConnectFailureEvent, RecorderEvent};
+    use crate::recorder::Recorder;
 
     let temp = tempfile::tempdir().unwrap();
     let mut config = crate::AppConfig::default();

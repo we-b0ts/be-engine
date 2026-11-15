@@ -9,7 +9,7 @@ fn mysql_tail_event(
     before: u16,
 ) -> RecorderEvent {
     let now = chrono::Utc::now();
-    RecorderEvent::MysqlExchange(crate::recorder::MysqlExchangeEvent {
+    RecorderEvent::MysqlExchange(crate::protocols::recording::events::MysqlExchangeEvent {
         id: Uuid::new_v4(),
         connection_id,
         query_sequence,
@@ -28,7 +28,7 @@ fn mysql_tail_event(
         statement_id: None,
         params: None,
         server_status_before: Some(before),
-        response: crate::recorder::MysqlExchangeResponse {
+        response: crate::protocols::recording::events::MysqlExchangeResponse {
             wire_prefix: vec![],
             server_status: Some(0),
             status: "ok".into(),

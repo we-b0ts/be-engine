@@ -16,7 +16,7 @@ pub(crate) struct Inventory {
     pub core: ExchangeInventory,
     global_usage: BTreeMap<ProtocolId, traffic_replay::report::Usage>,
     pub providers: Arc<crate::protocols::DependencyProviders>,
-    pub contracts: policy::request_contract::RequestContracts,
+    pub contracts: Arc<dyn policy::ValueRuleHost>,
     pub order: admission::RequestOrder,
     failures: Vec<report::RequestFailure>,
     failure_counts: BTreeMap<(String, Option<String>), usize>,
@@ -25,19 +25,13 @@ pub(crate) struct Inventory {
     captures: BTreeMap<(String, Uuid), usize>,
 }
 
-impl Default for Inventory {
-    fn default() -> Self {
-        Self::new(crate::protocols::default_providers())
-    }
-}
-
 impl Inventory {
     pub fn new(providers: Arc<crate::protocols::DependencyProviders>) -> Self {
         Self {
             core: Default::default(),
             global_usage: Default::default(),
             providers,
-            contracts: Default::default(),
+            contracts: Arc::new(policy::values::ValueState::default()),
             order: Default::default(),
             failures: Default::default(),
             matched: Default::default(),
@@ -123,6 +117,8 @@ impl Inventory {
         };
         let protocol = entry.kind;
         register_replay_target(targets, &target, ReplayProtocol::registered(protocol))?;
+        let prepared =
+            self.prepared_messages(&exchange, case, capture.as_ref(), self.contracts.as_ref())?;
         let rules = self.providers.bindings().for_protocol(protocol.as_str());
         let index = self.core.register(
             protocol.id(),
@@ -135,6 +131,8 @@ impl Inventory {
             },
             rules,
         )?;
+        self.core.exchanges[index].request = prepared.0;
+        self.core.exchanges[index].response = prepared.1;
         if let Some(case) = case
             && let Some(capture) = &capture
         {
@@ -155,6 +153,69 @@ impl Inventory {
         Ok(())
     }
 
+    fn prepared_messages(
+        &self,
+        exchange: &traffic_protocol::connection::RecordedExchange,
+        case: Option<&str>,
+        capture: Option<&CaptureMetadata>,
+        contracts: &dyn policy::ValueRuleHost,
+    ) -> Result<(
+        traffic_replay::rules::PreparedMessage,
+        traffic_replay::rules::PreparedMessage,
+    )> {
+        let start = capture.map(|capture| capture.started_at);
+        let delivered = start.and_then(|start| {
+            chrono::Duration::from_std(exchange.response_delay)
+                .ok()
+                .and_then(|delay| start.checked_add_signed(delay))
+        });
+        let clocks = contracts.contract_clocks(case, start, None, delivered, None);
+        let rules = self
+            .providers
+            .bindings()
+            .for_protocol(exchange.reference.protocol());
+        let request_policy = contracts.document_policy(clocks);
+        let mut response_clocks = clocks;
+        response_clocks.observation = Some(traffic_contract::time::ClockPair {
+            source: delivered,
+            target: None,
+        });
+        let response_policy = contracts.document_policy(response_clocks);
+        Ok((
+            traffic_replay::rules::PreparedMessage::compile_with_policy(
+                exchange.request.as_ref(),
+                &rules.request,
+                request_policy,
+            )?,
+            traffic_replay::rules::PreparedMessage::compile_with_policy(
+                exchange.response.as_ref(),
+                &rules.response,
+                response_policy,
+            )?,
+        ))
+    }
+
+    pub fn install_contracts(&mut self, contracts: Arc<dyn policy::ValueRuleHost>) -> Result<()> {
+        let prepared = self
+            .core
+            .exchanges
+            .iter()
+            .map(|exchange| {
+                self.prepared_messages(
+                    &exchange.native,
+                    exchange.source.case_id.as_deref(),
+                    exchange.source.capture.as_ref(),
+                    contracts.as_ref(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (exchange, (request, response)) in self.core.exchanges.iter_mut().zip(prepared) {
+            exchange.request = request;
+            exchange.response = response;
+        }
+        self.contracts = contracts;
+        Ok(())
+    }
     pub fn recorded_sequence(&self, index: usize) -> Option<u64> {
         self.core
             .exchanges

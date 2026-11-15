@@ -38,10 +38,7 @@ async fn files(root: &Path, protocol: Protocol) -> Vec<RecordedReference> {
     tokio::fs::write(root.join("dependencies.jsonl"), format!("{exchange}\n"))
         .await
         .unwrap();
-    vec![RecordedReference::Redis {
-        connection_id: connection,
-        sequence: 16,
-    }]
+    vec![RecordedReference::connection("redis", connection, 16)]
 }
 
 #[tokio::test]
@@ -52,10 +49,14 @@ async fn clean_native_interactions_retain_original_case_refs_without_a_sidecar()
         let original = tokio::fs::read(temp.path().join("dependencies.jsonl"))
             .await
             .unwrap();
-        let tail = from_complete_source(temp.path(), Duration::from_millis(100))
-            .await
-            .unwrap()
-            .unwrap();
+        let tail = from_complete_source(
+            temp.path(),
+            Duration::from_millis(100),
+            crate::protocols::default_providers().evidence(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(tail.request_timeout_ms, 600);
         assert_eq!(tail.interaction_post_input_ms, Some(500));
         assert_eq!(tail.references, references);
@@ -89,10 +90,14 @@ async fn redis_protocol_observations_do_not_become_interaction_business_tails() 
     tokio::fs::write(&path, format!("{control}\n{original}"))
         .await
         .unwrap();
-    let tail = from_complete_source(temp.path(), Duration::from_secs(1))
-        .await
-        .unwrap()
-        .unwrap();
+    let tail = from_complete_source(
+        temp.path(),
+        Duration::from_secs(1),
+        crate::protocols::default_providers().evidence(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(tail.references, references);
 }
 
@@ -108,10 +113,14 @@ async fn source_post_input_allowance_uses_offsets_without_reading_message_bodies
         {"offset_ms":400,"action":{"kind":"close"}}
     ]);
     tokio::fs::write(&path, request.to_string()).await.unwrap();
-    let tail = from_complete_source(temp.path(), Duration::from_millis(100))
-        .await
-        .unwrap()
-        .unwrap();
+    let tail = from_complete_source(
+        temp.path(),
+        Duration::from_millis(100),
+        crate::protocols::default_providers().evidence(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(tail.interaction_post_input_ms, Some(100));
     assert_eq!(tail.request_timeout_ms, 600);
     for offsets in [[400, 10], [10, 501]] {
@@ -119,9 +128,13 @@ async fn source_post_input_allowance_uses_offsets_without_reading_message_bodies
         request["interaction"]["actions"][1]["offset_ms"] = offsets[1].into();
         tokio::fs::write(&path, request.to_string()).await.unwrap();
         assert!(
-            from_complete_source(temp.path(), Duration::from_millis(100))
-                .await
-                .is_err()
+            from_complete_source(
+                temp.path(),
+                Duration::from_millis(100),
+                crate::protocols::default_providers().evidence()
+            )
+            .await
+            .is_err()
         );
     }
 }
@@ -144,10 +157,14 @@ async fn a_client_transport_end_retains_its_finite_cleanup_inventory_and_allowan
             serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
         response["interaction"]["end"]["reason"] = "client_transport_end".into();
         tokio::fs::write(&path, response.to_string()).await.unwrap();
-        let metadata = from_complete_source(temp.path(), Duration::from_millis(100))
-            .await
-            .unwrap()
-            .unwrap();
+        let metadata = from_complete_source(
+            temp.path(),
+            Duration::from_millis(100),
+            crate::protocols::default_providers().evidence(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(metadata.references, references);
         assert_eq!(metadata.interaction_post_input_ms, Some(100));
         assert_eq!(metadata.request_timeout_ms, 600);
@@ -157,10 +174,14 @@ async fn a_client_transport_end_retains_its_finite_cleanup_inventory_and_allowan
             .await
             .unwrap();
         assert!(
-            from_complete_source(temp.path(), Duration::from_millis(100))
-                .await
-                .unwrap()
-                .is_none()
+            from_complete_source(
+                temp.path(),
+                Duration::from_millis(100),
+                crate::protocols::default_providers().evidence()
+            )
+            .await
+            .unwrap()
+            .is_none()
         );
     }
 }
@@ -179,18 +200,26 @@ async fn incomplete_or_non_session_sources_do_not_prove_an_interaction_tail() {
         response["interaction"]["end"][field] = value;
         tokio::fs::write(&path, response.to_string()).await.unwrap();
         assert!(
-            from_complete_source(temp.path(), Duration::from_secs(1))
-                .await
-                .unwrap()
-                .is_none()
+            from_complete_source(
+                temp.path(),
+                Duration::from_secs(1),
+                crate::protocols::default_providers().evidence()
+            )
+            .await
+            .unwrap()
+            .is_none()
         );
     }
     files(temp.path(), Protocol::Sse).await;
     assert!(
-        from_complete_source(temp.path(), Duration::from_secs(1))
-            .await
-            .unwrap()
-            .is_none()
+        from_complete_source(
+            temp.path(),
+            Duration::from_secs(1),
+            crate::protocols::default_providers().evidence()
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
     tokio::fs::write(
         temp.path().join("request.json"),
@@ -199,10 +228,14 @@ async fn incomplete_or_non_session_sources_do_not_prove_an_interaction_tail() {
     .await
     .unwrap();
     assert!(
-        from_complete_source(temp.path(), Duration::from_secs(1))
-            .await
-            .unwrap()
-            .is_none()
+        from_complete_source(
+            temp.path(),
+            Duration::from_secs(1),
+            crate::protocols::default_providers().evidence()
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
 }
 
@@ -219,16 +252,24 @@ async fn malformed_or_incomplete_reference_inventories_fail_before_admission() {
     ] {
         tokio::fs::write(&path, contents).await.unwrap();
         assert!(
-            from_complete_source(temp.path(), Duration::from_secs(1))
-                .await
-                .is_err()
+            from_complete_source(
+                temp.path(),
+                Duration::from_secs(1),
+                crate::protocols::default_providers().evidence()
+            )
+            .await
+            .is_err()
         );
     }
     tokio::fs::remove_file(&path).await.unwrap();
     assert!(
-        from_complete_source(temp.path(), Duration::from_secs(1))
-            .await
-            .is_err()
+        from_complete_source(
+            temp.path(),
+            Duration::from_secs(1),
+            crate::protocols::default_providers().evidence()
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -243,10 +284,14 @@ async fn unsupported_legacy_footprints_do_not_claim_a_partial_tail_or_change_adm
     ] {
         tokio::fs::write(&path, event.to_string()).await.unwrap();
         assert!(
-            from_complete_source(temp.path(), Duration::from_secs(1))
-                .await
-                .unwrap()
-                .is_none()
+            from_complete_source(
+                temp.path(),
+                Duration::from_secs(1),
+                crate::protocols::default_providers().evidence()
+            )
+            .await
+            .unwrap()
+            .is_none()
         );
     }
 }
@@ -262,9 +307,13 @@ async fn original_protocol_identity_and_elapsed_time_are_validated() {
         response["interaction"]["protocol"] = value;
         tokio::fs::write(&path, response.to_string()).await.unwrap();
         assert!(
-            from_complete_source(temp.path(), Duration::from_secs(1))
-                .await
-                .is_err()
+            from_complete_source(
+                temp.path(),
+                Duration::from_secs(1),
+                crate::protocols::default_providers().evidence()
+            )
+            .await
+            .is_err()
         );
     }
     for value in [json!(-1), json!("500"), json!(1.5)] {
@@ -272,9 +321,13 @@ async fn original_protocol_identity_and_elapsed_time_are_validated() {
         response["duration_ms"] = value;
         tokio::fs::write(&path, response.to_string()).await.unwrap();
         assert!(
-            from_complete_source(temp.path(), Duration::from_secs(1))
-                .await
-                .is_err()
+            from_complete_source(
+                temp.path(),
+                Duration::from_secs(1),
+                crate::protocols::default_providers().evidence()
+            )
+            .await
+            .is_err()
         );
     }
 }

@@ -12,9 +12,12 @@ use super::result::{
     response_pointer_pattern, response_pointer_scope,
 };
 use super::{E2eRunContext, config, model, store};
-use crate::replay::{
-    ResponseAssertionCaseReport, ResponseBodyAssertionReport, ResponseBodyCodec,
-    ResponseDifferenceKind, ResponseGatewayProtocol,
+use crate::policy::runtime::ResponseBodyCodec;
+use crate::{
+    primary_protocol::assertion::ResponseAssertionCaseReport,
+    primary_protocol::assertion::ResponseBodyAssertionReport,
+    primary_protocol::assertion::ResponseDifferenceKind,
+    primary_protocol::assertion::ResponseGatewayProtocol,
 };
 
 const MAX_DISTINCT_SOURCE_VALUES: usize = 8;
@@ -421,13 +424,13 @@ pub fn query_e2e_dirty_counts(context: E2eRunContext, api: &str) -> Result<E2eDi
 
 pub(crate) fn query_http_cross_case_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
-    Ok(crate::replay::http_cross_case::discover(&state.case_source, &state.replay_report, true)
+    Ok(crate::protocols::replay::http_cross_case::discover(&state.case_source, &state.replay_report, true)
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "unavailable": "cross-case source evidence could not be inspected; existing dirty evidence remains authoritative"})))
 }
 
 pub(crate) fn query_redis_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
-    Ok(crate::replay::redis_value::evidence::discover(&state.replay_report)
+    Ok(crate::protocols::replay::redis_value::evidence::discover(&state.replay_report)
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "Redis unordered evidence is unavailable; rerun Replay"})))
 }
 
@@ -481,9 +484,7 @@ pub(crate) fn query_dependency_request_candidates(
 ) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
     let report: Value = serde_json::from_slice(&std::fs::read(&state.replay_report)?)?;
-    Ok(crate::replay::discover_dependency_request_candidates(
-        &report,
-    ))
+    Ok(crate::policy::runtime::discover_dependency_request_candidates(&report))
 }
 
 pub(crate) fn query_dynamic_capture_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
@@ -501,7 +502,7 @@ pub(crate) fn query_rule_policy_freshness(
     context: E2eRunContext,
     api: &str,
     current_fingerprint: &str,
-) -> crate::replay::ReplayEvidencePolicyFreshness {
+) -> crate::replay::policy::ReplayEvidencePolicyFreshness {
     let identity = (|| -> Result<Option<String>> {
         let evidence = super::resolve_e2e_response_rule_evidence(context, api)?;
         let report: Value = serde_json::from_slice(&std::fs::read(evidence.replay)?)?;
@@ -511,11 +512,11 @@ pub(crate) fn query_rule_policy_freshness(
             .map(str::to_owned))
     })();
     match identity {
-        Ok(identity) => crate::replay::ReplayEvidencePolicyFreshness::new(
+        Ok(identity) => crate::replay::policy::ReplayEvidencePolicyFreshness::new(
             identity.as_deref(),
             current_fingerprint,
         ),
-        Err(error) => crate::replay::ReplayEvidencePolicyFreshness::unavailable(
+        Err(error) => crate::replay::policy::ReplayEvidencePolicyFreshness::unavailable(
             current_fingerprint,
             format!("{error:#}"),
         ),
@@ -524,7 +525,7 @@ pub(crate) fn query_rule_policy_freshness(
 
 pub(crate) fn query_http_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
-    Ok(crate::replay::http_unordered::evidence::discover(&state.replay_report)
+    Ok(crate::protocols::replay::http_unordered::evidence::discover(&state.replay_report)
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "HTTP unordered evidence is unavailable; rerun Replay"})))
 }
 
@@ -563,7 +564,7 @@ pub(super) fn finalized_focused_evidence(
 mod tests {
     use super::*;
     use crate::E2eValuePresence;
-    use crate::replay::ResponseDifference;
+    use crate::primary_protocol::assertion::ResponseDifference;
     use std::path::PathBuf;
 
     #[test]

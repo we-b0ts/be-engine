@@ -226,7 +226,8 @@ fn redis_payload(surface: Surface, event: &Value, raw: &[u8]) -> Result<Vec<u8>>
         let index = value_index(event, args.len())?;
         Ok(args.get(index).context("Redis value slot missing")?.clone())
     } else {
-        crate::replay::redis_bulk_payload(raw)?.context("Redis response has no encoded value")
+        crate::policy::runtime::redis_bulk_payload(raw)?
+            .context("Redis response has no encoded value")
     }
 }
 

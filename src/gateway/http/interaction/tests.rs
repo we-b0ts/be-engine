@@ -176,18 +176,20 @@ async fn replay_case(case: &Path, target: SocketAddr) -> OutputObservation {
     )
     .unwrap();
     let policy = case.join("test-policy.yaml");
-    crate::replay::write_policy_fixture(
+    crate::policy::runtime::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
-    let report = crate::replay::assert_recorded_response(crate::replay::ResponseAssertionOptions {
-        case_id: "recording-self-replay".into(),
-        request: case.join("request.json"),
-        expected_response: case.join("expected-response.json"),
-        actual_response: actual,
-        policy,
-    })
+    let report = crate::primary_protocol::assertion::assert_recorded_response(
+        crate::primary_protocol::assertion::ResponseAssertionOptions {
+            case_id: "recording-self-replay".into(),
+            request: case.join("request.json"),
+            expected_response: case.join("expected-response.json"),
+            actual_response: actual,
+            policy,
+        },
+    )
     .unwrap();
     assert!(
         report.passed,

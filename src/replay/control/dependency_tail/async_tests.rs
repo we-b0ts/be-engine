@@ -226,17 +226,13 @@ async fn async_observation_retains_case_until_real_target_consumes_its_finite_ta
 async fn old_complete_source_can_prove_async_tail_but_an_unproven_end_cannot_release_it() {
     let fixture = super::tests::fixture(None, 1).await;
     source_request(&fixture.root).await;
-    let rule = serde_json::from_value(
+    let rule: crate::policy::AsyncApiRules = serde_json::from_value(
         json!({"when":{"/background":true},"end":[{"redis":{"operation":"GET","key":"key"}}]}),
     )
     .unwrap();
     let state = fixture.runtime.state.clone();
-    state
-        .lock()
-        .await
-        .dependency_tails
-        .async_rules
-        .insert("POST /api/v1/responses".into(), rule);
+    state.lock().await.dependency_tails.async_rules =
+        BTreeMap::from([("POST /api/v1/responses".into(), rule)]).into();
     state.lock().await.dependency_tails.request_timeout = Duration::from_millis(1000);
     assert_eq!(
         begin_case(&command("begin"), state.clone()).await["ok"],
@@ -256,15 +252,14 @@ async fn old_complete_source_can_prove_async_tail_but_an_unproven_end_cannot_rel
 
     let fixture = super::tests::fixture(None, 1).await;
     source_request(&fixture.root).await;
-    let rule=serde_json::from_value(json!({"when":{"/background":true},"end":[{"redis":{"operation":"DEL","key":"missing","occurrence":2}}]})).unwrap();
+    let rule: crate::policy::AsyncApiRules=serde_json::from_value(json!({"when":{"/background":true},"end":[{"redis":{"operation":"DEL","key":"missing","occurrence":2}}]})).unwrap();
     fixture
         .runtime
         .state
         .lock()
         .await
         .dependency_tails
-        .async_rules
-        .insert("POST /api/v1/responses".into(), rule);
+        .async_rules = BTreeMap::from([("POST /api/v1/responses".into(), rule)]).into();
     let result = begin_case(&command("begin"), fixture.runtime.state.clone()).await;
     assert_eq!(result["ok"], false);
     assert!(

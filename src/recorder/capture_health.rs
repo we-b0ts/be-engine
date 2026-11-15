@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 
-use super::{ProxyErrorEvent, RecorderEvent};
+use super::ProxyErrorEvent;
 
 const RAW_COPY_BUFFER_BYTES: usize = 8 * 1024;
 
@@ -72,7 +72,7 @@ impl ConnectionCaptureHealth {
             return;
         }
 
-        state.record_event_for_targets(self.proxy_error(reason), targets);
+        state.record_proxy_error(self.proxy_error(reason), targets);
     }
 
     pub(crate) fn is_degraded(&self) -> bool {
@@ -148,11 +148,11 @@ impl ConnectionCaptureHealth {
             status.last_reported_case = Some(case_id);
             reason
         };
-        state.record_event_for_targets(self.proxy_error(reason), targets);
+        state.record_proxy_error(self.proxy_error(reason), targets);
     }
 
-    fn proxy_error(&self, error: String) -> RecorderEvent {
-        RecorderEvent::ProxyError(ProxyErrorEvent {
+    fn proxy_error(&self, error: String) -> ProxyErrorEvent {
+        ProxyErrorEvent {
             id: Uuid::new_v4(),
             connection_id: Some(self.connection_id),
             timestamp: Utc::now(),
@@ -160,7 +160,7 @@ impl ConnectionCaptureHealth {
             client_addr: self.client_addr.clone(),
             target: Some(self.target.clone()),
             error,
-        })
+        }
     }
 }
 

@@ -1,7 +1,8 @@
 //! Source attribution selects complete probe publications even on a shared channel.
 use super::*;
 use crate::config::native_policy::{NativeSourceScope, SourceObligation, validate_source};
-use crate::recorder::{Recorder, RecorderEvent, RedisExchangeEvent, capture_body};
+use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
+use crate::recorder::{Recorder, capture_body};
 
 #[tokio::test]
 async fn sealed_process_publish_ownership_matches_only_complete_probe_messages() {

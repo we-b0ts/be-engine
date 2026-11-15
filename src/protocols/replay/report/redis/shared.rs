@@ -1,6 +1,6 @@
 //! Source-bound notification projection, independent of shared-artifact storage.
 use crate::dependency_index::PageManifest;
-use crate::replay::redis::pubsub::{NotificationIdentity, NotificationLaneEvidence};
+use crate::protocols::replay::redis::pubsub::{NotificationIdentity, NotificationLaneEvidence};
 use crate::replay::report::global_evidence::artifact::{ArtifactReference, digest};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};

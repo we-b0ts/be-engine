@@ -11,7 +11,7 @@ fn persisted(f: &Fixture, rules: Vec<crate::BackgroundDependencyRuleConfig>) -> 
 
 fn overlay(f: &Fixture) -> Value {
     let before = fs::read(&f.report).unwrap();
-    crate::replay::reclassify_background_dependencies(
+    crate::protocols::replay::report::ownership::reclassify_background_dependencies(
         &f.policy,
         &f.report,
         &std::collections::BTreeMap::from([

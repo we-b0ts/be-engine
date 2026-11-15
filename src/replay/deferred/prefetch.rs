@@ -1,8 +1,8 @@
 //! One bounded immutable read ahead, supervised by the Replay runtime.
 use super::*;
 
-pub(in crate::replay) async fn enqueue(
-    state: Arc<Mutex<ReplayState>>,
+pub(in crate::replay) async fn enqueue<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
     case_id: Option<&str>,
 ) -> Result<bool> {
     let state = state.lock().await;
@@ -24,7 +24,9 @@ pub(in crate::replay) async fn enqueue(
         .is_ok())
 }
 
-pub(in crate::replay) async fn run(state: Arc<Mutex<ReplayState>>) -> Result<()> {
+pub(in crate::replay) async fn run<P: ReplayProtocolSet>(
+    state: Arc<Mutex<RuntimeState<P>>>,
+) -> Result<()> {
     let Some(deferred) = state.lock().await.deferred.clone() else {
         return std::future::pending().await;
     };

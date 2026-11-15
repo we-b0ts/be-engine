@@ -91,7 +91,7 @@ fn retries_policy_application_after_report_reclassification() {
         .unwrap()
         .apply()
         .unwrap();
-    crate::replay::reclassify_background_dependencies(
+    crate::protocols::replay::report::ownership::reclassify_background_dependencies(
         &fixture.config,
         &fixture.replay_report,
         &Default::default(),

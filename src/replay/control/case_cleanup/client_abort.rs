@@ -2,8 +2,8 @@
 use super::*;
 use crate::interaction::model::{CLIENT_ABORT_LIMIT, CLIENT_ABORT_QUIET};
 
-pub(in crate::replay::control) fn mark_client_aborted(
-    state: &mut ReplayState,
+pub(crate) fn mark_client_aborted<P: ReplayProtocolSet>(
+    state: &mut RuntimeState<P>,
     case: &str,
 ) -> Result<()> {
     ensure!(
@@ -18,11 +18,11 @@ pub(in crate::replay::control) fn mark_client_aborted(
     Ok(())
 }
 
-pub(in crate::replay::control) async fn lock_for_abort_release<'a>(
-    shared: &'a Arc<Mutex<ReplayState>>,
+pub(crate) async fn lock_for_abort_release<'a, P: ReplayProtocolSet>(
+    shared: &'a Arc<Mutex<RuntimeState<P>>>,
     case: &str,
     aborted: TokioInstant,
-) -> Result<tokio::sync::MutexGuard<'a, ReplayState>> {
+) -> Result<tokio::sync::MutexGuard<'a, RuntimeState<P>>> {
     let deadline = aborted + CLIENT_ABORT_LIMIT;
     let mut quiet_from = aborted;
     let mut previous = None;

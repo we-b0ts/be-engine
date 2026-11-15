@@ -3,6 +3,21 @@ use super::*;
 use traffic_protocol::capture::CaptureEvidence;
 
 impl AppState {
+    pub(crate) fn record_proxy_error(
+        &self,
+        event: crate::recorder::ProxyErrorEvent,
+        targets: DependencyTargets,
+    ) {
+        self.record_event_for_targets(RecorderEvent::ProxyError(event), targets);
+    }
+    pub(crate) fn record_connect_failure(
+        &self,
+        event: crate::recorder::DependencyConnectFailureEvent,
+        targets: DependencyTargets,
+    ) {
+        self.record_event_for_targets(RecorderEvent::DependencyConnectFailure(event), targets);
+    }
+
     pub(crate) fn record_event(&self, event: RecorderEvent) {
         let targets = self.capture_dependency_targets();
         self.record_event_for_targets(event, targets);

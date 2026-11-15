@@ -1,94 +1,26 @@
-//! Original semantic exchange identities shared by finite-tail inventories.
+//! Original semantic exchange identities supplied by native evidence capabilities.
 use super::*;
 use serde_json::Value;
+use traffic_protocol::evidence::EvidenceRegistry;
 
-pub(in crate::replay::control::dependency_tail) fn reference(
+pub(crate) fn reference(
     event: &Value,
+    evidence: &EvidenceRegistry,
 ) -> Result<Option<RecordedReference>> {
-    // The central ledger retains protocol observations without creating finite
-    // business obligations. Missing legacy metadata keeps the ordinary guards.
     if event["capture"]["semantic_required"] == false {
         return Ok(None);
     }
-    let uuid = |field| {
-        event[field]
+    if event["event_type"] == "dependency_connect_failure" {
+        let event_id: uuid::Uuid = event["id"]
             .as_str()
-            .context("Source exchange identity missing")?
-            .parse()
-            .context("invalid Source exchange identity")
-    };
-    let sequence = |field| {
-        event[field]
-            .as_u64()
-            .context("Source exchange sequence missing")
-    };
-    Ok(match event["event_type"].as_str() {
-        Some("dependency_connect_failure") => Some(RecordedReference::Connect {
-            event_id: uuid("id")?,
-        }),
-        Some("http_exchange") => Some(RecordedReference::Http {
-            exchange_id: uuid("id")?,
-        }),
-        Some("redis_exchange") => Some(RecordedReference::Redis {
-            connection_id: uuid("connection_id")?,
-            sequence: sequence("sequence")?,
-        }),
-        Some("redis_pub_sub_push") if event["rpc_request"].is_object() => {
-            Some(RecordedReference::RedisRpcPush {
-                connection_id: event["rpc_request"]["connection_id"]
-                    .as_str()
-                    .context("Redis callback publisher identity missing")?
-                    .parse()?,
-                sequence: event["rpc_request"]["sequence"]
-                    .as_u64()
-                    .context("Redis callback publisher sequence missing")?,
-            })
-        }
-        Some("mysql_exchange") => {
-            let command = event["command"]
-                .as_str()
-                .context("Source MySQL command missing")?;
-            if crate::mysql::wire::is_no_response_command(command)
-                || command == "COM_PING"
-                || command == "COM_STMT_PREPARE" && event["response"]["status"] == "stmt_prepare"
-            {
-                None
-            } else {
-                Some(RecordedReference::Mysql {
-                    connection_id: uuid("connection_id")?,
-                    sequence: sequence("query_sequence")?,
-                })
-            }
-        }
-        Some("memcached_exchange") => Some(RecordedReference::Memcached {
-            connection_id: uuid("connection_id")?,
-            sequence: sequence("sequence")?,
-        }),
-        Some("motan_exchange") if event["heartbeat"] != true => Some(RecordedReference::Motan {
-            connection_id: uuid("connection_id")?,
-            sequence: sequence("sequence")?,
-        }),
-        Some("kafka_produce") => Some(RecordedReference::KafkaProduce {
-            connection_id: uuid("connection_id")?,
-            sequence: sequence("sequence")?,
-        }),
-        Some("kafka_fetch") => Some(RecordedReference::KafkaFetch {
-            connection_id: uuid("connection_id")?,
-            sequence: sequence("sequence")?,
-        }),
-        Some("kafka_delivery") => Some(RecordedReference::KafkaDelivery {
-            connection_id: uuid("connection_id")?,
-            sequence: sequence("sequence")?,
-        }),
-        Some("udp_datagram") => anyhow::bail!("finite-tail UDP replay is unsupported"),
-        _ if event["capture"]["semantic_required"] == true => Some(RecordedReference::Capture {
-            exchange_id: event["capture"]["exchange_id"]
-                .as_str()
-                .context("Source dependency has no framework capture identity")?
-                .parse()?,
-        }),
-        _ => None,
-    })
+            .context("Source connection failure identity missing")?
+            .parse()?;
+        return Ok(Some(RecordedReference::new(
+            "connect",
+            serde_json::json!({"event_id": event_id}),
+        )?));
+    }
+    evidence.finite_reference(event)
 }
 
 #[cfg(test)]
@@ -96,6 +28,10 @@ mod tests {
     use super::*;
     use serde_json::json;
     use uuid::Uuid;
+
+    fn reference(event: &Value) -> Result<Option<RecordedReference>> {
+        super::reference(event, crate::protocols::default_providers().evidence())
+    }
 
     #[test]
     fn mysql_ping_failure_is_not_a_dispatch_obligation() {
@@ -119,10 +55,7 @@ mod tests {
         event["capture"]["semantic_required"] = true.into();
         assert_eq!(
             reference(&event).unwrap(),
-            Some(RecordedReference::Redis {
-                connection_id: connection,
-                sequence: 7
-            })
+            Some(RecordedReference::connection("redis", connection, 7))
         );
         event.as_object_mut().unwrap().remove("capture");
         assert!(reference(&event).unwrap().is_some());

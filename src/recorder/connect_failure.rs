@@ -7,7 +7,8 @@ use tokio::net::TcpStream;
 use crate::AppState;
 use crate::active_case::DependencyTargets;
 use crate::dependency::termination::ConnectionControl;
-use crate::recorder::{CaseInvalidation, DependencyConnectFailureEvent, RecorderEvent};
+use crate::recorder::CaseInvalidation;
+use crate::recorder::DependencyConnectFailureEvent;
 
 pub(crate) fn record_connect_failure(
     state: &AppState,
@@ -122,8 +123,8 @@ fn record_failure(
         }
         return Err(error);
     }
-    state.record_event_for_targets(
-        RecorderEvent::DependencyConnectFailure(DependencyConnectFailureEvent {
+    state.record_connect_failure(
+        DependencyConnectFailureEvent {
             id: uuid::Uuid::new_v4(),
             timestamp: chrono::Utc::now(),
             client_addr,
@@ -133,7 +134,7 @@ fn record_failure(
             duration_ms: started.elapsed().as_millis(),
             failure_kind: failure_kind.into(),
             client_outcome: "reset".into(),
-        }),
+        },
         targets,
     );
     Ok(())

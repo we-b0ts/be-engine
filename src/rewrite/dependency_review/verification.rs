@@ -232,10 +232,12 @@ pub(super) fn reconcile(
             continue;
         }
         project_unused(&mut actual.report, source, &actual.unused, "mysql")?;
-        if crate::replay::report::report_has_case_dirty_events(&actual.report) {
+        if crate::protocols::replay::report::evidence::report_has_case_dirty_events(&actual.report)
+        {
             continue;
         }
-        let remaining = crate::replay::report::build_dependency_evidence(&actual.report);
+        let remaining =
+            crate::protocols::replay::report::evidence::build_dependency_evidence(&actual.report);
         if remaining
             .case_event_counts
             .values()

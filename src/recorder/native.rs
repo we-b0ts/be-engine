@@ -156,6 +156,10 @@ impl CaptureExchange for Exchange {
             self.state
                 .inner
                 .active_cases
+                .observe_async_capture(&event, &self.targets);
+            self.state
+                .inner
+                .active_cases
                 .observe_capture_tail_event(&event, &self.targets);
             self.state.enqueue_capture(event, self.targets, None, false)
         })

@@ -129,3 +129,48 @@ fn run_owned_lanes_keep_the_predecessors_actual_delivery_requirement() {
         Selection::Matched(selected) if selected.index == 1
     ));
 }
+
+#[test]
+fn native_reference_resolution_retains_case_ownership_and_rejects_ambiguity() {
+    let mut inventory = inventory(ReplaySource::Case);
+    let reference = inventory.exchanges[0].native.reference.clone();
+    assert_eq!(
+        inventory.resolve_reference("case", &reference).unwrap(),
+        Some(0)
+    );
+    assert_eq!(
+        inventory
+            .resolve_reference("other-case", &reference)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        inventory.exchanges[0].status,
+        ReplayExchangeStatus::Available
+    );
+    inventory
+        .register(
+            PROTOCOL,
+            RecordedExchange {
+                reference: reference.clone(),
+                endpoint: endpoint(),
+                lane: None,
+                response_delay: std::time::Duration::ZERO,
+                request: Arc::new(Message("duplicate")),
+                response: Arc::new(Message("duplicate")),
+            },
+            SourceContext {
+                source: ReplaySource::Case,
+                case_id: Some("case".into()),
+                position: 3,
+                capture: None,
+            },
+            ExchangeRules::default(),
+        )
+        .unwrap();
+    assert!(inventory.resolve_reference("case", &reference).is_err());
+    assert_eq!(
+        inventory.exchanges[0].status,
+        ReplayExchangeStatus::Available
+    );
+}

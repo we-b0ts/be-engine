@@ -6,9 +6,12 @@ use serde_json::Value;
 
 use super::model::{ActiveRunState, ResponseAssertionSummary, RunLayout, RunStatus};
 use super::support::status_label;
-use crate::replay::{
-    ResponseBodyAssertionReport, ResponseBodyCodec, ResponseDifference, ResponseDifferenceKind,
-    ResponseGatewayProtocol,
+use crate::policy::runtime::ResponseBodyCodec;
+use crate::{
+    primary_protocol::assertion::ResponseBodyAssertionReport,
+    primary_protocol::assertion::ResponseDifference,
+    primary_protocol::assertion::ResponseDifferenceKind,
+    primary_protocol::assertion::ResponseGatewayProtocol,
 };
 
 const MAX_FAILURE_CLUSTERS: usize = 20;
@@ -533,7 +536,7 @@ mod tests {
     use super::*;
     use crate::case_group::{CanonicalCase, CanonicalCaseGroup, CaseGroupInventory};
     use crate::e2e_run::model::ResponseAssertionSummary;
-    use crate::replay::ResponseDifference;
+    use crate::primary_protocol::assertion::ResponseDifference;
 
     #[test]
     fn response_pointer_scopes_distinguish_status_body_and_json_values() {
