@@ -5,9 +5,6 @@ use crate::dependency_index::{RecordReader, RecordRef, RecordSource};
 use crate::replay::global::{GlobalProjection, GlobalRegistrar, Phase};
 use std::sync::Arc;
 
-mod notifications;
-pub(crate) use notifications::load as load_unattributed_notifications;
-
 pub(crate) struct Records;
 impl GlobalProjection for Records {
     type Item = (DependencyRecord, RecordRef, Option<(usize, bool)>);
@@ -18,14 +15,7 @@ impl GlobalProjection for Records {
         let kind = record["event_type"]
             .as_str()
             .context("Global index record lacks an event type")?;
-        let metadata = matches!(
-            kind,
-            "mysql_connection"
-                | "mysql_exchange"
-                | "redis_pub_sub_push"
-                | "redis_connection"
-                | "proxy_error"
-        );
+        let metadata = matches!(kind, "mysql_connection" | "mysql_exchange" | "proxy_error");
         Ok(match phase {
             Phase::Metadata => metadata,
             Phase::Exchanges => !metadata,
@@ -33,11 +23,11 @@ impl GlobalProjection for Records {
     }
     fn decode(entry: GlobalEntry, source: &Arc<RecordSource>) -> Result<Self::Item> {
         let reference = source.reference(entry.location);
-        // Notification codecs validate original frames through their authenticated reference.
-        let record = if entry.record["event_type"] == "redis_pub_sub_push" {
-            reference.load()?
-        } else {
-            serde_json::from_value(entry.record)?
+        let record = serde_json::from_value(entry.record)?;
+        // Compact indexes omit native payloads. Projection requires the authenticated original.
+        let record = match record {
+            DependencyRecord::Native(_) => reference.load()?,
+            record => record,
         };
         Ok((record, reference, entry.mysql_row_shape))
     }
@@ -49,7 +39,6 @@ struct Registration<'a> {
     mysql: &'a mut MysqlReplayState,
     http: &'a mut Vec<http::ReplayHttpExchange>,
     blackholes: &'a mut Vec<http::ReplayHttpBlackhole>,
-    redis: &'a mut redis::RedisReplayState,
 
     targets: &'a mut BTreeMap<TargetKey, ReplayTarget>,
     identities: &'a mut HashMap<Uuid, MysqlDependencyIdentity>,
@@ -63,15 +52,14 @@ impl GlobalRegistrar for Registration<'_> {
     fn prepare(
         &mut self,
         index: &GlobalIndex,
-        root: &Path,
-        source: Arc<RecordSource>,
+        _root: &Path,
+        _source: Arc<RecordSource>,
     ) -> Result<()> {
-        self.redis.pubsub.restore_indexed(
-            index.notifications.clone(),
-            root,
-            source,
-            self.source_kind,
-        )
+        ensure!(
+            index.notifications.is_empty(),
+            "recorded notifications require an installed native notification capability"
+        );
+        Ok(())
     }
     fn register(&mut self, phase: Phase, item: <Records as GlobalProjection>::Item) -> Result<()> {
         let (record, reference, row_shape) = item;
@@ -81,7 +69,6 @@ impl GlobalRegistrar for Registration<'_> {
             mysql: _,
             http,
             blackholes,
-            redis,
 
             targets,
             identities,
@@ -104,18 +91,11 @@ impl GlobalRegistrar for Registration<'_> {
                     exchange.response.row_shape = row_shape.or(exchange.response.row_shape);
                     sql.push((line, DependencyRecord::MysqlExchange(exchange)));
                 }
-                DependencyRecord::RedisPubSubPush(push) => {
-                    redis
-                        .pubsub
-                        .register_indexed(*push, reference, source_kind)?
-                }
-                DependencyRecord::RedisConnection(connection) => {
-                    redis.register_connection(*connection, targets)?
-                }
-
                 DependencyRecord::ProxyError(error) => {
-                    redis::RedisReplayState::reject_proxy_error(&error)?;
-
+                    ensure!(
+                        error.protocol != "redis",
+                        "unsafe Redis capture proxy error"
+                    );
                     reject_retired_proxy_error(&error)?;
                 }
                 _ => {}
@@ -151,14 +131,6 @@ impl GlobalRegistrar for Registration<'_> {
                         source_kind,
                     )?;
                 }
-                DependencyRecord::RedisExchange(record) => redis.register_global_exchange(
-                    *record,
-                    source_kind,
-                    reference,
-                    targets,
-                    rules,
-                )?,
-
                 _ => {}
             },
         }
@@ -166,7 +138,7 @@ impl GlobalRegistrar for Registration<'_> {
     }
     fn complete(&mut self, phase: Phase) -> Result<()> {
         match phase {
-            Phase::Metadata => self.redis.pubsub.finish_indexed(),
+            Phase::Metadata => Ok(()),
             Phase::Exchanges => register_dependency_records(
                 self.path,
                 std::mem::take(&mut self.sql),
@@ -176,7 +148,6 @@ impl GlobalRegistrar for Registration<'_> {
                 self.mysql,
                 self.http,
                 self.blackholes,
-                self.redis,
                 self.targets,
                 self.identities,
                 self.rules,
@@ -194,7 +165,6 @@ pub(crate) async fn load(
     mysql: &mut MysqlReplayState,
     http: &mut Vec<http::ReplayHttpExchange>,
     blackholes: &mut Vec<http::ReplayHttpBlackhole>,
-    redis: &mut redis::RedisReplayState,
 
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
@@ -202,6 +172,19 @@ pub(crate) async fn load(
     reader: Arc<std::sync::Mutex<RecordReader>>,
     native: &mut native::Inventory,
 ) -> Result<()> {
+    if source_kind == ReplaySource::Unattributed {
+        let path = path.to_owned();
+        let (index, _) = tokio::task::spawn_blocking(move || {
+            crate::dependency_index::global::load_global_index(&path, validate_index_record)
+        })
+        .await
+        .context("ambient Source index preparation failed")??;
+        ensure!(
+            index.notifications.is_empty(),
+            "recorded notifications require an installed native notification capability"
+        );
+        return Ok(());
+    }
     replay::global::load(
         path,
         reader,
@@ -211,7 +194,6 @@ pub(crate) async fn load(
             mysql,
             http,
             blackholes,
-            redis,
 
             targets,
             identities,

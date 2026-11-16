@@ -20,7 +20,7 @@ pub(crate) fn install_joint_mysql(
 }
 pub(crate) fn promote_redis_sharing(
     value: crate::policy::runtime::RedisCrossCaseFeedback,
-    shared: crate::protocols::replay::redis::shared_read::RedisSharedReadSelector,
+    shared: traffic_protocol_redis::bindings::RedisSharedReadSelector,
 ) -> Result<()> {
     let mut policy = p::parse_policy(&std::fs::read_to_string(&value.policy_path)?)?;
     // The global map remains the sole value-format declaration.

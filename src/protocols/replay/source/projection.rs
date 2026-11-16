@@ -10,7 +10,6 @@ pub(crate) struct GlobalSource {
     pub mysql: MysqlReplayState,
     pub http: Vec<http::ReplayHttpExchange>,
     pub http_events: HttpReplayEvents,
-    pub redis: redis::RedisReplayState,
 }
 
 impl GlobalSource {
@@ -31,7 +30,6 @@ impl GlobalSource {
             mysql: Default::default(),
             http: vec![],
             http_events: Default::default(),
-            redis: Default::default(),
         };
         let mut blackholes = vec![];
         let mut targets = BTreeMap::new();
@@ -45,7 +43,6 @@ impl GlobalSource {
             &mut source.mysql,
             &mut source.http,
             &mut blackholes,
-            &mut source.redis,
             &mut targets,
             &mut identities,
             rules,
@@ -62,7 +59,6 @@ impl GlobalSource {
                     &mut source.mysql,
                     &mut source.http,
                     &mut blackholes,
-                    &mut source.redis,
                     &mut targets,
                     &mut identities,
                     rules,
@@ -76,61 +72,27 @@ impl GlobalSource {
             &mut source.mysql,
             &mut source.http_events,
             source.http.len(),
-            &mut source.redis,
         );
         source.native.freeze_global_report_layout();
-        // Subscription mirrors are native confirmation proofs. Legacy captures
-        // may resolve their native subscription record from Case dependency files;
-        // expected-response files and Case assertion identities are never read.
-        let physical = crate::dependency_index::scoped::resolve(path)?.path;
-        let root = physical
-            .parent()
-            .context("run-owned Source has no parent")?
-            .to_owned();
-        let rules = rules.to_vec();
-        tokio::task::spawn_blocking(move || {
-            source
-                .redis
-                .resolve_pubsub_subscriptions(&root, &mut targets, &rules, reader)?;
-            Ok(source)
-        })
-        .await
-        .context("Source Global subscription preparation task failed")?
+        Ok(source)
     }
-    pub fn retain_source_extensions(&self, marker: &Path) -> Result<BTreeMap<String, Value>> {
-        let session = self.redis.global_notification_evidence()?;
-        if session.lanes.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let reference = crate::protocols::replay::report::redis::shared::retain_portable(
-            marker,
-            &session.lanes,
-        )?;
-        Ok(BTreeMap::from([(
-            "notifications".into(),
-            serde_json::to_value(reference)?,
-        )]))
+    pub fn retain_source_extensions(&self, _marker: &Path) -> Result<BTreeMap<String, Value>> {
+        Ok(BTreeMap::new())
     }
+
     fn builtin_view(&self) -> ReportView<'_> {
         ReportView {
             mysql: &self.mysql,
             http: &self.http,
             http_events: &self.http_events,
-            redis: &self.redis,
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn freeze(
-    mysql: &mut MysqlReplayState,
-    http: &mut HttpReplayEvents,
-    http_len: usize,
-    redis: &mut redis::RedisReplayState,
-) {
+pub(crate) fn freeze(mysql: &mut MysqlReplayState, http: &mut HttpReplayEvents, http_len: usize) {
     mysql.freeze_global_report_layout();
     http.global_report.freeze_layout(vec![http_len]);
-    redis.freeze_global_report_layout();
 }
 
 impl GlobalReportProjection for GlobalSource {

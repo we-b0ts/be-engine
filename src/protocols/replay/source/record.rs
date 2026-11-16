@@ -8,9 +8,6 @@ pub(crate) enum DependencyRecord {
     MysqlExchange(Box<RecordedMysqlExchange>),
     HttpExchange(Box<http::RecordedHttpExchange>),
     TcpGatewayConnection(Box<http::RecordedTcpGatewayConnection>),
-    RedisConnection(Box<redis::RecordedConnection>),
-    RedisExchange(Box<redis::RecordedExchange>),
-    RedisPubSubPush(Box<redis::pubsub::RecordedPush>),
 
     ProxyError(Box<RecordedProxyError>),
     Native(Box<Value>),
@@ -37,9 +34,6 @@ impl<'de> Deserialize<'de> for DependencyRecord {
             "tcp_gateway_connection" => {
                 serde_json::from_value(value).map(Self::TcpGatewayConnection)
             }
-            "redis_connection" => serde_json::from_value(value).map(Self::RedisConnection),
-            "redis_exchange" => serde_json::from_value(value).map(Self::RedisExchange),
-            "redis_pub_sub_push" => serde_json::from_value(value).map(Self::RedisPubSubPush),
 
             "proxy_error" => serde_json::from_value(value).map(Self::ProxyError),
             _ => Ok(Self::Native(Box::new(value))),

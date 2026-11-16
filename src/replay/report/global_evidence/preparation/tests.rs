@@ -16,14 +16,6 @@ fn records() -> Vec<Value> {
             "target_host":"redis.test","target_port":6379,"database":0,"resp_version":2,
             "command":"GET","args":[capture("key")],"response":capture("$5\r\nvalue\r\n"),
             "response_kind":"bulk_string","duration_ms":0,"replay_safe":true}),
-        json!({"event_type":"redis_exchange","connection_id":connection,"sequence":2,
-            "target_host":"redis.test","target_port":6379,"database":0,"resp_version":2,
-            "command":"SUBSCRIBE","args":[capture("jobs")],"response":capture("*3\r\n$9\r\nsubscribe\r\n$4\r\njobs\r\n:1\r\n"),
-            "response_kind":"array","duration_ms":0,"replay_safe":true}),
-        json!({"event_type":"redis_pub_sub_push","connection_id":connection,"subscription_sequence":2,
-            "target_host":"redis.test","target_port":6379,"database":0,
-            "response":capture("*3\r\n$7\r\nmessage\r\n$4\r\njobs\r\n$4\r\nbody\r\n"),
-            "duration_ms":0,"replay_safe":true}),
     ]
 }
 
@@ -103,7 +95,7 @@ async fn load(
 }
 
 #[tokio::test]
-async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inventory() {
+async fn recorder_prewarms_the_exact_replay_policy_layout_and_native_inventory() {
     let temp = tempfile::tempdir().unwrap();
     let (recorder, config, policy) = recorded(temp.path(), &records()).await;
     assert!(!recorder.finish_run().await.unwrap());
@@ -125,7 +117,7 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
             .is_file()
     );
     assert!(!recorder.run_dir.join(".replay/replay-ca.pem").exists());
-    assert!(status.extensions.contains_key("notifications"));
+    assert!(status.extensions.is_empty());
     let report = temp
         .path()
         .join(".traffic-e2e/local/artifacts/replays/first/report.json");
@@ -180,20 +172,6 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
         )
         .unwrap();
     }
-    let session = state
-        .protocols
-        .redis
-        .global_notification_evidence()
-        .unwrap();
-    let notifications = super::super::shared::retain(&report, &session.lanes).unwrap();
-    assert_eq!(
-        notifications.key(),
-        serde_json::from_value::<crate::protocols::replay::report::redis::shared::SharedReference>(
-            status.extensions["notifications"].clone()
-        )
-        .unwrap()
-        .key()
-    );
     drop(state);
     // Local durable inventories no longer depend on the optional portable copy.
     fs::remove_dir_all(recorder.run_dir.join(".replay/shared-global-inventories")).unwrap();
@@ -328,7 +306,10 @@ async fn historical_mysql_prewarm_is_skipped_without_invalidating_other_protocol
         let (redis, _) = status.inventories["redis"]
             .load::<Inventory>(&marker)
             .unwrap();
-        assert!(redis.identity.semantics.is_none());
+        assert_eq!(
+            redis.identity.semantics.as_deref(),
+            Some("registered-native-global/v1:redis-native/v1")
+        );
         assert!(import(&source, &report, &redis.identity).unwrap().is_some());
     }
 }
@@ -485,7 +466,7 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
     assert_eq!(reference.key(), status.inventories["redis"].key());
     let mut items = vec![];
     evidence.read(&report, 0, 10, &mut items).unwrap();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 1);
 }
 
 fn config_policy(_config: &crate::AppConfig) -> String {

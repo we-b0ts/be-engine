@@ -102,7 +102,7 @@ pub(crate) fn redis_cross_case_rules(
 ) -> anyhow::Result<
     Vec<(
         String,
-        crate::protocols::replay::redis::shared_read::RedisSharedReadSelector,
+        traffic_protocol_redis::bindings::RedisSharedReadSelector,
     )>,
 > {
     let loaded = load_replay_policy(path)?;
@@ -123,7 +123,7 @@ pub(crate) fn redis_cross_case_rules(
             };
             Some((
                 rule.id,
-                crate::protocols::replay::redis::shared_read::RedisSharedReadSelector {
+                traffic_protocol_redis::bindings::RedisSharedReadSelector {
                     host: rule.target.host,
                     port: rule.target.port,
                     read,

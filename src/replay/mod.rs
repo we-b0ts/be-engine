@@ -79,10 +79,8 @@ pub(crate) use traffic_replay::preparation::{
 pub(crate) mod protocol_runtime;
 use policy::{ReplayPolicy, RequestRuleRuntime};
 use protocol_runtime::{InFlightScope, ReplayProtocolSet};
-pub(crate) mod sequence;
-#[cfg(test)]
-pub(crate) use crate::protocols::replay::redis;
 pub(crate) mod report;
+pub(crate) mod sequence;
 #[cfg(test)]
 pub(crate) mod test_support;
 

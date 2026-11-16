@@ -48,12 +48,7 @@ async fn two_second_idle_reports_unconsumed_dependencies_and_preserves_session()
     assert_eq!(waiting["actual_io_in_flight"], false);
     assert_eq!(waiting["references"][0]["reference"]["protocol"], "redis");
     assert_eq!(
-        state
-            .lock()
-            .await
-            .protocols
-            .redis
-            .snapshot()
+        state.lock().await.native.snapshot()["redis"]
             .unused_case
             .len(),
         1

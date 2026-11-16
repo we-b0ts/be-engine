@@ -146,7 +146,7 @@ async fn a_recorded_failed_connect_waits_for_the_real_normal_predecessor() {
         "the normal connection must retain protocol ownership"
     );
     let normal_state = state.clone();
-    let normal = tokio::spawn(super::super::redis::handle_connection(
+    let normal = tokio::spawn(crate::replay::test_support::serve_native(
         server,
         target(),
         normal_state,

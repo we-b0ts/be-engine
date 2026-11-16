@@ -1,9 +1,9 @@
 //! Explicit Redis/HTTP request timestamps, signed values and multipart contracts.
-use crate::protocols::replay::redis::key_selector::RedisValueKeySelector;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use traffic_protocol_redis::key_selector::RedisValueKeySelector;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

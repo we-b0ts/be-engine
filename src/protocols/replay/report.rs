@@ -9,18 +9,16 @@ pub(crate) mod artifacts;
 pub(crate) mod codecs;
 pub(crate) mod evidence;
 pub(crate) mod ownership;
-pub(crate) mod redis;
 pub(crate) mod snapshot;
 pub(super) mod unused_source;
 pub(crate) mod validation;
-use super::redis as redis_state;
 use super::*;
 
 use traffic_replay::report::{
     Change, GlobalReportProjection, GlobalReportRuntime, ReportRows, Row,
 };
 
-pub(crate) const PROTOCOLS: [&str; 3] = ["mysql", "redis", "http"];
+pub(crate) const PROTOCOLS: [&str; 2] = ["mysql", "http"];
 pub(crate) fn semantics(protocol: &str) -> Option<String> {
     (protocol == "mysql").then(|| "mysql-transaction-diagnostics-v6-source-read-proof".to_owned())
 }
@@ -28,7 +26,6 @@ pub(crate) struct ReportView<'a> {
     pub mysql: &'a MysqlReplayState,
     pub http: &'a [http::ReplayHttpExchange],
     pub http_events: &'a http::HttpReplayEvents,
-    pub redis: &'a redis_state::RedisReplayState,
 }
 
 impl<'a> From<&'a ReplayProtocols> for ReportView<'a> {
@@ -37,7 +34,6 @@ impl<'a> From<&'a ReplayProtocols> for ReportView<'a> {
             mysql: &protocols.mysql,
             http: &protocols.http_exchanges,
             http_events: &protocols.http_events,
-            redis: &protocols.redis,
         }
     }
 }
@@ -59,7 +55,6 @@ impl GlobalReportProjection for ReportView<'_> {
         Ok(match protocol {
             "mysql" => self.mysql.global_report_usage().layout().to_vec(),
             "http" => self.http_events.global_report.layout().to_vec(),
-            "redis" => self.redis.global_report_layout(),
 
             _ => anyhow::bail!("unknown Global projection protocol"),
         })
@@ -79,8 +74,6 @@ impl GlobalReportProjection for ReportView<'_> {
                 extras,
                 visitor,
             ),
-            "redis" if extras => self.redis.visit_global_report_extras(visitor),
-            "redis" => self.redis.visit_global_report_rows(visitor),
 
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
@@ -114,7 +107,6 @@ impl GlobalReportRuntime for ReplayProtocols {
         match protocol {
             "mysql" => self.mysql.global_report_snapshot(),
             "http" => self.http_events.global_report.snapshot(),
-            "redis" => self.redis.global_report_snapshot(),
 
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
@@ -123,7 +115,6 @@ impl GlobalReportRuntime for ReplayProtocols {
         match protocol {
             "mysql" => self.mysql.initialize_global_report_usage(visible),
             "http" => self.http_events.global_report.initialize(visible),
-            "redis" => self.redis.initialize_global_report_usage(visible),
 
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
@@ -134,32 +125,17 @@ impl GlobalReportRuntime for ReplayProtocols {
 impl ReplayProtocols {
     pub(crate) fn global_report_extensions(
         &self,
-        protocol: &str,
-        report: &Path,
+        _protocol: &str,
+        _report: &Path,
     ) -> Result<BTreeMap<String, serde_json::Value>> {
-        if protocol != "redis" {
-            return Ok(BTreeMap::new());
-        }
-        redis::fields(redis::notifications::NotificationEvidence::prepare(
-            report,
-            self.redis.global_notification_evidence()?,
-        )?)
+        Ok(BTreeMap::new())
     }
     pub(crate) fn global_report_fallback(
         &self,
-        protocol: &str,
-        report: &Path,
+        _protocol: &str,
+        _report: &Path,
         pages: crate::dependency_index::PageManifest,
     ) -> Result<serde_json::Value> {
-        if protocol == "redis"
-            && let Some(evidence) = redis::notifications::RedisEvidence::prepare(
-                report,
-                pages.clone(),
-                self.redis.global_notification_evidence()?,
-            )?
-        {
-            return Ok(serde_json::to_value(evidence)?);
-        }
         Ok(serde_json::to_value(pages)?)
     }
 }

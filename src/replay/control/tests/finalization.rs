@@ -248,7 +248,7 @@ async fn focused_finalization_rejects_actual_case_dependency_failures() {
         .await
         .unwrap();
     let (server, _) = listener.accept().await.unwrap();
-    let task = tokio::spawn(crate::protocols::replay::redis::handle_connection(
+    let task = tokio::spawn(crate::replay::test_support::serve_native(
         server,
         ReplayTarget {
             host: "redis.test".into(),

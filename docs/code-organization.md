@@ -231,14 +231,14 @@ delivery receipts retain framework ownership.
 Native capture facts supply the common outcome explicitly. Snapshot construction
 validates its shared transport contract and any compatible flattened outcome.
 Protocol evidence adapters interpret their own native safety fields.
-The Redis recording connection driver owns RESP framing, FIFO correlation,
-ordered output, subscription confirmation and FIN/RST projection in
-`traffic-protocol-redis::capture::connection`. Application bindings under
-`protocols/redis` supply request admission, snapshot coordination, RPC ownership,
-capture health, persistence and actual output receipts. Admitted requests and
-queued notifications retain opaque host-owned capture leases. Recording-local
-extensions store application protocol state without adding native fields to the
-Recorder. Native connection libraries retain their own event safety projection.
+`traffic-protocol-redis::native` owns the installed RESP2 request/response
+recording and server sessions, stored-record decoding and response projection.
+The shared `recorder/native` and `replay/native` hosts own admission, persistence,
+value-policy execution, finite consumption and actual output receipts. Redis
+session controls and credential sanitization remain in the protocol library.
+The finite provider currently rejects Pub/Sub, incomplete terminations, reusable
+snapshots and historical stateful permissions that require additional capabilities.
+The older native capture primitives remain available in the protocol library.
 `traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
 endpoint identities. MySQL session control and Source transaction analysis use
 these immutable inputs to project original wire positions, complete read prefixes,
@@ -294,6 +294,10 @@ capture decoding, notification payloads and notification references. Replay keep
 lifecycle authorization beside the native exchange and retains the historical
 flat witness serialization. Native notification evidence supplies its Source
 exchange identity through the protocol-owned accessor.
+Its `decode_replay` validates native completeness, peer termination and subscription
+confirmation before projecting arguments and response bytes. The host supplies
+authenticated cleanup authorization. `request_identity` owns the stable native
+request fingerprint shared by admission and evidence.
 `CaptureEvidence` supplies native completeness, references and control facts.
 The ledger owns capture lifetime and sealed persistence through that interface.
 The recording queue holds protocol-independent `CapturedEvent` snapshots.
@@ -361,10 +365,9 @@ physical inputs before invoking that store. The control transport dispatches
 open parameters and receives application-owned status flags, query results and
 case cleanup through the same runtime port. Shared value matching, codecs and finite execution retain their
 `traffic-contract` and `traffic-replay` owners.
-Command diagnostics and reports accept typed native extensions. Redis owns its
-state-observation/APPEND diagnostic variants, Pub/Sub summaries and native audit
-fields under `protocols/replay/redis/report`. Shared report DTOs retain connection,
-request, finite-use and lane-barrier facts. Primary response assertion adapters
+Command diagnostics and reports accept typed native extensions. The finite Redis
+provider uses the shared `dependency_protocols` report inventory. Shared report
+DTOs retain connection, request, finite-use and lane-barrier facts. Primary response assertion adapters
 live in `primary_protocol/assertion`, while content codecs and comparison kernels
 retain their independent library owners. Native report aggregation remains in
 the application report composition.

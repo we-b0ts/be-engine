@@ -167,8 +167,14 @@ async fn lazy_startup_indexes_preloaded_redis_before_any_case_begins() {
     let state = runtime.state.lock().await;
     assert!(state.active_case_id.is_none());
     assert_eq!(
-        state.protocols.redis.prepared_case_members("a").as_ref(),
-        &[0]
+        state
+            .native
+            .core
+            .exchanges
+            .iter()
+            .filter(|exchange| exchange.source.case_id.as_deref() == Some("a"))
+            .count(),
+        1
     );
 }
 

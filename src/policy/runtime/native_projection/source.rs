@@ -33,21 +33,7 @@ pub(crate) fn validate_finite_sharing(
             )?
         }
         n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis { .. }) => {
-            let super::super::redis_value::RedisSelector::SharedRead(read) = projected
-                .redis
-                .context("Redis sharing projection is missing")?
-            else {
-                anyhow::bail!("Redis sharing owner is not a finite shared read");
-            };
-            crate::protocols::replay::redis::cross_case::verify_candidate(
-                case_source,
-                replay_report,
-                &crate::protocols::replay::redis::shared_read::RedisSharedReadSelector {
-                    host: resource.map(|resource| resource.endpoint.host.clone()),
-                    port: resource.map(|resource| resource.endpoint.port),
-                    read,
-                },
-            )?
+            anyhow::bail!("finite Redis sharing requires an installed native sharing capability")
         }
         _ => unreachable!("validated finite-sharing effect"),
     };

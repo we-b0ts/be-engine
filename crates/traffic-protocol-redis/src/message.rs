@@ -9,6 +9,9 @@ use traffic_protocol::message::{
     MessageEncoder, ProjectedMessage, ProjectedValue, ProtocolMessage,
 };
 
+mod response;
+pub use response::ResponseMessage;
+
 #[derive(Clone)]
 pub struct RequestMessage {
     pub command: String,
@@ -21,6 +24,7 @@ pub struct RequestMessage {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RequestLocation {
+    Request,
     Argument { index: usize },
     Key,
     HashField,
@@ -45,6 +49,7 @@ impl ProtocolMessage for RequestMessage {
         let selector: RequestLocation = serde_json::from_value(selector.clone())?;
         let command = self.command.to_ascii_uppercase();
         let indices = match selector {
+            RequestLocation::Request => (0..self.args.len()).collect(),
             RequestLocation::Argument { index } => {
                 ensure!(
                     index < self.args.len(),

@@ -61,10 +61,10 @@ async fn delayed_dependency(failure: bool, repeated: bool) {
         let state = AppState::new(config).await.unwrap();
         let (mut source_redis, redis_client) = pair().await;
         let (mut redis_server, redis_upstream) = pair().await;
-        let redis = tokio::spawn(crate::protocols::redis::handle_connected(
-            redis_client, redis_upstream, state.clone(), crate::protocols::redis::ConnectionContext {
-                client_addr: None, target_host: "redis.test".into(), target_port: 6379,
-                target_addr: "redis.test:6379".into(), upstream_addr: "redis.test:6379".into(),
+        let redis = tokio::spawn(crate::recorder::native::handle_connected(crate::protocols::DependencyProtocol::Redis,
+            redis_client, redis_upstream, state.clone(), traffic_protocol::connection::ConnectionInfo {
+                client_addr: None, endpoint: traffic_protocol::connection::Endpoint {host: "redis.test".into(), port: 6379}, max_frame_bytes: 1024 * 1024,
+                 upstream_addr: Some("redis.test:6379".into()),
             },
         ));
         let (send_dependency, after_response) = tokio::sync::oneshot::channel();

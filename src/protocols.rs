@@ -97,7 +97,6 @@ pub(crate) mod evidence;
 pub(crate) mod mysql;
 pub(crate) mod recording;
 pub(crate) mod recording_preparation;
-pub(crate) mod redis;
 pub(crate) mod replay;
 
 pub(crate) type RecordingDriver = fn(
@@ -111,7 +110,6 @@ pub(crate) type RecordingDriver = fn(
 pub(crate) fn recording_driver(protocol: DependencyProtocol) -> Option<RecordingDriver> {
     match protocol {
         DependencyProtocol::Mysql => Some(mysql::record_connected),
-        DependencyProtocol::Redis => Some(redis::record_connected),
         _ => None,
     }
 }

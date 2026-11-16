@@ -64,9 +64,9 @@ fn value<'a>(text: &'a str, template: &str) -> Result<&'a str> {
 
 fn selected_identity<'a>(
     text: &'a str,
-    selector: &crate::protocols::replay::redis::key_selector::RedisValueKeySelector,
+    selector: &traffic_protocol_redis::key_selector::RedisValueKeySelector,
 ) -> Result<Option<&'a str>> {
-    use crate::protocols::replay::redis::key_selector::RedisValueKeySelector;
+    use traffic_protocol_redis::key_selector::RedisValueKeySelector;
     let (prefix, suffix) = match selector {
         RedisValueKeySelector::Affix { prefix, suffix }
         | RedisValueKeySelector::Numeric { prefix, suffix } => (prefix, suffix),

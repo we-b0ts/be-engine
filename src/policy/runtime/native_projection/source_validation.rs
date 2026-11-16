@@ -4,7 +4,6 @@ mod coverage;
 mod http;
 mod input;
 mod mysql;
-mod redis;
 mod signed_input;
 #[cfg(test)]
 mod tests;
@@ -49,15 +48,12 @@ pub(crate) fn validate_native_source_dependencies(
         );
     }
     let mut runtime = ReplayPolicyRuntime::from_source_policy(compiled, target_root, &requests)?;
-    let mut redis_state = crate::protocols::replay::redis::RedisReplayState::default();
-    let mut targets = BTreeMap::new();
     let mut checked = NativeSourceDependencyValidation::default();
     let mut coverage = coverage::Coverage::default();
     let mut identities = BTreeSet::new();
     for case in cases {
         input::validate(compiled, target_root, case, &mut checked)?;
         signed_input::validate(compiled, target_root, case, &mut checked)?;
-        redis::register_callbacks(&mut redis_state, case)?;
         for event in ordered(case.events)? {
             if event["session_setup"] != true
                 && let (Some(connection), Some(sequence)) = (
@@ -73,14 +69,6 @@ pub(crate) fn validate_native_source_dependencies(
                 );
             }
             let validation = match event["event_type"].as_str() {
-                Some("redis_exchange") => redis::validate(
-                    &mut runtime,
-                    &mut redis_state,
-                    &mut targets,
-                    case,
-                    event,
-                    &mut coverage,
-                ),
                 Some("http_exchange") => http::validate(&mut runtime, case, event, &mut coverage),
                 Some("mysql_exchange") => mysql::validate(&mut runtime, case, event, &mut coverage),
                 _ => Ok(()),
@@ -106,31 +94,8 @@ pub(crate) fn validate_native_source_dependencies(
             *checked.rules.entry(row.id).or_default() += row.matches;
         }
     }
-    for (id, count) in
-        crate::protocols::replay::redis::append::validate_source(&runtime.request_contracts, cases)?
-    {
-        *checked.rules.entry(id).or_default() += count;
-    }
-    for (id, count) in crate::protocols::replay::redis::read_commutation::validate_source(
-        &runtime.request_contracts,
-        cases,
-    )? {
-        *checked.rules.entry(id).or_default() += count;
-    }
-    for (id, count) in crate::protocols::replay::redis::observations::validate_source(
-        &runtime.request_contracts,
-        cases,
-    )? {
-        *checked.rules.entry(id).or_default() += count;
-    }
     for key in runtime.request_contracts.signing_keys() {
         checked.key_witnesses.extend(key.witnesses().cloned());
-    }
-    for (id, count) in crate::protocols::replay::redis::activity::validate_source(
-        &runtime.request_contracts,
-        cases,
-    )? {
-        *checked.rules.entry(id).or_default() += count;
     }
     checked.rules.retain(|id, _| {
         compiled

@@ -51,19 +51,29 @@ async fn unmatched_redis_closes_connection_retains_blocker_and_accepts_fresh_con
         .unwrap();
     assert_eof(&mut rejected).await;
     let report = wait_for_unmatched_count(&path, "redis", 1).await;
-    let event = &report["redis"]["unmatched"][0];
+    let event = &report["dependency_protocols"]["redis"]["unmatched"][0];
     assert_eq!(event["target_event_index"], 0);
-    assert_eq!(event["diagnostic"]["kind"], "lane_blocked");
-    assert_eq!(event["diagnostic"]["candidate"]["sequence"], 2);
-    assert_eq!(event["diagnostic"]["blocked_by"]["sequence"], 1);
-    assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 2);
+    assert!(event["reason"].as_str().unwrap().contains("predecessor"));
+    assert_eq!(
+        report["dependency_protocols"]["redis"]["unused_case"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     let mut fresh = TcpStream::connect(addr).await.unwrap();
-    redis_value_tests::request(&mut fresh, &["GET", "first"], b"$1\r\n1\r\n").await;
-    redis_value_tests::request(&mut fresh, &["GET", "second"], b"$1\r\n2\r\n").await;
+    request(&mut fresh, &["GET", "first"], b"$1\r\n1\r\n").await;
+    request(&mut fresh, &["GET", "second"], b"$1\r\n2\r\n").await;
     let report = wait_for_matched_count(&path, "redis", 2).await;
-    assert_eq!(report["redis"]["unmatched"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["dependency_protocols"]["redis"]["unmatched"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(
-        report["redis"]["unused_case"]
+        report["dependency_protocols"]["redis"]["unused_case"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -82,9 +92,14 @@ async fn recorded_redis_error_keeps_connection_usable() {
     ])
     .await;
     let mut client = TcpStream::connect(addr).await.unwrap();
-    redis_value_tests::request(&mut client, &["GET", "first"], b"-ERR source rejected\r\n").await;
-    redis_value_tests::request(&mut client, &["GET", "second"], b"$1\r\n2\r\n").await;
+    request(&mut client, &["GET", "first"], b"-ERR source rejected\r\n").await;
+    request(&mut client, &["GET", "second"], b"$1\r\n2\r\n").await;
     let report = wait_for_matched_count(&path, "redis", 2).await;
-    assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
+    assert!(
+        report["dependency_protocols"]["redis"]["unmatched"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     task.abort();
 }

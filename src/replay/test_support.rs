@@ -114,3 +114,13 @@ fn collect_json_endpoints(value: &Value, endpoints: &mut BTreeSet<RecordedEndpoi
         collect_json_endpoints(value, endpoints);
     }
 }
+
+/// Exercise the same shared serving port used by registered protocol providers.
+pub(crate) async fn serve_native(
+    stream: tokio::net::TcpStream,
+    target: super::ReplayTarget,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::protocols::replay::ReplayState>>,
+) -> anyhow::Result<()> {
+    let peer = stream.peer_addr()?;
+    super::native::handle_connection(stream, peer, target, state).await
+}

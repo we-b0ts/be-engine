@@ -78,12 +78,7 @@ async fn primary_failure_skips_success_work_but_preserves_the_target_stop_receip
     assert!(state.lock().await.target_session_stopped);
     assert!(state.lock().await.active_case_id.is_none());
     assert_eq!(
-        state
-            .lock()
-            .await
-            .protocols
-            .redis
-            .snapshot()
+        state.lock().await.native.snapshot()["redis"]
             .unused_case
             .len(),
         1

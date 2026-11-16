@@ -12,8 +12,6 @@ use crate::replay::{ReplayProtocolSet, RuntimeState};
 use traffic_replay::report::GlobalReportProjection;
 
 pub(crate) mod artifact;
-#[cfg(test)]
-mod compact_tests;
 pub(crate) mod preparation;
 mod projection;
 mod protocol;
@@ -213,9 +211,6 @@ pub(crate) fn stage(
     }
     Ok(rebound.then_some(report))
 }
-
-#[cfg(test)]
-use crate::protocols::replay::report::redis::{notifications, shared};
 
 #[cfg(test)]
 mod tests {

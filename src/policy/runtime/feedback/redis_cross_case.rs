@@ -1,8 +1,8 @@
 //! Historical cross-case plan DTOs retain the unified-authoring boundary.
-use crate::protocols::replay::redis::shared_read::RedisSharedReadSelector;
 use anyhow::Result;
 use serde::Serialize;
 use std::path::PathBuf;
+use traffic_protocol_redis::bindings::RedisSharedReadSelector;
 #[derive(Debug, Clone)]
 pub struct RedisCrossCaseFeedback {
     pub policy_path: PathBuf,

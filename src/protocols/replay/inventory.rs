@@ -47,11 +47,6 @@ pub(super) fn resolve(
     case: &str,
     references: &[RecordedReference],
 ) -> Result<Vec<ProtocolExchange>> {
-    let redis_keys = connection_keys(references, "redis")?;
-    let redis = state
-        .protocol_data()
-        .redis
-        .case_wire_exchange_indices(case, &redis_keys)?;
     let mysql_keys = connection_keys(references, "mysql")?;
     let http_keys = references
         .iter()
@@ -82,21 +77,13 @@ pub(super) fn resolve(
         mysql.len() == mysql_keys.len(),
         "dependency-tail MySQL reference is absent from its Case semantic dependencies"
     );
-    let rpc_pushes = state.protocol_data().redis.pubsub.finite_rpc_pushes(case)?;
 
     references
         .iter()
         .map(|reference| {
             let (inventory, index) = match reference.protocol() {
-                "redis" => ("redis", redis[&connection(reference)?]),
                 "mysql" => ("mysql", mysql[&connection(reference)?]),
                 "http" => ("http", http[&exchange(reference)?]),
-                "redis_rpc_push" => (
-                    "redis_rpc_push",
-                    *rpc_pushes
-                        .get(&connection(reference)?)
-                        .context("finite Redis callback reference is absent from Case inventory")?,
-                ),
 
                 _ => bail!("finite native reference has no installed inventory owner"),
             };
@@ -111,12 +98,6 @@ pub(super) fn resolve(
 pub(super) fn status(state: &State, exchange: ProtocolExchange) -> Option<ReplayExchangeStatus> {
     let index = exchange.index;
     match exchange.inventory.as_str() {
-        "redis" => state.protocol_data().redis.exchange_status(index),
-        "redis_rpc_push" => state
-            .protocol_data()
-            .redis
-            .pubsub
-            .finite_rpc_push_status(index),
         "mysql" => state.protocol_data().mysql.exchange_status(index),
         "http" => state.http_exchange_status(index),
 
@@ -126,10 +107,6 @@ pub(super) fn status(state: &State, exchange: ProtocolExchange) -> Option<Replay
 
 pub(super) fn permits_cancelled_omission(state: &State, exchange: ProtocolExchange) -> bool {
     match exchange.inventory.as_str() {
-        "redis" => state
-            .protocol_data()
-            .redis
-            .permits_cancelled_append_omission(exchange.index),
         "http" => state.permits_cancelled_http_omission(exchange.index),
         _ => false,
     }

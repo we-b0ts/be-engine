@@ -29,3 +29,25 @@ pub(crate) trait InputTimingProjection: Send {
         cap: Duration,
     );
 }
+
+impl InputTimingProjection for () {
+    fn evidence(&mut self, _: &str, _: DateTime<Utc>) -> Result<(Vec<Evidence>, bool)> {
+        Ok((Vec::new(), false))
+    }
+    fn notifications(&self, _: &str, _: DateTime<Utc>) -> (Vec<Evidence>, bool) {
+        (Vec::new(), false)
+    }
+    fn delivered(&self, _: &str, _: u64, _: &DeliveryReference) -> bool {
+        false
+    }
+    fn prepare_passive(&mut self, _: &str, _: &Passive, _: u64, _: u64) -> bool {
+        false
+    }
+    fn prefix_active(&self, _: &str, _: DateTime<Utc>, _: Instant) -> bool {
+        false
+    }
+    fn tail_ready(&mut self, _: &str, _: Instant) -> bool {
+        true
+    }
+    fn plan_dispatch(&mut self, _: &str, _: DateTime<Utc>, _: Range<Duration>, _: Duration) {}
+}

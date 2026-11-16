@@ -5,7 +5,6 @@ use crate::policy::runtime::ReplayPolicyRuntime;
 use crate::protocols::replay::http;
 
 use crate::protocols::replay::mysql;
-use crate::protocols::replay::redis;
 use crate::replay::TargetObservations;
 use crate::replay::protocol_runtime::loading::{
     ProtocolSourceLoader, SourcePreparation, SourceResources,
@@ -30,7 +29,7 @@ impl SourceLoader {
             protocols: ReplayProtocols {
                 deferred_identities: None,
                 mysql: Default::default(),
-                redis: Default::default(),
+                observations: (),
 
                 http_exchanges: Vec::new(),
                 http_case_exchange_index: Default::default(),
@@ -58,9 +57,7 @@ impl ProtocolSourceLoader for SourceLoader {
     type Protocols = ReplayProtocols;
     type CaseSelector = Vec<http::cross_case::HttpCrossCaseSelector>;
 
-    fn install_run_scopes(&mut self, scopes: BTreeMap<Uuid, Arc<str>>) {
-        self.protocols.redis = redis::RedisReplayState::with_run_value_scopes(scopes);
-    }
+    fn install_run_scopes(&mut self, _scopes: BTreeMap<Uuid, Arc<str>>) {}
 
     fn load_run<'a>(
         &'a mut self,
@@ -70,14 +67,6 @@ impl ProtocolSourceLoader for SourceLoader {
         resources: &'a mut SourceResources,
     ) -> NativeFuture<'a, ()> {
         Box::pin(async move {
-            if scope == ReplaySource::Unattributed {
-                return source::global::load_unattributed_notifications(
-                    path,
-                    &mut self.protocols.redis,
-                    resources.reader.clone(),
-                )
-                .await;
-            }
             let protocols = &mut self.protocols;
             source::global::load(
                 path,
@@ -85,7 +74,6 @@ impl ProtocolSourceLoader for SourceLoader {
                 &mut protocols.mysql,
                 &mut protocols.http_exchanges,
                 &mut protocols.http_blackholes,
-                &mut protocols.redis,
                 &mut resources.targets,
                 &mut self.identities,
                 rules,
@@ -102,7 +90,6 @@ impl ProtocolSourceLoader for SourceLoader {
             &mut protocols.mysql,
             &mut protocols.http_events,
             protocols.http_exchanges.len(),
-            &mut protocols.redis,
         );
     }
 
@@ -176,7 +163,6 @@ impl ProtocolSourceLoader for SourceLoader {
             &mut protocols.mysql,
             &mut protocols.http_exchanges,
             &mut protocols.http_blackholes,
-            &mut protocols.redis,
             &mut resources.targets,
             &mut self.identities,
             batch.process_rules,
@@ -220,32 +206,6 @@ impl ProtocolSourceLoader for SourceLoader {
                     mysql::ownership::load(&context.root, &context.rules)?,
                     &selected,
                 );
-                let redis = &mut protocols.redis;
-                redis.resolve_pubsub_subscriptions(
-                    &context.root,
-                    &mut resources.targets,
-                    &context.rules,
-                    resources.reader.clone(),
-                )?;
-                redis.apply_finite_process_order(&context.rules);
-                redis.apply_api_origin_order(&context.root, &context.rules)?;
-                redis::load_cross_case(
-                    redis,
-                    &context.root,
-                    self.policy.as_deref(),
-                    &context.cases,
-                    &mut resources.targets,
-                    &context.rules,
-                )?;
-                // Finish immutable native lookups before Target admission.
-                redis
-                    .pubsub
-                    .prepare_echo_indices()
-                    .context("Redis adapter self-echo index preparation failed")?;
-                redis.prepare_native_clock(&context.root, &context.cases)?;
-                redis.pubsub.prepare_namespace_sessions(&context.cases)?;
-                redis.prepare_ingress(&context.cases)?;
-                redis.apply_snapshot_overlays(&context.root, &context.rules);
                 Ok((self, resources))
             })
             .await
@@ -253,8 +213,8 @@ impl ProtocolSourceLoader for SourceLoader {
         })
     }
 
-    fn register_policy_sources(&self, policy: &mut ReplayPolicyRuntime) -> Result<()> {
-        self.protocols.redis.register_policy_sources(policy)
+    fn register_policy_sources(&self, _policy: &mut ReplayPolicyRuntime) -> Result<()> {
+        Ok(())
     }
 
     fn observe_policy_sources(&self, policy: &mut ReplayPolicyRuntime) -> Result<()> {
@@ -271,10 +231,9 @@ impl ProtocolSourceLoader for SourceLoader {
     fn finish(
         mut self,
         lazy: bool,
-        observations: TargetObservations,
-        policy: Option<&ReplayPolicyRuntime>,
+        _observations: TargetObservations,
+        _policy: Option<&ReplayPolicyRuntime>,
     ) -> Self::Protocols {
-        self.protocols.redis.bind_runtime(observations, policy);
         self.protocols.deferred_identities = lazy.then_some(self.identities);
         self.protocols
     }

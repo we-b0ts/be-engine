@@ -128,19 +128,19 @@ mod tests {
             crate::replay::push_success_detail(
                 &mut total,
                 &mut details,
-                &mut state.protocols.redis.events.matched_details,
+                &mut state.protocols.http_events.matched_details,
                 Some("case-a"),
                 |_| (),
             );
         }
         let before = counts(&state, "case-a");
-        assert_eq!(before[2], 125);
+        assert_eq!(*before.last().unwrap(), 125);
         assert_eq!(details.len(), 100);
         for _ in 0..30 {
             crate::replay::push_success_detail(
                 &mut total,
                 &mut details,
-                &mut state.protocols.redis.events.matched_details,
+                &mut state.protocols.http_events.matched_details,
                 None,
                 |_| (),
             );

@@ -47,8 +47,8 @@ pub enum RedisTimestampFormat {
 }
 
 impl RedisTimeShiftRead {
-    pub(crate) fn shared(&self) -> crate::protocols::replay::redis::shared_read::RedisSharedRead {
-        crate::protocols::replay::redis::shared_read::RedisSharedRead {
+    pub(crate) fn shared(&self) -> traffic_protocol_redis::bindings::RedisSharedRead {
+        traffic_protocol_redis::bindings::RedisSharedRead {
             command: self.command.clone(),
             database: Some(self.database),
             key: self.key.clone(),
@@ -60,10 +60,8 @@ impl RedisTimeShiftRead {
     }
 }
 impl RedisTimeShiftSelector {
-    pub(crate) fn shared(
-        &self,
-    ) -> crate::protocols::replay::redis::shared_read::RedisSharedReadSelector {
-        crate::protocols::replay::redis::shared_read::RedisSharedReadSelector {
+    pub(crate) fn shared(&self) -> traffic_protocol_redis::bindings::RedisSharedReadSelector {
+        traffic_protocol_redis::bindings::RedisSharedReadSelector {
             host: Some(self.host.clone()),
             port: Some(self.port),
             read: self.read.shared(),

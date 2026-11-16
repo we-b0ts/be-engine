@@ -53,8 +53,6 @@ pub(crate) struct NativeSnapshot {
     pub(crate) unused_global_http_exchange_count: usize,
     pub(crate) unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
     pub(crate) allowed_unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
-    #[serde(flatten)]
-    pub(crate) protocols: ProtocolsReport,
     pub(crate) http_ignored_query_params: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) allowed_unused_http: Option<ReplayAllowedUnusedHttpReport>,
@@ -64,11 +62,6 @@ pub(crate) struct NativeSnapshot {
 pub(crate) struct ReplayAllowedUnusedHttpReport {
     pub(crate) config: String,
     pub(crate) hosts: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct ProtocolsReport {
-    pub(crate) redis: super::super::redis::report::CommandProtocolReport,
 }
 
 pub(crate) use traffic_protocol_mysql::report::{ConnectionReport, RecordedExchangeSummary};
@@ -140,9 +133,6 @@ impl RuntimeState<ReplayProtocols> {
             unused_global_http_exchange_count: self.global_http_unused_count(),
             unused_case_http_exchanges,
             allowed_unused_case_http_exchanges,
-            protocols: ProtocolsReport {
-                redis: self.protocol_data().redis.snapshot(),
-            },
             http_ignored_query_params: self.protocol_data().http_ignore_query_params.clone(),
             allowed_unused_http: self
                 .protocol_data()
@@ -181,14 +171,12 @@ impl SessionSnapshot for NativeSnapshot {
                 .http_request_header_mismatches
                 .iter()
                 .any(|event| event.case_id.is_some())
-            || self.protocols.redis.is_dirty()
     }
 
     fn unused_run_dependencies(&self) -> std::collections::BTreeMap<String, usize> {
         std::collections::BTreeMap::from([
             ("mysql".into(), self.unused_global_exchange_count),
             ("http".into(), self.unused_global_http_exchange_count),
-            ("redis".into(), self.protocols.redis.unused_run_count()),
         ])
     }
     fn unmatched_or_unsafe(&self) -> usize {
@@ -197,6 +185,5 @@ impl SessionSnapshot for NativeSnapshot {
             + self.unmatched_http_requests.len()
             + self.unsupported_http_exchanges.len()
             + self.http_request_header_mismatches.len()
-            + self.protocols.redis.unmatched_or_unsafe()
     }
 }

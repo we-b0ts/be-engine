@@ -1,7 +1,6 @@
 //! Source registration binds native evidence to the shared execution inventory.
 use crate::protocols::replay::http;
 use crate::protocols::replay::mysql;
-use crate::protocols::replay::redis;
 use crate::replay::{
     self, RecordedProxyError, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol,
     ReplayTarget, TargetKey,
@@ -69,7 +68,6 @@ pub(crate) fn register_dependency_records(
     mysql: &mut MysqlReplayState,
     http_exchanges: &mut Vec<http::ReplayHttpExchange>,
     http_blackholes: &mut Vec<http::ReplayHttpBlackhole>,
-    redis: &mut redis::RedisReplayState,
 
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
@@ -98,15 +96,11 @@ pub(crate) fn register_dependency_records(
                     connection_identities.insert(connection.id, identity);
                 }
             }
-            DependencyRecord::RedisPubSubPush(push) => {
-                redis.pubsub.register((**push).clone(), source, case_id)?;
-            }
-            DependencyRecord::RedisConnection(connection) => {
-                redis.register_connection((**connection).clone(), targets)?;
-            }
-
             DependencyRecord::ProxyError(error) => {
-                redis::RedisReplayState::reject_proxy_error(error)?;
+                ensure!(
+                    error.protocol != "redis",
+                    "unsafe Redis capture proxy error"
+                );
 
                 reject_retired_proxy_error(error)?;
             }
@@ -147,20 +141,7 @@ pub(crate) fn register_dependency_records(
                 )?;
                 continue;
             }
-            DependencyRecord::RedisExchange(exchange) => {
-                redis.register_exchange(
-                    *exchange,
-                    source,
-                    case_id,
-                    targets,
-                    process_owned_dependencies,
-                )?;
-                continue;
-            }
-
             DependencyRecord::MysqlConnection(_)
-            | DependencyRecord::RedisPubSubPush(_)
-            | DependencyRecord::RedisConnection(_)
             | DependencyRecord::ProxyError(_)
             | DependencyRecord::ConnectFailure
             | DependencyRecord::Native(_) => continue,
@@ -236,7 +217,6 @@ pub(crate) fn register_dependency_records(
     mysql
         .isolation
         .install(isolation_plans, &mysql_record_indices);
-    redis.pubsub.validate_links(source, case_id)?;
     Ok(())
 }
 
@@ -256,11 +236,6 @@ pub(crate) fn authorize(
                         ))
                     },
                 ) {
-                    record.authorize_lifecycle_cleanup()?;
-                }
-            }
-            DependencyRecord::RedisExchange(record) => {
-                if references.contains(&record.cleanup_reference()) {
                     record.authorize_lifecycle_cleanup()?;
                 }
             }

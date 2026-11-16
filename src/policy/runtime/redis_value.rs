@@ -12,7 +12,7 @@ mod tests;
 #[serde(untagged)]
 pub(super) enum RedisSelector {
     Requests(super::request_contract::config::RedisRequestSelector),
-    SharedRead(crate::protocols::replay::redis::shared_read::RedisSharedRead),
+    SharedRead(traffic_protocol_redis::bindings::RedisSharedRead),
     #[cfg(test)]
     TimeShift(super::test_fixture::redis_time::RedisTimeShiftRead),
 }
@@ -45,14 +45,14 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         return request.validate();
     }
     if let RedisSelector::SharedRead(read) = redis {
-        let selector = crate::protocols::replay::redis::shared_read::RedisSharedReadSelector {
+        let selector = traffic_protocol_redis::bindings::RedisSharedReadSelector {
             host: rule.target.host.clone(),
             port: rule.target.port,
             read: read.clone(),
         };
         selector.validate()?;
         if rule.replay_scope == ReplayScope::RecordingRun {
-            crate::protocols::replay::redis::cross_case::exact_read(&selector)?;
+            anyhow::bail!("finite Redis sharing requires an installed native sharing capability");
         }
         return Ok(());
     }

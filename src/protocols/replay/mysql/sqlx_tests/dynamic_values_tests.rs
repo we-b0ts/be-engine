@@ -104,7 +104,7 @@ pub(super) async fn endpoint_listener(
                         .find(|target| target.port == 6379)
                         .unwrap()
                         .clone();
-                    crate::protocols::replay::redis::handle_connection(
+                    crate::replay::test_support::serve_native(
                         stream,
                         target,
                         runtime.state.clone(),

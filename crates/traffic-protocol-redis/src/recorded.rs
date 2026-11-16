@@ -138,3 +138,6 @@ impl RecordedExchange {
             })
     }
 }
+
+mod replay;
+pub use replay::DecodedExchange;

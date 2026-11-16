@@ -12,12 +12,10 @@ fn expected_phase(record: &DependencyRecord) -> Option<Phase> {
     match record {
         DependencyRecord::MysqlConnection(_)
         | DependencyRecord::MysqlExchange(_)
-        | DependencyRecord::RedisPubSubPush(_)
-        | DependencyRecord::RedisConnection(_)
         | DependencyRecord::ProxyError(_) => Some(Phase::Metadata),
-        DependencyRecord::TcpGatewayConnection(_)
-        | DependencyRecord::HttpExchange(_)
-        | DependencyRecord::RedisExchange(_) => Some(Phase::Exchanges),
+        DependencyRecord::TcpGatewayConnection(_) | DependencyRecord::HttpExchange(_) => {
+            Some(Phase::Exchanges)
+        }
         DependencyRecord::Native(_) | DependencyRecord::ConnectFailure => Some(Phase::Exchanges),
     }
 }

@@ -1,4 +1,5 @@
 pub mod access;
+pub mod bindings;
 pub mod builtins;
 pub mod client_info;
 pub mod expiration;
@@ -7,6 +8,8 @@ pub mod key_selector;
 pub mod key_slots;
 pub mod keys;
 pub mod message;
+pub mod native;
+pub mod request_identity;
 pub mod subject;
 pub mod value_rules;
 pub mod values;
@@ -84,6 +87,12 @@ pub type RedisSession = Box<dyn FrameDecoder<Frame = RedisFrame>>;
 impl traffic_protocol::DependencyProvider for RedisProvider {
     fn name(&self) -> &'static str {
         "redis"
+    }
+
+    fn native_protocol(
+        &self,
+    ) -> Option<std::sync::Arc<dyn traffic_protocol::connection::NativeProtocol>> {
+        Some(std::sync::Arc::new(native::Native))
     }
 
     fn evidence(&self) -> Option<std::sync::Arc<dyn traffic_protocol::evidence::EvidenceAdapter>> {

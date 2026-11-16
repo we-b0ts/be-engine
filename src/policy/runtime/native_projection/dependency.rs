@@ -130,7 +130,7 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                 }
                 n::FiniteSharingEffect::Redis { hash_field } => {
                     projected.redis = Some(r::RedisSelector::SharedRead(
-                        crate::protocols::replay::redis::shared_read::RedisSharedRead {
+                        traffic_protocol_redis::bindings::RedisSharedRead {
                             command: selector
                                 .operation
                                 .clone()

@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 use traffic_protocol::report::{ReportCodec, ReportSection};
 
-pub(crate) const HISTORICAL_PROTOCOLS: [&str; 3] = ["memcached", "motan", "kafka"];
+pub(crate) const HISTORICAL_PROTOCOLS: [&str; 4] = ["redis", "memcached", "motan", "kafka"];
 
 pub(crate) struct Builtin(pub &'static str);
 #[derive(Deserialize)]
@@ -50,21 +50,14 @@ impl ReportCodec for Builtin {
     fn requires_source_exchange_id(&self, row: &Value) -> bool {
         self.0 == "redis" && row["command"] == "PUBSUB_PUSH"
     }
-    fn decode(&self, report: &Path, value: &Value) -> Result<Option<Box<dyn ReportSection>>> {
-        if self.0 == "redis" {
-            super::redis::decode(report, value)
-        } else {
-            Ok(None)
-        }
+    fn decode(&self, _report: &Path, _value: &Value) -> Result<Option<Box<dyn ReportSection>>> {
+        Ok(None)
     }
     fn decode_extensions(
         &self,
-        report: &Path,
+        _report: &Path,
         fields: &BTreeMap<String, Value>,
     ) -> Result<Box<dyn ReportSection>> {
-        if self.0 == "redis" {
-            return super::redis::decode_extensions(report, fields);
-        }
         let fields: EmptyFields = serde_json::from_value(serde_json::to_value(fields)?)?;
         ensure!(
             fields.notifications.is_none(),

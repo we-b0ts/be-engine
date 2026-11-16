@@ -15,12 +15,38 @@ pub(crate) use http::tests::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
 };
 pub(crate) use http::unordered as http_unordered;
-pub(crate) mod redis;
-pub(crate) use redis::expiration::normalize as normalize_redis_expiration;
-pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
-pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
-pub(crate) use redis::value as redis_value;
-pub use redis::value::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
+pub use traffic_protocol_redis::key_selector::RedisValueKeySelector;
+pub type RedisUnorderedField = traffic_protocol_redis::bindings::LegacyValueLocation<
+    traffic_policy_schema::response::ProtobufFieldPath,
+    traffic_policy_schema::response::ProtobufRepeatedElementType,
+>;
+pub type RedisUnorderedSelector =
+    traffic_protocol_redis::bindings::LegacyUnorderedSelector<RedisUnorderedField>;
+pub(crate) use traffic_protocol_redis::request_identity::request_fingerprint as redis_request_fingerprint;
+pub(crate) mod redis_value {
+    pub use super::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
+}
+pub(crate) fn normalize_redis_expiration(
+    command: &str,
+    source: &[Vec<u8>],
+    target: &[Vec<u8>],
+    clocks: traffic_contract::time::ClockPair,
+) -> anyhow::Result<Option<Vec<Vec<u8>>>> {
+    traffic_protocol_redis::expiration::normalize(
+        command,
+        source,
+        target,
+        crate::value_contract::time::DEFAULT_TOLERANCE,
+        |scale| {
+            let (source, target) = clocks.require()?;
+            Ok(if scale == 1000 {
+                (source.timestamp_millis(), target.timestamp_millis())
+            } else {
+                (source.timestamp(), target.timestamp())
+            })
+        },
+    )
+}
 pub(crate) mod mysql;
 pub(crate) use mysql::contracts::automatic::Metadata as MysqlInferenceMetadata;
 pub(crate) use mysql::contracts::automatic::validate_source_witness as mysql_validate_global_source_witness;
@@ -68,7 +94,7 @@ pub(crate) struct ReplayProtocols {
         >,
     >,
     pub(crate) mysql: mysql::MysqlReplayState,
-    pub(crate) redis: redis::RedisReplayState,
+    pub(crate) observations: (),
 
     pub(crate) http_exchanges: Vec<http::ReplayHttpExchange>,
     pub(crate) http_case_exchange_index: replay::CaseExchangeIndex,
@@ -83,8 +109,8 @@ pub(crate) struct ReplayProtocols {
 }
 
 impl ReplayProtocols {
-    fn case_projections(&self) -> [&dyn CaseRuntimeProjection; 3] {
-        [&self.mysql, &self.http_events, &self.redis]
+    fn case_projections(&self) -> [&dyn CaseRuntimeProjection; 2] {
+        [&self.mysql, &self.http_events]
     }
 }
 
@@ -115,7 +141,7 @@ impl ReplayProtocolSet for ReplayProtocols {
     type Policy = crate::policy::runtime::ReplayPolicyRuntime;
     type SourceLoader = loading::SourceLoader;
     type ReportSnapshot = report::snapshot::NativeSnapshot;
-    type PrimaryClosePreparation = Vec<Vec<u8>>;
+    type PrimaryClosePreparation = ();
     fn primary_close_input(
         case: &replay::ReplayCase,
     ) -> Result<Option<replay::protocol_runtime::primary_close::SourceInput>> {
@@ -127,22 +153,17 @@ impl ReplayProtocolSet for ReplayProtocols {
     ) -> Result<Vec<replay::protocol_runtime::primary_close::SourceStream>> {
         http::input_timing::source_streams(state, case)
     }
-    fn prepare_primary_close(
-        case: &replay::ReplayCase,
-        source_close_ms: u64,
-    ) -> Result<Self::PrimaryClosePreparation> {
-        redis::append::cancelled::load(case, source_close_ms)
+
+    fn prepare_primary_close(_case: &replay::ReplayCase, _source_close_ms: u64) -> Result<()> {
+        Ok(())
     }
-    fn install_primary_close(
-        &mut self,
-        case: &str,
-        prepared: Self::PrimaryClosePreparation,
-    ) -> Result<()> {
-        self.redis.prepare_cancelled_caches(case, prepared)
+
+    fn install_primary_close(&mut self, _case: &str, _: ()) -> Result<()> {
+        Ok(())
     }
-    fn primary_closed(&mut self, case: &str) {
-        self.redis.confirm_cancelled_caches(case);
-    }
+
+    fn primary_closed(&mut self, _case: &str) {}
+
     fn snapshot_report(state: &RuntimeState<Self>) -> Self::ReportSnapshot {
         state.native_report_snapshot()
     }
@@ -155,15 +176,15 @@ impl ReplayProtocolSet for ReplayProtocols {
     fn native_events(
         &mut self,
     ) -> &mut dyn replay::protocol_runtime::events::NativeEventProjection {
-        &mut self.redis
+        &mut self.observations
     }
     fn input_timing(&self) -> &dyn replay::protocol_runtime::input::InputTimingProjection {
-        &self.redis
+        &self.observations
     }
     fn input_timing_mut(
         &mut self,
     ) -> &mut dyn replay::protocol_runtime::input::InputTimingProjection {
-        &mut self.redis
+        &mut self.observations
     }
     fn resolve_references(
         state: &RuntimeState<Self>,
@@ -220,11 +241,9 @@ impl ReplayProtocolSet for ReplayProtocols {
         protocol: &str,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
-        let protocols = state.protocol_data();
         match protocol {
             "mysql" => state.visit_global_mysql_unused(visitor),
             "http" => state.visit_global_http_unused(visitor),
-            "redis" => protocols.redis.visit_global_regular_unused(visitor),
 
             _ => anyhow::bail!("unknown native Global report protocol"),
         }
@@ -272,7 +291,6 @@ impl ReplayProtocolSet for ReplayProtocols {
             &mut self.mysql,
             &mut self.http_exchanges,
             &mut self.http_blackholes,
-            &mut self.redis,
             targets,
             &mut identities,
             batch.process_rules,
@@ -308,7 +326,7 @@ impl ReplayProtocolSet for ReplayProtocols {
     }
 
     fn case_is_dirty(&self, case: &str) -> bool {
-        let dirty = self.mysql.case_is_dirty(case)
+        self.mysql.case_is_dirty(case)
             || http::case_is_dirty(
                 &self.http_exchanges,
                 &self.http_case_exchange_index,
@@ -317,16 +335,8 @@ impl ReplayProtocolSet for ReplayProtocols {
                 self.allowed_unused_http.as_ref(),
                 case,
             )
-            || self.redis.case_is_dirty(case);
-        #[cfg(test)]
-        {
-            debug_assert_eq!(
-                self.redis.case_is_dirty(case),
-                self.redis.snapshot().case_is_dirty(case)
-            );
-        }
-        dirty
     }
+
     fn pending_diagnostic(&self) -> BTreeMap<String, serde_json::Value> {
         BTreeMap::from([
             ("mysql".into(), self.mysql.case_in_flight_diagnostic()),
@@ -338,28 +348,24 @@ impl ReplayProtocolSet for ReplayProtocols {
                 "http_ingress".into(),
                 self.http_ingress.pending_diagnostic(),
             ),
-            ("redis".into(), self.redis.case_in_flight_diagnostic()),
         ])
     }
 
     fn prepare_candidates(&mut self) {
         self.http_candidates.register(&self.http_exchanges);
         self.mysql.prepare_candidates();
-        self.redis.prepare_candidates();
     }
     fn prepare_case(
         &mut self,
         case: &str,
-        ordered: bool,
+        _ordered: bool,
         contracts: Option<&RequestContracts>,
     ) -> anyhow::Result<PreparedProtocols> {
-        let redis = self.redis.prepare_case(case, ordered)?;
         let mysql = self.mysql.prepare_case(case, contracts)?;
         let http =
             http::preparation::prepare_case(&mut self.http_candidates, &self.http_exchanges, case);
         Ok(BTreeMap::from([
             (ProtocolId::new("http"), http),
-            (ProtocolId::new("redis"), redis),
             (ProtocolId::new("mysql"), mysql),
         ]))
     }
@@ -370,11 +376,9 @@ impl ReplayProtocolSet for ReplayProtocols {
             &mut self.http_candidates,
             &self.http_exchanges,
         )?;
-        let redis = self.redis.prepare_run_sequence();
         let mysql = self.mysql.prepare_run_sequence()?;
         Ok(BTreeMap::from([
             (ProtocolId::new("http"), http),
-            (ProtocolId::new("redis"), redis),
             (ProtocolId::new("mysql"), mysql),
         ]))
     }
@@ -391,16 +395,12 @@ impl ReplayProtocolSet for ReplayProtocols {
         self.mysql.lifecycle.sequence = bindings
             .remove(&ProtocolId::new("mysql"))
             .unwrap_or_default();
-        self.redis.lifecycle.sequence = bindings
-            .remove(&ProtocolId::new("redis"))
-            .unwrap_or_default();
     }
     fn attach_run_sequence(&mut self, bindings: &BTreeMap<ProtocolId, SequenceBinding>) {
         for (protocol, binding) in bindings {
             match protocol.as_str() {
                 "http" => self.http_sequence.attach_run(binding.clone()),
                 "mysql" => self.mysql.lifecycle.sequence.attach_run(binding.clone()),
-                "redis" => self.redis.lifecycle.sequence.attach_run(binding.clone()),
                 _ => {}
             }
         }
@@ -408,12 +408,11 @@ impl ReplayProtocolSet for ReplayProtocols {
     fn activate_case(&mut self, case: Option<&str>) {
         self.http_ingress.activate_case(case);
     }
-    fn begin_case(&mut self, case: &str) {
-        self.redis.begin_case(case);
-    }
-    fn close_case(&mut self, case: &str) {
-        self.redis.close_case(case);
-    }
+
+    fn begin_case(&mut self, _case: &str) {}
+
+    fn close_case(&mut self, _case: &str) {}
+
     fn try_close_case(&self, case: &str) -> bool {
         self.http_ingress.try_close_case(case)
     }
@@ -428,7 +427,6 @@ impl ReplayProtocolSet for ReplayProtocols {
                 "http".into(),
                 http::startup_counts(&mut self.http_exchanges, close),
             ),
-            ("redis".into(), self.redis.startup_counts(close)),
         ])
     }
 
@@ -441,21 +439,16 @@ impl ReplayProtocolSet for ReplayProtocols {
         self.http_ingress.activate_case(active);
     }
 
-    fn start(state: Arc<Mutex<RuntimeState<Self>>>) {
-        redis::pubsub::ingress::start(state.clone());
-        redis::pubsub::native_clock::start(state);
-    }
+    fn start(_state: Arc<Mutex<RuntimeState<Self>>>) {}
 
     fn has_in_flight(&self, scope: InFlightScope, active_case: Option<&str>) -> bool {
         match scope {
             InFlightScope::All => {
                 self.mysql.has_in_flight()
-                    || self.redis.has_in_flight()
                     || http::has_in_flight(&self.http_exchanges, &self.http_ingress, None)
             }
             InFlightScope::Case => {
                 self.mysql.has_case_in_flight()
-                    || self.redis.has_case_in_flight()
                     || http::has_in_flight(
                         &self.http_exchanges,
                         &self.http_ingress,
@@ -478,10 +471,6 @@ impl ReplayProtocolSet for ReplayProtocols {
                 Some(ReplayProtocol::Auto) => {
                     let target = target.context("auto replay connection has no target")?;
                     match auto_protocol::detect_with_providers(&stream, &providers).await? {
-                        Some(ReplayProtocol::Redis) => {
-                            redis::handle_connection(stream, target, state).await
-                        }
-
                         Some(protocol @ (ReplayProtocol::Http | ReplayProtocol::Https)) => {
                             let mut target = target.clone();
                             target.protocol = protocol;
@@ -517,15 +506,6 @@ impl ReplayProtocolSet for ReplayProtocols {
                     )
                     .await
                 }
-                Some(ReplayProtocol::Redis) => {
-                    redis::handle_connection(
-                        stream,
-                        target.context("Redis replay connection has no target")?,
-                        state,
-                    )
-                    .await
-                }
-
                 Some(ReplayProtocol::Mysql) => {
                     let target = target.map(|target| traffic_protocol::connection::Endpoint {
                         host: target.host,
@@ -587,4 +567,13 @@ impl ReplayProtocol {
             })
             .context("dependency protocol has no registered implementation")
     }
+}
+
+/// Historical snapshot plans require a stateful capability beyond finite native Replay.
+pub(crate) fn inspect_case_source_snapshot_overlay(
+    _case_source: &Path,
+    _policy: &Path,
+    _rule_name: &str,
+) -> Result<crate::replay::report::command::CommandSnapshotOverlayReport> {
+    anyhow::bail!("Redis snapshot overlays require an installed native snapshot capability")
 }

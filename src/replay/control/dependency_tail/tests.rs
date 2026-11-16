@@ -140,7 +140,7 @@ pub(super) async fn client(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let connect = TcpStream::connect(listener.local_addr().unwrap());
     let (client, server) = tokio::join!(connect, listener.accept());
-    let task = tokio::spawn(crate::protocols::replay::redis::handle_connection(
+    let task = tokio::spawn(crate::replay::test_support::serve_native(
         server.unwrap().0,
         ReplayTarget {
             host: "redis.test".into(),
