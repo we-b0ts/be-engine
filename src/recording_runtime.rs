@@ -105,7 +105,28 @@ impl AppState {
 
         if self.config().mysql.enabled {
             let mysql_state = self.clone();
-            tasks.spawn(async move { crate::protocols::mysql::run(mysql_state).await });
+            let routes = self
+                .config()
+                .mysql
+                .effective_routes()
+                .into_iter()
+                .map(|route| {
+                    Ok(crate::recorder::native::listener::Route {
+                        listen: route.listen,
+                        endpoint: traffic_protocol::connection::endpoint_from_addr(&route.upstream)
+                            .context("configured recording endpoint requires a host and port")?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            tasks.spawn(async move {
+                crate::recorder::native::listener::run(
+                    mysql_state,
+                    crate::protocols::DependencyProtocol::Mysql,
+                    routes,
+                    crate::recording_control::RecordingListener::Mysql,
+                )
+                .await
+            });
         }
 
         info!(

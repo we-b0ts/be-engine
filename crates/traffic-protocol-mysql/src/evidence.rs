@@ -11,7 +11,13 @@ impl EvidenceAdapter for NativeEvidence {
         "mysql/semantic-evidence/v2"
     }
     fn event_types(&self) -> &'static [&'static str] {
-        &["mysql_exchange", "mysql_connection", "mysql_tls_rejected"]
+        &[
+            "mysql_exchange",
+            "mysql_connection",
+            "mysql_tls_rejected",
+            "mysql_query",
+            "mysql_response",
+        ]
     }
     fn recording_safety_issue(&self, value: &Value) -> Option<String> {
         let event_type = value["event_type"].as_str().unwrap_or_default();

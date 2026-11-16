@@ -5,11 +5,12 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_rustls::TlsConnector;
 use traffic_model::TerminationSide;
+use traffic_protocol::connection::{CaptureTransport, ConnectionIo};
 use traffic_protocol::transport::{ConnectionControl, ConnectionTermination, ObservedIo};
 use uuid::Uuid;
 
@@ -24,10 +25,6 @@ mod host;
 pub use host::{CaptureDecision, CaptureHost, CaptureObservation, CaptureRequest};
 #[cfg(test)]
 mod tests;
-
-trait MysqlIo: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T> MysqlIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
-type BoxedMysqlIo = Box<dyn MysqlIo>;
 
 #[derive(Debug, Clone)]
 pub struct CaptureConnectionContext {
@@ -71,6 +68,28 @@ pub async fn run(
     options: ConnectionOptions,
     host: Arc<dyn CaptureHost>,
 ) -> Result<()> {
+    let transport = CaptureTransport {
+        termination: options.termination.clone(),
+        client: Some(ConnectionControl::new(&client)?),
+        upstream: Some(ConnectionControl::new(&upstream)?),
+    };
+    run_io(
+        Box::new(client),
+        Box::new(upstream),
+        options,
+        transport,
+        host,
+    )
+    .await
+}
+
+pub(crate) async fn run_io(
+    client: Box<dyn ConnectionIo>,
+    upstream: Box<dyn ConnectionIo>,
+    options: ConnectionOptions,
+    transport: CaptureTransport,
+    host: Arc<dyn CaptureHost>,
+) -> Result<()> {
     let ConnectionOptions {
         context,
         max_body_bytes,
@@ -79,8 +98,8 @@ pub async fn run(
         mut server_decoder,
         termination,
     } = options;
-    let client_control = ConnectionControl::new(&client)?;
-    let upstream_control = ConnectionControl::new(&upstream)?;
+    let client_control = transport.client;
+    let upstream_control = transport.upstream;
     let mut client = ObservedIo::new(client, termination.clone(), TerminationSide::Client);
     let mut upstream = ObservedIo::new(upstream, termination.clone(), TerminationSide::Server);
     let connection_id = Uuid::new_v4();
@@ -116,7 +135,8 @@ pub async fn run(
     client_to_server_bytes += login_packet.encoded_len() as u64;
     let mut login = parse_handshake_response(&login_packet);
 
-    let (client, upstream): (BoxedMysqlIo, BoxedMysqlIo) = if login.tls_requested {
+    let (client, upstream): (Box<dyn ConnectionIo>, Box<dyn ConnectionIo>) = if login.tls_requested
+    {
         write_packet(&mut upstream, &login_packet)
             .await
             .context("failed to forward MySQL SSL request")?;
@@ -124,15 +144,9 @@ pub async fn run(
         let tls_host = target_host
             .clone()
             .unwrap_or_else(|| "localhost".to_string());
-        let downstream_config = host.server_tls_config(&tls_host)?;
         let server_name = rustls::pki_types::ServerName::try_from(tls_host.clone())
             .with_context(|| format!("invalid MySQL TLS server name {tls_host}"))?;
-        let accept_downstream = async {
-            TlsAcceptor::from(downstream_config)
-                .accept(client)
-                .await
-                .context("failed to accept MySQL client TLS")
-        };
+        let accept_downstream = host.accept_tls(Box::new(client), tls_host);
         let connect_upstream = async {
             TlsConnector::from(super::upstream_client_config())
                 .connect(server_name, upstream)
@@ -313,7 +327,9 @@ pub async fn run(
             .connection_end(TerminationSide::Client)
             .is_some()
         {
-            let _ = upstream_control.reset();
+            if let Some(control) = &upstream_control {
+                let _ = control.reset();
+            }
         } else {
             let _ = upstream_write.shutdown().await;
         }
@@ -493,7 +509,9 @@ pub async fn run(
         {
             match observed.termination.kind {
                 traffic_model::TerminationKind::Reset => {
-                    let _ = client_control.reset();
+                    if let Some(control) = &client_control {
+                        let _ = control.reset();
+                    }
                 }
                 traffic_model::TerminationKind::Eof => {
                     let _ = s2c_client_write.lock().await.shutdown().await;

@@ -1,4 +1,5 @@
 //! Recording host for registered native connection drivers.
+pub(crate) mod listener;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
@@ -7,7 +8,8 @@ use traffic_model::recording::ProtocolRef;
 use traffic_protocol::{
     capture::CaptureSnapshot,
     connection::{
-        CaptureExchange, CaptureHost, CaptureOutput, ConnectionInfo, NativeFuture, Operation,
+        CaptureExchange, CaptureHost, CaptureOutput, CaptureTransport, ConnectionInfo,
+        NativeFuture, Operation,
     },
 };
 
@@ -23,22 +25,33 @@ pub(crate) async fn handle_connected(
     state: AppState,
     info: ConnectionInfo,
 ) -> Result<()> {
-    if let Some(driver) = crate::protocols::recording_driver(protocol) {
-        return driver(client, upstream, state, info).await;
-    }
+    client.set_nodelay(true)?;
+    upstream.set_nodelay(true)?;
     let native = state
         .dependency_providers()
         .provider(protocol)?
         .native_protocol()
         .context("registered dependency has no native connection capability")?;
     let session = native.capture_session(info.clone())?;
-    let _connection = state
-        .dependency_connections()
-        .register(protocol.as_str(), &[&client, &upstream])?;
+    let transport = CaptureTransport {
+        termination: Default::default(),
+        client: Some(traffic_protocol::transport::ConnectionControl::new(
+            &client,
+        )?),
+        upstream: Some(traffic_protocol::transport::ConnectionControl::new(
+            &upstream,
+        )?),
+    };
+    let _connection = state.dependency_connections().register_observed(
+        protocol.as_str(),
+        &[&client, &upstream],
+        &transport.termination,
+    )?;
     let host = Arc::new(Host {
         state,
         protocol,
         info,
+        transport,
     });
     session
         .run(Box::new(client), Box::new(upstream), host)
@@ -49,6 +62,7 @@ struct Host {
     state: AppState,
     protocol: DependencyProtocol,
     info: ConnectionInfo,
+    transport: CaptureTransport,
 }
 
 impl Host {
@@ -65,6 +79,9 @@ impl Host {
 }
 
 impl CaptureHost for Host {
+    fn transport(&self) -> CaptureTransport {
+        self.transport.clone()
+    }
     fn accept_tls(
         &self,
         io: Box<dyn traffic_protocol::connection::ConnectionIo>,

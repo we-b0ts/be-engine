@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 use std::sync::Arc;
 use traffic_model::trace::OutputKind;
-use traffic_protocol::connection::{CaptureOutput, NativeFuture};
+use traffic_protocol::connection::{CaptureOutput, ConnectionIo, NativeFuture};
 use uuid::Uuid;
 
 pub struct CaptureRequest<'a> {
@@ -32,7 +32,21 @@ pub enum CaptureObservation {
 /// Native transport submits facts. The host owns authorization, capture
 /// lifetimes, attribution, persistence and output receipts.
 pub trait CaptureHost: Send + Sync {
-    fn server_tls_config(&self, host: &str) -> Result<Arc<rustls::ServerConfig>>;
+    fn server_tls_config(&self, _host: &str) -> Result<Arc<rustls::ServerConfig>> {
+        anyhow::bail!("MySQL recording TLS is unavailable")
+    }
+    fn accept_tls(
+        &self,
+        io: Box<dyn ConnectionIo>,
+        host: String,
+    ) -> NativeFuture<'_, Box<dyn ConnectionIo>> {
+        Box::pin(async move {
+            let io = tokio_rustls::TlsAcceptor::from(self.server_tls_config(&host)?)
+                .accept(io)
+                .await?;
+            Ok(Box::new(io) as Box<dyn ConnectionIo>)
+        })
+    }
     fn begin_request<'a>(
         &'a self,
         request: CaptureRequest<'a>,

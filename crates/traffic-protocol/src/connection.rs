@@ -144,7 +144,17 @@ pub trait CaptureOutput: Send {
     fn commit(self: Box<Self>);
 }
 
+#[derive(Clone, Default)]
+pub struct CaptureTransport {
+    pub termination: crate::transport::ConnectionTermination,
+    pub client: Option<crate::transport::ConnectionControl>,
+    pub upstream: Option<crate::transport::ConnectionControl>,
+}
+
 pub trait CaptureHost: Send + Sync {
+    fn transport(&self) -> CaptureTransport {
+        CaptureTransport::default()
+    }
     fn accept_tls(
         &self,
         _io: Box<dyn ConnectionIo>,

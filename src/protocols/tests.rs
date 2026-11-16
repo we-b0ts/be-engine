@@ -34,6 +34,10 @@ impl DependencyProvider for TrackedProvider {
         self.inner.evidence()
     }
 
+    fn native_protocol(&self) -> Option<Arc<dyn traffic_protocol::connection::NativeProtocol>> {
+        self.inner.native_protocol()
+    }
+
     fn create_session(&self) -> Result<Session> {
         (self.probe)();
         self.stats.sessions.fetch_add(1, Ordering::Relaxed);

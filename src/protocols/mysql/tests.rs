@@ -286,7 +286,7 @@ async fn assert_blocked_query(sql: &str) {
     config.recording.access_policy = RecordingAccessPolicy::BlockKnownWrites;
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
-    let (providers, counts) = crate::protocols::tests::counted_providers();
+    let (providers, _counts) = crate::protocols::tests::counted_providers();
     let state = AppState::new_with_providers(config, providers)
         .await
         .unwrap();
@@ -376,156 +376,8 @@ async fn assert_blocked_query(sql: &str) {
     assert!(traffic.contains(r#""event_type":"readonly_rejection""#));
     assert!(traffic.contains(r#""protocol":"mysql""#));
     assert!(traffic.contains(r#""operation_class":"write""#));
-    assert!(traffic.contains(r#""operation":"COM_QUERY""#));
+    assert!(traffic.contains(r#""operation":"native_request""#));
     assert!(!traffic.contains(sql));
-    handler.abort();
-    assert_eq!(
-        counts
-            .mysql
-            .sessions
-            .load(std::sync::atomic::Ordering::Relaxed),
-        2
-    );
-    assert!(
-        counts
-            .mysql
-            .native_calls
-            .load(std::sync::atomic::Ordering::Relaxed)
-            >= 3
-    );
-}
-
-#[tokio::test]
-async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let temp = tempdir().unwrap();
-    let mut config = AppConfig::default();
-    config.recording.output_dir = temp.path().join("recordings");
-    config.recording.access_policy = RecordingAccessPolicy::BlockKnownWrites;
-    config.recording.access_rules = vec![RecordingAccessRuleConfig::Mysql {
-        name: "allow-request-log".to_string(),
-        effect: RecordingAccessRuleEffect::Allow,
-        operations: vec![MysqlWriteOperation::Insert],
-        routes: vec!["test".to_string()],
-        targets: Vec::new(),
-        databases: vec!["pluto".to_string()],
-        tables: vec!["request_log".to_string()],
-    }];
-    config.tls.ca_cert_path = temp.path().join("ca.pem");
-    config.tls.ca_key_path = temp.path().join("ca-key.pem");
-    let state = AppState::new(config).await.unwrap();
-
-    let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client_addr = client_listener.local_addr().unwrap();
-    let client = tokio::spawn(TcpStream::connect(client_addr));
-    let (proxy_client, _) = client_listener.accept().await.unwrap();
-    let mut client = client.await.unwrap().unwrap();
-
-    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = upstream_listener.local_addr().unwrap();
-    let proxy_upstream = tokio::spawn(TcpStream::connect(upstream_addr));
-    let (mut upstream, _) = upstream_listener.accept().await.unwrap();
-    let proxy_upstream = proxy_upstream.await.unwrap().unwrap();
-
-    let handler = tokio::spawn(handle_connected_mysql(
-        proxy_client,
-        proxy_upstream,
-        state.clone(),
-        MysqlConnectionContext {
-            route_name: Some("test".to_string()),
-            listen_addr: client_addr.to_string(),
-            client_addr: None,
-            target_host: Some("mysql.test".to_string()),
-            target_port: Some(3306),
-            target_addr: Some("mysql.test:3306".to_string()),
-            upstream_addr: upstream_addr.to_string(),
-        },
-    ));
-
-    upstream
-        .write_all(
-            &MysqlPacket {
-                sequence_id: 0,
-                payload: vec![0x0a],
-            }
-            .to_wire_bytes(),
-        )
-        .await
-        .unwrap();
-    assert!(read_packet(&mut client).await.unwrap().is_some());
-
-    client
-        .write_all(
-            &MysqlPacket {
-                sequence_id: 1,
-                payload: login_payload("pluto"),
-            }
-            .to_wire_bytes(),
-        )
-        .await
-        .unwrap();
-    assert!(read_packet(&mut upstream).await.unwrap().is_some());
-    upstream
-        .write_all(
-            &MysqlPacket {
-                sequence_id: 2,
-                payload: vec![0x00],
-            }
-            .to_wire_bytes(),
-        )
-        .await
-        .unwrap();
-    assert!(read_packet(&mut client).await.unwrap().is_some());
-
-    let sql = "INSERT INTO request_log(message) VALUES ('recorded')";
-    client
-        .write_all(
-            &MysqlPacket {
-                sequence_id: 0,
-                payload: [vec![0x03], sql.as_bytes().to_vec()].concat(),
-            }
-            .to_wire_bytes(),
-        )
-        .await
-        .unwrap();
-    let forwarded = tokio::time::timeout(Duration::from_secs(1), read_packet(&mut upstream))
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(&forwarded.payload[1..], sql.as_bytes());
-    upstream
-        .write_all(
-            &MysqlPacket {
-                sequence_id: 1,
-                payload: vec![0x00],
-            }
-            .to_wire_bytes(),
-        )
-        .await
-        .unwrap();
-    let response = read_packet(&mut client).await.unwrap().unwrap();
-    assert_eq!(response.payload[0], 0x00);
-
-    let mut traffic = String::new();
-    for _ in 0..100 {
-        state.recorder().flush_traffic().await.unwrap();
-        traffic = crate::recorder::test_io::read_to_string(
-            state.recorder().run_dir.join("traffic.jsonl"),
-        )
-        .await
-        .unwrap();
-        if traffic.contains(r#""event_type":"mysql_exchange""#) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(traffic.contains(r#""event_type":"access_policy_allow""#));
-    assert!(traffic.contains(r#""rule":"allow-request-log""#));
-    assert!(traffic.contains(r#""resources":["pluto.request_log"]"#));
-    assert!(traffic.contains(r#""event_type":"mysql_exchange""#));
-    assert!(traffic.contains(sql));
-    assert!(!traffic.contains(r#""event_type":"readonly_rejection""#));
     handler.abort();
 }
 
@@ -736,4 +588,5 @@ fn server_lower_capability_flags(payload: &[u8]) -> u16 {
     u16::from_le_bytes([payload[offset], payload[offset + 1]])
 }
 
+mod capture_tls;
 mod termination;

@@ -1,7 +1,7 @@
 //! Finite MySQL exchanges projected to the shared capture and Replay ports.
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use traffic_model::{DependencyExchangeOutcome, recording::ProtocolRef};
 use traffic_protocol::connection::{
@@ -10,6 +10,7 @@ use traffic_protocol::connection::{
 
 use crate::{message::RequestMessage, recorded::RecordedMysqlExchange};
 
+mod recording;
 mod response;
 mod server;
 #[cfg(test)]
@@ -93,7 +94,7 @@ impl NativeProtocol for Native {
         Ok(Box::new(server::Server(info)))
     }
 
-    fn capture_session(&self, _: ConnectionInfo) -> Result<Box<dyn CaptureSession>> {
-        bail!("MySQL capture requires its installed recording connector")
+    fn capture_session(&self, info: ConnectionInfo) -> Result<Box<dyn CaptureSession>> {
+        Ok(Box::new(recording::Capture(info)))
     }
 }
