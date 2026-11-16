@@ -2,6 +2,7 @@
 use crate::connection::ResponseFramer;
 use anyhow::Result;
 use bytes::Bytes;
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputBoundary {
@@ -34,6 +35,31 @@ pub trait OutputStream: Send {
 }
 
 pub struct SingleOutput(Option<Bytes>);
+
+/// An owned finite chunk plan retains native boundaries until actual delivery.
+pub struct BufferedOutput {
+    parts: usize,
+    chunks: VecDeque<OutputChunk>,
+}
+
+impl BufferedOutput {
+    pub fn new(parts: usize, chunks: impl IntoIterator<Item = OutputChunk>) -> Self {
+        Self {
+            parts,
+            chunks: chunks.into_iter().collect(),
+        }
+    }
+}
+
+impl OutputStream for BufferedOutput {
+    fn part_count(&self) -> usize {
+        self.parts
+    }
+
+    fn next(&mut self) -> Result<Option<OutputChunk>> {
+        Ok(self.chunks.pop_front())
+    }
+}
 
 /// Apply connection-local native framing while retaining the original logical
 /// boundaries and the encoder's write observations.

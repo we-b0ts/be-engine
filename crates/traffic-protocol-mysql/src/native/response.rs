@@ -1,12 +1,12 @@
 //! Typed result cells expose physical locations and retain native wire metadata.
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use anyhow::{Result, ensure};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use traffic_protocol::message::{MessageEncoder, ProjectedMessage, ProtocolMessage};
-use traffic_protocol::output::{OutputChunk, OutputStream};
+use traffic_protocol::output::{BufferedOutput, OutputStream};
 
 use crate::{message::project_value, recorded::RecordedMysqlResponse};
 
@@ -24,11 +24,11 @@ impl ResponseMessage {
             status,
         );
         let parts = output.part_count();
-        let mut chunks = VecDeque::new();
+        let mut chunks = Vec::new();
         while let Some(chunk) = output.next()? {
-            chunks.push_back(chunk);
+            chunks.push(chunk);
         }
-        Ok(Box::new(RenderedResponse { parts, chunks }))
+        Ok(Box::new(BufferedOutput::new(parts, chunks)))
     }
 
     pub(super) fn new(
@@ -60,21 +60,6 @@ impl ResponseMessage {
             response,
             source_status_before,
         })
-    }
-}
-
-struct RenderedResponse {
-    parts: usize,
-    chunks: VecDeque<OutputChunk>,
-}
-
-impl OutputStream for RenderedResponse {
-    fn part_count(&self) -> usize {
-        self.parts
-    }
-
-    fn next(&mut self) -> Result<Option<OutputChunk>> {
-        Ok(self.chunks.pop_front())
     }
 }
 

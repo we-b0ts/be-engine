@@ -1,6 +1,7 @@
 //! Finite HTTP response values and native HTTP/1 rendering.
 use super::*;
 use traffic_protocol::message::MessageEncoder;
+use traffic_protocol::output::{BufferedOutput, OutputBoundary, OutputChunk, OutputStream};
 
 pub struct ResponseMessage {
     pub status: u16,
@@ -66,6 +67,30 @@ impl ProtocolMessage for ResponseMessage {
 }
 
 impl MessageEncoder for ResponseMessage {
+    fn output(&self, values: &BTreeMap<String, Bytes>) -> Result<Box<dyn OutputStream>> {
+        let wire = self.encode(values)?;
+        let header_end = wire
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .expect("encoded HTTP response includes its header terminator")
+            + 4;
+        Ok(Box::new(BufferedOutput::new(
+            0,
+            [
+                OutputChunk {
+                    bytes: wire.slice(..header_end),
+                    boundary: OutputBoundary::Headers,
+                    complete: true,
+                },
+                OutputChunk {
+                    bytes: wire.slice(header_end..),
+                    boundary: OutputBoundary::End,
+                    complete: true,
+                },
+            ],
+        )))
+    }
+
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes> {
         ensure!(
             self.project()?.values.keys().eq(values.keys()),
@@ -115,5 +140,40 @@ impl MessageEncoder for ResponseMessage {
             bytes.extend_from_slice(body);
         }
         Ok(bytes.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finite_output_retains_headers_and_body_completion_without_stream_parts() {
+        for head_request in [false, true] {
+            let message = ResponseMessage {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: Bytes::from_static(b"value"),
+                head_request,
+            };
+            let values = message
+                .project()
+                .unwrap()
+                .values
+                .into_iter()
+                .map(|(path, value)| (path, value.bytes))
+                .collect();
+            let expected = message.encode(&values).unwrap();
+            let mut output = message.output(&values).unwrap();
+            assert_eq!(output.part_count(), 0);
+            let mut bytes = Vec::new();
+            let mut boundaries = Vec::new();
+            while let Some(chunk) = output.next().unwrap() {
+                bytes.extend_from_slice(&chunk.bytes);
+                boundaries.push(chunk.boundary);
+            }
+            assert_eq!(bytes, expected);
+            assert_eq!(boundaries, [OutputBoundary::Headers, OutputBoundary::End]);
+        }
     }
 }
