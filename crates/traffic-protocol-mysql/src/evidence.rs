@@ -7,6 +7,13 @@ use traffic_protocol::observation::{TrafficInteraction, optional_endpoint};
 
 pub struct NativeEvidence;
 impl EvidenceAdapter for NativeEvidence {
+    fn discovery_annotations(
+        &self,
+        event: &Value,
+        side: traffic_protocol::evidence::MessageSide,
+    ) -> Result<serde_json::Map<String, Value>> {
+        discovery::annotations(event, side)
+    }
     fn query_value(
         &self,
         event: &Value,
@@ -139,4 +146,5 @@ impl EvidenceAdapter for NativeEvidence {
     }
 }
 
+mod discovery;
 mod value_query;

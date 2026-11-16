@@ -6,12 +6,22 @@ use serde_json::{Map, Value};
 #[derive(Debug, Serialize)]
 #[serde(tag = "presence", rename_all = "snake_case")]
 pub enum ValueObservation {
-    Present { value: Value },
-    Missing,
-    Unavailable { reason: String },
+    Present {
+        value: Value,
+    },
+    Missing {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    Unavailable {
+        reason: String,
+    },
 }
 
 impl ValueObservation {
+    pub fn missing() -> Self {
+        Self::Missing { reason: None }
+    }
     pub fn unavailable(reason: impl Into<String>) -> Self {
         Self::Unavailable {
             reason: reason.into(),
@@ -72,6 +82,12 @@ mod tests {
         fn supports_replay(&self, _: &Value) -> bool {
             true
         }
+        fn discovery_annotations(&self, _: &Value, _: MessageSide) -> Result<Map<String, Value>> {
+            Ok(Map::from_iter([(
+                "native_fields".into(),
+                json!(["fixture_field"]),
+            )]))
+        }
         fn query_value(
             &self,
             _: &Value,
@@ -107,11 +123,21 @@ mod tests {
         };
         assert!(
             registry
+                .discovery_annotations(&event, query.side)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            registry
                 .query_value(&event, b"\x00\x01\x02", query, &Reader)
                 .unwrap()
                 .is_none()
         );
         registry.register("vendor", Arc::new(Custom)).unwrap();
+        assert_eq!(
+            registry.discovery_annotations(&event, query.side).unwrap()["native_fields"],
+            json!(["fixture_field"])
+        );
         let result = registry
             .query_value(&event, b"\x00\x01\x02", query, &Reader)
             .unwrap()

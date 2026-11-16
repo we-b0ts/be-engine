@@ -40,6 +40,13 @@ pub trait RecordSource {
 pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
     fn event_types(&self) -> &'static [&'static str];
+    fn discovery_annotations(
+        &self,
+        _event: &Value,
+        _side: MessageSide,
+    ) -> Result<serde_json::Map<String, Value>> {
+        Ok(serde_json::Map::new())
+    }
     fn query_value(
         &self,
         _event: &Value,
@@ -150,6 +157,21 @@ impl std::fmt::Debug for EvidenceRegistry {
 }
 
 impl EvidenceRegistry {
+    pub fn discovery_annotations(
+        &self,
+        event: &Value,
+        side: MessageSide,
+    ) -> Result<serde_json::Map<String, Value>> {
+        match event["event_type"]
+            .as_str()
+            .and_then(|kind| self.events.get(kind))
+        {
+            Some(index) => self.registrations[*index]
+                .adapter
+                .discovery_annotations(event, side),
+            None => Ok(serde_json::Map::new()),
+        }
+    }
     pub fn process_summary_views(
         &self,
         values: &BTreeMap<String, Value>,

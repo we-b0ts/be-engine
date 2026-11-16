@@ -103,8 +103,8 @@ fn mysql_native_cell_queries_retain_missing_unavailable_and_native_context() {
         json!({"presence":"present","value":"observed"})
     );
     assert_eq!(
-        observed(&event, MessageSide::Request, "/sql_values/0/value", 0),
-        json!({"presence":"missing"})
+        observed(&event, MessageSide::Request, "/sql_values/0/value", 0)["presence"],
+        "missing"
     );
     assert_eq!(
         observed(
@@ -230,5 +230,34 @@ fn http_native_body_queries_use_the_same_installed_value_reader() {
     assert_eq!(
         observed(&event, MessageSide::Response, "/value", 1)["presence"],
         "unavailable"
+    );
+}
+
+#[test]
+fn native_sql_cells_delegate_embedded_content_to_the_registered_codec_reader() {
+    let event = json!({"event_type":"mysql_exchange", "command":"COM_QUERY", "database":"app",
+        "sql":"SELECT 'fixture:observed'", "response":{"status":"ok"}});
+    let payload =
+        traffic_protocol_mysql::witness::source_payload(&event, MessageSide::Request).unwrap();
+    let mut codecs = CodecRegistry::default();
+    codecs.register(Arc::new(CustomCodec)).unwrap();
+    let providers = crate::protocols::default_providers();
+    let result = providers
+        .evidence()
+        .query_value(
+            &event,
+            &payload,
+            ValueQuery {
+                side: MessageSide::Request,
+                value_index: 0,
+                pointer: "/sql_values/1/json/value",
+            },
+            &Reader(&codecs),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(result.observation).unwrap(),
+        json!({"presence":"present","value":"observed"})
     );
 }

@@ -199,6 +199,12 @@ Process-summary projection uses the same registered evidence owner. The host
 supplies a detail limit and publishes the resulting named native views. Redis
 owns snapshot decoding, endpoint truncation and omitted-endpoint counts beside
 its recording accumulator.
+Dependency rule discovery decodes authenticated envelopes through their installed
+native providers and visits projected value locations. Codec recognition and
+policy analysis use the shared executor for each value. Native discovery
+annotations, including MySQL physical SQL fields and token pointers, come from
+the evidence adapter. A root field finding retains its physical binding
+requirement instead of producing an empty global field selector.
 Native HTTP header occurrences and Redis RESP value positions live beside their
 protocol libraries. Value bindings receive the policy registry and comparison
 metadata. Implicit scalar applicability delegates to the shared field plan and its

@@ -147,7 +147,6 @@ pub(crate) use response::ResponseBodyRuleMatch;
 pub(crate) use matcher::ReplayPolicyRuntime;
 
 pub(crate) use request_contract::RequestContracts;
-pub(crate) use request_contract::redis_bulk_payload;
 
 pub(crate) use native_projection::validate_finite_sharing as validate_native_finite_sharing;
 pub(crate) use native_projection::{compiled_input_rules, validate_native_adapter};

@@ -8,13 +8,9 @@ use serde_json::Value;
 use std::path::Path;
 
 pub(in crate::rewrite::unified_rule) fn protocol(event: &Value) -> Option<Protocol> {
-    match event["event_type"].as_str()? {
-        "redis_exchange" => Some(Protocol::Redis),
-        "memcached_exchange" => Some(Protocol::Memcached),
-        "http_exchange" => Some(Protocol::Http),
-        "mysql_exchange" => Some(Protocol::Mysql),
-        _ => None,
-    }
+    let providers = crate::protocols::default_providers();
+    let owner = providers.event_provider(event)?;
+    serde_json::from_value(serde_json::json!(owner.kind.as_str())).ok()
 }
 
 pub(in crate::rewrite) fn source_witness(
@@ -67,35 +63,6 @@ pub(in crate::rewrite::unified_rule) fn validate_metadata(
         "Target witness protocol identity differs from its immutable Source exchange"
     );
     Ok(())
-}
-
-pub(in crate::rewrite) fn values(
-    surface: Surface,
-    event: &Value,
-    raw: &[u8],
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    match protocol(event).context("unsupported dependency event")? {
-        Protocol::Redis
-            if surface == Surface::DependencyResponse
-                && crate::policy::runtime::redis_bulk_payload(raw)?.is_none() =>
-        {
-            Ok(vec![])
-        }
-        Protocol::Redis => Ok(vec![(
-            super::arguments(event)?
-                .into_iter()
-                .next()
-                .context("Redis key is missing")?,
-            super::redis_payload(surface, event, raw)?,
-        )]),
-        Protocol::Memcached => {
-            anyhow::bail!("Memcached recording has no installed protocol implementation")
-        }
-        Protocol::Http => Ok(crate::protocols::replay::http_witness_value(raw, surface)?
-            .map(|payload| vec![(Vec::new(), payload)])
-            .unwrap_or_default()),
-        _ => anyhow::bail!("selected protocol requires its native value-slot extractor"),
-    }
 }
 
 fn database_matches(database: &Database, observed: &Value) -> bool {

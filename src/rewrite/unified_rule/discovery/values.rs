@@ -157,6 +157,11 @@ impl Drafts {
         let mut value = serde_json::to_value(finding)?;
         value["location"] = location.clone();
         value["witness_id"] = json!(witness);
+        if finding.source_path.is_empty()
+            && matches!(finding.proposal, Some(traffic_policy::Proposal::Field(_)))
+        {
+            value["requires_value_binding"] = json!(true);
+        }
         let identity = serde_json::to_string(&value)?;
         if self.finding_ids.insert(identity) && self.findings.len() < LIMIT {
             self.findings.push(value);
@@ -173,6 +178,9 @@ impl Drafts {
     ) -> Result<()> {
         let (identity, draft_policy) = match proposal {
             traffic_policy::Proposal::Field(contract) => {
+                if location.pattern.is_empty() {
+                    return Ok(());
+                }
                 let contract = serde_json::to_value(contract)?;
                 (
                     serde_json::to_string(&(&location.pattern, &contract))?,

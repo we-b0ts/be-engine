@@ -110,10 +110,15 @@ fn automatic_codecs_reach_registered_hints_and_keep_opaque_bytes_scalar() {
         )
         .unwrap();
     let candidates = drafts.candidates();
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0]["mechanism"], "unordered-joined-string");
+    assert!(candidates.is_empty());
+    let finding = drafts
+        .findings
+        .iter()
+        .find(|finding| finding["policy"] == "unordered-joined-string")
+        .unwrap();
+    assert_eq!(finding["requires_value_binding"], true);
     assert_eq!(
-        candidates[0]["draft_policy"]["json"]["fields"][""]["id"],
+        finding["proposal"]["value"]["id"],
         "unordered-joined-string"
     );
 

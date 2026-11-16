@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::super::model::RewriteState;
 use crate::{
-    policy::{CompiledPolicy, Protocol, Surface},
+    policy::{CompiledPolicy, Surface},
     policy_evidence::{TargetRole, WitnessManifest},
     value_contract::json::AnchorClocks,
 };
@@ -20,7 +20,6 @@ mod headers;
 mod interaction;
 mod page;
 mod primary;
-mod sql_fields;
 mod values;
 pub(in crate::rewrite) use page::Cursor;
 
@@ -231,38 +230,25 @@ impl Drafts {
             0,
         )
     }
-    #[allow(clippy::too_many_arguments)] // Native witnesses and physical-field suggestions share immutable context.
-    fn sql_entry(
+    fn native_entry(
         &mut self,
-        event: &Value,
-        source: &[u8],
-        target: Option<&[u8]>,
-        witness: &crate::policy_evidence::WitnessRef,
-        state: &RewriteState,
-        schemas: Option<&CompiledPolicy>,
+        base: &Value,
+        witness: &str,
+        annotations: serde_json::Map<String, Value>,
     ) -> Result<()> {
-        let _ = (source, target, state, schemas);
-        let base = json!({"surface":witness.metadata.surface,"match":{
-            "resource":witness.metadata.resource}});
-        let physical = sql_fields::observed(event, witness.metadata.surface);
-        let prefix = if witness.metadata.surface == Surface::DependencyRequest {
-            "/sql_values"
-        } else {
-            "/request/sql_values"
-        };
-        let unavailable = physical["fields"].as_array().is_none_or(Vec::is_empty);
-        let identity = serde_json::to_string(&(&base, &physical, &event["response"]["status"]))?;
-        self.add_entry(identity,json!({"location":base,"witness_id":witness.id,
-            "source_response_kind":event["response"]["status"],"physical_fields":physical,
-            "needs_sql_template":false,"needs_physical_location":unavailable,"needs_schema":false,
-            "protected_sql_value_pointers":{
-                "value":format!("{prefix}/<sql-token-index>/value"),
-                "decoded_json":format!("{prefix}/<sql-token-index>/json/<field-path>"),
-                "field":format!("{prefix}/<sql-token-index>/field"),
-                "instruction":"Use this witness_id with dependency_witness_query and a token index from physical_fields.fields[].observed_positions. Select a nested JSON field when the SQL value is large. Each statement retains its own physical positions; the candidate is not proof of a match."
-            },
-            "source_intent_required":true,
-            "instruction":"MySQL JSON payloads use root json.fields automatically. Native DATE/DATETIME/TIMESTAMP metadata is inferred when mysql is enabled; historical and invalid scalar inputs stay exact unless a valid differing value is proved. mysql.tables declares remaining scalar formats across databases; recorded and Target physical connection identities must still match. Table patterns contain table names, without a database prefix. No JSON column codec or SQL statement template is needed. Unknown physical origins grant no scalar permission."}));
+        if annotations.is_empty() {
+            return Ok(());
+        }
+        let mut entry =
+            json!({"location":base, "witness_id":witness, "source_intent_required":true});
+        let fields = entry.as_object_mut().expect("native entry is an object");
+        anyhow::ensure!(
+            annotations.keys().all(|name| !fields.contains_key(name)),
+            "native annotations would replace protected discovery facts"
+        );
+        fields.extend(annotations);
+        let identity = serde_json::to_string(&entry)?;
+        self.add_entry(identity, entry);
         Ok(())
     }
 }

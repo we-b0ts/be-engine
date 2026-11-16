@@ -218,34 +218,6 @@ pub(super) fn verify_attribution(
     Ok(result)
 }
 
-fn redis_payload(surface: Surface, event: &Value, raw: &[u8]) -> Result<Vec<u8>> {
-    if surface == Surface::DependencyRequest {
-        let args: Vec<Vec<u8>> = serde_json::from_slice(raw)?;
-        let index = value_index(event, args.len())?;
-        Ok(args.get(index).context("Redis value slot missing")?.clone())
-    } else {
-        crate::policy::runtime::redis_bulk_payload(raw)?
-            .context("Redis response has no encoded value")
-    }
-}
-
-fn value_index(event: &Value, length: usize) -> Result<usize> {
-    match (event["command"].as_str(), length) {
-        (Some("SET"), 2..) | (Some("PUBLISH"), 2) => Ok(1),
-        (Some("SETEX" | "PSETEX"), 3) => Ok(2),
-        _ => anyhow::bail!("unsupported Redis value slot or argument shape"),
-    }
-}
-
-fn arguments(event: &Value) -> Result<Vec<Vec<u8>>> {
-    event["args"]
-        .as_array()
-        .context("Source Redis arguments unavailable")?
-        .iter()
-        .map(capture)
-        .collect()
-}
-
 pub(super) fn capture(value: &Value) -> Result<Vec<u8>> {
     ensure!(value["truncated"] != true, "Source capture is truncated");
     ensure!(

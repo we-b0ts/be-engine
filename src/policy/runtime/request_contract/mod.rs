@@ -16,8 +16,6 @@ mod value_decision;
 pub(crate) use key::KeyBindingReport;
 #[cfg(test)]
 mod overlap;
-mod unified_response;
-pub(crate) use unified_response::redis_bulk_payload;
 mod script;
 mod source_applicability;
 mod source_records;

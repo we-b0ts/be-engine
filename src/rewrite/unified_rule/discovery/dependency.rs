@@ -77,25 +77,18 @@ pub(super) fn observe(
                 };
                 source_events.insert(directory.to_owned(), events);
             }
-            let identity_present = if resource.protocol == Protocol::Http {
-                witness.metadata.source.exchange_id.is_some()
-            } else {
-                witness.metadata.source.connection_id.is_some()
-                    && witness.metadata.source.sequence.is_some()
-            };
+            let providers = crate::protocols::default_providers();
+            let expected_protocol = serde_json::to_value(resource.protocol)?;
             let event = source_events[directory].iter().find(|event| {
-                super::super::preflight::dependency::protocol(event) == Some(resource.protocol)
-                    && if let Some(id) = &witness.metadata.source.exchange_id {
-                        event["id"] == *id
-                    } else {
-                        event["connection_id"].as_str()
-                            == witness.metadata.source.connection_id.as_deref()
-                            && (if resource.protocol == Protocol::Mysql {
-                                event["query_sequence"].as_u64()
-                            } else {
-                                event["sequence"].as_u64()
-                            }) == witness.metadata.source.sequence
-                    }
+                providers
+                    .event_provider(event)
+                    .is_some_and(|owner| expected_protocol == owner.kind.as_str())
+                    && super::super::preflight::dependency::source_identity(
+                        &witness.metadata.source.case_id,
+                        event,
+                    )
+                    .as_ref()
+                        == Some(&witness.metadata.source)
                     && super::super::preflight::dependency::source_witness(
                         witness.metadata.surface,
                         event,
@@ -108,95 +101,47 @@ pub(super) fn observe(
             let Some(event) = event else {
                 continue;
             };
-            let independent = identity_present
-                && witness.metadata.target_role == TargetRole::IndependentTargetObservation;
-            if resource.protocol == Protocol::Http {
-                let key = if witness.metadata.surface == crate::policy::Surface::DependencyRequest {
-                    "request_headers"
-                } else {
-                    "response_headers"
-                };
-                let before: Value = serde_json::from_slice(&source)?;
-                let after = target
-                    .as_deref()
-                    .filter(|_| independent)
-                    .map(serde_json::from_slice::<Value>)
-                    .transpose()?;
-                drafts.headers(
-                    &before[key],
-                    after.as_ref().map(|after| &after[key]),
-                    &witness.id,
-                    witness.metadata.clocks.comparison(),
-                )?;
-            }
-            if witness
-                .metadata
-                .resource
-                .as_ref()
-                .is_some_and(|r| r.protocol == Protocol::Mysql)
-            {
-                // The protected envelope omits connection defaults. Bind its
-                // actual endpoint/schema/user to the immutable Source event
-                // before interpreting unqualified SQL on either side.
-                super::super::preflight::dependency::validate_metadata(witness, event)?;
-                drafts.sql_entry(
-                    event,
-                    &source,
-                    target.as_deref().filter(|_| independent),
-                    witness,
-                    state,
-                    schemas,
-                )?;
-                continue;
-            }
-            let values = super::super::preflight::dependency::values(
-                witness.metadata.surface,
-                event,
-                &source,
-            );
-            let Ok(values) = values else {
+            super::super::preflight::dependency::validate_metadata(witness, event)?;
+            let owner = providers
+                .event_provider(event)
+                .context("native evidence owner is unavailable")?;
+            let Some(native) = owner.provider.native_protocol() else {
+                drafts.limit("native_evidence_unavailable");
                 continue;
             };
-            let actual = if independent {
-                target.as_ref().and_then(|target| {
-                    super::super::preflight::dependency::values(
-                        witness.metadata.surface,
-                        event,
-                        target,
-                    )
+            let side = witness.metadata.surface.dependency_side()?;
+            let source = native.decode_evidence(event, &source, side)?;
+            let source = projection(source, side)?;
+            let independent =
+                witness.metadata.target_role == TargetRole::IndependentTargetObservation;
+            let target = target.as_deref().filter(|_| independent).and_then(|bytes| {
+                native
+                    .decode_evidence(event, bytes, side)
+                    .and_then(|value| projection(value, side))
                     .ok()
-                })
-            } else {
-                None
-            };
-            for (index, (key, value)) in values.into_iter().enumerate() {
-                let Some(key) = std::str::from_utf8(&key).ok() else {
-                    continue;
-                };
-                let mut base = json!({"surface":witness.metadata.surface,"match":{"api":state.api,
-                    "resource":witness.metadata.resource,"operation":witness.metadata.operation},"slot":witness.metadata.slot});
-                if witness
-                    .metadata
-                    .resource
-                    .as_ref()
-                    .is_some_and(|r| r.protocol == Protocol::Http)
-                {
-                    base["match"]["path"] = json!(
-                        event["uri"]
-                            .as_str()
-                            .and_then(|uri| uri.parse::<hyper::Uri>().ok())
-                            .map(|uri| uri.path().to_owned())
-                            .unwrap_or_default()
-                    );
-                } else {
-                    base["match"]["key"] = json!({"exact":key});
+            });
+            let base = json!({"surface":witness.metadata.surface,"match":{
+                "api":state.api,"resource":witness.metadata.resource,
+                "operation":witness.metadata.operation},"slot":witness.metadata.slot});
+            drafts.native_entry(
+                &base,
+                &witness.id,
+                providers.evidence().discovery_annotations(event, side)?,
+            )?;
+            for (location, value) in source.values {
+                if drafts.observations >= OBSERVATION_LIMIT {
+                    drafts.limit("native_values");
+                    break;
                 }
+                drafts.observations += 1;
+                let mut base = base.clone();
+                base["native_location"] = json!(location);
                 drafts.observe(
-                    &value,
-                    actual
+                    &value.bytes,
+                    target
                         .as_ref()
-                        .and_then(|a| a.get(index))
-                        .map(|(_, v)| v.as_slice()),
+                        .and_then(|target| target.values.get(&location))
+                        .map(|value| value.bytes.as_ref()),
                     base,
                     &witness.id,
                     witness.metadata.clocks.comparison(),
@@ -207,4 +152,17 @@ pub(super) fn observe(
         }
     }
     Ok(true)
+}
+
+fn projection(
+    evidence: traffic_protocol::evidence::MessageEvidence,
+    side: traffic_protocol::evidence::MessageSide,
+) -> Result<traffic_protocol::message::ProjectedMessage> {
+    match side {
+        traffic_protocol::evidence::MessageSide::Request => evidence.request.project(),
+        traffic_protocol::evidence::MessageSide::Response => evidence
+            .response
+            .context("native response evidence is unavailable")?
+            .project(),
+    }
 }

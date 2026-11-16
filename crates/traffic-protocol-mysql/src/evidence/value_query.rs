@@ -66,8 +66,21 @@ fn select_cell(
     };
     Ok(
         match crate::witness::sql_value(payload, query.side, event["database"].as_str(), index) {
-            Ok(Some(value)) => reader.select(&serde_json::to_vec(&value)?, &format!("/{tail}")),
-            Ok(None) => ValueObservation::Missing,
+            Ok(Some(value)) => {
+                if let Some(pointer) = tail.strip_prefix("json")
+                    .filter(|pointer| pointer.is_empty() || pointer.starts_with('/'))
+                {
+                    match value["value"].as_str() {
+                        Some(text) => reader.select(text.as_bytes(), pointer),
+                        None => ValueObservation::missing(),
+                    }
+                } else {
+                    reader.select(&serde_json::to_vec(&value)?, &format!("/{tail}"))
+                }
+            }
+            Ok(None) => ValueObservation::Missing {
+                reason: Some("no scalar value at this lexical SQL token index; this is not a bound-parameter ordinal. Use physical_fields.fields[].observed_positions; /sql_values is a virtual single-cell selector, not an enumerable JSON collection".into()),
+            },
             Err(error) => ValueObservation::unavailable(error.to_string()),
         },
     )

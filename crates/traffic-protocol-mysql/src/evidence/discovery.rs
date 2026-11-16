@@ -1,9 +1,11 @@
 //! Bounded physical-field suggestions; observed syntax supplies no business proof.
-use super::*;
-use crate::mysql::sql::{
+use crate::sql::{
     bounds,
     field_bindings::{self, FieldIdentity},
 };
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use traffic_protocol::evidence::MessageSide;
 
 const FIELD_LIMIT: usize = 128;
 const POSITION_LIMIT: usize = 16;
@@ -11,7 +13,7 @@ type Key = (String, String, String);
 
 /// Never return SQL text, values, inferred codecs or inferred table families.
 /// Live adapters remain the owner of selection and comparison.
-pub(super) fn observed(event: &Value, surface: crate::policy::Surface) -> Value {
+pub(super) fn observed(event: &Value, surface: MessageSide) -> Value {
     let database = event["database"].as_str();
     let mut fields = BTreeMap::<Key, (Vec<usize>, usize)>::new();
     let mut omitted = 0;
@@ -32,7 +34,7 @@ pub(super) fn observed(event: &Value, surface: crate::policy::Surface) -> Value 
             positions.push(position);
         }
     };
-    let request = surface == crate::policy::Surface::DependencyRequest;
+    let request = surface == MessageSide::Request;
     if request {
         if let Some(analysis) = event["sql"]
             .as_str()
@@ -110,12 +112,11 @@ fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::Surface;
 
     #[test]
     fn unseen_statement_reports_physical_fields_without_sql_values_or_family_guessing() {
         let event = json!({"database":"default_db","sql":"UPDATE other_db.tasks_0042 AS t SET t.updated_at='private-secret' WHERE t.id=123"});
-        let observed = observed(&event, Surface::DependencyRequest);
+        let observed = observed(&event, MessageSide::Request);
         assert_eq!(observed["fields"].as_array().unwrap().len(), 2);
         assert_eq!(observed["fields"][1]["database"], "other_db");
         assert_eq!(observed["fields"][1]["table"], "tasks_0042");
@@ -129,7 +130,7 @@ mod tests {
         }
         let ambiguous = json!({"database":"app","sql":"SELECT a.id FROM a JOIN b ON a.id=b.id WHERE updated_at=?"});
         assert!(
-            self::observed(&ambiguous, Surface::DependencyRequest)["fields"]
+            self::observed(&ambiguous, MessageSide::Request)["fields"]
                 .as_array()
                 .unwrap()
                 .is_empty()
@@ -140,11 +141,11 @@ mod tests {
     fn response_uses_wire_origins_and_only_consistent_direct_projection_fallback() {
         let mut event = json!({"database":"default_db","sql":"SELECT t.updated_at AS alias FROM other_db.tasks AS t",
             "response":{"status":"resultset","columns":[{"name":"alias","table":"tasks","column":"updated_at"}]}});
-        let result = observed(&event, Surface::DependencyResponse);
+        let result = observed(&event, MessageSide::Response);
         assert_eq!(result["fields"][0]["database"], "other_db");
         event["response"]["columns"][0]["table"] = json!("wrong_table");
         assert!(
-            observed(&event, Surface::DependencyResponse)["fields"]
+            observed(&event, MessageSide::Response)["fields"]
                 .as_array()
                 .unwrap()
                 .is_empty()
@@ -152,7 +153,7 @@ mod tests {
         event["response"]["columns"][0] =
             json!({"database":"wire_db","table":"physical","column":"updated_at","name":"alias"});
         event["sql"] = json!("unsupported SQL must not be parsed");
-        let result = observed(&event, Surface::DependencyResponse);
+        let result = observed(&event, MessageSide::Response);
         assert_eq!(result["fields"][0]["database"], "wire_db");
         assert_eq!(result["fields"][0]["table"], "physical");
     }
@@ -164,7 +165,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(",");
         let event = json!({"database":"app","sql":format!("UPDATE tasks SET {assignments}")});
-        let result = observed(&event, Surface::DependencyRequest);
+        let result = observed(&event, MessageSide::Request);
         assert_eq!(result["fields"].as_array().unwrap().len(), FIELD_LIMIT);
         assert_eq!(
             result["unresolved_or_omitted_occurrences"],
@@ -173,7 +174,7 @@ mod tests {
         let rows = std::iter::repeat_n("(1)", 40).collect::<Vec<_>>().join(",");
         let event =
             json!({"database":"app","sql":format!("INSERT INTO tasks (updated_at) VALUES {rows}")});
-        let result = observed(&event, Surface::DependencyRequest);
+        let result = observed(&event, MessageSide::Request);
         assert_eq!(
             result["fields"][0]["observed_positions"]
                 .as_array()
@@ -186,4 +187,28 @@ mod tests {
             40 - POSITION_LIMIT
         );
     }
+}
+
+pub(super) fn annotations(
+    event: &Value,
+    side: MessageSide,
+) -> anyhow::Result<serde_json::Map<String, Value>> {
+    let physical = observed(event, side);
+    let prefix = if side == MessageSide::Request {
+        "/sql_values"
+    } else {
+        "/request/sql_values"
+    };
+    let unavailable = physical["fields"].as_array().is_none_or(Vec::is_empty);
+    Ok(serde_json::from_value(json!({
+        "source_response_kind":event["response"]["status"],"physical_fields":physical,
+        "needs_sql_template":false,"needs_physical_location":unavailable,"needs_schema":false,
+        "protected_sql_value_pointers":{
+            "value":format!("{prefix}/<sql-token-index>/value"),
+            "decoded_json":format!("{prefix}/<sql-token-index>/json/<field-path>"),
+            "field":format!("{prefix}/<sql-token-index>/field"),
+            "instruction":"Use this witness_id with dependency_witness_query and a token index from physical_fields.fields[].observed_positions. Select a nested JSON field when the SQL value is large. Each statement retains its own physical positions; the candidate is not proof of a match."
+        },
+        "instruction":"MySQL JSON payloads use root json.fields automatically. Native DATE/DATETIME/TIMESTAMP metadata is inferred when mysql is enabled; historical and invalid scalar inputs stay exact unless a valid differing value is proved. mysql.tables declares remaining scalar formats across databases; recorded and Target physical connection identities must still match. Table patterns contain table names, without a database prefix. No JSON column codec or SQL statement template is needed. Unknown physical origins grant no scalar permission."
+    }))?)
 }

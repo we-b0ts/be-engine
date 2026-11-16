@@ -166,6 +166,7 @@ fn redis_setex_json_checks_the_actual_value_slot_and_every_option() {
         let fixture = Fixture::new();
         let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
             "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,"database":0,
+            "resp_version":2,"response_kind":"simple","replay_safe":true,
             "command":"SETEX","args":[raw_body(b"session"),raw_body(b"30"),raw_body(br#"{"members":[1,2],"business":"exact"}"#)],"response":raw_body(b"+OK\r\n")});
         install(&fixture, event, |raw| {
             let mut args: Vec<Vec<u8>> = serde_json::from_slice(&raw).unwrap();
@@ -291,6 +292,7 @@ fn dependency_only_rules_cannot_replace_the_finished_primary_response_oracle() {
         let fixture = Fixture::new();
         let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
             "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
+            "resp_version":2,"response_kind":"simple","replay_safe":true,
             "target_host":"cache.test","target_port":6379,"database":0,"command":"SET",
             "args":[raw_body(b"session"),raw_body(br#"{"members":[1,2]}"#)],"response":raw_body(b"+OK\r\n")});
         install(&fixture, event, |raw| {
@@ -336,8 +338,54 @@ fn retired_memcached_evidence_cannot_authorize_a_rule_transaction() {
         assert!(
             error
                 .to_string()
-                .contains("no installed protocol implementation"),
+                .contains("dependency evidence owner is unavailable"),
             "{error}"
         );
     }
+}
+
+#[test]
+fn native_sql_discovery_uses_registered_locations_and_shared_policy_analysis() {
+    let fixture = Fixture::new();
+    let event = json!({"event_type":"mysql_exchange","connection_id":uuid::Uuid::nil(),"query_sequence":1,
+        "target_host":"db.test","target_port":3306,"database":"app","username":"worker","command":"COM_QUERY",
+        "sql":"INSERT INTO cache(payload,tenant) VALUES ('{\"members\":[1,2]}',42)",
+        "response":{"status":"ok"},"timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"outcome":"response"});
+    install(&fixture, event, |raw| {
+        let mut envelope: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        envelope["sql"] =
+            json!("INSERT INTO cache(payload,tenant) VALUES ('{\"members\":[2,1]}',42)");
+        serde_json::to_vec(&envelope).unwrap()
+    });
+    fixture.confirm();
+    let state = fixture.state();
+    let query = evidence::commands(fixture.root(), &state)
+        .into_iter()
+        .find(|query| query.query_id.ends_with("unified-rule-candidates"))
+        .unwrap();
+    let report = evidence::query(fixture.root(), &state, &query.query_id).unwrap();
+    let locations = report.facts["source_entry"]["locations"]
+        .as_array()
+        .unwrap();
+    assert!(locations.iter().any(|entry| {
+        entry["physical_fields"]["fields"]
+            .as_array()
+            .is_some_and(|fields| !fields.is_empty())
+    }));
+    assert!(
+        locations
+            .iter()
+            .any(|entry| entry["location"]["native_location"].as_str().is_some())
+    );
+    let findings = report.facts["policy_findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["policy"] == "unordered"
+                && finding["location"]["native_location"].as_str().is_some())
+    );
+    assert_eq!(
+        serde_json::to_value(fixture.state()).unwrap(),
+        serde_json::to_value(state).unwrap()
+    );
 }

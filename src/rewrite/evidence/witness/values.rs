@@ -21,7 +21,7 @@ impl ValueReader for Reader<'_> {
             Err(error) => return ValueObservation::unavailable(error.to_string()),
         };
         let Some(value) = document.value().pointer(pointer) else {
-            return ValueObservation::Missing;
+            return ValueObservation::missing();
         };
         let bytes = match serde_json::to_vec(value) {
             Ok(bytes) => bytes,
