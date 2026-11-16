@@ -117,7 +117,7 @@ impl Inventory {
         counts
     }
 
-    pub(super) fn record_failure(
+    pub(in crate::replay) fn record_failure(
         &mut self,
         protocol: ProtocolId,
         endpoint: &Endpoint,

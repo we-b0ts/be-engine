@@ -92,8 +92,6 @@ impl CaseExecutionPlan {
     }
 }
 
-pub(crate) use traffic_replay::index::CaseMembership;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,3 +131,6 @@ mod tests {
         assert_eq!(members.for_case("next").as_ref(), [3]);
     }
 }
+
+#[cfg(test)]
+pub(crate) use traffic_replay::index::CaseMembership;

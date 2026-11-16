@@ -15,6 +15,8 @@ pub struct ValueDecision {
 }
 
 pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
+    fn metadata(&self) -> &(dyn traffic_contract::compare::RuleMetadata + 'static);
+
     fn translate_document(
         &self,
         _scope: &str,

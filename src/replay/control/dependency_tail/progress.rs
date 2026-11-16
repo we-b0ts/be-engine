@@ -117,35 +117,4 @@ mod tests {
         assert!(!idle.observe(start + Duration::from_secs(91), false, [102; 6]));
         assert!(idle.observe(start + Duration::from_secs(96), false, [102; 6]));
     }
-
-    #[tokio::test]
-    async fn progress_is_case_scoped_and_survives_the_success_detail_limit() {
-        let fixture = super::super::tests::fixture_empty().await;
-        let mut state = fixture.runtime.state.lock().await;
-        let mut total = 0;
-        let mut details = Vec::new();
-        for _ in 0..125 {
-            crate::replay::push_success_detail(
-                &mut total,
-                &mut details,
-                &mut state.protocols.mysql.events.matched_query_details,
-                Some("case-a"),
-                |_| (),
-            );
-        }
-        let before = counts(&state, "case-a");
-        assert_eq!(*before.last().unwrap(), 125);
-        assert_eq!(details.len(), 100);
-        for _ in 0..30 {
-            crate::replay::push_success_detail(
-                &mut total,
-                &mut details,
-                &mut state.protocols.mysql.events.matched_query_details,
-                None,
-                |_| (),
-            );
-        }
-        assert_eq!(counts(&state, "case-a"), before);
-        assert_eq!(counts(&state, "case-b"), vec![0; before.len()]);
-    }
 }

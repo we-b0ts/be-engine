@@ -20,6 +20,7 @@ pub struct RequestMessage {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RequestLocation {
+    Request,
     Parameter {
         index: usize,
     },
@@ -39,7 +40,16 @@ impl ProtocolMessage for RequestMessage {
         let sql = self
             .sql
             .as_deref()
-            .map(|sql| project_sql(sql, &mut values))
+            .map(|sql| {
+                if matches!(
+                    self.command.as_str(),
+                    "COM_QUERY" | "COM_STMT_EXECUTE" | "COM_STMT_PREPARE"
+                ) {
+                    project_sql(sql, &mut values)
+                } else {
+                    Ok(Value::String(sql.into()))
+                }
+            })
             .transpose()?;
         let parameters = self
             .params
@@ -71,6 +81,7 @@ impl ProtocolMessage for RequestMessage {
 
     fn locate(&self, selector: &Value) -> Result<Vec<String>> {
         match serde_json::from_value::<RequestLocation>(selector.clone())? {
+            RequestLocation::Request => Ok(self.project()?.values.into_keys().collect()),
             RequestLocation::Parameter { index } => {
                 ensure!(
                     self.params

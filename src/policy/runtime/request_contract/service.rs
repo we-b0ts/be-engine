@@ -60,6 +60,10 @@ impl traffic_policy_value::DocumentPolicy for GlobalDocumentPolicy {
 }
 
 impl ValueRuleHost for RequestContracts {
+    fn metadata(&self) -> &(dyn traffic_contract::compare::RuleMetadata + 'static) {
+        &crate::value_contract::json::PolicyMetadata
+    }
+
     fn translate_document(
         &self,
         scope: &str,

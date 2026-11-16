@@ -1,9 +1,6 @@
 //! Application diagnostic envelopes for the shared command candidate traversal.
 use super::report::command::CommandMatchDiagnostic;
-pub(crate) use traffic_replay::command::{
-    CaseConnectionBinding, CommandExchangeScope, PreferredMatch, is_process_lane, preferred_match,
-    preferred_match_indexed_with_priority,
-};
+pub(crate) use traffic_replay::command::CommandExchangeScope;
 
 pub(crate) fn unmatched_diagnostic<T: CommandExchangeScope, D>(
     exchanges: &[T],

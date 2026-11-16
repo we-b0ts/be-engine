@@ -17,7 +17,6 @@ mod payload;
 pub(crate) use interaction::{compare_outputs_global as compare_interaction_global, decode_sse};
 pub(crate) use payload::{ResponsePayloadPair, response_payload_pair, response_rule_payload_pair};
 pub(crate) mod protobuf;
-pub(crate) use protobuf::unordered_evidence::candidates as protobuf_order_candidates;
 mod sse;
 
 use std::fs;

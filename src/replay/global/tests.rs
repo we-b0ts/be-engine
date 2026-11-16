@@ -10,10 +10,18 @@ mod ownership;
 fn expected_phase(record: &DependencyRecord) -> Option<Phase> {
     // Exhaustive: adding a dependency variant must also decide its load phase.
     match record {
-        DependencyRecord::MysqlConnection(_)
-        | DependencyRecord::MysqlExchange(_)
-        | DependencyRecord::ProxyError(_) => Some(Phase::Metadata),
-        DependencyRecord::Native(_) | DependencyRecord::ConnectFailure => Some(Phase::Exchanges),
+        DependencyRecord::ProxyError(_) => Some(Phase::Metadata),
+        DependencyRecord::Native(event) => Some(
+            if event["event_type"]
+                .as_str()
+                .is_some_and(|kind| kind.ends_with("_connection"))
+            {
+                Phase::Metadata
+            } else {
+                Phase::Exchanges
+            },
+        ),
+        DependencyRecord::ConnectFailure => Some(Phase::Exchanges),
     }
 }
 
@@ -105,16 +113,13 @@ async fn both_phases_cover_every_protocol_in_source_order_with_bounded_page_batc
             assert!(batch.len() <= 256);
             combined |= batch.len() > 1;
             batches += 1;
-            for (record, reference, shape) in batch {
+            for (record, reference) in batch {
                 assert_eq!(
                     std::mem::discriminant(&expected_phase(&record).unwrap()),
                     std::mem::discriminant(&phase)
                 );
                 let original = reference.load::<Value>().unwrap();
                 assert_eq!(original, originals[reference.location.line - 1]);
-                if matches!(record, DependencyRecord::MysqlExchange(_)) {
-                    assert_eq!(shape, Some((1, true)));
-                }
                 observed.push(reference.location.line);
             }
         }

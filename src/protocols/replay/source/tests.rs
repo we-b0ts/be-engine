@@ -80,13 +80,25 @@ fn installing_a_provider_reuses_the_open_native_record_path() {
 }
 
 #[test]
-fn retired_capture_errors_cannot_leave_an_empty_replay_inventory() {
+fn capture_errors_cannot_leave_an_empty_replay_inventory() {
     for protocol in ["memcached", "motan", "kafka"] {
         let event = RecordedProxyError {
             protocol: protocol.into(),
             error: "capture interrupted".into(),
         };
-        let error = reject_retired_proxy_error(&event).unwrap_err();
+        let mut native = native::Inventory::new(crate::protocols::default_providers());
+        let error = register_dependency_records(
+            std::path::Path::new("unused-source"),
+            vec![(1, DependencyRecord::ProxyError(Box::new(event)))],
+            &BTreeSet::new(),
+            ReplaySource::Startup,
+            None,
+            &mut BTreeMap::new(),
+            &[],
+            &BTreeSet::new(),
+            &mut native,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains(protocol), "{error}");
     }
 }

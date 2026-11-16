@@ -25,8 +25,7 @@ mod redis;
 mod redis_fields;
 mod redis_hypothesis;
 mod rule_dispatch;
-pub(crate) use read_back::{PreparedReadBack, RedisReadBackReport};
-pub(crate) use redis_fields::{PreparedRedisTimeRead, PreparedRedisTimeWrite};
+pub(crate) use read_back::RedisReadBackReport;
 pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
 pub(crate) use redis_fields::{
     RedisTimeRead, redis_delivered_global_time_copies, redis_delivered_scalar_time_copies,
@@ -34,7 +33,6 @@ pub(crate) use redis_fields::{
 };
 mod unified_response;
 mod url;
-pub(crate) use unified_response::PreparedRedisDelivery;
 pub(crate) use unified_response::redis_bulk_payload;
 mod script;
 mod source_applicability;

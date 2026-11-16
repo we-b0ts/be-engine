@@ -182,7 +182,7 @@ async fn lazy_startup_indexes_preloaded_redis_before_any_case_begins() {
 }
 
 #[tokio::test]
-async fn complete_mysql_connection_is_classified_at_case_preparation() {
+async fn mysql_transactions_enter_the_same_finite_inventory_at_case_preparation() {
     let temp = tempfile::tempdir().unwrap();
     fixture(temp.path()).await;
     let records = ["COMMIT", "ROLLBACK"].into_iter().enumerate().map(|(index, sql)| json!({
@@ -192,75 +192,19 @@ async fn complete_mysql_connection_is_classified_at_case_preparation() {
     }).to_string()).collect::<Vec<_>>().join("\n");
     std::fs::write(temp.path().join("a/dependencies.jsonl"), records).unwrap();
     let (runtime, _) = load(temp.path(), true).await;
-    assert!(
-        runtime
-            .state
-            .lock()
-            .await
-            .protocols
-            .mysql
-            .exchanges
-            .is_empty()
-    );
+    assert!(runtime.state.lock().await.native.core.exchanges.is_empty());
     let begin = begin_case(&request("begin", "a"), runtime.state.clone()).await;
     assert_eq!(begin["ok"], true, "{begin}");
     let state = runtime.state.lock().await;
-    assert_eq!(state.protocols.mysql.exchanges.len(), 2);
-    assert_eq!(
-        state.protocols.mysql.exchanges[1].optional_session,
-        Some(mysql::OptionalSessionExchange::Rollback)
+    assert_eq!(state.native.core.exchanges.len(), 2);
+    assert!(
+        state
+            .native
+            .core
+            .exchanges
+            .iter()
+            .all(|exchange| exchange.native.reference.protocol() == "mysql")
     );
-}
-
-#[tokio::test]
-async fn global_read_prefixes_are_available_to_eager_and_lazy_case_cleanup() {
-    for lazy in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
-        fixture(temp.path()).await;
-        let read = |seq, before| {
-            json!({"event_type":"mysql_exchange",
-            "connection_id":Uuid::nil(), "query_sequence":seq, "target_addr":"db.test:3306",
-            "database":"app", "username":"user", "command":"COM_QUERY",
-            "sql":"SELECT id FROM users", "server_status_before":before,
-            "response":{"status":"resultset", "server_status":1,
-                "columns":[{"name":"id","family":"integer","sql_type":"INT"}], "rows":[]}})
-        };
-        let globals = [read(100, 0), read(101, 1), read(200, 0), read(201, 1)];
-        std::fs::write(
-            temp.path().join("global-dependencies.jsonl"),
-            globals
-                .iter()
-                .map(Value::to_string)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
-        .unwrap();
-        for (id, seq) in [("a", 102), ("b", 202)] {
-            let mut end = read(seq, 1);
-            end["sql"] = json!("COMMIT");
-            end["response"] = json!({"status":"ok", "server_status":0,
-                "affected_rows":0, "last_insert_id":0});
-            std::fs::write(
-                temp.path().join(id).join("dependencies.jsonl"),
-                end.to_string(),
-            )
-            .unwrap();
-        }
-        let (runtime, _) = load(temp.path(), lazy).await;
-        for id in ["a", "b"] {
-            assert_eq!(
-                begin_case(&request("begin", id), runtime.state.clone()).await["ok"],
-                true
-            );
-            assert_eq!(
-                end_case(&request("end", id), runtime.state.clone()).await["dirty"],
-                false
-            );
-        }
-        let state = runtime.state.lock().await;
-        assert_eq!(state.allowed_unused_commits().len(), 2);
-        assert_eq!(state.unused_exchanges(ReplaySource::Startup).len(), 4);
-    }
 }
 
 #[tokio::test]
@@ -299,62 +243,4 @@ async fn read_ahead_warms_bytes_without_installing_exchanges() {
     assert_eq!(begin["ok"], true, "{begin}");
     assert_eq!(reader.lock().unwrap().hits, 2);
     worker.abort();
-}
-
-#[tokio::test]
-async fn reclamation_keeps_inflight_rows_and_stable_report_positions() {
-    let temp = tempfile::tempdir().unwrap();
-    fixture(temp.path()).await;
-    let event = json!({"event_type":"mysql_exchange", "target_host":"db.test", "target_port":3306,
-        "database":"app", "username":"user", "command":"COM_QUERY", "sql":"SELECT payload FROM records",
-        "response":{"status":"resultset", "rows":[[{"kind":"string", "value":"large-payload"}]]}});
-    std::fs::write(temp.path().join("a/dependencies.jsonl"), event.to_string()).unwrap();
-    let (runtime, _) = load(temp.path(), true).await;
-    assert_eq!(
-        begin_case(&request("begin", "a"), runtime.state.clone()).await["ok"],
-        true
-    );
-    runtime.state.lock().await.protocols.mysql.exchanges[0].status =
-        ReplayExchangeStatus::Responding;
-    let end_state = runtime.state.clone();
-    let ending = tokio::spawn(async move { end_case(&request("end", "a"), end_state).await });
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    assert!(!ending.is_finished());
-    assert_eq!(
-        begin_case(&request("begin", "b"), runtime.state.clone()).await["ok"],
-        false
-    );
-    {
-        let mut state = runtime.state.lock().await;
-        assert_eq!(
-            state.protocols.mysql.exchanges[0]
-                .record
-                .response
-                .rows
-                .len(),
-            1
-        );
-        assert_eq!(state.unused_exchanges(ReplaySource::Case)[0].index, 0);
-        state.protocols.mysql.exchanges[0].status = ReplayExchangeStatus::Consumed;
-    }
-    let ended = ending.await.unwrap();
-    assert_eq!(ended["ok"], true);
-    assert_eq!(
-        begin_case(&request("begin", "b"), runtime.state.clone()).await["ok"],
-        true
-    );
-    let state = runtime.state.lock().await;
-    assert_eq!(state.protocols.mysql.exchanges.len(), 1);
-    assert!(
-        state.protocols.mysql.exchanges[0]
-            .record
-            .response
-            .rows
-            .is_empty()
-    );
-    assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-    assert_eq!(
-        state.protocols.mysql.exchanges[0].case_id.as_deref(),
-        Some("a")
-    );
 }

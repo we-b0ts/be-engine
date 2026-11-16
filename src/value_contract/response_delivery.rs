@@ -20,7 +20,6 @@ pub(crate) trait IdentityDeliveryHost {
 }
 
 mod sse;
-pub(crate) use sse::SseDelivery;
 #[derive(Debug, Clone)]
 pub(crate) struct Delivery {
     decoded: DecodedValue,

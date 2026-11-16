@@ -33,7 +33,6 @@ pub use config::{
     RedisDerivedIdentity,
 };
 pub(crate) use http::HttpInput;
-pub(crate) use redis::RedisIdentity;
 
 use crate::replay::TargetKey;
 use anyhow::{Result, ensure};
@@ -263,3 +262,6 @@ mod path_tests;
 mod redis_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use redis::RedisIdentity;

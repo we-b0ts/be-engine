@@ -2,7 +2,7 @@
 use super::json::{AnchorClocks, Comparison};
 use crate::policy::HttpPolicy;
 use anyhow::Result;
-pub(crate) use native::{HeaderSnapshot, canonical, scalar};
+pub(crate) use native::{HeaderSnapshot, canonical};
 use traffic_protocol_http::header_values as native;
 pub(crate) fn compare(
     source: &HeaderSnapshot,

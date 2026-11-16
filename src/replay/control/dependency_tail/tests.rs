@@ -449,14 +449,17 @@ async fn explicit_dependency_failure_finishes_dirty_after_actual_cleanup() {
         begin_case(&command("begin"), state.clone()).await["ok"],
         true
     );
-    state
-        .lock()
-        .await
-        .protocols
-        .mysql
-        .events
-        .dirty_case_ids
-        .insert("case-a".into());
+    state.lock().await.native.record_failure(
+        traffic_protocol::ProtocolId::new("mysql"),
+        &traffic_protocol::connection::Endpoint {
+            host: "db.test".into(),
+            port: 3306,
+        },
+        Some("case-a".into()),
+        None,
+        None,
+        "explicit dependency failure",
+    );
     let started = Instant::now();
     let mut end = command("end");
     end.fail_on_dirty = true;

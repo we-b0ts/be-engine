@@ -160,7 +160,8 @@ capabilities supplied by callers. `traffic-contract::provenance` owns bounded,
 case-local delivered-value records, causal frontiers and copy proofs. The host
 supplies eligible compiled rule scopes and lazily projects its selected fields.
 `traffic-policy-value::host` owns the shared value-service port. Runtime bindings
-supply its identity, clock and document-policy services.
+supply its registered comparison metadata, identity, clock and document-policy
+services. The Replay execution loop receives those capabilities through the port.
 `traffic-policy-value::diagnosis::bodies` receives the installed codec registry
 for Source recognition and uses that selected implementation to decode Target.
 `traffic-policy-value::scalar` owns shared scalar recognition, Source-selected
@@ -251,6 +252,15 @@ Native sessions acquire those leases through `RequestHost::begin_input`. Shared
 Case cleanup and session finalization observe their I/O ownership. Native record
 projection receives the host's `EvidenceSecrets` port for Source decryption.
 Provider aliases retain one business protocol owner across transport variants.
+`traffic-protocol-mysql::native` owns finite SQL request projection, result-cell
+locations, Classic greeting, CLIENT_SSL upgrade and text response framing. Replay
+uses the same registered inventory, policy execution, claims, delivery receipts
+and reports for MySQL, HTTP and Redis. SQL token order and literal positions are
+preserved. Basic transaction commands retain finite Source consumption. Prepared
+commands, native transaction equivalences, projection permissions and incomplete
+cleanup serving currently require additional capabilities. The application keeps
+historical policy-evidence readers and the MySQL recording connector during their
+remaining cutover.
 `traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
 endpoint identities. MySQL session control and Source transaction analysis use
 these immutable inputs to project original wire positions, complete read prefixes,

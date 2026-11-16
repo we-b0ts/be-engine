@@ -3,41 +3,12 @@ use super::*;
 use crate::mysql::sql::{Token, bounds::statement_shared};
 use crate::policy::{CompiledRule, Protocol, Slot, Surface};
 use crate::policy_evidence::{
-    ClockPair, PreparedRequestSource, SourceIdentity, SourceRole, TargetRole, WitnessClocks,
-    WitnessMetadata,
+    ClockPair, SourceIdentity, SourceRole, TargetRole, WitnessClocks, WitnessMetadata,
 };
 use crate::protocols::replay::mysql::RecordedMysqlExchange;
 use crate::protocols::replay::mysql::{RecordedMysqlValue, ReplaySessionIdentity};
 use crate::value_contract::json::AnchorClocks;
 impl RequestContracts {
-    pub(crate) fn prepare_mysql_request_source(
-        &self,
-        case: &str,
-        exchange: &crate::protocols::replay::mysql::ReplayExchange,
-        source_case_start: Option<DateTime<Utc>>,
-    ) -> Result<Option<PreparedRequestSource>> {
-        let Some(store) = &self.witnesses else {
-            return Ok(None);
-        };
-        let identity = ReplaySessionIdentity {
-            target: Some(exchange.identity.target.clone()),
-            database: exchange.identity.database.clone(),
-            username: exchange.identity.username.clone(),
-        };
-        let mut clocks = AnchorClocks::default();
-        clocks.case.source = source_case_start;
-        clocks.dependency.source =
-            crate::protocols::replay::mysql::contracts::source_started(&exchange.record);
-        store.prepare_request_source(&self.mysql_metadata(
-            case,
-            &identity,
-            &exchange.record,
-            (Surface::DependencyRequest, Slot::SqlValue(0)),
-            TargetRole::Unavailable,
-            clocks,
-        ))
-    }
-
     pub(crate) fn prepare_mysql_candidate_witness(
         &self,
         case: &str,

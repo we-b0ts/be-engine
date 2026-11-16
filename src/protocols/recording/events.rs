@@ -335,10 +335,13 @@ pub struct AccessPolicyAllowEvent {
 pub use traffic_protocol_http::events::HttpExchangeEvent;
 
 pub use traffic_protocol_redis::events::{
-    RedisConnectionEvent, RedisExchangeEvent, RedisPubSubPushEvent, RedisRpcRequestRef,
+    RedisConnectionEvent, RedisExchangeEvent, RedisPubSubPushEvent,
 };
 
 pub use traffic_protocol_mysql::events::{
     MysqlConnectionEvent, MysqlExchangeEvent, MysqlPacketEvent, MysqlQueryEvent,
     MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent,
 };
+
+#[cfg(test)]
+pub use traffic_protocol_redis::events::RedisRpcRequestRef;

@@ -153,83 +153,8 @@ async fn pair() -> (TcpStream, TcpStream, SocketAddr) {
 }
 
 #[tokio::test]
-async fn lifecycle_mysql_waits_without_fabricating_an_error_or_result() {
-    for source_peer_end in [false, true] {
-        let mut event = mysql(Uuid::new_v4());
-        if source_peer_end {
-            peer_cleanup(&mut event);
-        }
-        let (_temp, runtime) = fixture(&[event], true).await.unwrap();
-        let state = runtime.state.clone();
-        assert_eq!(command(&state, "begin").await["ok"], true);
-        let (mut client, server, peer) = pair().await;
-        let task = tokio::spawn(crate::protocols::replay::mysql::handle_connection(
-            server,
-            peer,
-            Some(TargetKey {
-                host: "mysql.test".into(),
-                port: 3306,
-            }),
-            state.clone(),
-            runtime.ca.clone(),
-        ));
-        let _ = crate::mysql::wire::read_packet(&mut client)
-            .await
-            .unwrap()
-            .unwrap();
-        let flags = 0x200_u32 | 0x8000 | 8 | 0x80000;
-        let mut login = flags.to_le_bytes().to_vec();
-        login.extend_from_slice(&[0; 4]);
-        login.push(45);
-        login.extend_from_slice(&[0; 23]);
-        login.extend_from_slice(b"root\0\0appdb\0mysql_native_password\0");
-        client
-            .write_all(
-                &crate::mysql::wire::MysqlPacket {
-                    sequence_id: 1,
-                    payload: login,
-                }
-                .to_wire_bytes(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            crate::mysql::wire::read_packet(&mut client)
-                .await
-                .unwrap()
-                .unwrap()
-                .payload[0],
-            0
-        );
-        client
-            .write_all(
-                &crate::mysql::wire::MysqlPacket {
-                    sequence_id: 0,
-                    payload: b"\x03SELECT 1".to_vec(),
-                }
-                .to_wire_bytes(),
-            )
-            .await
-            .unwrap();
-        let mut probe = [0; 1];
-        assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(30),
-                client.read(&mut probe)
-            )
-            .await
-            .is_err()
-        );
-        assert_eq!(command(&state, "prepare_end").await["ok"], true);
-        assert!(!task.is_finished());
-        client.shutdown().await.unwrap();
-        task.await.unwrap().unwrap();
-        assert_eq!(command(&state, "end_stopped").await["ok"], true);
-        assert_eq!(
-            state.lock().await.protocols.mysql.exchanges[0].status,
-            ReplayExchangeStatus::Consumed
-        );
-    }
+async fn incomplete_mysql_cleanup_is_rejected_without_a_native_lifecycle_capability() {
+    assert!(fixture(&[mysql(Uuid::new_v4())], true).await.is_err());
 }
 
 #[tokio::test]

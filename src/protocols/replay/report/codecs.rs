@@ -6,7 +6,8 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 use traffic_protocol::report::{ReportCodec, ReportSection};
 
-pub(crate) const HISTORICAL_PROTOCOLS: [&str; 5] = ["http", "redis", "memcached", "motan", "kafka"];
+pub(crate) const HISTORICAL_PROTOCOLS: [&str; 6] =
+    ["mysql", "http", "redis", "memcached", "motan", "kafka"];
 
 pub(crate) struct Builtin(pub &'static str);
 #[derive(Deserialize)]

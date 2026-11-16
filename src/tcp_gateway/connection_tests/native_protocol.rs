@@ -472,6 +472,29 @@ async fn registered_protocol_keeps_unselected_fields_strict_and_rejections_uncon
 }
 
 #[tokio::test]
+async fn registered_protocol_unused_case_calls_prevent_batch_verification() {
+    let recording = record().await;
+    let mut replay = Replay::start(&recording, false).await;
+    let report = replay.finalize().await;
+    assert_eq!(report["dependency_protocols"][NATIVE]["matched_count"], 0);
+    assert_eq!(report["dependency_protocols"][NATIVE]["unmatched_count"], 0);
+    assert_eq!(
+        report["dependency_protocols"][NATIVE]["unused_case"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        report["batch_reconciliation"]["dependency_inventory_verified"],
+        false
+    );
+    assert!(
+        crate::protocols::replay::report::validation::validate_completed_receipt(&report).is_err()
+    );
+}
+
+#[tokio::test]
 async fn registered_protocol_global_evidence_uses_native_projection_and_generic_publication() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let recording = record_with_startup(true).await;

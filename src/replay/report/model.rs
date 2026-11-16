@@ -76,6 +76,10 @@ impl<S: traffic_replay::report::SessionSnapshot> ReplayReport<S> {
             || !self.unrecorded_targets.is_empty()
             || self.native.is_dirty()
             || self
+                .dependency_protocols
+                .values()
+                .any(|protocol| protocol.unmatched_count > 0 || !protocol.unused_case.is_empty())
+            || self
                 .replay_policy
                 .as_ref()
                 .is_some_and(|policy| !policy.unused_applicable_dependency_rule_ids.is_empty())

@@ -33,7 +33,7 @@ pub(crate) mod lifecycle_cleanup;
 pub(crate) mod native;
 pub(crate) use control::primary_close::Timeline as PrimaryCloseTimeline;
 mod attribution;
-pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes, run_value_scope};
+pub(crate) use attribution::{attribution_scope_key, prewarm_attribution_indexes};
 mod deferred;
 #[cfg(test)]
 pub(crate) use deferred::prepare_case as prepare_case_dependencies;
@@ -73,9 +73,7 @@ pub(crate) mod native_index;
 mod network_access;
 pub(crate) mod policy;
 mod preparation;
-pub(crate) use traffic_replay::preparation::{
-    PreparedProtocol, PreparedProtocols, RunSequenceReference,
-};
+pub(crate) use traffic_replay::preparation::{PreparedProtocols, RunSequenceReference};
 pub(crate) mod protocol_runtime;
 use policy::{ReplayPolicy, RequestRuleRuntime};
 use protocol_runtime::{InFlightScope, ReplayProtocolSet};
@@ -84,14 +82,12 @@ pub(crate) mod sequence;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub(crate) use case_index::CaseExchangeIndex;
 pub(crate) use control::*;
 pub(crate) use dependencies::{RecordedProxyError, target_from_addr};
 #[cfg(test)]
 pub(crate) use dns::Ipv4Cidr;
 use dns::*;
-pub(crate) use exchange::*;
-pub(crate) use exchange::{ReplayExchangeStatus, ReplayExchangeTiming};
+pub(crate) use exchange::ReplayExchangeStatus;
 pub(crate) use model::register_replay_target;
 pub(crate) use model::*;
 pub(crate) use model::{ReplayCase, TargetKey};

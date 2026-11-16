@@ -7,6 +7,7 @@ pub mod isolation;
 pub mod isolation_session;
 pub mod message;
 pub mod model;
+pub mod native;
 pub mod operation;
 pub mod output;
 pub mod prepare;
@@ -134,6 +135,12 @@ pub type MysqlSession = Box<dyn FrameDecoder<Frame = MysqlPacket>>;
 impl traffic_protocol::DependencyProvider for MysqlProvider {
     fn name(&self) -> &'static str {
         "mysql"
+    }
+
+    fn native_protocol(
+        &self,
+    ) -> Option<std::sync::Arc<dyn traffic_protocol::connection::NativeProtocol>> {
+        Some(std::sync::Arc::new(native::Native))
     }
 
     fn evidence(&self) -> Option<std::sync::Arc<dyn traffic_protocol::evidence::EvidenceAdapter>> {

@@ -4,8 +4,6 @@ use super::*;
 #[derive(Debug)]
 pub(crate) enum DependencyRecord {
     ConnectFailure,
-    MysqlConnection(Box<RecordedMysqlConnection>),
-    MysqlExchange(Box<RecordedMysqlExchange>),
 
     ProxyError(Box<RecordedProxyError>),
     Native(Box<Value>),
@@ -26,8 +24,6 @@ impl<'de> Deserialize<'de> for DependencyRecord {
                     .and_then(|failure| failure.validate().map_err(serde::de::Error::custom))
                     .map(|()| Self::ConnectFailure)
             }
-            "mysql_connection" => serde_json::from_value(value).map(Self::MysqlConnection),
-            "mysql_exchange" => serde_json::from_value(value).map(Self::MysqlExchange),
             "proxy_error" => serde_json::from_value(value).map(Self::ProxyError),
             _ => Ok(Self::Native(Box::new(value))),
         };

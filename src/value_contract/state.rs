@@ -76,6 +76,10 @@ impl ValueState {
 
 /// Strict sessions still share finite, case-local identity accounting.
 impl ValueRuleHost for ValueState {
+    fn metadata(&self) -> &(dyn traffic_contract::compare::RuleMetadata + 'static) {
+        &crate::value_contract::json::PolicyMetadata
+    }
+
     fn begin_case(&self, case: &str) {
         self.clear(case);
     }

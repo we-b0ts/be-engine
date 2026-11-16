@@ -11,7 +11,7 @@ mod native;
 pub(crate) use super::time_copies::VerifiedTimeCopy;
 pub(crate) use kernel::{
     AnchorClocks, Comparison, Field, LeafContext, LeafObservations, NonceIdentity, VerifiedField,
-    parse_time_pair, parse_time_value, pointer_observed,
+    parse_time_pair, pointer_observed,
 };
 pub(crate) use native::NativeField;
 pub(crate) use traffic_contract::comparison::Difference;

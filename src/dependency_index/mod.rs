@@ -21,7 +21,7 @@ mod stream;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use build::{Builder, http_key, redis_key};
+pub(crate) use build::Builder;
 pub use model::DependencyIndexReport;
 pub(crate) use model::{FRAGMENT, FileIndex, FileStamp, RecordLocation};
 pub(crate) use pages::{PageManifest, PageWriter, Paged};
@@ -29,3 +29,6 @@ pub(crate) use reader::RecordReader;
 pub(crate) use reference::{RecordRef, RecordSource};
 pub(crate) use store::{load_file, recording_files};
 pub(crate) use stream::RecordStream;
+
+#[cfg(test)]
+pub(crate) use build::http_key;

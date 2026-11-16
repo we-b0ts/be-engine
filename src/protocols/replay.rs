@@ -6,6 +6,8 @@ pub(crate) mod http_test_support;
 #[cfg(test)]
 mod native_http_tests;
 #[cfg(test)]
+mod native_mysql_tests;
+#[cfg(test)]
 pub(crate) use http_test_support::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
 };
@@ -26,9 +28,7 @@ pub type RedisUnorderedField = traffic_protocol_redis::bindings::LegacyValueLoca
 pub type RedisUnorderedSelector =
     traffic_protocol_redis::bindings::LegacyUnorderedSelector<RedisUnorderedField>;
 pub(crate) use traffic_protocol_redis::request_identity::request_fingerprint as redis_request_fingerprint;
-pub(crate) mod redis_value {
-    pub use super::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
-}
+pub(crate) mod redis_value {}
 pub(crate) fn normalize_redis_expiration(
     command: &str,
     source: &[Vec<u8>],
@@ -65,7 +65,6 @@ pub(crate) use mysql::contracts::{
     validate_contract_candidate as mysql_validate_contract_candidate,
     validate_contract_witness as mysql_validate_contract_witness,
 };
-mod inventory;
 mod loading;
 pub(crate) mod runtime;
 pub(crate) type ReplayState = RuntimeState<ReplayProtocols>;
@@ -79,7 +78,7 @@ use crate::replay::RunSequenceReference;
 use crate::replay::RuntimeState;
 use crate::{MitmCa, replay};
 use crate::{replay::protocol_runtime::InFlightScope, replay::protocol_runtime::ReplayProtocolSet};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::{collections::BTreeMap, sync::Arc};
@@ -90,45 +89,17 @@ use traffic_replay::{SequenceBinding, SequenceRuntime};
 
 #[derive(Debug)]
 pub(crate) struct ReplayProtocols {
-    pub(crate) deferred_identities: Option<
-        std::collections::HashMap<
-            uuid::Uuid,
-            traffic_protocol_mysql::session_identity::DependencyIdentity,
-        >,
-    >,
-    pub(crate) mysql: mysql::MysqlReplayState,
     pub(crate) observations: (),
 
     pub(crate) changed: Arc<tokio::sync::Notify>,
 }
 
-impl ReplayProtocols {
-    fn case_projections(&self) -> [&dyn CaseRuntimeProjection; 1] {
-        [&self.mysql]
-    }
-}
-
 impl CaseRuntimeProjection for ReplayProtocols {
-    fn case_has_runtime_failure(&self, case: &str) -> bool {
-        self.case_projections()
-            .iter()
-            .any(|projection| projection.case_has_runtime_failure(case))
+    fn case_has_runtime_failure(&self, _: &str) -> bool {
+        false
     }
-    fn append_matched_dependency_counts(&self, case: &str, counts: &mut Vec<usize>) {
-        for projection in self.case_projections() {
-            projection.append_matched_dependency_counts(case, counts);
-        }
-    }
-    fn append_case_failures(
-        &self,
-        case: &str,
-        failures: &mut Vec<serde_json::Value>,
-        limit: usize,
-    ) {
-        for projection in self.case_projections() {
-            projection.append_case_failures(case, failures, limit);
-        }
-    }
+    fn append_matched_dependency_counts(&self, _: &str, _: &mut Vec<usize>) {}
+    fn append_case_failures(&self, _: &str, _: &mut Vec<serde_json::Value>, _: usize) {}
 }
 
 impl ReplayProtocolSet for ReplayProtocols {
@@ -162,10 +133,10 @@ impl ReplayProtocolSet for ReplayProtocols {
         state.native_report_snapshot()
     }
     fn source_occurrence_rows(
-        state: &RuntimeState<Self>,
-        report: &serde_json::Value,
+        _state: &RuntimeState<Self>,
+        _report: &serde_json::Value,
     ) -> Vec<replay::report::unused_source::SourceRow> {
-        report::unused_source::rows(state, report)
+        Vec::new()
     }
     fn native_events(
         &mut self,
@@ -181,65 +152,56 @@ impl ReplayProtocolSet for ReplayProtocols {
         &mut self.observations
     }
     fn resolve_references(
-        state: &RuntimeState<Self>,
-        case: &str,
+        _state: &RuntimeState<Self>,
+        _case: &str,
         references: &[replay::RecordedReference],
     ) -> Result<Vec<replay::ProtocolExchange>> {
-        inventory::resolve(state, case, references)
+        anyhow::ensure!(
+            references.is_empty(),
+            "reference has no specialized inventory"
+        );
+        Ok(Vec::new())
     }
     fn exchange_status(
-        state: &RuntimeState<Self>,
-        exchange: replay::ProtocolExchange,
+        _state: &RuntimeState<Self>,
+        _exchange: replay::ProtocolExchange,
     ) -> Option<replay::ReplayExchangeStatus> {
-        inventory::status(state, exchange)
+        None
     }
     fn permits_cancelled_omission(
-        state: &RuntimeState<Self>,
-        exchange: replay::ProtocolExchange,
+        _state: &RuntimeState<Self>,
+        _exchange: replay::ProtocolExchange,
     ) -> bool {
-        inventory::permits_cancelled_omission(state, exchange)
+        false
     }
     fn permits_unstarted_omission(
-        state: &RuntimeState<Self>,
-        exchange: replay::ProtocolExchange,
-        shared_initialization: bool,
-        strict_reference: bool,
+        _state: &RuntimeState<Self>,
+        _exchange: replay::ProtocolExchange,
+        _shared_initialization: bool,
+        _strict_reference: bool,
     ) -> bool {
-        inventory::permits_unstarted_omission(
-            state,
-            exchange,
-            shared_initialization,
-            strict_reference,
-        )
+        false
     }
     fn shared_initialization(
-        state: &RuntimeState<Self>,
-        exchange: replay::ProtocolExchange,
-        completion: &crate::recorder::async_api::CompletionRequirements,
+        _state: &RuntimeState<Self>,
+        _exchange: replay::ProtocolExchange,
+        _completion: &crate::recorder::async_api::CompletionRequirements,
     ) -> bool {
-        inventory::shared_initialization(state, exchange, completion)
+        false
     }
     fn can_defer_dispatch(
-        state: &RuntimeState<Self>,
-        exchange: replay::ProtocolExchange,
-        input_at: chrono::DateTime<chrono::Utc>,
+        _state: &RuntimeState<Self>,
+        _exchange: replay::ProtocolExchange,
+        _input_at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        exchange.inventory.as_str() == "mysql"
-            && state
-                .protocol_data()
-                .mysql
-                .can_defer_autocommit_for_dispatch(exchange.index, input_at)
+        false
     }
     fn visit_global_unused(
-        state: &RuntimeState<Self>,
-        protocol: &str,
-        visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
+        _state: &RuntimeState<Self>,
+        _protocol: &str,
+        _visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
-        match protocol {
-            "mysql" => state.visit_global_mysql_unused(visitor),
-
-            _ => anyhow::bail!("unknown native Global report protocol"),
-        }
+        anyhow::bail!("unknown specialized Global report protocol")
     }
 
     fn global_report_extensions(
@@ -259,97 +221,67 @@ impl ReplayProtocolSet for ReplayProtocols {
     }
 
     type SourceRecord = source::DependencyRecord;
-    type SourceAppend = source::AppendedSource;
+    type SourceAppend = ();
     fn register_source(
         &mut self,
         batch: replay::dependencies::SourceBatch<'_, Self::SourceRecord>,
         native: &mut replay::native::Inventory,
         targets: &mut BTreeMap<replay::TargetKey, ReplayTarget>,
     ) -> Result<Self::SourceAppend> {
-        let appended = source::AppendedSource {
-            mysql_start: self.mysql.source_len(),
-        };
-        let mut identities = self
-            .deferred_identities
-            .as_ref()
-            .context("deferred native Source identities are absent")?
-            .clone();
         source::register_dependency_records(
             batch.path,
             batch.records,
             batch.skip,
             batch.source,
             batch.case,
-            &mut self.mysql,
             targets,
-            &mut identities,
             batch.process_rules,
             batch.cleanup,
             native,
-        )?;
-        Ok(appended)
+        )
     }
     fn index_source(&mut self, _: &Self::SourceAppend) {}
 
     fn observe_source(
         &self,
-        appended: &Self::SourceAppend,
-        policy: &mut crate::policy::runtime::ReplayPolicyRuntime,
+        _appended: &Self::SourceAppend,
+        _policy: &mut crate::policy::runtime::ReplayPolicyRuntime,
     ) {
-        self.mysql
-            .observe_registered_policy_exchanges(policy, appended.mysql_start, None);
     }
 
-    fn release_payloads(&mut self, cases: &BTreeMap<String, replay::ReplayCase>) {
-        self.mysql.release_consumed_payloads(cases);
-    }
+    fn release_payloads(&mut self, _cases: &BTreeMap<String, replay::ReplayCase>) {}
 
-    fn case_is_dirty(&self, case: &str) -> bool {
-        self.mysql.case_is_dirty(case)
+    fn case_is_dirty(&self, _case: &str) -> bool {
+        false
     }
 
     fn pending_diagnostic(&self) -> BTreeMap<String, serde_json::Value> {
-        BTreeMap::from([("mysql".into(), self.mysql.case_in_flight_diagnostic())])
+        BTreeMap::new()
     }
 
-    fn prepare_candidates(&mut self) {
-        self.mysql.prepare_candidates();
-    }
+    fn prepare_candidates(&mut self) {}
 
     fn prepare_case(
         &mut self,
-        case: &str,
+        _case: &str,
         _ordered: bool,
-        contracts: Option<&RequestContracts>,
+        _contracts: Option<&RequestContracts>,
     ) -> Result<PreparedProtocols> {
-        Ok(BTreeMap::from([(
-            ProtocolId::new("mysql"),
-            self.mysql.prepare_case(case, contracts)?,
-        )]))
+        Ok(BTreeMap::new())
     }
 
     fn run_sequence_refs(&mut self) -> Result<BTreeMap<ProtocolId, Vec<RunSequenceReference>>> {
-        Ok(BTreeMap::from([(
-            ProtocolId::new("mysql"),
-            self.mysql.prepare_run_sequence()?,
-        )]))
+        Ok(BTreeMap::new())
     }
 
     fn bind_case_sequence(
         &mut self,
-        mut bindings: BTreeMap<ProtocolId, SequenceBinding>,
+        _bindings: BTreeMap<ProtocolId, SequenceBinding>,
         _: &[Arc<SequenceRuntime>],
     ) {
-        self.mysql.lifecycle.sequence = bindings
-            .remove(&ProtocolId::new("mysql"))
-            .unwrap_or_default();
     }
 
-    fn attach_run_sequence(&mut self, bindings: &BTreeMap<ProtocolId, SequenceBinding>) {
-        if let Some(binding) = bindings.get(&ProtocolId::new("mysql")) {
-            self.mysql.lifecycle.sequence.attach_run(binding.clone());
-        }
-    }
+    fn attach_run_sequence(&mut self, _bindings: &BTreeMap<ProtocolId, SequenceBinding>) {}
 
     fn activate_case(&mut self, _: Option<&str>) {}
 
@@ -365,8 +297,8 @@ impl ReplayProtocolSet for ReplayProtocols {
         self.changed.clone()
     }
 
-    fn startup_counts(&mut self, close: bool) -> BTreeMap<String, traffic_replay::StartupCounts> {
-        BTreeMap::from([("mysql".into(), self.mysql.startup_counts(close))])
+    fn startup_counts(&mut self, _close: bool) -> BTreeMap<String, traffic_replay::StartupCounts> {
+        BTreeMap::new()
     }
 
     fn close_startup(&mut self) {}
@@ -375,11 +307,8 @@ impl ReplayProtocolSet for ReplayProtocols {
 
     fn start(_state: Arc<Mutex<RuntimeState<Self>>>) {}
 
-    fn has_in_flight(&self, scope: InFlightScope, _: Option<&str>) -> bool {
-        match scope {
-            InFlightScope::All => self.mysql.has_in_flight(),
-            InFlightScope::Case => self.mysql.has_case_in_flight(),
-        }
+    fn has_in_flight(&self, _scope: InFlightScope, _: Option<&str>) -> bool {
+        false
     }
 
     fn serve(
@@ -387,7 +316,7 @@ impl ReplayProtocolSet for ReplayProtocols {
         peer_addr: SocketAddr,
         mut target: Option<ReplayTarget>,
         state: Arc<Mutex<RuntimeState<Self>>>,
-        ca: Arc<MitmCa>,
+        _ca: Arc<MitmCa>,
         providers: Arc<super::DependencyProviders>,
     ) -> traffic_protocol::connection::NativeFuture<'static, ()> {
         Box::pin(async move {
@@ -405,34 +334,13 @@ impl ReplayProtocolSet for ReplayProtocols {
                     .context("auto replay target missing")?
                     .protocol = protocol;
             }
-            match target.as_ref().map(|target| target.protocol) {
-                Some(ReplayProtocol::Mysql) => {
-                    let endpoint = target.map(|target| traffic_protocol::connection::Endpoint {
-                        host: target.host,
-                        port: target.port,
-                    });
-                    mysql::handle_connection(stream, peer_addr, endpoint, state, ca).await
-                }
-                Some(_) => {
-                    replay::native::handle_connection(
-                        stream,
-                        peer_addr,
-                        target.context("native replay target missing")?,
-                        state,
-                    )
-                    .await
-                }
-                None => {
-                    #[cfg(test)]
-                    {
-                        mysql::handle_connection(stream, peer_addr, None, state, ca).await
-                    }
-                    #[cfg(not(test))]
-                    {
-                        Err(anyhow!("native replay connection has no registered target"))
-                    }
-                }
-            }
+            replay::native::handle_connection(
+                stream,
+                peer_addr,
+                target.context("native replay target missing")?,
+                state,
+            )
+            .await
         })
     }
 }

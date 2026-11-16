@@ -116,7 +116,7 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
                 endpoint: &self.endpoint,
                 active_case: observation.case.as_deref(),
                 request: self.message.as_ref(),
-                metadata: &crate::value_contract::json::PolicyMetadata,
+                metadata: native.contracts.metadata(),
             },
             |exchange| native.clocks(exchange.index, self.observed, false),
             |exchange, comparison| {
@@ -228,7 +228,7 @@ impl Inventory {
         let clocks = self.clocks(index, observed, true);
         let rendered = exchange.response.render_delivery_with_documents(
             clocks,
-            &crate::value_contract::json::PolicyMetadata,
+            self.contracts.metadata(),
             &exchange.delivery,
             |selected| {
                 self.contracts
