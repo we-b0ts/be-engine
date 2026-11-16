@@ -89,4 +89,4 @@ impl Bijection {
     }
 }
 
-pub use crate::identity::{key, token};
+pub use crate::identity::key;

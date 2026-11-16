@@ -56,7 +56,7 @@ pub fn scalar_bytes(value: &RecordedMysqlValue) -> Result<Option<Vec<u8>>> {
         value.kind.as_str(),
         "integer" | "number" | "float" | "double" | "decimal"
     ) {
-        traffic_contract::json::parse(&bytes).context("invalid SQL native result number")?
+        Value::Number(serde_json::from_slice(&bytes).context("invalid SQL native result number")?)
     } else {
         Value::String(String::from_utf8(bytes).context("SQL scalar result requires UTF-8")?)
     };

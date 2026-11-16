@@ -36,6 +36,7 @@ impl<P: ValuePolicy + ?Sized> RequestContext<'_, P> {
                 date: false,
                 inferred: false,
                 native_scalar: true,
+                document: None,
             }));
         }
         // The binary protocol can omit a DATETIME's zero-valued time bytes.
@@ -69,24 +70,37 @@ impl<P: ValuePolicy + ?Sized> RequestContext<'_, P> {
         let Token::Bytes(source) = source else {
             return Ok(None);
         };
-        let Some(logical) = traffic_contract::json::parse(source) else {
+        let Some(codec) = traffic_contract::codec::CodecPlan::try_recognize(
+            source,
+            &serde_json::from_value(
+                serde_json::json!({"protocol":"mysql", "carrier":"sql_value"}),
+            )?,
+            self.policy.execution().codecs,
+        )?
+        else {
             return Ok(None);
         };
-        let fields = json.field_plan().fields_with_clocks(&logical, clocks)?;
-        // A VARCHAR identifier such as '801' happens to parse as a JSON
-        // number. With no selected content field it is an ordinary SQL scalar,
-        // so the native predicate matcher may still permute an IN list.
+        let document = codec.decode(source)?;
+        if matches!(document.value(), traffic_value::Value::Bytes(_)) {
+            return Ok(None);
+        }
+        let logical = &document.logical;
+        let fields = json.field_plan().fields_with_clocks(logical, clocks)?;
+        // Content-free scalars retain their ordinary SQL predicate matching.
         if !logical.is_object() && !logical.is_array() && fields.is_empty() {
             return Ok(None);
         }
         let Token::Bytes(target) = target else {
-            anyhow::bail!("SQL JSON changed its native string representation")
+            anyhow::bail!("SQL content changed its native string representation")
         };
-        let actual =
-            traffic_contract::json::parse(target).context("Target SQL JSON cannot be decoded")?;
+        let actual = codec
+            .decode(target)
+            .context("Target SQL content violates its Source codec")?
+            .logical;
         Ok(Some(Selection {
             fields,
-            source: logical,
+            source: logical.clone(),
+            document: Some(document),
             target: actual,
             id: GLOBAL_JSON_ID,
             date: false,

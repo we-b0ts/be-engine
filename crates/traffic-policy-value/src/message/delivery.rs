@@ -1,9 +1,9 @@
 //! Shared identity delivery and explicitly authorized time translation.
+use crate::identity::IdentityDelivery;
 use std::collections::BTreeSet;
 
 use traffic_contract::{
     delivery::{self, TimeField},
-    identity::IdentityDelivery,
     rule::{FieldContract, TimeRelation},
 };
 

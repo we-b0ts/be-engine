@@ -1,80 +1,79 @@
-//! Shared read-only JSON/byte difference projection. Contract evaluation stays
-//! with the ordinary comparator; this walk only locates original value changes.
+//! Bounded differences over codec-projected logical values and original byte ranges.
+use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
-
-use serde_json::{Value, json};
-
+use traffic_value::Value;
 const PAGE_SIZE: usize = 20;
 const NODE_LIMIT: usize = 1_000_000;
 const DEPTH_LIMIT: usize = 128;
 
-pub fn at_pointer(source: &[u8], target: &[u8], pointer: &str) -> Value {
-    match (parse(source), parse(target)) {
-        (Some(source), Some(target)) => {
-            let source = source.pointer(pointer);
-            let target = target.pointer(pointer);
-            let mut result = json!({"pointer":pointer,"source":preview(source),"target":preview(target),
-                "origin":"original_body_values_at_runtime_failure_pointer"});
-            if let (Some(Value::String(source)), Some(Value::String(target))) = (source, target)
-                && source != target
-            {
-                result["string_difference"] = byte_difference(source.as_bytes(), target.as_bytes());
-            }
-            result
-        }
-        _ => {
-            json!({"pointer":pointer,"presence":"unavailable","reason":"original_body_is_not_json"})
-        }
+pub fn at_pointer(source: &Value, target: &Value, pointer: &str) -> Json {
+    let source = source.pointer(pointer);
+    let target = target.pointer(pointer);
+    let mut result = json!({"pointer":pointer,"source":preview(source),"target":preview(target),
+        "origin":"original_body_values_at_runtime_failure_pointer"});
+    if let (Some(Value::String(source)), Some(Value::String(target))) = (source, target)
+        && source != target
+    {
+        result["string_difference"] = byte_difference(source.as_bytes(), target.as_bytes());
     }
+    if let (Some(Value::Bytes(source)), Some(Value::Bytes(target))) = (source, target)
+        && source != target
+    {
+        result["bytes"] = byte_difference(source, target);
+    }
+    result
 }
 
-pub fn differences(source: &[u8], target: &[u8], offset: usize) -> Value {
-    let mut walk = Walk {
-        offset,
-        found: 0,
-        nodes: 0,
-        complete: true,
-        values: Vec::new(),
-    };
-    let codec = match (parse(source), parse(target)) {
-        (Some(source), Some(target)) => {
-            walk.visit(Some(&source), Some(&target), "", 0);
-            "json"
+pub fn differences(source: &Value, target: &Value, codec: &str, offset: usize) -> Json {
+    if let (Value::Bytes(source), Value::Bytes(target)) = (source, target) {
+        return byte_differences(source, target, codec, offset);
+    }
+    let mut walk = Walk::new(offset);
+    walk.visit(Some(source), Some(target), "", 0);
+    report(codec, walk)
+}
+
+pub fn byte_differences(source: &[u8], target: &[u8], codec: &str, offset: usize) -> Json {
+    let mut walk = Walk::new(offset);
+    if source != target {
+        walk.found = 1;
+        if offset == 0 {
+            walk.values
+                .push(json!({"pointer":"", "kind":"bytes_mismatch",
+                "bytes":byte_difference(source, target)}));
         }
-        _ => {
-            if source != target {
-                walk.found = 1;
-                if offset == 0 {
-                    walk.values
-                        .push(json!({"pointer":"", "kind":"bytes_mismatch",
-                        "bytes":byte_difference(source, target)}));
-                }
-            }
-            "bytes"
-        }
-    };
-    json!({"codec":codec, "offset":offset, "page_size":PAGE_SIZE,
+    }
+    report(codec, walk)
+}
+
+fn report(codec: &str, walk: Walk) -> Json {
+    json!({"codec":codec, "offset":walk.offset, "page_size":PAGE_SIZE,
         "analysis_complete":walk.complete, "nodes_examined":walk.nodes,
         "node_limit":NODE_LIMIT, "differences_found":walk.found,
         "total_differences":walk.complete.then_some(walk.found),
         "returned_differences":walk.values.len(), "differences":walk.values,
-        "next_offset":(offset.saturating_add(PAGE_SIZE) < walk.found)
-            .then_some(offset.saturating_add(PAGE_SIZE))})
+        "next_offset":(walk.offset.saturating_add(PAGE_SIZE) < walk.found)
+            .then_some(walk.offset.saturating_add(PAGE_SIZE))})
 }
-
-fn parse(bytes: &[u8]) -> Option<Value> {
-    crate::json::parse_with_limit(bytes, 64 * 1024 * 1024)
-}
-
 struct Walk {
     offset: usize,
     found: usize,
     nodes: usize,
     complete: bool,
-    values: Vec<Value>,
+    values: Vec<Json>,
 }
 
 impl Walk {
+    fn new(offset: usize) -> Self {
+        Self {
+            offset,
+            found: 0,
+            nodes: 0,
+            complete: true,
+            values: Vec::new(),
+        }
+    }
+
     fn emit(&mut self, pointer: &str, kind: &str, source: Option<&Value>, target: Option<&Value>) {
         if self.found >= self.offset && self.values.len() < PAGE_SIZE {
             let mut value = json!({"pointer":pointer,"kind":kind,
@@ -135,6 +134,16 @@ impl Walk {
                     }
                 }
             }
+            (Some(Value::Bytes(a)), Some(Value::Bytes(b))) => {
+                self.emit(pointer, "bytes_mismatch", source, target);
+                if let Some(value) = self
+                    .values
+                    .last_mut()
+                    .filter(|value| value["pointer"] == pointer)
+                {
+                    value["bytes"] = byte_difference(a, b);
+                }
+            }
             (Some(a), Some(b)) => self.emit(
                 pointer,
                 if kind(a) == kind(b) {
@@ -155,20 +164,38 @@ fn order_only(source: &[Value], target: &[Value]) -> bool {
     if source.len() > 1024 {
         return false;
     }
-    let counts = |items: &[Value]| -> Option<BTreeMap<String, usize>> {
-        let mut bytes = 0;
-        let mut counts = BTreeMap::new();
-        for value in items {
-            let value = value.to_string();
-            bytes += value.len();
-            if bytes > 1024 * 1024 {
-                return None;
-            }
-            *counts.entry(value).or_default() += 1;
+    let mut remaining: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+    let mut bytes = 0;
+    for value in target {
+        let Ok(key) = serde_json::to_string(value) else {
+            return false;
+        };
+        bytes += key.len();
+        if bytes > 1024 * 1024 {
+            return false;
         }
-        Some(counts)
-    };
-    counts(source).is_some_and(|a| counts(target).is_some_and(|b| a == b))
+        remaining.entry(key).or_default().push(value);
+    }
+    bytes = 0;
+    for value in source {
+        let Ok(key) = serde_json::to_string(value) else {
+            return false;
+        };
+        bytes += key.len();
+        if bytes > 1024 * 1024 {
+            return false;
+        }
+        let Some(candidates) = remaining.get_mut(&key) else {
+            return false;
+        };
+        // The serialized key is only a partition. Native bytes, arrays and
+        // numeric categories can share that spelling and still differ.
+        let Some(index) = candidates.iter().position(|candidate| *candidate == value) else {
+            return false;
+        };
+        candidates.swap_remove(index);
+    }
+    true
 }
 
 fn kind(value: &Value) -> &'static str {
@@ -179,10 +206,11 @@ fn kind(value: &Value) -> &'static str {
         Value::String(_) => "string",
         Value::Array(_) => "array",
         Value::Object(_) => "object",
+        Value::Bytes(_) => "bytes",
     }
 }
 
-fn preview(value: Option<&Value>) -> Value {
+fn preview(value: Option<&Value>) -> Json {
     let Some(value) = value else {
         return json!({"presence":"missing"});
     };
@@ -195,12 +223,25 @@ fn preview(value: Option<&Value>) -> Value {
             result["preview"] = context(text.as_bytes(), 0);
             result["truncated"] = json!(true);
         }
-        _ => result["value"] = value.clone(),
+        Value::Bytes(bytes) => {
+            result["byte_length"] = json!(bytes.len());
+            result["preview"] = context(bytes, 0);
+        }
+        Value::Number(number) => {
+            result["value"] = serde_json::to_value(number).expect("logical numbers serialize");
+            result["representation"] = match number {
+                traffic_value::Number::Signed(_) => "signed",
+                traffic_value::Number::Unsigned(_) => "unsigned",
+                traffic_value::Number::Float(_) => "float",
+            }
+            .into();
+        }
+        _ => result["value"] = serde_json::to_value(value).expect("logical values serialize"),
     }
     result
 }
 
-pub(super) fn byte_difference(source: &[u8], target: &[u8]) -> Value {
+pub fn byte_difference(source: &[u8], target: &[u8]) -> Json {
     let start = source
         .iter()
         .zip(target)
@@ -218,7 +259,7 @@ pub(super) fn byte_difference(source: &[u8], target: &[u8]) -> Value {
         "source_context":context(source, start), "target_context":context(target, start)})
 }
 
-fn context(bytes: &[u8], offset: usize) -> Value {
+fn context(bytes: &[u8], offset: usize) -> Json {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let mut start = offset.saturating_sub(64);
     let mut end = offset.saturating_add(128).min(bytes.len());

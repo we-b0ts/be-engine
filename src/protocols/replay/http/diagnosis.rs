@@ -250,7 +250,7 @@ impl Dataset<'_> {
         let target_body = target.as_ref().map(body_bytes).transpose()?;
         let mut diff = match (&source_body, &target_body) {
             (Some(source), Some(target)) => {
-                crate::value_contract::json::diagnosis::differences(source, target, offset)
+                crate::value_contract::diagnosis::differences(source, target, offset)
             }
             _ => self.unavailable(),
         };
@@ -273,7 +273,7 @@ impl Dataset<'_> {
                 .flatten()
                 .filter_map(|difference| difference["pointer"].as_str())
                 .map(|pointer| {
-                    crate::value_contract::json::diagnosis::at_pointer(source, target, pointer)
+                    crate::value_contract::diagnosis::at_pointer(source, target, pointer)
                 })
                 .collect::<Vec<_>>();
             if !observations.is_empty() {

@@ -135,3 +135,33 @@ pub fn sign(algorithm: Algorithm, key: &[u8], input: &[u8]) -> Vec<u8> {
         Algorithm::HS512 => sign!(Sha512),
     }
 }
+
+pub fn is_jwt(value: &serde_json::Value) -> bool {
+    let Some(token) = value.as_str().filter(|token| token.len() <= 64 * 1024) else {
+        return false;
+    };
+    let parts = token.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return false;
+    }
+    let decode = |part: &str| {
+        URL_SAFE_NO_PAD
+            .decode(part)
+            .ok()
+            .filter(|bytes| URL_SAFE_NO_PAD.encode(bytes) == part)
+    };
+    let Some(header) = decode(parts[0]).and_then(|bytes| traffic_codec_json::parse(&bytes)) else {
+        return false;
+    };
+    let Some(claims) = decode(parts[1]).and_then(|bytes| traffic_codec_json::parse(&bytes)) else {
+        return false;
+    };
+    header.is_object()
+        && header
+            .get("alg")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|algorithm| !algorithm.is_empty())
+        && claims.is_object()
+        && decode(parts[2])
+            .is_some_and(|signature| !signature.is_empty() || header["alg"] == "none")
+}

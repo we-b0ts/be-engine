@@ -5,9 +5,10 @@ use crate::replay::policy::ValueRuleHost;
 use crate::value_contract::response_delivery::IdentityDeliveryHost;
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
-    identity::{IdentityDecision, IdentityDelivery, IdentityPair},
+    identity::{IdentityDecision, IdentityPair},
     time::ClockPair,
 };
+use traffic_policy_value::identity::IdentityDelivery;
 use traffic_protocol::connection::NativeFuture;
 
 mod response_constraints;

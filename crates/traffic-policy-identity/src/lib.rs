@@ -4,6 +4,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use traffic_contract::{identity, rule::IdentityFormat};
+mod formats;
 use traffic_policy::{
     ComparisonPolicy, Evaluation, EvaluationHost, PolicyAction, PolicyDescriptor, PolicyProvider,
     ValuePair,
@@ -64,7 +65,7 @@ impl ComparisonPolicy for Configuration {
     }
 
     fn applies(&self, source: &Value, _: &Value) -> Result<bool> {
-        Ok(identity::token(
+        Ok(formats::token(
             &serde_json::to_value(source)?,
             &self.prefix,
             self.format,
@@ -74,7 +75,7 @@ impl ComparisonPolicy for Configuration {
     }
     fn entity_key(&self, source: &Value) -> Result<Option<[u8; 32]>> {
         let source = serde_json::to_value(source)?;
-        identity::token(&source, &self.prefix, self.format, "")
+        formats::token(&source, &self.prefix, self.format, "")
             .map_err(|error| anyhow::anyhow!(error.reason))?;
         let key = identity::key(&source, "").map_err(|error| anyhow::anyhow!(error.reason))?;
         Ok(Some(Sha256::digest(key.as_bytes()).into()))
@@ -92,7 +93,7 @@ impl ComparisonPolicy for Configuration {
                 ));
             }
             for value in [&source, &target] {
-                if let Err(error) = identity::token(value, &self.prefix, self.format, "") {
+                if let Err(error) = formats::token(value, &self.prefix, self.format, "") {
                     return Ok(Evaluation::mismatch(pair, "identity_format", &error.reason));
                 }
             }

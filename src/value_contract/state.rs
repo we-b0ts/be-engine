@@ -6,11 +6,10 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
-    identity::{
-        IdentityDecision, IdentityDelivery, IdentityPair, IdentityStore, PreparedIdentityDelivery,
-    },
+    identity::{IdentityDecision, IdentityPair, IdentityStore},
     time::ClockPair,
 };
+use traffic_policy_value::identity::IdentityDelivery;
 
 #[derive(Clone, Default)]
 pub(crate) struct ValueState {
@@ -59,7 +58,7 @@ impl ValueState {
         let prepared = selected
             .iter()
             .copied()
-            .map(PreparedIdentityDelivery::prepare)
+            .map(|selected| selected.prepare(traffic_extensions::policies()))
             .collect::<Result<Vec<_>>>()?;
         self.identities
             .lock()

@@ -31,7 +31,7 @@ pub fn checks<'a>(
             for pointer in traffic_contract::delivery::select(pattern, source)? {
                 checks.push((
                     pointer,
-                    Box::new(move |context| template::compare(context, formats)),
+                    Box::new(move |context| template::compare(context, formats, plan.policies())),
                 ));
             }
             continue;
@@ -76,7 +76,7 @@ pub fn checks<'a>(
 }
 /// Compact JWT syntax only. Claims and signatures remain opaque token content;
 /// correspondence uses the complete typed string, never a decoded field.
-pub use traffic_contract::identity::is_jwt;
+pub use traffic_jwt::is_jwt;
 
 /// Recognition is intentionally broader than authentication: duplicate JSON
 /// members or a disallowed algorithm cannot turn a compact JWS into an exact

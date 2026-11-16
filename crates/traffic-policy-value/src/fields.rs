@@ -697,7 +697,7 @@ impl<'a> FieldPlan<'a> {
                 if identity_only {
                     for pointer in traffic_contract::delivery::select(pattern, source)? {
                         let value = source.pointer(&pointer).context("JWT field disappeared")?;
-                        if traffic_contract::identity::is_jwt(value) {
+                        if crate::formats::is_jwt(value) {
                             fields.push(SelectedGlobalField {
                                 pattern: pattern.clone(),
                                 pointer,

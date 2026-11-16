@@ -5,10 +5,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 pub fn write_value(
     original: &RecordedMysqlValue,
     logical: Value,
-    scalar: bool,
+    selected: &Selection,
 ) -> Result<RecordedMysqlValue> {
     let mut output = original.clone();
-    if scalar {
+    if selected.native_scalar {
         if output.raw.is_some() {
             output.raw = Some(crate::model::ValueCapture {
                 truncated: false,
@@ -23,7 +23,20 @@ pub fn write_value(
     } else {
         let original_bytes = fields::encoded_bytes(original)?
             .context("MySQL JSON delivery lost its original bytes")?;
-        let bytes = traffic_contract::json::render::derived(&original_bytes, &logical)?;
+        let document = selected
+            .document
+            .as_ref()
+            .context("SQL content delivery lost its prepared codec")?;
+        ensure!(
+            document.original_bytes() == original_bytes,
+            "SQL content delivery differs from its prepared Source"
+        );
+        let allowed = selected
+            .fields
+            .iter()
+            .map(|(pointer, _)| pointer.clone())
+            .collect::<Vec<_>>();
+        let bytes = document.encode(&logical, &allowed)?;
         if output.raw.is_some() {
             output.raw = Some(crate::model::ValueCapture {
                 truncated: false,
@@ -132,7 +145,7 @@ pub fn translate_selection(
     }
     for (pointer, contract) in &selected.fields {
         if let FieldContract::Identity { prefix, format } = contract {
-            let entry = traffic_contract::identity::IdentityDelivery {
+            let entry = traffic_policy_value::identity::IdentityDelivery {
                 prefix,
                 format: *format,
                 value: selected

@@ -186,7 +186,7 @@ impl RequestContracts {
             Default::default()
         };
         let json_constraint = if let Some((_, value)) = &scalar {
-            value.json
+            !value.is_literal_text()
                 && self
                     .global_json()
                     .map(|global| Ok::<_, anyhow::Error>(global.fields.contains_key("")))

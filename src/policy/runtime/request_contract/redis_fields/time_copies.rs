@@ -43,7 +43,7 @@ struct ReadValue {
 #[derive(Clone, Debug)]
 enum ReadPlan {
     Json(Arc<CodecPlan>),
-    Scalar { json: bool },
+    Scalar(traffic_policy_value::scalar::ScalarDecoder),
 }
 
 /// Pending reads keep small temporal leaves and identities, never JSON bodies.
@@ -136,8 +136,8 @@ fn prepare_global_values(
         let Some(payload) = value.payload else {
             continue;
         };
-        let (logical, scalar) = if let Some(logical) = crate::json_value::parse(payload) {
-            (logical, false)
+        let (logical, scalar_decoder) = if let Some(logical) = crate::json_value::parse(payload) {
+            (logical, None)
         } else if redis
             .map(|policy| policy.field(value.key))
             .transpose()?
@@ -146,7 +146,8 @@ fn prepare_global_values(
             && let Some(scalar) =
                 crate::value_contract::redis_scalar::decode_automatic(payload, global, clocks)?
         {
-            (scalar.logical, true)
+            let decoder = scalar.decoder();
+            (scalar.logical, Some(decoder))
         } else {
             continue;
         };
@@ -174,12 +175,11 @@ fn prepare_global_values(
             key: value.key.to_vec(),
             hash_field: value.hash_field.map(<[u8]>::to_vec),
             payload_digest: Sha256::digest(payload).into(),
-            plan: if scalar {
-                ReadPlan::Scalar { json: false }
-            } else {
-                ReadPlan::Json(Arc::new(crate::value_codec::compile(
+            plan: match scalar_decoder {
+                Some(decoder) => ReadPlan::Scalar(decoder),
+                None => ReadPlan::Json(Arc::new(crate::value_codec::compile(
                     &crate::policy::Codec::Json,
-                )?))
+                )?)),
             },
             leaves,
         });
@@ -238,7 +238,7 @@ fn prepare_scalar_values(
             key: value.key.to_vec(),
             hash_field: value.hash_field.map(<[u8]>::to_vec),
             payload_digest: Sha256::digest(payload).into(),
-            plan: ReadPlan::Scalar { json: scalar.json },
+            plan: ReadPlan::Scalar(scalar.decoder()),
             leaves,
         });
     }
@@ -347,13 +347,7 @@ fn record_values(
         } else {
             Some(match &value.plan {
                 ReadPlan::Json(plan) => plan.decode(payload)?.logical,
-                ReadPlan::Scalar { json: true } => crate::json_value::parse(payload)
-                    .context("delivered Redis scalar JSON is invalid")?,
-                ReadPlan::Scalar { json: false } => Value::String(
-                    std::str::from_utf8(payload)
-                        .context("delivered Redis scalar is not UTF-8")?
-                        .into(),
-                ),
+                ReadPlan::Scalar(decoder) => decoder.decode(payload)?,
             })
         };
         let source_position = TimeCopyPosition::Redis {

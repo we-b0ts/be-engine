@@ -12,14 +12,20 @@ use traffic_contract::{
     identity::IdentityPair,
     template::extract,
 };
+use traffic_policy::PolicyRegistry;
 
 pub struct Document<'a> {
     format: &'a GlobalTemplateFormat,
+    policies: &'a PolicyRegistry,
     pub logical: Value,
 }
 
 impl<'a> Document<'a> {
-    pub fn select(value: &Value, formats: &'a [GlobalTemplateFormat]) -> Result<Option<Self>> {
+    pub fn select(
+        value: &Value,
+        formats: &'a [GlobalTemplateFormat],
+        policies: &'a PolicyRegistry,
+    ) -> Result<Option<Self>> {
         let Some(value) = value.as_str() else {
             return Ok(None);
         };
@@ -44,7 +50,8 @@ impl<'a> Document<'a> {
         };
         Ok(Some(Self {
             format,
-            logical: checked_values(format, values)?,
+            policies,
+            logical: checked_values(format, values, policies)?,
         }))
     }
 
@@ -72,6 +79,7 @@ impl<'a> Document<'a> {
             self.format,
             extract(&rebuilt, &self.format.template)
                 .map_err(|_| anyhow::anyhow!("derived template layout changed"))?,
+            self.policies,
         )?;
         ensure!(
             checked == *logical,
@@ -81,12 +89,16 @@ impl<'a> Document<'a> {
     }
 }
 
-fn checked_values(format: &GlobalTemplateFormat, values: BTreeMap<String, &str>) -> Result<Value> {
+fn checked_values(
+    format: &GlobalTemplateFormat,
+    values: BTreeMap<String, &str>,
+    policies: &PolicyRegistry,
+) -> Result<Value> {
     let mut logical = Map::new();
     for (name, field) in &format.fields {
         let text = values.get(name).context("template token disappeared")?;
         let value = Value::String((*text).into());
-        let token = traffic_contract::identity::token(&value, &field.prefix, field.format, "")
+        let token = crate::identity::token(&value, &field.prefix, field.format, "", policies)
             .map_err(|_| anyhow::anyhow!("template identity format is invalid"))?;
         if matches!(
             field.format,
@@ -117,7 +129,7 @@ pub fn selected<'a>(
             let value = source
                 .pointer(&pointer)
                 .context("template field disappeared")?;
-            if let Some(document) = Document::select(value, formats)? {
+            if let Some(document) = Document::select(value, formats, plan.policies())? {
                 selected.push((pointer, document));
             }
         }
@@ -128,9 +140,10 @@ pub fn selected<'a>(
 pub fn compare(
     context: LeafContext<'_>,
     formats: &[GlobalTemplateFormat],
+    policies: &PolicyRegistry,
 ) -> Result<LeafObservations, String> {
     let compare = || -> Result<LeafObservations> {
-        let Some(source) = Document::select(context.source, formats)? else {
+        let Some(source) = Document::select(context.source, formats, policies)? else {
             ensure!(
                 context.source == context.target,
                 "unselected template value differs"
@@ -143,7 +156,7 @@ pub fn compare(
             .context("Target template must remain a string")?;
         let values = extract(target, &source.format.template)
             .map_err(|_| anyhow::anyhow!("Target template literals or layout changed"))?;
-        let target = checked_values(source.format, values)?;
+        let target = checked_values(source.format, values, policies)?;
         let identities = source
             .format
             .fields

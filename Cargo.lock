@@ -2911,7 +2911,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "traffic-codec-json",
  "traffic-extensions",
  "traffic-policy",
  "traffic-time",
@@ -2973,6 +2972,7 @@ dependencies = [
  "tower-service",
  "tracing",
  "tracing-subscriber",
+ "traffic-codec-json",
  "traffic-codec-protobuf",
  "traffic-contract",
  "traffic-extensions",
@@ -3148,8 +3148,10 @@ dependencies = [
  "serde_json",
  "sha2",
  "traffic-contract",
+ "traffic-jwt",
  "traffic-policy",
  "traffic-value",
+ "uuid",
 ]
 
 [[package]]
@@ -3304,6 +3306,7 @@ dependencies = [
  "traffic-policy-execution",
  "traffic-policy-value",
  "traffic-protocol",
+ "traffic-value",
  "uuid",
 ]
 
@@ -3321,8 +3324,6 @@ dependencies = [
  "tokio",
  "traffic-contract",
  "traffic-model",
- "traffic-policy",
- "traffic-policy-value",
  "traffic-protocol",
  "uuid",
 ]

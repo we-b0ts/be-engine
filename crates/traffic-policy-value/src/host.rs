@@ -1,11 +1,12 @@
 //! Phase-independent value services supplied by the execution owner.
+use crate::identity::IdentityDelivery;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::sync::Arc;
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
-    identity::{IdentityDecision, IdentityDelivery, IdentityPair},
+    identity::{IdentityDecision, IdentityPair},
 };
 
 pub struct ValueDecision {

@@ -1,5 +1,6 @@
 //! Pure value semantics shared by policy, protocol adapters, and assertions.
 pub(crate) mod delivery;
+pub(crate) mod diagnosis;
 pub(crate) mod encoded;
 pub(crate) mod generated;
 pub(crate) mod global;

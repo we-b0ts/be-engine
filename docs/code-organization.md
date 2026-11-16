@@ -51,8 +51,8 @@ comparison, temporal analysis and scoped cross-message observation state over
 standard observed-clock facts. `traffic-time` owns exact temporal arithmetic,
 textual grammar recognition and temporal declarations shared by those
 implementations and compatibility adapters.
-`traffic-policy-identity` owns registered identity format comparison and entity
-key projection. The comparison host retains shared equality and injectivity
+`traffic-policy-identity` owns registered identity representation validation,
+format comparison and entity key projection. The comparison host retains shared equality and injectivity
 through its value-correspondence service.
 `traffic-policy-unordered` owns multiset comparison, joined-string collection
 comparison and canonicalization, and speculative child pairing through
@@ -115,7 +115,9 @@ canonical values to that installed provider.
 opaque delivery settings to the finite inventory. `traffic-policy-value` owns the
 application's field-rule message preparation and delivery implementation.
 `traffic-contract` retains field-contract compatibility, strict whole-document
-comparison and shared identity proposals/stores. Its codec
+comparison, codec-independent logical difference projection and shared identity
+proposals/stores. Identity delivery receives a prepared validation policy.
+Its codec
 compatibility entrypoints receive the application's codec registry. Comparison
 metadata supplies the policy registry. Neither path loads the extension catalog.
 Legacy identity, time, duration and unordered declarations lower to the registered execution
@@ -128,6 +130,12 @@ case-local delivered-value records, causal frontiers and copy proofs. The host
 supplies eligible compiled rule scopes and lazily projects its selected fields.
 `traffic-policy-value::host` owns the shared value-service port. Runtime bindings
 supply its identity, clock and document-policy services.
+`traffic-policy-value::diagnosis::bodies` receives the installed codec registry
+for Source recognition and uses that selected implementation to decode Target.
+`traffic-policy-value::scalar` owns shared scalar recognition, Source-selected
+decoders and authorized encoding through the prepared codec document. Native
+carrier bindings supply their rule identity and retain physical value locations.
+Pending read provenance retains the prepared scalar decoder.
 `traffic-policy-value::fields` owns carrier-independent format declarations and
 Source field selection over the supplied policy registry. Its `formats` module
 owns URL, compact JWT and named-template value checks. The host supplies frozen
@@ -139,8 +147,8 @@ Registered evidence adapters project native Source request and response
 envelopes. The host supplies authenticated storage and secret access through
 `RecordSource` and `EvidenceSecrets`. Policy evidence delegates envelope
 construction to the registered native owner.
-Native HTTP header occurrences and Redis scalar representations live beside their
-protocol libraries. These projections receive the policy registry and comparison
+Native HTTP header occurrences and Redis RESP value positions live beside their
+protocol libraries. Value bindings receive the policy registry and comparison
 metadata. Implicit scalar applicability delegates to the shared field plan and its
 installed implementations. Historical planner DTOs retain their existing rejection
 contract, while frozen-evidence checks continue serving pending journals.
@@ -151,6 +159,8 @@ optional scalar declarations. `DeliveryHost` supplies identity decisions without
 publishing them. Protected witness authorization, Case state and delivery commit
 remain application responsibilities. Shared delivered-time field enumeration and
 domain-separated declaration fingerprints retain their value-contract owners.
+Encoded SQL values use the installed codec registry for recognition, comparison
+and rendering. Selections retain their prepared Source document through delivery.
 Native MySQL semantic decoding and prepared-statement state belong to its
 protocol library. Its capture queue owns request/response FIFO correlation,
 continuation assembly, logical response boundaries and native termination-prefix

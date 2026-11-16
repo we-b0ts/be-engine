@@ -2,6 +2,7 @@
 use super::*;
 pub struct Selection {
     pub source: Value,
+    pub document: Option<traffic_contract::codec::DecodedDocument>,
     pub target: Value,
     pub fields: Vec<(String, FieldContract)>,
     pub id: &'static str,
@@ -39,9 +40,9 @@ pub(super) fn native_scalar(token: &crate::sql::Token) -> Result<Value> {
         crate::sql::Token::Bytes(bytes) => Ok(Value::String(
             String::from_utf8(bytes.clone()).context("SQL scalar requires UTF-8")?,
         )),
-        crate::sql::Token::Number(number) => {
-            traffic_contract::json::parse(number.as_bytes()).context("invalid SQL scalar number")
-        }
+        crate::sql::Token::Number(number) => serde_json::from_str(number)
+            .map(Value::Number)
+            .context("invalid SQL scalar number"),
         crate::sql::Token::Null => Ok(Value::Null),
         _ => anyhow::bail!("selected MySQL field is not a scalar value"),
     }
@@ -74,6 +75,7 @@ pub(super) fn global_scalar_selection(
         date: false,
         inferred: false,
         native_scalar: true,
+        document: None,
     }))
 }
 
@@ -100,6 +102,7 @@ pub fn temporal_selection(source: Value, target: Value, temporal: Temporal) -> R
             date: false,
             inferred: false,
             native_scalar: true,
+            document: None,
         });
     }
     let valid_source = source.as_str().is_some_and(|text| match temporal {
@@ -118,6 +121,7 @@ pub fn temporal_selection(source: Value, target: Value, temporal: Temporal) -> R
             date: false,
             inferred: false,
             native_scalar: true,
+            document: None,
         });
     }
     let contract = independent_scalar_contract(FieldContract::Time {
@@ -142,6 +146,7 @@ pub fn temporal_selection(source: Value, target: Value, temporal: Temporal) -> R
         date: temporal == Temporal::Date,
         inferred: true,
         native_scalar: true,
+        document: None,
     })
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 
 #[test]
 fn pointers_presence_types_and_array_multiplicity_are_explicit() {
@@ -102,4 +103,43 @@ fn rule_evaluation_reuses_the_shared_comparator_and_raw_diffs_remain_distinct() 
     );
     assert!(!failed.passed());
     assert_eq!(failed.differences[0].pointer, "/stable");
+}
+
+#[test]
+fn codec_scalar_categories_survive_diagnosis_and_collection_hints() {
+    use traffic_value::{Number, Value as Logical};
+    let source = Logical::Array(vec![
+        Logical::Bytes(vec![1, 2]),
+        Logical::Number(Number::Signed(1)),
+    ]);
+    let target = Logical::Array(vec![
+        Logical::Number(Number::Unsigned(1)),
+        Logical::Array(vec![
+            Logical::Number(Number::Unsigned(1)),
+            Logical::Number(Number::Unsigned(2)),
+        ]),
+    ]);
+    let result = super::differences(&source, &target, "native", 0);
+    assert!(result["analysis_complete"].as_bool().unwrap());
+    assert!(!result.to_string().contains("array_order_mismatch"));
+
+    let number = super::at_pointer(&source, &source, "/1");
+    assert_eq!(number["source"]["representation"], "signed");
+    let bytes = super::at_pointer(
+        &Logical::Bytes(vec![0xff, 1]),
+        &Logical::Bytes(vec![0xff, 2]),
+        "",
+    );
+    assert_eq!(bytes["source"]["type"], "bytes");
+    assert_eq!(bytes["bytes"]["first_different_byte"], 1);
+}
+
+fn differences(source: &[u8], target: &[u8], offset: usize) -> Value {
+    match (
+        serde_json::from_slice::<traffic_value::Value>(source),
+        serde_json::from_slice::<traffic_value::Value>(target),
+    ) {
+        (Ok(source), Ok(target)) => super::differences(&source, &target, "json", offset),
+        _ => super::byte_differences(source, target, "bytes", offset),
+    }
 }

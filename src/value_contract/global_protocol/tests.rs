@@ -1,7 +1,7 @@
 use crate::policy::CompiledJsonPolicy;
 use crate::value_contract::{global, json::AnchorClocks, time::ClockPair};
 use serde_json::json;
-use traffic_contract::identity::PreparedIdentityDelivery;
+use traffic_policy_value::identity::IdentityDelivery;
 fn plan(fields: &str) -> CompiledJsonPolicy {
     serde_yaml::from_str::<crate::policy::JsonPolicy>(&format!("fields:\n{fields}"))
         .unwrap()
@@ -81,9 +81,7 @@ fn bounded_string_format_keeps_original_maximum_without_weakening_generic_string
 
 #[test]
 fn jwt_identity_preserves_large_whole_tokens_during_delivery() {
-    use crate::value_contract::identities::{
-        IdentityDecision, IdentityDelivery, IdentityPair, IdentityStore,
-    };
+    use crate::value_contract::identities::{IdentityDecision, IdentityPair, IdentityStore};
     let source = crate::request_rules::tests::token(
         json!({"payload":"x".repeat(4096),"iat":1000,"exp":1060}),
         "key",
@@ -109,11 +107,12 @@ fn jwt_identity_preserves_large_whole_tokens_during_delivery() {
         )
         .unwrap();
     let value = json!(source);
-    let prepared = PreparedIdentityDelivery::prepare(IdentityDelivery {
+    let prepared = IdentityDelivery {
         prefix: "",
         format: crate::policy::IdentityFormat::Jwt,
         value: &value,
-    })
+    }
+    .prepare(traffic_extensions::policies())
     .unwrap();
     let (delivered, _) = store.deliveries("case", &[prepared]).unwrap();
     assert_eq!(delivered, vec![json!(target)]);

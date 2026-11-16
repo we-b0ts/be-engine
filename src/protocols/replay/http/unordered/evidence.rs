@@ -4,7 +4,7 @@ use anyhow::ensure;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
-use traffic_contract::json::canonical as canonical_json;
+use traffic_codec_json::canonical as canonical_json;
 
 const MAX_CANDIDATES: usize = 64;
 const MAX_BODY_BYTES: usize = 1024 * 1024;

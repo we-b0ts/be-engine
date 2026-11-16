@@ -1,5 +1,8 @@
 use super::*;
+use crate::rule::IdentityFormat;
 use serde_json::json;
+
+mod custom_policy;
 
 fn pair(source: &str, target: &str) -> IdentityPair {
     IdentityPair {
@@ -97,13 +100,13 @@ fn read_delivery_uses_known_renaming_and_fixes_unknown_historical_entities() {
     let old = json!("task_11");
     let historical = json!(12);
     let prepared = [
-        PreparedIdentityDelivery::prepare(IdentityDelivery {
+        prepare_delivery(IdentityDelivery {
             prefix: "task_",
             format: IdentityFormat::Decimal,
             value: &old,
         })
         .unwrap(),
-        PreparedIdentityDelivery::prepare(IdentityDelivery {
+        prepare_delivery(IdentityDelivery {
             prefix: "",
             format: IdentityFormat::Decimal,
             value: &historical,
@@ -144,7 +147,7 @@ fn independent_deliveries_cannot_silently_collapse_a_historical_id_into_known_ta
         .commit(decision("case", vec![pair("11", "1011")]))
         .unwrap();
     let historical = json!("1011");
-    let prepared = PreparedIdentityDelivery::prepare(IdentityDelivery {
+    let prepared = prepare_delivery(IdentityDelivery {
         prefix: "",
         format: IdentityFormat::Decimal,
         value: &historical,
@@ -271,4 +274,22 @@ fn large_tokens_hit_byte_limits_before_entity_limits_and_case_cleanup_releases_b
     store
         .commit(decision("case", vec![pair(&token, &token)]))
         .unwrap();
+}
+
+struct IdentityDelivery<'a> {
+    prefix: &'a str,
+    format: crate::rule::IdentityFormat,
+    value: &'a Value,
+}
+fn prepare_delivery(selected: IdentityDelivery<'_>) -> Result<PreparedIdentityDelivery> {
+    let definition = crate::rule::FieldContract::Identity {
+        prefix: selected.prefix.into(),
+        format: selected.format,
+    }
+    .registered_definition(false)
+    .unwrap();
+    PreparedIdentityDelivery::prepare(
+        selected.value,
+        traffic_extensions::policies().prepare_definition(&definition)?,
+    )
 }

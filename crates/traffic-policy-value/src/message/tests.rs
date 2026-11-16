@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 use traffic_contract::{
     compare::ExplicitRules,
-    identity::{IdentityDecision, IdentityPair, IdentityStore, PreparedIdentityDelivery},
+    identity::{IdentityDecision, IdentityPair, IdentityStore},
     rule::{ClockScope, IdentityFormat, TimeAnchor, TimeRelation, TimestampFormat},
     time::ClockPair,
 };
@@ -339,7 +339,7 @@ fn identity_and_time_delivery_share_one_strict_frame_and_keep_native_remainders(
                 let selected = selected
                     .iter()
                     .copied()
-                    .map(PreparedIdentityDelivery::prepare)
+                    .map(|selected| selected.prepare(traffic_extensions::policies()))
                     .collect::<Result<Vec<_>>>()?;
                 identities
                     .deliveries("case", &selected)

@@ -11,7 +11,7 @@ mod composition;
 pub mod diagnosis;
 pub mod identity;
 mod scope;
-pub use identity::{key as identity_key, token as identity_token};
+pub use identity::key as identity_key;
 mod native;
 mod observations;
 mod pointers;

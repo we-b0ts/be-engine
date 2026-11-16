@@ -10,7 +10,6 @@ test-support = []
 traffic-value = { path = "../traffic-value" }
 traffic-policy = { path = "../traffic-policy" }
 traffic-time = { path = "../traffic-time" }
-traffic-codec-json = { path = "../traffic-codec-json" }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

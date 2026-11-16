@@ -46,7 +46,7 @@ impl ScalarDelivery {
         let inner = Delivery::prepare_global(&serde_json::to_vec(&source.logical)?, &plan, clocks)?;
         let validation = account(inner.validation().clone());
         let additional = additional
-            .filter(|plan| source.json && plan.fields.contains_key(""))
+            .filter(|plan| !source.is_literal_text() && plan.fields.contains_key(""))
             .cloned();
         Ok(Self {
             source,

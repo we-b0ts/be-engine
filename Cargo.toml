@@ -10,6 +10,7 @@ edition = "2024"
 default-run = "traffic-e2e"
 
 [dependencies]
+traffic-codec-json = { path = "crates/traffic-codec-json" }
 traffic-policy-generated = { path = "crates/traffic-policy-generated" }
 traffic-policy-execution = { path = "crates/traffic-policy-execution" }
 traffic-policy-document = { path = "crates/traffic-policy-document" }

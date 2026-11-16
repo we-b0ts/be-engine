@@ -8,6 +8,7 @@ test-support = []
 
 [dependencies]
 traffic-contract = { path = "../traffic-contract" }
+traffic-value = { path = "../traffic-value" }
 traffic-policy-execution = { path = "../traffic-policy-execution" }
 traffic-policy-value = { path = "../traffic-policy-value" }
 

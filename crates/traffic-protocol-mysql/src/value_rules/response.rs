@@ -2,7 +2,7 @@
 use super::*;
 fn scalar_value(value: &RecordedMysqlValue) -> Result<Value> {
     let bytes = fields::scalar_bytes(value)?.context("MySQL scalar disappeared")?;
-    traffic_contract::json::parse(&bytes).context("MySQL scalar encoding is invalid")
+    serde_json::from_slice(&bytes).context("MySQL scalar encoding is invalid")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -47,6 +47,7 @@ pub fn response_selection<E>(
             date: false,
             inferred: false,
             native_scalar: true,
+            document: None,
         }));
     }
     let standard_scalar_candidate = source
@@ -78,17 +79,36 @@ pub fn response_selection<E>(
     let Some(bytes) = fields::encoded_bytes(source)? else {
         return Ok(None);
     };
-    let Some(source) = traffic_contract::json::parse(&bytes) else {
+    let Some(codec) = traffic_contract::codec::CodecPlan::try_recognize(
+        &bytes,
+        &serde_json::from_value(
+            serde_json::json!({"protocol":"mysql", "carrier":"result_value", "native_type":source.kind}),
+        )?,
+        policy.execution().codecs,
+    )?
+    else {
         return Ok(None);
     };
-    ensure!(target.kind != "null", "MySQL JSON value changed to NULL");
-    let bytes = fields::encoded_bytes(target)?.context("MySQL JSON target disappeared")?;
-    let target = traffic_contract::json::parse(&bytes)
-        .context("Target MySQL result changed from JSON encoding")?;
+    let document = codec.decode(&bytes)?;
+    if matches!(document.value(), traffic_value::Value::Bytes(_)) {
+        return Ok(None);
+    }
+    let source = &document.logical;
+    let fields = json.field_plan().fields_with_clocks(source, clocks)?;
+    if !source.is_object() && !source.is_array() && fields.is_empty() {
+        return Ok(None);
+    }
+    ensure!(target.kind != "null", "MySQL content value changed to NULL");
+    let bytes = fields::encoded_bytes(target)?.context("MySQL content target disappeared")?;
+    let target = codec
+        .decode(&bytes)
+        .context("Target MySQL result violates its Source codec")?
+        .logical;
     Ok(Some(Selection {
-        fields: json.field_plan().fields_with_clocks(&source, clocks)?,
-        source,
+        fields,
+        source: source.clone(),
         target,
+        document: Some(document),
         id: GLOBAL_JSON_ID,
         date: false,
         inferred: false,

@@ -5,7 +5,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub use traffic_protocol_redis::scalar::GLOBAL_REDIS_ID;
+pub const GLOBAL_REDIS_ID: &str = "global.redis";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

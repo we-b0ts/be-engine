@@ -2,7 +2,8 @@
 use anyhow::{Context, Result, ensure};
 use traffic_value::{Number, Value};
 
-pub(super) fn restore(original: &Value, projected: &serde_json::Value) -> Result<Value> {
+/// Restore scalar categories from a codec's original value after a projected edit.
+pub fn restore(original: &Value, projected: &serde_json::Value) -> Result<Value> {
     Ok(match original {
         Value::Bytes(_) => Value::Bytes(
             serde_json::from_value(projected.clone())

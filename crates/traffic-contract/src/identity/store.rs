@@ -7,8 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::rule::IdentityFormat;
-
 const MAX_CASE_ENTITIES: usize = 4096;
 const MAX_RUN_ENTITIES: usize = 32768;
 const MAX_PROPOSAL_PAIRS: usize = 16384;
@@ -319,8 +317,7 @@ impl IdentityStore {
                 .unwrap_or((selected.source_hash, selected.source.as_str()));
             let value: Value =
                 serde_json::from_str(token).context("invalid typed identity delivery")?;
-            super::token(&value, &selected.prefix, selected.format, "")
-                .map_err(|difference| anyhow::anyhow!(difference.reason))?;
+            selected.validate(&value)?;
             values.push(value);
             pairs.push(PreparedPair {
                 pair: IdentityPair {
@@ -344,37 +341,31 @@ impl IdentityStore {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct IdentityDelivery<'a> {
-    pub prefix: &'a str,
-    pub format: IdentityFormat,
-    pub value: &'a Value,
-}
-
-impl IdentityDelivery<'_> {
-    pub fn token(self) -> Result<String> {
-        super::token(self.value, self.prefix, self.format, "")
-            .map_err(|difference| anyhow::anyhow!(difference.reason))?;
-        super::key(self.value, "").map_err(|difference| anyhow::anyhow!(difference.reason))
-    }
-}
-
+/// A complete Source value and an opaque validation policy supplied by its owner.
 pub struct PreparedIdentityDelivery {
-    prefix: String,
     source: String,
     source_hash: Fingerprint,
-    format: IdentityFormat,
+    policy: traffic_policy::PreparedPolicy,
 }
-
 impl PreparedIdentityDelivery {
-    pub fn prepare(selected: IdentityDelivery<'_>) -> Result<Self> {
-        let source = selected.token()?;
-        Ok(Self {
-            prefix: selected.prefix.to_owned(),
+    pub fn prepare(value: &Value, policy: traffic_policy::PreparedPolicy) -> Result<Self> {
+        let source =
+            super::key(value, "").map_err(|difference| anyhow::anyhow!(difference.reason))?;
+        let prepared = Self {
             source_hash: Sha256::digest(source.as_bytes()).into(),
             source,
-            format: selected.format,
-        })
+            policy,
+        };
+        prepared.validate(value)?;
+        Ok(prepared)
+    }
+    fn validate(&self, value: &Value) -> Result<()> {
+        let value = serde_json::from_value(value.clone())?;
+        ensure!(
+            self.policy.applies(&value, &traffic_value::Value::Null)?,
+            "identity representation is invalid"
+        );
+        Ok(())
     }
 }
 

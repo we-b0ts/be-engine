@@ -9,14 +9,27 @@ use serde_json::Value;
 use traffic_contract::compare as kernel;
 mod native;
 pub(crate) use super::time_copies::VerifiedTimeCopy;
-pub(crate) use kernel::diagnosis;
 pub(crate) use kernel::{
     AnchorClocks, Comparison, Field, LeafContext, LeafObservations, NonceIdentity, VerifiedField,
     parse_time_pair, parse_time_value, pointer_observed,
 };
 pub(crate) use native::NativeField;
 pub(crate) use traffic_contract::comparison::Difference;
-pub(crate) use traffic_contract::identity::{key as identity_key, token as identity_token};
+pub(crate) use traffic_contract::identity::key as identity_key;
+pub(crate) fn identity_token(
+    value: &Value,
+    prefix: &str,
+    format: traffic_contract::rule::IdentityFormat,
+    pointer: &str,
+) -> Result<String, Difference> {
+    traffic_policy_value::identity::token(
+        value,
+        prefix,
+        format,
+        pointer,
+        traffic_extensions::policies(),
+    )
+}
 
 pub(crate) struct PolicyMetadata;
 impl kernel::RuleMetadata for PolicyMetadata {

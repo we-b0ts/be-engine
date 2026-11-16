@@ -195,3 +195,98 @@ fn injected_codec_reaches_binding_comparison_and_delivery_without_framework_regi
             .passed()
     );
 }
+
+#[test]
+fn scalar_formats_delegate_source_decoding_and_delivery_to_a_registered_codec() {
+    use traffic_policy_value::{
+        ExecutionContext,
+        fields::{GlobalField, GlobalIdentityFormat, TimePolicy},
+        scalar,
+    };
+    let mut codecs = CodecRegistry::default();
+    codecs.register(Arc::new(PrefixCodec)).unwrap();
+    let metadata = RegisteredRules(traffic_extensions::policies());
+    let context = ExecutionContext {
+        codecs: &codecs,
+        metadata: &metadata,
+    };
+    let field = GlobalField::Identity {
+        formats: vec![GlobalIdentityFormat {
+            prefix: "id_".into(),
+            format: IdentityFormat::Decimal,
+        }],
+    };
+    let source = scalar::decode_field(b"fixture=id_42", &field, &context)
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.logical, json!("id_42"));
+    assert!(!source.is_literal_text());
+    assert_eq!(
+        source.encode(&json!("id_1042")).unwrap(),
+        b"fixture=id_1042"
+    );
+    assert_eq!(
+        source.decoder().decode(b"fixture=id_1042").unwrap(),
+        json!("id_1042")
+    );
+    assert!(source.target(b"id_1042").is_err());
+
+    let comparison = scalar::compare(
+        &context,
+        "native-field",
+        b"fixture=id_42",
+        b"fixture=id_1042",
+        &field,
+        &TimePolicy::default(),
+        AnchorClocks::default(),
+        &[],
+    )
+    .unwrap();
+    assert!(comparison.passed());
+    assert!(comparison.evaluated.contains("native-field"));
+}
+
+#[test]
+fn scalar_codec_rendering_retains_original_tokens_and_numeric_identity_interpretation() {
+    use traffic_policy_value::{
+        ExecutionContext,
+        fields::{GlobalField, GlobalIdentityFormat},
+        scalar,
+    };
+    assert!(
+        scalar::decode(b"plain text", &CodecRegistry::default())
+            .unwrap()
+            .is_none()
+    );
+    let codecs = traffic_extensions::codecs();
+    let source = scalar::decode(b"  \"\\u0061\" \n", codecs)
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.logical, json!("a"));
+    assert_eq!(source.encode(&json!("a")).unwrap(), b"  \"\\u0061\" \n");
+    assert_eq!(source.encode(&json!("b")).unwrap(), b"  \"b\" \n");
+    assert!(source.target(br#"{"changed":"structure"}"#).is_err());
+    assert!(
+        scalar::decode(br#"{"object":1}"#, codecs)
+            .unwrap()
+            .is_none()
+    );
+
+    let metadata = RegisteredRules(traffic_extensions::policies());
+    let context = ExecutionContext {
+        codecs,
+        metadata: &metadata,
+    };
+    let field = GlobalField::Identity {
+        formats: vec![GlobalIdentityFormat {
+            prefix: String::new(),
+            format: IdentityFormat::Hex(8),
+        }],
+    };
+    let source = scalar::decode_field(b"12345678", &field, &context)
+        .unwrap()
+        .unwrap();
+    assert!(source.is_literal_text());
+    assert_eq!(source.logical, json!("12345678"));
+    assert_eq!(source.encode(&json!("abcdef01")).unwrap(), b"abcdef01");
+}
