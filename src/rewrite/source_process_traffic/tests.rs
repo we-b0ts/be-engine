@@ -59,23 +59,12 @@ fn projects_a_bounded_evidence_view_from_the_recording_summary() {
     assert_eq!(view.bootstrap.unwrap().data_interactions, 1);
     let process_owned = view.process_owned.unwrap();
     assert_eq!(process_owned.rules_total, 1);
-    assert_eq!(
-        process_owned.rules[0]
-            .redis_snapshot
-            .as_ref()
-            .unwrap()
-            .reuses,
-        1
-    );
-    assert_eq!(
-        process_owned.rules[0]
-            .redis_snapshot
-            .as_ref()
-            .unwrap()
-            .endpoints[0]
-            .endpoint,
-        "redis.internal:20917"
-    );
+    let native = &process_owned.rules[0].native["redis_snapshot"];
+    assert_eq!(native["reuses"], 1);
+    assert_eq!(native["endpoints"][0]["endpoint"], "redis.internal:20917");
+    assert_eq!(native["omitted_endpoints"], 0);
+    let serialized = serde_json::to_value(&process_owned.rules[0]).unwrap();
+    assert_eq!(serialized["redis_snapshot"], *native);
 
     let envelope = crate::rewrite::action::for_state(temp.path(), &state);
     let action = serde_json::to_value(envelope).unwrap();

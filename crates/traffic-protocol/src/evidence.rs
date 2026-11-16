@@ -9,6 +9,8 @@ mod payload;
 #[cfg(test)]
 mod payload_tests;
 mod recording_summary;
+#[cfg(test)]
+mod summary_view_tests;
 mod timing;
 mod value;
 pub use payload::{EvidenceSecrets, MessageSide};
@@ -105,6 +107,14 @@ pub trait EvidenceAdapter: Send + Sync {
     fn process_summary(&self, _name: &str) -> Option<Box<dyn NativeSummary>> {
         None
     }
+    fn process_summary_view(
+        &self,
+        _name: &str,
+        value: &Value,
+        _detail_limit: usize,
+    ) -> Result<Value> {
+        Ok(value.clone())
+    }
 }
 
 fn capture_reference(event: &Value) -> Result<Option<ProtocolRef>> {
@@ -140,6 +150,26 @@ impl std::fmt::Debug for EvidenceRegistry {
 }
 
 impl EvidenceRegistry {
+    pub fn process_summary_views(
+        &self,
+        values: &BTreeMap<String, Value>,
+        detail_limit: usize,
+    ) -> Result<BTreeMap<String, Value>> {
+        values
+            .iter()
+            .map(|(name, value)| {
+                let view = match self.summaries.get(name.as_str()) {
+                    Some(index) => self.registrations[*index].adapter.process_summary_view(
+                        name,
+                        value,
+                        detail_limit,
+                    )?,
+                    None => value.clone(),
+                };
+                Ok((name.clone(), view))
+            })
+            .collect()
+    }
     pub fn query_value(
         &self,
         event: &Value,

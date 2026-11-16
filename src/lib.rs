@@ -260,7 +260,6 @@ pub use rewrite::{
     RewriteRouteOptions, RewriteRouteOutcome, RewriteRouteReport, RewriteRuleHint,
     RewriteRulePlanOptions, RewriteRuleReport, RewriteSourceProcessObservationView,
     RewriteSourceProcessOwnedRuleView, RewriteSourceProcessOwnedView,
-    RewriteSourceProcessRedisSnapshotEndpointView, RewriteSourceProcessRedisSnapshotView,
     RewriteSourceProcessTrafficScopeView, RewriteSourceProcessTrafficView, RewriteStatusReport,
     RewriteTargetQualityOptions, RewriteTrafficOperationKind, RewriteTrafficOperationView,
     RewriteUnifiedRulePlanOptions, RewriteWaitOptions, RewriteWorkScope, RewriteWorkerActivity,

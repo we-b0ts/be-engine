@@ -195,6 +195,10 @@ application reader uses the installed codec registry and enforces observation
 limits. Native providers return standard present, missing or unavailable
 observations and provider-owned annotations. Rewrite owns authentication,
 assignment binding and report publication.
+Process-summary projection uses the same registered evidence owner. The host
+supplies a detail limit and publishes the resulting named native views. Redis
+owns snapshot decoding, endpoint truncation and omitted-endpoint counts beside
+its recording accumulator.
 Native HTTP header occurrences and Redis RESP value positions live beside their
 protocol libraries. Value bindings receive the policy registry and comparison
 metadata. Implicit scalar applicability delegates to the shared field plan and its

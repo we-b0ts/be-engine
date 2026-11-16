@@ -24,6 +24,31 @@ pub struct SnapshotEndpointSummary {
     pub fill_failures: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SnapshotView {
+    pub seeds: u64,
+    pub reuses: u64,
+    pub fill_failures: u64,
+    pub endpoints: Vec<SnapshotEndpointSummary>,
+    pub omitted_endpoints: usize,
+    pub omitted_interactions: u64,
+    pub truncated: bool,
+}
+
+impl SnapshotSummary {
+    pub fn view(&self, detail_limit: usize) -> SnapshotView {
+        SnapshotView {
+            seeds: self.seeds,
+            reuses: self.reuses,
+            fill_failures: self.fill_failures,
+            endpoints: self.endpoints.iter().take(detail_limit).cloned().collect(),
+            omitted_endpoints: self.endpoints.len().saturating_sub(detail_limit),
+            omitted_interactions: self.omitted_interactions,
+            truncated: self.truncated || self.endpoints.len() > detail_limit,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SnapshotAccumulator {
     seeds: u64,
@@ -141,5 +166,62 @@ impl NativeSummary for SnapshotAccumulator {
     }
     fn value(&self) -> Value {
         serde_json::to_value(self.summary()).expect("native snapshot summary is serializable")
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+    use traffic_protocol::evidence::EvidenceRegistry;
+
+    #[test]
+    fn installed_summary_projection_preserves_native_counts_and_reports_omitted_endpoints() {
+        let mut registry = EvidenceRegistry::default();
+        registry
+            .register(
+                "redis",
+                std::sync::Arc::new(crate::evidence::NativeEvidence),
+            )
+            .unwrap();
+        let summary = SnapshotSummary {
+            seeds: 8,
+            reuses: 5,
+            fill_failures: 3,
+            endpoints: (0..3)
+                .map(|index| SnapshotEndpointSummary {
+                    endpoint: format!("cache-{index}:6379"),
+                    seeds: 1,
+                    reuses: 2,
+                    fill_failures: 3,
+                })
+                .collect(),
+            omitted_interactions: 7,
+            truncated: false,
+        };
+        let values = BTreeMap::from([(
+            "redis_snapshot".into(),
+            serde_json::to_value(&summary).unwrap(),
+        )]);
+        let projected = registry.process_summary_views(&values, 1).unwrap();
+        let view = &projected["redis_snapshot"];
+        assert_eq!(view["seeds"], 8);
+        assert_eq!(view["reuses"], 5);
+        assert_eq!(view["fill_failures"], 3);
+        assert_eq!(view["endpoints"].as_array().unwrap().len(), 1);
+        assert_eq!(view["omitted_endpoints"], 2);
+        assert_eq!(view["omitted_interactions"], 7);
+        assert_eq!(view["truncated"], true);
+        assert_eq!(summary.endpoints.len(), 3);
+        let complete = registry.process_summary_views(&values, 3).unwrap();
+        assert_eq!(complete["redis_snapshot"]["truncated"], false);
+        assert_eq!(complete["redis_snapshot"]["omitted_endpoints"], 0);
+        assert!(
+            registry
+                .process_summary_views(
+                    &BTreeMap::from([("redis_snapshot".into(), serde_json::json!({}))]),
+                    1
+                )
+                .is_err()
+        );
     }
 }

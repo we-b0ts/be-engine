@@ -9,7 +9,7 @@ use crate::recorder::load_source_process_traffic_summary;
 const MAX_BOOTSTRAP_OBSERVATIONS: usize = 16;
 const MAX_PROCESS_OWNED_RULES: usize = 16;
 const MAX_RULE_OBSERVATIONS: usize = 8;
-const MAX_SNAPSHOT_ENDPOINTS: usize = 16;
+const MAX_NATIVE_DETAILS: usize = 16;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteSourceProcessTrafficView {
@@ -70,29 +70,8 @@ pub struct RewriteSourceProcessOwnedRuleView {
     pub omitted_observations: usize,
     pub omitted_interactions: u64,
     pub truncated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub redis_snapshot: Option<RewriteSourceProcessRedisSnapshotView>,
     #[serde(flatten)]
     pub native: std::collections::BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RewriteSourceProcessRedisSnapshotView {
-    pub seeds: u64,
-    pub reuses: u64,
-    pub fill_failures: u64,
-    pub endpoints: Vec<RewriteSourceProcessRedisSnapshotEndpointView>,
-    pub omitted_endpoints: usize,
-    pub omitted_interactions: u64,
-    pub truncated: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RewriteSourceProcessRedisSnapshotEndpointView {
-    pub endpoint: String,
-    pub seeds: u64,
-    pub reuses: u64,
-    pub fill_failures: u64,
 }
 
 pub(super) fn evidence_view(
@@ -109,23 +88,19 @@ pub(super) fn evidence_view(
     };
     match load_source_process_traffic_summary(&case_source) {
         Ok(Some(summary)) => {
-            let snapshots = summary
+            let providers = crate::protocols::default_providers();
+            let native = summary
                 .background
                 .rules
                 .iter()
                 .map(|rule| {
-                    rule.native
-                        .get("redis_snapshot")
-                        .map(|snapshot| {
-                            serde_json::from_value::<
-                                traffic_protocol_redis::process_summary::SnapshotSummary,
-                            >(snapshot.clone())
-                        })
-                        .transpose()
+                    providers
+                        .evidence()
+                        .process_summary_views(&rule.native, MAX_NATIVE_DETAILS)
                 })
-                .collect::<Result<Vec<_>, _>>();
-            let snapshots = match snapshots {
-                Ok(snapshots) => snapshots,
+                .collect::<anyhow::Result<Vec<_>>>();
+            let native = match native {
+                Ok(native) => native,
                 Err(error) => {
                     return unavailable(&format!("invalid native process summary: {error}"));
                 }
@@ -164,8 +139,8 @@ pub(super) fn evidence_view(
                 .rules
                 .iter()
                 .take(MAX_PROCESS_OWNED_RULES)
-                .enumerate()
-                .map(|(index, rule)| {
+                .zip(native)
+                .map(|(rule, native)| {
                     let observations_total = rule.observations.len();
                     RewriteSourceProcessOwnedRuleView {
                         name: rule.name.clone(),
@@ -184,36 +159,7 @@ pub(super) fn evidence_view(
                             .saturating_sub(MAX_RULE_OBSERVATIONS),
                         omitted_interactions: rule.omitted_interactions,
                         truncated: rule.truncated || observations_total > MAX_RULE_OBSERVATIONS,
-                        native: rule
-                            .native
-                            .iter()
-                            .filter(|(name, _)| name.as_str() != "redis_snapshot")
-                            .map(|(name, value)| (name.clone(), value.clone()))
-                            .collect(),
-                        redis_snapshot: snapshots[index].as_ref().map(|snapshot| {
-                            let endpoints_total = snapshot.endpoints.len();
-                            RewriteSourceProcessRedisSnapshotView {
-                                seeds: snapshot.seeds,
-                                reuses: snapshot.reuses,
-                                fill_failures: snapshot.fill_failures,
-                                endpoints: snapshot
-                                    .endpoints
-                                    .iter()
-                                    .take(MAX_SNAPSHOT_ENDPOINTS)
-                                    .map(|endpoint| RewriteSourceProcessRedisSnapshotEndpointView {
-                                        endpoint: endpoint.endpoint.clone(),
-                                        seeds: endpoint.seeds,
-                                        reuses: endpoint.reuses,
-                                        fill_failures: endpoint.fill_failures,
-                                    })
-                                    .collect(),
-                                omitted_endpoints: endpoints_total
-                                    .saturating_sub(MAX_SNAPSHOT_ENDPOINTS),
-                                omitted_interactions: snapshot.omitted_interactions,
-                                truncated: snapshot.truncated
-                                    || endpoints_total > MAX_SNAPSHOT_ENDPOINTS,
-                            }
-                        }),
+                        native,
                     }
                 })
                 .collect();

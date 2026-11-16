@@ -182,6 +182,17 @@ impl EvidenceAdapter for NativeEvidence {
                 as Box<dyn NativeSummary>
         })
     }
+    fn process_summary_view(
+        &self,
+        name: &str,
+        value: &Value,
+        detail_limit: usize,
+    ) -> Result<Value> {
+        anyhow::ensure!(name == "redis_snapshot", "unknown Redis process summary");
+        let snapshot: crate::process_summary::SnapshotSummary =
+            serde_json::from_value(value.clone())?;
+        Ok(serde_json::to_value(snapshot.view(detail_limit))?)
+    }
 }
 
 mod value_query;
