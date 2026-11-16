@@ -68,6 +68,17 @@ impl std::ops::DerefMut for DependencyProviders {
     }
 }
 impl DependencyProviders {
+    pub(crate) fn connection_provider(
+        &self,
+        protocol: traffic_protocol::ProtocolId,
+    ) -> Result<&traffic_protocol::RegisteredProtocol<DependencyProtocol>> {
+        self.registrations()
+            .iter()
+            .find(|entry| {
+                entry.kind.id() == protocol || entry.provider.aliases().contains(&protocol.as_str())
+            })
+            .ok_or_else(|| anyhow::anyhow!("native connection provider is not registered"))
+    }
     pub(crate) fn report_codecs(&self) -> &traffic_protocol::report::CodecRegistry {
         &self.report_codecs
     }

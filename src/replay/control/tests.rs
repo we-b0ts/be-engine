@@ -3,7 +3,6 @@ use super::*;
 mod cancelled_delivery;
 mod finalization;
 mod peer_disconnect;
-mod streaming;
 
 #[tokio::test(start_paused = true)]
 async fn replay_end_waits_for_close_tails_and_caps_rolling_quiet() {

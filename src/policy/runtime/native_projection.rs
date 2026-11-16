@@ -17,7 +17,7 @@ mod identity;
 mod response;
 pub(crate) use response::{dynamic_claim, project_jwt};
 pub(crate) use traffic_policy_schema::scope::NativeScopeGuard;
-mod redis_admission;
+mod native_admission;
 mod source;
 mod source_validation;
 pub(crate) use source::validate_finite_sharing;
@@ -51,7 +51,7 @@ pub(crate) fn project_native(rules: &[CompiledNativeRule]) -> Result<NativeRunti
     };
     for compiled in rules {
         let rule = &compiled.rule;
-        redis_admission::validate(rule)?;
+        native_admission::validate(rule)?;
         match &rule.effect {
             n::NativeEffect::Identity(_) if n::is_key_only_read_back(rule) => {
                 // Key-only read state uses globally declared scalar identities

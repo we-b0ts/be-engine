@@ -48,12 +48,6 @@ pub(super) fn resolve(
     references: &[RecordedReference],
 ) -> Result<Vec<ProtocolExchange>> {
     let mysql_keys = connection_keys(references, "mysql")?;
-    let http_keys = references
-        .iter()
-        .filter(|reference| reference.protocol() == "http")
-        .map(exchange)
-        .collect::<Result<_>>()?;
-    let http = state.http_case_exchange_indices(case, &http_keys)?;
     let mut mysql = BTreeMap::new();
     for (index, exchange) in state.protocol_data().mysql.exchanges.iter().enumerate() {
         let Some(key) = exchange
@@ -83,7 +77,6 @@ pub(super) fn resolve(
         .map(|reference| {
             let (inventory, index) = match reference.protocol() {
                 "mysql" => ("mysql", mysql[&connection(reference)?]),
-                "http" => ("http", http[&exchange(reference)?]),
 
                 _ => bail!("finite native reference has no installed inventory owner"),
             };
@@ -99,17 +92,13 @@ pub(super) fn status(state: &State, exchange: ProtocolExchange) -> Option<Replay
     let index = exchange.index;
     match exchange.inventory.as_str() {
         "mysql" => state.protocol_data().mysql.exchange_status(index),
-        "http" => state.http_exchange_status(index),
 
         _ => None,
     }
 }
 
-pub(super) fn permits_cancelled_omission(state: &State, exchange: ProtocolExchange) -> bool {
-    match exchange.inventory.as_str() {
-        "http" => state.permits_cancelled_http_omission(exchange.index),
-        _ => false,
-    }
+pub(super) fn permits_cancelled_omission(_: &State, _: ProtocolExchange) -> bool {
+    false
 }
 
 pub(super) fn permits_unstarted_omission(
@@ -123,26 +112,14 @@ pub(super) fn permits_unstarted_omission(
             .protocol_data()
             .mysql
             .permits_unstarted_omission(exchange.index),
-        "http" => {
-            !strict_reference
-                && shared_initialization
-                && state.http_exchange_status(exchange.index)
-                    == Some(ReplayExchangeStatus::Available)
-        }
         _ => false,
     }
 }
 
 pub(super) fn shared_initialization(
-    state: &State,
-    exchange: ProtocolExchange,
-    completion: &crate::recorder::async_api::CompletionRequirements,
+    _: &State,
+    _: ProtocolExchange,
+    _: &crate::recorder::async_api::CompletionRequirements,
 ) -> bool {
-    exchange.inventory.as_str() == "http"
-        && state.http_shared_initialization(
-            exchange.index,
-            completion
-                .get::<Vec<crate::policy::AsyncHttpEnd>>()
-                .map_or(&[], Vec::as_slice),
-        )
+    false
 }

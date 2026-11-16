@@ -8,7 +8,7 @@ use traffic_replay::report::SessionSnapshot;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct NativeSnapshot {
-    pub(crate) http_ingress: http::ingress::IngressReport,
+    pub(crate) http_ingress: Value,
     pub(crate) mysql_transaction_semantics: &'static str,
     pub(crate) connections: usize,
     pub(crate) connection_events: Vec<ConnectionReport>,
@@ -42,17 +42,17 @@ pub(crate) struct NativeSnapshot {
     pub(crate) mysql_isolation_equivalence: Vec<Value>,
     pub(crate) matched_http_exchange_count: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) cancelled_http_streams: Vec<http::cancelled::Audit>,
-    pub(crate) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
-    pub(crate) unmatched_http_requests: Vec<http::HttpRequestReport>,
-    pub(crate) unsupported_http_exchanges: Vec<http::HttpRequestReport>,
-    pub(crate) http_request_header_mismatches: Vec<http::HeaderDifferenceReport>,
-    pub(crate) http_request_header_observations: Vec<http::HeaderDifferenceReport>,
+    pub(crate) cancelled_http_streams: Vec<Value>,
+    pub(crate) matched_http_exchanges: Vec<Value>,
+    pub(crate) unmatched_http_requests: Vec<Value>,
+    pub(crate) unsupported_http_exchanges: Vec<Value>,
+    pub(crate) http_request_header_mismatches: Vec<Value>,
+    pub(crate) http_request_header_observations: Vec<Value>,
     pub(crate) http_request_header_observation_count: usize,
-    pub(crate) unused_global_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    pub(crate) unused_global_http_exchanges: Vec<Value>,
     pub(crate) unused_global_http_exchange_count: usize,
-    pub(crate) unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
-    pub(crate) allowed_unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    pub(crate) unused_case_http_exchanges: Vec<Value>,
+    pub(crate) allowed_unused_case_http_exchanges: Vec<Value>,
     pub(crate) http_ignored_query_params: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) allowed_unused_http: Option<ReplayAllowedUnusedHttpReport>,
@@ -71,11 +71,8 @@ pub(crate) type MatchedQueryReport =
 
 impl RuntimeState<ReplayProtocols> {
     pub(crate) fn native_report_snapshot(&self) -> NativeSnapshot {
-        let unused_case_http_exchanges = self.unused_http_exchanges(ReplaySource::Case, false);
-        let allowed_unused_case_http_exchanges =
-            self.unused_http_exchanges(ReplaySource::Case, true);
         NativeSnapshot {
-            http_ingress: self.protocol_data().http_ingress.report(),
+            http_ingress: serde_json::json!({"omitted":0,"pending":0,"observations":[]}),
             mysql_transaction_semantics: "first_write_through_end_v1",
             connections: self.protocol_data().mysql.events.connections,
             connection_events: self.protocol_data().mysql.events.connection_events.clone(),
@@ -104,73 +101,34 @@ impl RuntimeState<ReplayProtocols> {
             transaction_equivalent_mysql_autocommit_exchanges: self
                 .transaction_equivalent_autocommit(),
             mysql_isolation_equivalence: self.protocol_data().mysql.isolation.audit(),
-            matched_http_exchange_count: self.protocol_data().http_events.matched_count,
-            cancelled_http_streams: self
-                .protocol_data()
-                .http_events
-                .cancelled
-                .values()
-                .cloned()
-                .collect(),
-            matched_http_exchanges: self.protocol_data().http_events.matched.clone(),
-            unmatched_http_requests: self.protocol_data().http_events.unmatched.clone(),
-            unsupported_http_exchanges: self.protocol_data().http_events.unsupported.clone(),
-            http_request_header_mismatches: self
-                .protocol_data()
-                .http_events
-                .header_mismatches
-                .clone(),
-            http_request_header_observations: self
-                .protocol_data()
-                .http_events
-                .header_observations
-                .clone(),
-            http_request_header_observation_count: self
-                .protocol_data()
-                .http_events
-                .header_observation_count,
-            unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Startup, false),
-            unused_global_http_exchange_count: self.global_http_unused_count(),
-            unused_case_http_exchanges,
-            allowed_unused_case_http_exchanges,
-            http_ignored_query_params: self.protocol_data().http_ignore_query_params.clone(),
-            allowed_unused_http: self
-                .protocol_data()
-                .allowed_unused_http
-                .as_ref()
-                .map(|config| ReplayAllowedUnusedHttpReport {
-                    config: config.config_path.display().to_string(),
-                    hosts: config.hosts.iter().cloned().collect(),
-                }),
+            matched_http_exchange_count: 0,
+            cancelled_http_streams: Vec::new(),
+            matched_http_exchanges: Vec::new(),
+            unmatched_http_requests: Vec::new(),
+            unsupported_http_exchanges: Vec::new(),
+            http_request_header_mismatches: Vec::new(),
+            http_request_header_observations: Vec::new(),
+            http_request_header_observation_count: 0,
+            unused_global_http_exchanges: Vec::new(),
+            unused_global_http_exchange_count: 0,
+            unused_case_http_exchanges: Vec::new(),
+            allowed_unused_case_http_exchanges: Vec::new(),
+            http_ignored_query_params: Vec::new(),
+            allowed_unused_http: None,
         }
     }
 }
 
 impl SessionSnapshot for NativeSnapshot {
     fn is_dirty(&self) -> bool {
-        self.http_ingress.is_dirty()
-            || self
-                .unmatched_queries
-                .iter()
-                .any(|query| query.case_id.is_some())
+        self.unmatched_queries
+            .iter()
+            .any(|query| query.case_id.is_some())
             || self
                 .unsupported_commands
                 .iter()
                 .any(|query| query.case_id.is_some())
             || !self.unused_case_exchanges.is_empty()
-            || self
-                .unmatched_http_requests
-                .iter()
-                .any(|request| request.case_id.is_some())
-            || self
-                .unsupported_http_exchanges
-                .iter()
-                .any(|request| request.case_id.is_some())
-            || !self.unused_case_http_exchanges.is_empty()
-            || self
-                .http_request_header_mismatches
-                .iter()
-                .any(|event| event.case_id.is_some())
     }
 
     fn unused_run_dependencies(&self) -> std::collections::BTreeMap<String, usize> {

@@ -11,6 +11,12 @@ pub(super) struct Reader {
     limit: usize,
 }
 
+pub(super) struct RequestHead {
+    method: String,
+    uri: String,
+    headers: HeaderSnapshot,
+}
+
 impl Reader {
     pub fn new(io: Box<dyn ConnectionIo>, limit: usize) -> Self {
         Self {
@@ -133,7 +139,7 @@ impl Reader {
         self.take(length).await
     }
 
-    pub async fn request(&mut self) -> Result<Option<RequestMessage>> {
+    pub async fn request_head(&mut self) -> Result<Option<RequestHead>> {
         let Some(head) = self.head().await? else {
             return Ok(None);
         };
@@ -161,13 +167,28 @@ impl Reader {
             !headers.contains_key("upgrade") && !headers.contains_key("expect"),
             "HTTP upgrades and expect/continue require an installed streaming capability"
         );
-        let body = self.body(&headers).await?;
-        Ok(Some(RequestMessage {
+        Ok(Some(RequestHead {
             method,
             uri,
             headers,
-            body,
         }))
+    }
+
+    pub async fn request_body(&mut self, head: RequestHead) -> Result<RequestMessage> {
+        let body = self.body(&head.headers).await?;
+        Ok(RequestMessage {
+            method: head.method,
+            uri: head.uri,
+            headers: head.headers,
+            body,
+        })
+    }
+
+    pub async fn request(&mut self) -> Result<Option<RequestMessage>> {
+        let Some(head) = self.request_head().await? else {
+            return Ok(None);
+        };
+        Ok(Some(self.request_body(head).await?))
     }
 
     pub async fn response(&mut self, method: &str) -> Result<ResponseMessage> {

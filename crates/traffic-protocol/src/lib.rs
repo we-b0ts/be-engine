@@ -19,6 +19,9 @@ pub use identity::ProtocolId;
 /// persistence belong to the framework.
 pub trait DependencyProvider: Send + Sync {
     fn name(&self) -> &'static str;
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
     fn recognize(&self, probe: Probe<'_>) -> Recognition;
     fn create_session(&self) -> Result<Session>;
     fn evidence(&self) -> Option<Arc<dyn evidence::EvidenceAdapter>> {
@@ -177,7 +180,33 @@ impl<Kind> Default for ProviderRegistry<Kind> {
 }
 
 impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
+    fn validate_names(
+        &self,
+        provider: &dyn DependencyProvider,
+        replaced: Option<usize>,
+    ) -> Result<()> {
+        let mut names = std::collections::BTreeSet::new();
+        for name in std::iter::once(provider.name()).chain(provider.aliases().iter().copied()) {
+            ensure!(
+                !name.is_empty() && names.insert(name),
+                "dependency provider names and aliases must be unique and nonempty"
+            );
+        }
+        for (index, entry) in self.providers.iter().enumerate() {
+            if replaced == Some(index) {
+                continue;
+            }
+            ensure!(
+                std::iter::once(entry.provider.name())
+                    .chain(entry.provider.aliases().iter().copied())
+                    .all(|name| !names.contains(name)),
+                "dependency provider name or alias is already registered"
+            );
+        }
+        Ok(())
+    }
     pub fn register(&mut self, kind: Kind, provider: Arc<dyn DependencyProvider>) -> Result<()> {
+        self.validate_names(provider.as_ref(), None)?;
         ensure!(!provider.name().is_empty(), "provider name is empty");
         ensure!(
             self.providers
@@ -203,6 +232,7 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
             .iter()
             .position(|registered| registered.kind == kind)
             .ok_or_else(|| anyhow::anyhow!("dependency provider is not registered"))?;
+        self.validate_names(provider.as_ref(), Some(index))?;
         ensure!(!provider.name().is_empty(), "provider name is empty");
         ensure!(
             self.providers

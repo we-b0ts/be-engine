@@ -6,8 +6,6 @@ pub(crate) enum DependencyRecord {
     ConnectFailure,
     MysqlConnection(Box<RecordedMysqlConnection>),
     MysqlExchange(Box<RecordedMysqlExchange>),
-    HttpExchange(Box<http::RecordedHttpExchange>),
-    TcpGatewayConnection(Box<http::RecordedTcpGatewayConnection>),
 
     ProxyError(Box<RecordedProxyError>),
     Native(Box<Value>),
@@ -30,11 +28,6 @@ impl<'de> Deserialize<'de> for DependencyRecord {
             }
             "mysql_connection" => serde_json::from_value(value).map(Self::MysqlConnection),
             "mysql_exchange" => serde_json::from_value(value).map(Self::MysqlExchange),
-            "http_exchange" => serde_json::from_value(value).map(Self::HttpExchange),
-            "tcp_gateway_connection" => {
-                serde_json::from_value(value).map(Self::TcpGatewayConnection)
-            }
-
             "proxy_error" => serde_json::from_value(value).map(Self::ProxyError),
             _ => Ok(Self::Native(Box::new(value))),
         };

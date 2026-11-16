@@ -45,6 +45,12 @@ pub(crate) fn case_unused_rows<'a>(
 ) -> impl Iterator<Item = (&'a str, &'a Value)> {
     let mut rows = Vec::new();
     for (protocol, codec) in codecs.iter() {
+        if report["dependency_protocols"]
+            .get(protocol.as_str())
+            .is_some()
+        {
+            continue;
+        }
         rows.extend(
             codec
                 .unused_case_rows(report, protocol.as_str())
@@ -59,15 +65,13 @@ pub(crate) fn case_unused_rows<'a>(
         .into_iter()
         .flatten()
     {
-        if codecs.codec(protocol).is_none() {
-            rows.extend(
-                section["unused_case"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|row| (protocol.as_str(), row)),
-            );
-        }
+        rows.extend(
+            section["unused_case"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|row| (protocol.as_str(), row)),
+        );
     }
     rows.extend(
         report["connect_failures"]["unused_case"]
@@ -231,9 +235,10 @@ pub(crate) fn published_for_cases(
             continue;
         }
         let codec = codecs.codec(protocol);
-        if codec
-            .as_ref()
-            .is_some_and(|codec| !codec.supports_source_occurrences())
+        if report["dependency_protocols"].get(protocol).is_none()
+            && codec
+                .as_ref()
+                .is_some_and(|codec| !codec.supports_source_occurrences())
         {
             return None;
         }

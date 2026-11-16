@@ -240,11 +240,17 @@ The finite provider currently rejects Pub/Sub, incomplete terminations, reusable
 snapshots and historical stateful permissions that require additional capabilities.
 The older native capture primitives remain available in the protocol library.
 `traffic-protocol-http::native` supplies finite HTTP/1 capture and server sessions,
-chunked transfer decoding, stored exchange projection and response rendering. Its
-installation in the engine is pending the HTTP inventory cutover. Shared native
-hosts provide certificate termination through the `accept_tls` port. Protocols
+chunked transfer decoding, stored exchange projection and response rendering.
+Replay installs this provider through the extension catalog. The application
+retains the recording binding. Shared native hosts provide certificate
+termination through the `accept_tls` port. Protocols
 select upgrade timing and ALPN. HTTPS upstream certificate verification uses the
 system trust roots in the HTTP connector.
+`traffic-replay::input` owns live input leases before a request body is complete.
+Native sessions acquire those leases through `RequestHost::begin_input`. Shared
+Case cleanup and session finalization observe their I/O ownership. Native record
+projection receives the host's `EvidenceSecrets` port for Source decryption.
+Provider aliases retain one business protocol owner across transport variants.
 `traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
 endpoint identities. MySQL session control and Source transaction analysis use
 these immutable inputs to project original wire positions, complete read prefixes,

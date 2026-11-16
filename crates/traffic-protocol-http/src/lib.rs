@@ -91,6 +91,15 @@ impl traffic_protocol::DependencyProvider for HttpProvider {
         "http"
     }
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &["https"]
+    }
+    fn native_protocol(
+        &self,
+    ) -> Option<std::sync::Arc<dyn traffic_protocol::connection::NativeProtocol>> {
+        Some(std::sync::Arc::new(native::Native))
+    }
+
     fn evidence(&self) -> Option<std::sync::Arc<dyn traffic_protocol::evidence::EvidenceAdapter>> {
         Some(std::sync::Arc::new(evidence::NativeEvidence))
     }

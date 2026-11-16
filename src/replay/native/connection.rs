@@ -14,16 +14,16 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
     target: ReplayTarget,
     state: Arc<Mutex<RuntimeState<P>>>,
 ) -> Result<()> {
-    let protocol = target.protocol.id();
+    let connection_protocol = target.protocol.id();
     let endpoint = Endpoint {
         host: target.host,
         port: target.port,
     };
-    let session = {
+    let (protocol, session) = {
         let state = state.lock().await;
-        state
-            .providers
-            .provider(crate::protocols::DependencyProtocol::new(protocol.as_str()))?
+        let entry = state.providers.connection_provider(connection_protocol)?;
+        let session = entry
+            .provider
             .native_protocol()
             .context("registered dependency has no native connection capability")?
             .server_session(ConnectionInfo {
@@ -31,7 +31,8 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
                 client_addr: Some(peer.to_string()),
                 upstream_addr: None,
                 max_frame_bytes: traffic_contract::MAX_VALUE_BYTES,
-            })?
+            })?;
+        (entry.kind.id(), session)
     };
     let host = Arc::new(Host {
         state,
@@ -67,6 +68,19 @@ struct Host<P: ReplayProtocolSet> {
 }
 
 impl<P: ReplayProtocolSet> RequestHost for Host<P> {
+    fn begin_input(&self) -> NativeFuture<'_, Box<dyn traffic_protocol::connection::RequestInput>> {
+        Box::pin(async move {
+            let state = self.state.lock().await;
+            ensure!(
+                state.finalized_at.is_none(),
+                "Replay session is already finalized"
+            );
+            Ok(
+                Box::new(state.native.inputs.begin(state.active_case_id.clone()))
+                    as Box<dyn traffic_protocol::connection::RequestInput>,
+            )
+        })
+    }
     fn accept_tls(
         &self,
         io: Box<dyn ConnectionIo>,

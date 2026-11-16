@@ -54,3 +54,6 @@ fn encode_body(capture: &BodyCapture) -> Result<String> {
     );
     Ok(STANDARD.encode(body))
 }
+
+mod validation;
+pub use validation::{multipart_witness_matches, validate_witness, witness_value};

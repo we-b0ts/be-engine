@@ -189,7 +189,7 @@ async fn dirty_finalization_publishes_mysql_and_redis_source_occurrences_in_both
             .is_none()
         );
         let mut missing = report.clone();
-        missing["redis"]["unused_case"][0]
+        missing["dependency_protocols"]["redis"]["unused_case"][0]
             .as_object_mut()
             .unwrap()
             .remove("source_occurrence");
@@ -312,7 +312,15 @@ async fn focused_finalization_never_ignores_unfinished_http_ingress() {
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
-        while !fixture.runtime.state.lock().await.http_has_in_flight() {
+        while !fixture
+            .runtime
+            .state
+            .lock()
+            .await
+            .native
+            .inputs
+            .has_in_flight()
+        {
             tokio::task::yield_now().await;
         }
     })

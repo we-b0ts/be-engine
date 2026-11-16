@@ -526,9 +526,10 @@ pub(crate) fn query_rule_policy_freshness(
 }
 
 pub(crate) fn query_http_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
-    let state = finalized_focused_state(context, api)?;
-    Ok(crate::protocols::replay::http_unordered::evidence::discover(&state.replay_report)
-        .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "HTTP unordered evidence is unavailable; rerun Replay"})))
+    finalized_focused_state(context, api)?;
+    Ok(
+        serde_json::json!({"candidates":[],"omitted_candidates":0,"unavailable":"HTTP-specific unordered discovery is unavailable in the native provider"}),
+    )
 }
 
 fn finalized_focused_state(context: E2eRunContext, api: &str) -> Result<model::ActiveRunState> {

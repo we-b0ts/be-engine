@@ -2,7 +2,7 @@
 use super::*;
 
 fn exchange() -> Value {
-    json!({"event_type":"http_exchange","scheme":"http",
+    json!({"event_type":"http_exchange","id":Uuid::new_v4(),"scheme":"http",
         "authority":"config.api.demo.test:80","method":"GET","uri":"/1/config/service?service=example",
         "request_headers":{},"request_body":capture(""),"response_status":200,
         "response_headers":{"content-type":["application/json"]},"response_body":capture("{\"servers\":[]}"),
@@ -34,7 +34,7 @@ async fn legacy_rule_annotations_do_not_control_finite_startup_inventory() {
             crate::protocols::replay::source::projection::GlobalSource::load(source.path(), &rules)
                 .await
                 .unwrap();
-        assert_eq!(loaded.http.len(), 1);
+        assert_eq!(loaded.native.core.exchanges.len(), 1);
     }
     assert_eq!(std::fs::read(source.path()).unwrap(), before);
 }
@@ -56,7 +56,7 @@ async fn startup_inventory_does_not_depend_on_a_retired_background_selector() {
         )
         .await
         .unwrap();
-        assert_eq!(loaded.http.len(), 1);
+        assert_eq!(loaded.native.core.exchanges.len(), 1);
     }
 }
 
@@ -71,5 +71,5 @@ async fn bootstrap_http_without_background_ownership_keeps_its_original_role() {
         crate::protocols::replay::source::projection::GlobalSource::load(source.path(), &[])
             .await
             .unwrap();
-    assert_eq!(loaded.http.len(), 1);
+    assert_eq!(loaded.native.core.exchanges.len(), 1);
 }

@@ -1,5 +1,4 @@
 //! Source registration binds native evidence to the shared execution inventory.
-use crate::protocols::replay::http;
 use crate::protocols::replay::mysql;
 use crate::replay::{
     self, RecordedProxyError, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol,
@@ -66,8 +65,6 @@ pub(crate) fn register_dependency_records(
     source: ReplaySource,
     case_id: Option<&str>,
     mysql: &mut MysqlReplayState,
-    http_exchanges: &mut Vec<http::ReplayHttpExchange>,
-    http_blackholes: &mut Vec<http::ReplayHttpBlackhole>,
 
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
@@ -87,7 +84,14 @@ pub(crate) fn register_dependency_records(
         match record {
             DependencyRecord::Native(event) => {
                 validate_installed_provider(event, &native.providers)?;
-                native.register(event, source, case_id, *line, targets)?;
+                native.register(
+                    event,
+                    source,
+                    case_id,
+                    *line,
+                    targets,
+                    &crate::request_headers::SourceSecrets::new(path),
+                )?;
             }
             DependencyRecord::MysqlConnection(connection) => {
                 if let Some(identity) = identity_from_connection(connection) {
@@ -126,21 +130,6 @@ pub(crate) fn register_dependency_records(
             continue;
         }
         match record {
-            DependencyRecord::HttpExchange(mut exchange) => {
-                exchange.decrypt_request_headers(path)?;
-                http::register_http_exchange(*exchange, source, case_id, http_exchanges, targets)?;
-                continue;
-            }
-            DependencyRecord::TcpGatewayConnection(connection) => {
-                http::register_tcp_connection_blackhole(
-                    *connection,
-                    source,
-                    case_id,
-                    http_blackholes,
-                    targets,
-                )?;
-                continue;
-            }
             DependencyRecord::MysqlConnection(_)
             | DependencyRecord::ProxyError(_)
             | DependencyRecord::ConnectFailure
@@ -239,13 +228,6 @@ pub(crate) fn authorize(
                     record.authorize_lifecycle_cleanup()?;
                 }
             }
-            DependencyRecord::HttpExchange(record)
-                if record.exchange_id().is_some_and(|exchange_id| {
-                    references.contains(&replay::RecordedReference::exchange("http", exchange_id))
-                }) =>
-            {
-                record.authorize_lifecycle_cleanup()?;
-            }
             _ => {}
         }
     }
@@ -274,7 +256,6 @@ pub(crate) fn startup_records(
 
 pub(crate) struct AppendedSource {
     pub(super) mysql_start: usize,
-    pub(super) http_start: usize,
 }
 
 pub(crate) mod global;

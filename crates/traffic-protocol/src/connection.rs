@@ -74,6 +74,9 @@ pub trait ServerSession: Send {
 }
 
 pub trait RequestHost: Send + Sync {
+    fn begin_input(&self) -> NativeFuture<'_, Box<dyn RequestInput>> {
+        Box::pin(async { Ok(Box::new(()) as Box<dyn RequestInput>) })
+    }
     fn accept_tls(
         &self,
         _io: Box<dyn ConnectionIo>,
@@ -86,6 +89,10 @@ pub trait RequestHost: Send + Sync {
         request: Arc<dyn ProtocolMessage>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>>;
 }
+
+/// A live request retains its original I/O ownership until its parser or delivery ends.
+pub trait RequestInput: Send {}
+impl RequestInput for () {}
 
 pub trait ResponseFramer: Send {
     fn frame(&mut self, response: Bytes) -> Result<Bytes> {
@@ -187,6 +194,16 @@ pub trait NativeProtocol: Send + Sync {
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>>;
+    fn recorded_exchange_with_secrets(
+        &self,
+        event: &Value,
+        _secrets: &dyn crate::evidence::EvidenceSecrets,
+    ) -> Result<Option<RecordedExchange>> {
+        self.recorded_exchange(event)
+    }
+    fn recorded_protocol(&self, _event: &Value) -> Result<Option<crate::ProtocolId>> {
+        Ok(None)
+    }
     fn recorded_endpoint(&self, event: &Value) -> Result<Option<Endpoint>> {
         Ok(self
             .recorded_exchange(event)?

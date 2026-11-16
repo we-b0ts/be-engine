@@ -1,6 +1,14 @@
 //! Application assembly for built-in protocol state and native connection drivers.
 pub(crate) mod auto_protocol;
 pub(crate) mod http;
+#[cfg(test)]
+pub(crate) mod http_test_support;
+#[cfg(test)]
+mod native_http_tests;
+#[cfg(test)]
+pub(crate) use http_test_support::{
+    snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
+};
 
 pub(crate) use http::contracts::{
     multipart_witness_matches as http_multipart_witness_matches,
@@ -10,11 +18,6 @@ pub(crate) use http::contracts::{
 pub(crate) use http::cross_case as http_cross_case;
 pub use http::cross_case::HttpCrossCaseSelector;
 pub(crate) use http::diagnosis as http_request_diagnosis;
-#[cfg(test)]
-pub(crate) use http::tests::{
-    snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
-};
-pub(crate) use http::unordered as http_unordered;
 pub use traffic_protocol_redis::key_selector::RedisValueKeySelector;
 pub type RedisUnorderedField = traffic_protocol_redis::bindings::LegacyValueLocation<
     traffic_policy_schema::response::ProtobufFieldPath,
@@ -96,21 +99,12 @@ pub(crate) struct ReplayProtocols {
     pub(crate) mysql: mysql::MysqlReplayState,
     pub(crate) observations: (),
 
-    pub(crate) http_exchanges: Vec<http::ReplayHttpExchange>,
-    pub(crate) http_case_exchange_index: replay::CaseExchangeIndex,
-    pub(crate) http_candidates: http::candidates::Candidates,
-    pub(crate) http_blackholes: Vec<http::ReplayHttpBlackhole>,
-    pub(crate) http_events: http::HttpReplayEvents,
-    pub(crate) http_sequence: replay::sequence::Binding,
-    pub(crate) http_sequence_claims: BTreeMap<usize, traffic_replay::SequenceClaim>,
-    pub(crate) http_ingress: http::ingress::HttpIngress,
-    pub(crate) http_ignore_query_params: Vec<String>,
-    pub(crate) allowed_unused_http: Option<runtime::ReplayAllowedUnusedHttpConfig>,
+    pub(crate) changed: Arc<tokio::sync::Notify>,
 }
 
 impl ReplayProtocols {
-    fn case_projections(&self) -> [&dyn CaseRuntimeProjection; 2] {
-        [&self.mysql, &self.http_events]
+    fn case_projections(&self) -> [&dyn CaseRuntimeProjection; 1] {
+        [&self.mysql]
     }
 }
 
@@ -148,10 +142,10 @@ impl ReplayProtocolSet for ReplayProtocols {
         crate::primary_protocol::close_timing(case.directory(), case.id())
     }
     fn primary_streams(
-        state: &RuntimeState<Self>,
-        case: &str,
+        _: &RuntimeState<Self>,
+        _: &str,
     ) -> Result<Vec<replay::protocol_runtime::primary_close::SourceStream>> {
-        http::input_timing::source_streams(state, case)
+        Ok(Vec::new())
     }
 
     fn prepare_primary_close(_case: &replay::ReplayCase, _source_close_ms: u64) -> Result<()> {
@@ -243,7 +237,6 @@ impl ReplayProtocolSet for ReplayProtocols {
     ) -> Result<()> {
         match protocol {
             "mysql" => state.visit_global_mysql_unused(visitor),
-            "http" => state.visit_global_http_unused(visitor),
 
             _ => anyhow::bail!("unknown native Global report protocol"),
         }
@@ -275,7 +268,6 @@ impl ReplayProtocolSet for ReplayProtocols {
     ) -> Result<Self::SourceAppend> {
         let appended = source::AppendedSource {
             mysql_start: self.mysql.source_len(),
-            http_start: self.http_exchanges.len(),
         };
         let mut identities = self
             .deferred_identities
@@ -289,8 +281,6 @@ impl ReplayProtocolSet for ReplayProtocols {
             batch.source,
             batch.case,
             &mut self.mysql,
-            &mut self.http_exchanges,
-            &mut self.http_blackholes,
             targets,
             &mut identities,
             batch.process_rules,
@@ -299,15 +289,8 @@ impl ReplayProtocolSet for ReplayProtocols {
         )?;
         Ok(appended)
     }
-    fn index_source(&mut self, appended: &Self::SourceAppend) {
-        http::extend_case_exchange_index(
-            &mut self.http_case_exchange_index,
-            &self.http_exchanges,
-            appended.http_start,
-        );
-        self.http_ingress
-            .register(&self.http_exchanges[appended.http_start..]);
-    }
+    fn index_source(&mut self, _: &Self::SourceAppend) {}
+
     fn observe_source(
         &self,
         appended: &Self::SourceAppend,
@@ -315,209 +298,126 @@ impl ReplayProtocolSet for ReplayProtocols {
     ) {
         self.mysql
             .observe_registered_policy_exchanges(policy, appended.mysql_start, None);
-        http::observe_recorded_policy_exchanges(
-            policy,
-            &self.http_exchanges[appended.http_start..],
-        );
     }
+
     fn release_payloads(&mut self, cases: &BTreeMap<String, replay::ReplayCase>) {
         self.mysql.release_consumed_payloads(cases);
-        http::release_consumed_payloads(&mut self.http_exchanges, cases);
     }
 
     fn case_is_dirty(&self, case: &str) -> bool {
         self.mysql.case_is_dirty(case)
-            || http::case_is_dirty(
-                &self.http_exchanges,
-                &self.http_case_exchange_index,
-                &self.http_ingress,
-                &self.http_events,
-                self.allowed_unused_http.as_ref(),
-                case,
-            )
     }
 
     fn pending_diagnostic(&self) -> BTreeMap<String, serde_json::Value> {
-        BTreeMap::from([
-            ("mysql".into(), self.mysql.case_in_flight_diagnostic()),
-            (
-                "http".into(),
-                http::case_in_flight_diagnostic(&self.http_exchanges),
-            ),
-            (
-                "http_ingress".into(),
-                self.http_ingress.pending_diagnostic(),
-            ),
-        ])
+        BTreeMap::from([("mysql".into(), self.mysql.case_in_flight_diagnostic())])
     }
 
     fn prepare_candidates(&mut self) {
-        self.http_candidates.register(&self.http_exchanges);
         self.mysql.prepare_candidates();
     }
+
     fn prepare_case(
         &mut self,
         case: &str,
         _ordered: bool,
         contracts: Option<&RequestContracts>,
-    ) -> anyhow::Result<PreparedProtocols> {
-        let mysql = self.mysql.prepare_case(case, contracts)?;
-        let http =
-            http::preparation::prepare_case(&mut self.http_candidates, &self.http_exchanges, case);
-        Ok(BTreeMap::from([
-            (ProtocolId::new("http"), http),
-            (ProtocolId::new("mysql"), mysql),
-        ]))
+    ) -> Result<PreparedProtocols> {
+        Ok(BTreeMap::from([(
+            ProtocolId::new("mysql"),
+            self.mysql.prepare_case(case, contracts)?,
+        )]))
     }
-    fn run_sequence_refs(
-        &mut self,
-    ) -> anyhow::Result<BTreeMap<ProtocolId, Vec<RunSequenceReference>>> {
-        let http = http::preparation::prepare_run_sequence(
-            &mut self.http_candidates,
-            &self.http_exchanges,
-        )?;
-        let mysql = self.mysql.prepare_run_sequence()?;
-        Ok(BTreeMap::from([
-            (ProtocolId::new("http"), http),
-            (ProtocolId::new("mysql"), mysql),
-        ]))
+
+    fn run_sequence_refs(&mut self) -> Result<BTreeMap<ProtocolId, Vec<RunSequenceReference>>> {
+        Ok(BTreeMap::from([(
+            ProtocolId::new("mysql"),
+            self.mysql.prepare_run_sequence()?,
+        )]))
     }
+
     fn bind_case_sequence(
         &mut self,
         mut bindings: BTreeMap<ProtocolId, SequenceBinding>,
-        run: &[Arc<SequenceRuntime>],
+        _: &[Arc<SequenceRuntime>],
     ) {
-        self.http_sequence_claims
-            .retain(|_, claim| run.iter().any(|runtime| claim.belongs_to(runtime)));
-        self.http_sequence = bindings
-            .remove(&ProtocolId::new("http"))
-            .unwrap_or_default();
         self.mysql.lifecycle.sequence = bindings
             .remove(&ProtocolId::new("mysql"))
             .unwrap_or_default();
     }
+
     fn attach_run_sequence(&mut self, bindings: &BTreeMap<ProtocolId, SequenceBinding>) {
-        for (protocol, binding) in bindings {
-            match protocol.as_str() {
-                "http" => self.http_sequence.attach_run(binding.clone()),
-                "mysql" => self.mysql.lifecycle.sequence.attach_run(binding.clone()),
-                _ => {}
-            }
+        if let Some(binding) = bindings.get(&ProtocolId::new("mysql")) {
+            self.mysql.lifecycle.sequence.attach_run(binding.clone());
         }
     }
-    fn activate_case(&mut self, case: Option<&str>) {
-        self.http_ingress.activate_case(case);
-    }
+
+    fn activate_case(&mut self, _: Option<&str>) {}
 
     fn begin_case(&mut self, _case: &str) {}
 
     fn close_case(&mut self, _case: &str) {}
 
-    fn try_close_case(&self, case: &str) -> bool {
-        self.http_ingress.try_close_case(case)
+    fn try_close_case(&self, _: &str) -> bool {
+        true
     }
+
     fn io_changed(&self) -> Arc<tokio::sync::Notify> {
-        self.http_ingress.changed.clone()
+        self.changed.clone()
     }
 
     fn startup_counts(&mut self, close: bool) -> BTreeMap<String, traffic_replay::StartupCounts> {
-        BTreeMap::from([
-            ("mysql".into(), self.mysql.startup_counts(close)),
-            (
-                "http".into(),
-                http::startup_counts(&mut self.http_exchanges, close),
-            ),
-        ])
+        BTreeMap::from([("mysql".into(), self.mysql.startup_counts(close))])
     }
 
-    fn close_startup(&mut self) {
-        self.http_ingress.close_startup();
-    }
+    fn close_startup(&mut self) {}
 
-    fn initialize_connections(&mut self, active: Option<&str>) {
-        self.http_ingress.register(&self.http_exchanges);
-        self.http_ingress.activate_case(active);
-    }
+    fn initialize_connections(&mut self, _: Option<&str>) {}
 
     fn start(_state: Arc<Mutex<RuntimeState<Self>>>) {}
 
-    fn has_in_flight(&self, scope: InFlightScope, active_case: Option<&str>) -> bool {
+    fn has_in_flight(&self, scope: InFlightScope, _: Option<&str>) -> bool {
         match scope {
-            InFlightScope::All => {
-                self.mysql.has_in_flight()
-                    || http::has_in_flight(&self.http_exchanges, &self.http_ingress, None)
-            }
-            InFlightScope::Case => {
-                self.mysql.has_case_in_flight()
-                    || http::has_in_flight(
-                        &self.http_exchanges,
-                        &self.http_ingress,
-                        Some(active_case),
-                    )
-            }
+            InFlightScope::All => self.mysql.has_in_flight(),
+            InFlightScope::Case => self.mysql.has_case_in_flight(),
         }
     }
 
     fn serve(
         stream: TcpStream,
         peer_addr: SocketAddr,
-        target: Option<ReplayTarget>,
+        mut target: Option<ReplayTarget>,
         state: Arc<Mutex<RuntimeState<Self>>>,
         ca: Arc<MitmCa>,
         providers: Arc<super::DependencyProviders>,
     ) -> traffic_protocol::connection::NativeFuture<'static, ()> {
         Box::pin(async move {
+            if target
+                .as_ref()
+                .is_some_and(|target| target.protocol == ReplayProtocol::Auto)
+            {
+                let Some(protocol) =
+                    auto_protocol::detect_with_providers(&stream, &providers).await?
+                else {
+                    return Ok(());
+                };
+                target
+                    .as_mut()
+                    .context("auto replay target missing")?
+                    .protocol = protocol;
+            }
             match target.as_ref().map(|target| target.protocol) {
-                Some(ReplayProtocol::Auto) => {
-                    let target = target.context("auto replay connection has no target")?;
-                    match auto_protocol::detect_with_providers(&stream, &providers).await? {
-                        Some(protocol @ (ReplayProtocol::Http | ReplayProtocol::Https)) => {
-                            let mut target = target.clone();
-                            target.protocol = protocol;
-                            http::handle_http_replay_connection(
-                                stream, peer_addr, target, state, ca,
-                            )
-                            .await
-                        }
-                        Some(protocol)
-                            if providers.registrations().iter().any(|entry| {
-                                entry.kind.id() == protocol.id()
-                                    && entry.provider.native_protocol().is_some()
-                            }) =>
-                        {
-                            let mut target = target;
-                            target.protocol = protocol;
-                            replay::native::handle_connection(stream, peer_addr, target, state)
-                                .await
-                        }
-                        Some(protocol) => Err(anyhow!(
-                            "auto replay target resolved to unsupported protocol {protocol:?}"
-                        )),
-                        None => Ok(()),
-                    }
-                }
-                Some(ReplayProtocol::Http) | Some(ReplayProtocol::Https) => {
-                    http::handle_http_replay_connection(
-                        stream,
-                        peer_addr,
-                        target.context("HTTP replay connection has no target")?,
-                        state,
-                        ca,
-                    )
-                    .await
-                }
                 Some(ReplayProtocol::Mysql) => {
-                    let target = target.map(|target| traffic_protocol::connection::Endpoint {
+                    let endpoint = target.map(|target| traffic_protocol::connection::Endpoint {
                         host: target.host,
                         port: target.port,
                     });
-                    mysql::handle_connection(stream, peer_addr, target, state, ca).await
+                    mysql::handle_connection(stream, peer_addr, endpoint, state, ca).await
                 }
                 Some(_) => {
                     replay::native::handle_connection(
                         stream,
                         peer_addr,
-                        target.context("native replay connection has no target")?,
+                        target.context("native replay target missing")?,
                         state,
                     )
                     .await

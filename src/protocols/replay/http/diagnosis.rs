@@ -120,7 +120,10 @@ impl Dataset<'_> {
                 .as_str()
                 .context("Source request URI is missing")?;
             if method.is_none_or(|m| request["method"] == m)
-                && crate::path_pattern::matches_path_pattern(path, &super::uri_path_only(uri))
+                && crate::path_pattern::matches_path_pattern(
+                    path,
+                    &traffic_protocol_http::uri::uri_path_only(uri),
+                )
             {
                 self.failures.push(index);
             }
@@ -346,7 +349,7 @@ fn envelope_summary(envelope: Option<&Value>, body: Option<&[u8]>) -> Value {
     };
     json!({"presence":"present","exchange_id":envelope["exchange_id"],"scheme":envelope["scheme"],
         "endpoint":envelope["endpoint"],"method":envelope["method"],
-        "path":envelope["uri"].as_str().map(super::uri_path_only),
+        "path":envelope["uri"].as_str().map(traffic_protocol_http::uri::uri_path_only),
         "request_started_at":envelope["request_started_at"],
         "content_type":envelope["request_headers"]["content-type"],
         "content_encoding":envelope["request_headers"]["content-encoding"],
@@ -357,13 +360,12 @@ pub(crate) fn source_summary(event: &Value) -> Result<Option<Value>> {
     if event["event_type"] != "http_exchange" {
         return Ok(None);
     }
-    let record: super::RecordedHttpExchange = serde_json::from_value(event.clone())?;
-    let identity = super::identity_from_record(&record)?;
-    Ok(Some(
-        json!({"host":identity.target.host,"port":identity.target.port,
-        "scheme":identity.scheme,"method":record.native.method,"path":super::uri_path_only(&record.native.uri),
-        "exchange_id":record.native.id,"body_capture_truncated":record.native.request_body.truncated,
+    let record: traffic_protocol_http::recorded::RecordedExchange =
+        serde_json::from_value(event.clone())?;
+    let (scheme, endpoint) = record.identity()?;
+    Ok(Some(json!({"host":endpoint.host,"port":endpoint.port,
+        "scheme":scheme,"method":record.method,"path":traffic_protocol_http::uri::uri_path_only(&record.uri),
+        "exchange_id":record.id,"body_capture_truncated":record.request_body.truncated,
         "body_original_len":event["request_body"]["original_len"],
-        "body_encoding":record.native.request_body.encoding}),
-    ))
+        "body_encoding":record.request_body.encoding})))
 }

@@ -106,12 +106,21 @@ pub(super) async fn lock_drained<'a, P: ReplayProtocolSet>(
     let deadline = deadline
         .unwrap_or_else(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE);
     loop {
-        let changed = { state.lock().await.protocols.io_changed() };
+        let (changed, native_changed) = {
+            let state = state.lock().await;
+            (
+                state.protocols.io_changed(),
+                state.native.inputs.changed.clone(),
+            )
+        };
         // Register before the empty check so a synchronous RAII release cannot
         // be lost between inspecting the counter and awaiting the notification.
         let notified = changed.notified();
+        let native_notified = native_changed.notified();
         tokio::pin!(notified);
+        tokio::pin!(native_notified);
         notified.as_mut().enable();
+        native_notified.as_mut().enable();
         let state = state.lock().await;
         ensure!(
             state.active_case_id.as_deref() == Some(case),
@@ -129,6 +138,7 @@ pub(super) async fn lock_drained<'a, P: ReplayProtocolSet>(
         drop(state);
         tokio::select! {
             _ = &mut notified => {},
+            _ = &mut native_notified => {},
             _ = tokio::time::sleep(Duration::from_millis(25).min(deadline.saturating_duration_since(now))) => {},
         }
     }

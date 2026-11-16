@@ -83,7 +83,7 @@ async fn lazy_inventory_matches_eager_and_never_replenishes_consumption() {
         let before = serde_json::to_value(runtime.state.lock().await.snapshot_report()).unwrap();
         assert_eq!(before["selected_case_ids"], json!(["a", "b"]));
         assert_eq!(
-            runtime.state.lock().await.protocols.http_exchanges.len(),
+            runtime.state.lock().await.native.core.exchanges.len(),
             if lazy { 0 } else { 2 }
         );
         let server = runtime.clone();
@@ -108,13 +108,9 @@ async fn lazy_inventory_matches_eager_and_never_replenishes_consumption() {
             );
         }
         let state = runtime.state.lock().await;
-        assert_eq!(state.protocols.http_exchanges.len(), 2);
-        assert_eq!(state.protocols.http_events.matched_count, 2);
-        assert!(
-            state
-                .unused_http_exchanges(ReplaySource::Case, false)
-                .is_empty()
-        );
+        assert_eq!(state.native.core.exchanges.len(), 2);
+        assert_eq!(state.native.snapshot()["http"].matched_count, 2);
+        assert!(state.native.snapshot()["http"].unused_case.is_empty());
         drop(state);
         if lazy {
             assert_eq!(
@@ -129,7 +125,14 @@ async fn lazy_inventory_matches_eager_and_never_replenishes_consumption() {
             true
         );
         assert_eq!(
-            fresh.state.lock().await.protocols.http_events.matched_count,
+            fresh
+                .state
+                .lock()
+                .await
+                .native
+                .snapshot()
+                .get("http")
+                .map_or(0, |report| report.matched_count),
             0
         );
     }
@@ -147,7 +150,7 @@ async fn modified_source_fails_preparation_without_activating_case() {
     );
     let state = runtime.state.lock().await;
     assert!(state.active_case_id.is_none());
-    assert!(state.protocols.http_exchanges.is_empty());
+    assert!(state.native.core.exchanges.is_empty());
 }
 
 #[tokio::test]
@@ -290,19 +293,11 @@ async fn read_ahead_warms_bytes_without_installing_exchanges() {
     })
     .await
     .unwrap();
-    assert!(
-        runtime
-            .state
-            .lock()
-            .await
-            .protocols
-            .http_exchanges
-            .is_empty()
-    );
+    assert!(runtime.state.lock().await.native.core.exchanges.is_empty());
     assert!(runtime.state.lock().await.active_case_id.is_none());
     let begin = begin_case(&request("begin", "a"), runtime.state.clone()).await;
     assert_eq!(begin["ok"], true, "{begin}");
-    assert_eq!(reader.lock().unwrap().hits, 1);
+    assert_eq!(reader.lock().unwrap().hits, 2);
     worker.abort();
 }
 

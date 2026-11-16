@@ -190,6 +190,6 @@ fn matches(resource: &Option<Resource>, operation: &str, event: &Value) -> bool 
 fn same_path(envelope: &Value, event: &Value) -> bool {
     envelope["uri"]
         .as_str()
-        .is_some_and(|uri| super::super::uri_path_only(uri) == event["uri"])
+        .is_some_and(|uri| traffic_protocol_http::uri::uri_path_only(uri) == event["uri"])
         && envelope["scheme"] == event["scheme"]
 }

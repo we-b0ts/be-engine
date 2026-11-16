@@ -29,6 +29,68 @@ fn provider(name: &'static str, recognition: Recognition) -> Arc<dyn DependencyP
     })
 }
 
+struct AliasedProvider {
+    name: &'static str,
+    aliases: &'static [&'static str],
+}
+impl DependencyProvider for AliasedProvider {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn aliases(&self) -> &'static [&'static str] {
+        self.aliases
+    }
+    fn recognize(&self, _: Probe<'_>) -> Recognition {
+        Recognition::Reject
+    }
+    fn create_session(&self) -> Result<Session> {
+        Ok(Session::new(()))
+    }
+}
+
+#[test]
+fn aliases_share_the_registration_namespace_and_replace_atomically() {
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(
+            1,
+            Arc::new(AliasedProvider {
+                name: "plain",
+                aliases: &["secure"],
+            }),
+        )
+        .unwrap();
+    assert!(
+        registry
+            .register(2, provider("secure", Recognition::Reject))
+            .is_err()
+    );
+    registry
+        .replace(
+            1,
+            Arc::new(AliasedProvider {
+                name: "plain",
+                aliases: &["other"],
+            }),
+        )
+        .unwrap();
+    registry
+        .register(2, provider("secure", Recognition::Reject))
+        .unwrap();
+    assert!(
+        registry
+            .replace(
+                1,
+                Arc::new(AliasedProvider {
+                    name: "plain",
+                    aliases: &["secure"]
+                })
+            )
+            .is_err()
+    );
+    assert_eq!(registry.provider(1).unwrap().aliases(), &["other"]);
+}
+
 #[test]
 fn runtime_registry_preserves_provider_identity_and_creates_separate_sessions() {
     let mut registry = ProviderRegistry::default();

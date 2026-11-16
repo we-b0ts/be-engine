@@ -37,8 +37,6 @@ struct Registration<'a> {
     path: &'a Path,
     source_kind: ReplaySource,
     mysql: &'a mut MysqlReplayState,
-    http: &'a mut Vec<http::ReplayHttpExchange>,
-    blackholes: &'a mut Vec<http::ReplayHttpBlackhole>,
 
     targets: &'a mut BTreeMap<TargetKey, ReplayTarget>,
     identities: &'a mut HashMap<Uuid, MysqlDependencyIdentity>,
@@ -67,8 +65,6 @@ impl GlobalRegistrar for Registration<'_> {
         let Self {
             path,
             mysql: _,
-            http,
-            blackholes,
 
             targets,
             identities,
@@ -109,26 +105,7 @@ impl GlobalRegistrar for Registration<'_> {
                         None,
                         reference.location.line,
                         targets,
-                    )?;
-                }
-                DependencyRecord::TcpGatewayConnection(record) => {
-                    http::register_tcp_connection_blackhole(
-                        *record,
-                        source_kind,
-                        None,
-                        blackholes,
-                        targets,
-                    )?
-                }
-                DependencyRecord::HttpExchange(mut record) => {
-                    record.decrypt_request_headers(path)?;
-                    http::register_global_exchange(
-                        *record,
-                        reference,
-                        http,
-                        targets,
-                        rules,
-                        source_kind,
+                        &crate::request_headers::SourceSecrets::new(path),
                     )?;
                 }
                 _ => {}
@@ -146,8 +123,6 @@ impl GlobalRegistrar for Registration<'_> {
                 self.source_kind,
                 None,
                 self.mysql,
-                self.http,
-                self.blackholes,
                 self.targets,
                 self.identities,
                 self.rules,
@@ -163,8 +138,6 @@ pub(crate) async fn load(
     path: &Path,
     source_kind: ReplaySource,
     mysql: &mut MysqlReplayState,
-    http: &mut Vec<http::ReplayHttpExchange>,
-    blackholes: &mut Vec<http::ReplayHttpBlackhole>,
 
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
@@ -192,8 +165,6 @@ pub(crate) async fn load(
             path,
             source_kind,
             mysql,
-            http,
-            blackholes,
 
             targets,
             identities,

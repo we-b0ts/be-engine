@@ -128,7 +128,7 @@ mod tests {
             crate::replay::push_success_detail(
                 &mut total,
                 &mut details,
-                &mut state.protocols.http_events.matched_details,
+                &mut state.protocols.mysql.events.matched_query_details,
                 Some("case-a"),
                 |_| (),
             );
@@ -140,7 +140,7 @@ mod tests {
             crate::replay::push_success_detail(
                 &mut total,
                 &mut details,
-                &mut state.protocols.http_events.matched_details,
+                &mut state.protocols.mysql.events.matched_query_details,
                 None,
                 |_| (),
             );

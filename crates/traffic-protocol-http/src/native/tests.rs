@@ -174,4 +174,24 @@ async fn native_capture_persists_protocol_owned_data_that_can_project_for_replay
             .as_ref(),
         br#"{"id":42}"#
     );
+    let mut protected = events[0].payload().clone();
+    protected["request_headers"]["authorization"] = serde_json::json!(["traffic-e2e:enc:test"]);
+    assert!(Native.recorded_exchange(&protected).is_err());
+    assert!(
+        Native
+            .recorded_exchange_with_secrets(&protected, &Secrets)
+            .unwrap()
+            .is_some()
+    );
+}
+
+struct Secrets;
+impl traffic_protocol::evidence::EvidenceSecrets for Secrets {
+    fn unseal_text<'a>(&self, label: &str, value: &'a str) -> Result<std::borrow::Cow<'a, str>> {
+        if value == "traffic-e2e:enc:test" {
+            ensure!(label == "authorization", "secret label changed");
+            return Ok(std::borrow::Cow::Owned("Bearer test-token".into()));
+        }
+        Ok(std::borrow::Cow::Borrowed(value))
+    }
 }

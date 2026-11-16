@@ -13,6 +13,7 @@ pub(super) use report::ProtocolReport;
 
 #[derive(Debug)]
 pub(crate) struct Inventory {
+    pub inputs: traffic_replay::input::InputActivity,
     pub tls: Option<Arc<dyn traffic_protocol::connection::TlsServer>>,
     pub core: ExchangeInventory<crate::value_extensions::ValueRules>,
     global_usage: BTreeMap<ProtocolId, traffic_replay::report::Usage>,
@@ -29,6 +30,7 @@ pub(crate) struct Inventory {
 impl Inventory {
     pub fn new(providers: Arc<crate::protocols::DependencyProviders>) -> Self {
         Self {
+            inputs: Default::default(),
             tls: None,
             core: Default::default(),
             global_usage: Default::default(),
@@ -50,6 +52,7 @@ impl Inventory {
         case: Option<&str>,
         position: usize,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+        secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
     ) -> Result<()> {
         let Some(entry) = self.providers.event_provider(event) else {
             ensure!(
@@ -65,7 +68,7 @@ impl Inventory {
             );
             return Ok(());
         };
-        let Some(mut exchange) = native.recorded_exchange(event)? else {
+        let Some(mut exchange) = native.recorded_exchange_with_secrets(event, secrets)? else {
             ensure!(
                 event["capture"]["semantic_required"] != true
                     || !self.providers.evidence().supports_replay(event),
@@ -118,7 +121,11 @@ impl Inventory {
             port: exchange.endpoint.port,
         };
         let protocol = entry.kind;
-        register_replay_target(targets, &target, ReplayProtocol::registered(protocol))?;
+        let connection_protocol = native
+            .recorded_protocol(event)?
+            .map(ReplayProtocol::new)
+            .unwrap_or_else(|| ReplayProtocol::registered(protocol));
+        register_replay_target(targets, &target, connection_protocol)?;
         let prepared =
             self.prepared_messages(&exchange, case, capture.as_ref(), self.contracts.as_ref())?;
         let rules = self.providers.bindings().for_protocol(protocol.as_str());
@@ -229,27 +236,30 @@ impl Inventory {
     }
 
     pub fn has_in_flight(&self) -> bool {
-        self.core.exchanges.iter().any(|exchange| {
-            matches!(
-                self.core
-                    .lifecycle
-                    .live_status(exchange.index, exchange.status),
-                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
-            )
-        })
-    }
-
-    pub fn has_case_in_flight(&self) -> bool {
-        self.core.exchanges.iter().any(|exchange| {
-            exchange.source.source == ReplaySource::Case
-                && matches!(
+        self.inputs.has_in_flight()
+            || self.core.exchanges.iter().any(|exchange| {
+                matches!(
                     self.core
                         .lifecycle
                         .live_status(exchange.index, exchange.status),
                     ReplayExchangeStatus::Responding
                         | ReplayExchangeStatus::AwaitingClientTermination
                 )
-        })
+            })
+    }
+
+    pub fn has_case_in_flight(&self) -> bool {
+        self.inputs.has_case_in_flight()
+            || self.core.exchanges.iter().any(|exchange| {
+                exchange.source.source == ReplaySource::Case
+                    && matches!(
+                        self.core
+                            .lifecycle
+                            .live_status(exchange.index, exchange.status),
+                        ReplayExchangeStatus::Responding
+                            | ReplayExchangeStatus::AwaitingClientTermination
+                    )
+            })
     }
 
     pub fn resolve(&self, case: &str, exchange_id: Uuid) -> Result<usize> {
@@ -348,7 +358,11 @@ pub(super) fn extend_index(
             endpoints.push((
                 normalize_host(&endpoint.host),
                 endpoint.port,
-                entry.kind.as_str().to_owned(),
+                native
+                    .recorded_protocol(&event)?
+                    .unwrap_or_else(|| entry.kind.id())
+                    .as_str()
+                    .to_owned(),
             ));
         }
     }

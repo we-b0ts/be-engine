@@ -13,9 +13,6 @@ fn expected_phase(record: &DependencyRecord) -> Option<Phase> {
         DependencyRecord::MysqlConnection(_)
         | DependencyRecord::MysqlExchange(_)
         | DependencyRecord::ProxyError(_) => Some(Phase::Metadata),
-        DependencyRecord::TcpGatewayConnection(_) | DependencyRecord::HttpExchange(_) => {
-            Some(Phase::Exchanges)
-        }
         DependencyRecord::Native(_) | DependencyRecord::ConnectFailure => Some(Phase::Exchanges),
     }
 }

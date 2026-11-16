@@ -1,6 +1,5 @@
 //! Source-only Global preparation. No Case oracle, Target, CA, DNS or listener is involved.
 use super::*;
-use crate::protocols::replay::http::HttpReplayEvents;
 use crate::protocols::replay::report::ReportView;
 use std::sync::Arc;
 use traffic_replay::report::{GlobalReportProjection, JoinedProjection, ReportRows, Row};
@@ -8,8 +7,6 @@ use traffic_replay::report::{GlobalReportProjection, JoinedProjection, ReportRow
 pub(crate) struct GlobalSource {
     pub native: native::Inventory,
     pub mysql: MysqlReplayState,
-    pub http: Vec<http::ReplayHttpExchange>,
-    pub http_events: HttpReplayEvents,
 }
 
 impl GlobalSource {
@@ -28,10 +25,7 @@ impl GlobalSource {
         let mut source = Self {
             native: native::Inventory::new(providers),
             mysql: Default::default(),
-            http: vec![],
-            http_events: Default::default(),
         };
-        let mut blackholes = vec![];
         let mut targets = BTreeMap::new();
         let mut identities = HashMap::new();
         let reader = Arc::new(std::sync::Mutex::new(
@@ -41,8 +35,6 @@ impl GlobalSource {
             path,
             ReplaySource::Startup,
             &mut source.mysql,
-            &mut source.http,
-            &mut blackholes,
             &mut targets,
             &mut identities,
             rules,
@@ -57,8 +49,6 @@ impl GlobalSource {
                     &process,
                     ReplaySource::Process,
                     &mut source.mysql,
-                    &mut source.http,
-                    &mut blackholes,
                     &mut targets,
                     &mut identities,
                     rules,
@@ -68,11 +58,7 @@ impl GlobalSource {
                 .await?;
             }
         }
-        freeze(
-            &mut source.mysql,
-            &mut source.http_events,
-            source.http.len(),
-        );
+        freeze(&mut source.mysql);
         source.native.freeze_global_report_layout();
         Ok(source)
     }
@@ -81,18 +67,13 @@ impl GlobalSource {
     }
 
     fn builtin_view(&self) -> ReportView<'_> {
-        ReportView {
-            mysql: &self.mysql,
-            http: &self.http,
-            http_events: &self.http_events,
-        }
+        ReportView { mysql: &self.mysql }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn freeze(mysql: &mut MysqlReplayState, http: &mut HttpReplayEvents, http_len: usize) {
+pub(crate) fn freeze(mysql: &mut MysqlReplayState) {
     mysql.freeze_global_report_layout();
-    http.global_report.freeze_layout(vec![http_len]);
 }
 
 impl GlobalReportProjection for GlobalSource {

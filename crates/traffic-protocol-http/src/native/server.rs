@@ -27,7 +27,9 @@ impl ServerSession for Server {
                 Box::new(io)
             };
             let mut reader = wire::Reader::new(io, self.0.max_frame_bytes);
-            if let Some(request) = reader.request().await? {
+            if let Some(head) = reader.request_head().await? {
+                let _input = host.begin_input().await?;
+                let request = reader.request_body(head).await?;
                 let delivery = host.execute(Arc::new(request)).await?;
                 delivery.write(&mut reader.io, &mut Framer).await?;
             }

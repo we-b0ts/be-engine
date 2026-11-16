@@ -2,7 +2,6 @@
 use super::*;
 use crate::ReplayConfig;
 use crate::policy::runtime::ReplayPolicyRuntime;
-use crate::protocols::replay::http;
 
 use crate::protocols::replay::mysql;
 use crate::replay::TargetObservations;
@@ -19,8 +18,7 @@ use uuid::Uuid;
 pub(crate) struct SourceLoader {
     protocols: ReplayProtocols,
     identities: HashMap<Uuid, DependencyIdentity>,
-    policy: Option<PathBuf>,
-    shared_http: Vec<http::cross_case::HttpCrossCaseSelector>,
+    unsupported_http_options: bool,
 }
 
 impl SourceLoader {
@@ -31,31 +29,18 @@ impl SourceLoader {
                 mysql: Default::default(),
                 observations: (),
 
-                http_exchanges: Vec::new(),
-                http_case_exchange_index: Default::default(),
-                http_candidates: Default::default(),
-                http_blackholes: Vec::new(),
-                http_events: Default::default(),
-                http_sequence: Default::default(),
-                http_sequence_claims: BTreeMap::new(),
-                http_ingress: Default::default(),
-                http_ignore_query_params: config
-                    .http_ignore_query_params
-                    .iter()
-                    .map(|value| value.to_ascii_lowercase())
-                    .collect(),
-                allowed_unused_http: config.allowed_unused_http.clone(),
+                changed: Default::default(),
             },
             identities: HashMap::new(),
-            policy: config.policy_path.clone(),
-            shared_http: Vec::new(),
+            unsupported_http_options: !config.http_ignore_query_params.is_empty()
+                || config.allowed_unused_http.is_some(),
         }
     }
 }
 
 impl ProtocolSourceLoader for SourceLoader {
     type Protocols = ReplayProtocols;
-    type CaseSelector = Vec<http::cross_case::HttpCrossCaseSelector>;
+    type CaseSelector = ();
 
     fn install_run_scopes(&mut self, _scopes: BTreeMap<Uuid, Arc<str>>) {}
 
@@ -72,8 +57,6 @@ impl ProtocolSourceLoader for SourceLoader {
                 path,
                 scope,
                 &mut protocols.mysql,
-                &mut protocols.http_exchanges,
-                &mut protocols.http_blackholes,
                 &mut resources.targets,
                 &mut self.identities,
                 rules,
@@ -85,12 +68,7 @@ impl ProtocolSourceLoader for SourceLoader {
     }
 
     fn freeze_global_layout(&mut self) {
-        let protocols = &mut self.protocols;
-        source::projection::freeze(
-            &mut protocols.mysql,
-            &mut protocols.http_events,
-            protocols.http_exchanges.len(),
-        );
+        source::projection::freeze(&mut self.protocols.mysql);
     }
 
     fn prepare_run<'a>(
@@ -114,22 +92,15 @@ impl ProtocolSourceLoader for SourceLoader {
                     .mysql
                     .install_global_transactions(transactions, &mut resources.targets)?;
             }
-            self.shared_http = self
-                .policy
-                .as_deref()
-                .map(crate::policy::runtime::http_cross_case_rules)
-                .transpose()?
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(_, selector)| selector)
-                .collect();
+            anyhow::ensure!(
+                !self.unsupported_http_options,
+                "legacy HTTP matching options require an installed native permission capability"
+            );
             Ok(())
         })
     }
 
-    fn case_selector(&self) -> Self::CaseSelector {
-        self.shared_http.clone()
-    }
+    fn case_selector(&self) -> Self::CaseSelector {}
 
     fn startup_records(
         path: &Path,
@@ -140,12 +111,12 @@ impl ProtocolSourceLoader for SourceLoader {
     }
 
     fn shared_source_lines(
-        path: &Path,
-        index: &crate::dependency_index::FileIndex,
-        reader: &mut crate::dependency_index::RecordReader,
-        selector: &Self::CaseSelector,
+        _: &Path,
+        _: &crate::dependency_index::FileIndex,
+        _: &mut crate::dependency_index::RecordReader,
+        _: &Self::CaseSelector,
     ) -> Result<BTreeSet<usize>> {
-        http::cross_case::selected_source_lines(path, index, reader, selector)
+        Ok(BTreeSet::new())
     }
 
     fn register_source(
@@ -161,8 +132,6 @@ impl ProtocolSourceLoader for SourceLoader {
             batch.source,
             batch.case,
             &mut protocols.mysql,
-            &mut protocols.http_exchanges,
-            &mut protocols.http_blackholes,
             &mut resources.targets,
             &mut self.identities,
             batch.process_rules,
@@ -187,20 +156,6 @@ impl ProtocolSourceLoader for SourceLoader {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || -> Result<_> {
                 let protocols = &mut self.protocols;
-                let shared_cases = if context.lazy {
-                    BTreeMap::new()
-                } else {
-                    context.cases.clone()
-                };
-                http::cross_case::load(
-                    &context.root,
-                    self.policy.as_deref(),
-                    &shared_cases,
-                    &mut protocols.http_exchanges,
-                    &mut resources.targets,
-                )?;
-                protocols.http_case_exchange_index =
-                    http::case_exchange_index(&protocols.http_exchanges);
                 let selected = context.cases.keys().cloned().collect();
                 protocols.mysql.set_origins(
                     mysql::ownership::load(&context.root, &context.rules)?,
@@ -223,9 +178,7 @@ impl ProtocolSourceLoader for SourceLoader {
             0,
             Some(ReplaySource::Case),
         );
-        http::observe_recorded_policy_exchanges(policy, &self.protocols.http_exchanges);
-
-        policy.reject_http_ignore_overlap(&self.protocols.http_ignore_query_params)
+        Ok(())
     }
 
     fn finish(

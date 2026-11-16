@@ -6,7 +6,6 @@ mod service;
 pub(crate) use derived_inputs::PreparedDerivedInputs;
 pub(crate) mod evidence;
 mod global_value;
-mod http_value;
 pub(crate) mod hypotheses;
 pub(crate) use hypotheses::{HypothesisAttempt, HypothesisContext};
 mod identity;

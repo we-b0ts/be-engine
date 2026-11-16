@@ -1,62 +1,20 @@
-//! Complete native HTTP envelopes; codec decoding never normalizes HTTP headers.
-use super::*;
-use crate::dependency::http_limits::{MAX_BASE64_BODY_BYTES, MAX_BODY_BYTES, MAX_WITNESS_BYTES};
-use anyhow::ensure;
-use std::path::Path;
-
-pub(crate) fn source_witness(
-    event: &Value,
-    surface: Surface,
-    key_context: &Path,
-) -> Result<Vec<u8>> {
-    traffic_protocol_http::witness::source_payload(
-        event,
-        surface.dependency_side()?,
-        &crate::request_headers::SourceSecrets::new(key_context),
-    )
-}
-
-pub(crate) fn witness_metadata_matches(event: &Value, metadata: &WitnessMetadata) -> Result<()> {
-    let record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
-    let identity = identity_from_record(&record)?;
-    ensure!(
-        record.native.id.as_deref().is_some_and(|id| !id.is_empty())
-            && metadata.source.exchange_id == record.native.id
-            && metadata.source.connection_id.is_none()
-            && metadata.source.sequence.is_none()
-            && metadata.slot == Slot::Body
-            && metadata
-                .operation
-                .eq_ignore_ascii_case(&record.native.method)
-            && metadata
-                .resource
-                .as_ref()
-                .is_some_and(
-                    |resource| resource.protocol == crate::policy::Protocol::Http
-                        && resource
-                            .endpoint
-                            .host
-                            .eq_ignore_ascii_case(&identity.target.host)
-                        && resource.endpoint.port == identity.target.port
-                        && resource.database.is_none()
-                        && resource.username.is_none()
-                ),
-        "HTTP protected witness identity differs from immutable Source exchange"
-    );
-    Ok(())
-}
-
-pub(super) fn from_record(record: &RecordedHttpExchange, surface: Surface) -> Result<Value> {
-    traffic_protocol_http::witness::from_record(&record.native, surface.dependency_side()?)
-}
-
-pub(crate) fn witness_value(bytes: &[u8], surface: Surface) -> Result<Option<Vec<u8>>> {
+//! Native HTTP envelope validation with protocol-independent clock facts.
+use crate::{
+    headers::HeaderSnapshot,
+    limits::{MAX_BASE64_BODY_BYTES, MAX_BODY_BYTES, MAX_WITNESS_BYTES},
+};
+use anyhow::{Context, Result, ensure};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde_json::Value;
+use traffic_contract::compare::AnchorClocks;
+use traffic_protocol::evidence::MessageSide;
+pub fn witness_value(bytes: &[u8], surface: MessageSide) -> Result<Option<Vec<u8>>> {
     let value = parse(bytes)?;
-    if surface == Surface::DependencyRequest {
+    if surface == MessageSide::Request {
         return capture(&value["request_body"]).map(Some);
     }
     ensure!(
-        surface == Surface::DependencyResponse,
+        surface == MessageSide::Response,
         "HTTP dependency witness has no API response surface"
     );
     if value["outcome"] == "client_terminated" {
@@ -89,12 +47,12 @@ pub(crate) fn witness_value(bytes: &[u8], surface: Surface) -> Result<Option<Vec
 /// Multipart is an HTTP protocol projection, independent of JSON field plans.
 /// The protected envelopes stay original; callers may skip their opaque-body
 /// comparison only after this Source-selected comparison succeeds.
-pub(crate) fn multipart_witness_matches(
+pub fn multipart_witness_matches(
     source: &[u8],
     target: &[u8],
-    surface: Surface,
+    surface: MessageSide,
 ) -> Result<bool> {
-    if surface != Surface::DependencyRequest {
+    if surface != MessageSide::Request {
         return Ok(false);
     }
     multipart_values_match(&parse(source)?, &parse(target)?)
@@ -102,22 +60,22 @@ pub(crate) fn multipart_witness_matches(
 
 fn multipart_values_match(source: &Value, target: &Value) -> Result<bool> {
     let expected: HeaderSnapshot = serde_json::from_value(source["request_headers"].clone())?;
-    if !super::super::multipart::supports_headers(&expected) {
+    if !crate::multipart::supports_headers(&expected) {
         return Ok(false);
     }
     let actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
     let source_body = capture(&source["request_body"])?;
     let actual_body = capture(&target["request_body"])?;
-    match super::super::multipart::preview(&source_body, &expected, &actual_body, &actual) {
+    match crate::multipart::preview(&source_body, &expected, &actual_body, &actual) {
         Some(result) => result.map(|()| true),
         None => Ok(false),
     }
 }
 
-pub(crate) fn validate_witness(
+pub fn validate_witness(
     source: &[u8],
     target: &[u8],
-    surface: Surface,
+    surface: MessageSide,
     clocks: AnchorClocks,
 ) -> Result<()> {
     let mut source = parse(source)?;
@@ -126,7 +84,7 @@ pub(crate) fn validate_witness(
         source["request_started_at"] == serde_json::to_value(clocks.dependency.source)?,
         "HTTP Source request clock differs from its protected metadata"
     );
-    if surface == Surface::DependencyRequest {
+    if surface == MessageSide::Request {
         // Each side retains its own independently authenticated exchange id.
         // Legacy v1 targets copied the Source id. Both remain outside the native
         // endpoint/method/header/body comparison contract.
@@ -154,11 +112,11 @@ pub(crate) fn validate_witness(
             }
         }
         ensure!(
-            request_headers::native_contract_match(&expected, &actual),
+            crate::headers::native_contract_match(&expected, &actual),
             "HTTP request native header contract differs"
         );
         ensure!(
-            uri_mismatch_reason(
+            crate::request_contract::uri_mismatch_reason(
                 source["uri"].as_str().context("HTTP Source URI missing")?,
                 target["uri"].as_str().context("HTTP Target URI missing")?,
                 &[]
@@ -179,7 +137,7 @@ pub(crate) fn validate_witness(
         }
     } else {
         ensure!(
-            surface == Surface::DependencyResponse,
+            surface == MessageSide::Response,
             "HTTP dependency witness has no API response surface"
         );
         ensure!(
@@ -205,11 +163,13 @@ pub(crate) fn validate_witness(
         );
         ensure!(
             target["response_headers"]
-                == serde_json::to_value(request_headers::capture(&response_headers_for_payload(
-                    source_headers.as_ref(),
-                    target_body.len(),
-                    delivered
-                )))?,
+                == serde_json::to_value(crate::headers::capture(
+                    &crate::response::response_headers_for_payload(
+                        source_headers.as_ref(),
+                        target_body.len(),
+                        delivered
+                    )
+                ))?,
             "HTTP response native headers/framing changed"
         );
         for value in [&mut source, &mut target] {
@@ -225,7 +185,7 @@ pub(crate) fn validate_witness(
     Ok(())
 }
 
-pub(super) fn has_integrity_headers(headers: Option<&HeaderSnapshot>) -> bool {
+pub fn has_integrity_headers(headers: Option<&HeaderSnapshot>) -> bool {
     headers.is_some_and(|headers| {
         headers.keys().any(|name| {
             matches!(
