@@ -1,43 +1,23 @@
 //! Copy permission is a preview of real, case-local read delivery provenance.
 use super::*;
 use crate::mysql::sql::field_bindings::FieldIdentity;
-use crate::policy::runtime::request_contract::RequestContracts;
 use crate::value_contract::{
     json::VerifiedTimeCopy,
     time_copies::{TimeCopyLookup, TimeCopyStore},
 };
 
-enum Source<'a> {
-    Runtime(&'a RequestContracts),
-    Stored(&'a TimeCopyStore),
-}
-
 pub(crate) struct CopyProofs<'a> {
     case: &'a str,
-    source: Source<'a>,
+    source: &'a TimeCopyStore,
     available: bool,
-    clocks: crate::value_contract::time::ClockPair,
 }
 
 impl<'a> CopyProofs<'a> {
-    pub(crate) fn runtime(
-        owner: &'a RequestContracts,
-        case: &'a str,
-        clocks: crate::value_contract::time::ClockPair,
-    ) -> Self {
-        Self {
-            case,
-            source: Source::Runtime(owner),
-            available: owner.has_time_copies(case),
-            clocks,
-        }
-    }
     pub(crate) fn stored(store: &'a TimeCopyStore, case: &'a str) -> Self {
         Self {
             case,
-            source: Source::Stored(store),
+            source: store,
             available: store.has_case(case),
-            clocks: Default::default(),
         }
     }
     /// Global JSON describes content independently of its carrier. An exact
@@ -59,10 +39,8 @@ impl<'a> CopyProofs<'a> {
             return Ok(verified);
         }
         if let Some(plan) = &context.policy.global_json {
-            let (delivered, observed) = match self.source {
-                Source::Runtime(owner) => (owner.delivered_time_copies(self.case), self.clocks),
-                Source::Stored(store) => (store.delivered_copies(self.case), clocks.dependency),
-            };
+            let delivered = self.source.delivered_copies(self.case);
+            let observed = clocks.dependency;
             verified.extend(delivered.proofs(&selected.source, plan, clocks, observed)?);
         }
         Ok(verified)
@@ -117,12 +95,9 @@ impl<'a> CopyProofs<'a> {
     /// Every selected physical field contributes prepared hashes before this
     /// one short lookup lock for the complete SQL candidate.
     pub(super) fn resolve(&self, lookups: Vec<TimeCopyLookup>) -> Vec<VerifiedTimeCopy> {
-        match self.source {
-            Source::Runtime(owner) => owner.time_copy_proofs(self.case, lookups, self.clocks),
-            Source::Stored(store) => lookups
-                .iter()
-                .filter_map(|lookup| store.proof_prepared(self.case, lookup))
-                .collect(),
-        }
+        lookups
+            .iter()
+            .filter_map(|lookup| self.source.proof_prepared(self.case, lookup))
+            .collect()
     }
 }

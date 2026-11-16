@@ -8,9 +8,7 @@ use traffic_policy_value::{fields::ScalarFormat, formats::FormatHost};
 use traffic_protocol_mysql::{sql::field_bindings::FieldIdentity, value_rules as native};
 pub(crate) type RequestContext<'a> = native::RequestContext<'a, CompiledPolicy>;
 mod witness;
-pub(crate) use witness::{
-    validate_source_record, validate_source_witness, validate_witness_with_time_copies,
-};
+pub(crate) use witness::{validate_source_witness, validate_witness_with_time_copies};
 
 impl native::ValuePolicy for CompiledPolicy {
     fn execution(&self) -> ExecutionContext<'_> {
@@ -30,28 +28,7 @@ impl native::ValuePolicy for CompiledPolicy {
         self.mysql.is_some() || self.global_json.is_some()
     }
 }
-impl native::DeliveryHost for policy::request_contract::RequestContracts {
-    fn format_host(&self) -> Option<&dyn FormatHost> {
-        self.global_json().map(|plan| plan as &dyn FormatHost)
-    }
-    fn translate_document_identity(
-        &self,
-        scope: &str,
-        source: &Value,
-        delivered: &mut Value,
-    ) -> Result<traffic_contract::identity::IdentityDecision> {
-        self.translate_global_identity_logical(scope, source, delivered)
-            .map(|(decision, _)| decision)
-    }
-}
-#[cfg(test)]
-fn compare_selection(selected: &Selection, clocks: AnchorClocks) -> Result<Comparison> {
-    native::compare_selection(
-        &crate::value_contract::execution_context(),
-        selected,
-        clocks,
-    )
-}
+
 pub(crate) fn compare_selection_with_context(
     selected: &Selection,
     clocks: AnchorClocks,
@@ -68,8 +45,6 @@ pub(crate) fn compare_selection_with_context(
 
 #[cfg(test)]
 use native::{Temporal, temporal_selection};
-#[cfg(test)]
-mod tests;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn response_selection(

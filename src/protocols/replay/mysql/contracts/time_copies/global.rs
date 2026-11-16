@@ -1,29 +1,6 @@
 //! Retain globally selected time leaves using real result-column provenance.
 use super::*;
 
-pub(super) fn columns(
-    owner: &RequestContracts,
-    identity: &ReplaySessionIdentity,
-    original: &RecordedMysqlExchange,
-    projected: &RecordedMysqlResponse,
-    sql: Option<&str>,
-) -> Result<Vec<Column>> {
-    let Some(policy) = owner
-        .compiled_rules()
-        .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some())
-    else {
-        return Ok(vec![]);
-    };
-    let clocks = owner.contract_clocks(
-        None,
-        source_started(original),
-        None,
-        original.timestamp,
-        None,
-    );
-    columns_for_policy(policy, identity, original, projected, sql, clocks)
-}
-
 fn columns_for_policy(
     policy: &crate::policy::CompiledPolicy,
     identity: &ReplaySessionIdentity,
@@ -159,14 +136,10 @@ pub(crate) fn delivered_witness_time_copies(
         return Ok(0);
     }
     let pending = PreparedRead {
-        owner: None,
-        case: String::new(),
         host: resource.endpoint.host.clone(),
         port: resource.endpoint.port,
         columns,
         row_count: projected.rows.len(),
-        source_completed_at: source.response_delivered_at,
-        witness: None,
     };
     pending.observe_delivered(
         &identity,

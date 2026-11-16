@@ -29,6 +29,7 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     fn document_policy(&self, _clocks: AnchorClocks) -> Option<Arc<dyn crate::DocumentPolicy>> {
         None
     }
+    fn observe_source_comparison(&self, _comparison: &Comparison) {}
     fn begin_case(&self, case: &str);
     fn clear_case_values(&self, case: &str);
     fn case_flags(&self, _case: &str) -> std::collections::BTreeMap<String, Value> {

@@ -51,7 +51,6 @@ impl RequestContracts {
             hypothesis_context: None,
             hypothesis_journal: None,
             compiled: None,
-            native_dispatch: Arc::default(),
             rule_catalogue: Arc::default(),
             witnesses: None,
             input_origin: Some(derived_inputs::InputOrigin::Root(target_root.to_owned())),
@@ -66,20 +65,10 @@ impl RequestContracts {
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),
             values: Default::default(),
-            mysql_automatic: Arc::default(),
         })
     }
 
     pub(crate) fn finish_source_session(&self) -> Result<()> {
-        ensure!(
-            self.state
-                .lock()
-                .expect("Source contracts")
-                .sequences
-                .values()
-                .all(|sequence| sequence.next == 0),
-            "Source atomic sequence is incomplete"
-        );
         for key in self.signing_keys() {
             key.ensure_current()?;
         }

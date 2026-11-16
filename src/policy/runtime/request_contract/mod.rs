@@ -10,26 +10,20 @@ pub(crate) mod hypotheses;
 pub(crate) use hypotheses::{HypothesisAttempt, HypothesisContext};
 mod identity;
 mod identity_inputs;
-mod jwt;
 pub(crate) mod key;
-mod mysql;
 pub(crate) mod native_projection;
 mod signing_keys;
 mod value_decision;
 pub(crate) use key::KeyBindingReport;
 #[cfg(test)]
 mod overlap;
-mod redis;
 mod redis_fields;
-mod redis_hypothesis;
-mod rule_dispatch;
 pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
 pub(crate) use redis_fields::{
     RedisTimeRead, redis_delivered_global_time_copies, redis_delivered_scalar_time_copies,
     redis_time_position,
 };
 mod unified_response;
-mod url;
 pub(crate) use unified_response::redis_bulk_payload;
 mod script;
 mod source_applicability;
@@ -38,17 +32,14 @@ mod source_session;
 mod time;
 mod time_copies;
 mod unified;
-#[cfg(test)]
-pub(crate) use overlap::validate as validate_overlaps;
-pub(crate) use unified::RedisRequestContext;
-#[cfg(test)]
-mod tests;
 use super::config::{DependencyProtocol, ReplayDependencyRule};
 use crate::replay::{ReplayCase, TargetKey};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 pub(crate) use evidence::Candidate;
 pub(crate) use evidence::discover;
+#[cfg(test)]
+pub(crate) use overlap::validate as validate_overlaps;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -97,17 +88,6 @@ impl CaseAnchor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct SequenceKey {
-    case: String,
-    rule: String,
-    host: String,
-    port: u16,
-    database: i64,
-    username: Option<String>,
-    source_key: Vec<u8>,
-}
-
 #[derive(Default)]
 struct State {
     source_plan_facts: BTreeMap<String, BTreeSet<case_plan::SourceFact>>,
@@ -116,8 +96,6 @@ struct State {
     hypothesis_checkpoints: BTreeSet<String>,
     hypothesis_error: Option<String>,
     pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
-    key_bindings: BTreeMap<key::BindingScope, BTreeMap<String, String>>,
-    key_binding_proofs: BTreeSet<KeyBindingReport>,
     key_binds: BTreeMap<String, usize>,
     identity_references: BTreeMap<String, usize>,
     cases: BTreeMap<String, CaseAnchor>,
@@ -125,17 +103,9 @@ struct State {
     source_request_digests: BTreeMap<String, String>,
     derived_inputs: BTreeMap<String, derived_inputs::AuthorizedInputs>,
     applicable: BTreeSet<String>,
-    redis_applicability: source_applicability::RedisApplicability,
     usage: BTreeMap<String, usize>,
     time_validations: BTreeMap<String, usize>,
     candidates: Vec<Candidate>,
-    sequences: BTreeMap<SequenceKey, Sequence>,
-}
-#[derive(Debug, Clone, Default)]
-struct Sequence {
-    actual_key: Option<Vec<u8>>,
-    next: usize,
-    times: Vec<time::ComparedTime>,
 }
 #[derive(Clone, Default)]
 pub(crate) struct RequestContracts {
@@ -145,14 +115,11 @@ pub(crate) struct RequestContracts {
     compiled: Option<Arc<crate::policy::CompiledPolicy>>,
     input_origin: Option<derived_inputs::InputOrigin>,
     witnesses: Option<crate::policy_evidence::WitnessStore>,
-    rules: Arc<rule_dispatch::IndexedRules>,
-    native_dispatch: Arc<rule_dispatch::NativeDispatch>,
+    rules: Arc<Vec<ReplayDependencyRule>>,
     rule_catalogue: Arc<case_plan::RuleCatalogue>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
     state: Arc<Mutex<State>>,
     pub(crate) values: crate::value_contract::state::ValueState,
-    pub(crate) mysql_automatic:
-        Arc<Mutex<crate::protocols::replay::mysql::contracts::automatic::Metadata>>,
 }
 impl std::fmt::Debug for RequestContracts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -165,11 +132,9 @@ impl std::fmt::Debug for RequestContracts {
 pub(crate) struct Decision {
     pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
     pub(crate) identity: Option<crate::value_contract::identities::IdentityDecision>,
-    key_bindings: Vec<key::PendingBinding>,
     identity_references: usize,
     pub ids: Vec<String>,
     time_validations: usize,
-    sequence: Option<(SequenceKey, Sequence)>,
     unified_time_validations: BTreeMap<String, usize>,
 }
 impl RequestContracts {
@@ -216,7 +181,6 @@ impl RequestContracts {
             hypothesis_journal: None,
             pre_match_enabled: false,
             compiled: None,
-            native_dispatch: Arc::default(),
             rule_catalogue: Arc::default(),
             witnesses: None,
             input_origin: Some(derived_inputs::InputOrigin::Policy(policy.to_owned())),
@@ -231,7 +195,6 @@ impl RequestContracts {
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),
             values: Default::default(),
-            mysql_automatic: Arc::default(),
         })
     }
     pub(crate) fn signing_keys(&self) -> Vec<crate::request_rules::keys::ResolvedSigningKey> {
@@ -250,9 +213,6 @@ impl RequestContracts {
         if let Some(case) = state.cases.get_mut(id) {
             case.actual = None;
         }
-        state.sequences.retain(|key, _| key.case != id);
-        state.key_bindings.retain(|scope, _| !scope.belongs_to(id));
-        state.key_binding_proofs.retain(|proof| proof.case_id != id);
         state.candidates.retain(|c| c.case_id != id);
         state.derived_inputs.remove(id);
         drop(state);
@@ -305,33 +265,6 @@ impl RequestContracts {
         anchor.recorded = times.source;
         anchor.actual = times.target;
     }
-    fn selected(
-        &self,
-        case: &str,
-        target: &TargetKey,
-        protocol: DependencyProtocol,
-    ) -> Vec<&ReplayDependencyRule> {
-        let state = self.state.lock().expect("request contracts");
-        let Some(anchor) = state.cases.get(case) else {
-            return vec![];
-        };
-        self.rules
-            .candidates(protocol)
-            .filter(|r| {
-                r.protocol == protocol
-                    && (r.when.is_none() || anchor.conditions.contains(&r.id))
-                    && r.target
-                        .host
-                        .as_ref()
-                        .is_none_or(|host| host.eq_ignore_ascii_case(&target.host))
-                    && r.target.port.is_none_or(|port| port == target.port)
-                    && r.case_selector.as_ref().is_none_or(|selector| {
-                        selector.method == anchor.method
-                            && super::pattern::path_pattern_matches(&selector.path, &anchor.path)
-                    })
-            })
-            .collect()
-    }
     pub(crate) fn commit(&self, decision: Decision) -> Result<()> {
         self.commit_hypothesis_attempts(&decision.pre_matches)?;
         if let Some(identity) = decision.identity {
@@ -344,7 +277,6 @@ impl RequestContracts {
             }
         }
         for id in decision.ids {
-            *state.key_binds.entry(id.clone()).or_default() += decision.key_bindings.len();
             *state.identity_references.entry(id.clone()).or_default() +=
                 decision.identity_references;
             *state.time_validations.entry(id.clone()).or_default() += decision
@@ -353,16 +285,6 @@ impl RequestContracts {
                 .copied()
                 .unwrap_or(decision.time_validations);
             *state.usage.entry(id).or_default() += 1;
-        }
-        if let Some((key, sequence)) = decision.sequence {
-            state.sequences.insert(key, sequence);
-        }
-        for (scope, source, actual) in decision.key_bindings {
-            state
-                .key_bindings
-                .entry(scope)
-                .or_default()
-                .insert(source, actual);
         }
         Ok(())
     }
@@ -451,63 +373,6 @@ impl RequestContracts {
             time_validations: state.time_validations.get(id).copied().unwrap_or_default(),
         })
         .collect()
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn preview_multipart(
-        &self,
-        case: &str,
-        target: &TargetKey,
-        method: &str,
-        path: &str,
-        source: &[u8],
-        source_headers: &BTreeMap<String, Vec<String>>,
-        actual: &[u8],
-        headers: &BTreeMap<String, Vec<String>>,
-    ) -> Option<Result<Decision>> {
-        let rules: Vec<_> = self
-            .selected(case, target, DependencyProtocol::Http)
-            .into_iter()
-            .filter(|r| {
-                self.native_rule_scope_matches(
-                    &r.id,
-                    Some(case),
-                    crate::policy::Protocol::Http,
-                    target,
-                    None,
-                    None,
-                ) && r.http.as_ref().is_some_and(|h| {
-                    h.multipart.is_some()
-                        && h.method == method
-                        && super::pattern::path_pattern_matches(&h.path, path)
-                })
-            })
-            .collect();
-        if rules.is_empty() {
-            return None;
-        }
-        Some((|| {
-            let mut source_identity = source_headers.clone();
-            let mut actual_identity = headers.clone();
-            source_identity.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
-            actual_identity.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
-            ensure!(
-                crate::protocols::replay::http::request_headers::exact_contract_match(
-                    &source_identity,
-                    &actual_identity
-                ),
-                "multipart identity headers differ"
-            );
-            crate::protocols::replay::http::multipart::compare(
-                source,
-                source_headers,
-                actual,
-                headers,
-            )?;
-            Ok(Decision {
-                ids: rules.iter().map(|r| r.id.clone()).collect(),
-                ..Default::default()
-            })
-        })())
     }
 }
 pub(crate) fn is_request_rule(rule: &ReplayDependencyRule) -> bool {

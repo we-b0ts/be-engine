@@ -4,7 +4,6 @@ use crate::mysql::sql::{
     bounds,
     field_bindings::{self, FieldIdentity},
 };
-use crate::policy::runtime::request_contract::RequestContracts;
 use crate::value_contract::time_copies::{self, TimeCopyLeaf};
 use sha2::{Digest, Sha256};
 use traffic_contract::provenance::ValueOrigin;
@@ -36,23 +35,11 @@ struct Row {
     leaves: Vec<TimeCopyLeaf>,
 }
 #[derive(Debug, Clone)]
-struct InputWitness {
-    source: Arc<[u8]>,
-    request: RequestEnvelope,
-    metadata: Vec<WitnessMetadata>,
-    observation_id: uuid::Uuid,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct PreparedRead {
-    owner: Option<RequestContracts>,
-    case: String,
     host: String,
     port: u16,
     columns: Vec<Column>,
     row_count: usize,
-    source_completed_at: Option<chrono::DateTime<Utc>>,
-    witness: Option<InputWitness>,
 }
 
 fn analysis(
@@ -73,184 +60,7 @@ fn analysis(
         .flatten()
 }
 
-/// Called after a proven projection and materialization, before input rewriting.
-/// Keep declared active time leaves and carrier hashes, never another JSON tree.
-pub(crate) fn prepare(
-    owner: &RequestContracts,
-    case: &str,
-    identity: &ReplaySessionIdentity,
-    original: &RecordedMysqlExchange,
-    projected: &RecordedMysqlResponse,
-    projected_sql: Option<&str>,
-) -> Result<Option<PreparedRead>> {
-    let columns = global::columns(owner, identity, original, projected, projected_sql)?;
-    let (Some(endpoint), Some(_)) = (&identity.target, original.timestamp) else {
-        return Ok(None);
-    };
-    if columns.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(PreparedRead {
-        owner: Some(owner.clone()),
-        case: case.into(),
-        host: endpoint.host.clone(),
-        port: endpoint.port,
-        columns,
-        row_count: projected.rows.len(),
-        source_completed_at: original.timestamp,
-        witness: None,
-    }))
-}
-
 impl PreparedRead {
-    /// Protected evidence is retained only in managed witness mode. Share an
-    /// existing delivery's immutable Source envelope when one was prepared.
-    pub(crate) fn prepare_witness(
-        &mut self,
-        original: &RecordedMysqlExchange,
-        identity: &ReplaySessionIdentity,
-        request: ObservedRequest<'_>,
-        delivery: Option<&PreparedDelivery>,
-    ) -> Result<()> {
-        let Some(owner) = self
-            .owner
-            .as_ref()
-            .filter(|owner| owner.retains_value_witnesses())
-        else {
-            return Ok(());
-        };
-        let source = if let Some(delivery) = delivery {
-            delivery.original.clone()
-        } else {
-            let response = original.response.materialize()?;
-            response_witness(
-                RequestEnvelope::recorded(original),
-                original.timestamp,
-                original.outcome,
-                &response,
-            )?
-            .into()
-        };
-        let clocks = owner.contract_clocks(
-            Some(&self.case),
-            source_started(original),
-            Some(request.started_at),
-            original.timestamp,
-            None,
-        );
-        let mut slots = BTreeSet::new();
-        let mut metadata = Vec::new();
-        for column in &self.columns {
-            let slot = Slot::SqlField(column.origin.column.clone());
-            if slots.insert(serde_json::to_string(&slot)?) {
-                metadata.push(owner.mysql_metadata(
-                    &self.case,
-                    identity,
-                    original,
-                    (Surface::DependencyResponse, slot),
-                    TargetRole::DeliveredInput,
-                    clocks,
-                ));
-            }
-        }
-        self.witness = Some(InputWitness {
-            source,
-            request: RequestEnvelope::observed(request),
-            metadata,
-            observation_id: request.observation_id.unwrap_or_else(uuid::Uuid::new_v4),
-        });
-        Ok(())
-    }
-
-    /// Commit this observed input fact synchronously before the caller awaits
-    /// the global replay ledger; another connection may immediately use it.
-    pub(crate) fn commit_after_wire(
-        &self,
-        case: Option<&str>,
-        identity: &ReplaySessionIdentity,
-        delivered: &RecordedMysqlResponse,
-        delivered_sql: Option<&str>,
-    ) -> Result<()> {
-        if let Some(owner) = &self.owner {
-            let completed_at = Utc::now();
-            self.commit(
-                owner,
-                case,
-                identity,
-                delivered,
-                delivered_sql,
-                completed_at,
-            )?;
-            if case == Some(self.case.as_str())
-                && let Some(witness) = &self.witness
-            {
-                let target = response_witness(
-                    witness.request.clone(),
-                    Some(completed_at),
-                    crate::DependencyExchangeOutcome::Response,
-                    delivered,
-                )?;
-                for metadata in &witness.metadata {
-                    let mut metadata = metadata.clone();
-                    metadata.clocks.delivery.target = Some(completed_at);
-                    owner.record_delivery_witness(
-                        &witness.observation_id.to_string(),
-                        metadata,
-                        &witness.source,
-                        &target,
-                    )?;
-                }
-            }
-        }
-        Ok(())
-    }
-    /// Publish all actual input facts atomically after successful wire flush.
-    pub(crate) fn commit(
-        &self,
-        owner: &RequestContracts,
-        case: Option<&str>,
-        identity: &ReplaySessionIdentity,
-        delivered: &RecordedMysqlResponse,
-        delivered_sql: Option<&str>,
-        delivered_at: chrono::DateTime<Utc>,
-    ) -> Result<()> {
-        if case != Some(self.case.as_str()) {
-            return Ok(());
-        }
-        let mut records = Vec::new();
-        self.observe_delivered(
-            identity,
-            delivered,
-            delivered_sql,
-            &mut |source,
-                  target,
-                  source_pattern,
-                  target_pattern,
-                  source_value,
-                  target_value,
-                  time| {
-                records.push(time_copies::TimeCopyRecord::new_time(
-                    time,
-                    source,
-                    target,
-                    source_pattern,
-                    target_pattern,
-                    source_value,
-                    target_value,
-                )?);
-                Ok(())
-            },
-        )?;
-        owner.record_time_copies(
-            &self.case,
-            records,
-            crate::value_contract::time::ClockPair {
-                source: self.source_completed_at,
-                target: Some(delivered_at),
-            },
-        )
-    }
-
     fn observe_delivered(
         &self,
         identity: &ReplaySessionIdentity,

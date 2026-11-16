@@ -64,6 +64,10 @@ impl ValueRuleHost for RequestContracts {
         &crate::value_contract::json::PolicyMetadata
     }
 
+    fn observe_source_comparison(&self, comparison: &Comparison) {
+        self.observe_value_slot_applicable(comparison.evaluated.iter().cloned());
+    }
+
     fn translate_document(
         &self,
         scope: &str,

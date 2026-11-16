@@ -87,23 +87,37 @@ fn preview(
     source: &Value,
     target: &Value,
 ) -> Result<Decision> {
-    let physical = TargetKey {
-        host: "cache.test".into(),
-        port: 6379,
+    use crate::replay::policy::ValueRuleHost;
+    let request = |key: &str, value: &Value| traffic_protocol_redis::message::RequestMessage {
+        command: "SET".into(),
+        args: vec![
+            key.to_owned().into(),
+            serde_json::to_vec(value).unwrap().into(),
+        ],
+        resp_version: 2,
+        database: 7,
+        username: None,
     };
-    let mut context = RedisRequestContext::without_exchange("case", &physical, 7, "SET");
-    context.recorded_at = DateTime::from_timestamp(1000, 0);
-    context.actual_at = DateTime::from_timestamp(2000, 0);
-    owner
-        .preview_redis_context(
-            &context,
-            &[key.as_bytes().to_vec(), serde_json::to_vec(source).unwrap()],
-            &[
-                actual_key.as_bytes().to_vec(),
-                serde_json::to_vec(target).unwrap(),
-            ],
-        )
-        .expect("a global JSON contract selects this ordinary Redis value")
+    let source = request(key, source);
+    let target = request(actual_key, target);
+    let clocks = owner.contract_clocks(
+        Some("case"),
+        DateTime::from_timestamp(1000, 0),
+        DateTime::from_timestamp(2000, 0),
+        None,
+        None,
+    );
+    let prepared = crate::value_extensions::prepare_message_with_policy(
+        &source,
+        &[],
+        owner.document_policy(clocks),
+    )?;
+    let checked = prepared.compare(&target, clocks, owner.metadata())?;
+    ensure!(checked.passed(), "native JWT comparison failed");
+    let identity = owner.identity_decision("case", &checked)?;
+    let mut decision = Decision::from_value_comparison(checked);
+    decision.identity = Some(identity);
+    Ok(decision)
 }
 
 #[test]

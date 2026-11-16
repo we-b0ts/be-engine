@@ -73,7 +73,7 @@ impl RequestContracts {
         } else if (if command == "RPUSH" && source.len() >= 2 {
             Some(1)
         } else {
-            super::unified::value_index(command, source.len())
+            traffic_protocol_redis::value_rules::message_value_index(command, source.len())
         })
         .is_some_and(|index| {
             crate::json_value::parse(&source[index]).is_some()

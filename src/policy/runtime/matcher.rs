@@ -83,14 +83,12 @@ impl ReplayPolicyRuntime {
             global_formats: self.request_contracts.global_format_reports(),
             dynamic_bindings: Vec::new(),
             redis_read_backs: Vec::new(),
-            key_bindings: self.request_contracts.key_binding_report(),
+            key_bindings: Vec::new(),
             dynamic_capture_candidates: Vec::new(),
             request_contract_candidates: self.request_contracts.candidates(),
             unused_applicable_dependency_rule_ids,
             recorded_mysql_rule_applicability: BTreeMap::new(),
-            recorded_redis_rule_applicability: self
-                .request_contracts
-                .recorded_redis_rule_applicability(),
+            recorded_redis_rule_applicability: BTreeMap::new(),
         }
     }
 }

@@ -1,6 +1,4 @@
 use super::*;
-use crate::protocols::replay::mysql::RecordedMysqlExchange;
-use crate::protocols::replay::mysql::{RecordedMysqlValue, ReplaySessionIdentity};
 use serde_json::json;
 
 const A: &str = "11111111-1111-4111-8111-111111111111";
@@ -36,21 +34,6 @@ fn runtime() -> RequestContracts {
     owner
 }
 
-fn record(sql: &str) -> RecordedMysqlExchange {
-    serde_json::from_value(json!({"command":"COM_QUERY","sql":sql,"connection_id":uuid::Uuid::new_v4(),"query_sequence":1,"target_host":"db.test","target_port":3306,"database":"app","timestamp":"2023-11-14T22:13:20Z","response":{"status":"ok","affected_rows":1}})).unwrap()
-}
-
-fn identity() -> ReplaySessionIdentity {
-    ReplaySessionIdentity {
-        target: Some(TargetKey {
-            host: "db.test".into(),
-            port: 3306,
-        }),
-        database: Some("app".into()),
-        username: None,
-    }
-}
-
 #[test]
 fn hypothesis_failed_json_candidate_keeps_all_considered_leaf_rules() {
     let owner = runtime();
@@ -81,97 +64,6 @@ fn hypothesis_failed_json_candidate_keeps_all_considered_leaf_rules() {
     let output = serde_json::to_string(&attempts).unwrap();
     assert!(!output.contains(A) && !output.contains(B) && !output.contains("not a timestamp"));
     assert!(owner.pre_match_reports().is_empty());
-}
-
-#[test]
-fn builtin_redis_argument_composes_with_a_real_key_hypothesis_and_stays_strict() {
-    for (date, passes) in [
-        ("2023-11-14T22:13:30Z", true),
-        ("2023-11-14T22:13:30.000Z", false),
-        ("2023-11-14T22:13:39Z", false),
-    ] {
-        let owner = runtime();
-        let target = TargetKey {
-            host: "cache.test".into(),
-            port: 6379,
-        };
-        let mut context = RedisRequestContext::without_exchange("case", &target, 0, "MSET");
-        context.recorded_at = DateTime::from_timestamp(1700000000, 0);
-        context.actual_at = DateTime::from_timestamp(1700000010, 0);
-        let args = |id: &str, date: &str| {
-            vec![
-                format!("job:{id}").into_bytes(),
-                b"same".to_vec(),
-                b"clock".to_vec(),
-                date.as_bytes().to_vec(),
-            ]
-        };
-        let result = owner
-            .preview_redis_hypothesis(&context, &args(A, "2023-11-14T22:13:20Z"), &args(B, date))
-            .unwrap();
-        assert_eq!(result.is_ok(), passes, "{date}");
-        if let Ok(decision) = result {
-            assert_eq!(decision.pre_matches.len(), 1);
-            assert!(
-                decision
-                    .ids
-                    .iter()
-                    .any(|id| id == crate::value_contract::time::automatic::RULE_ID)
-            );
-        }
-        let attempts = owner.hypothesis_attempts();
-        assert_eq!(attempts.len(), 1, "builtin time never produces a rule hint");
-        assert_eq!(attempts[0].carrier, "redis_key");
-    }
-}
-
-#[test]
-fn redis_hypotheses_keep_mixed_precision_clocks_independent_per_argument() {
-    for json_payload in [false, true] {
-        let owner = runtime();
-        let target = TargetKey {
-            host: "cache.test".into(),
-            port: 6379,
-        };
-        let mut context = RedisRequestContext::without_exchange("case", &target, 0, "MSET");
-        context.recorded_at = DateTime::from_timestamp(1700000000, 0);
-        context.actual_at = DateTime::from_timestamp(1700000010, 456_789_000);
-        let args = |id: &str, whole: &str, milli: &str| {
-            if json_payload {
-                vec![
-                    b"first".to_vec(),
-                    json!({"id":id,"at":whole}).to_string().into_bytes(),
-                    b"second".to_vec(),
-                    json!({"id":id,"at":milli}).to_string().into_bytes(),
-                ]
-            } else {
-                vec![
-                    format!("job:{id}").into_bytes(),
-                    b"same".to_vec(),
-                    b"whole".to_vec(),
-                    whole.as_bytes().to_vec(),
-                    b"milli".to_vec(),
-                    milli.as_bytes().to_vec(),
-                ]
-            }
-        };
-        let decision = owner
-            .preview_redis_hypothesis(
-                &context,
-                &args(A, "2023-11-14T22:13:20Z", "2023-11-14T22:13:20.123Z"),
-                &args(B, "2023-11-14T22:13:30Z", "2023-11-14T22:13:30.579Z"),
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(decision.pre_matches.len(), if json_payload { 2 } else { 1 });
-        assert!(owner.hypothesis_attempts().iter().all(|attempt| {
-            attempt
-                .candidate
-                .draft_policy
-                .to_string()
-                .contains("identity")
-        }));
-    }
 }
 
 #[tokio::test]

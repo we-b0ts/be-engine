@@ -190,7 +190,7 @@ impl Inventory {
             target: None,
         });
         let response_policy = contracts.document_policy(response_clocks);
-        Ok((
+        let prepared = (
             crate::value_extensions::prepare_message_with_policy(
                 exchange.request.as_ref(),
                 &rules.request,
@@ -201,7 +201,32 @@ impl Inventory {
                 &rules.response,
                 response_policy,
             )?,
-        ))
+        );
+        let mut source_clocks = clocks;
+        source_clocks.case.target = source_clocks.case.source;
+        source_clocks.dependency.target = source_clocks.dependency.source;
+        source_clocks.delivery.target = source_clocks.delivery.source;
+        let request = prepared.0.compare(
+            exchange.request.as_ref(),
+            source_clocks,
+            contracts.metadata(),
+        )?;
+        let mut response_clocks = source_clocks;
+        response_clocks.observation = Some(source_clocks.delivery);
+        let response = prepared.1.compare(
+            exchange.response.as_ref(),
+            response_clocks,
+            contracts.metadata(),
+        )?;
+        ensure!(
+            request.passed() && response.passed(),
+            "Source projected value contract failed: request={:?}, response={:?}",
+            request.differences,
+            response.differences
+        );
+        contracts.observe_source_comparison(&request);
+        contracts.observe_source_comparison(&response);
+        Ok(prepared)
     }
 
     pub fn install_contracts(&mut self, contracts: Arc<dyn policy::ValueRuleHost>) -> Result<()> {
