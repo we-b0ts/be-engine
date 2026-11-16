@@ -52,9 +52,6 @@ impl ReplayPolicy for ReplayPolicyRuntime {
         index: Option<&crate::dependency_index::FileIndex>,
     ) -> Result<()> {
         self.request_contracts.observe_source(case, raw, index)?;
-        if self.dynamic_values.enabled() {
-            self.dynamic_values.observe_source(case, raw)?;
-        }
         Ok(())
     }
 

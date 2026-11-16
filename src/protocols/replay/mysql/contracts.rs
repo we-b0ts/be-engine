@@ -8,10 +8,8 @@ use crate::value_contract::json::{AnchorClocks, Comparison};
 pub(crate) mod automatic;
 mod delivery;
 pub(crate) mod fields;
-mod preflight_identity;
 pub(crate) mod time_copies;
 mod value_view;
-pub(crate) use preflight_identity::{IdentityPreflight, normalize_identity_witnesses};
 pub(crate) use value_view::mysql_witness_sql_value;
 
 #[derive(Debug, Clone, Copy)]

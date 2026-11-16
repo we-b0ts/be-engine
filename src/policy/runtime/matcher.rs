@@ -5,7 +5,6 @@ mod http_native;
 pub(crate) mod mysql_native;
 pub(crate) mod mysql_selectors;
 pub(super) mod mysql_values;
-mod source_session;
 use std::fs;
 use std::path::Path;
 
@@ -74,7 +73,6 @@ impl DependencyRuleDecision {
 #[derive(Debug)]
 pub(crate) struct ReplayPolicyRuntime {
     pub(crate) request_contracts: super::request_contract::RequestContracts,
-    pub(crate) dynamic_values: super::dynamic_values::DynamicValues,
     loaded: LoadedReplayPolicy,
     mysql_selectors: mysql_selectors::MysqlSelectors,
     cases: BTreeMap<String, CaseIdentity>,
@@ -156,25 +154,10 @@ impl ReplayPolicyRuntime {
                 load_case_identity(&case.dir, &request_path)?,
             );
         }
-        let mut dynamic_values = super::dynamic_values::DynamicValues::new(
-            loaded.document.dynamic_values.clone(),
-            case_identities
-                .iter()
-                .filter_map(|(id, case)| case.path.as_ref().map(|path| (id.clone(), path.clone())))
-                .collect(),
-        );
-        if let Some(compiled) = &loaded.compiled {
-            dynamic_values.configure_native(&compiled.native);
-        }
         if loaded
             .compiled
             .as_ref()
             .is_some_and(|policy| !policy.native.is_empty())
-            || loaded
-                .document
-                .dynamic_values
-                .iter()
-                .any(|rule| rule.when.is_some())
             || loaded
                 .document
                 .dependency_rules
@@ -187,7 +170,6 @@ impl ReplayPolicyRuntime {
             {
                 let request: Value =
                     serde_json::from_slice(&fs::read(case.dir.join("request.json"))?)?;
-                dynamic_values.set_request(&case.id, &request);
                 if let Some(identity) = case_identities.get_mut(&case.id) {
                     identity.conditions = super::case_condition::matching_rule_ids(
                         &request,
@@ -227,7 +209,6 @@ impl ReplayPolicyRuntime {
                 path,
                 cases,
             )?,
-            dynamic_values,
             loaded,
             cases: case_identities,
             applicable_dependency_rule_ids: BTreeSet::new(),
@@ -237,15 +218,9 @@ impl ReplayPolicyRuntime {
         runtime
             .request_contracts
             .configure_compiled(runtime.loaded.compiled.clone())?;
-        runtime
-            .dynamic_values
-            .configure_identities(runtime.request_contracts.clone());
-        if observe_sources
-            && (runtime.dynamic_values.enabled() || runtime.request_contracts.enabled())
-        {
+        if observe_sources && runtime.request_contracts.enabled() {
             for case in cases.values() {
                 let bytes = crate::dependency_index::scoped::read_bytes(&case.dependencies_path)?;
-                runtime.dynamic_values.observe_source(&case.id, &bytes)?;
                 runtime
                     .request_contracts
                     .observe_source(&case.id, &bytes, None)?;
@@ -335,7 +310,6 @@ impl ReplayPolicyRuntime {
     }
 
     pub(crate) fn begin_case(&mut self, case_id: &str) {
-        self.dynamic_values.begin_case(case_id);
         self.request_contracts.begin_case(case_id);
     }
 
@@ -683,7 +657,6 @@ impl ReplayPolicyRuntime {
                     time_validations: usage.time_validations,
                 }
             })
-            .chain(self.dynamic_values.rule_reports())
             .chain(self.request_contracts.reports())
             .chain(self.redis_native_rule_reports())
             .collect::<Vec<_>>();
@@ -699,10 +672,10 @@ impl ReplayPolicyRuntime {
             expected_response: self.loaded.document.expected_response,
             dependency_rules,
             global_formats: self.request_contracts.global_format_reports(),
-            dynamic_bindings: self.dynamic_values.report(),
+            dynamic_bindings: Vec::new(),
             redis_read_backs: Vec::new(),
             key_bindings: self.request_contracts.key_binding_report(),
-            dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
+            dynamic_capture_candidates: Vec::new(),
             request_contract_candidates: self.request_contracts.candidates(),
             unused_applicable_dependency_rule_ids,
             recorded_mysql_rule_applicability: self.recorded_mysql_rule_applicability.clone(),

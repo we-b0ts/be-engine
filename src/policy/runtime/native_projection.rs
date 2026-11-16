@@ -13,7 +13,6 @@ use super::config::{
 
 mod dependency;
 pub(crate) use dependency::generated;
-mod identity;
 mod response;
 pub(crate) use response::{dynamic_claim, project_jwt};
 pub(crate) use traffic_policy_schema::scope::NativeScopeGuard;
@@ -53,14 +52,11 @@ pub(crate) fn project_native(rules: &[CompiledNativeRule]) -> Result<NativeRunti
         let rule = &compiled.rule;
         native_admission::validate(rule)?;
         match &rule.effect {
-            n::NativeEffect::Identity(_) if n::is_key_only_read_back(rule) => {
-                // Key-only read state uses globally declared scalar identities
-                // and the causal write ledger, with no legacy capture model.
+            n::NativeEffect::Identity(_) => {
+                anyhow::bail!(
+                    "native identity capture requires an installed native state capability"
+                )
             }
-            n::NativeEffect::Identity(effect) => output
-                .document
-                .dynamic_values
-                .push(identity::project(rule, effect)?),
             n::NativeEffect::RedisSequence(_)
             | n::NativeEffect::HttpRequest(_)
             | n::NativeEffect::MysqlValues(_)

@@ -11,11 +11,11 @@ pub(crate) struct ReplayPolicyReport {
     pub(crate) dependency_rules: Vec<DependencyRuleReport>,
     pub(crate) global_formats: Vec<GlobalFormatReport>,
     pub(crate) request_contract_candidates: Vec<super::request_contract::Candidate>,
-    pub(crate) dynamic_bindings: Vec<super::dynamic_values::DynamicBindingReport>,
+    pub(crate) dynamic_bindings: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) redis_read_backs: Vec<serde_json::Value>,
     pub(crate) key_bindings: Vec<super::request_contract::KeyBindingReport>,
-    pub(crate) dynamic_capture_candidates: Vec<super::dynamic_values::CaptureCandidate>,
+    pub(crate) dynamic_capture_candidates: Vec<serde_json::Value>,
     pub(crate) unused_applicable_dependency_rule_ids: Vec<String>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(crate) recorded_mysql_rule_applicability: std::collections::BTreeMap<

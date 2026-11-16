@@ -54,12 +54,9 @@ pub(crate) mod mysql;
 pub(crate) use mysql::contracts::automatic::Metadata as MysqlInferenceMetadata;
 pub(crate) use mysql::contracts::automatic::validate_source_witness as mysql_validate_global_source_witness;
 pub(crate) use mysql::contracts::automatic::validate_witness_with_time_copies as mysql_validate_global_witness_with_time_copies;
+pub(crate) use mysql::contracts::mysql_witness_sql_value;
 pub(crate) use mysql::contracts::source_witness as mysql_source_witness;
 pub(crate) use mysql::contracts::time_copies::global::delivered_witness_time_copies as mysql_global_delivered_time_copies;
-pub(crate) use mysql::contracts::{
-    IdentityPreflight as MysqlIdentityPreflight, mysql_witness_sql_value,
-    normalize_identity_witnesses as mysql_normalize_identity_witnesses,
-};
 pub(crate) use mysql::contracts::{
     request_candidates_related as mysql_request_candidates_related,
     validate_contract_candidate as mysql_validate_contract_candidate,

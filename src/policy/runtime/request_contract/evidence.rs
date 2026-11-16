@@ -2,12 +2,6 @@
 use super::super::config::fingerprint;
 use super::*;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-mod legacy_validation;
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
-use legacy_validation::verify;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Candidate {
@@ -27,24 +21,6 @@ pub(crate) struct Candidate {
     pub authentication: String,
 }
 impl Candidate {
-    #[cfg(test)]
-    fn actual(&self, context: &Path) -> Result<Vec<u8>> {
-        let bytes = self.payload.read(context, &self.label())?;
-        if !matches!(
-            self.payload,
-            crate::policy_evidence::StoredPayload::Encrypted { .. }
-        ) || !self.authentication.is_empty()
-        {
-            crate::policy_evidence::authentication::verify(
-                context,
-                &self.label(),
-                &bytes,
-                &self.authentication,
-            )?;
-        }
-        Ok(bytes)
-    }
-
     fn label(&self) -> String {
         let metadata = serde_json::to_string(&(
             &self.case_id,
