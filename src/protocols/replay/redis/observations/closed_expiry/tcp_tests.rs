@@ -4,6 +4,7 @@ use crate::protocols::replay::redis::append::tests::{event, rule as append_rule}
 use crate::protocols::replay::redis::observations::tests::{read_rule, refresh_rule};
 use crate::replay::{ReplayConfig, ReplayRuntime};
 use serde_json::json;
+use std::time::Duration;
 use tokio::net::TcpListener;
 
 #[tokio::test]

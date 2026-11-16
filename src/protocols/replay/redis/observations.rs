@@ -6,6 +6,7 @@ use crate::protocols::replay::redis::report::CommandMatchDiagnostic;
 use crate::protocols::replay::redis::report::RedisDiagnostic;
 use crate::replay::command_matching::CommandExchangeScope;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
 mod absence;
 mod closed_expiry;
 pub(crate) mod omissions;
@@ -15,56 +16,15 @@ mod refresh_barrier;
 mod source;
 #[cfg(test)]
 mod state_tests;
-mod state_trace;
 pub(super) use source::validate_causal_order;
 #[cfg(test)]
 pub(super) mod tests;
 
 const MAX_KEYS: usize = 128;
-const MAX_OBSERVATIONS: usize = 4096;
 const MAX_CALLS: usize = 4096;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Kind {
-    Read,
-    StateRead,
-    AbsentRead,
-    Expiry,
-}
-
-impl Kind {
-    fn is_read(self) -> bool {
-        matches!(self, Self::Read | Self::StateRead | Self::AbsentRead)
-    }
-}
-
-#[derive(Debug)]
-struct Epoch {
-    mutation: Option<usize>,
-    observations: Vec<usize>,
-    predecessors: Vec<usize>,
-}
-
-#[derive(Debug)]
-struct Profile {
-    case: String,
-    rule: String,
-    kind: Kind,
-    transient_nil: bool,
-    target: TargetKey,
-    database: i64,
-    username: Option<String>,
-    resp_version: u8,
-    key: Vec<u8>,
-    finite_prefix: Vec<usize>,
-    initial_accesses: Vec<usize>,
-    epochs: Vec<Epoch>,
-    valid_for_seconds: Option<u64>,
-    prepared_at: chrono::DateTime<chrono::Utc>,
-    failed: bool,
-    closed_expiry: Vec<closed_expiry::Lifetime>,
-}
+use traffic_protocol_redis::storage::observations::{Epoch, Kind, MAX_OBSERVATIONS};
+type Profile = traffic_protocol_redis::storage::observations::Profile<closed_expiry::Lifetime>;
 
 #[derive(Debug, Clone)]
 pub(super) struct Prepared {

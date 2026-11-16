@@ -2,6 +2,7 @@ use super::*;
 use crate::protocols::replay::redis::append::tests::{event, request, state};
 use crate::protocols::replay::redis::observations::tests::refresh_rule;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 fn events() -> Vec<Value> {
     vec![

@@ -176,6 +176,11 @@ protocol libraries. Value bindings receive the policy registry and comparison
 metadata. Implicit scalar applicability delegates to the shared field plan and its
 installed implementations. Historical planner DTOs retain their existing rejection
 contract, while frozen-evidence checks continue serving pending journals.
+Redis `storage::StorageExchange` supplies immutable RESP facts, original scope and
+authenticated response access. The protocol library owns complete read-commutation,
+absent-state, state-epoch and closed-TTL Source proofs over that port. The host
+supplies preparation clocks, installs complete proofs atomically and retains live
+delivery receipts, failure state and audit publication.
 Native MySQL value selection, physical column origins, observed native temporal
 metadata and scalar output representations live in `traffic-protocol-mysql::value_rules`.
 Its `ValuePolicy` port receives the shared execution context, document formats and

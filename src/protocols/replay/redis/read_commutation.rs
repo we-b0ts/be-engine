@@ -13,15 +13,7 @@ pub(super) mod tests;
 const MAX_KEYS: usize = 128;
 const MAX_READS: usize = 4096;
 
-#[derive(Debug)]
-struct Profile {
-    case: String,
-    target: TargetKey,
-    database: i64,
-    key: Vec<u8>,
-    rule: String,
-    reads: Vec<usize>,
-}
+use traffic_protocol_redis::storage::ReadCommutationProof as Profile;
 
 #[derive(Debug, Default)]
 pub(super) struct ReadCommutation {

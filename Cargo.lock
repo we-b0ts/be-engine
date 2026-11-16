@@ -3349,6 +3349,7 @@ dependencies = [
  "traffic-contract",
  "traffic-model",
  "traffic-protocol",
+ "traffic-value",
  "uuid",
 ]
 

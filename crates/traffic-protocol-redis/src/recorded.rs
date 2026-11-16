@@ -111,3 +111,30 @@ pub struct RequestRef {
     #[serde(default)]
     pub case_id: Option<String>,
 }
+
+impl RecordedExchange {
+    pub fn source_started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.request_started_at.or_else(|| {
+            self.timestamp?
+                .checked_sub_signed(chrono::TimeDelta::milliseconds(
+                    i64::try_from(self.duration_ms).ok()?,
+                ))
+        })
+    }
+    pub fn earliest_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.request_started_at.or_else(|| {
+            self.timestamp?
+                .checked_sub_signed(chrono::TimeDelta::milliseconds(
+                    i64::try_from(self.duration_ms.checked_add(1)?).ok()?,
+                ))
+        })
+    }
+    pub fn run_owner_kind(&self) -> Option<&'static str> {
+        self.capture
+            .as_ref()
+            .and_then(|capture| match capture.owner_kind() {
+                "case" => None,
+                kind => Some(kind),
+            })
+    }
+}

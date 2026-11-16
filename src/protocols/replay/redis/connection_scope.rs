@@ -36,3 +36,18 @@ impl SessionExchange for ReplayExchange {
 
 #[cfg(test)]
 mod tests;
+
+impl traffic_protocol_redis::storage::StorageExchange for ReplayExchange {
+    fn native_record(&self) -> &traffic_protocol_redis::recorded::RecordedExchange {
+        &self.record.native
+    }
+    fn arguments(&self) -> &[Vec<u8>] {
+        &self.args
+    }
+    fn response_bytes(&self) -> anyhow::Result<Vec<u8>> {
+        ReplayExchange::response_bytes(self)
+    }
+    fn explicitly_shared(&self) -> bool {
+        self.shared_rule_id.is_some() || self.reusable_snapshot
+    }
+}

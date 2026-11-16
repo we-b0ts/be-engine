@@ -3,56 +3,56 @@ use super::*;
 
 /// A read-only key can be observed absent, or reach one stable terminal value.
 /// Actual DEL boundaries remain finite, including multi-key cleanup.
-pub(super) fn read_only(
-    state: &RedisReplayState,
-    mut profile: Profile,
-    timeline: &[(usize, &ReplayExchange)],
-) -> Result<Profile> {
+pub(super) fn read_only<E: StorageExchange, L>(
+    exchanges: &[E],
+    mut profile: Profile<L>,
+    timeline: &[(usize, &E)],
+) -> Result<Profile<L>> {
     let mut lanes = BTreeMap::new();
     // Keep the entire unchanged-state frontier, including no-op deletions.
     // A long read or cleanup must not disappear behind a shorter later read
     // when checking a real transition to a different value.
-    let mut accesses: Vec<&ReplayExchange> = Vec::new();
+    let mut accesses: Vec<&E> = Vec::new();
     let mut value: Option<Vec<u8>> = None;
-    let mut mutation: Option<&ReplayExchange> = None;
+    let mut mutation: Option<&E> = None;
     let mut observed = false;
     let multiple_lanes = timeline.first().is_some_and(|(_, first)| {
         timeline
             .iter()
-            .any(|(_, e)| e.record.native.connection_id != first.record.native.connection_id)
+            .any(|(_, e)| e.native_record().connection_id != first.native_record().connection_id)
     });
     for &(index, exchange) in timeline {
         if let Some(previous) = lanes.insert(
-            exchange.record.native.connection_id,
-            exchange.record.native.sequence,
+            exchange.native_record().connection_id,
+            exchange.native_record().sequence,
         ) {
             ensure!(
-                previous < exchange.record.native.sequence,
+                previous < exchange.native_record().sequence,
                 "state read Source clocks reverse a connection lane"
             );
         }
         if multiple_lanes {
             ensure!(
                 exchange
-                    .record
+                    .native_record()
                     .earliest_start()
-                    .zip(exchange.record.native.timestamp)
+                    .zip(exchange.native_record().timestamp)
                     .is_some_and(|(start, end)| start <= end),
                 "concurrent state observations require complete Source clocks"
             );
         }
         let response = exchange.response_bytes()?;
         ensure!(
-            response.len() <= crate::value_limits::MAX_VALUE_BYTES,
+            response.len() <= traffic_value::MAX_VALUE_BYTES,
             "state read response exceeds bounds"
         );
         if let Some(before) = mutation {
-            source::require_causal_order(before, exchange)?;
+            super::require_causal_order(before, exchange)?;
         }
-        match exchange.record.native.command.as_str() {
+        match exchange.native_record().command.as_str() {
             "GET" => {
                 ensure!(
-                    exchange.args == [profile.key.clone()],
+                    exchange.arguments() == [profile.key.clone()],
                     "state observation requires single-key GET"
                 );
                 ensure!(
@@ -69,8 +69,8 @@ pub(super) fn read_only(
                         profile.transient_nil && previous == b"$-1\r\n" && response != b"$-1\r\n",
                         "read-only state changed without a supported SET; only a declared transient nil may precede a stable terminal value"
                     );
-                    for before in &accesses {
-                        source::require_causal_order(before, exchange)?;
+                    for &before in &accesses {
+                        super::require_causal_order(before, exchange)?;
                     }
                     ensure!(
                         profile.epochs.len() < 1024,
@@ -82,19 +82,18 @@ pub(super) fn read_only(
                         observations: vec![],
                         // Polling cannot observe completion before required
                         // earlier work on the Source lane has actually run.
-                        predecessors: state
-                            .exchanges
+                        predecessors: exchanges
                             .iter()
                             .enumerate()
                             .filter(|(_, earlier)| {
-                                earlier.source == ReplaySource::Case
-                                    && earlier.case_id.as_deref() == Some(profile.case.as_str())
-                                    && earlier.record.native.connection_id
-                                        == exchange.record.native.connection_id
-                                    && earlier.record.native.sequence
-                                        < exchange.record.native.sequence
-                                    && !(earlier.record.native.command == "GET"
-                                        && earlier.args == [profile.key.clone()])
+                                earlier.source() == DependencyScope::Case
+                                    && earlier.case_id() == Some(profile.case.as_str())
+                                    && earlier.native_record().connection_id
+                                        == exchange.native_record().connection_id
+                                    && earlier.native_record().sequence
+                                        < exchange.native_record().sequence
+                                    && !(earlier.native_record().command == "GET"
+                                        && earlier.arguments() == [profile.key.clone()])
                             })
                             .map(|(index, _)| index)
                             .collect(),
@@ -107,8 +106,8 @@ pub(super) fn read_only(
                 profile.epochs.last_mut().unwrap().observations.push(index);
             }
             "DEL" | "UNLINK" => {
-                let removed = source::integer(&response)?;
-                let unique = exchange.args.iter().collect::<BTreeSet<_>>().len();
+                let removed = super::integer(&response)?;
+                let unique = exchange.arguments().iter().collect::<BTreeSet<_>>().len();
                 let known_absent = value.as_deref() == Some(b"$-1\r\n");
                 let upper = unique.saturating_sub(usize::from(known_absent));
                 ensure!(
@@ -122,11 +121,11 @@ pub(super) fn read_only(
                     );
                 }
                 if !known_absent {
-                    for before in &accesses {
-                        source::require_causal_order(before, exchange)?;
+                    for &before in &accesses {
+                        super::require_causal_order(before, exchange)?;
                     }
                 }
-                source::new_epoch(&mut profile, index)?;
+                super::new_epoch(&mut profile, index)?;
                 value = Some(b"$-1\r\n".to_vec());
                 if known_absent {
                     // Nil GETs and cleanup that cannot remove this key commute.

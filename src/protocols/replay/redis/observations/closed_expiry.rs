@@ -2,8 +2,8 @@
 //! This never makes the creation, reads, deletion or content work optional.
 use super::*;
 use crate::replay::report::command::CommandExchangeRefReport;
-use std::time::Duration;
 use tokio::time::Instant;
+use traffic_protocol_redis::storage::observations::{ExpiryProof, set_ttl};
 mod refresh;
 
 #[cfg(test)]
@@ -15,11 +15,7 @@ mod tests;
 
 #[derive(Debug)]
 pub(super) struct Lifetime {
-    pub(super) epoch: usize,
-    creation: usize,
-    deletion: usize,
-    required: Vec<usize>,
-    ttl: Duration,
+    proof: ExpiryProof,
     established: Option<Instant>,
     closed: Option<Instant>,
     creation_key: Option<String>,
@@ -28,6 +24,28 @@ pub(super) struct Lifetime {
     failed: bool,
     settled: bool,
     used_refresh: bool,
+}
+
+impl std::ops::Deref for Lifetime {
+    type Target = ExpiryProof;
+    fn deref(&self) -> &Self::Target {
+        &self.proof
+    }
+}
+impl From<ExpiryProof> for Lifetime {
+    fn from(proof: ExpiryProof) -> Self {
+        Self {
+            proof,
+            established: None,
+            closed: None,
+            creation_key: None,
+            deletion_key: None,
+            deletion_event: None,
+            failed: false,
+            settled: false,
+            used_refresh: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,111 +61,6 @@ pub(super) enum Coverage {
         ttl_seconds: u64,
         target_lifetime_ms: u128,
     },
-}
-
-pub(super) fn prove(state: &RedisReplayState, profile: &Profile, trace: &[usize]) -> Vec<Lifetime> {
-    if trace.len() > MAX_OBSERVATIONS {
-        return vec![];
-    }
-    let positions = trace
-        .iter()
-        .enumerate()
-        .map(|(p, &i)| (i, p))
-        .collect::<BTreeMap<_, _>>();
-    profile
-        .epochs
-        .windows(2)
-        .enumerate()
-        .filter_map(|(epoch, pair)| {
-            let (creation, deletion) = pair[0].mutation.zip(pair[1].mutation)?;
-            let first = &state.exchanges[creation];
-            let last = &state.exchanges[deletion];
-            // Multi-key DEL's aggregate count cannot prove this particular key existed.
-            if first.record.native.command != "SET"
-                || first.args.len() != 4
-                || !matches!(last.record.native.command.as_str(), "DEL" | "UNLINK")
-                || last.args != [profile.key.clone()]
-                || last.response_bytes().ok()? != b":1\r\n"
-            {
-                return None;
-            }
-            let ttl = set_ttl(&first.args)?;
-            let elapsed = last
-                .record
-                .native
-                .timestamp?
-                .signed_duration_since(first.record.earliest_start()?)
-                .to_std()
-                .ok()?;
-            if elapsed >= ttl {
-                return None;
-            }
-            let start = *positions.get(&creation)?;
-            let end = *positions.get(&deletion)?;
-            if end < start || end - start >= MAX_OBSERVATIONS {
-                return None;
-            }
-            let mut expected = format!("${}\r\n", first.args[1].len()).into_bytes();
-            expected.extend_from_slice(&first.args[1]);
-            expected.extend_from_slice(b"\r\n");
-            let mut required = vec![creation];
-            for &index in &trace[start + 1..end] {
-                let exchange = &state.exchanges[index];
-                match exchange.record.native.command.as_str() {
-                    "EXPIRE"
-                        if exchange.args.len() == 2
-                            && seconds(&exchange.args[1]).map(Duration::from_secs) == Some(ttl) => {
-                    }
-                    "GET"
-                        if exchange.args == [profile.key.clone()]
-                            && exchange.response_bytes().ok()? == expected =>
-                    {
-                        required.push(index)
-                    }
-                    // Changed values, compound reads and other writes need their own proof.
-                    _ => return None,
-                }
-            }
-            required.push(deletion);
-            Some(Lifetime {
-                epoch,
-                creation,
-                deletion,
-                required,
-                ttl,
-                established: None,
-                closed: None,
-                creation_key: None,
-                deletion_key: None,
-                deletion_event: None,
-                failed: false,
-                settled: false,
-                used_refresh: false,
-            })
-        })
-        .collect()
-}
-
-fn seconds(value: &[u8]) -> Option<u64> {
-    if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    std::str::from_utf8(value)
-        .ok()?
-        .parse()
-        .ok()
-        .filter(|&n| n > 0)
-}
-
-fn set_ttl(args: &[Vec<u8>]) -> Option<Duration> {
-    let value = seconds(&args[3])?;
-    if args[2].eq_ignore_ascii_case(b"EX") {
-        Some(Duration::from_secs(value))
-    } else if args[2].eq_ignore_ascii_case(b"PX") && value % 1000 == 0 {
-        Some(Duration::from_millis(value))
-    } else {
-        None
-    }
 }
 
 impl Observations {

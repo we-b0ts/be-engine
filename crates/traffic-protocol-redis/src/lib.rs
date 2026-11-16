@@ -627,3 +627,5 @@ pub mod recorded;
 pub mod candidate;
 
 mod recording_summary;
+
+pub mod storage;

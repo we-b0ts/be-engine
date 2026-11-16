@@ -99,24 +99,10 @@ pub(crate) struct RecordedExchange {
 
 impl RecordedExchange {
     fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.native.request_started_at.or_else(|| {
-            self.native
-                .timestamp?
-                .checked_sub_signed(chrono::TimeDelta::milliseconds(
-                    i64::try_from(self.native.duration_ms).ok()?,
-                ))
-        })
+        self.native.source_started_at()
     }
-
-    /// A floor-millisecond duration only establishes a conservative lower bound.
     fn earliest_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.native.request_started_at.or_else(|| {
-            self.native
-                .timestamp?
-                .checked_sub_signed(chrono::TimeDelta::milliseconds(
-                    i64::try_from(self.native.duration_ms.checked_add(1)?).ok()?,
-                ))
-        })
+        self.native.earliest_start()
     }
 }
 
@@ -883,16 +869,7 @@ fn validate_subscription_exchange(
     }
 }
 
-fn target_matches(target: &TargetKey, host: &str, port: u16) -> bool {
-    target.host == normalize_host(host) && target.port == port
-}
-
-fn normalize_optional(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
-}
+use traffic_protocol_redis::storage::{normalized_username as normalize_optional, target_matches};
 
 fn unused_iter(
     exchanges: &[ReplayExchange],
@@ -941,12 +918,6 @@ mod tests;
 
 impl RecordedExchange {
     fn run_owner_kind(&self) -> Option<&'static str> {
-        self.native
-            .capture
-            .as_ref()
-            .and_then(|capture| match capture.owner_kind() {
-                "case" => None,
-                kind => Some(kind),
-            })
+        self.native.run_owner_kind()
     }
 }

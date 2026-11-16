@@ -1,27 +1,13 @@
-//! Ordinary Case evidence cannot establish or invalidate another Case's proof.
+//! Apply native storage isolation to the framework's Case and sharing facts.
 use super::{RecordedExchange, ReplayExchange, ReplaySource};
-
 pub(super) fn is_other_ordinary_case(
     owner: &str,
     source: ReplaySource,
     case: Option<&str>,
     record: &RecordedExchange,
 ) -> bool {
-    source == ReplaySource::Case
-        && case.is_some_and(|case| case != owner)
-        && record.native.cache_snapshot_rule.is_none()
-        && !record.native.cache_snapshot_hit
-        && record.run_owner_kind().is_none()
-        && !record.native.session_setup
+    traffic_protocol_redis::storage::is_other_ordinary_case(owner, source, case, &record.native)
 }
-
 pub(super) fn is_other_ordinary_exchange(owner: &str, exchange: &ReplayExchange) -> bool {
-    exchange.shared_rule_id.is_none()
-        && !exchange.reusable_snapshot
-        && is_other_ordinary_case(
-            owner,
-            exchange.source,
-            exchange.case_id.as_deref(),
-            &exchange.record,
-        )
+    traffic_protocol_redis::storage::is_other_ordinary_exchange(owner, exchange)
 }
