@@ -59,13 +59,7 @@ impl ProtocolMessage for RequestMessage {
                     .iter()
                     .enumerate()
                     .map(|(index, value)| {
-                        let projected = if value.kind == "null" {
-                            ProjectedValue::json(Bytes::from_static(b"null"))
-                        } else if let Some(logical) = &value.value {
-                            ProjectedValue::json(serde_json::to_vec(logical)?)
-                        } else {
-                            ProjectedValue::bytes(crate::values::mysql_value_bytes(value)?)
-                        };
+                        let projected = project_value(value)?;
                         values.insert(parameter_location(index), projected);
                         Ok(value.kind.clone())
                     })
@@ -184,7 +178,7 @@ fn project_sql(sql: &str, values: &mut BTreeMap<String, ProjectedValue>) -> Resu
                 if let Ok(text) = std::str::from_utf8(bytes) {
                     values.insert(
                         location.clone(),
-                        ProjectedValue::json(serde_json::to_vec(text)?),
+                        ProjectedValue::bytes(Bytes::copy_from_slice(text.as_bytes())),
                     );
                     json!({"text_literal":location})
                 } else {
@@ -228,4 +222,26 @@ fn parameter_location(index: usize) -> String {
 }
 fn literal_location(index: usize) -> String {
     format!("/literals/{index}")
+}
+
+pub(crate) fn project_value(value: &MysqlValue) -> Result<ProjectedValue> {
+    ensure!(
+        value.raw.as_ref().is_none_or(|raw| !raw.truncated),
+        "truncated MySQL value"
+    );
+    if value.raw.is_some() {
+        return Ok(ProjectedValue::bytes(crate::values::mysql_value_bytes(
+            value,
+        )?));
+    }
+    if matches!(value.kind.as_str(), "string" | "json")
+        && let Some(Value::String(text)) = &value.value
+    {
+        return Ok(ProjectedValue::bytes(Bytes::copy_from_slice(
+            text.as_bytes(),
+        )));
+    }
+    Ok(ProjectedValue::json(serde_json::to_vec(
+        value.value.as_ref().unwrap_or(&Value::Null),
+    )?))
 }

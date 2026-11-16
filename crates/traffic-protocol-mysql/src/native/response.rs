@@ -5,11 +5,9 @@ use anyhow::{Result, ensure};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use traffic_protocol::message::{
-    MessageEncoder, ProjectedMessage, ProjectedValue, ProtocolMessage,
-};
+use traffic_protocol::message::{MessageEncoder, ProjectedMessage, ProtocolMessage};
 
-use crate::{model::MysqlValue, recorded::RecordedMysqlResponse};
+use crate::{message::project_value, recorded::RecordedMysqlResponse};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct ResponseMessage {
@@ -161,7 +159,12 @@ impl MessageEncoder for ResponseMessage {
                 let bytes = &values[&path];
                 if bytes != &projection.values[&path].bytes {
                     if value.raw.is_some() {
-                        *value = crate::values::mysql_bytes_or_utf8(bytes, true);
+                        value.raw = crate::values::mysql_bytes_or_utf8(bytes, true).raw;
+                        value.value = None;
+                    } else if matches!(value.kind.as_str(), "string" | "json")
+                        && value.value.as_ref().is_some_and(Value::is_string)
+                    {
+                        value.value = Some(Value::String(std::str::from_utf8(bytes)?.to_owned()));
                     } else {
                         let logical: Value = serde_json::from_slice(bytes)?;
                         let source = value.value.as_ref().unwrap_or(&Value::Null);
@@ -184,16 +187,4 @@ impl MessageEncoder for ResponseMessage {
 
 fn location(row: usize, column: usize) -> String {
     format!("/rows/{row}/{column}")
-}
-
-fn project_value(value: &MysqlValue) -> Result<ProjectedValue> {
-    if value.raw.is_some() {
-        Ok(ProjectedValue::bytes(crate::values::mysql_value_bytes(
-            value,
-        )?))
-    } else {
-        Ok(ProjectedValue::json(serde_json::to_vec(
-            value.value.as_ref().unwrap_or(&Value::Null),
-        )?))
-    }
 }
