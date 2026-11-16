@@ -7,9 +7,9 @@ const SOURCE: &str = "11111111-1111-4111-8111-111111111111";
 const TARGET: &str = "22222222-2222-4222-8222-222222222222";
 
 fn owner(uri: &str, body: Option<Value>, prefix: &str, format: &str) -> RequestContracts {
-    let document = json!({"format":"traffic-policy/v3", "mysql":{"tables":{"tasks":{
-        "pattern":"tasks", "fields":{"id":{"kind":"identity","formats":[{"prefix":prefix,"format":format}]}}
-    }}}});
+    let document = json!({"format":"traffic-policy/v3", "json":{"fields":{
+        "":{"kind":"identity","formats":[{"prefix":prefix,"format":format}]}
+    }}});
     let mut owner = RequestContracts::default();
     owner
         .configure_compiled(Some(Arc::new(
@@ -44,15 +44,6 @@ fn pair(source: &str, target: &str) -> IdentityPair {
 #[test]
 fn provided_id_cannot_change_in_the_first_sql_predicate_update_or_insert() {
     let owner = owner("/tasks", Some(json!({"id":SOURCE})), "", "uuid");
-    let compiled = owner.compiled_rules().unwrap();
-    let identity = crate::protocols::replay::mysql::ReplaySessionIdentity {
-        target: Some(TargetKey {
-            host: "db.test".into(),
-            port: 3306,
-        }),
-        database: Some("app".into()),
-        username: None,
-    };
     for template in [
         "SELECT title FROM tasks WHERE id='ID'",
         "UPDATE tasks SET title='unchanged' WHERE id='ID'",
@@ -60,29 +51,25 @@ fn provided_id_cannot_change_in_the_first_sql_predicate_update_or_insert() {
     ] {
         let source = template.replace("ID", SOURCE);
         let target = template.replace("ID", TARGET);
-        let record: crate::protocols::replay::mysql::RecordedMysqlExchange = serde_json::from_value(
-            json!({"command":"COM_QUERY","database":"app","sql":source,"response":{"status":"ok"}}),
+        use crate::replay::policy::ValueRuleHost;
+        let message = |sql| traffic_protocol_mysql::message::RequestMessage {
+            command: "COM_QUERY".into(),
+            sql: Some(sql),
+            params: None,
+            database: Some("app".into()),
+            username: None,
+        };
+        let source = message(source);
+        let target = message(target);
+        let prepared = crate::value_extensions::prepare_message_with_policy(
+            &source,
+            &[],
+            owner.document_policy(Default::default()),
         )
         .unwrap();
-        let context = crate::protocols::replay::mysql::contracts::automatic::RequestContext::new(
-            compiled,
-            Default::default(),
-            &identity,
-            &record,
-        );
-        let comparison = crate::policy::runtime::matcher::mysql_native::compare_with_automatic(
-            Some("app"),
-            Some(&source),
-            None,
-            Some(&target),
-            None,
-            &[],
-            &[],
-            Default::default(),
-            None,
-            &context,
-        )
-        .unwrap();
+        let comparison = prepared
+            .compare(&target, Default::default(), owner.metadata())
+            .unwrap();
         assert!(comparison.passed(), "{:?}", comparison.differences);
         assert!(owner.identity_decision("case", &comparison).is_err());
         assert!(!owner.has_identities("case"));

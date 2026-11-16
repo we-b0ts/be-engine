@@ -14,6 +14,12 @@ pub use payload::{EvidenceSecrets, MessageSide};
 pub use recording_summary::RecordingSummaries;
 pub use timing::SourceTiming;
 
+pub struct MessageEvidence {
+    pub request: Arc<dyn crate::message::ProtocolMessage>,
+    pub response: Option<Arc<dyn crate::message::ProtocolMessage>>,
+    pub timing: SourceTiming,
+}
+
 /// Authenticated storage is owned by the host. Protocol implementations decode
 /// their native payload without depending on its physical location or reader.
 pub trait RecordSource {

@@ -1,12 +1,10 @@
 //! Protocol admission and immutable envelopes stay outside the encoded value core.
 use crate::{
-    policy::{CompiledNativeRule, Database, Protocol, Surface},
+    policy::{Database, Protocol, Surface},
     policy_evidence::WitnessRef,
-    value_contract::json::AnchorClocks,
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 pub(in crate::rewrite::unified_rule) fn protocol(event: &Value) -> Option<Protocol> {
@@ -19,59 +17,24 @@ pub(in crate::rewrite::unified_rule) fn protocol(event: &Value) -> Option<Protoc
     }
 }
 
-pub(super) fn selects_native_sql(rule: &CompiledNativeRule, event: &Value) -> Result<bool> {
-    let Some(resource) = &rule.rule.selector.resource else {
-        return Ok(false);
-    };
-    if resource.protocol != Protocol::Mysql || protocol(event) != Some(Protocol::Mysql) {
-        return Ok(false);
-    }
-    if !event["target_host"]
-        .as_str()
-        .is_some_and(|host| host.eq_ignore_ascii_case(&resource.endpoint.host))
-        || event["target_port"].as_u64() != Some(u64::from(resource.endpoint.port))
-        || resource
-            .database
-            .as_ref()
-            .is_some_and(|database| !database_matches(database, &event["database"]))
-        || resource
-            .username
-            .as_ref()
-            .is_some_and(|username| event["username"].as_str() != Some(username))
-        || rule
-            .rule
-            .selector
-            .operation
-            .as_ref()
-            .is_some_and(|operation| {
-                !event["command"]
-                    .as_str()
-                    .is_some_and(|command| command.eq_ignore_ascii_case(operation))
-            })
-    {
-        return Ok(false);
-    }
-    crate::policy::runtime::mysql_native_witness_matches(event, rule)
-}
-
 pub(in crate::rewrite) fn source_witness(
     surface: Surface,
     event: &Value,
     key_context: &Path,
 ) -> Result<Vec<u8>> {
-    match protocol(event).context("unsupported dependency event")? {
-        Protocol::Redis if surface == Surface::DependencyRequest => {
-            Ok(serde_json::to_vec(&super::arguments(event)?)?)
-        }
-        Protocol::Redis => super::capture(&event["response"]),
-        Protocol::Memcached => {
-            anyhow::bail!("Memcached recording has no installed protocol implementation")
-        }
-        Protocol::Mysql => crate::protocols::replay::mysql_source_witness(event, surface),
-        Protocol::Http => {
-            crate::protocols::replay::http_source_witness(event, surface, key_context)
-        }
-    }
+    let providers = crate::protocols::default_providers();
+    let owner = providers
+        .event_provider(event)
+        .context("dependency evidence owner is unavailable")?;
+    providers
+        .evidence()
+        .source_payload(
+            owner.kind.as_str(),
+            event,
+            surface.dependency_side()?,
+            &crate::request_headers::SourceSecrets::new(key_context),
+        )?
+        .context("native Source payload projection is unavailable")
 }
 
 pub(in crate::rewrite::unified_rule) fn validate_metadata(
@@ -104,63 +67,6 @@ pub(in crate::rewrite::unified_rule) fn validate_metadata(
         "Target witness protocol identity differs from its immutable Source exchange"
     );
     Ok(())
-}
-
-pub(super) fn compare_source(
-    surface: Surface,
-    event: &Value,
-    raw: &[u8],
-    native: &[&CompiledNativeRule],
-    clocks: AnchorClocks,
-) -> Result<BTreeSet<String>> {
-    ensure!(
-        surface == Surface::DependencyRequest && protocol(event) == Some(Protocol::Mysql),
-        "native value preflight requires a MySQL request"
-    );
-    let report = crate::protocols::replay::mysql_validate_contract_witness(
-        event["database"].as_str(),
-        raw,
-        raw,
-        &[],
-        native,
-        clocks,
-    )?;
-    ensure!(
-        report.passed(),
-        "Source native SQL contract preflight failed"
-    );
-    Ok(report.evaluated)
-}
-
-pub(super) fn compare_pair(
-    surface: Surface,
-    event: &Value,
-    source: &[u8],
-    target: &[u8],
-    native: &[&CompiledNativeRule],
-    clocks: AnchorClocks,
-) -> Result<usize> {
-    ensure!(
-        surface == Surface::DependencyRequest && protocol(event) == Some(Protocol::Mysql),
-        "native value preflight requires a MySQL request"
-    );
-    let Some(report) = crate::protocols::replay::mysql_validate_contract_candidate(
-        event["database"].as_str(),
-        source,
-        target,
-        &[],
-        native,
-        clocks,
-    )?
-    else {
-        return Ok(0);
-    };
-    ensure!(
-        report.passed(),
-        "native SQL witness failed: {}",
-        serde_json::to_string(&report.differences)?
-    );
-    Ok(report.evaluated.len())
 }
 
 pub(in crate::rewrite) fn values(
@@ -197,4 +103,28 @@ fn database_matches(database: &Database, observed: &Value) -> bool {
         Database::Index(index) => observed.as_i64() == Some(*index),
         Database::Name(name) => observed.as_str() == Some(name),
     }
+}
+
+pub(super) fn source_identity(
+    case: &str,
+    event: &Value,
+) -> Option<crate::policy_evidence::SourceIdentity> {
+    let providers = crate::protocols::default_providers();
+    let reference = providers.evidence().finite_reference(event).ok()??;
+    let fields = reference.fields();
+    let identity = crate::policy_evidence::SourceIdentity {
+        case_id: case.into(),
+        exchange_id: fields
+            .get("exchange_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        connection_id: fields
+            .get("connection_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        sequence: fields.get("sequence").and_then(Value::as_u64),
+    };
+    (identity.exchange_id.is_some()
+        || identity.connection_id.is_some() && identity.sequence.is_some())
+    .then_some(identity)
 }

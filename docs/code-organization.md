@@ -258,9 +258,12 @@ uses the same registered inventory, policy execution, claims, delivery receipts
 and reports for MySQL, HTTP and Redis. SQL token order and literal positions are
 preserved. Basic transaction commands retain finite Source consumption. Prepared
 commands, native transaction equivalences, projection permissions and incomplete
-cleanup serving currently require additional capabilities. The application keeps
-historical policy-evidence readers and the MySQL recording connector during their
-remaining cutover.
+cleanup serving currently require additional capabilities. Its recording connector
+uses the same registered capture host as HTTP and Redis. Each native provider
+decodes authenticated evidence into request/response messages and timing facts.
+Offline global-value preflight prepares and compares those messages through the
+same codec/policy executor used by live Replay. The application retains witness
+authentication, immutable Source checks, coverage accounting and plan publication.
 Historical Redis read-back execution, native identity capture execution and
 dedicated dependency Source-session policy validators are retired. Input preflight validates immutable requests and
 freezes actual signing inputs through its focused input owner. Registered value

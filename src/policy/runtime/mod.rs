@@ -25,9 +25,7 @@ mod initialization;
 pub(crate) mod native_projection;
 pub(crate) use native_projection::{SourceInputCase, validate_source_inputs};
 mod matcher;
-pub(crate) use matcher::mysql_native::compare_with_automatic as compare_mysql_with_automatic;
 
-pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
 mod pattern;
 mod report;
 mod response;
@@ -146,19 +144,10 @@ pub use feedback::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
 
 pub(crate) use response::ResponseBodyRuleMatch;
 
-pub(crate) use matcher::mysql_native::{
-    CopyProofs as MysqlTimeCopyProofs,
-    compare_with_time_copies as compare_mysql_contracts_with_time_copies,
-};
-
 pub(crate) use matcher::ReplayPolicyRuntime;
 
 pub(crate) use request_contract::RequestContracts;
 pub(crate) use request_contract::redis_bulk_payload;
-pub(crate) use request_contract::{
-    RedisFieldValue, RedisTimeRead, redis_delivered_global_time_copies,
-    redis_delivered_scalar_time_copies, redis_field_values, redis_time_position,
-};
 
 pub(crate) use native_projection::validate_finite_sharing as validate_native_finite_sharing;
 pub(crate) use native_projection::{compiled_input_rules, validate_native_adapter};

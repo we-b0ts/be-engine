@@ -2,16 +2,8 @@
 use super::config::{LoadedReplayPolicy, load_replay_policy};
 use super::report::ReplayPolicyReport;
 use crate::replay::ReplayCase;
-use anyhow::{Context, Result, ensure};
-use serde_json::Value;
+use anyhow::{Result, ensure};
 use std::{collections::BTreeMap, path::Path};
-
-// Historical witness readers retain these adapters during the evidence cutover.
-pub(crate) mod mysql_native;
-pub(super) mod mysql_values;
-use crate::protocols::replay::mysql::{RecordedMysqlValue, ReplaySessionIdentity};
-use crate::replay::TargetKey;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug)]
 pub(crate) struct ReplayPolicyRuntime {

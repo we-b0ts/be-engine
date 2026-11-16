@@ -36,6 +36,13 @@ pub enum RequestLocation {
 
 impl ProtocolMessage for RequestMessage {
     fn project(&self) -> Result<ProjectedMessage> {
+        ensure!(
+            !matches!(
+                self.command.as_str(),
+                "COM_QUERY" | "COM_STMT_EXECUTE" | "COM_STMT_PREPARE"
+            ) || self.sql.is_some(),
+            "MySQL query command has no SQL statement"
+        );
         let mut values = BTreeMap::new();
         let sql = self
             .sql

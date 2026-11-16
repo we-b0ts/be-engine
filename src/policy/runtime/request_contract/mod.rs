@@ -17,12 +17,6 @@ mod value_decision;
 pub(crate) use key::KeyBindingReport;
 #[cfg(test)]
 mod overlap;
-mod redis_fields;
-pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
-pub(crate) use redis_fields::{
-    RedisTimeRead, redis_delivered_global_time_copies, redis_delivered_scalar_time_copies,
-    redis_time_position,
-};
 mod unified_response;
 pub(crate) use unified_response::redis_bulk_payload;
 mod script;

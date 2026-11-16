@@ -98,13 +98,13 @@ fn comparisons(rule: &Arc<ValueRule>, source: &str, target: &str) -> Vec<Compari
         binding(
             rule,
             json!({"kind":"field","table":"users","column":"id"}),
-            Codec::Json,
+            Codec::Scalar,
             "",
         ),
         binding(
             rule,
             json!({"kind":"field","table":"users","column":"owner"}),
-            Codec::Json,
+            Codec::Scalar,
             "",
         ),
     ];

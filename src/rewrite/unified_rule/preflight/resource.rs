@@ -155,12 +155,6 @@ fn matches(policy: &CompiledPolicy, ids: &BTreeSet<String>, event: &Value) -> Re
         {
             return Ok(true);
         }
-        if matches!(rule.rule.effect, NativeEffect::MysqlValues(_)) {
-            if dependency::selects_native_sql(rule, event)? {
-                return Ok(true);
-            }
-            continue;
-        }
         if matches!(rule.rule.effect, NativeEffect::HttpRequest(_))
             && (rule
                 .rule

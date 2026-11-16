@@ -51,17 +51,35 @@ pub(crate) fn normalize_redis_expiration(
     )
 }
 pub(crate) mod mysql;
-pub(crate) use mysql::contracts::automatic::Metadata as MysqlInferenceMetadata;
-pub(crate) use mysql::contracts::automatic::validate_source_witness as mysql_validate_global_source_witness;
-pub(crate) use mysql::contracts::automatic::validate_witness_with_time_copies as mysql_validate_global_witness_with_time_copies;
-pub(crate) use mysql::contracts::mysql_witness_sql_value;
-pub(crate) use mysql::contracts::source_witness as mysql_source_witness;
-pub(crate) use mysql::contracts::time_copies::global::delivered_witness_time_copies as mysql_global_delivered_time_copies;
-pub(crate) use mysql::contracts::{
-    request_candidates_related as mysql_request_candidates_related,
-    validate_contract_candidate as mysql_validate_contract_candidate,
-    validate_contract_witness as mysql_validate_contract_witness,
-};
+pub(crate) fn mysql_source_witness(
+    event: &serde_json::Value,
+    surface: crate::policy::Surface,
+) -> anyhow::Result<Vec<u8>> {
+    traffic_protocol_mysql::witness::source_payload(event, surface.dependency_side()?)
+}
+pub(crate) fn mysql_witness_sql_value(
+    raw: &[u8],
+    surface: crate::policy::Surface,
+    database: Option<&str>,
+    index: usize,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let mut value = traffic_protocol_mysql::witness::sql_value(
+        raw,
+        surface.dependency_side()?,
+        database,
+        index,
+    )?;
+    if let Some(value) = &mut value
+        && let Some(text) = value["value"].as_str()
+        && let Some(codec) =
+            crate::value_codec::try_recognize(text.as_bytes(), &traffic_value::Value::Null)?
+        && let Ok(decoded) = codec.decode(text.as_bytes())
+        && (decoded.logical.is_object() || decoded.logical.is_array())
+    {
+        value["json"] = decoded.logical;
+    }
+    Ok(value)
+}
 mod loading;
 pub(crate) mod runtime;
 pub(crate) type ReplayState = RuntimeState<ReplayProtocols>;

@@ -21,9 +21,9 @@ fn resource() -> Resource {
 fn event(date: &str) -> serde_json::Value {
     json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::new_v4(),"sequence":1,
         "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
-        "target_host":"cache.test","target_port":6379,"database":0,"command":"SET",
+        "target_host":"cache.test","target_port":6379,"database":0,"resp_version":2,"command":"SET",
         "args":[raw_body(b"pet"),raw_body(json!({"lastActiveDate":date,"counter":136}).to_string().as_bytes())],
-        "response":raw_body(b"+OK\r\n")})
+        "response_kind":"simple", "response":raw_body(b"+OK\r\n"), "replay_safe":true})
 }
 
 fn fixture() -> Fixture {

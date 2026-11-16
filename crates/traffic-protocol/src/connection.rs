@@ -194,6 +194,14 @@ pub trait CaptureSession: Send {
 /// Installed with the native codec at application startup. A new protocol
 /// supplies this capability without extending host enums or state layouts.
 pub trait NativeProtocol: Send + Sync {
+    fn decode_evidence(
+        &self,
+        _event: &Value,
+        _payload: &[u8],
+        _side: crate::evidence::MessageSide,
+    ) -> Result<crate::evidence::MessageEvidence> {
+        anyhow::bail!("native evidence decoding is unavailable")
+    }
     fn report_semantics(&self) -> &'static str {
         "native-reference/v1"
     }

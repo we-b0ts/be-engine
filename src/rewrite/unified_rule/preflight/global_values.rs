@@ -2,18 +2,12 @@
 //! validation never counts as an independently observed Target witness.
 use super::*;
 use crate::policy::GLOBAL_JSON_ID;
-use crate::value_contract::time_copies::TimeCopyStore;
 use crate::value_contract::{global, json::Comparison, time::ClockPair};
 mod headers;
-mod redis;
 
 struct CompareContext<'a> {
-    policy: &'a CompiledPolicy,
+    host: &'a dyn crate::replay::policy::ValueRuleHost,
     clocks: AnchorClocks,
-    metadata: &'a crate::protocols::replay::MysqlInferenceMetadata,
-    copies: Option<(&'a TimeCopyStore, &'a str)>,
-    request: Option<&'a Value>,
-    native_obligations: &'a mut BTreeSet<String>,
 }
 
 fn active(policy: &CompiledPolicy, selected: &BTreeSet<String>) -> bool {
@@ -40,6 +34,7 @@ pub(super) fn verify(
     if !active(policy, selected) {
         return Ok(());
     }
+    let service = value_service(policy)?;
     let manifest = bundle
         .replay
         .get("policy_witnesses")
@@ -64,61 +59,11 @@ pub(super) fn verify(
         .map(WitnessManifest::source_index)
         .transpose()?;
     let mut candidates = candidate_pairs::Candidates::default();
-    // Case boundaries do not erase an input from the same protected Replay
-    // session: application caches and in-flight work can carry it forward.
-    // Collect first, independent of the case map's lexical iteration order.
-    let mut inputs = super::input_retiming::Inputs::new(previous, policy);
-    if inputs.enabled() {
-        for (case, directory) in bundle.cases.clone() {
-            let request = bundle.request(&directory.join("request.json"))?;
-            let trace = bundle.dependency_path(&directory)?;
-            bundle.freeze(&trace)?;
-            let mut delivered = TimeCopyStore::default();
-            delivered.begin_case(&case);
-            visit(&trace, |event| {
-                if matches!(
-                    dependency::protocol(event),
-                    Some(Protocol::Mysql | Protocol::Redis)
-                ) && has_surface(event, Surface::DependencyResponse)
-                    && let (Some(index), Some(private), Some(identity)) = (
-                        index.as_ref(),
-                        private.as_deref(),
-                        time_copies::identity(&case, event),
-                    )
-                {
-                    let raw =
-                        dependency::source_witness(Surface::DependencyResponse, event, &directory)?;
-                    time_copies::observe_global_with_retiming(
-                        &mut delivered,
-                        &case,
-                        event,
-                        &raw,
-                        policy,
-                        time_copies::ReadEvidence {
-                            private,
-                            directory: &directory,
-                            report: &bundle.replay,
-                            case_started: timestamp(&request["timestamp"]),
-                            responses: index
-                                .for_source(Surface::DependencyResponse, &identity)
-                                .collect(),
-                            requests: index
-                                .for_source(Surface::DependencyRequest, &identity)
-                                .collect(),
-                        },
-                        Some(&mut inputs),
-                    )?;
-                }
-                Ok(())
-            })?;
-        }
-    }
+    let inputs = super::input_retiming::Inputs::new(previous, policy);
     for (case, directory) in bundle.cases.clone() {
         let request = bundle.request(&directory.join("request.json"))?;
         let trace = bundle.dependency_path(&directory)?;
         bundle.freeze(&trace)?;
-        let mut metadata = crate::protocols::replay::MysqlInferenceMetadata::default();
-        visit(&trace, |event| metadata.observe_event(event))?;
         if selected.contains(crate::policy::GLOBAL_HTTP_ID)
             && let Some(http) = &policy.http
         {
@@ -132,35 +77,24 @@ pub(super) fn verify(
                 format!("global format primary validation: case={case}, surface=api.response")
             })?;
         }
-        let mut copies = TimeCopyStore::default();
-        copies.begin_case(&case);
         visit(&trace, |event| {
             let clocks = source_clocks(timestamp(&request["timestamp"]), event);
+            let Some(exchange) = recorded(event, &directory)? else {
+                return Ok(());
+            };
             for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-                if dependency::protocol(event).is_none() || !has_surface(event, surface) {
-                    continue;
-                }
-                let raw = dependency::source_witness(surface, event, &directory)?;
-                let checked = compare_prepared(
-                    event,
-                    surface,
-                    &raw,
-                    &raw,
-                    &mut CompareContext {
-                        policy,
-                        clocks,
-                        metadata: &metadata,
-                        copies: None,
-                        request: Some(&request),
-                        native_obligations: &mut result.stateful_target_obligations,
-                    },
-                ).with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
+                let checked = compare_source_message(&exchange, surface, &service, clocks)
+                    .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
                 let relevant = record_source(&checked, selected, result)
                     .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
                 if !relevant {
                     continue;
                 }
-                let identity = time_copies::identity(&case, event);
+                let Some(raw) = source_payload(event, surface, &directory)? else {
+                    result.missing_target_witnesses += 1;
+                    continue;
+                };
+                let identity = dependency::source_identity(&case, event);
                 let mut found = false;
                 if let (Some(index), Some(private), Some(identity)) =
                     (index.as_ref(), private.as_deref(), identity)
@@ -197,33 +131,14 @@ pub(super) fn verify(
                         );
                         let target =
                             target.context("independent global format Target is unavailable")?;
-                        if dependency::protocol(event) == Some(Protocol::Redis)
-                            && surface == Surface::DependencyRequest
-                            && !redis::related_candidate(event, &raw, &target, policy, &request)?
-                        {
-                            continue;
-                        }
-                        if dependency::protocol(event) == Some(Protocol::Mysql)
-                            && surface == Surface::DependencyRequest
-                            && !crate::protocols::replay::mysql_request_candidates_related(
-                                &raw, &target, observed,
-                            )?
-                        {
-                            continue;
-                        }
-                        copies.set_lookup_clocks(observed.dependency);
                         let checked = compare_prepared(
                             event,
                             surface,
                             &raw,
                             &target,
                             &mut CompareContext {
-                                policy,
+                                host: &service,
                                 clocks: observed,
-                                metadata: &metadata,
-                                copies: Some((&copies, &case)),
-                                request: Some(&request),
-                                native_obligations: &mut result.stateful_target_obligations,
                             },
                         )
                         .and_then(|comparison| valid_count(&comparison, selected))
@@ -241,12 +156,7 @@ pub(super) fn verify(
                             super::input_retiming::Inputs::defer(&case, surface, Some(witness), result);
                             candidates.defer(witness)?;
                             0
-                        } else if matches!(
-                            dependency::protocol(event),
-                            Some(Protocol::Mysql | Protocol::Redis)
-                        )
-                            && surface == Surface::DependencyRequest
-                        {
+                        } else if surface == Surface::DependencyRequest {
                             candidates.observe(witness, checked)?
                         } else {
                             match checked {
@@ -266,31 +176,7 @@ pub(super) fn verify(
                 if !found {
                     result.missing_target_witnesses += 1;
                 }
-                if surface == Surface::DependencyResponse
-                    && let (Some(index), Some(private), Some(identity)) = (
-                        index.as_ref(),
-                        private.as_deref(),
-                        time_copies::identity(&case, event),
-                    )
-                {
-                    time_copies::observe_global(
-                        &mut copies,
-                        &case,
-                        event,
-                        &raw,
-                        policy,
-                        time_copies::ReadEvidence {
-                            private,
-                            directory: &directory,
-                            report: &bundle.replay,
-                            case_started: timestamp(&request["timestamp"]),
-                            responses: index.for_source(surface, &identity).collect(),
-                            requests: index
-                                .for_source(Surface::DependencyRequest, &identity)
-                                .collect(),
-                        },
-                    )?;
-                }
+
             }
             Ok(())
         }).with_context(|| format!("global format dependency validation: case={case}"))?;
@@ -309,6 +195,7 @@ pub(super) fn global_trace(
     if !active(policy, selected) {
         return Ok(());
     }
+    let service = value_service(policy)?;
     let source = state
         .case_source
         .as_ref()
@@ -320,30 +207,16 @@ pub(super) fn global_trace(
             continue;
         }
         bundle.freeze(&path)?;
-        let mut metadata = crate::protocols::replay::MysqlInferenceMetadata::default();
-        visit(&path, |event| metadata.observe_event(event))?;
         visit(&path, |event| {
-            if dependency::protocol(event).is_none() {
+            let Some(exchange) = recorded(event, &recording)? else {
                 return Ok(());
-            }
+            };
             for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-                if !has_surface(event, surface) {
-                    continue;
-                }
-                let raw = dependency::source_witness(surface, event, &recording)?;
-                let comparison = compare_prepared(
-                    event,
+                let comparison = compare_source_message(
+                    &exchange,
                     surface,
-                    &raw,
-                    &raw,
-                    &mut CompareContext {
-                        policy,
-                        clocks: source_clocks(None, event),
-                        metadata: &metadata,
-                        copies: None,
-                        request: None,
-                        native_obligations: &mut result.stateful_target_obligations,
-                    },
+                    &service,
+                    source_clocks(None, event),
                 )
                 .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
                 if record_source(&comparison, selected, result)
@@ -380,23 +253,6 @@ fn visit(path: &Path, mut visitor: impl FnMut(&Value) -> Result<()>) -> Result<(
         }
     }
     Ok(())
-}
-
-fn has_surface(event: &Value, surface: Surface) -> bool {
-    if surface != Surface::DependencyResponse {
-        return true;
-    }
-    match dependency::protocol(event) {
-        Some(Protocol::Redis) => !event["response"].is_null(),
-        Some(Protocol::Http) => {
-            !event["response_body"].is_null()
-                && event["outcome"]
-                    .as_str()
-                    .is_none_or(|outcome| outcome == "response")
-        }
-        Some(Protocol::Memcached) => event["no_response"] != true,
-        _ => true,
-    }
 }
 
 fn source_clocks(case: Option<DateTime<Utc>>, event: &Value) -> AnchorClocks {
@@ -578,18 +434,15 @@ fn compare(
     policy: &CompiledPolicy,
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
+    let service = value_service(policy)?;
     compare_prepared(
         event,
         surface,
         source,
         target,
         &mut CompareContext {
-            policy,
+            host: &service,
             clocks,
-            metadata: &crate::protocols::replay::MysqlInferenceMetadata::default(),
-            copies: None,
-            request: None,
-            native_obligations: &mut BTreeSet::new(),
         },
     )
 }
@@ -601,118 +454,140 @@ fn compare_prepared(
     target: &[u8],
     context: &mut CompareContext<'_>,
 ) -> Result<Comparison> {
-    let policy = context.policy;
-    let clocks = context.clocks;
-    if dependency::protocol(event) == Some(Protocol::Mysql) {
-        if source == target && context.copies.is_none() {
-            return crate::protocols::replay::mysql_validate_global_source_witness(
-                event["database"].as_str(),
-                source,
-                surface,
-                policy,
-                clocks,
-                &observed_resource(event)?,
-                context.metadata,
-            );
-        }
-        if let Some((store, case)) = context.copies {
-            return crate::protocols::replay::mysql_validate_global_witness_with_time_copies(
-                event["database"].as_str(),
-                source,
-                target,
-                surface,
-                policy,
-                clocks,
-                &observed_resource(event)?,
-                store,
-                case,
-                context.metadata,
-            );
-        }
-        let store = TimeCopyStore::default();
-        return crate::protocols::replay::mysql_validate_global_witness_with_time_copies(
-            event["database"].as_str(),
-            source,
-            target,
-            surface,
-            policy,
-            clocks,
-            &observed_resource(event)?,
-            &store,
-            "",
-            context.metadata,
-        );
-    }
-    if dependency::protocol(event) == Some(Protocol::Redis) {
-        if policy.global_json.is_some() || policy.redis.is_some() {
-            return redis::compare(event, surface, source, target, context);
-        }
-        return Ok(Comparison::default());
-    }
-    let (mut comparison, normalized_headers) = if dependency::protocol(event)
-        == Some(Protocol::Http)
-        && let Some(http) = &policy.http
-    {
-        let (comparison, target) = headers::dependency(source, target, surface, http, clocks)?;
-        (comparison, Some(target))
-    } else {
-        (Comparison::default(), None)
-    };
-    let native_target = normalized_headers.as_deref().unwrap_or(target);
-    let before = dependency::values(surface, event, source)?;
-    let after = dependency::values(surface, event, target)?;
-    // Source self-validation checks only immutable content. Paired observations
-    // additionally prove the carrier's endpoint, headers, options and clocks.
-    if source != target
-        || clocks.dependency.source != clocks.dependency.target
-        || clocks.delivery.source != clocks.delivery.target
-    {
-        match dependency::protocol(event) {
-            Some(Protocol::Http) => {
-                crate::protocols::replay::http_validate_witness(
-                    source,
-                    native_target,
-                    surface,
-                    clocks,
-                )?;
-            }
-            Some(Protocol::Memcached) => {
-                anyhow::bail!("Memcached recording has no installed protocol implementation");
-            }
-            _ => {}
-        }
-    }
-    ensure!(
-        before.len() == after.len(),
-        "global JSON dependency value inventory changed"
-    );
-    if dependency::protocol(event) == Some(Protocol::Http)
-        && crate::protocols::replay::http_multipart_witness_matches(source, native_target, surface)?
-    {
-        return Ok(comparison);
-    }
-    let Some(plan) = &policy.global_json else {
-        return Ok(comparison);
-    };
-    for (index, ((key, source), (other, target))) in before.iter().zip(&after).enumerate() {
-        ensure!(key == other, "global JSON dependency position changed");
-        if dependency::protocol(event) == Some(Protocol::Memcached)
-            && surface == Surface::DependencyRequest
-            && !event["command"].as_str().is_some_and(|command| {
-                matches!(
-                    command.to_ascii_lowercase().as_str(),
-                    "set" | "add" | "replace" | "cas"
-                )
-            })
+    use traffic_protocol::evidence::{MessageSide, SourceTiming};
+    let providers = crate::protocols::default_providers();
+    let owner = providers
+        .event_provider(event)
+        .context("native evidence owner is unavailable")?;
+    let native = owner
+        .provider
+        .native_protocol()
+        .context("native evidence capability is unavailable")?;
+    let side = surface.dependency_side()?;
+    let source = native.decode_evidence(event, source, side)?;
+    let target = native.decode_evidence(event, target, side)?;
+    for (evidence, request, delivered) in [
+        (
+            &source,
+            context.clocks.dependency.source,
+            context.clocks.delivery.source,
+        ),
+        (
+            &target,
+            context.clocks.dependency.target,
+            context.clocks.delivery.target,
+        ),
+    ] {
+        if let SourceTiming::Request {
+            started_at,
+            completed_at,
+        } = evidence.timing
         {
-            ensure!(source == target, "Memcached fragments remain exact");
-            continue;
+            ensure!(
+                started_at == request,
+                "native evidence request clock differs from its witness"
+            );
+            if side == MessageSide::Response {
+                ensure!(
+                    completed_at == delivered,
+                    "native evidence delivery clock differs from its witness"
+                );
+            }
         }
-        let mut checked = compare_bytes(source, target, plan, clocks)?;
-        checked.scope_schema_clocks(index);
-        comparison.merge_and_validate(checked);
+    }
+    let service = context.host;
+    let rules = providers.bindings().for_protocol(owner.kind.as_str());
+    let request = crate::value_extensions::prepare_message_with_policy(
+        source.request.as_ref(),
+        &rules.request,
+        service.document_policy(context.clocks),
+    )?;
+    let comparison =
+        request.compare(target.request.as_ref(), context.clocks, service.metadata())?;
+    if side == MessageSide::Response {
+        ensure!(
+            comparison.passed(),
+            "response witness request context differs"
+        );
+        let source = source
+            .response
+            .context("Source response evidence is absent")?;
+        let target = target
+            .response
+            .context("Target response evidence is absent")?;
+        let mut clocks = context.clocks;
+        clocks.observation = Some(clocks.delivery);
+        let response = crate::value_extensions::prepare_message_with_policy(
+            source.as_ref(),
+            &rules.response,
+            service.document_policy(clocks),
+        )?;
+        return response.compare(target.as_ref(), clocks, service.metadata());
     }
     Ok(comparison)
+}
+
+fn recorded(
+    event: &Value,
+    directory: &Path,
+) -> Result<Option<traffic_protocol::connection::RecordedExchange>> {
+    let providers = crate::protocols::default_providers();
+    let Some(owner) = providers.event_provider(event) else {
+        return Ok(None);
+    };
+    let Some(native) = owner.provider.native_protocol() else {
+        return Ok(None);
+    };
+    native.recorded_exchange_with_secrets(
+        event,
+        &crate::request_headers::SourceSecrets::new(directory),
+    )
+}
+
+fn source_payload(event: &Value, surface: Surface, directory: &Path) -> Result<Option<Vec<u8>>> {
+    let providers = crate::protocols::default_providers();
+    let owner = providers
+        .event_provider(event)
+        .context("Source evidence owner is unavailable")?;
+    providers.evidence().source_payload(
+        owner.kind.as_str(),
+        event,
+        surface.dependency_side()?,
+        &crate::request_headers::SourceSecrets::new(directory),
+    )
+}
+
+fn compare_source_message(
+    exchange: &traffic_protocol::connection::RecordedExchange,
+    surface: Surface,
+    service: &dyn crate::replay::policy::ValueRuleHost,
+    mut clocks: AnchorClocks,
+) -> Result<Comparison> {
+    let providers = crate::protocols::default_providers();
+    let bindings = providers
+        .bindings()
+        .for_protocol(exchange.reference.protocol());
+    let (message, bindings) = if surface == Surface::DependencyResponse {
+        clocks.observation = Some(clocks.delivery);
+        (
+            exchange.response.as_ref() as &dyn traffic_protocol::message::ProtocolMessage,
+            &bindings.response,
+        )
+    } else {
+        (exchange.request.as_ref(), &bindings.request)
+    };
+    let prepared = crate::value_extensions::prepare_message_with_policy(
+        message,
+        bindings,
+        service.document_policy(clocks),
+    )?;
+    prepared.compare(message, clocks, service.metadata())
+}
+
+fn value_service(policy: &CompiledPolicy) -> Result<crate::policy::runtime::RequestContracts> {
+    let mut service = crate::policy::runtime::RequestContracts::default();
+    service.configure_compiled(Some(std::sync::Arc::new(policy.clone())))?;
+    Ok(service)
 }
 
 fn compare_bytes(
@@ -726,35 +601,6 @@ fn compare_bytes(
     } else {
         global::compare(source, target, plan, &[], clocks)
     }
-}
-
-fn observed_resource(event: &Value) -> Result<crate::policy::Resource> {
-    let protocol =
-        dependency::protocol(event).context("global format resource protocol unavailable")?;
-    Ok(crate::policy::Resource {
-        protocol,
-        endpoint: crate::policy::Endpoint {
-            host: event["target_host"]
-                .as_str()
-                .context("global format resource endpoint unavailable")?
-                .into(),
-            port: u16::try_from(
-                event["target_port"]
-                    .as_u64()
-                    .context("global format resource port unavailable")?,
-            )?,
-        },
-        database: match protocol {
-            Protocol::Redis => event["database"]
-                .as_i64()
-                .map(crate::policy::Database::Index),
-            Protocol::Mysql => event["database"]
-                .as_str()
-                .map(|name| crate::policy::Database::Name(name.into())),
-            _ => None,
-        },
-        username: event["username"].as_str().map(str::to_owned),
-    })
 }
 
 #[cfg(test)]

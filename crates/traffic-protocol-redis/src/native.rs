@@ -14,6 +14,7 @@ use crate::{
     recorded,
 };
 
+mod evidence;
 mod recording;
 mod server;
 
@@ -23,6 +24,15 @@ mod tests;
 pub struct Native;
 
 impl NativeProtocol for Native {
+    fn decode_evidence(
+        &self,
+        event: &Value,
+        payload: &[u8],
+        side: traffic_protocol::evidence::MessageSide,
+    ) -> Result<traffic_protocol::evidence::MessageEvidence> {
+        evidence::decode(event, payload, side)
+    }
+
     fn report_semantics(&self) -> &'static str {
         "redis-native/v1"
     }

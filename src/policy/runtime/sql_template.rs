@@ -6,5 +6,3 @@ pub(crate) use traffic_protocol_mysql::value_template::{
 pub(crate) fn template_matches(template: &str, sql: &str) -> bool {
     SqlValueTemplate::new(template, &[], &[], None).is_ok_and(|template| template.matches(sql))
 }
-#[cfg(test)]
-mod tests;

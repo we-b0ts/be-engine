@@ -2,7 +2,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{BufRead, BufReader},
     path::Path,
 };
 
@@ -32,7 +31,6 @@ mod resource;
 mod response;
 mod session;
 mod source;
-mod time_copies;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Preflight {
