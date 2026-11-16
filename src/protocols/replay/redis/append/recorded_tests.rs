@@ -147,7 +147,11 @@ fn recorded_append_source_traces_validate_without_changing_recordings() {
                     && event["database"].as_i64() == Some(profile.database)
                 {
                     assert!(
-                        !trace::touches(event["command"].as_str().unwrap(), &args, &profile.key),
+                        !traffic_protocol_redis::key_access::touches(
+                            event["command"].as_str().unwrap(),
+                            &args,
+                            &profile.key
+                        ),
                         "Global key overlap"
                     );
                 }

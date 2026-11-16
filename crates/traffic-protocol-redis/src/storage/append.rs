@@ -1,144 +1,175 @@
 //! Source-only stream inventory: exact byte order, RESP lengths and read/reset fences.
-pub(super) use super::super::key_access::touches;
-use super::*;
+use super::{
+    StorageExchange, is_other_ordinary_exchange, normalized_username as normalize_optional,
+    target_matches,
+};
+use crate::key_access::touches;
+use anyhow::{Context, Result, ensure};
+use std::collections::BTreeMap;
+use traffic_model::{DependencyExchangeOutcome, attribution::DependencyScope as ReplaySource};
+use traffic_protocol::connection::Endpoint;
 
-pub(super) fn prepare(
-    exchanges: &[ReplayExchange],
+const MAX_BYTES: usize = traffic_value::MAX_VALUE_BYTES;
+const MAX_VALUE: usize = traffic_value::MAX_VALUE_BYTES;
+const MAX_PIECES: usize = 4096;
+
+#[derive(Debug)]
+pub struct StreamProof {
+    pub rule: String,
+    pub case: String,
+    pub target: Endpoint,
+    pub database: i64,
+    pub username: Option<String>,
+    pub resp_version: u8,
+    pub key: Vec<u8>,
+    pub pieces: Vec<Piece>,
+    pub barriers: Vec<(usize, usize)>,
+}
+
+#[derive(Debug)]
+pub struct Piece {
+    pub index: usize,
+    pub start: usize,
+    pub end: usize,
+    pub epoch_start: usize,
+    pub base: usize,
+}
+
+#[derive(Debug)]
+pub struct StreamTrace {
+    pub proof: StreamProof,
+    pub bytes: Vec<u8>,
+}
+
+pub fn prepare<E: StorageExchange>(
+    exchanges: &[E],
     case: &str,
     rule: &str,
-    seed: &ReplayExchange,
-) -> Result<Profile> {
+    seed: &E,
+) -> Result<StreamTrace> {
     let key = seed
-        .args
+        .arguments()
         .first()
         .context("append stream Source key missing")?
         .clone();
-    let same_database = |e: &ReplayExchange| {
+    let same_database = |e: &E| {
         target_matches(
-            &TargetKey {
-                host: seed.record.native.target_host.clone(),
-                port: seed.record.native.target_port,
+            &Endpoint {
+                host: seed.native_record().target_host.clone(),
+                port: seed.native_record().target_port,
             },
-            &e.record.native.target_host,
-            e.record.native.target_port,
-        ) && e.record.native.database == seed.record.native.database
+            &e.native_record().target_host,
+            e.native_record().target_port,
+        ) && e.native_record().database == seed.native_record().database
     };
-    let same_resource = |e: &ReplayExchange| {
+    let same_resource = |e: &E| {
         same_database(e)
-            && normalize_optional(e.record.native.username.as_deref())
-                == normalize_optional(seed.record.native.username.as_deref())
+            && normalize_optional(e.native_record().username.as_deref())
+                == normalize_optional(seed.native_record().username.as_deref())
     };
     ensure!(
         !exchanges.iter().any(|e| same_database(e)
-            && !super::super::case_scope::is_other_ordinary_exchange(case, e)
-            && (e.source != ReplaySource::Case
-                || e.case_id.as_deref() != Some(case)
-                || normalize_optional(e.record.native.username.as_deref())
-                    != normalize_optional(seed.record.native.username.as_deref()))
-            && touches(&e.record.native.command, &e.args, &key)),
+            && !is_other_ordinary_exchange(case, e)
+            && (e.source() != ReplaySource::Case
+                || e.case_id() != Some(case)
+                || normalize_optional(e.native_record().username.as_deref())
+                    != normalize_optional(seed.native_record().username.as_deref()))
+            && touches(&e.native_record().command, e.arguments(), &key)),
         "append stream key overlaps Global/shared inventory or another Case-local authentication identity"
     );
     let mut timeline = exchanges
         .iter()
         .enumerate()
         .filter(|(_, e)| {
-            e.source == ReplaySource::Case && e.case_id.as_deref() == Some(case) && same_resource(e)
+            e.source() == ReplaySource::Case && e.case_id() == Some(case) && same_resource(e)
         })
         .collect::<Vec<_>>();
     ensure!(
         !timeline.iter().any(|(_, e)| matches!(
-            e.record.native.command.as_str(),
+            e.native_record().command.as_str(),
             "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "MONITOR"
         )),
         "append stream does not authorize transactional or watched sessions"
     );
-    timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
+    timeline.sort_by_key(|(index, e)| (e.native_record().source_started_at(), *index));
     let mut lanes = BTreeMap::new();
     for (_, e) in &timeline {
         if let Some(previous) =
-            lanes.insert(e.record.native.connection_id, e.record.native.sequence)
+            lanes.insert(e.native_record().connection_id, e.native_record().sequence)
         {
             ensure!(
-                previous < e.record.native.sequence,
+                previous < e.native_record().sequence,
                 "append stream Source clocks reverse a lane"
             );
         }
     }
-    let mut profile = Profile {
+    let mut profile = StreamProof {
         rule: rule.into(),
         case: case.into(),
-        target: TargetKey {
-            host: seed.record.native.target_host.clone(),
-            port: seed.record.native.target_port,
+        target: Endpoint {
+            host: seed.native_record().target_host.clone(),
+            port: seed.native_record().target_port,
         },
-        database: seed.record.native.database,
-        username: seed.record.native.username.clone(),
-        resp_version: seed.record.native.resp_version,
+        database: seed.native_record().database,
+        username: seed.native_record().username.clone(),
+        resp_version: seed.native_record().resp_version,
         key,
-        bytes: vec![],
         pieces: vec![],
         barriers: vec![],
-        target_key: None,
-        reserved: 0,
-        delivered: 0,
-        completed: BTreeMap::new(),
-        in_flight: BTreeMap::new(),
-        failed: false,
-        cancelled_cache: None,
     };
+    let mut stream_bytes = Vec::new();
     let mut base = None;
     let mut epoch_start = 0_usize;
     let mut initial_known = true;
-    let mut last_access: Option<&ReplayExchange> = None;
+    let mut last_access: Option<&E> = None;
     for (index, exchange) in timeline {
         if !touches(
-            &exchange.record.native.command,
-            &exchange.args,
+            &exchange.native_record().command,
+            exchange.arguments(),
             &profile.key,
         ) {
             continue;
         }
         if !matches!(
-            exchange.record.native.command.as_str(),
+            exchange.native_record().command.as_str(),
             "EXPIRE" | "PEXPIRE"
         ) {
             if let Some(previous) = last_access {
                 ensure!(
-                    previous.record.native.connection_id == exchange.record.native.connection_id
+                    previous.native_record().connection_id
+                        == exchange.native_record().connection_id
                         || previous
-                            .record
-                            .native
+                            .native_record()
                             .timestamp
-                            .zip(exchange.record.earliest_start())
+                            .zip(exchange.native_record().earliest_start())
                             .is_some_and(|(end, start)| end <= start),
                     "append stream Source accesses overlap or lack causal clocks"
                 );
             }
             last_access = Some(exchange);
         }
-        let offset = profile.bytes.len();
-        if exchange.record.native.command == "APPEND" {
+        let offset = stream_bytes.len();
+        if exchange.native_record().command == "APPEND" {
             ensure!(
                 initial_known,
                 "append stream follows an unsupported mutation"
             );
             ensure!(
-                exchange.shared_rule_id.is_none()
-                    && !exchange.reusable_snapshot
-                    && exchange.record.native.cache_snapshot_rule.is_none()
-                    && !exchange.record.native.cache_snapshot_hit
-                    && !exchange.record.native.session_setup
-                    && exchange.record.run_owner_kind().is_none()
-                    && exchange.record.native.resp_version == profile.resp_version,
+                !exchange.explicitly_shared()
+                    && exchange.native_record().cache_snapshot_rule.is_none()
+                    && !exchange.native_record().cache_snapshot_hit
+                    && !exchange.native_record().session_setup
+                    && exchange.native_record().run_owner_kind().is_none()
+                    && exchange.native_record().resp_version == profile.resp_version,
                 "append stream requires ordinary Case exchanges"
             );
             ensure!(
-                exchange.record.native.outcome == DependencyExchangeOutcome::Response
-                    && exchange.record.native.response_kind == "integer"
-                    && exchange.args.len() == 2,
+                exchange.native_record().outcome == DependencyExchangeOutcome::Response
+                    && exchange.native_record().response_kind == "integer"
+                    && exchange.arguments().len() == 2,
                 "append stream requires successful two-argument APPEND"
             );
-            let bytes = &exchange.args[1];
+            let bytes = &exchange.arguments()[1];
             ensure!(
                 !bytes.is_empty() && bytes.len() <= MAX_VALUE,
                 "append stream Source chunk exceeds bounds"
@@ -170,11 +201,11 @@ pub(super) fn prepare(
                 returned == expected,
                 "APPEND response does not prove the cumulative Source byte length"
             );
-            profile.bytes.extend_from_slice(bytes);
+            stream_bytes.extend_from_slice(bytes);
             profile.pieces.push(Piece {
                 index,
                 start: offset,
-                end: profile.bytes.len(),
+                end: offset + bytes.len(),
                 epoch_start,
                 base,
             });
@@ -183,16 +214,16 @@ pub(super) fn prepare(
         // A successful fixed-argument expiry refresh is still matched and consumed
         // by its ordinary native owner. It does not observe the string's contents.
         if matches!(
-            exchange.record.native.command.as_str(),
+            exchange.native_record().command.as_str(),
             "EXPIRE" | "PEXPIRE"
         ) {
             ensure!(
-                exchange.args.len() == 2
-                    && exchange.record.native.outcome == DependencyExchangeOutcome::Response
-                    && exchange.record.native.response_kind == "integer"
-                    && exchange.args[1].iter().all(u8::is_ascii_digit)
-                    && !exchange.args[1].is_empty()
-                    && std::str::from_utf8(&exchange.args[1])?.parse::<u64>()? > 0
+                exchange.arguments().len() == 2
+                    && exchange.native_record().outcome == DependencyExchangeOutcome::Response
+                    && exchange.native_record().response_kind == "integer"
+                    && exchange.arguments()[1].iter().all(u8::is_ascii_digit)
+                    && !exchange.arguments()[1].is_empty()
+                    && std::str::from_utf8(&exchange.arguments()[1])?.parse::<u64>()? > 0
                     && integer(&exchange.response_bytes()?)? == 1,
                 "append stream supports only successful unconditional positive expiry refreshes"
             );
@@ -200,22 +231,22 @@ pub(super) fn prepare(
         }
         profile.barriers.push((index, offset));
         let response = exchange.response_bytes()?;
-        let success = exchange.record.native.outcome == DependencyExchangeOutcome::Response;
-        match exchange.record.native.command.as_str() {
+        let success = exchange.native_record().outcome == DependencyExchangeOutcome::Response;
+        match exchange.native_record().command.as_str() {
             "DEL" | "UNLINK" if success && integer(&response).is_ok() => {
                 base = Some(0);
                 epoch_start = offset;
                 initial_known = true;
             }
             "SET" | "SETEX" | "PSETEX" if success && response == b"+OK\r\n" => {
-                let value = if exchange.record.native.command == "SET" {
+                let value = if exchange.native_record().command == "SET" {
                     1
                 } else {
                     2
                 };
                 base = Some(
                     exchange
-                        .args
+                        .arguments()
                         .get(value)
                         .context("append stream reset lacks value")?
                         .len(),
@@ -233,10 +264,13 @@ pub(super) fn prepare(
         !profile.pieces.is_empty(),
         "append stream lacks a positive Source write"
     );
-    Ok(profile)
+    Ok(StreamTrace {
+        proof: profile,
+        bytes: stream_bytes,
+    })
 }
 
-pub(super) fn integer(bytes: &[u8]) -> Result<usize> {
+fn integer(bytes: &[u8]) -> Result<usize> {
     let text = std::str::from_utf8(bytes)?
         .strip_prefix(':')
         .and_then(|s| s.strip_suffix("\r\n"))

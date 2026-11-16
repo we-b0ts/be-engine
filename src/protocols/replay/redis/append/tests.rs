@@ -549,34 +549,34 @@ fn stateful_source_lane_is_owned_by_one_target_connection_even_across_split_chun
 #[test]
 fn declared_script_keys_preserve_fences_and_unproven_key_inventories_stay_conservative() {
     let args = |items: &[&[u8]]| items.iter().map(|v| v.to_vec()).collect::<Vec<_>>();
-    assert!(!trace::touches(
+    assert!(!traffic_protocol_redis::key_access::touches(
         "EVALSHA",
         &args(&[b"digest", b"1", b"lock:1", b"token"]),
         b"content:1"
     ));
-    assert!(trace::touches(
+    assert!(traffic_protocol_redis::key_access::touches(
         "EVAL",
         &args(&[b"script", b"2", b"lock:1", b"content:1"]),
         b"content:1"
     ));
     for declaration in [b"0".as_slice(), b"-1", b"3", b"invalid"] {
-        assert!(trace::touches(
+        assert!(traffic_protocol_redis::key_access::touches(
             "EVAL",
             &args(&[b"script", declaration, b"lock:1"]),
             b"content:1"
         ));
     }
-    assert!(!trace::touches(
+    assert!(!traffic_protocol_redis::key_access::touches(
         "SCRIPT",
         &args(&[b"LOAD", b"script"]),
         b"content:1"
     ));
-    assert!(trace::touches(
+    assert!(traffic_protocol_redis::key_access::touches(
         "SCRIPT",
         &args(&[b"DEBUG", b"yes"]),
         b"content:1"
     ));
-    assert!(trace::touches(
+    assert!(traffic_protocol_redis::key_access::touches(
         "UNRECOGNIZED",
         &args(&[b"other"]),
         b"content:1"

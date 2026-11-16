@@ -14,7 +14,7 @@ pub(crate) fn validate_source(
     }
     let mut counts = BTreeMap::new();
     for profile in state.append_streams.profiles {
-        *counts.entry(profile.rule).or_default() += profile.pieces.len();
+        *counts.entry(profile.source.rule).or_default() += profile.pieces.len();
     }
     Ok(counts)
 }

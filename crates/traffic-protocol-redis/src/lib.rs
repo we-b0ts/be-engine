@@ -629,3 +629,6 @@ pub mod candidate;
 mod recording_summary;
 
 pub mod storage;
+
+pub mod pubsub;
+pub mod socketio_rpc;

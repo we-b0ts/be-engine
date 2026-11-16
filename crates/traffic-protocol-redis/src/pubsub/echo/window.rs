@@ -13,7 +13,7 @@ impl Publication {
     pub(super) fn from_record(record: &RecordedExchange) -> Self {
         Self {
             start: record.earliest_start(),
-            end: record.native.timestamp,
+            end: record.timestamp,
         }
     }
 }

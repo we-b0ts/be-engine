@@ -30,33 +30,19 @@ pub(super) struct ActivityRefreshes {
 
 #[derive(Debug)]
 struct Profile {
-    case: String,
-    rule: String,
-    target: TargetKey,
-    database: i64,
-    username: Option<String>,
-    resp_version: u8,
-    key: Vec<u8>,
-    lifetimes: Vec<Lifetime>,
+    source: SourceProfile,
     current: Option<Current>,
     failed: bool,
 }
 
-#[derive(Debug)]
-struct Lifetime {
-    creation: usize,
-    deletion: Option<usize>,
-    reads: Vec<usize>,
-    writes: Vec<usize>,
-    fields: Vec<(String, TimeContract)>,
-    reference: Value,
-    ttl_args: Vec<Vec<u8>>,
-    ttl_seconds: u64,
-}
+type SourceProfile =
+    traffic_protocol_redis::storage::activity::Profile<Value, Vec<(String, TimeContract)>>;
 
-impl Lifetime {
-    fn eligible(&self) -> bool {
-        !self.reads.is_empty() && !self.writes.is_empty()
+impl std::ops::Deref for Profile {
+    type Target = SourceProfile;
+
+    fn deref(&self) -> &Self::Target {
+        &self.source
     }
 }
 
@@ -192,7 +178,7 @@ pub(crate) fn validate_source(
     }
     let mut counts = BTreeMap::new();
     for profile in state.activity_refresh.profiles {
-        *counts.entry(profile.rule).or_default() += profile
+        *counts.entry(profile.source.rule).or_default() += profile
             .lifetimes
             .iter()
             .filter(|l| l.eligible())

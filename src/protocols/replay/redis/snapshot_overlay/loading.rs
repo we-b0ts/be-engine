@@ -3,32 +3,7 @@ use super::*;
 use crate::dependency_index::{RecordReader, RecordSource, RecordStream};
 use std::sync::{Arc, Mutex};
 
-#[derive(Default)]
-pub(super) struct EvidenceCollector {
-    pub(super) entries: Vec<SnapshotEvidence>,
-    bytes: usize,
-}
-
-impl EvidenceCollector {
-    fn push(&mut self, entry: SnapshotEvidence) -> Result<()> {
-        ensure!(
-            self.entries.len() < MAX_MATCHING_EXCHANGES,
-            "Redis snapshot evidence exceeds the {MAX_MATCHING_EXCHANGES} exchange evidence limit"
-        );
-        self.bytes = entry
-            .args
-            .iter()
-            .try_fold(self.bytes, |total, arg| total.checked_add(arg.len()))
-            .and_then(|total| total.checked_add(entry.response.len()))
-            .context("Redis snapshot evidence byte count overflowed")?;
-        ensure!(
-            self.bytes <= MAX_MATCHING_BYTES,
-            "Redis snapshot evidence exceeds the {MAX_MATCHING_BYTES} byte evidence limit"
-        );
-        self.entries.push(entry);
-        Ok(())
-    }
-}
+pub(super) use native::EvidenceCollector;
 
 pub(super) fn replay_evidence(
     exchanges: &[ReplayExchange],
@@ -43,7 +18,7 @@ pub(super) fn replay_evidence(
             &exchange.args,
         )
     }) {
-        evidence.push(evidence_from_replay(index, exchange)?)?;
+        evidence.push(SnapshotEvidence::from_storage(index, exchange)?)?;
     }
     Ok(evidence.entries)
 }

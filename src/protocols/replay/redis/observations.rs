@@ -16,7 +16,6 @@ mod refresh_barrier;
 mod source;
 #[cfg(test)]
 mod state_tests;
-pub(super) use source::validate_causal_order;
 #[cfg(test)]
 pub(super) mod tests;
 

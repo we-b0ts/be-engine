@@ -2,10 +2,10 @@
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
-pub(crate) const MAX_RPC_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
+pub const MAX_RPC_BYTES: usize = traffic_value::MAX_VALUE_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub(crate) struct Identity {
+pub struct Identity {
     pub host: String,
     pub sid: String,
     pub namespace: String,
@@ -13,7 +13,7 @@ pub(crate) struct Identity {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Request {
+pub struct Request {
     pub identity: Identity,
     pub value: Value,
 }
@@ -23,7 +23,7 @@ fn document(bytes: &[u8]) -> Option<Value> {
     {
         return None;
     }
-    crate::json_value::parse(bytes)
+    traffic_codec_json::parse(bytes)
 }
 
 fn text(value: &Value) -> Result<String> {
@@ -47,7 +47,7 @@ fn host(value: &Value) -> Result<String> {
     Ok(value)
 }
 
-pub(crate) fn request(command: &str, args: &[Vec<u8>]) -> Result<Option<Request>> {
+pub fn request(command: &str, args: &[Vec<u8>]) -> Result<Option<Request>> {
     if command != "PUBLISH" || args.len() != 2 {
         return Ok(None);
     }
@@ -90,7 +90,7 @@ pub(crate) fn request(command: &str, args: &[Vec<u8>]) -> Result<Option<Request>
 }
 
 /// The native envelope identity only; application data stays in its original record.
-pub(crate) fn notification_request(channel: &[u8], payload: &[u8]) -> Option<Identity> {
+pub fn notification_request(channel: &[u8], payload: &[u8]) -> Option<Identity> {
     request("PUBLISH", &[channel.to_vec(), payload.to_vec()])
         .ok()
         .flatten()
@@ -98,7 +98,7 @@ pub(crate) fn notification_request(channel: &[u8], payload: &[u8]) -> Option<Ide
 }
 
 /// Bounded protocol metadata only; ordinary broadcast arguments stay private.
-pub(crate) fn notification_namespace(channel: &[u8], payload: &[u8]) -> Option<String> {
+pub fn notification_namespace(channel: &[u8], payload: &[u8]) -> Option<String> {
     broadcast("PUBLISH", &[channel.to_vec(), payload.to_vec()])
         .ok()
         .flatten()?
@@ -107,7 +107,7 @@ pub(crate) fn notification_namespace(channel: &[u8], payload: &[u8]) -> Option<S
         .map(str::to_owned)
 }
 
-pub(crate) fn callback(payload: &[u8]) -> Result<Option<(Identity, Value)>> {
+pub fn callback(payload: &[u8]) -> Result<Option<(Identity, Value)>> {
     let Some(value) = document(payload) else {
         return Ok(None);
     };
@@ -156,7 +156,7 @@ impl Request {
 }
 
 /// Exact Redis self-echo identity; protocol IDs and application bytes are included.
-pub(crate) fn echo_digest(channel: &[u8], payload: &[u8]) -> Option<[u8; 32]> {
+pub fn echo_digest(channel: &[u8], payload: &[u8]) -> Option<[u8; 32]> {
     use sha2::{Digest, Sha256};
     if payload.len() > MAX_RPC_BYTES || channel.is_empty() || channel.len() > 1024 {
         return None;
@@ -176,12 +176,12 @@ pub(crate) fn echo_digest(channel: &[u8], payload: &[u8]) -> Option<[u8; 32]> {
 
 /// A non-RPC Socket.IO broadcast still carries the manager's process identity.
 #[derive(Debug, Clone)]
-pub(crate) struct Broadcast {
+pub struct Broadcast {
     pub host: String,
     pub value: Value,
 }
 
-pub(crate) fn broadcast(command: &str, args: &[Vec<u8>]) -> Result<Option<Broadcast>> {
+pub fn broadcast(command: &str, args: &[Vec<u8>]) -> Result<Option<Broadcast>> {
     if command != "PUBLISH" || args.len() != 2 {
         return Ok(None);
     }

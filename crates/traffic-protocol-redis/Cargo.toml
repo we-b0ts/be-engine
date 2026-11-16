@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+traffic-codec-json = { path = "../traffic-codec-json" }
+sha2 = "0.10"
 traffic-value = { path = "../traffic-value" }
 base64 = "0.22"
 serde_json = "1"

@@ -9,8 +9,9 @@ pub(crate) mod cancelled;
 mod diagnostic;
 pub(crate) use diagnostic::{AppendBoundaryMismatch, AppendMismatch};
 mod source;
-mod trace;
 pub(crate) use source::validate_source;
+use trace::StreamProof;
+use traffic_protocol_redis::storage::append as trace;
 #[cfg(test)]
 mod case_scope_tests;
 #[cfg(test)]
@@ -26,7 +27,6 @@ pub(super) mod tests;
 
 const MAX_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
 const MAX_VALUE: usize = crate::value_limits::MAX_VALUE_BYTES;
-const MAX_PIECES: usize = 4096;
 const MAX_STREAMS: usize = 128;
 const MAX_FRAGMENTS: usize = 64;
 const MAX_CALLS: usize = 4096;
@@ -43,16 +43,8 @@ pub(super) struct AppendStreams {
 
 #[derive(Debug)]
 struct Profile {
-    rule: String,
-    case: String,
-    target: TargetKey,
-    database: i64,
-    username: Option<String>,
-    resp_version: u8,
-    key: Vec<u8>,
+    source: StreamProof,
     bytes: Vec<u8>,
-    pieces: Vec<Piece>,
-    barriers: Vec<(usize, usize)>,
     target_key: Option<Vec<u8>>,
     reserved: usize,
     delivered: usize,
@@ -62,13 +54,28 @@ struct Profile {
     cancelled_cache: Option<cancelled::Cache>,
 }
 
-#[derive(Debug)]
-struct Piece {
-    index: usize,
-    start: usize,
-    end: usize,
-    epoch_start: usize,
-    base: usize,
+impl From<trace::StreamTrace> for Profile {
+    fn from(trace: trace::StreamTrace) -> Self {
+        Self {
+            source: trace.proof,
+            bytes: trace.bytes,
+            target_key: None,
+            reserved: 0,
+            delivered: 0,
+            completed: BTreeMap::new(),
+            in_flight: BTreeMap::new(),
+            failed: false,
+            cancelled_cache: None,
+        }
+    }
+}
+
+impl std::ops::Deref for Profile {
+    type Target = StreamProof;
+
+    fn deref(&self) -> &Self::Target {
+        &self.source
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -205,12 +212,12 @@ impl RedisReplayState {
                     profiles.len() < MAX_STREAMS,
                     "append stream exceeds Case key limit"
                 );
-                profiles.push(trace::prepare(
+                profiles.push(Profile::from(trace::prepare(
                     &self.exchanges,
                     case,
                     &rule.rule.id,
                     exchange,
-                )?);
+                )?));
             }
         }
         ensure!(

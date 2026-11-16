@@ -2,16 +2,6 @@
 use super::*;
 use crate::dependency_index::Paged;
 
-impl Echoes {
-    fn needs_index(&self, lane: &inventory::IndexedLane) -> bool {
-        lane.kind != RedisSubscriptionKind::ShardChannel
-            && self.channels.iter().any(|(target, channel)| {
-                *target == endpoint(&lane.record)
-                    && (lane.kind == RedisSubscriptionKind::Pattern || *channel == lane.subject)
-            })
-    }
-}
-
 impl PubSubState {
     pub(crate) fn prepare_echo_indices(&self) -> Result<()> {
         self.echoes.prepare_windows();
@@ -19,7 +9,10 @@ impl PubSubState {
             .indexed
             .lanes
             .iter()
-            .filter(|lane| self.echoes.needs_index(lane))
+            .filter(|lane| {
+                self.echoes
+                    .needs_index(&lane.record, lane.kind, &lane.subject)
+            })
             .collect::<Vec<_>>();
         if lanes.is_empty() {
             return Ok(());

@@ -47,3 +47,11 @@ pub fn is_other_ordinary_exchange(owner: &str, exchange: &impl StorageExchange) 
 }
 
 pub mod observations;
+
+pub mod activity;
+pub mod append;
+
+pub mod snapshot;
+
+#[cfg(test)]
+mod tests;

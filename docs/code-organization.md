@@ -181,6 +181,22 @@ authenticated response access. The protocol library owns complete read-commutati
 absent-state, state-epoch and closed-TTL Source proofs over that port. The host
 supplies preparation clocks, installs complete proofs atomically and retains live
 delivery receipts, failure state and audit publication.
+Its `storage::append` owns original byte offsets, cumulative RESP lengths and
+read/reset fences. `storage::activity` proves complete SET/GET/DEL lifetimes and
+accepts value decoding, selected metadata and stable-field equivalence through
+`ValueModel`. The application binds that port to its installed value contracts.
+`storage::snapshot` owns native response equivalence, bootstrap seed selection,
+complete key coverage and bounded evidence collection. `Rule` supplies the
+authorized selector and current seed ownership. The application authenticates
+evidence access, binds the fingerprint to the current declaration and Source
+directory, and installs the proven overlay.
+Redis `socketio_rpc` owns bounded Socket.IO Redis-adapter envelopes.
+`pubsub::echo` owns exact publication identities, disjoint Source intervals,
+finite notification selection and native payload rendering. `pubsub::identity`
+owns manager, namespace-session and callback correspondence. Its broadcast
+comparison accepts independently observed namespace-session receipts from the
+host. Case ownership, authenticated payload loading, finite admission and
+successful delivery publication stay with the application adapters.
 Native MySQL value selection, physical column origins, observed native temporal
 metadata and scalar output representations live in `traffic-protocol-mysql::value_rules`.
 Its `ValuePolicy` port receives the shared execution context, document formats and

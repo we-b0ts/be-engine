@@ -1,6 +1,8 @@
+use crate::DependencyExchangeOutcome;
 use std::collections::BTreeMap;
 use std::fs;
 use traffic_protocol_redis::recorded::RecordedExchange as NativeRecordedExchange;
+use uuid::Uuid;
 
 use serde_json::json;
 

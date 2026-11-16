@@ -1,18 +1,11 @@
 //! Socket.IO Redis-adapter correlation and identity translation, independent of application events.
 use super::*;
 use std::collections::HashMap;
-type Realm = (TargetKey, i64, Option<String>);
 type Scope = (bool, Option<String>);
 type RequestKey = (Scope, Uuid, u64);
-type SessionKey = (Realm, String, String);
 #[derive(Debug, Default)]
 pub(super) struct Bindings {
-    hosts: HashMap<(Realm, String), String>,
-    sessions: HashMap<SessionKey, String>,
-    session_targets: HashMap<SessionKey, String>,
-    callbacks: HashMap<(Realm, rpc::Identity), rpc::Identity>,
-    callback_targets: HashMap<(Realm, rpc::Identity), rpc::Identity>,
-    host_targets: HashMap<(Realm, String), String>,
+    identities: traffic_protocol_redis::pubsub::identity::Correspondences,
     requests: HashMap<RequestKey, usize>,
     wire_references: std::collections::HashSet<(Uuid, u64)>,
     publishers: std::collections::HashSet<(Uuid, u64)>,
@@ -84,11 +77,11 @@ impl PubSubState {
                 .flatten()
                 .is_some()
             {
-                self.echoes.register(record, args);
+                self.echoes.register(&record.native, args);
             }
             return Ok(None);
         };
-        self.echoes.register(record, args);
+        self.echoes.register(&record.native, args);
         ensure!(
             self.bindings
                 .publishers
@@ -231,47 +224,19 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<(rpc::Broadcast, rpc::Broadcast)> {
-        let mut source = rpc::broadcast(&exchange.record.native.command, &exchange.args)
-            .ok()
-            .flatten()?;
-        let actual = rpc::broadcast(&exchange.record.native.command, args)
-            .ok()
-            .flatten()?;
-        for field in ["room", "skip_sid"] {
-            if source.value[field] == actual.value[field] {
-                continue;
-            }
-            if !self.namespace_sessions.matches_sid(
-                exchange.case_id.as_deref(),
-                &source.value["namespace"],
-                &source.value[field],
-                &actual.value[field],
-            ) {
-                return None;
-            }
-            source.value[field] = actual.value[field].clone();
-        }
-        let realm = (
-            TargetKey {
-                host: normalize_host(&exchange.record.native.target_host),
-                port: exchange.record.native.target_port,
+        self.bindings.identities.compatible_broadcast(
+            &exchange.record.native,
+            &exchange.args,
+            args,
+            |namespace, source, actual| {
+                self.namespace_sessions.matches_sid(
+                    exchange.case_id.as_deref(),
+                    namespace,
+                    source,
+                    actual,
+                )
             },
-            exchange.record.native.database,
-            exchange.record.native.username.clone(),
-        );
-        (exchange.args.first() == args.first()
-            && source.envelope_matches(&actual)
-            && self
-                .bindings
-                .hosts
-                .get(&(realm.clone(), source.host.clone()))
-                .is_none_or(|host| *host == actual.host)
-            && self
-                .bindings
-                .host_targets
-                .get(&(realm, actual.host.clone()))
-                .is_none_or(|host| *host == source.host))
-        .then_some((source, actual))
+        )
     }
 
     fn compatible_request(
@@ -279,65 +244,10 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<(rpc::Request, rpc::Request)> {
-        if !self.is_adapter_source(exchange) {
-            return None;
-        }
-        let source = rpc::request(&exchange.record.native.command, &exchange.args)
-            .ok()
-            .flatten()?;
-        let actual = rpc::request(&exchange.record.native.command, args)
-            .ok()
-            .flatten()?;
-        let realm = (
-            TargetKey {
-                host: normalize_host(&exchange.record.native.target_host),
-                port: exchange.record.native.target_port,
-            },
-            exchange.record.native.database,
-            exchange.record.native.username.clone(),
-        );
-        (exchange.args.first() == args.first()
-            && self
-                .bindings
-                .sessions
-                .get(&(
-                    realm.clone(),
-                    source.identity.namespace.clone(),
-                    source.identity.sid.clone(),
-                ))
-                .is_none_or(|sid| *sid == actual.identity.sid)
-            && self
-                .bindings
-                .session_targets
-                .get(&(
-                    realm.clone(),
-                    actual.identity.namespace.clone(),
-                    actual.identity.sid.clone(),
-                ))
-                .is_none_or(|sid| *sid == source.identity.sid)
-            && source.identity.namespace == actual.identity.namespace
-            && source.envelope_matches(&actual)
-            && self
-                .bindings
-                .callbacks
-                .get(&(realm.clone(), source.identity.clone()))
-                .is_none_or(|v| *v == actual.identity)
-            && self
-                .bindings
-                .callback_targets
-                .get(&(realm.clone(), actual.identity.clone()))
-                .is_none_or(|bound| *bound == source.identity)
-            && self
-                .bindings
-                .hosts
-                .get(&(realm.clone(), source.identity.host.clone()))
-                .is_none_or(|v| *v == actual.identity.host)
-            && self
-                .bindings
-                .host_targets
-                .get(&(realm.clone(), actual.identity.host.clone()))
-                .is_none_or(|bound| *bound == source.identity.host))
-        .then_some((source, actual))
+        self.is_adapter_source(exchange).then_some(())?;
+        self.bindings
+            .identities
+            .compatible_request(&exchange.record.native, &exchange.args, args)
     }
 
     pub(in crate::protocols::replay::redis) fn claim(
@@ -349,20 +259,9 @@ impl PubSubState {
             return None;
         }
         if let Some((source, actual)) = self.compatible_broadcast(exchange, args) {
-            let realm = (
-                TargetKey {
-                    host: normalize_host(&exchange.record.native.target_host),
-                    port: exchange.record.native.target_port,
-                },
-                exchange.record.native.database,
-                exchange.record.native.username.clone(),
-            );
             self.bindings
-                .hosts
-                .insert((realm.clone(), source.host.clone()), actual.host.clone());
-            self.bindings
-                .host_targets
-                .insert((realm, actual.host), source.host);
+                .identities
+                .bind_broadcast(&exchange.record.native, source, actual);
             return None;
         }
         let source = rpc::request(&exchange.record.native.command, &exchange.args)
@@ -371,62 +270,14 @@ impl PubSubState {
         let actual = rpc::request(&exchange.record.native.command, args)
             .ok()
             .flatten()?;
-        let realm = (
-            TargetKey {
-                host: normalize_host(&exchange.record.native.target_host),
-                port: exchange.record.native.target_port,
-            },
-            exchange.record.native.database,
-            exchange.record.native.username.clone(),
+        self.bindings.identities.bind_request(
+            &exchange.record.native,
+            source.identity,
+            &actual.identity,
         );
-        self.bindings.sessions.insert(
-            (
-                realm.clone(),
-                source.identity.namespace.clone(),
-                source.identity.sid.clone(),
-            ),
-            actual.identity.sid.clone(),
-        );
-        self.bindings.session_targets.insert(
-            (
-                realm.clone(),
-                actual.identity.namespace.clone(),
-                actual.identity.sid.clone(),
-            ),
-            source.identity.sid.clone(),
-        );
-        self.bindings.callback_targets.insert(
-            (realm.clone(), actual.identity.clone()),
-            source.identity.clone(),
-        );
-        self.bindings.host_targets.insert(
-            (realm.clone(), actual.identity.host.clone()),
-            source.identity.host.clone(),
-        );
-        self.bindings.callbacks.insert(
-            (realm.clone(), source.identity.clone()),
-            actual.identity.clone(),
-        );
-        self.bindings
-            .hosts
-            .insert((realm, source.identity.host), actual.identity.host.clone());
         let index = exchange.rpc_push?;
         let raw = self.pushes[index].bytes().ok()?;
-        let frame = redis_command(&bytes::Bytes::copy_from_slice(&raw)).expect("validated push");
-        let mut parts = frame.args;
-        let (_, mut payload) = rpc::callback(parts.last().expect("push payload"))
-            .ok()
-            .flatten()
-            .expect("validated callback");
-        payload["host_id"] = actual.identity.host.into();
-        payload["id"] = actual.identity.id.into();
-        payload["sid"] = actual.identity.sid.into();
-        *parts.last_mut().expect("push payload") =
-            serde_json::to_vec(&payload).expect("JSON serializes");
-        let name = frame.name.to_ascii_lowercase();
-        let mut values = vec![name.as_bytes()];
-        values.extend(parts.iter().map(Vec::as_slice));
-        Some(crate::redis::encode_array(&values))
+        traffic_protocol_redis::pubsub::identity::render_callback(&raw, &actual.identity).ok()
     }
 
     pub(in crate::protocols::replay::redis) fn rpc_is_detached(

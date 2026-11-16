@@ -1,6 +1,5 @@
 //! Bind complete native Source proofs to framework installation and clocks.
 use super::*;
-pub(in crate::protocols::replay::redis) use native::validate_causal_order;
 use traffic_protocol_redis::storage::observations as native;
 
 pub(super) fn has_owned_set(

@@ -97,9 +97,26 @@ pub(super) fn check(
     Ok(())
 }
 
-pub(super) fn bulk(bytes: &[u8]) -> Vec<u8> {
-    let mut response = format!("${}\r\n", bytes.len()).into_bytes();
-    response.extend_from_slice(bytes);
-    response.extend_from_slice(b"\r\n");
-    response
+pub(super) use traffic_protocol_redis::storage::activity::bulk;
+
+pub(super) struct SourceValues<'a> {
+    pub state: &'a RedisReplayState,
+    pub pointers: &'a [String],
+}
+
+impl traffic_protocol_redis::storage::activity::ValueModel for SourceValues<'_> {
+    type Value = Value;
+    type Fields = Vec<(String, TimeContract)>;
+
+    fn decode(&self, bytes: &[u8]) -> Result<Value> {
+        decode(bytes)
+    }
+
+    fn fields(&self, value: &Value, clock: chrono::DateTime<chrono::Utc>) -> Result<Self::Fields> {
+        selected(self.state, value, self.pointers, clock)
+    }
+
+    fn same_stable(&self, before: &Value, after: &Value, fields: &Self::Fields) -> Result<bool> {
+        Ok(stable(before, fields)? == stable(after, fields)?)
+    }
 }
