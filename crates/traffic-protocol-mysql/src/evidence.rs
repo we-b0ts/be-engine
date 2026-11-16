@@ -7,6 +7,16 @@ use traffic_protocol::observation::{TrafficInteraction, optional_endpoint};
 
 pub struct NativeEvidence;
 impl EvidenceAdapter for NativeEvidence {
+    fn query_value(
+        &self,
+        event: &Value,
+        payload: &[u8],
+        query: traffic_protocol::evidence::ValueQuery<'_>,
+        reader: &dyn traffic_protocol::evidence::ValueReader,
+    ) -> Result<Option<traffic_protocol::evidence::ValueEvidence>> {
+        value_query::query(event, payload, query, reader).map(Some)
+    }
+
     fn schema(&self) -> &'static str {
         "mysql/semantic-evidence/v2"
     }
@@ -128,3 +138,5 @@ impl EvidenceAdapter for NativeEvidence {
         })
     }
 }
+
+mod value_query;

@@ -26,7 +26,7 @@ pub(super) mod discovery;
 mod manifest;
 mod preflight;
 pub(super) use preflight::dependency::{
-    source_witness as dependency_source_witness, values as dependency_witness_values,
+    source_identity as dependency_source_identity, source_witness as dependency_source_witness,
 };
 mod impact;
 mod proposal;

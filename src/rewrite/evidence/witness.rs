@@ -1,9 +1,9 @@
 //! Bounded on-demand values from authenticated, issue-bound dependency witnesses.
 use super::*;
-use crate::policy::{Protocol, Surface};
+use crate::policy::Protocol;
 use crate::policy_evidence::{SourceIdentity, TargetRole, WitnessManifest};
 use crate::rewrite::{RewriteContext, store::RewriteStore};
-mod mysql;
+mod values;
 
 pub fn query_rewrite_witness_for_scope(
     context: RewriteContext,
@@ -90,63 +90,25 @@ pub fn query_rewrite_witness_for_scope(
         crate::policy_evidence::digest(&original) == witness.source_sha256,
         "witness Source event changed"
     );
-    let redis_arguments = if protocol == Protocol::Redis {
-        Some(serde_json::from_slice::<Vec<Vec<u8>>>(
-            &super::super::unified_rule::dependency_source_witness(
-                Surface::DependencyRequest,
-                &event,
-                directory,
-            )?,
-        )?)
-    } else {
-        None
+    let providers = crate::protocols::default_providers();
+    let query = traffic_protocol::evidence::ValueQuery {
+        side: witness.metadata.surface.dependency_side()?,
+        value_index,
+        pointer,
     };
-    let documents = |raw: &[u8]| -> Result<Vec<Vec<u8>>> {
-        if protocol == Protocol::Mysql {
-            Ok(vec![raw.to_vec()])
-        } else if let Some(arguments) = redis_arguments.as_ref() {
-            let actual;
-            let arguments = if witness.metadata.surface == Surface::DependencyRequest {
-                actual = serde_json::from_slice::<Vec<Vec<u8>>>(raw)?;
-                &actual
-            } else {
-                arguments
-            };
-            if witness.metadata.operation == "PUBLISH"
-                && witness.metadata.surface == Surface::DependencyRequest
-            {
-                return Ok(vec![
-                    arguments
-                        .get(1)
-                        .context("PUBLISH payload is unavailable")?
-                        .clone(),
-                ]);
-            }
-            Ok(traffic_protocol_redis::values::redis_field_values(
-                &witness.metadata.operation,
-                arguments,
-                (witness.metadata.surface == Surface::DependencyResponse).then_some(raw),
-            )?
-            .into_iter()
-            .map(|field| field.payload.unwrap_or_default().to_vec())
-            .collect())
-        } else {
-            Ok(super::super::unified_rule::dependency_witness_values(
-                witness.metadata.surface,
-                &event,
-                raw,
-            )?
-            .into_iter()
-            .map(|(_, bytes)| bytes)
-            .collect())
-        }
+    let reader = values::Reader(traffic_extensions::codecs());
+    let project = |raw: &[u8]| {
+        providers
+            .evidence()
+            .query_value(&event, raw, query, &reader)?
+            .context("native witness value projection is unavailable")
     };
-    let source = documents(&source)?;
+    let source = project(&source)?;
     let independent = witness.metadata.target_role == TargetRole::IndependentTargetObservation;
     let target = target
         .as_deref()
         .filter(|_| independent)
-        .map(documents)
+        .map(project)
         .transpose()?;
     let raw_request: Value =
         serde_json::from_slice(&std::fs::read(directory.join("request.json"))?)?;
@@ -157,75 +119,34 @@ pub fn query_rewrite_witness_for_scope(
         .as_object()
         .map(|headers| headers.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    let sql_values =
-        protocol == Protocol::Mysql && mysql::is_selector(pointer, witness.metadata.surface);
-    let observe = |raw| {
-        if sql_values {
-            mysql::observation(
-                raw,
-                pointer,
-                witness.metadata.surface,
-                witness
-                    .metadata
-                    .resource
-                    .as_ref()
-                    .and_then(|resource| resource.database.as_ref())
-                    .and_then(crate::policy::Database::name),
-            )
-        } else {
-            observation(raw, pointer)
-        }
-    };
     let mut facts = json!({
         "attempt":issue.attempt,"recording_run_id":state.recording_run_id,
         "report_sha256":crate::policy_evidence::digest(&bytes),
         "witness_id":witness.id,"metadata":witness.metadata,
-        "representation":if sql_values {"materialized_mysql_sql_value"} else if protocol == Protocol::Mysql {"native_witness_json"} else {"logical_json"},
+        "representation":source.representation,
         "value_index":value_index,"pointer":pointer,
-        "source_document_count":source.len(),"target_document_count":target.as_ref().map(Vec::len),
-        "source":observe(source.get(value_index).map(Vec::as_slice)),
-        "target":if independent {observe(target.as_ref().and_then(|values| values.get(value_index)).map(Vec::as_slice))} else {json!({"presence":"unavailable","reason":"witness is not an independent Target observation"})},
+        "source_document_count":source.document_count,
+        "target_document_count":target.as_ref().map(|projection| projection.document_count),
+        "source":source.observation,
+        "target":target.as_ref().map(|projection| &projection.observation)
+            .map(serde_json::to_value).transpose()?
+            .unwrap_or_else(|| json!({"presence":"unavailable","reason":"witness is not an independent Target observation"})),
         "recorded_request_context":{"header_names":header_names,"headers_encrypted_at_rest":crate::request_headers::has_encrypted_request_headers(&raw_request)}
     });
-    if protocol == Protocol::Mysql {
-        facts["sql_value_selection"] = json!({
-            "request_pointer":"/sql_values/<sql-token-index>/value",
-            "response_request_pointer":"/request/sql_values/<sql-token-index>/value",
-            "decoded_json_pointer":"/sql_values/<sql-token-index>/json/<json-pointer>",
-            "physical_field_pointer":"/sql_values/<sql-token-index>/field",
-            "position_source":"physical_fields.fields[].observed_positions in unified-rule-candidates uses the same SQL token indexes",
-            "semantics":"Each statement is materialized independently. Numbers retain exact normalized SQL text; strings preserve decoded native bytes. A field origin or decoded JSON view grants no matching permission and does not prove the two selected cells correspond."
-        });
-    }
+    let fields = facts.as_object_mut().expect("witness facts are an object");
+    anyhow::ensure!(
+        source
+            .annotations
+            .keys()
+            .all(|name| !fields.contains_key(name)),
+        "native value annotations would replace protected witness facts"
+    );
+    fields.extend(source.annotations);
     let mut report =
         super::report::selected(&root, &state, &scope, issue, "dependency_witness", facts)?;
     report.does_not_prove = vec!["A retained candidate proves observed bytes, not a successful dependency match or authorization for a rule.".into()];
     report.next_step = "Trace the selected observed difference through Source and Target code. Recorded request header names come from authenticated input; public encrypted-header placeholders do not establish absence. Use narrower pointers for unavailable large values.".into();
     Ok(report)
-}
-
-fn observation(raw: Option<&[u8]>, pointer: &str) -> Value {
-    let Some(raw) = raw else {
-        return json!({"presence":"unavailable","reason":"selected document is unavailable"});
-    };
-    let Some(value) = crate::json_value::parse_with_limit(raw, 4 * 1024 * 1024) else {
-        return json!({"presence":"unavailable","reason":"selected document is not supported JSON"});
-    };
-    let Some(value) = value.pointer(pointer) else {
-        return json!({"presence":"missing"});
-    };
-    selected_observation(Some(value))
-}
-
-fn selected_observation(value: Option<&Value>) -> Value {
-    let Some(value) = value else {
-        return json!({"presence":"missing"});
-    };
-    let size = serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len());
-    if size > 4096 {
-        return json!({"presence":"unavailable","reason":"selected value exceeds 4096 bytes; choose a narrower pointer","bytes":size});
-    }
-    json!({"presence":"present","value":value})
 }
 
 fn source_event(directory: &Path, identity: &SourceIdentity, protocol: Protocol) -> Result<Value> {
@@ -234,12 +155,8 @@ fn source_event(directory: &Path, identity: &SourceIdentity, protocol: Protocol)
             || identity.connection_id.is_some() && identity.sequence.is_some(),
         "witness has no original Source exchange identity"
     );
-    let event_type = match protocol {
-        Protocol::Http => "http_exchange",
-        Protocol::Mysql => "mysql_exchange",
-        Protocol::Redis => "redis_exchange",
-        Protocol::Memcached => "memcached_exchange",
-    };
+    let expected_protocol = serde_json::to_value(protocol)?;
+    let providers = crate::protocols::default_providers();
     let path = directory.join("dependencies.jsonl");
     let mut reader = crate::dependency_index::RecordStream::open(&path)?;
     while let Some((_, line)) = reader.next()? {
@@ -251,18 +168,15 @@ fn source_event(directory: &Path, identity: &SourceIdentity, protocol: Protocol)
             continue;
         }
         let event: Value = serde_json::from_slice(line)?;
-        if event["event_type"] != event_type {
+        if !providers
+            .event_provider(&event)
+            .is_some_and(|owner| expected_protocol == owner.kind.as_str())
+        {
             continue;
         }
-        let matched = if let Some(id) = identity.exchange_id.as_ref() {
-            event["id"] == *id
-        } else {
-            event["connection_id"].as_str() == identity.connection_id.as_deref()
-                && event["sequence"]
-                    .as_u64()
-                    .or_else(|| event["query_sequence"].as_u64())
-                    == identity.sequence
-        };
+        let matched =
+            super::super::unified_rule::dependency_source_identity(&identity.case_id, &event)
+                .is_some_and(|observed| observed == *identity);
         if matched {
             return Ok(event);
         }

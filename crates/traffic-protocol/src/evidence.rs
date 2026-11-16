@@ -10,9 +10,11 @@ mod payload;
 mod payload_tests;
 mod recording_summary;
 mod timing;
+mod value;
 pub use payload::{EvidenceSecrets, MessageSide};
 pub use recording_summary::RecordingSummaries;
 pub use timing::SourceTiming;
+pub use value::{ValueEvidence, ValueObservation, ValueQuery, ValueReader};
 
 pub struct MessageEvidence {
     pub request: Arc<dyn crate::message::ProtocolMessage>,
@@ -36,6 +38,15 @@ pub trait RecordSource {
 pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
     fn event_types(&self) -> &'static [&'static str];
+    fn query_value(
+        &self,
+        _event: &Value,
+        _payload: &[u8],
+        _query: ValueQuery<'_>,
+        _reader: &dyn ValueReader,
+    ) -> Result<Option<ValueEvidence>> {
+        Ok(None)
+    }
     fn source_payload(
         &self,
         _protocol: &str,
@@ -129,6 +140,23 @@ impl std::fmt::Debug for EvidenceRegistry {
 }
 
 impl EvidenceRegistry {
+    pub fn query_value(
+        &self,
+        event: &Value,
+        payload: &[u8],
+        query: ValueQuery<'_>,
+        reader: &dyn ValueReader,
+    ) -> Result<Option<ValueEvidence>> {
+        match event["event_type"]
+            .as_str()
+            .and_then(|kind| self.events.get(kind))
+        {
+            Some(index) => self.registrations[*index]
+                .adapter
+                .query_value(event, payload, query, reader),
+            None => Ok(None),
+        }
+    }
     pub fn source_payload(
         &self,
         protocol: &str,

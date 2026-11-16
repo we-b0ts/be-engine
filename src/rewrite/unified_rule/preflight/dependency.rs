@@ -105,7 +105,7 @@ fn database_matches(database: &Database, observed: &Value) -> bool {
     }
 }
 
-pub(super) fn source_identity(
+pub(in crate::rewrite) fn source_identity(
     case: &str,
     event: &Value,
 ) -> Option<crate::policy_evidence::SourceIdentity> {

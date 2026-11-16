@@ -189,6 +189,12 @@ Registered evidence adapters project native Source request and response
 envelopes. The host supplies authenticated storage and secret access through
 `RecordSource` and `EvidenceSecrets`. Policy evidence delegates envelope
 construction to the registered native owner.
+Their value-query port selects native payload documents and virtual native
+fields, then delegates logical selection to the host's `ValueReader`. The
+application reader uses the installed codec registry and enforces observation
+limits. Native providers return standard present, missing or unavailable
+observations and provider-owned annotations. Rewrite owns authentication,
+assignment binding and report publication.
 Native HTTP header occurrences and Redis RESP value positions live beside their
 protocol libraries. Value bindings receive the policy registry and comparison
 metadata. Implicit scalar applicability delegates to the shared field plan and its
@@ -913,8 +919,8 @@ retain the same responsibility and 1000-line requirements as `src/`.
   discarding the whole API ownership graph. Protected witness and Redis argument
   queries retain their own assignment, attempt, native identity and authentication
   checks before creating that envelope.
-  Its MySQL selector reads one authenticated materialized SQL cell; the pure
-  `protocols/replay/mysql/contracts/value_view` adapter reuses bounded native parameter
+  The registered MySQL evidence adapter reads one authenticated materialized SQL
+  cell. `traffic-protocol-mysql::witness` reuses bounded native parameter
   decoding and physical field resolution. It does not pair statements or
   authorize formats, and preserves exact decimal text and native NULL/bytes.
   `rewrite/evidence/redis_argument` owns bounded native argument selection for
