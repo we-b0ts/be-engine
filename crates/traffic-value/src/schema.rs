@@ -1,4 +1,4 @@
-//! Optional static field information supplied by a codec before payload access.
+//! Logical field shapes shared by value producers and policy applicability checks.
 use crate::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

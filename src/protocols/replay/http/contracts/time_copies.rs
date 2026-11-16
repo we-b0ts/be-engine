@@ -1,6 +1,5 @@
 //! Keep the dependency's already checked timestamp pairs until successful delivery.
 use super::*;
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::value_contract::time_copies::{TimeCopyRecord, global_leaves};
 
 #[derive(Debug, Clone)]
@@ -23,11 +22,12 @@ pub(super) fn prepare(
             completed: exchange.record.native.timestamp,
         });
     };
-    let position = TimeCopyPosition::Http {
+    let position = traffic_protocol_http::origin::ValuePosition {
         host: &exchange.identity.target.host,
         port: exchange.identity.target.port,
         exchange: identity,
-    };
+    }
+    .origin();
     let mut observe =
         |source: &serde_json::Value, target: &serde_json::Value, prefix: &str| -> Result<()> {
             for leaf in global_leaves(source, plan, clocks)? {

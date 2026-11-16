@@ -194,90 +194,9 @@ impl ServerClose {
 }
 
 pub(super) fn validate_record(record: &RecordedHttpExchange) -> Result<()> {
-    if record.native.outcome == crate::DependencyExchangeOutcome::NoResponse {
-        return Err(anyhow!(
-            "HTTP does not support a protocol-level no_response outcome"
-        ));
-    }
-    if !record.native.outcome.is_client_terminated()
-        && !record.native.outcome.is_server_terminated()
-    {
-        anyhow::ensure!(
-            record.native.outcome.termination().is_none(),
-            "HTTP engine-owned termination is not replayable peer evidence"
-        );
-        return Ok(());
-    }
-    if let Some(end) = record.native.outcome.termination() {
-        use crate::dependency::{TerminationKind, TerminationScope};
-        anyhow::ensure!(
-            matches!(
-                (end.kind, end.scope),
-                (TerminationKind::Eof, TerminationScope::WriteHalf)
-                    | (TerminationKind::Reset, TerminationScope::Connection)
-            ),
-            "HTTP/1 replay requires an observed write-half EOF or connection reset; stream-local cancellation is unsupported"
-        );
-    }
-    anyhow::ensure!(
-        record.native.error.is_none(),
-        "HTTP client termination contains an upstream/capture error"
-    );
-    if let Some(stream) = &record.native.response_stream {
-        anyhow::ensure!(
-            stream.version == 2 && record.native.outcome.termination().is_some(),
-            "HTTP cancelled response prefixes require version-2 termination evidence; re-record this case"
-        );
-        anyhow::ensure!(
-            record.native.response_status.is_some() && record.native.response_headers.is_some(),
-            "HTTP cancelled response prefix has no response headers"
-        );
-        anyhow::ensure!(
-            stream.trailers.is_none(),
-            "HTTP cancelled response prefix cannot contain terminal trailers"
-        );
-        let body = record
-            .native
-            .response_body
-            .as_ref()
-            .context("HTTP cancelled response prefix has no payload")?;
-        let payload_len = if record.response_evidence.is_some() {
-            body.stored_len
-                .context("deferred HTTP cancelled stream has no payload length")?
-        } else {
-            decode_body(body)?.len()
-        };
-        stream.validate(payload_len)?;
-        anyhow::ensure!(
-            record.native.duration_ms.as_ref().and_then(Value::as_u64) == Some(stream.end_ms),
-            "HTTP cancelled stream duration and termination time disagree"
-        );
-    } else {
-        anyhow::ensure!(
-            record.native.response_status.is_none() && record.native.response_headers.is_none(),
-            "HTTP client termination contains response headers"
-        );
-        anyhow::ensure!(
-            record
-                .native
-                .response_body
-                .as_ref()
-                .map(decode_body)
-                .transpose()?
-                .is_none_or(|body| body.is_empty()),
-            "HTTP client termination contains response bytes"
-        );
-    }
-    anyhow::ensure!(
-        record
-            .native
-            .duration_ms
-            .as_ref()
-            .and_then(Value::as_u64)
-            .is_some(),
-        "HTTP client termination requires an integer duration_ms"
-    );
-    Ok(())
+    record
+        .native
+        .validate_termination(record.response_evidence.is_some())
 }
 
 impl ReplayState {

@@ -18,7 +18,5 @@ pub(crate) use time_writes::PreparedRedisTimeWrite;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use traffic_protocol_redis::values::{
-    RedisContainer, RedisFieldValue, redis_field_values,
-};
+pub(crate) use traffic_protocol_redis::values::{RedisFieldValue, redis_field_values};
 pub(super) use traffic_protocol_redis::values::{bulk_prefix, response_identities};

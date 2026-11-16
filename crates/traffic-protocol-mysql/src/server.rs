@@ -7,6 +7,15 @@ use traffic_protocol::{connection::ConnectionIo, transport::ConnectionControl};
 
 use crate::{HandshakeResponse, MysqlPacket, MysqlSession, parse_handshake_response};
 
+mod driver;
+mod host;
+mod requests;
+mod session;
+pub use driver::serve;
+pub use host::{Request, Selection, ServerHost};
+pub use requests::query;
+pub use session::{Directive, Session};
+
 pub struct Connection {
     pub io: Box<dyn ConnectionIo>,
     pub decoder: MysqlSession,

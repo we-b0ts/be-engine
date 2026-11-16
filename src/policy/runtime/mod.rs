@@ -171,5 +171,3 @@ pub(crate) use test_fixture::{
     install_dependency_rule as install_dependency_rule_fixture,
     write_policy as write_policy_fixture,
 };
-
-pub(crate) mod native_origin;

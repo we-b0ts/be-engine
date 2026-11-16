@@ -6,9 +6,8 @@ use anyhow::Result;
 use crate::Value;
 
 mod registry;
-mod schema;
+pub use crate::schema::{FieldSchema, ValueType};
 pub use registry::{CodecIdentity, CodecProbe, CodecRegistry, PreparedCodec};
-pub use schema::{FieldSchema, ValueType};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodecDescriptor {

@@ -87,17 +87,17 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
         }
         let transaction = matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE").then(|| {
             matcher::TransactionMatch {
-                savepoints: &self.session.savepoints,
+                savepoints: &self.session.context.savepoints,
                 preferred_end: self.sql.and_then(|sql| {
                     state
                         .protocols
                         .mysql
                         .transaction_equivalence
-                        .preferred_end(&self.session.transaction_witness, sql)
+                        .preferred_end(&self.session.context.transaction_witness, sql)
                 }),
                 status_flags: self.session.status_flags,
-                connection: self.session.transaction_witness.connection(),
-                witness: &self.session.transaction_witness,
+                connection: self.session.context.transaction_witness.connection(),
+                witness: &self.session.context.transaction_witness,
             }
         });
         let unmatched_before = state.protocols.mysql.events.unmatched_queries.len();
@@ -156,7 +156,7 @@ impl DependencyRequestAdapter<ReplayState> for NativeRequest<'_> {
         (self.recorded_rejection.is_none()
             && matches!(self.command, "COM_QUERY" | "COM_STMT_EXECUTE")
             && state.protocols.mysql.isolation.waiting_for_prior(
-                self.session.transaction_witness.connection(),
+                self.session.context.transaction_witness.connection(),
                 &SessionContext(&state.protocols.mysql.exchanges),
             )
             && self

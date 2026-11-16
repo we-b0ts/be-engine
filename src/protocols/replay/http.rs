@@ -268,82 +268,16 @@ pub(crate) fn register_http_exchange(
     } else {
         termination::validate_record(&record)?;
     }
-    let stream_mime = record
-        .native
-        .response_headers
-        .as_ref()
-        .and_then(|headers| {
-            headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-        })
-        .and_then(|(_, values)| values.first())
-        .map(|value| {
-            value
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase()
-        });
-    anyhow::ensure!(
-        record.native.response_stream.is_some()
-            || !matches!(
-                stream_mime.as_deref(),
-                Some("text/event-stream" | "application/x-ndjson" | "application/ndjson")
-            ),
-        "recorded HTTP streaming dependency has no chunk timing evidence; re-record this case"
-    );
-    if let Some(stream) = &record.native.response_stream {
-        let body = record
-            .native
-            .response_body
-            .as_ref()
-            .context("HTTP stream has no recorded payload")?;
-        // Global indexes retain byte-length metadata while deferring payload
-        // bytes. Validate their shape without loading every Global response;
-        // materialization and delivery validate the actual payload on demand.
-        let payload_len = if record.response_evidence.is_some() {
-            body.stored_len
-                .context("deferred HTTP stream has no stored payload length; re-record this case")?
-        } else {
-            decode_body(body)?.len()
-        };
-        if record.cleanup_authorized {
-            stream.validate_prefix(payload_len)?;
-        } else {
-            stream.validate(payload_len)?;
-            anyhow::ensure!(
-                record.native.error.is_none(),
-                "HTTP stream contains a capture error"
-            );
-        }
-    }
+    record.native.validate_payloads(
+        record.cleanup_authorized,
+        record.response_evidence.is_some(),
+    )?;
     let identity = identity_from_record(&record)?;
     let protocol = match identity.scheme {
         HttpReplayScheme::Http => ReplayProtocol::Http,
         HttpReplayScheme::Https => ReplayProtocol::Https,
     };
     register_replay_target(targets, &identity.target, protocol)?;
-    if record.native.request_body.truncated {
-        return Err(anyhow!(
-            "http_exchange {} {} has a truncated request body",
-            record.native.method,
-            record.native.uri
-        ));
-    }
-    if record
-        .native
-        .response_body
-        .as_ref()
-        .is_some_and(|body| body.truncated)
-    {
-        return Err(anyhow!(
-            "http_exchange {} {} has a truncated response body",
-            record.native.method,
-            record.native.uri
-        ));
-    }
     exchanges.push(ReplayHttpExchange {
         source,
         case_id: case_id.map(ToOwned::to_owned),

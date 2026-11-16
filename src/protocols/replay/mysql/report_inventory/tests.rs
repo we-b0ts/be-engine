@@ -101,16 +101,13 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
     let mut session = ReplaySession {
         control: crate::dependency::termination::ConnectionControl::new(&socket).unwrap(),
         request_started: tokio::time::Instant::now(),
-        fast_response_timing: false,
         target: actual.target,
         database: actual.database,
         username: actual.username,
         next_statement_id: 1,
         status_flags: 2,
         statements: HashMap::new(),
-        transaction_scope: Default::default(),
-        savepoints: Default::default(),
-        transaction_witness: Default::default(),
+        context: SessionState::default(),
     };
     let first = super::super::admission::match_request(
         &runtime.state,
@@ -202,9 +199,21 @@ async fn shared_mysql_admission_observes_once_and_keeps_arrival_when_delivery_re
     state.finalized_at = Some(Utc::now());
     drop(state);
     let (mut output, _peer) = tokio::io::duplex(32);
-    let error = handle_query(&mut output, runtime.state.clone(), &mut session, "SELECT 1")
-        .await
-        .unwrap_err();
+    let error = traffic_protocol_mysql::server::query(
+        &mut output,
+        &crate::protocols::replay::mysql::server_host::Host {
+            state: runtime.state.clone(),
+        },
+        &mut session,
+        traffic_protocol_mysql::server::Request {
+            command: "COM_QUERY",
+            sql: Some("SELECT 1"),
+            params: None,
+        },
+        ResultRowEncoding::Text,
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("finalized"));
     let state = runtime.state.lock().await;
     assert_eq!(

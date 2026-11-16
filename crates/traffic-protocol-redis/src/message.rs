@@ -68,7 +68,7 @@ impl ProtocolMessage for RequestMessage {
                 _ => Vec::new(),
             },
             RequestLocation::Value => {
-                crate::values::redis_field_values(&command, &self.arguments(), None)?
+                crate::value_rules::request_values(&command, &self.arguments())?
                     .into_iter()
                     .filter_map(|field| field.argument)
                     .collect()

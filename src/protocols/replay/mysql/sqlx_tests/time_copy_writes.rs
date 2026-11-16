@@ -1,7 +1,6 @@
 //! Cross-carrier delivered time pairs retain their original clock at SQL writes.
 use super::*;
 use crate::policy::GlobalFieldRuntime;
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::policy::runtime::{MysqlTimeCopyProofs, request_contract::RequestContracts};
 use crate::policy::{CompiledPolicy, RedisContainer};
 use crate::value_contract::{
@@ -36,14 +35,15 @@ fn record(policy: &CompiledPolicy) -> TimeCopyRecord {
         .unwrap()
         .time()
         .unwrap();
-    let position = TimeCopyPosition::Redis {
+    let position = traffic_protocol_redis::values::ValuePosition {
         host: "cache.test",
         port: 6379,
         database: 0,
         key: b"blocks:1",
         container: RedisContainer::String,
         hash_field: None,
-    };
+    }
+    .origin();
     TimeCopyRecord::new_time(
         &time,
         position,

@@ -61,8 +61,7 @@ pub(crate) type RecordedMysqlResponse =
     traffic_protocol_mysql::recorded::RecordedMysqlResponse<crate::dependency_index::RecordRef>;
 
 pub(crate) use traffic_protocol_mysql::model::{
-    MysqlColumn as RecordedMysqlColumn, MysqlValue as RecordedMysqlValue, PreparedStatement,
-    ResultRowEncoding,
+    MysqlColumn as RecordedMysqlColumn, MysqlValue as RecordedMysqlValue, ResultRowEncoding,
 };
 
 pub(crate) use traffic_protocol_mysql::prepare::StatementMetadata;

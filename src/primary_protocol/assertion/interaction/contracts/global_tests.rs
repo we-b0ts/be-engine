@@ -1,6 +1,5 @@
 use super::*;
 use crate::policy::GlobalFieldRuntime;
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use serde_json::json;
 
 #[test]
@@ -161,11 +160,12 @@ json:
         .unwrap()
         .time()
         .unwrap();
-    let position = TimeCopyPosition::Http {
+    let position = traffic_protocol_http::origin::ValuePosition {
         host: "stream.test",
         port: 80,
         exchange: "original",
-    };
+    }
+    .origin();
     let mut store = TimeCopyStore::default();
     store.set_record_clocks(ClockPair {
         source: chrono::DateTime::from_timestamp(1100, 0),

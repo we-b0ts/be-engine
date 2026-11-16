@@ -261,11 +261,12 @@ barriers and contiguous part receipts. The caller retains final wire publication
 and semantic commit. MySQL response, PREPARE and continuation framing belong to
 its protocol library. Registered native encoders enter the same delivery path
 through `MessageEncoder::output`, including multipart native frames.
-`traffic-protocol-mysql::server` owns server greeting, CLIENT_SSL negotiation and
-the once-only login acknowledgement. The Replay host supplies its replay-CA
-configuration and observes the native login before accepting it. Business
-selection, shared admission and response-delivery accounting retain their
-framework entry points.
+`traffic-protocol-mysql::server` owns server greeting, CLIENT_SSL negotiation,
+the once-only login acknowledgement, native command dispatch and prepared-statement
+lifetime. Its generic `Session` retains opaque host-owned context. `ServerHost`
+supplies business selection, statement metadata, delivery and observations.
+The application binds these ports to shared admission, Case/transaction ownership,
+protected evidence and response-delivery accounting.
 Redis storage positions and RESP value ranges belong to its
 protocol library. Recorder retains capture clocks, ownership and persistence.
 `traffic-protocol-redis::session_binding` owns native physical-session
@@ -391,7 +392,8 @@ selectors and primary HTTP capture adapters retain application ownership there.
 Primary case descriptors use open kind identities and native Source-binding
 documents. Native constructors live under `primary_protocol/recording`.
 Shared timestamp provenance consumes `PhysicalOrigin` fingerprints and typed
-read/write observations. Application selectors retain native physical positions.
+read/write observations. HTTP, Redis and MySQL libraries project their native
+positions to opaque `ValueOrigin` values with their existing fingerprints.
 Registered JSON projections bind the compiled global field policy through
 `ValueRuleHost::document_policy` and the shared rule executor. Native leaf
 verification, selected paths and complete document comparison retain the same

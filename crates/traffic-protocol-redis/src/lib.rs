@@ -8,6 +8,7 @@ pub mod key_slots;
 pub mod keys;
 pub mod message;
 pub mod subject;
+pub mod value_rules;
 pub mod values;
 use anyhow::{Context, Result, anyhow};
 pub use client_info::is_client_library_info;

@@ -51,6 +51,40 @@ sequenceDiagram
 
 ## 核心 contract
 
+### Policy、codec 与协议的依赖方向
+
+Policy 的输入是标准 value、逻辑位置与独立观察到的上下文。适用性、比较、变换和证据分析由注册的 Policy 实现提供。
+相同的实现通过位置绑定应用到 HTTP、Redis、MySQL，以及 JSON、Protobuf 等不同的值表示。
+逻辑字段类型由 `traffic-value::schema` 定义，codec 提供这些类型信息，Policy 据此验证自身适用性。
+
+协议拥有请求与响应的原生位置、录制负载、解码、会话约束和服务端 framing。
+Codec 拥有字节识别、结构遍历、类型与 presence，以及保留原始数据的重编码。
+绑定层组合协议位置、codec 声明、逻辑字段与 Policy 定义。共享执行层使用这些接口准备值、执行 Policy、收集结果并交付。
+录制、Replay 和 API 状态机通过标准观察与能力接口驱动相同的实现，应用入口负责安装具体协议、codec 和 Policy。
+
+当前 `traffic-policy-schema`、`traffic-policy-compiler`、`traffic-policy-document` 仍包含历史的协议位置声明、SQL 验证和具体 codec 兼容处理。
+这些职责需要继续迁入协议与 codec 的绑定能力，编译入口接收注册表提供的验证、位置覆盖和静态字段描述。
+变换接口当前也保留原始字节输入，需要继续收敛到标准 value 与授权修改结果，编码与嵌套内容解码交给 codec 执行层。
+完成这些迁移后，依赖检查需要覆盖共享契约、具体实现、应用组装和正常运行入口。
+
+实施按依赖方向推进。
+
+1. 收敛标准 value、逻辑字段描述与变换结果。由执行层识别和固定 Source codec，并通过同一 codec 编码授权修改。
+2. 把原生位置选择、位置覆盖关系、录制解码和 Source 原生约束移入协议能力。编译和证据接口委托注册的能力完成验证。
+3. 将 `src/policy/runtime` 中的协议实现归入对应协议库，共享值执行、身份对应、时钟和证据提交通过 host 接口提供。
+4. 完成现有 HTTP、Redis、MySQL 录制与服务驱动对共享流程的接入。Replay 持有 Case、等待、有限消费与交付回执，应用入口组合实际安装项。
+5. 检查 `src` 体积与真实依赖图，验证策略 feature 的增删，随后构建新版引擎并录制五个简单 API Case 完成真实回归。
+
+### 原生服务与录制数据
+
+MySQL 的 `server` 模块拥有命令循环、原生 session、预处理语句标识与参数类型，以及文本和二进制结果的输出选择。
+`ServerHost` 提供请求选择、交付、语句元数据与观察回调。应用绑定持有 Case、事务归属、证据和有限消费，实际输出使用共享交付流程。
+HTTP 的 `recorded` 模块验证原生响应、完整流与取消前缀，并还原录制代理实际交付的失败响应。
+应用提供认证过的清理许可和延迟负载状态。
+
+已交付值的位置由协议生成不透明的 `ValueOrigin`。HTTP 交换、Redis 存储值和 MySQL 物理列的规范化与组成由各自协议库定义。
+共享 provenance 存储使用位置指纹与逻辑字段验证因果关系。协议库保持既有位置指纹，保护历史录制数据的对应关系。
+
 `traffic-protocol` 提供 `DependencyProvider`、`FrameDecoder`、`EventHandler<Message>` 和共享缓冲读取。
 `recognize(Probe)` 接受方向及只读前缀。`decode` 消费框架提供的 `BytesMut`，`encode` 输出原生帧。
 `parse` 把类型化消息交给 `EventHandler`。`read_size` 表达下一步帧读取需求，MySQL 使用该接口保护 SSLRequest 边界。

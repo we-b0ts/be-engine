@@ -212,7 +212,7 @@ impl PreparedTransform {
     }
 }
 impl PreparedPolicy {
-    pub fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+    pub fn validate_schema(&self, schema: &traffic_value::schema::FieldSchema) -> Result<()> {
         self.implementation.validate_schema(schema)
     }
 

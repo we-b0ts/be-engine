@@ -21,6 +21,8 @@ use traffic_policy_value::{
 pub const MYSQL_ID: &str = "global.mysql";
 pub mod delivery;
 pub mod fields;
+mod origin;
+pub use origin::ValuePosition;
 mod metadata;
 mod provenance;
 mod request;

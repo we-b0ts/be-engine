@@ -77,8 +77,8 @@ impl PolicyProvider for DurationPolicy {
 }
 
 impl ComparisonPolicy for Configuration {
-    fn validate_schema(&self, schema: &traffic_value::codec::FieldSchema) -> Result<()> {
-        use traffic_value::codec::{FieldSchema, ValueType};
+    fn validate_schema(&self, schema: &traffic_value::schema::FieldSchema) -> Result<()> {
+        use traffic_value::schema::{FieldSchema, ValueType};
         ensure!(
             matches!(
                 schema,

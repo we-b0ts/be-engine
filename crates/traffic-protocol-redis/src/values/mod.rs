@@ -2,6 +2,8 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
+mod origin;
+pub use origin::ValuePosition;
 mod response;
 pub use response::bulk_prefix;
 

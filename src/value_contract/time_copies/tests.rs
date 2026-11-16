@@ -1,20 +1,21 @@
 use super::*;
 use crate::policy::FieldContract;
-#[cfg(test)]
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::value_contract::json::{self, AnchorClocks, Field};
 use crate::value_contract::time::ClockPair;
 use serde_json::json;
+#[cfg(test)]
+use traffic_contract::provenance::ValueOrigin;
 
 const RULE: &str = "global.json";
-fn position() -> TimeCopyPosition<'static> {
-    TimeCopyPosition::Mysql {
+fn position() -> ValueOrigin {
+    traffic_protocol_mysql::value_rules::ValuePosition {
         host: "db.test",
         port: 3306,
         database: "app",
         table: "tasks",
         column: "payload",
     }
+    .origin()
 }
 fn store() -> TimeCopyStore {
     let mut store = TimeCopyStore::default();
@@ -91,13 +92,14 @@ fn delivered_copy_requires_case_position_path_and_exact_pair() {
             .proof_for_source("case", p, p, "/other", "/t", &json!(10), RULE)
             .is_none()
     );
-    let other = TimeCopyPosition::Mysql {
+    let other = traffic_protocol_mysql::value_rules::ValuePosition {
         host: "db.test",
         port: 3306,
         database: "other",
         table: "tasks",
         column: "payload",
-    };
+    }
+    .origin();
     assert!(
         store
             .proof_for_source("case", other, p, "/t", "/t", &json!(10), RULE)

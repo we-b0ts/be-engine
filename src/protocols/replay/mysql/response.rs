@@ -1,7 +1,6 @@
 //! Native output plans use the shared Replay delivery transaction.
 use super::*;
-pub(crate) use traffic_protocol_mysql::response::*;
-
+#[cfg(test)]
 pub(crate) async fn write_response(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     response: &RecordedMysqlResponse,
@@ -22,6 +21,7 @@ pub(super) async fn write_response_ordered(
     traffic_replay::output::deliver(stream, &mut output, sequence).await
 }
 
+#[cfg(test)]
 pub(crate) async fn write_stmt_prepare_ok(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     statement_id: u32,
@@ -29,13 +29,5 @@ pub(crate) async fn write_stmt_prepare_ok(
     status_flags: u16,
 ) -> Result<()> {
     let mut output = traffic_protocol_mysql::output::prepare(statement_id, metadata, status_flags);
-    traffic_replay::output::deliver(stream, &mut output, None).await
-}
-
-pub(crate) async fn write_packet_and_flush(
-    stream: &mut (impl MysqlReplayIo + ?Sized),
-    packet: MysqlPacket,
-) -> Result<()> {
-    let mut output = traffic_protocol_mysql::output::packet(packet);
     traffic_replay::output::deliver(stream, &mut output, None).await
 }

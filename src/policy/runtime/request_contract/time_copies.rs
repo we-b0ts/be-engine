@@ -75,7 +75,6 @@ impl RequestContracts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::runtime::native_origin::TimeCopyPosition;
     use crate::policy::{FieldContract, RedisContainer};
     use serde_json::json;
 
@@ -88,14 +87,15 @@ mod tests {
         }))
         .unwrap();
         let time = field.time().unwrap();
-        let position = TimeCopyPosition::Redis {
+        let position = traffic_protocol_redis::values::ValuePosition {
             host: "cache.test",
             port: 6379,
             database: 0,
             key: b"task:1",
             container: RedisContainer::String,
             hash_field: None,
-        };
+        }
+        .origin();
         for case in ["case-a", "case-b"] {
             owner
                 .record_time_copies(

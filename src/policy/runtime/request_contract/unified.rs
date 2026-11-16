@@ -597,10 +597,4 @@ impl RequestContracts {
     }
 }
 
-pub(super) fn value_index(command: &str, length: usize) -> Option<usize> {
-    match (command, length) {
-        ("SET", 2..) | ("PUBLISH", 2) => Some(1),
-        ("SETEX" | "PSETEX", 3) => Some(2),
-        _ => None,
-    }
-}
+pub(super) use traffic_protocol_redis::value_rules::message_value_index as value_index;

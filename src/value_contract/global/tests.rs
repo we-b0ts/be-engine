@@ -389,17 +389,17 @@ fn compatible_legacy_time_delivery_is_translated_once_and_conflicts_fail() {
 
 #[test]
 fn authenticated_global_read_copy_does_not_authorize_other_values() {
-    use crate::policy::runtime::native_origin::TimeCopyPosition;
     use crate::value_contract::time_copies::TimeCopyStore;
     let policy = plan("  /created_at: {kind: time, formats: [unix_seconds]}\n");
-    let position = TimeCopyPosition::Redis {
+    let position = traffic_protocol_redis::values::ValuePosition {
         host: "cache",
         port: 6379,
         database: 0,
         key: b"task",
         container: crate::policy::RedisContainer::String,
         hash_field: None,
-    };
+    }
+    .origin();
     let mut store = TimeCopyStore::default();
     store.set_record_clocks(time::ClockPair {
         source: DateTime::from_timestamp(0, 0),

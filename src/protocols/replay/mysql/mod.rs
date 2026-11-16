@@ -23,6 +23,7 @@ use traffic_protocol_mysql::projection;
 mod report_inventory;
 mod response;
 mod savepoints;
+mod server_host;
 mod session;
 mod session_constraints;
 mod session_setup;
@@ -44,9 +45,12 @@ mod wire_diagnostics;
 pub(crate) use broker::handle_connection;
 pub(crate) use matcher::MysqlReplayState;
 pub(crate) use model::*;
-pub(crate) use response::*;
+#[cfg(test)]
+pub(crate) use response::{write_response, write_stmt_prepare_ok};
 pub(crate) use session::*;
 pub(crate) use session_constraints::SessionContext;
+#[cfg(test)]
+pub(crate) use traffic_protocol_mysql::response::{column_definition_payload, handshake_packet};
 pub(crate) use values::*;
 
 use crate::replay::*;
@@ -66,11 +70,11 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::mysql::wire::MysqlPacket;
 #[cfg(test)]
 use crate::mysql::wire::{
     CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, CLIENT_SSL, read_packet,
 };
-use crate::mysql::wire::{MysqlPacket, parse_client_command};
 pub(crate) use traffic_protocol::connection::ConnectionIo as MysqlReplayIo;
 
 pub(crate) use traffic_protocol_mysql::types::*;

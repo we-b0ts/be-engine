@@ -5,7 +5,7 @@ use serde_json::Value;
 #[cfg(test)]
 use traffic_contract::provenance::MAX_CASE_COPIES;
 
-pub(crate) use traffic_contract::provenance::{PhysicalOrigin, TimeCopyLeaf, TimeCopyRecord};
+pub(crate) use traffic_contract::provenance::{TimeCopyLeaf, TimeCopyRecord};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SchemaCopyRules;

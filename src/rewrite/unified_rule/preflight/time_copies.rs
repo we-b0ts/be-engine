@@ -3,9 +3,9 @@
 use std::borrow::Cow;
 
 use super::*;
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::policy_evidence::{SourceRole, WitnessEntry, WitnessRef};
 use crate::value_contract::time_copies::{TimeCopyRecord, TimeCopyStore};
+use traffic_contract::provenance::ValueOrigin;
 
 pub(super) struct ReadEvidence<'a> {
     pub private: &'a Path,
@@ -216,8 +216,8 @@ pub(super) fn observe_global_with_retiming(
             target: Some(delivered_at),
         });
         let mut records = Vec::new();
-        let mut record = |before: TimeCopyPosition<'_>,
-                          after: TimeCopyPosition<'_>,
+        let mut record = |before: ValueOrigin,
+                          after: ValueOrigin,
                           before_path: &str,
                           after_path: &str,
                           source: &Value,

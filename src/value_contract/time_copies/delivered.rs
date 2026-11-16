@@ -29,8 +29,6 @@ impl DeliveredTimeCopies {
 mod tests {
     use super::*;
     use crate::policy::GlobalFieldRuntime;
-    #[cfg(test)]
-    use crate::policy::runtime::native_origin::TimeCopyPosition;
     use crate::value_contract::{global, json::AnchorClocks};
     use serde_json::json;
 
@@ -57,11 +55,12 @@ json:
             .unwrap()
             .time()
             .unwrap();
-        let position = TimeCopyPosition::Http {
+        let position = traffic_protocol_http::origin::ValuePosition {
             host: "dependency.test",
             port: 80,
             exchange: "recorded-call",
-        };
+        }
+        .origin();
         let read = TimeCopyRecord::new_time(
             &time,
             position,
@@ -217,11 +216,12 @@ json:
             leaf.rule_id,
             crate::value_contract::time::automatic::RULE_ID
         );
-        let position = TimeCopyPosition::Http {
+        let position = traffic_protocol_http::origin::ValuePosition {
             host: "dependency.test",
             port: 80,
             exchange: "read",
-        };
+        }
+        .origin();
         let record = TimeCopyRecord::new_time(
             &leaf.time,
             position,

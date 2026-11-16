@@ -4,15 +4,15 @@ use crate::mysql::sql::{
     bounds,
     field_bindings::{self, FieldIdentity},
 };
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::policy::runtime::request_contract::RequestContracts;
 use crate::value_contract::time_copies::{self, TimeCopyLeaf};
 use sha2::{Digest, Sha256};
+use traffic_contract::provenance::ValueOrigin;
 pub(crate) mod global;
 
 type Recorder<'a> = dyn FnMut(
-        TimeCopyPosition<'_>,
-        TimeCopyPosition<'_>,
+        ValueOrigin,
+        ValueOrigin,
         &str,
         &str,
         &Value,
@@ -288,20 +288,22 @@ impl PreparedRead {
             };
             let mut leaf_pair = |source: &TimeCopyLeaf, target: &TimeCopyLeaf| -> Result<()> {
                 record(
-                    TimeCopyPosition::Mysql {
+                    traffic_protocol_mysql::value_rules::ValuePosition {
                         host: &self.host,
                         port: self.port,
                         database: source_database,
                         table: &column.origin.table,
                         column: &column.origin.column,
-                    },
-                    TimeCopyPosition::Mysql {
+                    }
+                    .origin(),
+                    traffic_protocol_mysql::value_rules::ValuePosition {
                         host: &endpoint.host,
                         port: endpoint.port,
                         database: target_database,
                         table: &target_origin.table,
                         column: &target_origin.column,
-                    },
+                    }
+                    .origin(),
                     &source.pattern,
                     &target.pattern,
                     &source.value,

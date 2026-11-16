@@ -16,6 +16,8 @@ pub trait CopyRuleScope: Clone + Default + std::fmt::Debug + Send + Sync + 'stat
 
 pub const MAX_CASE_COPIES: usize = 4096;
 const MAX_TOTAL_COPIES: usize = 32768;
+mod origin;
+pub use origin::ValueOrigin;
 mod delivered;
 pub use delivered::DeliveredTimeCopies;
 

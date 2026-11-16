@@ -1,7 +1,6 @@
 //! Copy permission is a preview of real, case-local read delivery provenance.
 use super::*;
 use crate::mysql::sql::field_bindings::FieldIdentity;
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::policy::runtime::request_contract::RequestContracts;
 use crate::value_contract::{
     json::VerifiedTimeCopy,
@@ -84,13 +83,14 @@ impl<'a> CopyProofs<'a> {
         else {
             return Ok(vec![]);
         };
-        let position = TimeCopyPosition::Mysql {
+        let position = traffic_protocol_mysql::value_rules::ValuePosition {
             host: &endpoint.host,
             port: endpoint.port,
             database,
             table: &origin.table,
             column: &origin.column,
-        };
+        }
+        .origin();
         Ok(
             crate::protocols::replay::mysql::contracts::automatic::time_leaves(
                 selected,

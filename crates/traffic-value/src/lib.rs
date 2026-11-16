@@ -2,6 +2,7 @@
 pub mod codec;
 mod patch;
 pub mod path;
+pub mod schema;
 mod value;
 
 pub use patch::validate_patch;

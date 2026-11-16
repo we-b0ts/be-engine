@@ -2,8 +2,8 @@
 //! authenticated read-copy facts. Native key relations remain Replay obligations.
 use super::*;
 use crate::policy::native::{NativeKeyContract, NativeKeySelector};
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::value_contract::time_copies::TimeCopyLookup;
+use traffic_contract::provenance::ValueOrigin;
 mod script_times;
 
 pub(super) fn compare(
@@ -367,8 +367,8 @@ fn compare_scalar(
 fn proofs(
     store: &TimeCopyStore,
     case: &str,
-    source: TimeCopyPosition<'_>,
-    target: TimeCopyPosition<'_>,
+    source: ValueOrigin,
+    target: ValueOrigin,
     logical: &Value,
     plan: &crate::policy::CompiledJsonPolicy,
     clocks: AnchorClocks,

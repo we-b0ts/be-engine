@@ -1,10 +1,10 @@
 //! Temporal leaves become copy evidence only after the read reaches the wire.
 use super::*;
-use crate::policy::runtime::native_origin::TimeCopyPosition;
 use crate::policy::{Slot, Surface};
 use crate::value_codec::CodecPlan;
 use crate::value_contract::time_copies::{self, TimeCopyLookup, TimeCopyRecord};
 use sha2::{Digest, Sha256};
+use traffic_contract::provenance::ValueOrigin;
 
 const MAX_LEAVES: usize = 4096;
 const MAX_IDENTITIES: usize = 1024 * 1024;
@@ -276,7 +276,7 @@ pub(crate) fn redis_delivered_scalar_time_copies(
 }
 
 pub(super) fn redis_scalar_time_write_lookups(
-    position: TimeCopyPosition<'_>,
+    position: ValueOrigin,
     source: &crate::value_contract::redis_scalar::Scalar,
     field: &crate::policy::GlobalField,
     settings: &crate::policy::TimePolicy,
@@ -308,8 +308,8 @@ pub(super) fn redis_scalar_time_write_lookups(
 }
 
 type CopyRecorder<'a> = dyn FnMut(
-        TimeCopyPosition<'_>,
-        TimeCopyPosition<'_>,
+        ValueOrigin,
+        ValueOrigin,
         &str,
         &str,
         &Value,
@@ -350,14 +350,15 @@ fn record_values(
                 ReadPlan::Scalar(decoder) => decoder.decode(payload)?,
             })
         };
-        let source_position = TimeCopyPosition::Redis {
+        let source_position = traffic_protocol_redis::values::ValuePosition {
             host: &target.host,
             port: target.port,
             database,
             key: &value.key,
             container: value.container,
             hash_field: value.hash_field.as_deref(),
-        };
+        }
+        .origin();
         let target_position = redis_time_position(&target.host, target.port, database, after);
         for leaf in &value.leaves {
             let observed = match &decoded {
@@ -418,8 +419,8 @@ pub(crate) fn redis_time_position<'a>(
     port: u16,
     database: i64,
     value: &RedisFieldValue<'a>,
-) -> TimeCopyPosition<'a> {
-    TimeCopyPosition::Redis {
+) -> ValueOrigin {
+    traffic_protocol_redis::values::ValuePosition {
         host,
         port,
         database,
@@ -427,10 +428,11 @@ pub(crate) fn redis_time_position<'a>(
         container: value.container,
         hash_field: value.hash_field,
     }
+    .origin()
 }
 
 pub(super) fn redis_global_time_write_lookups(
-    position: TimeCopyPosition<'_>,
+    position: ValueOrigin,
     source: &crate::value_codec::DecodedValue,
     global: &crate::policy::CompiledJsonPolicy,
     clocks: crate::value_contract::json::AnchorClocks,

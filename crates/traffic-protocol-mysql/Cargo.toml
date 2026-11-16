@@ -24,10 +24,10 @@ bytes = "1"
 rustls = "0.23"
 uuid = { version = "1", features = ["serde", "v4"] }
 traffic-protocol = { path = "../traffic-protocol" }
+traffic-replay = { path = "../traffic-replay" }
 tokio = { version = "1", features = ["io-util", "net", "sync", "macros", "rt"] }
 tracing = "0.1"
 tokio-rustls = "0.26"
 
 [dev-dependencies]
-traffic-replay = { path = "../traffic-replay" }
 tokio = { version = "1", features = ["macros", "rt", "io-util"] }

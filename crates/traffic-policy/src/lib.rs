@@ -139,7 +139,7 @@ pub enum SourceMatch {
 }
 
 pub trait ComparisonPolicy: Send + Sync {
-    fn validate_schema(&self, _schema: &traffic_value::codec::FieldSchema) -> Result<()> {
+    fn validate_schema(&self, _schema: &traffic_value::schema::FieldSchema) -> Result<()> {
         Ok(())
     }
 

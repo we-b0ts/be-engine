@@ -41,11 +41,17 @@ impl RequestContracts {
             {
                 continue;
             }
-            if crate::json_value::parse(&original_source[index]).is_none() {
+            let Some(plan) = crate::value_codec::try_recognize(
+                &original_source[index],
+                &traffic_value::Value::Null,
+            )?
+            else {
+                continue;
+            };
+            let source = plan.decode(&original_source[index])?;
+            if !source.logical.is_object() && !source.logical.is_array() {
                 continue;
             }
-            let plan = crate::value_codec::compile(&crate::policy::Codec::Json)?;
-            let source = plan.decode(&original_source[index])?;
             let target = plan.decode(&original_target[index])?;
             let projected_a = plan.decode(&projected_source[index])?;
             let projected_b = plan.decode(&projected_target[index])?;

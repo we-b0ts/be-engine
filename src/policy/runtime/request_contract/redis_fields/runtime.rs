@@ -11,81 +11,51 @@ impl RequestContracts {
         if self.global_json().is_none() && self.redis_policy().is_none() {
             return None;
         }
-        let values = match request_values(context.command, source) {
-            Ok(values) => values,
-            Err(error) => return Some(Err(error)),
-        };
-        if values.is_empty() {
-            return None;
-        }
-        Some((|| {
-            ensure!(source.len() == actual.len(), "Redis argument count changed");
-            let clocks = self.contract_clocks(
-                Some(context.case),
-                context.recorded_at,
-                context.actual_at,
-                None,
-                None,
-            );
-            let normalized = crate::protocols::replay::normalize_redis_expiration(
-                context.command,
-                source,
-                actual,
-                clocks.dependency,
-            )?;
-            let actual = normalized.as_deref().unwrap_or(actual);
-            let indices = values
-                .iter()
-                .filter_map(|value| value.argument)
-                .collect::<BTreeSet<_>>();
-            let mut merged = crate::value_contract::json::Comparison::default();
-            for value in &values {
-                let index = value
-                    .argument
-                    .context("Redis write has no argument position")?;
-                let mut comparison = self.compare_redis_storage_value(
+        let clocks = self.contract_clocks(
+            Some(context.case),
+            context.recorded_at,
+            context.actual_at,
+            None,
+            None,
+        );
+        let result = traffic_protocol_redis::value_rules::compare_request(
+            context.command,
+            source,
+            actual,
+            clocks.dependency,
+            crate::value_contract::time::DEFAULT_TOLERANCE,
+            |value, source, actual| {
+                self.compare_redis_storage_value(
                     context.case,
                     context.target,
                     context.database,
                     value,
-                    &source[index],
-                    &actual[index],
+                    source,
+                    actual,
                     clocks,
+                )
+            },
+            |comparison, actual| {
+                let identity = self.identity_decision(context.case, comparison)?;
+                let keys = self.project_redis_key_pairs(
+                    context.case,
+                    context.command,
+                    source,
+                    actual,
+                    &comparison.identity_pairs(),
                 )?;
-                ensure!(
-                    comparison.passed(),
-                    "Redis global value contract failed: {:?}",
-                    comparison.differences
-                );
-                comparison.scope_schema_clocks(index);
-                merged.merge_and_validate(comparison);
-            }
-            ensure!(
-                merged.passed(),
-                "Redis value relationships changed: {:?}",
-                merged.differences
-            );
-            let identity = self.identity_decision(context.case, &merged)?;
-            let keys = self.project_redis_key_pairs(
-                context.case,
-                context.command,
-                source,
-                actual,
-                &merged.identity_pairs(),
-            )?;
-            let actual = keys.as_deref().unwrap_or(actual);
-            ensure!(
-                source
-                    .iter()
-                    .zip(actual)
-                    .enumerate()
-                    .all(|(index, (a, b))| indices.contains(&index) || a == b),
-                "Redis key, hash field, index or unselected options/arguments changed"
-            );
-            let mut decision = Decision::from_value_comparison(merged);
-            decision.identity = Some(identity);
-            Ok(decision)
-        })())
+                Ok((identity, keys))
+            },
+        );
+        match result {
+            Ok(None) => None,
+            result => Some(result.and_then(|result| {
+                let result = result.context("Redis request comparison is absent")?;
+                let mut decision = Decision::from_value_comparison(result.comparison);
+                decision.identity = Some(result.identity);
+                Ok(decision)
+            })),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -317,24 +287,4 @@ impl RequestContracts {
     }
 }
 
-pub(super) fn request_values<'a>(
-    command: &str,
-    args: &'a [Vec<u8>],
-) -> Result<Vec<RedisFieldValue<'a>>> {
-    let mut values = redis_field_values(command, args, None)?;
-    if let Some(index) = super::super::unified::value_index(command, args.len())
-        && !values.iter().any(|value| value.argument == Some(index))
-        && let (Some(key), Some(payload)) = (args.first(), args.get(index))
-    {
-        values.push(RedisFieldValue {
-            container: RedisContainer::String,
-            key,
-            hash_field: None,
-            payload: Some(payload),
-            stored: false,
-            argument: Some(index),
-            response: None,
-        });
-    }
-    Ok(values)
-}
+pub(super) use traffic_protocol_redis::value_rules::request_values;
