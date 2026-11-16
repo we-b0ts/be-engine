@@ -79,7 +79,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
         && (facts["dynamic_capture_candidates"]
             .as_array()
             .is_some_and(|items| !items.is_empty())
-            || super::super::mysql_diagnosis::has_sql_mismatch(facts))
+            || super::super::protocol_diagnosis::has_value_difference(facts))
     {
         hints.push(RewriteRuleHint {
             capability: "dynamic_value".into(), rule: "dynamic-value".into(),

@@ -27,6 +27,9 @@ pub trait DependencyProvider: Send + Sync {
     fn evidence(&self) -> Option<Arc<dyn evidence::EvidenceAdapter>> {
         None
     }
+    fn report_codec(&self) -> Option<Arc<dyn report::ReportCodec>> {
+        None
+    }
     fn native_protocol(&self) -> Option<Arc<dyn connection::NativeProtocol>> {
         None
     }
@@ -155,6 +158,7 @@ impl<Kind> RegisteredProtocol<Kind> {
 pub struct ProviderRegistry<Kind> {
     providers: Vec<RegisteredProtocol<Kind>>,
     evidence: evidence::EvidenceRegistry,
+    reports: report::CodecRegistry,
 }
 
 impl<Kind: std::fmt::Debug> std::fmt::Debug for ProviderRegistry<Kind> {
@@ -175,6 +179,7 @@ impl<Kind> Default for ProviderRegistry<Kind> {
         Self {
             providers: Vec::new(),
             evidence: evidence::EvidenceRegistry::default(),
+            reports: report::CodecRegistry::default(),
         }
     }
 }
@@ -215,9 +220,16 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
                     && registered.provider.name() != provider.name()),
             "dependency provider is already registered"
         );
+        let mut evidence = self.evidence.clone();
+        let mut reports = self.reports.clone();
         if let Some(adapter) = provider.evidence() {
-            self.evidence.register(provider.name(), adapter)?;
+            evidence.register(provider.name(), adapter)?;
         }
+        if let Some(codec) = provider.report_codec() {
+            reports.register(ProtocolId::new(provider.name()), codec)?;
+        }
+        self.evidence = evidence;
+        self.reports = reports;
         self.providers.push(RegisteredProtocol::new(kind, provider));
         Ok(())
     }
@@ -243,11 +255,20 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
                 }),
             "dependency provider name is already registered"
         );
-        self.evidence.replace(
+        let mut evidence = self.evidence.clone();
+        let mut reports = self.reports.clone();
+        evidence.replace(
             self.providers[index].provider.name(),
             provider.name(),
             provider.evidence(),
         )?;
+        reports.replace(
+            self.providers[index].provider.name(),
+            provider.name(),
+            provider.report_codec(),
+        )?;
+        self.evidence = evidence;
+        self.reports = reports;
         self.providers[index] = RegisteredProtocol::new(kind, provider);
         Ok(())
     }
@@ -266,6 +287,22 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
 
     pub fn evidence(&self) -> &evidence::EvidenceRegistry {
         &self.evidence
+    }
+
+    pub fn report_codecs(&self) -> &report::CodecRegistry {
+        &self.reports
+    }
+
+    pub fn register_report_codec(
+        &mut self,
+        protocol: ProtocolId,
+        codec: Arc<dyn report::ReportCodec>,
+    ) -> Result<()> {
+        self.reports.register(protocol, codec)
+    }
+
+    pub fn report_codec(&self, protocol: &str) -> Option<Arc<dyn report::ReportCodec>> {
+        self.reports.codec(protocol)
     }
 
     pub fn registrations(&self) -> &[RegisteredProtocol<Kind>] {

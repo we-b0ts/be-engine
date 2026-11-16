@@ -95,6 +95,10 @@ impl traffic_protocol::DependencyProvider for RedisProvider {
         Some(std::sync::Arc::new(native::Native))
     }
 
+    fn report_codec(&self) -> Option<std::sync::Arc<dyn traffic_protocol::report::ReportCodec>> {
+        Some(std::sync::Arc::new(report::EvidenceCodec))
+    }
+
     fn evidence(&self) -> Option<std::sync::Arc<dyn traffic_protocol::evidence::EvidenceAdapter>> {
         Some(std::sync::Arc::new(evidence::NativeEvidence))
     }

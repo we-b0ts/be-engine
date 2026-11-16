@@ -201,3 +201,54 @@ fn replacing_a_cloned_registry_preserves_other_instances_and_existing_sessions()
         0
     );
 }
+
+struct ReportingProvider(&'static str);
+impl report::ReportCodec for ReportingProvider {}
+impl DependencyProvider for ReportingProvider {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+    fn recognize(&self, _: Probe<'_>) -> Recognition {
+        Recognition::Reject
+    }
+    fn create_session(&self) -> Result<Session> {
+        Ok(Session::new(()))
+    }
+    fn report_codec(&self) -> Option<Arc<dyn report::ReportCodec>> {
+        Some(Arc::new(ReportingProvider(self.0)))
+    }
+}
+
+#[test]
+fn registering_and_replacing_a_provider_installs_its_report_owner_atomically() {
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(1, Arc::new(ReportingProvider("vendor")))
+        .unwrap();
+    assert!(registry.report_codec("vendor").is_some());
+    let original = registry.clone();
+    registry
+        .register_report_codec(
+            ProtocolId::new("reserved"),
+            Arc::new(ReportingProvider("reserved")),
+        )
+        .unwrap();
+    assert!(
+        registry
+            .replace(1, Arc::new(ReportingProvider("reserved")))
+            .is_err()
+    );
+    assert_eq!(registry.provider(1).unwrap().name(), "vendor");
+    assert!(registry.report_codec("vendor").is_some());
+    assert!(
+        registry
+            .register(2, Arc::new(ReportingProvider("reserved")))
+            .is_err()
+    );
+    assert!(registry.provider(2).is_err());
+    registry
+        .replace(1, provider("replacement", Recognition::Reject))
+        .unwrap();
+    assert!(registry.report_codec("vendor").is_none());
+    assert!(original.report_codec("vendor").is_some());
+}

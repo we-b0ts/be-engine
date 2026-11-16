@@ -30,9 +30,9 @@ mod report;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 use query_catalog::query_kinds;
 mod diagnosis;
-mod mysql_diagnosis;
 mod overview;
 pub(super) mod policy_freshness;
+mod protocol_diagnosis;
 mod response_body;
 mod rule_guidance;
 mod unified_discovery;
@@ -389,11 +389,11 @@ fn facts(
                 facts["cross_case_candidates"] = crate::e2e_run::query_http_cross_case_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             }
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
-            mysql_diagnosis::attach(&mut facts);
-            let limitations = dirty_cluster_limitations(&facts);
+            let native = protocol_diagnosis::attach(&mut facts, crate::protocols::default_providers().report_codecs())?;
+            let limitations = dirty_cluster_limitations(&native);
             let next_step = if let Some(failures) = facts["execution_failures"].as_array().filter(|failures| !failures.is_empty()) {
-                format!("{} {}",execution::guidance(failures),mysql_diagnosis::next_step(&facts))
-            } else {mysql_diagnosis::next_step(&facts)};
+                format!("{} {}",execution::guidance(failures),protocol_diagnosis::next_step(&native))
+            } else {protocol_diagnosis::next_step(&native)};
             Ok((
                 facts,
                 limitations,
@@ -455,23 +455,14 @@ fn dirty_cluster_facts(target_root: &Path, counts: E2eDirtyCounts) -> Value {
     })
 }
 
-fn dirty_cluster_limitations(facts: &Value) -> Vec<String> {
+fn dirty_cluster_limitations(
+    native: &traffic_protocol::report::diagnostics::Diagnosis,
+) -> Vec<String> {
     let mut limitations = vec![
         "dirty event counts do not prove process ownership".to_string(),
         "they do not prove response causality".to_string(),
     ];
-    limitations.extend(mysql_diagnosis::limitations(facts));
-    if facts
-        .get("clusters")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("motan"))
-    {
-        limitations.push(
-            "Motan dirty evidence does not indicate a business-argument mismatch".to_string(),
-        );
-    }
+    limitations.extend(native.limitations.iter().cloned());
     limitations
 }
 

@@ -2,7 +2,10 @@
 use serde::Serialize;
 
 mod diagnostics;
+mod evidence;
+mod guidance;
 pub use diagnostics::{ConnectionReport, MatchedQueryReport, QueryReport, RecordedExchangeSummary};
+pub use evidence::EvidenceCodec;
 
 use crate::sql::{Token, tokens_with_spans};
 

@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub mod diagnostics;
+mod empty;
 
 pub trait ReportSection: Send + Sync {
     fn count(&self) -> Result<usize>;
@@ -22,12 +23,16 @@ pub trait ReportCodec: Send + Sync {
     fn diagnostics(&self) -> &dyn diagnostics::DiagnosticSchema {
         &diagnostics::STANDARD
     }
-    fn decode(&self, report: &Path, value: &Value) -> Result<Option<Box<dyn ReportSection>>>;
+    fn decode(&self, _report: &Path, _value: &Value) -> Result<Option<Box<dyn ReportSection>>> {
+        Ok(None)
+    }
     fn decode_extensions(
         &self,
-        report: &Path,
+        _report: &Path,
         fields: &BTreeMap<String, Value>,
-    ) -> Result<Box<dyn ReportSection>>;
+    ) -> Result<Box<dyn ReportSection>> {
+        empty::decode(fields)
+    }
     fn reclassified_rows<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
         &report["dependency_protocols"][protocol]["unused_global"]
     }
@@ -70,5 +75,42 @@ impl CodecRegistry {
             .iter()
             .find(|(id, _)| id.as_str() == protocol)
             .map(|(_, codec)| codec.clone())
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        old_name: &str,
+        name: &'static str,
+        codec: Option<Arc<dyn ReportCodec>>,
+    ) -> Result<()> {
+        let mut replacement = self.clone();
+        replacement.codecs.retain(|id, _| id.as_str() != old_name);
+        if let Some(codec) = codec {
+            replacement.register(ProtocolId::new(name), codec)?;
+        }
+        *self = replacement;
+        Ok(())
+    }
+
+    pub fn diagnose(&self, facts: &Value) -> Result<diagnostics::Diagnosis> {
+        let mut diagnosis = diagnostics::Diagnosis::default();
+        for (_, codec) in self.iter() {
+            let native = codec.diagnostics().diagnose(facts);
+            for (name, detail) in native.details {
+                ensure!(
+                    !diagnosis.details.contains_key(&name),
+                    "native diagnosis would replace an existing fact {name:?}"
+                );
+                diagnosis.details.insert(name, detail);
+            }
+            diagnosis.limitations.extend(native.limitations);
+            diagnosis.next_steps.extend(native.next_steps);
+        }
+        Ok(diagnosis)
+    }
+
+    pub fn has_value_difference(&self, facts: &Value) -> bool {
+        self.iter()
+            .any(|(_, codec)| codec.diagnostics().has_value_difference(facts))
     }
 }

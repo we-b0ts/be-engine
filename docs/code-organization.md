@@ -67,6 +67,13 @@ transactional host checkpoints. `traffic-extensions` is the
 application extension catalog, with feature-selected installations in one file.
 Framework crates depend on the extension contracts and receive their execution
 owners through application composition.
+Native providers install their report codecs together with their connection and
+evidence capabilities. HTTP header-report layouts, MySQL SQL signatures and
+transaction guidance, and Redis report identities belong to the corresponding
+protocol crates. `traffic-protocol::report` aggregates provider-owned diagnostic
+facts, limitations and next steps. Rewrite retains issue state, protected evidence
+access and command construction. Shared report collection preserves both native
+report sections and historical layouts, including their actual delivery receipts.
 `traffic-policy-schema` owns persisted compatibility declarations, physical
 selectors, bounded proofs and their pure validation. Its validation entrypoints
 receive the policy and codec registries. Application adapters supply the installed

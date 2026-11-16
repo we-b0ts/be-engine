@@ -4,6 +4,30 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+pub struct EvidenceCodec;
+impl traffic_protocol::report::ReportCodec for EvidenceCodec {
+    fn diagnostics(&self) -> &dyn traffic_protocol::report::diagnostics::DiagnosticSchema {
+        self
+    }
+    fn unused_case_rows<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
+        &report[protocol]["unused_case"]
+    }
+    fn reclassified_rows<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
+        &report[protocol]["unused_global"]
+    }
+    fn requires_source_exchange_id(&self, row: &Value) -> bool {
+        row["command"] == "PUBSUB_PUSH"
+    }
+}
+impl traffic_protocol::report::diagnostics::DiagnosticSchema for EvidenceCodec {
+    fn section<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
+        &report[protocol]
+    }
+    fn matched_rows<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
+        &report[protocol]["matched"]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationIdentity {

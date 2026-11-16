@@ -41,7 +41,6 @@ impl DependencyProtocol {
 pub struct DependencyProviders {
     providers: ProviderRegistry<DependencyProtocol>,
     bindings: traffic_policy_value::BindingRegistry,
-    report_codecs: traffic_protocol::report::CodecRegistry,
 }
 
 impl Default for DependencyProviders {
@@ -51,7 +50,6 @@ impl Default for DependencyProviders {
             bindings: traffic_policy_value::BindingRegistry::new(
                 traffic_extensions::codecs().clone(),
             ),
-            report_codecs: traffic_protocol::report::CodecRegistry::default(),
         }
     }
 }
@@ -79,22 +77,6 @@ impl DependencyProviders {
             })
             .ok_or_else(|| anyhow::anyhow!("native connection provider is not registered"))
     }
-    pub(crate) fn report_codecs(&self) -> &traffic_protocol::report::CodecRegistry {
-        &self.report_codecs
-    }
-    pub fn register_report_codec(
-        &mut self,
-        protocol: traffic_protocol::ProtocolId,
-        codec: Arc<dyn traffic_protocol::report::ReportCodec>,
-    ) -> Result<()> {
-        self.report_codecs.register(protocol, codec)
-    }
-    pub fn report_codec(
-        &self,
-        protocol: &str,
-    ) -> Option<Arc<dyn traffic_protocol::report::ReportCodec>> {
-        self.report_codecs.codec(protocol)
-    }
     pub fn bindings(&self) -> &traffic_policy_value::BindingRegistry {
         &self.bindings
     }
@@ -120,14 +102,11 @@ pub fn default_providers() -> Arc<DependencyProviders> {
         providers
             .register_evidence("transport", Arc::new(evidence::TransportEvidence))
             .expect("unique transport evidence adapter");
-        for protocol in replay::report::PROTOCOLS
-            .into_iter()
-            .chain(replay::report::codecs::HISTORICAL_PROTOCOLS)
-        {
+        for protocol in replay::report::codecs::HISTORICAL_PROTOCOLS {
             providers
                 .register_report_codec(
                     traffic_protocol::ProtocolId::new(protocol),
-                    Arc::new(replay::report::codecs::Builtin(protocol)),
+                    Arc::new(replay::report::codecs::Builtin),
                 )
                 .expect("unique built-in report codec");
         }

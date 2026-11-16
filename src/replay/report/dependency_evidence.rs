@@ -150,11 +150,13 @@ struct DiagnosticSource<'a> {
     protocol: &'a str,
     section: &'a Value,
     schema: &'a dyn DiagnosticSchema,
+    fields: &'static [traffic_protocol::report::diagnostics::Field],
+    matched: &'a Value,
 }
 
 impl DiagnosticSource<'_> {
     fn arrays(&self) -> impl Iterator<Item = EventArray<'_>> {
-        self.schema.fields().iter().map(|field| EventArray {
+        self.fields.iter().map(|field| EventArray {
             protocol: self.protocol,
             field: field.name,
             reason: field.reason,
@@ -174,6 +176,8 @@ fn diagnostic_sources<'a>(
             protocol: protocol.as_str(),
             section: codec.diagnostics().section(report, protocol.as_str()),
             schema: codec.diagnostics(),
+            fields: codec.diagnostics().fields(),
+            matched: codec.diagnostics().matched_rows(report, protocol.as_str()),
         })
         .collect::<Vec<_>>();
     for (protocol, section) in report["dependency_protocols"]
@@ -181,11 +185,22 @@ fn diagnostic_sources<'a>(
         .into_iter()
         .flatten()
     {
-        if !sources.iter().any(|source| source.protocol == protocol) {
+        if !sources
+            .iter()
+            .any(|source| std::ptr::eq(source.section, section))
+        {
+            let schema = codecs
+                .iter()
+                .find(|(id, _)| id.as_str() == protocol)
+                .map_or(&STANDARD as &dyn DiagnosticSchema, |(_, codec)| {
+                    codec.diagnostics()
+                });
             sources.push(DiagnosticSource {
                 protocol,
                 section,
-                schema: &STANDARD,
+                schema,
+                fields: STANDARD.fields(),
+                matched: &section["matched"],
             });
         }
     }
@@ -458,19 +473,23 @@ fn target_matches(
     case_id: &str,
     sources: &[DiagnosticSource<'_>],
 ) -> (Vec<ReplayDependencyTargetMatch>, bool) {
-    let schema = sources
+    let events = sources
         .iter()
-        .find(|source| source.protocol == protocol)
-        .map_or(&STANDARD as &dyn DiagnosticSchema, |source| source.schema);
-    let events = schema.matched_rows(report, protocol).as_array();
-    let Some(events) = events else {
-        return (Vec::new(), false);
-    };
+        .filter(|source| source.protocol == protocol)
+        .flat_map(|source| {
+            source
+                .matched
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(move |event| (source.schema, event))
+        })
+        .collect::<Vec<_>>();
     let mut matches = events
         .iter()
-        .filter(|event| event.get("case_id").and_then(Value::as_str) == Some(case_id))
+        .filter(|(_, event)| event.get("case_id").and_then(Value::as_str) == Some(case_id))
         .enumerate()
-        .map(|(fallback_index, event)| {
+        .map(|(fallback_index, (schema, event))| {
             let target_event_index = event
                 .get("target_event_index")
                 .and_then(Value::as_u64)

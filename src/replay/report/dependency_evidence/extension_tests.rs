@@ -132,3 +132,53 @@ fn open_protocol_reports_include_dirty_evidence_without_a_builtin_schema() {
     );
     assert_eq!(representative.target_matches[0].target_event_index, 2);
 }
+
+#[test]
+fn historical_codecs_keep_current_native_differences_and_match_receipts_visible() {
+    let providers = crate::protocols::default_providers();
+    let report = json!({
+        "unmatched_queries":[{"case_id":"case-a", "command":"COM_QUERY", "sql":"SELECT legacy"}],
+        "matched_queries":[{"case_id":"case-a", "command":"COM_QUERY", "sql":"SELECT old", "target_event_index":1}],
+        "dependency_protocols": {
+            "mysql": {
+                "unmatched":[{"case_id":"case-a", "command":"COM_QUERY", "sql":"SELECT native"}],
+                "matched":[{"case_id":"case-a", "command":"COM_QUERY", "sql":"SELECT current", "target_event_index":2}]
+            },
+            "http": {"unused_case":[{"case_id":"case-a", "method":"GET", "uri":"/current"}]},
+            "redis": {"unmatched":[{"case_id":"case-a", "command":"GET"}]}
+        }
+    });
+    let evidence = build_dependency_evidence(&report, providers.report_codecs());
+    assert!(report_has_case_dirty_events(
+        &report,
+        providers.report_codecs()
+    ));
+    assert_eq!(evidence.case_event_counts["mysql"]["unmatched_target"], 2);
+    assert_eq!(evidence.case_event_counts["http"]["unused_recorded"], 1);
+    assert_eq!(evidence.case_event_counts["redis"]["unmatched_target"], 1);
+    let mysql = evidence
+        .clusters
+        .iter()
+        .find(|cluster| cluster.protocol == "mysql")
+        .unwrap();
+    let matches = &mysql.representative.as_ref().unwrap().target_matches;
+    assert_eq!(matches.len(), 2);
+    assert!(matches.iter().all(|row| row.sql_fingerprint.is_some()));
+    assert_eq!(matches[0].target_event_index, 1);
+    assert_eq!(matches[1].target_event_index, 2);
+}
+
+#[test]
+fn a_schema_using_standard_native_locations_is_collected_once() {
+    struct Native;
+    impl ReportCodec for Native {}
+    let mut codecs = CodecRegistry::default();
+    codecs
+        .register(ProtocolId::new("custom"), std::sync::Arc::new(Native))
+        .unwrap();
+    let report = json!({"dependency_protocols":{"custom":{
+        "unmatched":[{"case_id":"case-a", "command":"READ"}]
+    }}});
+    let evidence = build_dependency_evidence(&report, &codecs);
+    assert_eq!(evidence.case_event_counts["custom"]["unmatched_target"], 1);
+}

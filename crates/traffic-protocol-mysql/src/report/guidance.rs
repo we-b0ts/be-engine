@@ -30,11 +30,8 @@ fn recorded_transaction_control(cluster: &Value) -> bool {
     });
     cluster["reason"] == "unused_recorded"
         && sql.is_some_and(|sql| {
-            crate::mysql::autocommit::assignment(sql) == Some(false)
-                || matches!(
-                    crate::mysql::sql::normalize(sql).as_str(),
-                    "commit" | "rollback"
-                )
+            crate::autocommit::assignment(sql) == Some(false)
+                || matches!(crate::sql::normalize(sql).as_str(), "commit" | "rollback")
         })
 }
 
@@ -51,7 +48,7 @@ pub(super) fn has_sql_mismatch(facts: &Value) -> bool {
     })
 }
 
-pub(super) fn attach(facts: &mut Value) {
+fn attach(facts: &mut Value) {
     let cluster_ids: Vec<_> = unused_clusters(facts)
         .filter_map(|cluster| cluster["cluster_id"].as_str().map(str::to_owned))
         .collect();
@@ -134,7 +131,7 @@ pub(super) fn attach(facts: &mut Value) {
     }
 }
 
-pub(super) fn limitations(facts: &Value) -> Vec<String> {
+fn limitations(facts: &Value) -> Vec<String> {
     let mut limitations = Vec::new();
     if unused_clusters(facts).next().is_some() {
         limitations.extend([
@@ -148,91 +145,40 @@ pub(super) fn limitations(facts: &Value) -> Vec<String> {
     limitations
 }
 
-pub(super) fn next_step(facts: &Value) -> String {
-    let mut step = "Start with the largest endpoint cluster. Execute representative_dependencies_command when present to summarize that case's dependency targets, then select a returned detail_command before proving request or process ownership and response causality in source code.".to_string();
+fn next_step(facts: &Value) -> String {
+    let mut step = String::new();
     if facts.get("mysql_autocommit_diagnosis").is_some() {
-        step.push_str(" For MySQL transaction evidence, follow mysql_autocommit_diagnosis: resolve an incomplete Source proof using its rejected query references first; otherwise inspect Source write count and first-write-through-end members, then the actual Target socket's transaction status, missing members and member_comparison.first_difference before changing code or alleging an engine gap.");
+        step.push_str("For MySQL transaction evidence, follow mysql_autocommit_diagnosis: resolve an incomplete Source proof using its rejected query references first; otherwise inspect Source write count and first-write-through-end members, then the actual Target socket's transaction status, missing members and member_comparison.first_difference before changing code or alleging an engine gap.");
     } else if unused_clusters(facts).next().is_some() {
-        step.push_str(" For unused MySQL calls, follow mysql_unused_diagnosis.source_checks before choosing a rule or reporting an engine gap; include implicit ORM refreshes in the source trace.");
+        step.push_str("For unused MySQL calls, follow mysql_unused_diagnosis.source_checks before choosing a rule or reporting an engine gap; include implicit ORM refreshes in the source trace.");
     }
     step
+}
+
+pub(super) fn diagnose(facts: &Value) -> traffic_protocol::report::diagnostics::Diagnosis {
+    let mut native = json!({"clusters":facts["clusters"]});
+    attach(&mut native);
+    let limitations = limitations(&native);
+    let step = next_step(&native);
+    let mut details = native
+        .as_object()
+        .expect("native diagnosis is an object")
+        .clone();
+    details.remove("clusters");
+    traffic_protocol::report::diagnostics::Diagnosis {
+        details,
+        limitations,
+        next_steps: if step.is_empty() {
+            Vec::new()
+        } else {
+            vec![step]
+        },
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rewrite::evidence::{QUERY_DIRTY_CLUSTERS, rule_guidance};
-    use crate::rewrite::model::RewriteIssueKind;
-    use std::path::Path;
-
-    #[test]
-    fn unused_read_guidance_preserves_uncertainty_and_does_not_offer_a_time_fix() {
-        let mut facts = json!({
-            "clusters": [{"cluster_id":"unused", "protocol":"mysql", "reason":"unused_recorded", "operations":{"COM_QUERY":1}}],
-            "dependency_request_candidates":[], "dynamic_capture_candidates":[]
-        });
-        let recorded_clusters = facts["clusters"].clone();
-        attach(&mut facts);
-        assert_eq!(facts["clusters"], recorded_clusters);
-        let diagnosis = &facts["mysql_unused_diagnosis"];
-        assert_eq!(diagnosis["cluster_ids"], json!(["unused"]));
-        assert_eq!(diagnosis["ownership"], "unresolved");
-        assert_eq!(diagnosis["observation"], "recorded_calls_not_consumed");
-        assert!(!limitations(&facts).is_empty());
-        assert!(next_step(&facts).contains("mysql_unused_diagnosis.source_checks"));
-        for kind in [
-            RewriteIssueKind::Replay,
-            RewriteIssueKind::Dependency,
-            RewriteIssueKind::Response,
-        ] {
-            let planners = rule_guidance::applicable_rule_planners(
-                Path::new("/target"),
-                kind,
-                QUERY_DIRTY_CLUSTERS,
-                &facts,
-                "current",
-            );
-            assert!(planners.iter().all(|p| p.capability != "mysql_sql_time"));
-        }
-        let hints = rule_guidance::rule_hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts);
-        let hint = hints
-            .iter()
-            .find(|h| h.capability == "api_triggered_process_traffic")
-            .unwrap();
-        assert!(hint.hint.contains("not evidence of process ownership"));
-    }
-
-    #[test]
-    fn mysql_guidance_is_scoped_without_hiding_other_dirty_reasons() {
-        for cluster in [
-            json!({"protocol":"mysql", "reason":"unmatched_target"}),
-            json!({"protocol":"redis", "reason":"unused_recorded"}),
-        ] {
-            let mut facts = json!({"clusters":[cluster]});
-            let original = facts.clone();
-            attach(&mut facts);
-            assert_eq!(facts, original);
-            assert!(limitations(&facts).is_empty());
-            assert!(!next_step(&facts).contains("mysql_unused_diagnosis"));
-        }
-        let mut facts = json!({"clusters":[
-            {"cluster_id":"unused", "protocol":"mysql", "reason":"unused_recorded"},
-            {"cluster_id":"unmatched", "protocol":"mysql", "reason":"unmatched_target"}
-        ]});
-        attach(&mut facts);
-        assert_eq!(
-            facts["mysql_unused_diagnosis"]["cluster_ids"],
-            json!(["unused"])
-        );
-        let planners = rule_guidance::applicable_rule_planners(
-            Path::new("/target"),
-            RewriteIssueKind::Replay,
-            QUERY_DIRTY_CLUSTERS,
-            &facts,
-            "current",
-        );
-        assert!(planners.iter().any(|p| p.capability == "mysql_sql_time"));
-    }
 
     #[test]
     fn autocommit_guidance_uses_transaction_evidence_without_inferring_a_gap() {
@@ -373,90 +319,6 @@ mod tests {
                 .get("target_status_before")
                 .is_none()
         );
-    }
-
-    #[test]
-    fn unmatched_transaction_evidence_guides_the_write_interval_without_value_rules() {
-        let cluster = json!({
-            "cluster_id":"transaction", "protocol":"mysql", "reason":"unmatched_target", "count":1,
-            "representative":{"difference":{"actual":{"signature":{
-                "diagnostic":{"kind":"mysql_autocommit_transaction_coverage",
-                    "reason":"target_transaction_members_or_end_differ",
-                    "source_transactions":[{"write_count":2,"source_connection_id":"source-connection","first_write_query_sequence":5,
-                        "last_query_sequence":9,"required_operation_count":4,"end":"commit",
-                        "target_status_before":2,"target_status_after":2,
-                        "member_comparison":{"first_difference":{"member_position":1,
-                            "expected":{"source_query_sequence":6},"actual":{"source_query_sequence":8}}}}]}
-            }}}}
-        });
-        let mut facts = json!({"clusters":[cluster.clone()]});
-        attach(&mut facts);
-        assert_eq!(facts["clusters"], json!([cluster]));
-        assert!(facts.get("mysql_unused_diagnosis").is_none());
-        let diagnosis = &facts["mysql_autocommit_diagnosis"];
-        assert_eq!(
-            diagnosis["clusters"][0]["transaction_evidence"]["source_transactions"][0]["write_count"],
-            2
-        );
-        assert_eq!(
-            diagnosis["clusters"][0]["connection_id"],
-            "source-connection"
-        );
-        assert_eq!(diagnosis["clusters"][0]["query_sequence"], 9);
-        let checks = diagnosis["target_checks"].to_string();
-        for text in [
-            "FIRST WRITE",
-            "trailing",
-            "Prefix",
-            "0x0002",
-            "with_transaction",
-            "first_difference",
-        ] {
-            assert!(checks.contains(text), "missing {text}");
-        }
-        for text in [
-            "affected_rows=0",
-            "affected_rows>0",
-            "UPDATE error",
-            "failed end controls",
-        ] {
-            assert!(
-                checks.contains(text),
-                "missing single-UPDATE guidance: {text}"
-            );
-        }
-        assert!(
-            diagnosis["source_checks"]
-                .to_string()
-                .contains("autocommit_eligible")
-        );
-        assert!(!limitations(&facts).is_empty());
-        assert!(next_step(&facts).contains("first-write-through-end"));
-        assert_eq!(
-            diagnosis["clusters"][0]["transaction_evidence"]["source_transactions"][0]["member_comparison"]
-                ["first_difference"]["actual"]["source_query_sequence"],
-            8
-        );
-        let planners = rule_guidance::applicable_rule_planners(
-            Path::new("/target"),
-            RewriteIssueKind::Replay,
-            QUERY_DIRTY_CLUSTERS,
-            &facts,
-            "current",
-        );
-        assert!(planners.iter().all(|planner| !matches!(
-            planner.capability.as_str(),
-            "mysql_sql_time" | "dynamic_value"
-        )));
-        // A distinct SQL mismatch still needs its ordinary rule discovery.
-        facts["clusters"].as_array_mut().unwrap().push(json!({
-            "protocol":"mysql", "reason":"unmatched_target", "count":1,
-            "representative":{"difference":{"actual":{"signature":{"sql":"SELECT 1"}}}}
-        }));
-        assert!(has_sql_mismatch(&facts));
-        facts["clusters"].as_array_mut().unwrap().pop();
-        facts["clusters"][0]["count"] = json!(2);
-        assert!(has_sql_mismatch(&facts));
     }
 
     #[test]

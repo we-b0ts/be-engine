@@ -264,8 +264,8 @@ pub(super) fn applicable_rule_planners(
     {
         add("dependency_scope", "http_cross_case");
     }
-    if super::mysql_diagnosis::has_sql_mismatch(facts) {
-        add("dependency_value", "mysql_sql_time");
+    if super::protocol_diagnosis::has_value_difference(facts) {
+        add("dependency_value", "resource_field_contract");
     }
     if issue == RewriteIssueKind::Dependency {
         let protocols = facts["clusters"]
@@ -315,7 +315,7 @@ mod tests {
             );
             let time = planners
                 .iter()
-                .find(|p| p.capability == "mysql_sql_time")
+                .find(|p| p.capability == "resource_field_contract")
                 .unwrap();
             assert_eq!(time.evidence_id, "current");
             assert!(time.command.argv.contains(&"--file".into()));
@@ -329,7 +329,7 @@ mod tests {
                 "current"
             )
             .iter()
-            .all(|p| p.capability != "mysql_sql_time")
+            .all(|p| p.capability != "resource_field_contract")
         );
     }
 

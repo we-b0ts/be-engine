@@ -2,6 +2,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Provider-owned interpretation of native evidence. The host retains the
+/// original facts, command construction, issue state and publication.
+#[derive(Debug, Default)]
+pub struct Diagnosis {
+    pub details: serde_json::Map<String, Value>,
+    pub limitations: Vec<String>,
+    pub next_steps: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
     Provisional,
@@ -60,6 +69,12 @@ const FIELDS: &[Field] = &[
 ];
 
 pub trait DiagnosticSchema: Send + Sync {
+    fn diagnose(&self, _facts: &Value) -> Diagnosis {
+        Diagnosis::default()
+    }
+    fn has_value_difference(&self, _facts: &Value) -> bool {
+        false
+    }
     fn section<'a>(&self, report: &'a Value, protocol: &str) -> &'a Value {
         &report["dependency_protocols"][protocol]
     }

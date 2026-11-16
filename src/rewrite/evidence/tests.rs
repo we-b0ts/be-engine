@@ -588,17 +588,15 @@ fn dirty_cluster_facts_omit_the_duplicate_full_startup_summary() {
 }
 
 #[test]
-fn motan_dirty_cluster_guidance_rules_out_business_argument_mismatch() {
-    let limitations = dirty_cluster_limitations(&serde_json::json!({
-        "clusters": [{"protocol": "motan", "reason": "unmatched_target"}]
-    }));
-
+fn uninstalled_native_diagnostics_retain_generic_limitations() {
+    let native = traffic_protocol::report::CodecRegistry::default()
+        .diagnose(&serde_json::json!({"clusters":[{"protocol":"vendor-native", "reason":"unmatched_target"}]}))
+        .unwrap();
     assert_eq!(
-        limitations,
+        dirty_cluster_limitations(&native),
         [
             "dirty event counts do not prove process ownership",
             "they do not prove response causality",
-            "Motan dirty evidence does not indicate a business-argument mismatch",
         ]
     );
 }
