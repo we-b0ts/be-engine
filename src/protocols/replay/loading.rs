@@ -27,7 +27,10 @@ impl SourceLoader {
                 changed: Default::default(),
             },
             unsupported_http_options: !config.http_ignore_query_params.is_empty()
-                || config.allowed_unused_http.is_some(),
+                || config
+                    .allowed_unused_http
+                    .as_ref()
+                    .is_some_and(|permission| !permission.hosts.is_empty()),
         }
     }
 }

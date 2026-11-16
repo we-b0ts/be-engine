@@ -75,7 +75,11 @@ async fn load(
                 policy_path: None,
                 http_ignore_query_params: Vec::new(),
                 process_owned_dependencies: Vec::new(),
-                allowed_unused_http: None,
+                // Managed replay supplies config metadata with an empty host set.
+                allowed_unused_http: Some(crate::ReplayAllowedUnusedHttpConfig {
+                    config_path: case.join("project.yaml"),
+                    hosts: Default::default(),
+                }),
             },
             "127.0.0.1:0".parse().unwrap(),
             address,
