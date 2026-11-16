@@ -3,7 +3,8 @@ use super::*;
 use crate::dns_mock::FakeDnsEntry;
 use anyhow::ensure;
 use serde::Deserialize;
-use traffic_policy::{PreparedTransform, TransformInput, TransformPlan};
+use traffic_policy::PreparedTransform;
+use traffic_policy_value::transformation::Transformation;
 
 pub(super) struct RegisteredRewrite(PreparedTransform);
 impl RegisteredRewrite {
@@ -24,10 +25,13 @@ impl Plugin for RegisteredRewrite {
     }
     fn rewrite(&self, input: &RewriteInput<'_>) -> Result<PluginResult> {
         let context = serde_json::from_value(serde_json::json!({"query":input.uri.query()}))?;
-        let Some(plan) = self.0.inspect(&TransformInput {
-            bytes: input.body,
-            context: &context,
-        })?
+        let Some(plan) = Transformation::inspect(
+            &self.0,
+            input.body,
+            &context,
+            &traffic_value::Value::Null,
+            traffic_extensions::codecs(),
+        )?
         else {
             return Ok(PluginResult::Unchanged);
         };
@@ -84,7 +88,7 @@ struct NetworkRoute {
     upstream_authority: Option<String>,
 }
 struct RegisteredBody {
-    plan: Box<dyn TransformPlan>,
+    plan: Transformation,
     routes: Vec<NetworkRoute>,
 }
 impl ResponseBody for RegisteredBody {
@@ -125,6 +129,6 @@ impl ResponseBody for RegisteredBody {
                 })
             })
             .collect::<Result<_>>()?;
-        Ok((self.plan.materialize(&resources)?.bytes, targets))
+        Ok((self.plan.materialize(&resources)?, targets))
     }
 }

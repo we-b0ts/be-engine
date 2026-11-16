@@ -70,4 +70,9 @@ pub trait ValueDocument: Send + Sync {
     fn original_bytes(&self) -> &[u8];
     fn comparison_view<'a>(&'a self, selected: &[String]) -> Cow<'a, Value>;
     fn encode(&self, logical: &Value, allowed: &[String]) -> Result<Vec<u8>>;
+
+    fn transform(&self, logical: &Value, selected: &[String]) -> Result<Vec<u8>> {
+        let changed = crate::transformation_paths(self.value(), logical, selected)?;
+        self.encode(logical, &changed)
+    }
 }

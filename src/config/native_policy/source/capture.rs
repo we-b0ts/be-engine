@@ -117,12 +117,14 @@ pub(super) fn validate(
                             .parse()?;
                         let context =
                             serde_json::from_value(serde_json::json!({"query":uri.query()}))?;
-                        if transformation
-                            .inspect(&traffic_policy::TransformInput {
-                                bytes: &decoded,
-                                context: &context,
-                            })?
-                            .is_some()
+                        if traffic_policy_value::transformation::Transformation::inspect(
+                            transformation,
+                            &decoded,
+                            &context,
+                            &traffic_value::Value::Null,
+                            traffic_extensions::codecs(),
+                        )?
+                        .is_some()
                         {
                             count += 1;
                         }

@@ -30,7 +30,7 @@ fn nested_naming_response_requests_a_route_before_rewriting_the_recorded_value()
     .unwrap();
     let plan = policy
         .inspect(&TransformInput {
-            bytes: &original,
+            value: &serde_json::from_slice(&original).unwrap(),
             context: &Value::Null,
         })
         .unwrap()
@@ -47,7 +47,7 @@ fn nested_naming_response_requests_a_route_before_rewriting_the_recorded_value()
     assert!(plan.materialize(&BTreeMap::new()).is_err());
     let plan = policy
         .inspect(&TransformInput {
-            bytes: &original,
+            value: &serde_json::from_slice(&original).unwrap(),
             context: &Value::Null,
         })
         .unwrap()
@@ -57,7 +57,7 @@ fn nested_naming_response_requests_a_route_before_rewriting_the_recorded_value()
         value(serde_json::json!({"advertised_ip":"198.19.0.7"})),
     )]);
     let rewritten = plan.materialize(&routes).unwrap();
-    let outer: serde_json::Value = serde_json::from_slice(&rewritten.bytes).unwrap();
+    let outer: serde_json::Value = serde_json::to_value(&rewritten.value).unwrap();
     let body: serde_json::Value = serde_json::from_str(outer["body"].as_str().unwrap()).unwrap();
     assert_eq!(
         body["nodes"]["service"][0],
@@ -85,7 +85,7 @@ fn cache_configuration_uses_the_same_registered_transform_and_route_contract() {
     assert!(
         policy
             .inspect(&TransformInput {
-                bytes: &original,
+                value: &serde_json::from_slice(&original).unwrap(),
                 context: &value(serde_json::json!({"query":"action=other"})),
             })
             .unwrap()
@@ -93,7 +93,7 @@ fn cache_configuration_uses_the_same_registered_transform_and_route_contract() {
     );
     let plan = policy
         .inspect(&TransformInput {
-            bytes: &original,
+            value: &serde_json::from_slice(&original).unwrap(),
             context: &value(serde_json::json!({"query":"action=lookup"})),
         })
         .unwrap()
@@ -103,7 +103,7 @@ fn cache_configuration_uses_the_same_registered_transform_and_route_contract() {
         value(serde_json::json!({"advertised_ip":"198.19.0.8"})),
     )]);
     let rewritten = plan.materialize(&routes).unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&rewritten.bytes).unwrap();
+    let body: serde_json::Value = serde_json::to_value(&rewritten.value).unwrap();
     let embedded = body["body"]["nodes"][0]["value"].as_str().unwrap();
     assert!(embedded.contains("198.19.0.8:6379"));
     assert!(embedded.contains("stable"));

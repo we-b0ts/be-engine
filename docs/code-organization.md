@@ -171,6 +171,9 @@ Pending read provenance retains the prepared scalar decoder.
 Source field selection over the supplied policy registry. Its `formats` module
 owns URL, compact JWT and named-template value checks. The host supplies frozen
 signing keys and whole-document comparison for nested values.
+Its `transformation` module binds registered value transformations to a Source-selected
+codec document. Policies receive logical values and return authorized logical paths.
+The executor supplies decoding and delegates rendering to the retained document.
 `traffic-recording::source` owns immutable scope resolution, authenticated file
 stamps, byte-bounded readers, finite record references and paged storage. Native
 index builders enrich these shared locations with protocol metadata.

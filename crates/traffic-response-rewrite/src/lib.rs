@@ -228,6 +228,30 @@ impl CompiledRewrite {
         );
         let root =
             serde_json::from_slice(body).context("response rewrite body is not valid JSON")?;
+        self.inspect_root(root, body.len(), budget, query)
+    }
+
+    pub fn inspect_value(
+        &self,
+        root: Value,
+        budget: RewriteBudget,
+        query: Option<&str>,
+    ) -> Result<Option<RewritePlan>> {
+        let size = serde_json::to_vec(&root)?.len();
+        ensure!(
+            size <= budget.max_decoded_bytes,
+            "response rewrite value exceeds its decoded byte budget"
+        );
+        self.inspect_root(root, size, budget, query)
+    }
+
+    fn inspect_root(
+        &self,
+        root: Value,
+        size: usize,
+        budget: RewriteBudget,
+        query: Option<&str>,
+    ) -> Result<Option<RewritePlan>> {
         let mut plan = RewritePlan {
             documents: vec![Document {
                 value: root,
@@ -238,7 +262,7 @@ impl CompiledRewrite {
             transformed: false,
         };
         let mut decoded = HashMap::new();
-        let mut decoded_bytes = body.len();
+        let mut decoded_bytes = size;
         let query: Vec<_> =
             url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()).collect();
         for rule in &self.rules {
@@ -416,7 +440,11 @@ impl RewritePlan {
         self.endpoints.values()
     }
 
-    pub fn materialize(mut self, routes: &BTreeMap<String, Ipv4Addr>) -> Result<Vec<u8>> {
+    pub fn materialize(self, routes: &BTreeMap<String, Ipv4Addr>) -> Result<Vec<u8>> {
+        serde_json::to_vec(&self.materialize_value(routes)?).map_err(Into::into)
+    }
+
+    pub fn materialize_value(mut self, routes: &BTreeMap<String, Ipv4Addr>) -> Result<Value> {
         for ((document, path), patch) in self.patches {
             let ip = routes
                 .get(&patch.alias)
@@ -451,7 +479,7 @@ impl RewritePlan {
                 .pointer_mut(&path)
                 .context("embedded response document disappeared")? = Value::String(rendered);
         }
-        serde_json::to_vec(&self.documents[0].value).map_err(Into::into)
+        Ok(self.documents.remove(0).value)
     }
 }
 

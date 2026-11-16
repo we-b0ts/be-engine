@@ -12,13 +12,15 @@ pub fn canonicalize(policies: &PolicyRegistry, value: &str, separator: &str) -> 
         let context = Value::Null;
         let plan = transform
             .inspect(&traffic_policy::TransformInput {
-                bytes: value.as_bytes(),
+                value: &Value::String(value.into()),
                 context: &context,
             })?
             .ok_or_else(|| anyhow::anyhow!("joined collection has no transformation"))?;
-        Ok(String::from_utf8(
-            plan.materialize(&BTreeMap::new())?.bytes,
-        )?)
+        plan.materialize(&BTreeMap::new())?
+            .value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("joined collection transformation changed value type"))
     };
     canonical().unwrap_or_else(|_| value.into())
 }

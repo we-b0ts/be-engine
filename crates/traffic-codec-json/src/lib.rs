@@ -131,4 +131,9 @@ impl ValueDocument for JsonDocument {
         traffic_value::validate_patch(&self.value, logical, allowed)?;
         render::derived(&self.original, &serde_json::to_value(logical)?)
     }
+
+    fn transform(&self, logical: &Value, selected: &[String]) -> Result<Vec<u8>> {
+        traffic_value::transformation_paths(&self.value, logical, selected)?;
+        render::transformed(&self.original, &serde_json::to_value(logical)?)
+    }
 }

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use traffic_value::Value;
 
 pub struct TransformInput<'a> {
-    pub bytes: &'a [u8],
+    pub value: &'a Value,
     pub context: &'a Value,
 }
 
@@ -17,7 +17,8 @@ pub struct ResourceRequest {
 }
 
 pub struct TransformedValue {
-    pub bytes: Vec<u8>,
+    pub value: Value,
+    pub paths: Vec<String>,
 }
 
 pub trait TransformPolicy: Send + Sync {

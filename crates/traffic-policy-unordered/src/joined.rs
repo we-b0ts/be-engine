@@ -116,22 +116,28 @@ impl ComparisonPolicy for Configuration {
 
 impl TransformPolicy for Configuration {
     fn inspect(&self, input: &TransformInput<'_>) -> Result<Option<Box<dyn TransformPlan>>> {
+        let source = input
+            .value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("joined collection requires a string value"))?;
         ensure!(
-            input.bytes.len() <= traffic_value::MAX_VALUE_BYTES,
+            source.len() <= traffic_value::MAX_VALUE_BYTES,
             "joined collection exceeds 64 MiB"
         );
-        let source = std::str::from_utf8(input.bytes)?;
-        let canonical = canonicalize(source, &self.separator).into_bytes();
+        let canonical = canonicalize(source, &self.separator);
         Ok(Some(Box::new(Plan(canonical))))
     }
 }
-struct Plan(Vec<u8>);
+struct Plan(String);
 impl TransformPlan for Plan {
     fn requests(&self) -> &[ResourceRequest] {
         &[]
     }
     fn materialize(self: Box<Self>, _: &BTreeMap<String, Value>) -> Result<TransformedValue> {
-        Ok(TransformedValue { bytes: self.0 })
+        Ok(TransformedValue {
+            value: Value::String(self.0),
+            paths: vec![String::new()],
+        })
     }
 }
 
@@ -161,13 +167,16 @@ mod tests {
         let transformation = JoinedStringPolicy.prepare_transform(&options).unwrap();
         let plan = transformation
             .inspect(&TransformInput {
-                bytes: b"b,a,,a",
+                value: &Value::String("b,a,,a".into()),
                 context: &Value::Null,
             })
             .unwrap()
             .unwrap();
         assert!(plan.requests().is_empty());
-        assert_eq!(plan.materialize(&BTreeMap::new()).unwrap().bytes, b",a,a,b");
+        assert_eq!(
+            plan.materialize(&BTreeMap::new()).unwrap().value,
+            Value::String(",a,a,b".into())
+        );
         let invalid = serde_json::from_value(serde_json::json!({"separator":""})).unwrap();
         assert!(JoinedStringPolicy.prepare(&invalid).is_err());
     }

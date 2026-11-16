@@ -64,7 +64,8 @@ Codec 拥有字节识别、结构遍历、类型与 presence，以及保留原�
 
 当前 `traffic-policy-schema`、`traffic-policy-compiler`、`traffic-policy-document` 仍包含历史的协议位置声明、SQL 验证和具体 codec 兼容处理。
 这些职责需要继续迁入协议与 codec 的绑定能力，编译入口接收注册表提供的验证、位置覆盖和静态字段描述。
-变换接口当前也保留原始字节输入，需要继续收敛到标准 value 与授权修改结果，编码与嵌套内容解码交给 codec 执行层。
+变换接口接收标准 value，并返回变换值及其授权逻辑位置。`traffic-policy-value::transformation` 选择 Source codec、保留原始 document 并委托同一 codec 编码结果。
+Response rewrite 的历史嵌套 JSON/YAML 解码仍需继续移入 codec 绑定能力。
 完成这些迁移后，依赖检查需要覆盖共享契约、具体实现、应用组装和正常运行入口。
 
 实施按依赖方向推进。

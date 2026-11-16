@@ -80,7 +80,11 @@ impl PolicyProvider for ResponseRewritePolicy {
 impl TransformPolicy for CompiledRewrite {
     fn inspect(&self, input: &TransformInput<'_>) -> Result<Option<Box<dyn TransformPlan>>> {
         let query = input.context.pointer("/query").and_then(Value::as_str);
-        let Some(plan) = self.inspect_with_query(input.bytes, RewriteBudget::default(), query)?
+        let Some(plan) = self.inspect_value(
+            serde_json::to_value(input.value)?,
+            RewriteBudget::default(),
+            query,
+        )?
         else {
             return Ok(None);
         };
@@ -128,7 +132,8 @@ impl TransformPlan for Plan {
             })
             .collect::<Result<_>>()?;
         Ok(TransformedValue {
-            bytes: self.plan.materialize(&routes)?,
+            value: serde_json::from_value(self.plan.materialize_value(&routes)?)?,
+            paths: vec![String::new()],
         })
     }
 }

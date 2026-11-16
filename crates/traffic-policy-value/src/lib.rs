@@ -22,6 +22,7 @@ pub mod url_query;
 
 pub mod identity;
 pub mod scalar;
+pub mod transformation;
 
 /// Installed content decoding and value comparison services for carrier adapters.
 #[derive(Clone, Copy)]

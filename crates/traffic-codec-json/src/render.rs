@@ -1,4 +1,4 @@
-//! Replace derived scalar tokens without rewriting the surrounding JSON bytes.
+//! Render scalar edits and explicitly authorized structural transformations.
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, de::Visitor};
 use serde_json::{Value, value::RawValue};
@@ -6,13 +6,21 @@ use serde_json::{Value, value::RawValue};
 /// Permissions remain with the caller. This renderer preserves field presence,
 /// scalar types, array order, and every byte outside the changed scalar tokens.
 pub fn derived(original: &[u8], logical: &Value) -> Result<Vec<u8>> {
+    render(original, logical, false)
+}
+
+pub fn transformed(original: &[u8], logical: &Value) -> Result<Vec<u8>> {
+    render(original, logical, true)
+}
+
+fn render(original: &[u8], logical: &Value, allow_structure: bool) -> Result<Vec<u8>> {
     let before = super::parse(original).context("derived input requires bounded strict JSON")?;
     if &before == logical {
         return Ok(original.to_vec());
     }
     let raw: &RawValue = serde_json::from_slice(original)?;
     let mut edits = Vec::new();
-    collect(raw, &before, logical, &mut edits)?;
+    collect(raw, &before, logical, allow_structure, &mut edits)?;
     let mut output = Vec::with_capacity(original.len());
     let mut end = 0;
     for (raw, replacement) in edits {
@@ -43,10 +51,22 @@ fn collect<'a, 'b>(
     raw: &'a RawValue,
     before: &Value,
     after: &'b Value,
+    allow_structure: bool,
     edits: &mut Vec<(&'a str, &'b Value)>,
 ) -> Result<()> {
     if before == after {
         return Ok(());
+    }
+    if allow_structure {
+        let same_shape = match (before, after) {
+            (Value::Object(before), Value::Object(after)) => before.keys().eq(after.keys()),
+            (Value::Array(before), Value::Array(after)) => before.len() == after.len(),
+            _ => std::mem::discriminant(before) == std::mem::discriminant(after),
+        };
+        if !same_shape {
+            edits.push((raw.get(), after));
+            return Ok(());
+        }
     }
     match (before, after) {
         (Value::Object(before), Value::Object(after)) => {
@@ -56,7 +76,7 @@ fn collect<'a, 'b>(
             );
             let members: Members<'_> = serde_json::from_str(raw.get())?;
             for (key, value) in members.0 {
-                collect(value, &before[&key], &after[&key], edits)?;
+                collect(value, &before[&key], &after[&key], allow_structure, edits)?;
             }
         }
         (Value::Array(before), Value::Array(after)) => {
@@ -66,7 +86,7 @@ fn collect<'a, 'b>(
             );
             let values: Vec<&RawValue> = serde_json::from_str(raw.get())?;
             for ((raw, before), after) in values.into_iter().zip(before).zip(after) {
-                collect(raw, before, after, edits)?;
+                collect(raw, before, after, allow_structure, edits)?;
             }
         }
         _ => {
