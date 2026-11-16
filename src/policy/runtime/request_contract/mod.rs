@@ -13,7 +13,6 @@ mod identity_inputs;
 mod jwt;
 pub(crate) mod key;
 mod mysql;
-mod mysql_hypothesis;
 pub(crate) mod native_projection;
 mod signing_keys;
 mod value_decision;
@@ -142,7 +141,6 @@ struct Sequence {
 pub(crate) struct RequestContracts {
     hypothesis_context: Option<Arc<HypothesisContext>>,
     hypothesis_journal: Option<crate::policy_evidence::hypotheses::Journal>,
-    mysql_hypothesis_projections: Arc<Mutex<mysql_hypothesis::ProjectionCache>>,
     pre_match_enabled: bool,
     compiled: Option<Arc<crate::policy::CompiledPolicy>>,
     input_origin: Option<derived_inputs::InputOrigin>,
@@ -216,7 +214,6 @@ impl RequestContracts {
         Ok(Self {
             hypothesis_context: None,
             hypothesis_journal: None,
-            mysql_hypothesis_projections: Arc::default(),
             pre_match_enabled: false,
             compiled: None,
             native_dispatch: Arc::default(),

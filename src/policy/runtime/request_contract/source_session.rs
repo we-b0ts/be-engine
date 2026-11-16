@@ -50,7 +50,6 @@ impl RequestContracts {
             pre_match_enabled: false,
             hypothesis_context: None,
             hypothesis_journal: None,
-            mysql_hypothesis_projections: Arc::default(),
             compiled: None,
             native_dispatch: Arc::default(),
             rule_catalogue: Arc::default(),

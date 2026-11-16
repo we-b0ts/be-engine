@@ -57,7 +57,6 @@ pub use feedback::{
 pub use initialization::{
     ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,
 };
-pub(crate) use matcher::{HttpPolicyContext, MysqlPolicyContext};
 pub(crate) use pattern::uri_path;
 pub(crate) use response::response_locations_overlap;
 pub use response::{

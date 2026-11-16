@@ -10,7 +10,6 @@ mod copies;
 pub(crate) mod fields;
 mod params;
 pub(crate) use copies::CopyProofs;
-pub(crate) use params::validate_parameters;
 
 fn same_time_semantics(left: &FieldContract, right: &FieldContract) -> bool {
     let time = |contract: &FieldContract| match contract {
@@ -489,31 +488,6 @@ pub(crate) fn witness_matches(event: &Value, rule: &CompiledNativeRule) -> Resul
         .bind(&source)
         .and_then(|bound| extract(&bound, &source))
         .is_some())
-}
-
-pub(crate) fn decision(
-    mut comparison: Comparison,
-    native: &[&CompiledNativeRule],
-) -> DependencyRuleDecision {
-    let mut output = DependencyRuleDecision::default();
-    for rule in native {
-        if comparison.evaluated.remove(&rule.rule.id) {
-            output
-                .usage
-                .entry(rule.rule.id.clone())
-                .or_default()
-                .time_validations = comparison
-                .time_validations
-                .remove(&rule.rule.id)
-                .unwrap_or_default();
-        }
-    }
-    if !comparison.evaluated.is_empty() {
-        output
-            .value_contracts
-            .push(super::super::request_contract::Decision::from_value_comparison(comparison));
-    }
-    output
 }
 
 #[cfg(test)]
