@@ -63,6 +63,10 @@ async fn record() -> Recording {
 }
 
 async fn record_with_startup(startup: bool) -> Recording {
+    record_with_value(startup, "original").await
+}
+
+async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let directory = tempfile::tempdir().unwrap();
     let native_upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -133,7 +137,7 @@ async fn record_with_startup(startup: bool) -> Recording {
             let request = traffic_protocol_fixture::read(&mut stream).await.unwrap();
             assert_eq!(
                 request,
-                json!({"id":42,"operation":operation,"fixed":"original"})
+                json!({"id":42,"operation":operation,"fixed":fixed})
             );
             stream
                 .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
@@ -149,7 +153,7 @@ async fn record_with_startup(startup: bool) -> Recording {
     });
     let startup_dependency = if startup {
         let mut stream = TcpStream::connect(native_address).await.unwrap();
-        let request = json!({"id":42,"operation":"warm","fixed":"original"});
+        let request = json!({"id":42,"operation":"warm","fixed":fixed});
         stream
             .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
             .await
@@ -171,7 +175,7 @@ async fn record_with_startup(startup: bool) -> Recording {
             None => TcpStream::connect(native_address).await.unwrap(),
         };
         for operation in ["fetch", "next"] {
-            let request = json!({"id":42,"operation":operation,"fixed":"original"});
+            let request = json!({"id":42,"operation":operation,"fixed":fixed});
             let wire = traffic_protocol_fixture::encode(&request).unwrap();
             for piece in wire.chunks(3) {
                 dependency.write_all(piece).await.unwrap();
@@ -591,4 +595,70 @@ async fn registered_protocol_uses_authored_global_json_rules_through_normal_repl
             assert_eq!(std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(), recording.source_bytes);
         }
     }).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_native_request_reports_registered_policy_findings_and_source_references() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let recording = record_with_value(false, "red,blue,red").await;
+        let replay = Replay::start(&recording, true).await;
+        let mut target = TcpStream::connect(replay.address).await.unwrap();
+        let request = json!({"id":1042,"operation":"fetch","fixed":"blue,red,red"});
+        target
+            .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        target.read_to_end(&mut response).await.unwrap();
+        assert!(response.is_empty());
+        let report = replay.finish().await;
+        let native = &report["dependency_protocols"][NATIVE];
+        assert_eq!(native["matched_count"], 0);
+        assert_eq!(native["unmatched_count"], 1);
+        assert_eq!(native["unused_case"].as_array().unwrap().len(), 2);
+        let failed = &native["unmatched"][0];
+        assert!(failed["target_observation_id"].as_str().is_some());
+        let compared = &failed["candidate_comparisons"][0];
+        assert_eq!(compared["source_reference"]["protocol"], NATIVE);
+        assert!(compared["source_exchange_id"].as_str().is_some());
+        assert!(
+            compared["differences"]
+                .as_array()
+                .is_some_and(|differences| !differences.is_empty())
+        );
+        let findings = traffic_protocol::report::findings::candidate_findings(failed, NATIVE);
+        let finding = findings
+            .iter()
+            .find(|finding| finding["policy"] == "unordered-joined-string")
+            .unwrap();
+        assert_eq!(finding["source_path"], "/fixed");
+        assert_eq!(finding["native_location"], "document");
+        assert_eq!(
+            finding["origin"]["target_observation_id"],
+            failed["target_observation_id"]
+        );
+        let evidence = crate::replay::report::build_dependency_evidence(
+            &report,
+            recording.providers.report_codecs(),
+        );
+        let facts = json!({"clusters":evidence.clusters});
+        let diagnosed = recording
+            .providers
+            .report_codecs()
+            .diagnose(&facts)
+            .unwrap();
+        assert!(
+            diagnosed.details["policy_findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["policy"] == "unordered-joined-string")
+        );
+        assert_eq!(
+            std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+            recording.source_bytes
+        );
+    })
+    .await
+    .unwrap();
 }

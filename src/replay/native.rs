@@ -5,6 +5,7 @@ use traffic_protocol::{ProtocolId, connection::Endpoint};
 use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
 mod connection;
+mod diagnosis;
 mod global_report;
 mod report;
 mod request;

@@ -280,6 +280,16 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         clocks: impl Fn(&PreparedExchange<R>) -> R::Context,
         validate: impl Fn(&PreparedExchange<R>, &R::Comparison) -> Result<()>,
     ) -> Result<Selection<R::Comparison>> {
+        self.select_observed(context, clocks, validate, |_, _| Ok(()))
+    }
+
+    pub fn select_observed(
+        &self,
+        context: MatchContext<'_, R>,
+        clocks: impl Fn(&PreparedExchange<R>) -> R::Context,
+        validate: impl Fn(&PreparedExchange<R>, &R::Comparison) -> Result<()>,
+        observe: impl Fn(&PreparedExchange<R>, &R::Comparison) -> Result<()>,
+    ) -> Result<Selection<R::Comparison>> {
         let structure = serde_json::to_vec(&context.request.project()?.structure)?;
         let key = CandidateKey {
             scope: ScopePartition::new(ReplaySource::Case, context.active_case),
@@ -324,13 +334,18 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                     clocks(exchange),
                     context.metadata,
                 ) {
-                    Ok(comparison)
-                        if R::passed(&comparison) && validate(exchange, &comparison).is_ok() =>
-                    {
-                        previews.borrow_mut().insert(exchange.index, comparison);
-                        true
+                    Ok(comparison) => {
+                        if let Err(error) = observe(exchange, &comparison) {
+                            *failed.borrow_mut() = Some(error);
+                            return false;
+                        }
+                        if R::passed(&comparison) && validate(exchange, &comparison).is_ok() {
+                            previews.borrow_mut().insert(exchange.index, comparison);
+                            true
+                        } else {
+                            false
+                        }
                     }
-                    Ok(_) => false,
                     Err(error) => {
                         *failed.borrow_mut() = Some(error);
                         false

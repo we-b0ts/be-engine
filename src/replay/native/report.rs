@@ -9,6 +9,8 @@ pub(crate) struct RequestFailure {
     pub target_event_index: Option<usize>,
     pub target_observation_id: Option<Uuid>,
     pub reason: String,
+    #[serde(flatten)]
+    pub(super) diagnostics: diagnosis::CandidateDiagnostics,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -125,6 +127,7 @@ impl Inventory {
         target_event_index: Option<usize>,
         target_observation_id: Option<Uuid>,
         reason: &str,
+        diagnostics: diagnosis::CandidateDiagnostics,
     ) {
         // Each physical request or failed delivery keeps a bounded diagnostic.
         // The count remains independent of diagnostic retention.
@@ -143,6 +146,7 @@ impl Inventory {
                 target_event_index,
                 target_observation_id,
                 reason: reason.into(),
+                diagnostics,
             });
         }
     }

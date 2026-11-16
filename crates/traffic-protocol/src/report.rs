@@ -6,6 +6,8 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub mod diagnostics;
 mod empty;
+pub mod findings;
+pub mod validation;
 
 pub trait ReportSection: Send + Sync {
     fn count(&self) -> Result<usize>;
@@ -20,6 +22,9 @@ pub trait ReportSection: Send + Sync {
 }
 
 pub trait ReportCodec: Send + Sync {
+    fn validate_legacy_session(&self, _report: &Value, _protocol: &str) -> Result<Option<usize>> {
+        Ok(None)
+    }
     fn diagnostics(&self) -> &dyn diagnostics::DiagnosticSchema {
         &diagnostics::STANDARD
     }
@@ -57,6 +62,15 @@ impl std::fmt::Debug for CodecRegistry {
     }
 }
 impl CodecRegistry {
+    pub fn validate_legacy_sessions(&self, report: &Value) -> Result<BTreeMap<String, usize>> {
+        let mut unused = BTreeMap::new();
+        for (protocol, codec) in self.iter() {
+            if let Some(count) = codec.validate_legacy_session(report, protocol.as_str())? {
+                unused.insert(protocol.as_str().into(), count);
+            }
+        }
+        Ok(unused)
+    }
     pub fn iter(&self) -> impl Iterator<Item = (ProtocolId, &dyn ReportCodec)> {
         self.codecs
             .iter()
@@ -94,6 +108,16 @@ impl CodecRegistry {
 
     pub fn diagnose(&self, facts: &Value) -> Result<diagnostics::Diagnosis> {
         let mut diagnosis = diagnostics::Diagnosis::default();
+        let findings = findings::representative_findings(facts);
+        if !findings.is_empty() {
+            diagnosis
+                .details
+                .insert("policy_findings".into(), Value::Array(findings));
+            diagnosis.details.insert(
+                "policy_findings_scope".into(),
+                Value::String("cluster_representatives".into()),
+            );
+        }
         for (_, codec) in self.iter() {
             let native = codec.diagnostics().diagnose(facts);
             for (name, detail) in native.details {

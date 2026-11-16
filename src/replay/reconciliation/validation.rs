@@ -151,8 +151,8 @@ pub(crate) fn validate_completed_receipt_with(
         )?;
     }
     ensure!(
-        unused == receipt.unused_run_dependencies
-            && unused.values().all(|n| *n == 0)
+        unused.values().all(|n| *n == 0)
+            && receipt.unused_run_dependencies.values().all(|n| *n == 0)
             && receipt.actual_unmatched_or_unsafe == 0
             && !receipt.provisional_hypotheses_used
             && receipt.startup_phase_complete
@@ -252,6 +252,51 @@ mod tests {
             invalid["dependency_protocols"]["custom-native"][field] = value;
             assert!(validate_completed_receipt(&invalid).is_err(), "{field}");
         }
+    }
+
+    #[test]
+    fn registered_only_sessions_validate_without_historical_native_layouts() {
+        let mut report = completed();
+        let fields = report.as_object_mut().unwrap();
+        for field in [
+            "unmatched_queries",
+            "unsupported_commands",
+            "unused_case_exchanges",
+            "unused_global_exchanges",
+            "unused_global_exchange_count",
+            "unmatched_http_requests",
+            "unsupported_http_exchanges",
+            "http_request_header_mismatches",
+            "unused_case_http_exchanges",
+            "unused_global_http_exchanges",
+            "unused_global_http_exchange_count",
+            "http_ingress",
+            "redis",
+            "memcached",
+            "motan",
+            "kafka",
+        ] {
+            fields.remove(field);
+        }
+        report["dependency_protocols"] = serde_json::json!({"custom-native":{
+            "unmatched_count":0,"unmatched":[],"unused_case":[],
+            "unused_global":[],"unused_global_count":0
+        }});
+        report["batch_reconciliation"]["unused_run_dependencies"] =
+            serde_json::json!({"custom-native":0});
+        assert!(validate_completed_receipt(&report).is_ok());
+        for field in [
+            "unsupported_commands",
+            "unsupported_http_exchanges",
+            "redis",
+        ] {
+            let mut incomplete = report.clone();
+            incomplete[field] = serde_json::json!([]);
+            assert!(validate_completed_receipt(&incomplete).is_err(), "{field}");
+        }
+        report["batch_reconciliation"]["unused_run_dependencies"]["custom-native"] =
+            serde_json::json!(1);
+        assert!(validate_completed_receipt(&report).is_err());
     }
 
     #[test]

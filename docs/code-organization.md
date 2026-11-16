@@ -74,6 +74,11 @@ protocol crates. `traffic-protocol::report` aggregates provider-owned diagnostic
 facts, limitations and next steps. Rewrite retains issue state, protected evidence
 access and command construction. Shared report collection preserves both native
 report sections and historical layouts, including their actual delivery receipts.
+Each report adapter validates its historical session layout when present.
+Shared reconciliation validates the open protocol inventories independently of
+the installed historical layouts. Failed candidate comparisons retain bounded
+Source references and registered value-analysis findings. Shared diagnosis and
+discovery carry those findings to API hints through the standard finding contract.
 `traffic-policy-schema` owns persisted compatibility declarations, physical
 selectors, bounded proofs and their pure validation. Its validation entrypoints
 receive the policy and codec registries. Application adapters supply the installed

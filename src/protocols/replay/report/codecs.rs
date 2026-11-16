@@ -14,6 +14,13 @@ impl DiagnosticSchema for Builtin {
     }
 }
 impl ReportCodec for Builtin {
+    fn validate_legacy_session(
+        &self,
+        report: &Value,
+        protocol: &str,
+    ) -> anyhow::Result<Option<usize>> {
+        traffic_protocol::report::validation::named_section(report, protocol)
+    }
     fn diagnostics(&self) -> &dyn DiagnosticSchema {
         self
     }

@@ -7,6 +7,37 @@ use traffic_protocol::report::{
 
 pub struct EvidenceCodec;
 impl ReportCodec for EvidenceCodec {
+    fn validate_legacy_session(&self, report: &Value, _: &str) -> anyhow::Result<Option<usize>> {
+        use traffic_protocol::report::validation::{array, empty, number};
+        let fields = [
+            "unmatched_http_requests",
+            "unsupported_http_exchanges",
+            "http_request_header_mismatches",
+            "unused_case_http_exchanges",
+            "unused_global_http_exchanges",
+        ];
+        if !fields
+            .iter()
+            .chain([&"unused_global_http_exchange_count", &"http_ingress"])
+            .any(|field| report.get(*field).is_some())
+        {
+            return Ok(None);
+        }
+        empty(report, &fields)?;
+        let ingress = &report["http_ingress"];
+        anyhow::ensure!(
+            number(ingress, "omitted")? == 0
+                && number(ingress, "pending")? == 0
+                && array(ingress, "observations")?
+                    .iter()
+                    .all(|observation| observation["status"] == "body_complete"),
+            "actual HTTP request ingress remains incomplete or cancelled"
+        );
+        Ok(Some(usize::try_from(number(
+            report,
+            "unused_global_http_exchange_count",
+        )?)?))
+    }
     fn diagnostics(&self) -> &dyn DiagnosticSchema {
         self
     }

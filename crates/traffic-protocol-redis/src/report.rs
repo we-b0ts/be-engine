@@ -6,6 +6,9 @@ use uuid::Uuid;
 
 pub struct EvidenceCodec;
 impl traffic_protocol::report::ReportCodec for EvidenceCodec {
+    fn validate_legacy_session(&self, report: &Value, protocol: &str) -> Result<Option<usize>> {
+        traffic_protocol::report::validation::named_section(report, protocol)
+    }
     fn diagnostics(&self) -> &dyn traffic_protocol::report::diagnostics::DiagnosticSchema {
         self
     }

@@ -10,6 +10,7 @@ pub(super) struct Request {
     pub message: Arc<dyn ProtocolMessage>,
     pub observed: DateTime<Utc>,
     pub bytes: usize,
+    pub diagnostics: diagnosis::CandidateDiagnostics,
 }
 
 pub(super) struct Matched {
@@ -110,7 +111,8 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
             });
         }
         let native = &state.native;
-        let selected = native.core.select(
+        let diagnostics = std::cell::RefCell::new(diagnosis::CandidateDiagnostics::default());
+        let selected = native.core.select_observed(
             MatchContext {
                 protocol: self.protocol,
                 endpoint: &self.endpoint,
@@ -128,7 +130,15 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
                 )
                 .map(|_| ())
             },
-        )?;
+            |exchange, comparison| {
+                diagnostics
+                    .borrow_mut()
+                    .observe(native, exchange, self, comparison);
+                Ok(())
+            },
+        );
+        self.diagnostics = diagnostics.into_inner();
+        let selected = selected?;
         let selected = match selected {
             Selection::Matched(selected) => selected,
             Selection::LaneBlocked { blocker, .. } => {
@@ -213,6 +223,7 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
             observation.event_index,
             observation.observation_id,
             &error.reason,
+            self.diagnostics.clone(),
         );
     }
 }

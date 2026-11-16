@@ -113,9 +113,12 @@ pub trait DiagnosticSchema: Send + Sync {
             "reason",
             "diagnostic",
             "target_event_index",
+            "target_observation_id",
             "failure_kind",
             "client_outcome",
             "duration_ms",
+            "candidate_comparisons",
+            "candidate_comparisons_omitted",
         ];
         Value::Object(
             fields

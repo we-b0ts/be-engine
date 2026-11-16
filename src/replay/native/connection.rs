@@ -54,6 +54,7 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
                 None,
                 None,
                 &error.to_string(),
+                Default::default(),
             );
         }
     }
@@ -123,6 +124,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                 message,
                 observed,
                 bytes,
+                diagnostics: Default::default(),
             };
             let matched = admission::request::execute(
                 &self.state,
@@ -237,6 +239,7 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                         None,
                         None,
                         &error.to_string(),
+                        Default::default(),
                     );
                 }
             }

@@ -7,6 +7,27 @@ use traffic_protocol::report::{
 
 pub struct EvidenceCodec;
 impl ReportCodec for EvidenceCodec {
+    fn validate_legacy_session(&self, report: &Value, _: &str) -> anyhow::Result<Option<usize>> {
+        use traffic_protocol::report::validation::{empty, number};
+        let fields = [
+            "unmatched_queries",
+            "unsupported_commands",
+            "unused_case_exchanges",
+            "unused_global_exchanges",
+        ];
+        if !fields
+            .iter()
+            .chain([&"unused_global_exchange_count"])
+            .any(|field| report.get(*field).is_some())
+        {
+            return Ok(None);
+        }
+        empty(report, &fields)?;
+        Ok(Some(usize::try_from(number(
+            report,
+            "unused_global_exchange_count",
+        )?)?))
+    }
     fn diagnostics(&self) -> &dyn DiagnosticSchema {
         self
     }

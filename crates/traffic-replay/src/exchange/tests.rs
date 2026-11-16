@@ -173,3 +173,55 @@ fn native_reference_resolution_retains_case_ownership_and_rejects_ambiguity() {
         ReplayExchangeStatus::Available
     );
 }
+
+#[test]
+fn comparison_observers_receive_failed_candidates_without_consuming_their_inventory() {
+    let inventory = inventory(ReplaySource::Case);
+    let observations = RefCell::new(Vec::new());
+    let selected = inventory
+        .select_observed(
+            MatchContext {
+                protocol: PROTOCOL,
+                endpoint: &endpoint(),
+                active_case: Some("case"),
+                request: &Message("different"),
+                metadata: &(),
+            },
+            |_| (),
+            |_, _| Ok(()),
+            |exchange, comparison| {
+                observations
+                    .borrow_mut()
+                    .push((exchange.index, *comparison));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(matches!(selected, Selection::NotFound));
+    assert_eq!(*observations.borrow(), vec![(0, false), (1, false)]);
+    assert!(
+        inventory
+            .exchanges
+            .iter()
+            .all(|exchange| exchange.status == ReplayExchangeStatus::Available)
+    );
+    let failed = inventory.select_observed(
+        MatchContext {
+            protocol: PROTOCOL,
+            endpoint: &endpoint(),
+            active_case: Some("case"),
+            request: &Message("first"),
+            metadata: &(),
+        },
+        |_| (),
+        |_, _| Ok(()),
+        |_, _| anyhow::bail!("observer unavailable"),
+    );
+    assert!(failed.is_err());
+    assert!(
+        inventory
+            .exchanges
+            .iter()
+            .all(|exchange| exchange.status == ReplayExchangeStatus::Available)
+    );
+}

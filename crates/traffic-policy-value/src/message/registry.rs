@@ -42,6 +42,9 @@ impl BindingRegistry {
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
     }
+    pub fn codecs(&self) -> &CodecRegistry {
+        &self.codecs
+    }
 
     pub fn signature(&self) -> Result<Vec<u8>> {
         let rules = self

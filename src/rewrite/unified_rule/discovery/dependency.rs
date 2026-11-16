@@ -10,6 +10,7 @@ pub(super) fn observe(
     schemas: Option<&CompiledPolicy>,
     cursor: &mut Cursor,
 ) -> Result<bool> {
+    observe_report_findings(drafts, report)?;
     let mut source_events = BTreeMap::new();
     let mut source_bytes = 0_u64;
     if let Some(manifest) = manifest
@@ -154,6 +155,51 @@ pub(super) fn observe(
     Ok(true)
 }
 
+fn observe_report_findings(drafts: &mut Drafts, report: &Value) -> Result<()> {
+    let cases = report["cases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|case| case["case_id"].as_str())
+        .collect::<BTreeSet<_>>();
+    for (protocol, section) in report["dependency_protocols"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        for event in section["unmatched"].as_array().into_iter().flatten() {
+            if !event["case_id"]
+                .as_str()
+                .is_some_and(|case| cases.contains(case))
+            {
+                continue;
+            }
+            for mut finding in
+                traffic_protocol::report::findings::candidate_findings(event, protocol)
+            {
+                let location = json!({"surface":"dependency.request",
+                    "native_location":finding["native_location"],"origin":finding["origin"]});
+                finding["location"] = location.clone();
+                if finding["source_path"] == "" {
+                    finding["requires_value_binding"] = json!(true);
+                }
+                let identity = serde_json::to_string(&finding)?;
+                if drafts.finding_ids.insert(identity) {
+                    if drafts.findings.len() >= LIMIT {
+                        drafts.limit("native_findings");
+                        return Ok(());
+                    }
+                    drafts.findings.push(finding);
+                }
+                let entry = json!({"location":location,"source_intent_required":true,
+                    "instruction":"Trace the recorded Source location before declaring a value format. This candidate retains an independent Target observation and the compared Source reference. Complete plan/apply and its fresh verification obligations."});
+                drafts.add_entry(serde_json::to_string(&entry)?, entry);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn projection(
     evidence: traffic_protocol::evidence::MessageEvidence,
     side: traffic_protocol::evidence::MessageSide,
@@ -164,5 +210,41 @@ fn projection(
             .response
             .context("native response evidence is unavailable")?
             .project(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_report_findings_retain_observation_and_source_identity_without_a_witness_claim() {
+        let event = |case: &str, policy: &str| {
+            json!({"case_id":case,"target_observation_id":"target-request",
+            "candidate_comparisons":[{"source":"case","source_case_id":case,
+                "source_reference":{"protocol":"vendor-rpc","native_id":"source-request"},
+                "policy_findings":[{"policy":policy,"native_location":"opaque-location","source_path":"/field",
+                    "summary":"Field differs","hint":"Trace Source construction","proposal":null,"requirements":["source_semantics"]}]}]})
+        };
+        let report = json!({"cases":[{"case_id":"selected"}],"dependency_protocols":{
+            "vendor-rpc":{"unmatched":[event("selected","fixture-extension"),event("foreign","other-extension")]}
+        }});
+        let before = report.clone();
+        let mut drafts = Drafts::default();
+        observe_report_findings(&mut drafts, &report).unwrap();
+        assert_eq!(drafts.findings.len(), 1);
+        let finding = &drafts.findings[0];
+        assert_eq!(finding["policy"], "fixture-extension");
+        assert_eq!(
+            finding["origin"]["source_reference"]["native_id"],
+            "source-request"
+        );
+        assert_eq!(finding["origin"]["target_observation_id"], "target-request");
+        assert!(finding.get("witness_id").is_none());
+        assert_eq!(
+            drafts.entries[0]["location"]["native_location"],
+            "opaque-location"
+        );
+        assert_eq!(report, before);
     }
 }

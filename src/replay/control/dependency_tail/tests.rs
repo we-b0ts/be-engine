@@ -459,6 +459,7 @@ async fn explicit_dependency_failure_finishes_dirty_after_actual_cleanup() {
         None,
         None,
         "explicit dependency failure",
+        Default::default(),
     );
     let started = Instant::now();
     let mut end = command("end");

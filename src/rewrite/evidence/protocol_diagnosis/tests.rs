@@ -246,3 +246,27 @@ fn native_diagnosis_name_conflicts_publish_no_partial_facts() {
     assert!(attach(&mut facts, &codecs).is_err());
     assert_eq!(facts, before);
 }
+
+#[test]
+fn standard_native_candidate_findings_reach_the_existing_hint_api() {
+    let finding = json!({"policy":"fixture-extension","source_path":"/field",
+        "native_location":"opaque-location","summary":"Native field differs",
+        "hint":"Inspect Source generation at this location","proposal":null,"requirements":["source_semantics"]});
+    let mut facts = json!({"clusters":[{"protocol":"vendor-rpc","reason":"unmatched_target",
+    "representative":{"difference":{"actual":{"signature":{
+        "target_observation_id":"observed-request",
+        "candidate_comparisons":[{"source_reference":{"protocol":"vendor-rpc","native_id":"source-request"},
+            "source_case_id":"case-a","source":"case","policy_findings":[finding]}]
+    }}}}}]});
+    attach(&mut facts, &CodecRegistry::default()).unwrap();
+    assert_eq!(
+        facts["policy_findings"][0]["origin"]["target_observation_id"],
+        "observed-request"
+    );
+    let hints = rule_guidance::rule_hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts);
+    let hint = hints
+        .iter()
+        .find(|hint| hint.rule == "fixture-extension")
+        .unwrap();
+    assert_eq!(hint.hint, "Inspect Source generation at this location");
+}
