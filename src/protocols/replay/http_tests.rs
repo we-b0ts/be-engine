@@ -26,46 +26,6 @@ mod request_contracts;
 mod server_termination;
 
 #[test]
-fn ignored_query_values_are_still_required_on_both_requests() {
-    let ignored = vec!["signature".to_string()];
-    assert!(
-        uri_mismatch_reason(
-            "/path?a=1&Signature=recorded",
-            "/path?Signature=current&a=1",
-            &ignored,
-        )
-        .is_none()
-    );
-    assert!(uri_mismatch_reason("/path?a=1&Signature=recorded", "/path?a=1", &ignored,).is_some());
-}
-
-#[test]
-fn uri_mismatch_diagnostics_never_include_query_values() {
-    let ignored = vec!["signature".to_string()];
-    let reason = uri_mismatch_reason(
-        "/path?a=recorded-secret&Signature=recorded-signature",
-        "/path?a=current-secret&Signature=current-signature",
-        &ignored,
-    )
-    .unwrap();
-    assert_eq!(reason, "HTTP stable query parameter values differed for: a");
-    assert!(!reason.contains("secret"));
-    assert!(!reason.contains("signature"));
-
-    let reason = uri_mismatch_reason(
-        "/path?a=1&Signature=recorded-signature",
-        "/path?b=1",
-        &ignored,
-    )
-    .unwrap();
-    assert_eq!(
-        reason,
-        "HTTP ignored query parameter presence differed: signature (recorded 1, actual 0)"
-    );
-    assert!(!reason.contains("recorded-signature"));
-}
-
-#[test]
 fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
     let mut targets = BTreeMap::new();
     for (port, protocol) in [(80, ReplayProtocol::Http), (443, ReplayProtocol::Https)] {

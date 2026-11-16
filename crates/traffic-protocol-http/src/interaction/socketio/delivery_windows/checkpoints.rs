@@ -4,7 +4,7 @@ use super::*;
 pub(super) fn fences(
     input: &InputTranscript,
     tracked: &TrackedInputs,
-    response_path: &Path,
+    read_outputs: impl FnOnce() -> Result<Option<Value>>,
     end_ms: u64,
 ) -> Result<Vec<Fence>> {
     let checkpoints = if tracked.unacknowledged.first().is_some_and(|(first, _)| {
@@ -13,7 +13,7 @@ pub(super) fn fences(
             .values()
             .any(|(sequence, _)| sequence > first)
     }) {
-        source_acks(input, tracked, response_path, end_ms)?
+        source_acks(input, tracked, read_outputs()?, end_ms)?
     } else {
         BTreeMap::new()
     };
@@ -43,14 +43,12 @@ pub(super) fn fences(
 fn source_acks(
     input: &InputTranscript,
     tracked: &TrackedInputs,
-    path: &Path,
+    response: Option<Value>,
     end_ms: u64,
 ) -> Result<BTreeMap<u64, Option<u64>>> {
-    let Some(mut response) = read::<Value>(path)? else {
+    let Some(response) = response else {
         return Ok(BTreeMap::new());
     };
-    crate::interaction::private::decrypt_output(&mut response, path)
-        .context("native notification ACK checkpoint could not be authenticated")?;
     let Some(events) = response
         .pointer("/interaction/events")
         .and_then(Value::as_array)

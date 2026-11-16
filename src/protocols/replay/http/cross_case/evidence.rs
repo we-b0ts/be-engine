@@ -196,7 +196,7 @@ pub(crate) fn verify_candidate(
     let mut checked = 0usize;
     for file in files {
         recording::visit_matching_or_all(&file, keys.as_ref(), &mut reader, |_, record| {
-            if selector.matches(&record) {
+            if selector.matches(&record.native) {
                 require_replayable(&record)?;
                 checked += 1;
             }

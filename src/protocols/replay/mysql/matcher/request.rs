@@ -91,7 +91,7 @@ impl ReplayState {
         let active_case_id = case.map(ToOwned::to_owned);
         let preferred_end = transaction_end.or_else(|| {
             self.protocols.mysql.cleanup_selection.preferred_end(
-                &self.protocols.mysql.exchanges,
+                &SessionContext(&self.protocols.mysql.exchanges),
                 active_case_id.as_deref(),
                 identity,
                 command,
@@ -185,7 +185,7 @@ impl ReplayState {
                             policy.mysql_sql_difference_may_apply(case, identity, command, sql)
                         })
                         && let Some(ends) = self.protocols.mysql.cleanup_selection.candidates(
-                            &self.protocols.mysql.exchanges,
+                            &SessionContext(&self.protocols.mysql.exchanges),
                             case,
                             identity,
                             command,

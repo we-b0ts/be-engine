@@ -1,3 +1,54 @@
+use crate::{
+    recorded,
+    session_constraints::SourceExchange,
+    session_control::OptionalSessionExchange,
+    session_identity::{
+        DependencyIdentity as MysqlDependencyIdentity, SessionIdentity as ReplaySessionIdentity,
+        identity_matches_exchange,
+    },
+    test_support::NoSource,
+};
+use traffic_replay::ReplayExchangeStatus;
+#[derive(Clone)]
+struct ReplayExchange {
+    source: ReplaySource,
+    case_id: Option<String>,
+    identity: MysqlDependencyIdentity,
+    record: recorded::RecordedMysqlExchange<NoSource>,
+    optional_session: Option<OptionalSessionExchange>,
+    status: ReplayExchangeStatus,
+}
+struct Inventory<'a>(&'a [ReplayExchange]);
+impl SessionContext for Inventory<'_> {
+    type Evidence = NoSource;
+    fn exchange(&self, index: usize) -> SourceExchange<'_, NoSource> {
+        let exchange = &self.0[index];
+        SourceExchange {
+            record: &exchange.record,
+            identity: &exchange.identity,
+            source: exchange.source,
+            case_id: exchange.case_id.as_deref(),
+            optional_session: exchange.optional_session,
+        }
+    }
+    fn available(&self, index: usize) -> bool {
+        self.0[index].status.is_available()
+    }
+    fn admitted(&self, index: usize) -> bool {
+        matches!(
+            self.0[index].status,
+            ReplayExchangeStatus::Responding | ReplayExchangeStatus::Consumed
+        )
+    }
+    fn delivered(&self, index: usize) -> bool {
+        self.0[index].status.is_consumed()
+    }
+}
+impl SessionInventory for Inventory<'_> {
+    fn exchange_count(&self) -> usize {
+        self.0.len()
+    }
+}
 use super::*;
 use serde_json::json;
 
@@ -22,7 +73,6 @@ fn exchange(sequence: u64, sql: &str, before: u16, after: u16) -> ReplayExchange
         .unwrap(),
         optional_session: None,
         status: ReplayExchangeStatus::Available,
-        timing: ReplayExchangeTiming::from_recorded(0, crate::DependencyExchangeOutcome::Response),
     }
 }
 
@@ -63,7 +113,7 @@ fn reference(
     }
     let in_scope = |exchange: &ReplayExchange| {
         exchange.source == ReplaySource::Case
-            && active_case_matches(case, exchange)
+            && exchange.case_id.as_deref() == case
             && identity_matches_exchange(identity, &exchange.identity)
     };
     let matches_end = |exchange: &ReplayExchange| {
@@ -119,7 +169,13 @@ fn reference(
 }
 
 fn check(index: &mut Index, exchanges: &[ReplayExchange], end: &str, expected: Option<usize>) {
-    let actual = index.preferred_end(exchanges, Some("case"), &identity(), "COM_QUERY", Some(end));
+    let actual = index.preferred_end(
+        &Inventory(exchanges),
+        Some("case"),
+        &identity(),
+        "COM_QUERY",
+        Some(end),
+    );
     assert_eq!(actual, expected);
     assert_eq!(
         actual,
@@ -139,7 +195,7 @@ fn live_delivery_states_preserve_business_end_precedence() {
     for end in ["commit", "rollback"] {
         let mut exchanges = records(end);
         let mut index = Index::default();
-        index.register(&exchanges);
+        index.register(&Inventory(&exchanges));
         for cleanup in states {
             for member in states {
                 for business in states {
@@ -188,7 +244,7 @@ fn scope_identity_sequence_and_protocol_remain_constraints() {
         let mut index = Index::default();
         assert_eq!(
             index.preferred_end(
-                &exchanges,
+                &Inventory(&exchanges),
                 Some("case"),
                 &identity(),
                 "COM_STMT_EXECUTE",
@@ -198,7 +254,7 @@ fn scope_identity_sequence_and_protocol_remain_constraints() {
         );
         assert_eq!(
             index.preferred_end(
-                &exchanges,
+                &Inventory(&exchanges),
                 Some("case"),
                 &identity(),
                 "COM_QUERY",
@@ -210,7 +266,7 @@ fn scope_identity_sequence_and_protocol_remain_constraints() {
         missing_target.target = None;
         assert_eq!(
             index.preferred_end(
-                &exchanges,
+                &Inventory(&exchanges),
                 Some("case"),
                 &missing_target,
                 "COM_QUERY",
@@ -275,12 +331,18 @@ fn late_predecessors_and_inventory_replacement_rebuild_without_stale_candidates(
         }
         index = Index::default();
         assert_eq!(
-            index.preferred_end(&exchanges, None, &identity(), "COM_QUERY", Some(end)),
+            index.preferred_end(
+                &Inventory(&exchanges),
+                None,
+                &identity(),
+                "COM_QUERY",
+                Some(end)
+            ),
             Some(2)
         );
         assert_eq!(
             index.preferred_end(
-                &exchanges,
+                &Inventory(&exchanges),
                 Some("case"),
                 &identity(),
                 "COM_QUERY",
@@ -305,13 +367,13 @@ fn indexed_cleanup_selection_ignores_unrelated_inventory_size() {
             exchanges.push(other);
         }
         let mut index = Index::default();
-        index.register(&exchanges);
+        index.register(&Inventory(&exchanges));
         let request_identity = identity();
         let started = Instant::now();
         for _ in 0..200 {
             assert_eq!(
                 black_box(index.preferred_end(
-                    &exchanges,
+                    &Inventory(&exchanges),
                     Some("case"),
                     &request_identity,
                     "COM_QUERY",

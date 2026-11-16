@@ -77,11 +77,11 @@ pub struct Query {
 }
 
 impl Query {
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn source_shape_count(&self) -> usize {
         self.source_shapes.len()
     }
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn source_group_count(&self) -> usize {
         self.source_groups.len()
     }
@@ -373,3 +373,6 @@ pub fn semantic_columns<S: ProjectionSource>(
         .matches(recorded, true)
         .then(|| record.columns().to_vec())
 }
+
+#[cfg(test)]
+mod tests;

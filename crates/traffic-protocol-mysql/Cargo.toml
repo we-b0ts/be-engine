@@ -29,4 +29,5 @@ tracing = "0.1"
 tokio-rustls = "0.26"
 
 [dev-dependencies]
+traffic-replay = { path = "../traffic-replay" }
 tokio = { version = "1", features = ["macros", "rt", "io-util"] }

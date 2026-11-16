@@ -204,3 +204,5 @@ pub mod witness;
 pub mod data_stream;
 
 pub mod header_values;
+
+pub mod request_contract;

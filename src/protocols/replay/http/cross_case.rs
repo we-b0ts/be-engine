@@ -7,81 +7,12 @@ use anyhow::ensure;
 pub(crate) use evidence::{discover, verify_candidate};
 use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HttpCrossCaseSelector {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
-    pub method: String,
-    pub path: String,
+pub use traffic_protocol_http::request_contract::HttpCrossCaseSelector;
+
+trait SourceIndexKey {
+    fn index_key(&self) -> Option<String>;
 }
-
-impl HttpCrossCaseSelector {
-    pub(crate) fn validate(&self) -> Result<()> {
-        ensure!(
-            self.host.is_some() || self.port.is_none(),
-            "HTTP shared port requires a host"
-        );
-        if let Some(host) = &self.host {
-            let authority = host.parse::<Authority>().ok();
-            ensure!(
-                host.len() <= 255
-                    && !host.contains('*')
-                    && authority.is_some_and(
-                        |authority| authority.host() == host && authority.port().is_none()
-                    ),
-                "HTTP shared host requires a literal host without port, path or wildcard"
-            );
-        }
-        if let (Some(host), Some(port)) = (&self.host, self.port) {
-            super::selector::HttpDependencySelector {
-                host: host.clone(),
-                port,
-                method: self.method.clone(),
-                path: self.path.clone(),
-            }
-            .validate()?;
-        } else {
-            ensure!(
-                self.method.len() <= 32 && Method::from_bytes(self.method.as_bytes()).is_ok(),
-                "invalid shared HTTP method"
-            );
-            crate::path_pattern::validate_literal_path(&self.path)?;
-            ensure!(
-                !self.path.contains(['?', '*']),
-                "shared HTTP path cannot include a query or wildcard"
-            );
-        }
-        Ok(())
-    }
-
-    fn matches(&self, record: &RecordedHttpExchange) -> bool {
-        identity_from_record(record).is_ok_and(|identity| {
-            self.host
-                .as_ref()
-                .is_none_or(|host| identity.target.host == crate::replay::normalize_host(host))
-                && self.port.is_none_or(|port| identity.target.port == port)
-                && record.native.method.eq_ignore_ascii_case(&self.method)
-                && uri_path_only(&record.native.uri) == self.path
-        })
-    }
-
-    fn covers(&self, concrete: &Self) -> bool {
-        concrete
-            .host
-            .as_ref()
-            .zip(concrete.port)
-            .is_some_and(|(host, port)| {
-                self.host.as_ref().is_none_or(|expected| {
-                    crate::replay::normalize_host(expected) == crate::replay::normalize_host(host)
-                }) && self.port.is_none_or(|expected| expected == port)
-            })
-            && self.method.eq_ignore_ascii_case(&concrete.method)
-            && self.path == concrete.path
-    }
-
+impl SourceIndexKey for HttpCrossCaseSelector {
     fn index_key(&self) -> Option<String> {
         Some(crate::dependency_index::http_key(
             self.host.as_deref()?,
@@ -143,7 +74,10 @@ pub(crate) fn selected_source_lines(
     {
         let raw = reader.read(path, &index.stamp, &entry.location)?;
         let record: RecordedHttpExchange = serde_json::from_slice(&raw)?;
-        if selectors.iter().any(|selector| selector.matches(&record)) {
+        if selectors
+            .iter()
+            .any(|selector| selector.matches(&record.native))
+        {
             selected.insert(entry.location.line);
         }
     }
@@ -167,7 +101,10 @@ pub(crate) fn load(
     let (_, files) = recording::files(root)?;
     // Selected exchanges already exist in memory. Change only their derived scope.
     for exchange in exchanges.iter_mut() {
-        if let Some((id, _)) = rules.iter().find(|(_, s)| s.matches(&exchange.record)) {
+        if let Some((id, _)) = rules
+            .iter()
+            .find(|(_, s)| s.matches(&exchange.record.native))
+        {
             require_replayable(&exchange.record)?;
             exchange.shared_origin = Some(SharedOrigin {
                 rule_id: id.clone(),
@@ -187,7 +124,7 @@ pub(crate) fn load(
             continue;
         }
         recording::visit_matching_or_all(&file, keys.as_ref(), &mut reader, |_, record| {
-            let Some((rule_id, _)) = rules.iter().find(|(_, s)| s.matches(&record)) else {
+            let Some((rule_id, _)) = rules.iter().find(|(_, s)| s.matches(&record.native)) else {
                 return Ok(());
             };
             require_replayable(&record)?;

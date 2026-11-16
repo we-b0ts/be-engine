@@ -3329,6 +3329,7 @@ dependencies = [
  "traffic-policy-execution",
  "traffic-policy-value",
  "traffic-protocol",
+ "traffic-replay",
  "traffic-value",
  "uuid",
 ]

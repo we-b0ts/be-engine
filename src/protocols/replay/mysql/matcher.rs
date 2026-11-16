@@ -147,7 +147,8 @@ impl MysqlReplayState {
         self.case_exchange_index
             .register(exchange.source, exchange.case_id.as_deref(), index);
         self.exchanges.push(exchange);
-        self.cleanup_selection.register(&self.exchanges);
+        self.cleanup_selection
+            .register(&SessionContext(&self.exchanges));
         self.classify_origin(index);
     }
 

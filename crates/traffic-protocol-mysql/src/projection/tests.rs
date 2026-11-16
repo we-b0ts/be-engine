@@ -1,3 +1,14 @@
+use crate::{
+    recorded, response::column_definition_payload, test_support::NoSource, values::mysql_json,
+};
+type RecordedMysqlExchange = recorded::RecordedMysqlExchange<NoSource>;
+type RecordedMysqlResponse = recorded::RecordedMysqlResponse<NoSource>;
+fn statement_columns(
+    record: &RecordedMysqlExchange,
+    sql: &str,
+) -> Option<Vec<crate::model::MysqlColumn>> {
+    Query::prepare("COM_QUERY", sql, None)?.statement_columns(record)
+}
 use super::*;
 use serde_json::json;
 

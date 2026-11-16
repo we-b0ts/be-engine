@@ -96,7 +96,11 @@ identity proposals and response-local IV relationships.
 `traffic-protocol-http::data_stream` owns complete SSE/JSON-line event framing,
 physical data ranges, byte-offset correspondence and lossless data replacement.
 Application stream bindings compare those projected data values through the shared
-execution library.
+execution library. Its `request_contract` owns native endpoint selectors, URI
+multiplicity, method/body positions and immutable request fingerprints. The host
+supplies body equivalence and canonical body bytes. `headers::audit` returns native
+header differences and protected observations. Replay owns their Case provenance,
+retention budgets, publication and dirty-state aggregation.
 `traffic-jwt` owns compact JWS authentication, NumericDate comparisons and nonce
 formats, including RS256 public-key authentication. Signing-key source validation is pure there. Startup resolution and
 immutable key witnesses retain application ownership.
@@ -117,6 +121,9 @@ correlation, stream envelopes and complete interaction closure. `ValueComparator
 receives the selected business values and independent observation clocks. The
 application supplies registered value execution and authenticated delivery proofs
 through this port, and retains report aggregation and encrypted artifact access.
+Socket.IO's `delivery_windows` owns original namespace scope, native input ACK
+checkpoints and finite Source delivery intervals. Its host supplies authenticated
+metadata and lazily loads original output events when a checkpoint requires them.
 Native MySQL table selectors, SQL value templates, placeholder
 validation and savepoint correspondence live in its protocol library. Pure policy
 compilation returns prepared declarations. Application composition then validates
@@ -124,6 +131,10 @@ the installed runtime adapters before publishing a compiled policy. Policy
 comparison normalization is an optional provider
 capability. `traffic-policy-value::diagnosis` supplies bounded traversal and delegates
 canonical values to that installed provider.
+MySQL's `cleanup_selection` owns native transaction-end candidate indexes and wire
+predecessor precedence. `SessionInventory` extends its read-only session facts with
+an exchange count. Replay supplies availability and actual delivery facts through
+that port, then retains claims, matching decisions and delivery publication.
 `traffic-replay::rules::RuleRuntime` supplies message preparation, comparison and
 opaque delivery settings to the finite inventory. `traffic-policy-value` owns the
 application's field-rule message preparation and delivery implementation.

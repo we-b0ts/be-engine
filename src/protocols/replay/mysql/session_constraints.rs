@@ -35,3 +35,9 @@ impl NativeContext for SessionContext<'_> {
         self.0[index].status.is_consumed()
     }
 }
+
+impl traffic_protocol_mysql::cleanup_selection::SessionInventory for SessionContext<'_> {
+    fn exchange_count(&self) -> usize {
+        self.0.len()
+    }
+}

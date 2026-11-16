@@ -1,4 +1,5 @@
 //! Native HTTP header normalization and comparison modes.
+pub mod audit;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::{BTreeMap, BTreeSet};
 pub type HeaderSnapshot = BTreeMap<String, Vec<String>>;

@@ -30,7 +30,6 @@ use chrono::Utc;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::header::{CONTENT_LENGTH, HOST};
-use hyper::http::uri::Authority;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 #[cfg(test)]
@@ -59,7 +58,6 @@ mod lifecycle;
 mod recording;
 pub(crate) use evidence::register_global_exchange;
 pub(crate) mod request_headers;
-mod selector;
 mod stream_delivery;
 mod tail;
 mod termination;
@@ -599,7 +597,6 @@ impl ReplayHttpExchange {
     }
 }
 
-/// Keep the already decoded body only when multipart may use it next.
 fn http_request_comparison(
     exchange: &ReplayHttpExchange,
     method: &Method,
@@ -607,41 +604,14 @@ fn http_request_comparison(
     body: &[u8],
     ignored_query_params: &[String],
 ) -> (Option<String>, Option<Vec<u8>>) {
-    if !exchange
-        .record
-        .native
-        .method
-        .eq_ignore_ascii_case(method.as_str())
-    {
-        return (
-            Some(format!(
-                "HTTP method mismatch: recorded {} actual {}",
-                exchange.record.native.method, method
-            )),
-            None,
-        );
-    }
-    if let Some(reason) = uri_mismatch_reason(
-        &exchange.record.native.uri,
-        &uri.to_string(),
+    traffic_protocol_http::request_contract::compare_request(
+        &exchange.record.native,
+        method,
+        uri,
+        body,
         ignored_query_params,
-    ) {
-        return (Some(reason), None);
-    }
-    match decode_body(&exchange.record.native.request_body) {
-        Ok(recorded_body) => {
-            let mismatch = (!bodies_match(&recorded_body, body))
-                .then(|| "HTTP request body did not match the recorded body".to_string());
-            let multipart_body = (!exchange.record.native.request_body.truncated
-                && multipart::supports_headers(&exchange.record.native.request_headers))
-            .then_some(recorded_body);
-            (mismatch, multipart_body)
-        }
-        Err(error) => (
-            Some(format!("failed to decode recorded request body: {error}")),
-            None,
-        ),
-    }
+        bodies_match,
+    )
 }
 
 fn active_http_case_matches(active_case_id: Option<&str>, exchange: &ReplayHttpExchange) -> bool {
@@ -654,100 +624,8 @@ fn active_http_case_matches(active_case_id: Option<&str>, exchange: &ReplayHttpE
     }
 }
 
-fn host_matches_target(host: &str, target: &TargetKey) -> bool {
-    let Ok(authority) = host.parse::<Authority>() else {
-        return false;
-    };
-    crate::replay::normalize_host(authority.host()) == target.host
-        && authority.port_u16().unwrap_or(target.port) == target.port
-}
-
-fn normalize_uri(value: &str, ignored_query_params: &[String]) -> (String, Vec<(String, String)>) {
-    let (path, mut query) = traffic_protocol_http::uri::normalize_uri(value);
-    query.retain(|(key, _)| {
-        !ignored_query_params
-            .iter()
-            .any(|ignored| ignored.eq_ignore_ascii_case(key))
-    });
-    (path, query)
-}
-
-pub(crate) fn uri_mismatch_reason(
-    recorded: &str,
-    actual: &str,
-    ignored_query_params: &[String],
-) -> Option<String> {
-    let (recorded_path, recorded_query) = normalize_uri(recorded, ignored_query_params);
-    let (actual_path, actual_query) = normalize_uri(actual, ignored_query_params);
-    if recorded_path != actual_path {
-        return Some("HTTP path did not match the recorded request".to_string());
-    }
-
-    let ignored_count_differences = ignored_query_params
-        .iter()
-        .filter_map(|ignored| {
-            let recorded_count = query_param_count(recorded, ignored);
-            let actual_count = query_param_count(actual, ignored);
-            (recorded_count != actual_count)
-                .then(|| format!("{ignored} (recorded {recorded_count}, actual {actual_count})"))
-        })
-        .collect::<Vec<_>>();
-    if !ignored_count_differences.is_empty() {
-        return Some(format!(
-            "HTTP ignored query parameter presence differed: {}",
-            ignored_count_differences.join(", ")
-        ));
-    }
-
-    if recorded_query == actual_query {
-        return None;
-    }
-
-    let recorded_keys = query_key_counts(&recorded_query);
-    let actual_keys = query_key_counts(&actual_query);
-    if recorded_keys != actual_keys {
-        let differing_keys = recorded_keys
-            .keys()
-            .chain(actual_keys.keys())
-            .filter(|key| recorded_keys.get(*key) != actual_keys.get(*key))
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        return Some(format!(
-            "HTTP stable query parameter names or counts differed: {}",
-            differing_keys.into_iter().collect::<Vec<_>>().join(", ")
-        ));
-    }
-
-    let differing_value_keys = recorded_keys
-        .keys()
-        .filter(|key| query_values(&recorded_query, key) != query_values(&actual_query, key))
-        .cloned()
-        .collect::<Vec<_>>();
-    Some(format!(
-        "HTTP stable query parameter values differed for: {}",
-        differing_value_keys.join(", ")
-    ))
-}
-
-fn query_key_counts(query: &[(String, String)]) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-    for (key, _) in query {
-        *counts.entry(key.clone()).or_default() += 1;
-    }
-    counts
-}
-
-fn query_values(query: &[(String, String)], key: &str) -> Vec<String> {
-    query
-        .iter()
-        .filter(|(query_key, _)| query_key == key)
-        .map(|(_, value)| value.clone())
-        .collect()
-}
-
-fn query_param_count(uri: &str, key: &str) -> usize {
-    traffic_protocol_http::uri::count_query_parameters(uri, |name| name.eq_ignore_ascii_case(key))
-}
+use traffic_protocol_http::request_contract::host_matches_target;
+pub(crate) use traffic_protocol_http::request_contract::uri_mismatch_reason;
 
 fn bodies_match(recorded: &[u8], actual: &[u8]) -> bool {
     match (

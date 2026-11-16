@@ -1,10 +1,22 @@
 //! Scoped transaction ends and wire predecessors; live state decides precedence.
-use super::*;
+use crate::{
+    session_constraints::SessionContext,
+    session_identity::{SessionIdentity as ReplaySessionIdentity, normalize_identity_value},
+    values::normalize_sql,
+};
+use std::{collections::HashMap, sync::Arc};
+use traffic_model::attribution::DependencyScope as ReplaySource;
+use traffic_protocol::connection::Endpoint as TargetKey;
+use uuid::Uuid;
+
+pub trait SessionInventory: SessionContext {
+    fn exchange_count(&self) -> usize;
+}
 
 type ScopeKey = (Option<String>, TargetKey, Option<String>, Option<String>);
 
 #[derive(Debug, Default)]
-pub(super) struct Index {
+pub struct Index {
     count: usize,
     scopes: HashMap<ScopeKey, Scope>,
 }
@@ -39,16 +51,17 @@ fn end_kind(command: &str, normalized_sql: Option<&str>) -> Option<usize> {
 impl Index {
     /// Register appended immutable inventory, including test/repair constructors.
     /// Status and optional classifications are deliberately not cached.
-    pub(super) fn register(&mut self, exchanges: &[ReplayExchange]) {
-        if self.count > exchanges.len() {
+    pub fn register(&mut self, exchanges: &impl SessionInventory) {
+        if self.count > exchanges.exchange_count() {
             *self = Self::default();
         }
-        for (index, exchange) in exchanges.iter().enumerate().skip(self.count) {
+        for index in self.count..exchanges.exchange_count() {
+            let exchange = exchanges.exchange(index);
             if exchange.source != ReplaySource::Case {
                 continue;
             }
             let key = (
-                exchange.case_id.clone(),
+                exchange.case_id.map(str::to_owned),
                 exchange.identity.target.clone(),
                 normalize_identity_value(exchange.identity.database.as_deref()),
                 normalize_identity_value(exchange.identity.username.as_deref()),
@@ -71,12 +84,12 @@ impl Index {
                 scope.end_candidates[kind].take();
             }
         }
-        self.count = exchanges.len();
+        self.count = exchanges.exchange_count();
     }
 
-    pub(super) fn candidates(
+    pub fn candidates(
         &mut self,
-        exchanges: &[ReplayExchange],
+        exchanges: &impl SessionInventory,
         case: Option<&str>,
         identity: &ReplaySessionIdentity,
         command: &str,
@@ -96,9 +109,9 @@ impl Index {
         ))
     }
 
-    pub(super) fn preferred_end(
+    pub fn preferred_end(
         &mut self,
-        exchanges: &[ReplayExchange],
+        exchanges: &impl SessionInventory,
         active_case: Option<&str>,
         identity: &ReplaySessionIdentity,
         command: &str,
@@ -112,22 +125,22 @@ impl Index {
         let scope = self.scopes.get(&scope_key(active_case, identity)?)?;
         let ends = &scope.ends[kind];
         if !ends.iter().any(|index| {
-            let exchange = &exchanges[*index];
+            let exchange = exchanges.exchange(*index);
             exchange.record.command == "COM_QUERY"
                 && exchange.optional_session.is_some()
-                && exchange.status.is_available()
+                && exchanges.available(*index)
         }) {
             return None;
         }
         ends.iter().copied().find(|index| {
-            let exchange = &exchanges[*index];
+            let exchange = exchanges.exchange(*index);
             if exchange.record.command != "COM_QUERY"
                 || exchange.optional_session.is_some()
-                || !exchange.status.is_available()
+                || !exchanges.available(*index)
             {
                 return false;
             }
-            let record = &exchange.record;
+            let record = exchange.record;
             let Some(before) = record
                 .server_status_before
                 .filter(|flags| flags & 0x2009 == 1)
@@ -147,8 +160,8 @@ impl Index {
                 indices
                     .iter()
                     .rev()
-                    .map(|index| &exchanges[*index])
-                    .find(|previous| previous.status.is_consumed())
+                    .find(|index| exchanges.delivered(**index))
+                    .map(|index| exchanges.exchange(*index))
             });
             previous.is_some_and(|previous| {
                 previous.identity == exchange.identity
