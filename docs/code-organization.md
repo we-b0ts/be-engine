@@ -112,7 +112,12 @@ Native HTTP interaction framing, Source transcripts, namespace-session facts and
 client execution live under `traffic-protocol-http::interaction`. Client drivers
 receive timing and actual-observation ports from their host. Authenticated Source
 loading, Case admission, persistence and dependency cleanup remain application
-responsibilities. Native MySQL table selectors, SQL value templates, placeholder
+responsibilities. Its `verification` module owns transport identity, native ACK
+correlation, stream envelopes and complete interaction closure. `ValueComparator`
+receives the selected business values and independent observation clocks. The
+application supplies registered value execution and authenticated delivery proofs
+through this port, and retains report aggregation and encrypted artifact access.
+Native MySQL table selectors, SQL value templates, placeholder
 validation and savepoint correspondence live in its protocol library. Pure policy
 compilation returns prepared declarations. Application composition then validates
 the installed runtime adapters before publishing a compiled policy. Policy

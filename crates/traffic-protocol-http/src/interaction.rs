@@ -9,4 +9,5 @@ pub mod policy;
 pub mod sessions;
 pub mod socketio;
 pub mod stream;
+pub mod verification;
 pub mod websocket_transport;
