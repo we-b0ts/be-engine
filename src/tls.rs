@@ -12,6 +12,8 @@ use rcgen::{
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use x509_parser::parse_x509_certificate;
+mod native;
+pub(crate) use native::ServerTls;
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -127,6 +129,14 @@ impl MitmCa {
 
     pub(crate) fn mysql_server_config_for_host(&self, host: &str) -> Result<Arc<ServerConfig>> {
         self.server_config_for_host_and_alpn(host, "mysql", Vec::new())
+    }
+
+    pub(crate) fn server_config_for_transport(
+        &self,
+        host: &str,
+        alpn: Vec<Vec<u8>>,
+    ) -> Result<Arc<ServerConfig>> {
+        self.server_config_for_host_and_alpn(host, &format!("native/{alpn:?}"), alpn)
     }
 
     fn server_config_for_host_and_alpn(

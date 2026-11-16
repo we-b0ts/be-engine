@@ -239,6 +239,12 @@ session controls and credential sanitization remain in the protocol library.
 The finite provider currently rejects Pub/Sub, incomplete terminations, reusable
 snapshots and historical stateful permissions that require additional capabilities.
 The older native capture primitives remain available in the protocol library.
+`traffic-protocol-http::native` supplies finite HTTP/1 capture and server sessions,
+chunked transfer decoding, stored exchange projection and response rendering. Its
+installation in the engine is pending the HTTP inventory cutover. Shared native
+hosts provide certificate termination through the `accept_tls` port. Protocols
+select upgrade timing and ALPN. HTTPS upstream certificate verification uses the
+system trust roots in the HTTP connector.
 `traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
 endpoint identities. MySQL session control and Source transaction analysis use
 these immutable inputs to project original wire positions, complete read prefixes,

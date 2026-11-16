@@ -274,6 +274,7 @@ async fn load_state<P: ReplayProtocolSet>(
         mut targets,
         reader,
     } = resources;
+    native.tls = Some(Arc::new(crate::tls::ServerTls(ca.clone())));
     let known_targets = targets.clone();
     let recording_network =
         network_access::apply_recorded_network_contract(&root_dir, &mut targets)?;

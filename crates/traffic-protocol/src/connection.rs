@@ -74,6 +74,13 @@ pub trait ServerSession: Send {
 }
 
 pub trait RequestHost: Send + Sync {
+    fn accept_tls(
+        &self,
+        _io: Box<dyn ConnectionIo>,
+        _alpn: Vec<Vec<u8>>,
+    ) -> NativeFuture<'_, Box<dyn ConnectionIo>> {
+        Box::pin(async { anyhow::bail!("server TLS is unavailable") })
+    }
     fn execute(
         &self,
         request: Arc<dyn ProtocolMessage>,
@@ -131,6 +138,13 @@ pub trait CaptureOutput: Send {
 }
 
 pub trait CaptureHost: Send + Sync {
+    fn accept_tls(
+        &self,
+        _io: Box<dyn ConnectionIo>,
+        _alpn: Vec<Vec<u8>>,
+    ) -> NativeFuture<'_, Box<dyn ConnectionIo>> {
+        Box::pin(async { anyhow::bail!("recording TLS is unavailable") })
+    }
     fn begin(
         &self,
         reference: ProtocolRef,
@@ -138,6 +152,15 @@ pub trait CaptureHost: Send + Sync {
     ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>>;
 
     fn observe(&self, event: CaptureSnapshot) -> NativeFuture<'_, ()>;
+}
+
+pub trait TlsServer: std::fmt::Debug + Send + Sync {
+    fn accept(
+        &self,
+        io: Box<dyn ConnectionIo>,
+        host: String,
+        alpn: Vec<Vec<u8>>,
+    ) -> NativeFuture<'_, Box<dyn ConnectionIo>>;
 }
 
 /// Protocol-owned framing, correlation and session state. The host owns access

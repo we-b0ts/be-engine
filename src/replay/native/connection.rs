@@ -67,6 +67,23 @@ struct Host<P: ReplayProtocolSet> {
 }
 
 impl<P: ReplayProtocolSet> RequestHost for Host<P> {
+    fn accept_tls(
+        &self,
+        io: Box<dyn ConnectionIo>,
+        alpn: Vec<Vec<u8>>,
+    ) -> NativeFuture<'_, Box<dyn ConnectionIo>> {
+        Box::pin(async move {
+            let tls = self
+                .state
+                .lock()
+                .await
+                .native
+                .tls
+                .clone()
+                .context("native server TLS is unavailable")?;
+            tls.accept(io, self.endpoint.host.clone(), alpn).await
+        })
+    }
     fn execute(
         &self,
         message: Arc<dyn ProtocolMessage>,

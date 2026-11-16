@@ -13,6 +13,7 @@ pub(super) use report::ProtocolReport;
 
 #[derive(Debug)]
 pub(crate) struct Inventory {
+    pub tls: Option<Arc<dyn traffic_protocol::connection::TlsServer>>,
     pub core: ExchangeInventory<crate::value_extensions::ValueRules>,
     global_usage: BTreeMap<ProtocolId, traffic_replay::report::Usage>,
     pub providers: Arc<crate::protocols::DependencyProviders>,
@@ -28,6 +29,7 @@ pub(crate) struct Inventory {
 impl Inventory {
     pub fn new(providers: Arc<crate::protocols::DependencyProviders>) -> Self {
         Self {
+            tls: None,
             core: Default::default(),
             global_usage: Default::default(),
             providers,

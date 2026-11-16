@@ -6,6 +6,8 @@ use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessage};
+mod response;
+pub use response::ResponseMessage;
 
 pub struct RequestMessage {
     pub method: String,
@@ -17,6 +19,7 @@ pub struct RequestMessage {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RequestLocation {
+    Request,
     PathSegment { index: usize },
     QueryParameter { name: String, index: Option<usize> },
     Body,
@@ -25,7 +28,8 @@ pub enum RequestLocation {
 
 impl ProtocolMessage for RequestMessage {
     fn project(&self) -> Result<ProjectedMessage> {
-        let headers = crate::headers::normalized(&self.headers);
+        let mut headers = crate::headers::normalized(&self.headers);
+        headers.retain(|name, _| !is_framing_header(name));
         let shape: BTreeMap<_, _> = headers
             .iter()
             .map(|(name, values)| (name.clone(), values.len()))
@@ -48,6 +52,7 @@ impl ProtocolMessage for RequestMessage {
 
     fn locate(&self, selector: &Value) -> Result<Vec<String>> {
         match serde_json::from_value::<RequestLocation>(selector.clone())? {
+            RequestLocation::Request => Ok(self.project()?.values.into_keys().collect()),
             RequestLocation::PathSegment { index } => {
                 let (_, values) = uri_projection(&self.uri)?;
                 let location = format!("/uri/path/{index}");
@@ -109,6 +114,13 @@ impl ProtocolMessage for RequestMessage {
             .collect::<Vec<_>>();
         Ok(json!({"method":self.method, "values":values}))
     }
+}
+
+fn is_framing_header(name: &str) -> bool {
+    matches!(
+        name,
+        "connection" | "keep-alive" | "transfer-encoding" | "content-length" | "trailer"
+    )
 }
 
 fn header_location(name: &str, index: usize) -> String {

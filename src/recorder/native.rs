@@ -65,6 +65,20 @@ impl Host {
 }
 
 impl CaptureHost for Host {
+    fn accept_tls(
+        &self,
+        io: Box<dyn traffic_protocol::connection::ConnectionIo>,
+        alpn: Vec<Vec<u8>>,
+    ) -> NativeFuture<'_, Box<dyn traffic_protocol::connection::ConnectionIo>> {
+        Box::pin(async move {
+            let config = self
+                .state
+                .ca()
+                .server_config_for_transport(&self.info.endpoint.host, alpn)?;
+            let io = tokio_rustls::TlsAcceptor::from(config).accept(io).await?;
+            Ok(Box::new(io) as Box<dyn traffic_protocol::connection::ConnectionIo>)
+        })
+    }
     fn begin(
         &self,
         reference: ProtocolRef,
