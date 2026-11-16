@@ -5,8 +5,8 @@ use crate::request_rules::{jwt, keys::ResolvedSigningKey};
 pub(super) fn validate(
     compiled: &CompiledPolicy,
     root: &Path,
-    case: &NativeSourceCase<'_>,
-    checked: &mut NativeSourceDependencyValidation,
+    case: &SourceInputCase<'_>,
+    checked: &mut SourceInputValidation,
 ) -> Result<()> {
     let body = super::super::super::case_condition::request_body(case.request);
     let path = super::super::super::pattern::uri_path(

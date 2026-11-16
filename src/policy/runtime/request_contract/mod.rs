@@ -20,12 +20,10 @@ mod value_decision;
 pub(crate) use key::KeyBindingReport;
 #[cfg(test)]
 mod overlap;
-mod read_back;
 mod redis;
 mod redis_fields;
 mod redis_hypothesis;
 mod rule_dispatch;
-pub(crate) use read_back::RedisReadBackReport;
 pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
 pub(crate) use redis_fields::{
     RedisTimeRead, redis_delivered_global_time_copies, redis_delivered_scalar_time_copies,
@@ -119,7 +117,6 @@ struct State {
     hypothesis_checkpoints: BTreeSet<String>,
     hypothesis_error: Option<String>,
     pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
-    read_back: read_back::ReadBackState,
     key_bindings: BTreeMap<key::BindingScope, BTreeMap<String, String>>,
     key_binding_proofs: BTreeSet<KeyBindingReport>,
     key_binds: BTreeMap<String, usize>,
@@ -260,7 +257,6 @@ impl RequestContracts {
         state.key_bindings.retain(|scope, _| !scope.belongs_to(id));
         state.key_binding_proofs.retain(|proof| proof.case_id != id);
         state.candidates.retain(|c| c.case_id != id);
-        state.read_back.begin_case(id);
         state.derived_inputs.remove(id);
         drop(state);
         self.values

@@ -13,7 +13,7 @@ pub(crate) struct ReplayPolicyReport {
     pub(crate) request_contract_candidates: Vec<super::request_contract::Candidate>,
     pub(crate) dynamic_bindings: Vec<super::dynamic_values::DynamicBindingReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) redis_read_backs: Vec<super::request_contract::RedisReadBackReport>,
+    pub(crate) redis_read_backs: Vec<serde_json::Value>,
     pub(crate) key_bindings: Vec<super::request_contract::KeyBindingReport>,
     pub(crate) dynamic_capture_candidates: Vec<super::dynamic_values::CaptureCandidate>,
     pub(crate) unused_applicable_dependency_rule_ids: Vec<String>,

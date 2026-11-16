@@ -5,7 +5,6 @@ mod generated_values;
 #[cfg(test)]
 mod registered_tests;
 mod resource_fields;
-mod stateful_dependencies;
 pub(super) use generated_values::has_response_jwt;
 
 fn help(root: &Path) -> super::super::model::RewriteCommandSpec {
@@ -70,7 +69,6 @@ pub(super) fn try_rule_hints(
     }
     hints.extend(generated_values::hints(root, query, facts));
     hints.extend(resource_fields::hints(root, query, facts));
-    hints.extend(stateful_dependencies::hints(root, query, facts));
     let mut add = |capability: &str, rule: &str, instruction: &str| {
         hints.push(RewriteRuleHint {
         capability: capability.into(), rule: rule.into(),
@@ -215,9 +213,7 @@ pub(super) fn applicable_rule_planners(
     planners.extend(resource_fields::planners(
         root, issue, query, facts, evidence,
     ));
-    planners.extend(stateful_dependencies::planners(
-        root, issue, query, facts, evidence,
-    ));
+
     let mut add = |kind: &str, capability: &str| {
         planners.push(RewriteApplicableRulePlanner {
             kind: kind.into(),

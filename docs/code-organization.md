@@ -261,6 +261,11 @@ commands, native transaction equivalences, projection permissions and incomplete
 cleanup serving currently require additional capabilities. The application keeps
 historical policy-evidence readers and the MySQL recording connector during their
 remaining cutover.
+Historical Redis read-back execution and dedicated dependency Source-session
+policy validators are retired. Input preflight validates immutable requests and
+freezes actual signing inputs through its focused input owner. Registered value
+comparison and identity delivery retain the shared value-service port. Rewrite
+policy guidance omits the retired native state adapters.
 `traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
 endpoint identities. MySQL session control and Source transaction analysis use
 these immutable inputs to project original wire positions, complete read prefixes,

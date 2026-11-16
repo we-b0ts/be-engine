@@ -700,7 +700,7 @@ impl ReplayPolicyRuntime {
             dependency_rules,
             global_formats: self.request_contracts.global_format_reports(),
             dynamic_bindings: self.dynamic_values.report(),
-            redis_read_backs: self.request_contracts.read_back_report(),
+            redis_read_backs: Vec::new(),
             key_bindings: self.request_contracts.key_binding_report(),
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
             request_contract_candidates: self.request_contracts.candidates(),

@@ -1,29 +1,18 @@
-//! Stateful Source traces use isolated domain state, never invented Target pairs.
+//! Source input verification freezes the original request and its signing inputs.
 use super::*;
 use crate::policy::{CompiledNativeRule, NativeEffect};
 
-fn stateful(rule: &CompiledNativeRule) -> bool {
-    match &rule.rule.effect {
-        NativeEffect::Identity(_)
-        | NativeEffect::RedisSequence(_)
-        | NativeEffect::RedisAppendStream
-        | NativeEffect::RedisReadCommutation(_)
-        | NativeEffect::RedisReadObservation(_)
-        | NativeEffect::RedisExpiryRefresh(_)
-        | NativeEffect::RedisActivityRefresh(_)
-        | NativeEffect::HttpRequest(_)
-        | NativeEffect::InputJwt(_)
-        | NativeEffect::InputSignedTimestamp(_) => true,
-        NativeEffect::MysqlValues(effect) => !effect.params.is_empty(),
-        _ => false,
-    }
+fn input_rule(rule: &CompiledNativeRule) -> bool {
+    matches!(
+        rule.rule.effect,
+        NativeEffect::InputJwt(_) | NativeEffect::InputSignedTimestamp(_)
+    )
 }
 
 struct Case {
     id: String,
     dir: std::path::PathBuf,
     request: Value,
-    events: Vec<Value>,
 }
 
 pub(super) fn verify(
@@ -36,58 +25,24 @@ pub(super) fn verify(
     if !policy
         .native
         .iter()
-        .any(|rule| selected.contains(&rule.rule.id) && stateful(rule))
+        .any(|rule| selected.contains(&rule.rule.id) && input_rule(rule))
     {
         return Ok(());
     }
     let mut cases = Vec::new();
-    let mut total = 0usize;
     for (id, dir) in bundle.cases.clone() {
         let request = bundle.request(&dir.join("request.json"))?;
-        let path = bundle.dependency_path(&dir)?;
-        bundle.freeze(&path)?;
-        let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
-        total = total
-            .checked_add(bytes.len())
-            .context("Source trace inventory size overflow")?;
-        ensure!(
-            total <= 1024 * 1024 * 1024,
-            "Source trace inventory exceeds supported evidence bounds"
-        );
-        ensure!(
-            crate::policy_evidence::digest(&bytes) == bundle.artifacts[&path].sha256,
-            "Source dependency trace changed while loading"
-        );
-        let events = bytes
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
-            .map(|line| {
-                ensure!(
-                    line.len() <= crate::dependency::http_limits::MAX_RECORD_BYTES,
-                    "Source exchange exceeds supported evidence bounds"
-                );
-                serde_json::from_slice(line).context("invalid immutable Source dependency exchange")
-            })
-            .collect::<Result<Vec<Value>>>()?;
-        cases.push(Case {
-            id,
-            dir,
-            request,
-            events,
-        });
+        cases.push(Case { id, dir, request });
     }
     let inputs = cases
         .iter()
-        .map(|case| crate::policy::runtime::NativeSourceCase {
+        .map(|case| crate::policy::runtime::SourceInputCase {
             id: &case.id,
             dir: &case.dir,
             request: &case.request,
-            events: &case.events,
         })
         .collect::<Vec<_>>();
-    let proof = crate::policy::runtime::validate_native_source_dependencies(
-        policy, selected, root, &inputs,
-    )?;
+    let proof = crate::policy::runtime::validate_source_inputs(policy, selected, root, &inputs)?;
     for (path, digest) in &proof.key_witnesses {
         // Freeze actual private inputs by SHA256. The plan contains references
         // only; key values and raw startup files are never copied into reports.
@@ -111,7 +66,7 @@ pub(super) fn verify(
         policy
             .native
             .iter()
-            .filter(|rule| selected.contains(&rule.rule.id) && stateful(rule))
+            .filter(|rule| selected.contains(&rule.rule.id) && input_rule(rule))
             .map(|rule| rule.rule.id.clone()),
     );
     Ok(())

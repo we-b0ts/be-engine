@@ -17,11 +17,11 @@ mod identity;
 mod response;
 pub(crate) use response::{dynamic_claim, project_jwt};
 pub(crate) use traffic_policy_schema::scope::NativeScopeGuard;
+mod input_validation;
 mod native_admission;
 mod source;
-mod source_validation;
+pub(crate) use input_validation::{SourceInputCase, validate_source_inputs};
 pub(crate) use source::validate_finite_sharing;
-pub(crate) use source_validation::{NativeSourceCase, validate_native_source_dependencies};
 
 #[derive(Debug)]
 pub(crate) struct NativeRuntimeProjection {

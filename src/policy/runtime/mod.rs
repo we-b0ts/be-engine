@@ -23,7 +23,7 @@ pub use feedback::{
 };
 mod initialization;
 pub(crate) mod native_projection;
-pub(crate) use native_projection::{NativeSourceCase, validate_native_source_dependencies};
+pub(crate) use native_projection::{SourceInputCase, validate_source_inputs};
 mod matcher;
 pub(crate) use matcher::mysql_native::compare_with_automatic as compare_mysql_with_automatic;
 

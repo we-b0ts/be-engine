@@ -6,8 +6,8 @@ use crate::request_rules::{jwt, keys::ResolvedSigningKey, signed_timestamp};
 pub(super) fn validate(
     compiled: &CompiledPolicy,
     root: &Path,
-    case: &NativeSourceCase<'_>,
-    checked: &mut NativeSourceDependencyValidation,
+    case: &SourceInputCase<'_>,
+    checked: &mut SourceInputValidation,
 ) -> Result<()> {
     let body = super::super::super::case_condition::request_body(case.request);
     let path = super::super::super::pattern::uri_path(
@@ -95,15 +95,14 @@ mod tests {
         let original = source.to_string();
         std::fs::write(&path, &original).unwrap();
         let check = |source: &Value| {
-            validate_native_source_dependencies(
+            validate_source_inputs(
                 &compiled,
                 &BTreeSet::from(["signed-login".into()]),
                 temp.path(),
-                &[NativeSourceCase {
+                &[SourceInputCase {
                     id: "case",
                     dir: temp.path(),
                     request: source,
-                    events: &[],
                 }],
             )
         };
