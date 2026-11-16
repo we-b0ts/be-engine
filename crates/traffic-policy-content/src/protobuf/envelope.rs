@@ -1,14 +1,11 @@
 use anyhow::{Context, Result, ensure};
 
 use super::parse_fields;
-use crate::{
-    primary_protocol::assertion::binary_body::BodyEnvelope,
-    primary_protocol::assertion::binary_body::simple_payload,
-};
+use crate::{binary_body::BodyEnvelope, binary_body::simple_payload};
 
 /// Resolves a protobuf message carried directly in the normalized business
 /// body or inside the legacy Simple `byte[]` envelope.
-pub(super) fn resolve_body(body: &[u8]) -> Result<(BodyEnvelope, &[u8])> {
+pub fn resolve_body(body: &[u8]) -> Result<(BodyEnvelope, &[u8])> {
     if let Some(payload) = simple_payload(body)
         && parse_fields(payload).is_ok()
     {
@@ -19,7 +16,7 @@ pub(super) fn resolve_body(body: &[u8]) -> Result<(BodyEnvelope, &[u8])> {
     Ok((BodyEnvelope::Raw, body))
 }
 
-pub(super) fn parse_bodies<'a>(
+pub fn parse_bodies<'a>(
     expected: &'a [u8],
     actual: &'a [u8],
 ) -> Result<(BodyEnvelope, &'a [u8], &'a [u8])> {
@@ -36,7 +33,7 @@ pub(super) fn parse_bodies<'a>(
     Ok((expected_envelope, expected, actual))
 }
 
-pub(crate) fn payload_pair<'a>(source: &'a [u8], target: &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
+pub fn payload_pair<'a>(source: &'a [u8], target: &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
     let (_, source, target) = parse_bodies(source, target)?;
     Ok((source, target))
 }

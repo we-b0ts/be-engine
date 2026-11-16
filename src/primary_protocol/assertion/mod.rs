@@ -1,14 +1,11 @@
 mod artifact;
-mod binary_body;
 mod compare;
 mod evaluation;
 use evaluation::evaluate_response;
-pub(crate) mod docx;
 pub(crate) mod headers;
 pub(crate) mod native;
 mod unified;
 pub use headers::date::ResponseHeaderDateCandidate;
-pub(crate) mod hessian2;
 mod interaction;
 mod joined_string;
 pub(crate) mod jwt;
@@ -93,56 +90,7 @@ pub(crate) fn diagnose_response_body(
     actual: &[u8],
     codec: ResponseBodyCodec,
 ) -> Result<ResponseBodyAssertionReport> {
-    match codec {
-        ResponseBodyCodec::Protobuf => {
-            let discovery = protobuf::discover_protobuf_order(expected, actual)?;
-            Ok(ResponseBodyAssertionReport {
-                codec,
-                envelope: discovery.envelope.as_str().to_string(),
-                configured: false,
-                used_for_verdict: false,
-                codec_candidates: vec![codec],
-                unordered_path_candidates: discovery
-                    .unordered_paths
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                unordered_joined_string_candidates: discovery
-                    .unordered_joined_string_paths
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                differences: discovery.differences.into_iter().map(Into::into).collect(),
-                candidates_explain_all_differences: discovery.candidates_explain_all_differences,
-                order_only: discovery.order_only,
-            })
-        }
-        ResponseBodyCodec::Hessian2 => {
-            let discovery = hessian2::discover_hessian2_order(expected, actual)?;
-            Ok(ResponseBodyAssertionReport {
-                codec,
-                envelope: discovery.envelope.as_str().to_string(),
-                configured: false,
-                used_for_verdict: false,
-                codec_candidates: vec![codec],
-                unordered_path_candidates: discovery
-                    .unordered_paths
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                unordered_joined_string_candidates: discovery
-                    .unordered_joined_string_paths
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                differences: discovery.differences.into_iter().map(Into::into).collect(),
-                candidates_explain_all_differences: discovery.candidates_explain_all_differences,
-                order_only: discovery.order_only,
-            })
-        }
-        ResponseBodyCodec::Docx => docx::diagnose_docx(expected, actual),
-        codec => anyhow::bail!("unsupported structured response body codec {codec:?}"),
-    }
+    traffic_policy_content::body::diagnose(traffic_extensions::policies(), expected, actual, codec)
 }
 
 pub fn assert_recorded_response(

@@ -1,5 +1,5 @@
-//! Response-only RS256 authentication; never re-sign or transform a token.
-use crate::request_rules::jwt::contract::{self, Failure};
+//! RS256 public-key authentication and paired claim contracts.
+use crate::contract::{self, Failure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use x509_parser::prelude::FromDer;
@@ -21,7 +21,7 @@ fn authenticate(
         URL_SAFE_NO_PAD
             .decode(part)
             .ok()
-            .and_then(|bytes| crate::json_value::parse(&bytes))
+            .and_then(|bytes| traffic_codec_json::parse(&bytes))
             .ok_or(Failure::Invalid)
     };
     let header = json(parts[0])?;
@@ -52,13 +52,13 @@ fn authenticate(
     Ok((header, claims))
 }
 
-pub(super) fn compare(
+pub fn compare(
     source: &Value,
     target: &Value,
     key: &[u8],
     kid: Option<&str>,
     anchors: [i128; 2],
-    dynamic: &[crate::request_rules::JwtDynamicClaim],
+    dynamic: &[crate::nonce::DynamicClaim],
 ) -> Result<contract::Validated, Failure> {
     let mut reader = key;
     let Some(rustls_pemfile::Item::SubjectPublicKeyInfo(der)) =
@@ -87,7 +87,7 @@ pub(super) fn compare(
         source,
         target,
         anchors,
-        crate::value_contract::time::DEFAULT_TOLERANCE.as_nanos() as i128,
+        traffic_time::DEFAULT_TOLERANCE.as_nanos() as i128,
         dynamic,
     )
 }

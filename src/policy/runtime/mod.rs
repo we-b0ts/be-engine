@@ -63,7 +63,6 @@ pub(crate) use matcher::{
 };
 pub(crate) use pattern::uri_path;
 pub(crate) use response::response_locations_overlap;
-pub(crate) use response::select_json_pointers;
 pub use response::{
     DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
     ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,

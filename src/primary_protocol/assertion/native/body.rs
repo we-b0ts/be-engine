@@ -1,9 +1,7 @@
 //! Preflight facades use the same typed projection and codec owners as Replay.
 use anyhow::{Context, Result, ensure};
 
-use crate::policy::runtime::{
-    ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath,
-};
+use crate::policy::runtime::ResponseBodyCodec;
 use crate::policy::{CompiledNativeRule, NativeEffect};
 
 pub(in crate::primary_protocol::assertion) fn merge_opaque(
@@ -120,28 +118,13 @@ pub(crate) fn compare_body(
                 )?
                 .passed())
         }
-        ResponseBodyCodec::Hessian2 => {
-            let unordered = rule
-                .unordered_paths
-                .iter()
-                .map(|path| match path {
-                    ResponseBodyUnorderedPath::Hessian2(path) => Ok(path.clone()),
-                    _ => anyhow::bail!("mixed body codecs"),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let joined = rule
-                .unordered_joined_string_paths
-                .iter()
-                .map(|path| match path {
-                    ResponseBodyJoinedStringPath::Hessian2(path) => Ok(path.clone()),
-                    _ => anyhow::bail!("mixed body codecs"),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            super::super::hessian2::compare_hessian2(source, target, &unordered, &joined)
-        }
-        ResponseBodyCodec::Docx => {
-            Ok(super::super::docx::evaluate_docx(source, target, &rule.docx_timestamps, times)?.0)
-        }
-        _ => anyhow::bail!("not an opaque body codec"),
+        _ => Ok(traffic_policy_content::body::evaluate(
+            traffic_extensions::policies(),
+            rule,
+            source,
+            target,
+            times,
+        )?
+        .0),
     }
 }

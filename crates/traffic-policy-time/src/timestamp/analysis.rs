@@ -20,6 +20,7 @@ pub(super) fn analyze(input: &AnalysisInput<'_>) -> Result<Vec<Finding>> {
             config,
             clock: "observation".into(),
             accept_exact: true,
+            tolerance: Tolerance::Observed,
         };
         if automatic.compare(&source, &target, input.facts).is_ok() {
             return Ok(Vec::new());
@@ -53,6 +54,7 @@ pub(super) fn analyze(input: &AnalysisInput<'_>) -> Result<Vec<Finding>> {
             },
             clock: "observation".into(),
             accept_exact: false,
+            tolerance: Tolerance::Observed,
         };
         if configuration.compare(&source, &target, input.facts).is_ok() {
             return Ok(vec![Finding {

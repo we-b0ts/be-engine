@@ -29,6 +29,16 @@ struct Configuration {
     clock: String,
     #[serde(default)]
     accept_exact: bool,
+    #[serde(default)]
+    tolerance: Tolerance,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Tolerance {
+    #[default]
+    Observed,
+    Fixed,
 }
 
 impl PolicyProvider for TimestampPolicy {
@@ -162,7 +172,7 @@ impl ComparisonPolicy for Configuration {
         let mut right = other.config;
         left.clock_group = None;
         right.clock_group = None;
-        Ok(self.clock == other.clock && left == right)
+        Ok(self.clock == other.clock && self.tolerance == other.tolerance && left == right)
     }
 
     fn applies(&self, source: &Value, _: &Value) -> Result<bool> {
@@ -244,7 +254,12 @@ impl Configuration {
                 clocks,
             );
         }
-        let tolerance = traffic_time::timestamp_tolerance_nanos(clock(facts, "case")?, clocks);
+        let tolerance = match self.tolerance {
+            Tolerance::Observed => {
+                traffic_time::timestamp_tolerance_nanos(clock(facts, "case")?, clocks)
+            }
+            Tolerance::Fixed => traffic_time::TOLERANCE_NANOS,
+        };
         let clocks = traffic_time::timestamp_clocks(
             source,
             target,

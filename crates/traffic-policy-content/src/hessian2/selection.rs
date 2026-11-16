@@ -5,7 +5,8 @@ use super::{
     canonicalize_path, parse_bodies,
 };
 
-pub(crate) fn selected_paths_match(
+pub fn selected_paths_match(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
     effective_unordered: &[Hessian2UnorderedPath],
@@ -19,8 +20,8 @@ pub(crate) fn selected_paths_match(
         canonicalize_path(&mut actual, &rule.value_path.0, &rule.value_path)?;
     }
     for rule in effective_joined {
-        canonicalize_joined_string(&mut expected, &rule.value_path.0, &rule.separator)?;
-        canonicalize_joined_string(&mut actual, &rule.value_path.0, &rule.separator)?;
+        canonicalize_joined_string(policies, &mut expected, &rule.value_path.0, &rule.separator)?;
+        canonicalize_joined_string(policies, &mut actual, &rule.value_path.0, &rule.separator)?;
     }
 
     Ok(selected_unordered
@@ -63,10 +64,30 @@ fn selected_values<'value, 'body>(
 
 #[cfg(test)]
 mod tests {
+
+    fn selected_paths_match(
+        expected: &[u8],
+        actual: &[u8],
+        effective_unordered: &[Hessian2UnorderedPath],
+        effective_joined: &[Hessian2JoinedStringPath],
+        selected_unordered: &[Hessian2UnorderedPath],
+        selected_joined: &[Hessian2JoinedStringPath],
+    ) -> Result<bool> {
+        super::selected_paths_match(
+            traffic_extensions::policies(),
+            expected,
+            actual,
+            effective_unordered,
+            effective_joined,
+            selected_unordered,
+            selected_joined,
+        )
+    }
+
     use motan_hessian2::{ClassSchema, Encoder, Limits};
 
     use super::*;
-    use crate::policy::runtime::Hessian2ValuePath;
+    use traffic_policy_schema::response::Hessian2ValuePath;
 
     fn response(names: &[&str], source: &str) -> Vec<u8> {
         let mut body = Vec::new();

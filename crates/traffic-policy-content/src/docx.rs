@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::model::{DocxBodyDifference, DocxBodyDifferenceKind, ResponseBodyAssertionReport};
 use super::time::RequestTimes;
-use crate::policy::runtime::{DocxTimestampRule, ResponseBodyCodec};
+use traffic_policy_schema::response::{DocxTimestampRule, ResponseBodyCodec};
 
 const MAX_ENTRIES: usize = 4096;
 const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
@@ -16,20 +16,30 @@ const CREATED_ELEMENT: &str = "dcterms:created";
 const DOCUMENT_CONTENT_TYPE: &[u8] =
     b"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 
-pub(crate) fn is_docx_body(body: &[u8]) -> bool {
+pub fn is_docx_body(body: &[u8]) -> bool {
     package(body).is_ok()
 }
 
-pub(crate) fn diagnose_docx(expected: &[u8], actual: &[u8]) -> Result<ResponseBodyAssertionReport> {
+pub fn diagnose_docx(
+    policies: &traffic_policy::PolicyRegistry,
+    expected: &[u8],
+    actual: &[u8],
+) -> Result<ResponseBodyAssertionReport> {
     let candidate = DocxTimestampRule {
         part: CORE_PROPERTIES_PART.into(),
         element: CREATED_ELEMENT.into(),
-        format: crate::policy::runtime::ResponseTimestampFormat::Rfc3339,
+        format: traffic_policy_schema::response::ResponseTimestampFormat::Rfc3339,
         source_evidence: "diagnostic candidate only".into(),
         source_example: "source".into(),
         target_example: "target".into(),
     };
-    let discovery = compare_packages(expected, actual, std::slice::from_ref(&candidate), None)?;
+    let discovery = compare_packages(
+        policies,
+        expected,
+        actual,
+        std::slice::from_ref(&candidate),
+        None,
+    )?;
     Ok(ResponseBodyAssertionReport {
         codec: ResponseBodyCodec::Docx,
         envelope: "opc_zip".into(),
@@ -44,13 +54,14 @@ pub(crate) fn diagnose_docx(expected: &[u8], actual: &[u8]) -> Result<ResponseBo
     })
 }
 
-pub(crate) fn evaluate_docx(
+pub fn evaluate_docx(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
     rules: &[DocxTimestampRule],
     times: RequestTimes,
 ) -> Result<(bool, ResponseBodyAssertionReport)> {
-    let comparison = compare_packages(expected, actual, rules, Some(times))?;
+    let comparison = compare_packages(policies, expected, actual, rules, Some(times))?;
     let report = ResponseBodyAssertionReport {
         codec: ResponseBodyCodec::Docx,
         envelope: "opc_zip".into(),
@@ -72,6 +83,7 @@ struct PackageComparison {
 }
 
 fn compare_packages(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
     rules: &[DocxTimestampRule],
@@ -127,6 +139,7 @@ fn compare_packages(
             }
             if let Some(times) = times {
                 let result = super::time::compare_preserved_timestamp(
+                    policies,
                     rule.format,
                     &Value::String(expected_value),
                     &Value::String(actual_value),

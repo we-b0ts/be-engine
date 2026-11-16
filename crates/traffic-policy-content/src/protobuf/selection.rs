@@ -5,7 +5,8 @@ use super::{
     parse_bodies, parse_fields,
 };
 
-pub(crate) fn selected_paths_match(
+pub fn selected_paths_match(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
     effective_unordered: &[ProtobufUnorderedPath],
@@ -14,8 +15,8 @@ pub(crate) fn selected_paths_match(
     selected_joined: &[ProtobufJoinedStringPath],
 ) -> Result<bool> {
     let (_, expected, actual) = parse_bodies(expected, actual)?;
-    let expected = canonicalize_rules(expected, effective_unordered, effective_joined)?;
-    let actual = canonicalize_rules(actual, effective_unordered, effective_joined)?;
+    let expected = canonicalize_rules(policies, expected, effective_unordered, effective_joined)?;
+    let actual = canonicalize_rules(policies, actual, effective_unordered, effective_joined)?;
 
     selected_unordered
         .iter()
@@ -67,8 +68,28 @@ fn select_groups_inner<'a>(
 
 #[cfg(test)]
 mod tests {
+
+    fn selected_paths_match(
+        expected: &[u8],
+        actual: &[u8],
+        effective_unordered: &[ProtobufUnorderedPath],
+        effective_joined: &[ProtobufJoinedStringPath],
+        selected_unordered: &[ProtobufUnorderedPath],
+        selected_joined: &[ProtobufJoinedStringPath],
+    ) -> Result<bool> {
+        super::selected_paths_match(
+            traffic_extensions::policies(),
+            expected,
+            actual,
+            effective_unordered,
+            effective_joined,
+            selected_unordered,
+            selected_joined,
+        )
+    }
+
     use super::*;
-    use crate::policy::runtime::ProtobufRepeatedElementType;
+    use traffic_policy_schema::response::ProtobufRepeatedElementType;
 
     fn response(names: &[&str], source: &str) -> Vec<u8> {
         let mut message = Vec::new();

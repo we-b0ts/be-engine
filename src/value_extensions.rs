@@ -48,25 +48,6 @@ pub(crate) fn strict_values() -> std::sync::Arc<dyn crate::replay::policy::Value
     std::sync::Arc::new(crate::value_contract::state::ValueState::default())
 }
 
-pub(crate) fn compare_registered(
-    id: &str,
-    options: &serde_json::Value,
-    source: &serde_json::Value,
-    target: &serde_json::Value,
-) -> Result<traffic_policy::Evaluation> {
-    let policy =
-        traffic_extensions::policies().prepare(id, &serde_json::from_value(options.clone())?)?;
-    policy.evaluate(
-        &traffic_policy::ValuePair {
-            source: &serde_json::from_value(source.clone())?,
-            target: &serde_json::from_value(target.clone())?,
-            source_path: "",
-            target_path: "",
-        },
-        &mut (),
-    )
-}
-
 impl RuleRuntime for ValueRules {
     type Bindings = Vec<RuleBinding>;
     type Delivery = std::collections::BTreeSet<String>;

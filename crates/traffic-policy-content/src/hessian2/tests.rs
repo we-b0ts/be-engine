@@ -478,3 +478,22 @@ fn joined_string_discovery_skips_fields_that_are_not_reordered_sets() {
     assert!(discovery.unordered_joined_string_paths.is_empty());
     assert!(discovery.unordered_paths.is_empty());
 }
+
+fn compare_hessian2(
+    expected: &[u8],
+    actual: &[u8],
+    unordered_paths: &[Hessian2UnorderedPath],
+    joined_string_paths: &[Hessian2JoinedStringPath],
+) -> Result<bool> {
+    super::compare_hessian2(
+        traffic_extensions::policies(),
+        expected,
+        actual,
+        unordered_paths,
+        joined_string_paths,
+    )
+}
+
+fn discover_hessian2_order(expected: &[u8], actual: &[u8]) -> Result<Hessian2OrderDiscovery> {
+    super::discover_hessian2_order(traffic_extensions::policies(), expected, actual)
+}

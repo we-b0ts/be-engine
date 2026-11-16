@@ -195,3 +195,26 @@ fn duration_hours_and_minutes_keep_tolerance_in_seconds() {
         Some(360)
     );
 }
+
+fn compare(
+    rule: ResponseTimeRule,
+    source: &Value,
+    target: &Value,
+    times: RequestTimes,
+) -> Result<(), ResponseDifferenceKind> {
+    super::compare(traffic_extensions::policies(), rule, source, target, times)
+}
+fn compare_preserved_timestamp(
+    format: ResponseTimestampFormat,
+    source: &Value,
+    target: &Value,
+    times: RequestTimes,
+) -> Result<(), ResponseDifferenceKind> {
+    super::compare_preserved_timestamp(
+        traffic_extensions::policies(),
+        format,
+        source,
+        target,
+        times,
+    )
+}

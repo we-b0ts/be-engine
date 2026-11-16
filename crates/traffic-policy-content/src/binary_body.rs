@@ -3,7 +3,7 @@ const SIMPLE_BYTE_ARRAY_HEADER: usize = 5;
 
 /// Envelope carrying one binary business value inside a normalized response body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BodyEnvelope {
+pub enum BodyEnvelope {
     /// Simple `byte[]` serialization: tag, big-endian length, payload.
     SimpleByteArray,
     /// The serialized business value occupies the whole response body.
@@ -11,7 +11,7 @@ pub(super) enum BodyEnvelope {
 }
 
 impl BodyEnvelope {
-    pub(super) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::SimpleByteArray => "simple_byte_array",
             Self::Raw => "raw",
@@ -21,7 +21,7 @@ impl BodyEnvelope {
 
 /// Returns the payload of a simple byte-array envelope when the body has
 /// that exact framing.
-pub(super) fn simple_payload(body: &[u8]) -> Option<&[u8]> {
+pub fn simple_payload(body: &[u8]) -> Option<&[u8]> {
     if body.len() < SIMPLE_BYTE_ARRAY_HEADER || body[0] != SIMPLE_BYTE_ARRAY {
         return None;
     }

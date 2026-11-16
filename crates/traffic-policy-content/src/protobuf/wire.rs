@@ -1,6 +1,6 @@
 //! Bounded Protobuf wire field decoding for structural comparison.
 use super::*;
-pub(super) fn parse_fields(payload: &[u8]) -> Result<Vec<Field<'_>>> {
+pub fn parse_fields(payload: &[u8]) -> Result<Vec<Field<'_>>> {
     let mut fields = Vec::new();
     let mut index = 0;
     while index < payload.len() {
@@ -55,7 +55,7 @@ pub(super) fn parse_fields(payload: &[u8]) -> Result<Vec<Field<'_>>> {
     Ok(fields)
 }
 
-pub(super) fn read_varint(payload: &[u8], index: &mut usize) -> Result<u64> {
+pub fn read_varint(payload: &[u8], index: &mut usize) -> Result<u64> {
     let mut value = 0_u64;
     for shift in (0..70).step_by(7) {
         let byte = *payload
@@ -71,7 +71,7 @@ pub(super) fn read_varint(payload: &[u8], index: &mut usize) -> Result<u64> {
     bail!("protobuf varint overflow")
 }
 
-pub(super) fn advance(payload: &[u8], index: &mut usize, length: usize) -> Result<()> {
+pub fn advance(payload: &[u8], index: &mut usize, length: usize) -> Result<()> {
     let end = index
         .checked_add(length)
         .ok_or_else(|| anyhow::anyhow!("protobuf field length overflow"))?;

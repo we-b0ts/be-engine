@@ -98,8 +98,16 @@ physical data ranges, byte-offset correspondence and lossless data replacement.
 Application stream bindings compare those projected data values through the shared
 execution library.
 `traffic-jwt` owns compact JWS authentication, NumericDate comparisons and nonce
-formats. Signing-key source validation is pure there. Startup resolution and
+formats, including RS256 public-key authentication. Signing-key source validation is pure there. Startup resolution and
 immutable key witnesses retain application ownership.
+`traffic-policy-content` owns phase-independent content comparison, bounded
+structured-value diagnosis and compatibility diagnostic DTOs. Its Protobuf,
+Hessian2 and joined-value entrypoints receive the installed policy registry.
+JSON field evaluation receives a token verifier. JWT comparison receives
+authenticated key material through `VerificationKey`. The application retains
+key resolution, immutable evidence checks, Case reports and result publication.
+Opaque body declarations and automatic diagnostic recognition delegate to this
+content owner. These pure entrypoints also serve Source preflight.
 Native HTTP interaction framing, Source transcripts, namespace-session facts and
 client execution live under `traffic-protocol-http::interaction`. Client drivers
 receive timing and actual-observation ports from their host. Authenticated Source

@@ -5,6 +5,15 @@ use zip::write::SimpleFileOptions;
 
 use super::*;
 
+fn compare_packages(
+    source: &[u8],
+    target: &[u8],
+    rules: &[DocxTimestampRule],
+    times: Option<RequestTimes>,
+) -> Result<PackageComparison> {
+    super::compare_packages(traffic_extensions::policies(), source, target, rules, times)
+}
+
 fn docx(created: &str, document: &str, second: u8) -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(&mut bytes);
@@ -34,7 +43,7 @@ fn rule() -> DocxTimestampRule {
     DocxTimestampRule {
         part: CORE_PROPERTIES_PART.into(),
         element: CREATED_ELEMENT.into(),
-        format: crate::policy::runtime::ResponseTimestampFormat::Rfc3339,
+        format: traffic_policy_schema::response::ResponseTimestampFormat::Rfc3339,
         source_evidence: "generator sets the core created property from the request clock".into(),
         source_example: "2024-01-02T03:04:05Z".into(),
         target_example: "2024-01-02T04:04:05Z".into(),
@@ -54,14 +63,12 @@ fn compares_decompressed_parts_and_accepts_request_relative_created_time() {
     assert!(report.candidates_explain_all_differences);
     assert!(matches!(
         report.differences.as_slice(),
-        [
-            crate::primary_protocol::assertion::ResponseBodyDifferenceDetail::Docx(
-                DocxBodyDifference {
-                    kind: DocxBodyDifferenceKind::TimestampMismatch,
-                    ..
-                }
-            )
-        ]
+        [crate::model::ResponseBodyDifferenceDetail::Docx(
+            DocxBodyDifference {
+                kind: DocxBodyDifferenceKind::TimestampMismatch,
+                ..
+            }
+        )]
     ));
 }
 
@@ -93,4 +100,16 @@ fn rejects_real_part_changes_and_unanchored_timestamps() {
 fn requires_a_docx_opc_package() {
     assert!(!is_docx_body(b"PK not a zip"));
     assert!(diagnose_docx(b"PK not a zip", b"PK not a zip").is_err());
+}
+
+fn diagnose_docx(source: &[u8], target: &[u8]) -> Result<ResponseBodyAssertionReport> {
+    super::diagnose_docx(traffic_extensions::policies(), source, target)
+}
+fn evaluate_docx(
+    source: &[u8],
+    target: &[u8],
+    rules: &[DocxTimestampRule],
+    times: RequestTimes,
+) -> Result<(bool, ResponseBodyAssertionReport)> {
+    super::evaluate_docx(traffic_extensions::policies(), source, target, rules, times)
 }

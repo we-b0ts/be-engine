@@ -2,7 +2,8 @@
 use super::*;
 const MAX_VISITED_FIELDS: usize = 4096;
 
-pub(crate) fn candidates(
+pub fn candidates(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
 ) -> Vec<(ProtobufFieldPath, Vec<ProtobufRepeatedElementType>)> {
@@ -23,6 +24,7 @@ pub(crate) fn candidates(
     for field_path in paths {
         let probe = rule(&field_path, types[0]);
         if selected_paths_match(
+            policies,
             expected,
             actual,
             &[],
@@ -39,6 +41,7 @@ pub(crate) fn candidates(
             .filter(|element_type| {
                 let rule = rule(&field_path, *element_type);
                 selected_paths_match(
+                    policies,
                     expected,
                     actual,
                     std::slice::from_ref(&rule),
@@ -63,7 +66,7 @@ pub(crate) fn candidates(
         .map(|(path, types)| rule(path, types[0]))
         .collect::<Vec<_>>();
     // Selected-field witnesses are insufficient: all residual fields must also match.
-    if compare_protobuf(expected, actual, &rules, &[]).unwrap_or(false) {
+    if compare_protobuf(policies, expected, actual, &rules, &[]).unwrap_or(false) {
         candidates
     } else {
         Vec::new()

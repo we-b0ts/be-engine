@@ -8,8 +8,10 @@ use motan_hessian2::{ClassId, Decoder, Limits, TypeId, ValueKind};
 use super::binary_body::{BodyEnvelope, simple_payload};
 use super::joined_string;
 use super::model::{Hessian2BodyDifference, Hessian2BodyDifferenceKind};
-use crate::config::DEFAULT_BODY_LIMIT_BYTES;
-use crate::policy::runtime::{Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath};
+const DEFAULT_BODY_LIMIT_BYTES: usize = traffic_value::MAX_VALUE_BYTES;
+use traffic_policy_schema::response::{
+    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
+};
 
 const MAX_NODES: usize = 1_000_000;
 const MAX_DISCOVERED_PATHS: usize = 32;
@@ -19,13 +21,13 @@ const MAX_DIFFERENCES: usize = 32;
 mod selection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Hessian2OrderDiscovery {
-    pub(super) envelope: BodyEnvelope,
-    pub(super) unordered_paths: Vec<Hessian2ValuePath>,
-    pub(super) unordered_joined_string_paths: Vec<(Hessian2ValuePath, String)>,
-    pub(super) differences: Vec<Hessian2BodyDifference>,
-    pub(super) candidates_explain_all_differences: bool,
-    pub(super) order_only: bool,
+pub struct Hessian2OrderDiscovery {
+    pub envelope: BodyEnvelope,
+    pub unordered_paths: Vec<Hessian2ValuePath>,
+    pub unordered_joined_string_paths: Vec<(Hessian2ValuePath, String)>,
+    pub differences: Vec<Hessian2BodyDifference>,
+    pub candidates_explain_all_differences: bool,
+    pub order_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,18 +75,19 @@ struct Parser<'a> {
     nodes: usize,
 }
 
-pub(crate) fn is_hessian2_body(body: &[u8]) -> bool {
+pub fn is_hessian2_body(body: &[u8]) -> bool {
     resolve_body(body).is_ok()
 }
 
-pub(crate) fn compare_hessian2(
+pub fn compare_hessian2(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[Hessian2UnorderedPath],
     joined_string_paths: &[Hessian2JoinedStringPath],
 ) -> Result<bool> {
     if !unordered_paths.is_empty() {
-        traffic_extensions::policies().prepare("unordered", &traffic_value::Value::Null)?;
+        policies.prepare("unordered", &traffic_value::Value::Null)?;
     }
     let (_, mut expected, mut actual) = parse_bodies(expected, actual)?;
     for path in unordered_paths {
@@ -92,20 +95,27 @@ pub(crate) fn compare_hessian2(
         canonicalize_path(&mut actual, &path.value_path.0, &path.value_path)?;
     }
     for path in joined_string_paths {
-        canonicalize_joined_string(&mut expected, &path.value_path.0, &path.separator)?;
-        canonicalize_joined_string(&mut actual, &path.value_path.0, &path.separator)?;
+        canonicalize_joined_string(policies, &mut expected, &path.value_path.0, &path.separator)?;
+        canonicalize_joined_string(policies, &mut actual, &path.value_path.0, &path.separator)?;
     }
     Ok(expected == actual)
 }
 
-pub(super) fn evaluate_hessian2(
+pub fn evaluate_hessian2(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[Hessian2UnorderedPath],
     joined_string_paths: &[Hessian2JoinedStringPath],
 ) -> Result<(bool, Hessian2OrderDiscovery)> {
-    let mut discovery = discover_hessian2_order(expected, actual)?;
-    let matches = compare_hessian2(expected, actual, unordered_paths, joined_string_paths)?;
+    let mut discovery = discover_hessian2_order(policies, expected, actual)?;
+    let matches = compare_hessian2(
+        policies,
+        expected,
+        actual,
+        unordered_paths,
+        joined_string_paths,
+    )?;
     for rule in unordered_paths {
         for difference in discovery
             .differences
@@ -131,7 +141,8 @@ pub(super) fn evaluate_hessian2(
     Ok((matches, discovery))
 }
 
-pub(super) fn discover_hessian2_order(
+pub fn discover_hessian2_order(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &[u8],
     actual: &[u8],
 ) -> Result<Hessian2OrderDiscovery> {
@@ -142,6 +153,7 @@ pub(super) fn discover_hessian2_order(
     while expected != actual && selected.len() < MAX_DISCOVERED_PATHS {
         let mut discovered = BTreeSet::new();
         discover_paths(
+            policies,
             &expected,
             &actual,
             &mut Vec::new(),
@@ -164,8 +176,8 @@ pub(super) fn discover_hessian2_order(
     let mut candidate_expected = expected.clone();
     let mut candidate_actual = actual.clone();
     for (path, separator) in &joined_string {
-        canonicalize_joined_string(&mut candidate_expected, &path.0, separator)?;
-        canonicalize_joined_string(&mut candidate_actual, &path.0, separator)?;
+        canonicalize_joined_string(policies, &mut candidate_expected, &path.0, separator)?;
+        canonicalize_joined_string(policies, &mut candidate_actual, &path.0, separator)?;
     }
     let candidates_explain_all_differences = candidate_expected == candidate_actual;
     let mut differences = selected
@@ -440,14 +452,16 @@ fn canonicalize_path_inner(
 /// (multiset semantics — duplicates preserved), and re-join. Walking the value
 /// tree mirrors `canonicalize_path`; the terminal must be a Hessian2 string.
 fn canonicalize_joined_string(
+    policies: &traffic_policy::PolicyRegistry,
     value: &mut HessianValue<'_>,
     path: &[String],
     separator: &str,
 ) -> Result<bool> {
-    canonicalize_joined_string_inner(value, path, separator, false)
+    canonicalize_joined_string_inner(policies, value, path, separator, false)
 }
 
 fn canonicalize_joined_string_inner(
+    policies: &traffic_policy::PolicyRegistry,
     value: &mut HessianValue<'_>,
     path: &[String],
     separator: &str,
@@ -456,7 +470,7 @@ fn canonicalize_joined_string_inner(
     let Some((segment, remaining)) = path.split_first() else {
         return match value {
             HessianValue::String(text) => {
-                *text = Cow::Owned(joined_string::canonicalize(text, separator));
+                *text = Cow::Owned(joined_string::canonicalize(policies, text, separator));
                 Ok(true)
             }
             _ if below_wildcard => Ok(false),
@@ -469,6 +483,7 @@ fn canonicalize_joined_string_inner(
             for (name, value) in class.fields.iter().zip(fields.iter_mut()) {
                 if name.as_ref() == segment {
                     found |= canonicalize_joined_string_inner(
+                        policies,
                         value,
                         remaining,
                         separator,
@@ -483,6 +498,7 @@ fn canonicalize_joined_string_inner(
             for (key, value) in entries {
                 if matches!(key, HessianValue::String(name) if name.as_ref() == segment) {
                     found |= canonicalize_joined_string_inner(
+                        policies,
                         value,
                         remaining,
                         separator,
@@ -495,7 +511,8 @@ fn canonicalize_joined_string_inner(
         HessianValue::List { values, .. } if segment == "*" => {
             let mut found = false;
             for value in values {
-                found |= canonicalize_joined_string_inner(value, remaining, separator, true)?;
+                found |=
+                    canonicalize_joined_string_inner(policies, value, remaining, separator, true)?;
             }
             Ok(found)
         }
@@ -504,6 +521,7 @@ fn canonicalize_joined_string_inner(
 }
 
 fn discover_paths(
+    policies: &traffic_policy::PolicyRegistry,
     expected: &HessianValue<'_>,
     actual: &HessianValue<'_>,
     path: &mut Vec<String>,
@@ -530,15 +548,14 @@ fn discover_paths(
             actual_sorted.sort();
             if expected_values != actual_values
                 && expected_sorted == actual_sorted
-                && traffic_extensions::policies()
-                    .supports("unordered", traffic_policy::PolicyAction::Analyze)
+                && policies.supports("unordered", traffic_policy::PolicyAction::Analyze)
             {
                 discovered.insert(Hessian2ValuePath(path.clone()));
                 return;
             }
             path.push("*".to_string());
             for (expected, actual) in expected_values.iter().zip(actual_values) {
-                discover_paths(expected, actual, path, discovered, joined_string);
+                discover_paths(policies, expected, actual, path, discovered, joined_string);
             }
             path.pop();
         }
@@ -558,7 +575,7 @@ fn discover_paths(
                 .zip(expected_fields.iter().zip(actual_fields))
             {
                 path.push(name.to_string());
-                discover_paths(expected, actual, path, discovered, joined_string);
+                discover_paths(policies, expected, actual, path, discovered, joined_string);
                 path.pop();
             }
         }
@@ -582,12 +599,14 @@ fn discover_paths(
                     continue;
                 };
                 path.push(key.to_string());
-                discover_paths(expected, actual, path, discovered, joined_string);
+                discover_paths(policies, expected, actual, path, discovered, joined_string);
                 path.pop();
             }
         }
         (HessianValue::String(expected), HessianValue::String(actual)) => {
-            for separator in joined_string::matching_discovery_separators(expected, actual) {
+            for separator in
+                joined_string::matching_discovery_separators(policies, expected, actual)
+            {
                 if discovered.len() + joined_string.len() >= MAX_DISCOVERED_PATHS {
                     return;
                 }

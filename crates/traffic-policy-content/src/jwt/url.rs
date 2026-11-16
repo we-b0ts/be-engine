@@ -1,12 +1,12 @@
 //! URL carriers preserve every byte outside the token and proven nonce echoes.
 use super::*;
 
-pub(super) struct Extracted {
+pub struct Extracted {
     pub tokens: [Value; 2],
     pub echoes: BTreeMap<String, [String; 2]>,
 }
 
-pub(super) fn extract(
+pub fn extract(
     rule: &ResponseJwtRule,
     source: &Value,
     target: &Value,
@@ -24,7 +24,7 @@ pub(super) fn extract(
                 .iter()
                 .map(|(claim, name)| (name, Some(claim))),
         ) {
-            let selected = crate::request_rules::jwt::url_query::select(raw, name)
+            let selected = traffic_protocol_http::query_token::select(raw, name)
                 .map_err(|_| ResponseDifferenceKind::JwtInvalid)?;
             ranges.push((selected.prefix.len(), raw.len() - selected.suffix.len()));
             if let Some(claim) = claim {

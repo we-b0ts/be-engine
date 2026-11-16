@@ -2980,6 +2980,7 @@ dependencies = [
  "traffic-model",
  "traffic-policy",
  "traffic-policy-compiler",
+ "traffic-policy-content",
  "traffic-policy-document",
  "traffic-policy-execution",
  "traffic-policy-generated",
@@ -3031,12 +3032,15 @@ dependencies = [
  "anyhow",
  "base64",
  "hmac",
+ "jsonwebtoken",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2",
  "traffic-codec-json",
  "traffic-time",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]
@@ -3079,6 +3083,25 @@ dependencies = [
  "traffic-protocol-http",
  "traffic-protocol-mysql",
  "traffic-value",
+]
+
+[[package]]
+name = "traffic-policy-content"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "motan-hessian2",
+ "serde",
+ "serde_json",
+ "traffic-contract",
+ "traffic-extensions",
+ "traffic-jwt",
+ "traffic-policy",
+ "traffic-policy-schema",
+ "traffic-protocol-http",
+ "traffic-value",
+ "zip",
 ]
 
 [[package]]

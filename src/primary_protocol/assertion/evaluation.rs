@@ -307,148 +307,15 @@ pub(super) fn evaluate_response(
             response_fields.is_empty(),
             "typed response-body rules cannot be combined with JSON response rules"
         );
-        let (body_matches, body_diagnosis) = match rule.codec {
-            crate::policy::runtime::ResponseBodyCodec::Protobuf => {
-                let unordered_paths = rule
-                    .unordered_paths
-                    .iter()
-                    .map(|path| match path {
-                        crate::policy::runtime::ResponseBodyUnorderedPath::Protobuf(path) => {
-                            Ok(path.clone())
-                        }
-                        crate::policy::runtime::ResponseBodyUnorderedPath::Hessian2(_) => {
-                            anyhow::bail!(
-                                "protobuf response-body rule contains a Hessian2 unordered path"
-                            )
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let joined_string_paths = rule
-                    .unordered_joined_string_paths
-                    .iter()
-                    .map(|path| match path {
-                        crate::policy::runtime::ResponseBodyJoinedStringPath::Protobuf(path) => {
-                            Ok(path.clone())
-                        }
-                        crate::policy::runtime::ResponseBodyJoinedStringPath::Hessian2(_) => {
-                            anyhow::bail!(
-                                "protobuf response-body rule contains a Hessian2 joined-string path"
-                            )
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                report.body_codec = ResponseBodyCodec::Protobuf;
-                let (body_matches, discovery) = protobuf::evaluate_protobuf(
-                    expected_body.body(),
-                    actual_body.body(),
-                    &unordered_paths,
-                    &joined_string_paths,
-                )
-                .context("failed to apply configured protobuf response-body rule")?;
-                (
-                    body_matches,
-                    ResponseBodyAssertionReport {
-                        codec: rule.codec,
-                        envelope: discovery.envelope.as_str().to_string(),
-                        configured: true,
-                        used_for_verdict: true,
-                        codec_candidates: vec![rule.codec],
-                        unordered_path_candidates: discovery
-                            .unordered_paths
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        unordered_joined_string_candidates: discovery
-                            .unordered_joined_string_paths
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        differences: discovery.differences.into_iter().map(Into::into).collect(),
-                        candidates_explain_all_differences: discovery
-                            .candidates_explain_all_differences,
-                        order_only: discovery.order_only,
-                    },
-                )
-            }
-            crate::policy::runtime::ResponseBodyCodec::Hessian2 => {
-                let unordered_paths = rule
-                    .unordered_paths
-                    .iter()
-                    .map(|path| match path {
-                        crate::policy::runtime::ResponseBodyUnorderedPath::Hessian2(path) => {
-                            Ok(path.clone())
-                        }
-                        crate::policy::runtime::ResponseBodyUnorderedPath::Protobuf(_) => {
-                            anyhow::bail!(
-                                "Hessian2 response-body rule contains a protobuf unordered path"
-                            )
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let joined_string_paths = rule
-                    .unordered_joined_string_paths
-                    .iter()
-                    .map(|path| match path {
-                        crate::policy::runtime::ResponseBodyJoinedStringPath::Hessian2(path) => {
-                            Ok(path.clone())
-                        }
-                        crate::policy::runtime::ResponseBodyJoinedStringPath::Protobuf(_) => {
-                            anyhow::bail!(
-                                "Hessian2 response-body rule contains a protobuf joined-string path"
-                            )
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                report.body_codec = ResponseBodyCodec::Hessian2;
-                let (body_matches, discovery) = hessian2::evaluate_hessian2(
-                    expected_body.body(),
-                    actual_body.body(),
-                    &unordered_paths,
-                    &joined_string_paths,
-                )
-                .context("failed to apply configured Hessian2 response-body rule")?;
-                (
-                    body_matches,
-                    ResponseBodyAssertionReport {
-                        codec: rule.codec,
-                        envelope: discovery.envelope.as_str().to_string(),
-                        configured: true,
-                        used_for_verdict: true,
-                        codec_candidates: vec![rule.codec],
-                        unordered_path_candidates: discovery
-                            .unordered_paths
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        unordered_joined_string_candidates: discovery
-                            .unordered_joined_string_paths
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        differences: discovery.differences.into_iter().map(Into::into).collect(),
-                        candidates_explain_all_differences: discovery
-                            .candidates_explain_all_differences,
-                        order_only: discovery.order_only,
-                    },
-                )
-            }
-            crate::policy::runtime::ResponseBodyCodec::Docx => {
-                ensure!(
-                    rule.unordered_paths.is_empty()
-                        && rule.unordered_joined_string_paths.is_empty(),
-                    "DOCX response-body rule cannot contain typed collection paths"
-                );
-                report.body_codec = ResponseBodyCodec::Docx;
-                docx::evaluate_docx(
-                    expected_body.body(),
-                    actual_body.body(),
-                    &rule.docx_timestamps,
-                    times,
-                )
-                .context("failed to apply configured DOCX response-body rule")?
-            }
-            codec => anyhow::bail!("unsupported configured response-body codec {codec:?}"),
-        };
+        let (body_matches, body_diagnosis) = traffic_policy_content::body::evaluate(
+            traffic_extensions::policies(),
+            rule,
+            expected_body.body(),
+            actual_body.body(),
+            times,
+        )?;
+        report.body_codec = body_diagnosis.codec;
+
         if loaded.compiled.is_some() {
             report.applied_body_rule_ids.extend(native_body_ids.clone());
         } else {
@@ -485,37 +352,22 @@ pub(super) fn evaluate_response(
         return Ok(report);
     }
 
-    if expected_body.protocol_body_codec() == Some(ResponseBodyCodec::Hessian2)
-        && actual_body.protocol_body_codec() == Some(ResponseBodyCodec::Hessian2)
+    if let Some(codec) = expected_body
+        .protocol_body_codec()
+        .filter(|codec| actual_body.protocol_body_codec() == Some(*codec))
     {
         ensure!(
             response_fields.is_empty(),
-            "JSON response rules cannot apply to a Motan1 Hessian2 value response"
+            "JSON response rules cannot apply to an opaque native value response"
         );
-        report.body_codec = ResponseBodyCodec::Hessian2;
-        let (body_matches, discovery) =
-            hessian2::evaluate_hessian2(expected_body.body(), actual_body.body(), &[], &[])
-                .context("failed to compare Motan1 Hessian2 value response bodies")?;
-        report.body_diagnosis = Some(ResponseBodyAssertionReport {
-            codec: ResponseBodyCodec::Hessian2,
-            envelope: discovery.envelope.as_str().to_string(),
-            configured: false,
-            used_for_verdict: true,
-            codec_candidates: vec![ResponseBodyCodec::Hessian2],
-            unordered_path_candidates: discovery
-                .unordered_paths
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            unordered_joined_string_candidates: discovery
-                .unordered_joined_string_paths
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            differences: discovery.differences.into_iter().map(Into::into).collect(),
-            candidates_explain_all_differences: discovery.candidates_explain_all_differences,
-            order_only: discovery.order_only,
-        });
+        let (body_matches, diagnosis) = traffic_policy_content::body::compare_declared(
+            traffic_extensions::policies(),
+            codec,
+            expected_body.body(),
+            actual_body.body(),
+        )?;
+        report.body_codec = diagnosis.codec;
+        report.body_diagnosis = Some(diagnosis);
         if !body_matches {
             report
                 .differences
@@ -571,39 +423,13 @@ pub(super) fn evaluate_response(
                     .push(ResponseDifference::exact_body_mismatch());
                 let expected_body_value = expected_body.body();
                 let actual_body_value = actual_body.body();
-                if expected_body_value != actual_body_value {
-                    let protobuf_candidate = protobuf::is_protobuf_body(expected_body_value)
-                        && protobuf::is_protobuf_body(actual_body_value);
-                    let hessian2_candidate = hessian2::is_hessian2_body(expected_body_value)
-                        && hessian2::is_hessian2_body(actual_body_value);
-                    let docx_candidate = docx::is_docx_body(expected_body_value)
-                        && docx::is_docx_body(actual_body_value);
-                    let mut codec_candidates = Vec::new();
-                    if protobuf_candidate {
-                        codec_candidates.push(crate::policy::runtime::ResponseBodyCodec::Protobuf);
-                    }
-                    if hessian2_candidate {
-                        codec_candidates.push(crate::policy::runtime::ResponseBodyCodec::Hessian2);
-                    }
-                    if docx_candidate {
-                        codec_candidates.push(crate::policy::runtime::ResponseBodyCodec::Docx);
-                    }
-                    let diagnostic_codec = if protobuf_candidate {
-                        Some(ResponseBodyCodec::Protobuf)
-                    } else if hessian2_candidate {
-                        Some(ResponseBodyCodec::Hessian2)
-                    } else if docx_candidate {
-                        Some(ResponseBodyCodec::Docx)
-                    } else {
-                        None
-                    };
-                    if let Some(codec) = diagnostic_codec {
-                        let mut diagnosis =
-                            diagnose_response_body(expected_body_value, actual_body_value, codec)?;
-                        diagnosis.codec_candidates = codec_candidates;
-                        report.body_codec = codec;
-                        report.body_diagnosis = Some(diagnosis);
-                    }
+                if let Some(diagnosis) = traffic_policy_content::body::discover(
+                    traffic_extensions::policies(),
+                    expected_body_value,
+                    actual_body_value,
+                )? {
+                    report.body_codec = diagnosis.codec;
+                    report.body_diagnosis = Some(diagnosis);
                 }
             }
             if let Some(difference) = body_type_difference {

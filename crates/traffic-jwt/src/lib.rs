@@ -165,3 +165,5 @@ pub fn is_jwt(value: &serde_json::Value) -> bool {
         && decode(parts[2])
             .is_some_and(|signature| !signature.is_empty() || header["alg"] == "none")
 }
+
+pub mod rsa;

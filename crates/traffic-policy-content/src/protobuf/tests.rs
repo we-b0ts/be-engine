@@ -1,5 +1,5 @@
 use super::*;
-use crate::policy::runtime::ProtobufJoinedStringFieldType;
+use traffic_policy_schema::response::ProtobufJoinedStringFieldType;
 
 fn bytes_field(number: u32, value: &[u8]) -> Vec<u8> {
     assert!(number < 16 && value.len() < 128);
@@ -298,4 +298,38 @@ fn joined_string_rule_preserves_duplicate_multiplicity() {
     };
 
     assert!(!compare_protobuf(&expected, &actual, &[], &[rule]).unwrap());
+}
+
+fn discover_protobuf_order(expected: &[u8], actual: &[u8]) -> Result<ProtobufOrderDiscovery> {
+    super::discover_protobuf_order(traffic_extensions::policies(), expected, actual)
+}
+
+fn compare_protobuf(
+    expected: &[u8],
+    actual: &[u8],
+    unordered_paths: &[ProtobufUnorderedPath],
+    joined_string_paths: &[ProtobufJoinedStringPath],
+) -> Result<bool> {
+    super::compare_protobuf(
+        traffic_extensions::policies(),
+        expected,
+        actual,
+        unordered_paths,
+        joined_string_paths,
+    )
+}
+
+fn evaluate_protobuf(
+    expected: &[u8],
+    actual: &[u8],
+    unordered_paths: &[ProtobufUnorderedPath],
+    joined_string_paths: &[ProtobufJoinedStringPath],
+) -> Result<(bool, ProtobufOrderDiscovery)> {
+    super::evaluate_protobuf(
+        traffic_extensions::policies(),
+        expected,
+        actual,
+        unordered_paths,
+        joined_string_paths,
+    )
 }

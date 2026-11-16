@@ -1,0 +1,21 @@
+[package]
+name = "traffic-policy-content"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+traffic-jwt = { path = "../traffic-jwt" }
+traffic-protocol-http = { path = "../traffic-protocol-http" }
+chrono = "0.4"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+motan-hessian2 = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4", default-features = false }
+traffic-contract = { path = "../traffic-contract" }
+traffic-policy = { path = "../traffic-policy" }
+traffic-policy-schema = { path = "../traffic-policy-schema" }
+traffic-value = { path = "../traffic-value" }
+
+[dev-dependencies]
+traffic-extensions = { path = "../traffic-extensions" }

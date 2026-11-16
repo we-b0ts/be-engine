@@ -1,8 +1,8 @@
 //! Exact derivation checks for fields accompanying a signed response token.
 use super::*;
-use crate::policy::runtime::ResponseTimestampFormat;
+use traffic_policy_schema::response::ResponseTimestampFormat;
 
-pub(super) fn compare(
+pub fn compare(
     rule: &ResponseJwtRule,
     pointer: &str,
     documents: [&Value; 2],
@@ -11,7 +11,7 @@ pub(super) fn compare(
     compare_pair(rule, [pointer, pointer], documents, validated)
 }
 
-pub(crate) fn compare_pair(
+pub fn compare_pair(
     rule: &ResponseJwtRule,
     pointers: [&str; 2],
     documents: [&Value; 2],
@@ -26,14 +26,12 @@ pub(crate) fn compare_pair(
         };
         let format = match rule.expires_at_format {
             ResponseTimestampFormat::UnixSeconds => {
-                crate::value_contract::time::TimestampFormat::UnixSeconds
+                traffic_contract::time::TimestampFormat::UnixSeconds
             }
-            ResponseTimestampFormat::Rfc3339 => {
-                crate::value_contract::time::TimestampFormat::Rfc3339
-            }
+            ResponseTimestampFormat::Rfc3339 => traffic_contract::time::TimestampFormat::Rfc3339,
             _ => return Err(invalid),
         };
-        crate::value_contract::time::validate_representation(read(0)?, read(1)?, format)
+        traffic_contract::time::validate_representation(read(0)?, read(1)?, format)
             .map_err(|_| invalid)?;
     }
     for (index, document) in documents.into_iter().enumerate() {
