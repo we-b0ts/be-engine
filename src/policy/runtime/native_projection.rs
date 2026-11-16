@@ -3,24 +3,18 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 
+use crate::policy::CompiledNativeRule;
 use crate::policy::native as n;
-use crate::policy::{CompiledNativeRule, SourceCondition};
 
-use super::config::{
-    DependencyProtocol, ExpectedResponseUsage, ReplayDependencyRule, ReplayPolicyDocument,
-    ReplayScope, TargetSelector,
-};
+use super::config::{ExpectedResponseUsage, ReplayPolicyDocument};
 
-mod dependency;
-pub(crate) use dependency::generated;
 mod response;
-pub(crate) use response::{dynamic_claim, project_jwt};
+mod response_format;
+pub(crate) use response::project_jwt;
 pub(crate) use traffic_policy_schema::scope::NativeScopeGuard;
 mod input_validation;
 mod native_admission;
-mod source;
 pub(crate) use input_validation::{SourceInputCase, validate_source_inputs};
-pub(crate) use source::validate_finite_sharing;
 
 #[derive(Debug)]
 pub(crate) struct NativeRuntimeProjection {
@@ -52,18 +46,13 @@ pub(crate) fn project_native(rules: &[CompiledNativeRule]) -> Result<NativeRunti
         let rule = &compiled.rule;
         native_admission::validate(rule)?;
         match &rule.effect {
-            n::NativeEffect::Identity(_) => {
-                anyhow::bail!(
-                    "native identity capture requires an installed native state capability"
-                )
-            }
-            n::NativeEffect::RedisSequence(_)
+            n::NativeEffect::Identity(_)
+            | n::NativeEffect::RedisSequence(_)
             | n::NativeEffect::HttpRequest(_)
             | n::NativeEffect::MysqlValues(_)
-            | n::NativeEffect::FiniteSharing(_) => output
-                .document
-                .dependency_rules
-                .push(dependency::project(rule)?),
+            | n::NativeEffect::FiniteSharing(_) => {
+                unreachable!("unavailable native effects are rejected before projection")
+            }
             n::NativeEffect::ResponseJwt(_)
             | n::NativeEffect::ResponseHeaderDate(_)
             | n::NativeEffect::ResponseBody(_) => response::project(&mut output, rule)?,
@@ -85,75 +74,6 @@ pub(crate) fn project_native(rules: &[CompiledNativeRule]) -> Result<NativeRunti
         }
     }
     Ok(output)
-}
-
-fn dependency_rule(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
-    let resource = rule.selector.resource.as_ref();
-    let protocol = resource
-        .map(|resource| resource.protocol)
-        .or(match &rule.effect {
-            n::NativeEffect::RedisSequence(_)
-            | n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis { .. }) => {
-                Some(crate::policy::Protocol::Redis)
-            }
-            n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Http) => {
-                Some(crate::policy::Protocol::Http)
-            }
-            _ => None,
-        })
-        .context("native dependency has no resource or protocol owner")?;
-    Ok(ReplayDependencyRule {
-        id: rule.id.clone(),
-        when: condition(rule.when.as_ref()),
-        replay_scope: ReplayScope::Case,
-        source_evidence: String::new(),
-        case_selector: rule
-            .selector
-            .api
-            .as_deref()
-            .map(|api| -> Result<super::config::CaseSelector> {
-                let (method, path) = api
-                    .split_once(' ')
-                    .context("invalid compiled API selector")?;
-                Ok(super::config::CaseSelector {
-                    method: method.into(),
-                    path: path.into(),
-                })
-            })
-            .transpose()?,
-        protocol: match protocol {
-            crate::policy::Protocol::Http => DependencyProtocol::Http,
-            crate::policy::Protocol::Redis => DependencyProtocol::Redis,
-            crate::policy::Protocol::Memcached => DependencyProtocol::Memcached,
-            crate::policy::Protocol::Mysql => DependencyProtocol::Mysql,
-        },
-        target: TargetSelector {
-            host: resource
-                .map(|resource| resource.endpoint.host.clone())
-                .or_else(|| rule.selector.http_host.clone()),
-            port: resource.map(|resource| resource.endpoint.port),
-        },
-        mysql: None,
-        http: None,
-        memcached: None,
-        redis: None,
-    })
-}
-
-pub(crate) fn key(value: &n::NativeKeySelector) -> crate::RedisValueKeySelector {
-    match value {
-        n::NativeKeySelector::Exact { value } => crate::RedisValueKeySelector::Exact {
-            value: value.clone(),
-        },
-        n::NativeKeySelector::Affix { prefix, suffix } => crate::RedisValueKeySelector::Affix {
-            prefix: prefix.clone(),
-            suffix: suffix.clone(),
-        },
-        n::NativeKeySelector::Numeric { prefix, suffix } => crate::RedisValueKeySelector::Numeric {
-            prefix: prefix.clone(),
-            suffix: suffix.clone(),
-        },
-    }
 }
 
 pub(crate) fn startup_key(value: &n::StartupKey) -> crate::request_rules::keys::SigningKeySource {
@@ -237,35 +157,6 @@ fn input(
     Ok(())
 }
 
-fn condition(value: Option<&SourceCondition>) -> Option<super::case_condition::CaseCondition> {
-    value.map(|condition| super::case_condition::CaseCondition {
-        request_body_json: condition
-            .request_body_json
-            .iter()
-            .map(|(pointer, predicate)| {
-                let predicate = match predicate {
-                    crate::policy::SourcePredicate::Equals(value) => {
-                        super::case_condition::JsonCondition::Equals(scalar(&value.equals))
-                    }
-                    crate::policy::SourcePredicate::NotEquals(value) => {
-                        super::case_condition::JsonCondition::NotEquals(scalar(&value.not_equals))
-                    }
-                };
-                (pointer.clone(), predicate)
-            })
-            .collect(),
-    })
-}
-
-fn scalar(value: &crate::policy::SourceScalar) -> serde_json::Value {
-    match value {
-        crate::policy::SourceScalar::Null => serde_json::Value::Null,
-        crate::policy::SourceScalar::Bool(value) => (*value).into(),
-        crate::policy::SourceScalar::Number(value) => value.clone().into(),
-        crate::policy::SourceScalar::String(value) => value.clone().into(),
-    }
-}
-
 fn proof(value: Option<&crate::policy::Proof>) -> String {
     let Some(value) = value else {
         return String::new();
@@ -284,4 +175,13 @@ pub(crate) fn compiled_input_rules(
     compiled: &crate::policy::CompiledPolicy,
 ) -> Result<crate::request_rules::RequestRules> {
     Ok(project_native(&compiled.native)?.document.request_rules)
+}
+
+/// Finite sharing has no installed execution capability in this runtime.
+pub(crate) fn validate_finite_sharing(
+    _case_source: &std::path::Path,
+    _replay_report: &std::path::Path,
+    _compiled: &CompiledNativeRule,
+) -> Result<usize> {
+    anyhow::bail!("finite sharing requires an installed native sharing capability")
 }

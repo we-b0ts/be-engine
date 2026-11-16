@@ -230,7 +230,7 @@ fn body_field(
                 .push(r::DocxTimestampRule {
                     part: part.clone(),
                     element: element.clone(),
-                    format: dependency::response_format(*format)?,
+                    format: response_format::project(*format)?,
                     source_evidence,
                     source_example: String::new(),
                     target_example: String::new(),
@@ -361,7 +361,7 @@ pub(crate) fn project_jwt(
             .collect(),
         url_query_param: effect.url_query_param.clone(),
         expires_at: effect.expires_at.clone(),
-        expires_at_format: dependency::response_format(effect.expires_at_format)?,
+        expires_at_format: response_format::project(effect.expires_at_format)?,
         issued_at: effect.issued_at.clone(),
         ttl: effect.ttl.clone(),
         source_evidence: proof(source_proof),

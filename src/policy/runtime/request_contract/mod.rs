@@ -11,7 +11,6 @@ pub(crate) use hypotheses::{HypothesisAttempt, HypothesisContext};
 mod identity;
 mod identity_inputs;
 pub(crate) mod key;
-pub(crate) mod native_projection;
 mod signing_keys;
 mod value_decision;
 pub(crate) use key::KeyBindingReport;
