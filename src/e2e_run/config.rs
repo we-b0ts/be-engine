@@ -222,26 +222,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_port = recorder_target_http_port(&recorder.http_gateway.matched_upstream)?;
     let target_http_readiness_enabled = recorder.http_gateway.enabled;
-    let target_motan_connect_timeout =
-        Duration::from_millis(recorder.motan_gateway.connect_timeout_ms);
-    let target_motan_request_timeout =
-        Duration::from_millis(recorder.motan_gateway.request_timeout_ms);
-    let target_motan_limits = motan_protocol::Limits {
-        max_frame_bytes: recorder.motan_gateway.max_frame_bytes,
-        max_metadata_bytes: recorder.motan_gateway.max_frame_bytes,
-        max_body_bytes: recorder.motan_gateway.max_frame_bytes,
-    };
-    let target_motan_upstream = recorder
-        .motan_gateway
-        .enabled
-        .then(|| {
-            let port = crate::platform::endpoint_port(
-                &recorder.motan_gateway.matched_upstream,
-                "motan_gateway.matched_upstream",
-            )?;
-            Ok::<String, anyhow::Error>(format!("127.0.0.1:{port}"))
-        })
-        .transpose()?;
     let regression = crate::config::regression::RegressionScope::load(&target_root)?;
     let project = ResolvedProjectConfig {
         replay_pre_match: config.project.replay.pre_match,
@@ -259,10 +239,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         target_http_origin: format!("http://127.0.0.1:{target_port}"),
         target_port,
         target_http_readiness_enabled,
-        target_motan_upstream,
-        target_motan_connect_timeout,
-        target_motan_request_timeout,
-        target_motan_limits,
         target_readiness_path: recorder.http_gateway.ready.path,
         target_readiness_status: recorder.http_gateway.ready.success_status,
         target_startup_timeout: Duration::from_secs(config.project.target.startup_timeout_seconds),
@@ -803,27 +779,6 @@ mod tests {
 
         assert_eq!(config.target_http_origin, "http://127.0.0.1:8080");
         assert_eq!(config.target_port, 8080);
-    }
-
-    #[test]
-    fn managed_replay_accepts_motan_only_readiness() {
-        let target = target();
-        let recorder_path = target.path().join("config/project.yaml");
-        let mut recorder = crate::config::AppConfig::load_static(&recorder_path).unwrap();
-        recorder.http_gateway.enabled = false;
-        recorder.http_gateway.ready.enabled = false;
-        recorder.motan_gateway.enabled = true;
-        recorder.motan_gateway.matched_upstream = "127.0.0.1:8884".to_string();
-        write_input_project(target.path(), &recorder);
-        initialize(options(target.path())).unwrap();
-
-        let (_, config) = resolve_project(target.path()).unwrap();
-
-        assert!(!config.target_http_readiness_enabled);
-        assert_eq!(
-            config.target_motan_upstream.as_deref(),
-            Some("127.0.0.1:8884")
-        );
     }
 
     #[test]

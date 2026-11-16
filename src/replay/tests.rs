@@ -28,7 +28,7 @@ mod tests {
                 host: "cache.internal".to_string(),
                 port: 9447,
                 fake_ip: "198.19.0.2".parse().unwrap(),
-                protocol: ReplayProtocol::Memcached,
+                protocol: ReplayProtocol::Redis,
             },
             ReplayTarget {
                 host: "redis.internal".to_string(),

@@ -29,7 +29,6 @@ pub(crate) use matcher::mysql_native::compare_with_automatic as compare_mysql_wi
 
 pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
 mod pattern;
-mod protobuf;
 mod report;
 mod response;
 pub(crate) mod response_headers;
@@ -58,9 +57,7 @@ pub use feedback::{
 pub use initialization::{
     ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,
 };
-pub(crate) use matcher::{
-    DependencyRuleDecision, HttpPolicyContext, MemcachedPolicyContext, MysqlPolicyContext,
-};
+pub(crate) use matcher::{DependencyRuleDecision, HttpPolicyContext, MysqlPolicyContext};
 pub(crate) use pattern::uri_path;
 pub(crate) use response::response_locations_overlap;
 pub use response::{

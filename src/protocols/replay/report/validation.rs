@@ -40,7 +40,11 @@ impl SessionEvidence for NativeSessionEvidence {
             &["unused_global_exchanges", "unused_global_http_exchanges"],
         )?;
         for protocol in ["redis", "memcached", "motan", "kafka"] {
-            let native = &report[protocol];
+            let native = match report.get(protocol) {
+                Some(native) => native,
+                None if super::codecs::HISTORICAL_PROTOCOLS.contains(&protocol) => continue,
+                None => anyhow::bail!("actual Replay report lacks {protocol} evidence"),
+            };
             empty(
                 native,
                 &[

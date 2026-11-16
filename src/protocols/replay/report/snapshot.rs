@@ -69,9 +69,6 @@ pub(crate) struct ReplayAllowedUnusedHttpReport {
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct ProtocolsReport {
     pub(crate) redis: super::super::redis::report::CommandProtocolReport,
-    pub(crate) memcached: replay::report::command::CommandProtocolReport,
-    pub(crate) kafka: kafka::KafkaProtocolReport,
-    pub(crate) motan: replay::report::command::CommandProtocolReport,
 }
 
 pub(crate) use traffic_protocol_mysql::report::{ConnectionReport, RecordedExchangeSummary};
@@ -145,9 +142,6 @@ impl RuntimeState<ReplayProtocols> {
             allowed_unused_case_http_exchanges,
             protocols: ProtocolsReport {
                 redis: self.protocol_data().redis.snapshot(),
-                memcached: self.protocol_data().memcached.snapshot(),
-                kafka: self.protocol_data().kafka.snapshot(),
-                motan: self.protocol_data().motan.snapshot(),
             },
             http_ignored_query_params: self.protocol_data().http_ignore_query_params.clone(),
             allowed_unused_http: self
@@ -188,9 +182,6 @@ impl SessionSnapshot for NativeSnapshot {
                 .iter()
                 .any(|event| event.case_id.is_some())
             || self.protocols.redis.is_dirty()
-            || self.protocols.memcached.is_dirty()
-            || self.protocols.kafka.is_dirty()
-            || self.protocols.motan.is_dirty()
     }
 
     fn unused_run_dependencies(&self) -> std::collections::BTreeMap<String, usize> {
@@ -198,12 +189,6 @@ impl SessionSnapshot for NativeSnapshot {
             ("mysql".into(), self.unused_global_exchange_count),
             ("http".into(), self.unused_global_http_exchange_count),
             ("redis".into(), self.protocols.redis.unused_run_count()),
-            (
-                "memcached".into(),
-                self.protocols.memcached.unused_run_count(),
-            ),
-            ("motan".into(), self.protocols.motan.unused_run_count()),
-            ("kafka".into(), self.protocols.kafka.unused_run_count()),
         ])
     }
     fn unmatched_or_unsafe(&self) -> usize {
@@ -213,8 +198,5 @@ impl SessionSnapshot for NativeSnapshot {
             + self.unsupported_http_exchanges.len()
             + self.http_request_header_mismatches.len()
             + self.protocols.redis.unmatched_or_unsafe()
-            + self.protocols.memcached.unmatched_or_unsafe()
-            + self.protocols.motan.unmatched_or_unsafe()
-            + self.protocols.kafka.unmatched_or_unsafe()
     }
 }

@@ -7,10 +7,6 @@ use crate::protocols::recording::events::HeaderMapSnapshot;
 
 pub(crate) enum PrimaryObservation {
     Http(Box<crate::recorded_request::RecordedHttpResponse>),
-    Motan {
-        status: u16,
-        response_frame: Vec<u8>,
-    },
 }
 
 pub(crate) struct PrimaryOutput {
@@ -101,7 +97,6 @@ impl CapturedBody {
 
 impl PrimaryOutput {
     pub(crate) fn artifact(&self) -> anyhow::Result<serde_json::Value> {
-        let empty_rules = Vec::new();
         let metadata = || PrimaryMetadata {
             api: self.api.clone(),
             clocks: crate::policy_evidence::WitnessClocks {
@@ -123,23 +118,6 @@ impl PrimaryOutput {
                 body: CapturedBody::from_bytes(&response.body),
                 sse_observation: response.sse_observation.as_ref(),
                 interaction: response.interaction.as_ref(),
-            },
-            PrimaryObservation::Motan {
-                status,
-                response_frame,
-            } => ActualResponse {
-                primary: metadata(),
-                interaction_started_at: None,
-                version: 1,
-                request_sent_at: self.clocks.target_request_started_at,
-                response_completed_at: self.response_completed_at,
-                request_rules: &empty_rules,
-                request_headers: None,
-                status: *status,
-                headers: None,
-                body: CapturedBody::from_bytes(response_frame),
-                sse_observation: None,
-                interaction: None,
             },
         };
         let mut value = serde_json::to_value(response)?;

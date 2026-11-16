@@ -11,9 +11,6 @@ pub(crate) struct GlobalSource {
     pub http: Vec<http::ReplayHttpExchange>,
     pub http_events: HttpReplayEvents,
     pub redis: redis::RedisReplayState,
-    pub memcached: memcached::MemcachedReplayState,
-    pub kafka: kafka::KafkaReplayState,
-    pub motan: motan::MotanReplayState,
 }
 
 impl GlobalSource {
@@ -35,9 +32,6 @@ impl GlobalSource {
             http: vec![],
             http_events: Default::default(),
             redis: Default::default(),
-            memcached: Default::default(),
-            kafka: Default::default(),
-            motan: Default::default(),
         };
         let mut blackholes = vec![];
         let mut targets = BTreeMap::new();
@@ -52,9 +46,6 @@ impl GlobalSource {
             &mut source.http,
             &mut blackholes,
             &mut source.redis,
-            &mut source.memcached,
-            &mut source.kafka,
-            &mut source.motan,
             &mut targets,
             &mut identities,
             rules,
@@ -72,9 +63,6 @@ impl GlobalSource {
                     &mut source.http,
                     &mut blackholes,
                     &mut source.redis,
-                    &mut source.memcached,
-                    &mut source.kafka,
-                    &mut source.motan,
                     &mut targets,
                     &mut identities,
                     rules,
@@ -89,9 +77,6 @@ impl GlobalSource {
             &mut source.http_events,
             source.http.len(),
             &mut source.redis,
-            &mut source.memcached,
-            &mut source.kafka,
-            &mut source.motan,
         );
         source.native.freeze_global_report_layout();
         // Subscription mirrors are native confirmation proofs. Legacy captures
@@ -132,9 +117,6 @@ impl GlobalSource {
             http: &self.http,
             http_events: &self.http_events,
             redis: &self.redis,
-            memcached: &self.memcached,
-            kafka: &self.kafka,
-            motan: &self.motan,
         }
     }
 }
@@ -145,16 +127,10 @@ pub(crate) fn freeze(
     http: &mut HttpReplayEvents,
     http_len: usize,
     redis: &mut redis::RedisReplayState,
-    memcached: &mut memcached::MemcachedReplayState,
-    kafka: &mut kafka::KafkaReplayState,
-    motan: &mut motan::MotanReplayState,
 ) {
     mysql.freeze_global_report_layout();
     http.global_report.freeze_layout(vec![http_len]);
     redis.freeze_global_report_layout();
-    memcached.freeze_global_report_layout();
-    kafka.freeze_global_report_layout();
-    motan.freeze_global_report_layout();
 }
 
 impl GlobalReportProjection for GlobalSource {

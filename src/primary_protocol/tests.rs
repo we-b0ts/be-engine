@@ -7,12 +7,7 @@ use tokio::{
     net::TcpListener,
 };
 
-fn context<'a>(
-    request: &'a Path,
-    session: &'a Path,
-    http: &'a str,
-    motan: Option<&'a str>,
-) -> CaseExecutionContext<'a> {
+fn context<'a>(request: &'a Path, session: &'a Path, http: &'a str) -> CaseExecutionContext<'a> {
     CaseExecutionContext {
         case_id: "00000000-0000-0000-0000-000000000123",
         session_path: session,
@@ -23,10 +18,8 @@ fn context<'a>(
         dependency_failure: None,
         settings: ExecutionSettings {
             http_origin: http,
-            motan_upstream: motan,
             request_timeout: Duration::from_secs(2),
             max_response_bytes: 1024,
-            motan_limits: motan_protocol::Limits::default(),
             socketio_timing: Default::default(),
         },
         deadline: tokio::time::Instant::now() + Duration::from_secs(2),
@@ -66,7 +59,7 @@ async fn http_static_adapter_executes_real_input_and_retains_independent_clocks(
     let bytes = serde_json::to_vec(&json!({"method":"GET","uri":"/api/42","api_pattern":"/api/{id}","timestamp":"2020-01-01T00:00:00Z","headers":{},"body":{"encoding":"utf8","data":"","truncated":false}})).unwrap();
     let input = PrimaryProtocol::from_recorded(&bytes).unwrap();
     let output = input
-        .execute(&context(&request_path, &session, &origin, None))
+        .execute(&context(&request_path, &session, &origin))
         .await
         .unwrap();
     let artifact = output.artifact().unwrap();
@@ -105,74 +98,6 @@ fn motan2_request() -> Vec<u8> {
         .to_vec()
 }
 
-#[tokio::test]
-async fn motan_versions_use_real_wire_and_typed_identity_without_expected_evidence() {
-    for (version, raw) in [
-        (
-            "motan1",
-            include_bytes!("../../tests/fixtures/motan/motan1-request.bin").to_vec(),
-        ),
-        ("motan2", motan2_request()),
-    ] {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        let original = raw.clone();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut received = vec![0; original.len()];
-            stream.read_exact(&mut received).await.unwrap();
-            assert_eq!(received, original);
-            let mut response = Vec::new();
-            motan_protocol::encode_empty_response(
-                motan_protocol::parse_frame_ref(&received, motan_protocol::Limits::default())
-                    .unwrap(),
-                &mut response,
-                motan_protocol::Limits::default(),
-            )
-            .unwrap();
-            let body_released_at = chrono::Utc::now();
-            stream.write_all(&response).await.unwrap();
-            (response, body_released_at)
-        });
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("request.json");
-        let session = temp.path().join("session.json");
-        std::fs::write(
-            temp.path().join("expected-response.json"),
-            "NEVER_EXECUTE_EXPECTED",
-        )
-        .unwrap();
-        let bytes = serde_json::to_vec(&json!({"method":"MOTAN","uri":"/rpc/echo","protocol_version":version,"timestamp":"2020-01-01T00:00:00Z","frame":{"encoding":"base64","data":STANDARD.encode(raw),"truncated":false}})).unwrap();
-        let input = PrimaryProtocol::from_recorded(&bytes).unwrap();
-        assert!(matches!(
-            input.api(),
-            ApiIdentity::Motan {
-                interface: Some(_),
-                ..
-            }
-        ));
-        let output = input
-            .execute(&context(
-                &path,
-                &session,
-                "http://127.0.0.1:1",
-                Some(&address),
-            ))
-            .await
-            .unwrap();
-        let PrimaryObservation::Motan { response_frame, .. } = &output.observation else {
-            panic!("native Motan output required")
-        };
-        let (expected_frame, body_released_at) = server.await.unwrap();
-        assert_eq!(*response_frame, expected_frame);
-        assert!(output.response_completed_at.unwrap() >= body_released_at);
-        assert_eq!(
-            output.artifact().unwrap()["primary"]["api"]["protocol"],
-            "motan"
-        );
-    }
-}
-
 #[test]
 fn native_version_and_primary_role_cannot_be_guessed_from_a_payload() {
     let raw = motan2_request();
@@ -204,10 +129,7 @@ fn partial_native_declarations_and_invalid_native_frames_are_rejected() {
     let raw = motan2_request();
     let complete = json!({"method":"MOTAN","uri":"/rpc/echo","protocol_version":"motan2","frame":{"encoding":"base64","data":STANDARD.encode(raw),"truncated":false}});
     let bytes = serde_json::to_vec(&complete).unwrap();
-    assert_eq!(
-        PrimaryProtocol::from_recorded(&bytes).unwrap().kind(),
-        ProtocolKind::Motan
-    );
+    assert!(PrimaryProtocol::from_recorded(&bytes).is_err());
     for missing in ["protocol_version", "frame"] {
         let mut partial = complete.clone();
         partial.as_object_mut().unwrap().remove(missing);

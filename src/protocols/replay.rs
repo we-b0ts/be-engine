@@ -1,9 +1,7 @@
 //! Application assembly for built-in protocol state and native connection drivers.
 pub(crate) mod auto_protocol;
 pub(crate) mod http;
-pub(crate) mod kafka;
-pub(crate) mod memcached;
-pub(crate) mod motan;
+
 pub(crate) use http::contracts::{
     multipart_witness_matches as http_multipart_witness_matches,
     source_witness as http_source_witness, validate_witness as http_validate_witness,
@@ -71,9 +69,7 @@ pub(crate) struct ReplayProtocols {
     >,
     pub(crate) mysql: mysql::MysqlReplayState,
     pub(crate) redis: redis::RedisReplayState,
-    pub(crate) memcached: crate::protocols::replay::memcached::MemcachedReplayState,
-    pub(crate) kafka: crate::protocols::replay::kafka::KafkaReplayState,
-    pub(crate) motan: crate::protocols::replay::motan::MotanReplayState,
+
     pub(crate) http_exchanges: Vec<http::ReplayHttpExchange>,
     pub(crate) http_case_exchange_index: replay::CaseExchangeIndex,
     pub(crate) http_candidates: http::candidates::Candidates,
@@ -87,15 +83,8 @@ pub(crate) struct ReplayProtocols {
 }
 
 impl ReplayProtocols {
-    fn case_projections(&self) -> [&dyn CaseRuntimeProjection; 6] {
-        [
-            &self.mysql,
-            &self.http_events,
-            &self.redis,
-            &self.kafka,
-            &self.memcached,
-            &self.motan,
-        ]
+    fn case_projections(&self) -> [&dyn CaseRuntimeProjection; 3] {
+        [&self.mysql, &self.http_events, &self.redis]
     }
 }
 
@@ -236,9 +225,7 @@ impl ReplayProtocolSet for ReplayProtocols {
             "mysql" => state.visit_global_mysql_unused(visitor),
             "http" => state.visit_global_http_unused(visitor),
             "redis" => protocols.redis.visit_global_regular_unused(visitor),
-            "memcached" => protocols.memcached.visit_global_unused(visitor),
-            "kafka" => protocols.kafka.visit_global_unused(visitor),
-            "motan" => protocols.motan.visit_global_unused(visitor),
+
             _ => anyhow::bail!("unknown native Global report protocol"),
         }
     }
@@ -286,9 +273,6 @@ impl ReplayProtocolSet for ReplayProtocols {
             &mut self.http_exchanges,
             &mut self.http_blackholes,
             &mut self.redis,
-            &mut self.memcached,
-            &mut self.kafka,
-            &mut self.motan,
             targets,
             &mut identities,
             batch.process_rules,
@@ -317,17 +301,10 @@ impl ReplayProtocolSet for ReplayProtocols {
             policy,
             &self.http_exchanges[appended.http_start..],
         );
-        crate::protocols::replay::memcached::observe_recorded_policy_exchanges(
-            policy,
-            &self.memcached,
-        );
     }
     fn release_payloads(&mut self, cases: &BTreeMap<String, replay::ReplayCase>) {
         self.mysql.release_consumed_payloads(cases);
         http::release_consumed_payloads(&mut self.http_exchanges, cases);
-        self.memcached.release_consumed_payloads(cases);
-        self.motan.release_consumed_payloads(cases);
-        self.kafka.release_consumed_payloads(cases);
     }
 
     fn case_is_dirty(&self, case: &str) -> bool {
@@ -340,27 +317,12 @@ impl ReplayProtocolSet for ReplayProtocols {
                 self.allowed_unused_http.as_ref(),
                 case,
             )
-            || self.redis.case_is_dirty(case)
-            || self.memcached.case_is_dirty(case)
-            || self.kafka.case_is_dirty(case)
-            || self.motan.case_is_dirty(case);
+            || self.redis.case_is_dirty(case);
         #[cfg(test)]
         {
             debug_assert_eq!(
                 self.redis.case_is_dirty(case),
                 self.redis.snapshot().case_is_dirty(case)
-            );
-            debug_assert_eq!(
-                self.memcached.case_is_dirty(case),
-                self.memcached.snapshot().case_is_dirty(case)
-            );
-            debug_assert_eq!(
-                self.kafka.case_is_dirty(case),
-                self.kafka.snapshot().case_is_dirty(case)
-            );
-            debug_assert_eq!(
-                self.motan.case_is_dirty(case),
-                self.motan.snapshot().case_is_dirty(case)
             );
         }
         dirty
@@ -377,12 +339,6 @@ impl ReplayProtocolSet for ReplayProtocols {
                 self.http_ingress.pending_diagnostic(),
             ),
             ("redis".into(), self.redis.case_in_flight_diagnostic()),
-            (
-                "memcached".into(),
-                self.memcached.has_case_in_flight().into(),
-            ),
-            ("kafka".into(), self.kafka.has_case_in_flight().into()),
-            ("motan".into(), self.motan.has_case_in_flight().into()),
         ])
     }
 
@@ -473,9 +429,6 @@ impl ReplayProtocolSet for ReplayProtocols {
                 http::startup_counts(&mut self.http_exchanges, close),
             ),
             ("redis".into(), self.redis.startup_counts(close)),
-            ("memcached".into(), self.memcached.startup_counts(close)),
-            ("motan".into(), self.motan.startup_counts(close)),
-            ("kafka".into(), self.kafka.startup_counts(close)),
         ])
     }
 
@@ -498,17 +451,11 @@ impl ReplayProtocolSet for ReplayProtocols {
             InFlightScope::All => {
                 self.mysql.has_in_flight()
                     || self.redis.has_in_flight()
-                    || self.memcached.has_in_flight()
-                    || self.kafka.has_in_flight()
-                    || self.motan.has_in_flight()
                     || http::has_in_flight(&self.http_exchanges, &self.http_ingress, None)
             }
             InFlightScope::Case => {
                 self.mysql.has_case_in_flight()
                     || self.redis.has_case_in_flight()
-                    || self.memcached.has_case_in_flight()
-                    || self.kafka.has_case_in_flight()
-                    || self.motan.has_case_in_flight()
                     || http::has_in_flight(
                         &self.http_exchanges,
                         &self.http_ingress,
@@ -534,12 +481,7 @@ impl ReplayProtocolSet for ReplayProtocols {
                         Some(ReplayProtocol::Redis) => {
                             redis::handle_connection(stream, target, state).await
                         }
-                        Some(ReplayProtocol::Memcached) => {
-                            crate::protocols::replay::memcached::handle_connection(
-                                stream, target, state,
-                            )
-                            .await
-                        }
+
                         Some(protocol @ (ReplayProtocol::Http | ReplayProtocol::Https)) => {
                             let mut target = target.clone();
                             target.protocol = protocol;
@@ -583,30 +525,7 @@ impl ReplayProtocolSet for ReplayProtocols {
                     )
                     .await
                 }
-                Some(ReplayProtocol::Memcached) => {
-                    crate::protocols::replay::memcached::handle_connection(
-                        stream,
-                        target.context("Memcached replay connection has no target")?,
-                        state,
-                    )
-                    .await
-                }
-                Some(ReplayProtocol::Kafka) => {
-                    crate::protocols::replay::kafka::handle_connection(
-                        stream,
-                        target.context("Kafka replay connection has no target")?,
-                        state,
-                    )
-                    .await
-                }
-                Some(ReplayProtocol::Motan) => {
-                    crate::protocols::replay::motan::handle_connection(
-                        stream,
-                        target.context("Motan replay connection has no target")?,
-                        state,
-                    )
-                    .await
-                }
+
                 Some(ReplayProtocol::Mysql) => {
                     let target = target.map(|target| traffic_protocol::connection::Endpoint {
                         host: target.host,
@@ -644,9 +563,6 @@ impl ReplayProtocol {
     pub const Http: Self = Self::new(traffic_protocol::ProtocolId::new("http"));
     pub const Https: Self = Self::new(traffic_protocol::ProtocolId::new("https"));
     pub const Redis: Self = Self::new(traffic_protocol::ProtocolId::new("redis"));
-    pub const Memcached: Self = Self::new(traffic_protocol::ProtocolId::new("memcached"));
-    pub const Kafka: Self = Self::new(traffic_protocol::ProtocolId::new("kafka"));
-    pub const Motan: Self = Self::new(traffic_protocol::ProtocolId::new("motan"));
 
     pub(crate) fn resolve(
         value: &str,
@@ -658,9 +574,6 @@ impl ReplayProtocol {
             Self::Http,
             Self::Https,
             Self::Redis,
-            Self::Memcached,
-            Self::Kafka,
-            Self::Motan,
         ];
         known
             .into_iter()

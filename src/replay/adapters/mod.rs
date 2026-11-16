@@ -137,6 +137,3 @@ impl ExchangeHandle {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

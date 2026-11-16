@@ -273,17 +273,6 @@ async fn run_managed_runtime(options: PreflightRecordingOptions) -> Result<Manag
     })
 }
 
-pub(crate) fn endpoint_port(endpoint: &str, label: &str) -> Result<u16> {
-    let (_, port) = endpoint
-        .rsplit_once(':')
-        .with_context(|| format!("{label} must contain a port"))?;
-    let port = port
-        .parse::<u16>()
-        .with_context(|| format!("{label} has an invalid port"))?;
-    ensure!(port > 0, "{label} port must be greater than zero");
-    Ok(port)
-}
-
 async fn wait_for_managed_runtime(
     child: &mut tokio::process::Child,
 ) -> Result<std::process::ExitStatus> {

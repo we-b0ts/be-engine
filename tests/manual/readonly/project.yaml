@@ -84,16 +84,6 @@ recorder:
       path_prefixes:
       - /scenario/readonly
       headers: {}
-  motan_gateway:
-    enabled: false
-    listen: 127.0.0.1:18081
-    matched_upstream: 127.0.0.1:8002
-    connect_timeout_ms: 3000
-    request_timeout_ms: 30000
-    max_connections: 1024
-    max_frame_bytes: 8388608
-    max_cases_per_api: 100
-    rules: []
   mysql:
     enabled: false
     record_raw_packets: false

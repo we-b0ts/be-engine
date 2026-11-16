@@ -14,18 +14,10 @@ fn expected_phase(record: &DependencyRecord) -> Option<Phase> {
         | DependencyRecord::MysqlExchange(_)
         | DependencyRecord::RedisPubSubPush(_)
         | DependencyRecord::RedisConnection(_)
-        | DependencyRecord::MemcachedConnection(_)
-        | DependencyRecord::KafkaConnection(_)
-        | DependencyRecord::MotanConnection(_)
         | DependencyRecord::ProxyError(_) => Some(Phase::Metadata),
         DependencyRecord::TcpGatewayConnection(_)
         | DependencyRecord::HttpExchange(_)
-        | DependencyRecord::RedisExchange(_)
-        | DependencyRecord::MemcachedExchange(_)
-        | DependencyRecord::MotanExchange(_)
-        | DependencyRecord::KafkaProduce(_)
-        | DependencyRecord::KafkaFetch(_)
-        | DependencyRecord::KafkaDelivery(_) => Some(Phase::Exchanges),
+        | DependencyRecord::RedisExchange(_) => Some(Phase::Exchanges),
         DependencyRecord::Native(_) | DependencyRecord::ConnectFailure => Some(Phase::Exchanges),
     }
 }

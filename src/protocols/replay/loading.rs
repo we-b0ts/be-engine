@@ -3,7 +3,7 @@ use super::*;
 use crate::ReplayConfig;
 use crate::policy::runtime::ReplayPolicyRuntime;
 use crate::protocols::replay::http;
-use crate::protocols::replay::memcached;
+
 use crate::protocols::replay::mysql;
 use crate::protocols::replay::redis;
 use crate::replay::TargetObservations;
@@ -31,9 +31,7 @@ impl SourceLoader {
                 deferred_identities: None,
                 mysql: Default::default(),
                 redis: Default::default(),
-                memcached: Default::default(),
-                kafka: Default::default(),
-                motan: Default::default(),
+
                 http_exchanges: Vec::new(),
                 http_case_exchange_index: Default::default(),
                 http_candidates: Default::default(),
@@ -88,9 +86,6 @@ impl ProtocolSourceLoader for SourceLoader {
                 &mut protocols.http_exchanges,
                 &mut protocols.http_blackholes,
                 &mut protocols.redis,
-                &mut protocols.memcached,
-                &mut protocols.kafka,
-                &mut protocols.motan,
                 &mut resources.targets,
                 &mut self.identities,
                 rules,
@@ -108,16 +103,13 @@ impl ProtocolSourceLoader for SourceLoader {
             &mut protocols.http_events,
             protocols.http_exchanges.len(),
             &mut protocols.redis,
-            &mut protocols.memcached,
-            &mut protocols.kafka,
-            &mut protocols.motan,
         );
     }
 
     fn prepare_run<'a>(
         &'a mut self,
         root: &'a Path,
-        debug: Option<PathBuf>,
+        _debug: Option<PathBuf>,
         resources: &'a mut SourceResources,
     ) -> NativeFuture<'a, ()> {
         Box::pin(async move {
@@ -134,14 +126,6 @@ impl ProtocolSourceLoader for SourceLoader {
                 self.protocols
                     .mysql
                     .install_global_transactions(transactions, &mut resources.targets)?;
-            }
-            if let Some(path) = debug {
-                source::load_motan_debug_file(
-                    &path,
-                    &mut self.protocols.motan,
-                    &mut resources.targets,
-                )
-                .await?;
             }
             self.shared_http = self
                 .policy
@@ -193,9 +177,6 @@ impl ProtocolSourceLoader for SourceLoader {
             &mut protocols.http_exchanges,
             &mut protocols.http_blackholes,
             &mut protocols.redis,
-            &mut protocols.memcached,
-            &mut protocols.kafka,
-            &mut protocols.motan,
             &mut resources.targets,
             &mut self.identities,
             batch.process_rules,
@@ -206,17 +187,10 @@ impl ProtocolSourceLoader for SourceLoader {
 
     fn load_case_metadata<'a>(
         &'a mut self,
-        directory: &'a Path,
-        resources: &'a mut SourceResources,
+        _directory: &'a Path,
+        _resources: &'a mut SourceResources,
     ) -> NativeFuture<'a, ()> {
-        Box::pin(async move {
-            source::load_motan_debug_file(
-                &directory.join("dependencies-debug.jsonl"),
-                &mut self.protocols.motan,
-                &mut resources.targets,
-            )
-            .await
-        })
+        Box::pin(async { Ok(()) })
     }
 
     fn prepare(
@@ -290,7 +264,7 @@ impl ProtocolSourceLoader for SourceLoader {
             Some(ReplaySource::Case),
         );
         http::observe_recorded_policy_exchanges(policy, &self.protocols.http_exchanges);
-        memcached::observe_recorded_policy_exchanges(policy, &self.protocols.memcached);
+
         policy.reject_http_ignore_overlap(&self.protocols.http_ignore_query_params)
     }
 

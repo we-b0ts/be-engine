@@ -3,8 +3,8 @@
 ## Overview
 
 This is a Rust traffic E2E engine and backend rewrite coordinator. It records
-HTTP, HTTPS, HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, Redis, Memcached,
-and constrained Kafka traffic to JSONL files, then groups, replays, and
+HTTP, HTTPS, HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, and Redis
+traffic to JSONL files, then groups, replays, and
 verifies recorded contracts.
 
 The primary crate is in `src/` and builds three default binaries. `traffic-e2e` exposes

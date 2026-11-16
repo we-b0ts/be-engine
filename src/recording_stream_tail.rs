@@ -8,63 +8,6 @@ use crate::config::BackgroundDependencyRuleConfig;
 use crate::protocols::recording::request::DependencyRequest;
 
 impl AppState {
-    pub(crate) fn capture_memcached_dependency(
-        &self,
-        connection_id: uuid::Uuid,
-        sequence: u64,
-        port: u16,
-        command: &str,
-        key: Option<&[u8]>,
-    ) -> DependencyTargets {
-        let rules = if command.eq_ignore_ascii_case("get") {
-            key.map(|key| {
-                self.inner
-                    .process_owned_dependencies
-                    .matching_memcached_requests(port, key)
-            })
-            .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let targets = self.process_observation_targets(&rules, true);
-        targets.bind_protocol(crate::dependency::observation::ProtocolRef::connection(
-            "memcached",
-            connection_id,
-            sequence,
-        ));
-        crate::recorder::process_classification::classify(
-            targets,
-            rules,
-            &self.config().process_dependency_tasks,
-        )
-    }
-
-    pub(crate) fn capture_motan_dependency(
-        &self,
-        connection_id: uuid::Uuid,
-        sequence: u64,
-        identity: &crate::motan::RequestIdentity,
-        group: Option<&str>,
-        heartbeat: bool,
-    ) -> DependencyTargets {
-        let rules = self.config().process_owned_dependencies.iter().filter(|rule|
-            !heartbeat && matches!(rule,BackgroundDependencyRuleConfig::Motan{group:expected,interface_name,method_name,..}
-                if group==Some(expected.as_str()) && identity.interface_name.as_deref()==Some(interface_name)
-                    && identity.method_name.as_deref()==Some(method_name)))
-            .map(|rule|rule.name().to_owned()).collect::<Vec<_>>();
-        let targets = self.process_observation_targets(&rules, !heartbeat);
-        targets.bind_protocol(crate::dependency::observation::ProtocolRef::connection(
-            "motan",
-            connection_id,
-            sequence,
-        ));
-        crate::recorder::process_classification::classify(
-            targets,
-            rules,
-            &self.config().process_dependency_tasks,
-        )
-    }
-
     pub(crate) fn capture_http_dependency_request(
         &self,
         method: &Method,

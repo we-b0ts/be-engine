@@ -3626,10 +3626,7 @@ cargo test mysql::wire
 cargo test -p traffic-protocol-mysql capture::semantic
 cargo test proxy_integration
 cargo test redis::
-cargo test memcached::
 cargo test replay::command_protocol_tests
-cargo test kafka::
-cargo test motan
 ```
 
 Network or root-requiring behavior should be covered with isolated unit tests

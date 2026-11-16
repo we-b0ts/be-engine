@@ -83,9 +83,7 @@ pub(super) fn resolve(
         "dependency-tail MySQL reference is absent from its Case semantic dependencies"
     );
     let rpc_pushes = state.protocol_data().redis.pubsub.finite_rpc_pushes(case)?;
-    let memcached = state.protocol_data().memcached.finite_exchanges(case)?;
-    let motan = state.protocol_data().motan.finite_exchanges(case)?;
-    let kafka = state.protocol_data().kafka.finite_exchanges(case)?;
+
     references
         .iter()
         .map(|reference| {
@@ -99,39 +97,7 @@ pub(super) fn resolve(
                         .get(&connection(reference)?)
                         .context("finite Redis callback reference is absent from Case inventory")?,
                 ),
-                "memcached" => (
-                    "memcached",
-                    *memcached
-                        .get(&connection(reference)?)
-                        .context("finite Memcached reference absent from Case inventory")?,
-                ),
-                "motan" => (
-                    "motan",
-                    *motan
-                        .get(&connection(reference)?)
-                        .context("finite Motan reference absent from Case inventory")?,
-                ),
-                "kafka_produce" | "kafka_fetch" | "kafka_delivery" => {
-                    let key = connection(reference)?;
-                    let effect = reference
-                        .protocol()
-                        .strip_prefix("kafka_")
-                        .expect("Kafka effect prefix");
-                    match kafka
-                        .get(&(effect, key.0, key.1))
-                        .context("finite Kafka reference absent from Case inventory")?
-                    {
-                        crate::protocols::replay::kafka::FiniteExchange::Produce(index) => {
-                            ("kafka_produce", *index)
-                        }
-                        crate::protocols::replay::kafka::FiniteExchange::Fetch(index) => {
-                            ("kafka_fetch", *index)
-                        }
-                        crate::protocols::replay::kafka::FiniteExchange::Delivery(index) => {
-                            ("kafka_delivery", *index)
-                        }
-                    }
-                }
+
                 _ => bail!("finite native reference has no installed inventory owner"),
             };
             Ok(ProtocolExchange {
@@ -153,20 +119,7 @@ pub(super) fn status(state: &State, exchange: ProtocolExchange) -> Option<Replay
             .finite_rpc_push_status(index),
         "mysql" => state.protocol_data().mysql.exchange_status(index),
         "http" => state.http_exchange_status(index),
-        "memcached" => state
-            .protocol_data()
-            .memcached
-            .finite_exchange_status(index),
-        "motan" => state.protocol_data().motan.finite_exchange_status(index),
-        "kafka_produce" => state.protocol_data().kafka.finite_exchange_status(
-            crate::protocols::replay::kafka::FiniteExchange::Produce(index),
-        ),
-        "kafka_fetch" => state.protocol_data().kafka.finite_exchange_status(
-            crate::protocols::replay::kafka::FiniteExchange::Fetch(index),
-        ),
-        "kafka_delivery" => state.protocol_data().kafka.finite_exchange_status(
-            crate::protocols::replay::kafka::FiniteExchange::Delivery(index),
-        ),
+
         _ => None,
     }
 }

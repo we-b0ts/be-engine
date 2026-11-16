@@ -11,14 +11,7 @@ pub(crate) enum DependencyRecord {
     RedisConnection(Box<redis::RecordedConnection>),
     RedisExchange(Box<redis::RecordedExchange>),
     RedisPubSubPush(Box<redis::pubsub::RecordedPush>),
-    MemcachedConnection(Box<memcached::RecordedConnection>),
-    MemcachedExchange(Box<memcached::RecordedExchange>),
-    KafkaConnection(Box<kafka::RecordedKafkaConnection>),
-    KafkaProduce(Box<kafka::RecordedKafkaProduce>),
-    KafkaFetch(Box<kafka::RecordedKafkaFetch>),
-    KafkaDelivery(Box<kafka::RecordedKafkaDelivery>),
-    MotanConnection(Box<motan::RecordedConnection>),
-    MotanExchange(Box<motan::RecordedExchange>),
+
     ProxyError(Box<RecordedProxyError>),
     Native(Box<Value>),
 }
@@ -47,14 +40,7 @@ impl<'de> Deserialize<'de> for DependencyRecord {
             "redis_connection" => serde_json::from_value(value).map(Self::RedisConnection),
             "redis_exchange" => serde_json::from_value(value).map(Self::RedisExchange),
             "redis_pub_sub_push" => serde_json::from_value(value).map(Self::RedisPubSubPush),
-            "memcached_connection" => serde_json::from_value(value).map(Self::MemcachedConnection),
-            "memcached_exchange" => serde_json::from_value(value).map(Self::MemcachedExchange),
-            "kafka_connection" => serde_json::from_value(value).map(Self::KafkaConnection),
-            "kafka_produce" => serde_json::from_value(value).map(Self::KafkaProduce),
-            "kafka_fetch" => serde_json::from_value(value).map(Self::KafkaFetch),
-            "kafka_delivery" => serde_json::from_value(value).map(Self::KafkaDelivery),
-            "motan_connection" => serde_json::from_value(value).map(Self::MotanConnection),
-            "motan_exchange" => serde_json::from_value(value).map(Self::MotanExchange),
+
             "proxy_error" => serde_json::from_value(value).map(Self::ProxyError),
             _ => Ok(Self::Native(Box::new(value))),
         };

@@ -62,16 +62,13 @@ mod tests {
     }
 
     #[test]
-    fn native_finite_inventory_preserves_kafka_effects_and_excludes_only_heartbeats() {
+    fn native_finite_inventory_preserves_original_identities() {
         let connection = Uuid::new_v4();
         for (event, field, expected) in [
-            ("memcached_exchange", "sequence", "memcached"),
-            ("motan_exchange", "sequence", "motan"),
-            ("kafka_produce", "sequence", "kafka_produce"),
-            ("kafka_fetch", "sequence", "kafka_fetch"),
-            ("kafka_delivery", "sequence", "kafka_delivery"),
+            ("redis_exchange", "sequence", "redis"),
+            ("mysql_exchange", "query_sequence", "mysql"),
         ] {
-            let mut raw = json!({"event_type":event,"connection_id":connection,"heartbeat":false,"request_sequence":1,"fetch_sequence":1});
+            let mut raw = json!({"event_type":event,"connection_id":connection,"command":"COM_QUERY","request_sequence":1});
             raw[field] = json!(7);
             let selected = reference(&raw).unwrap().unwrap();
             assert_eq!(

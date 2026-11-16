@@ -7,9 +7,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::config::{ExpectedResponseUsage, validate_replay_policy};
-use super::matcher::{
-    HttpPolicyContext, MemcachedPolicyContext, MysqlPolicyContext, ReplayPolicyRuntime,
-};
+use super::matcher::{HttpPolicyContext, MysqlPolicyContext, ReplayPolicyRuntime};
 use crate::protocols::replay::mysql::{RecordedMysqlValue, ReplaySessionIdentity};
 use crate::replay::{ReplayCase, ReplayCaseStatus, TargetKey};
 
@@ -434,80 +432,6 @@ fn rejects_changed_reference_and_out_of_window_time() {
 }
 
 #[test]
-fn memcached_json_uses_global_formats_across_keys_and_resources_without_exposing_values() {
-    let fixture = policy_fixture(
-        "format: traffic-policy/v3\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
-    );
-    let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
-    let source_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
-    let target_at = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
-    let source =
-        serde_json::to_vec(&json!({"created_at":1_699_999_995_i64,"stable":"private-stable"}))
-            .unwrap();
-    let target =
-        serde_json::to_vec(&json!({"created_at":1_799_999_995_i64,"stable":"private-stable"}))
-            .unwrap();
-    for (host, key) in [
-        ("cache.internal", b"users:42".as_slice()),
-        ("other-cache.internal", b"other:42".as_slice()),
-    ] {
-        let endpoint = TargetKey {
-            host: host.into(),
-            port: 11211,
-        };
-        let context = |actual_value| MemcachedPolicyContext {
-            case_id: Some(CASE_ID),
-            target: &endpoint,
-            command: "set",
-            key: Some(key),
-            recorded_value: Some(&source),
-            actual_value,
-            recorded_request_started_at: Some(source_at),
-            actual_observed_at: target_at,
-        };
-        let decision = runtime.preview_memcached(&context(Some(&target))).unwrap();
-        runtime.commit(Some(CASE_ID), decision).unwrap();
-        let changed =
-            serde_json::to_vec(&json!({"created_at":1_799_999_995_i64,"stable":"changed"}))
-                .unwrap();
-        assert!(runtime.preview_memcached(&context(Some(&changed))).is_err());
-    }
-    let report = runtime.report();
-    assert_eq!(report.global_formats[0].validations, 2);
-    assert_eq!(report.global_formats[0].time_validations, 2);
-    let public = serde_json::to_string(&report).unwrap();
-    assert!(!public.contains("private-stable"));
-    assert!(!public.contains("1699999995"));
-}
-
-#[test]
-fn unknown_memcached_bytes_remain_exact_and_value_presence_is_strict() {
-    let fixture = policy_fixture(
-        "format: traffic-policy/v3\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
-    );
-    let runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
-    let endpoint = TargetKey {
-        host: "cache.internal".into(),
-        port: 11211,
-    };
-    let source = protobuf_user_info(1_700_000_000, b"stable");
-    let target = protobuf_user_info(1_800_000_000, b"stable");
-    let context = |actual_value| MemcachedPolicyContext {
-        case_id: Some(CASE_ID),
-        target: &endpoint,
-        command: "set",
-        key: Some(b"u42"),
-        recorded_value: Some(&source),
-        actual_value,
-        recorded_request_started_at: Some(Utc::now()),
-        actual_observed_at: Utc::now(),
-    };
-    assert!(runtime.preview_memcached(&context(Some(&source))).is_ok());
-    assert!(runtime.preview_memcached(&context(Some(&target))).is_err());
-    assert!(runtime.preview_memcached(&context(None)).is_err());
-}
-
-#[test]
 fn validates_scoped_http_query_fields() {
     let fixture = policy_fixture(http_policy());
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
@@ -820,22 +744,6 @@ dependency_rules:
             relative_to: replay_now
             tolerance: 5s
 "#
-}
-
-fn protobuf_user_info(timestamp: u64, stable: &[u8]) -> Vec<u8> {
-    let mut value = vec![0x08, 0x07, 0x90, 0x03];
-    encode_varint(timestamp, &mut value);
-    value.extend_from_slice(&[0x12, stable.len() as u8]);
-    value.extend_from_slice(stable);
-    value
-}
-
-fn encode_varint(mut value: u64, output: &mut Vec<u8>) {
-    while value >= 0x80 {
-        output.push((value as u8 & 0x7f) | 0x80);
-        value >>= 7;
-    }
-    output.push(value as u8);
 }
 
 fn composed_mysql_policy() -> &'static str {

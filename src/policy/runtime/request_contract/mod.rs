@@ -13,7 +13,6 @@ mod identity;
 mod identity_inputs;
 mod jwt;
 pub(crate) mod key;
-mod memcached;
 mod mysql;
 mod mysql_hypothesis;
 pub(crate) mod native_projection;

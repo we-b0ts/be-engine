@@ -76,7 +76,6 @@ impl Recorder {
             &config.recording,
             &config.async_api,
             &config.http_gateway,
-            &config.motan_gateway,
             &config.process_owned_dependencies,
             &config.process_dependency_tasks,
         ))?;

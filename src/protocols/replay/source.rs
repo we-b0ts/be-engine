@@ -6,11 +6,8 @@ use crate::replay::{
     self, RecordedProxyError, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol,
     ReplayTarget, TargetKey,
 };
-use crate::{
-    protocols::replay::kafka, protocols::replay::memcached, protocols::replay::motan,
-    replay::native, replay::register_replay_target,
-};
-use anyhow::{Context, Result, anyhow, ensure};
+use crate::{replay::native, replay::register_replay_target};
+use anyhow::{Context, Result, ensure};
 use mysql::{MysqlReplayState, ReplayExchange};
 use serde::Deserialize;
 use serde_json::Value;
@@ -18,7 +15,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
-use tokio::io::{AsyncBufReadExt, BufReader};
 use traffic_protocol_mysql::recorded::RecordedMysqlConnection;
 use traffic_protocol_mysql::session_identity::DependencyIdentity as MysqlDependencyIdentity;
 use uuid::Uuid;
@@ -29,6 +25,33 @@ use traffic_replay::ReplaySource;
 pub(crate) mod preparation;
 mod record;
 pub(crate) use record::DependencyRecord;
+
+fn validate_installed_provider(
+    event: &Value,
+    providers: &crate::protocols::DependencyProviders,
+) -> Result<()> {
+    let kind = event["event_type"].as_str().unwrap_or_default();
+    if ["memcached_", "motan_", "kafka_"]
+        .iter()
+        .any(|prefix| kind.starts_with(prefix))
+    {
+        ensure!(
+            providers.event_provider(event).is_some(),
+            "recording event {kind:?} has no installed protocol implementation"
+        );
+    }
+    Ok(())
+}
+
+fn reject_retired_proxy_error(error: &RecordedProxyError) -> Result<()> {
+    ensure!(
+        !matches!(error.protocol.as_str(), "memcached" | "motan" | "kafka"),
+        "unsafe dependency proxy error for protocol {}: {}",
+        error.protocol,
+        error.error
+    );
+    Ok(())
+}
 
 pub(crate) fn validate_index_record(value: &Value) -> Result<()> {
     replay::dependencies::validate_outcome(value)?;
@@ -47,9 +70,7 @@ pub(crate) fn register_dependency_records(
     http_exchanges: &mut Vec<http::ReplayHttpExchange>,
     http_blackholes: &mut Vec<http::ReplayHttpBlackhole>,
     redis: &mut redis::RedisReplayState,
-    memcached: &mut memcached::MemcachedReplayState,
-    kafka: &mut kafka::KafkaReplayState,
-    motan: &mut motan::MotanReplayState,
+
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
@@ -67,6 +88,7 @@ pub(crate) fn register_dependency_records(
         }
         match record {
             DependencyRecord::Native(event) => {
+                validate_installed_provider(event, &native.providers)?;
                 native.register(event, source, case_id, *line, targets)?;
             }
             DependencyRecord::MysqlConnection(connection) => {
@@ -82,25 +104,11 @@ pub(crate) fn register_dependency_records(
             DependencyRecord::RedisConnection(connection) => {
                 redis.register_connection((**connection).clone(), targets)?;
             }
-            DependencyRecord::MemcachedConnection(connection) => {
-                memcached.register_connection((**connection).clone(), targets)?;
-            }
-            DependencyRecord::KafkaConnection(connection) => {
-                kafka.register_connection((**connection).clone(), targets)?;
-            }
-            DependencyRecord::MotanConnection(connection) => {
-                motan.register_connection((**connection).clone(), targets)?;
-            }
+
             DependencyRecord::ProxyError(error) => {
                 redis::RedisReplayState::reject_proxy_error(error)?;
-                memcached::MemcachedReplayState::reject_proxy_error(error)?;
-                motan::MotanReplayState::reject_proxy_error(error)?;
-                if error.protocol == "kafka" {
-                    return Err(anyhow!(
-                        "unsafe Kafka dependency proxy error: {}",
-                        error.error
-                    ));
-                }
+
+                reject_retired_proxy_error(error)?;
             }
             _ => {}
         }
@@ -149,32 +157,10 @@ pub(crate) fn register_dependency_records(
                 )?;
                 continue;
             }
-            DependencyRecord::MemcachedExchange(exchange) => {
-                memcached.register_exchange(*exchange, source, case_id, targets)?;
-                continue;
-            }
-            DependencyRecord::KafkaProduce(exchange) => {
-                kafka.register_produce(*exchange, source, case_id, targets)?;
-                continue;
-            }
-            DependencyRecord::KafkaFetch(exchange) => {
-                kafka.register_fetch(*exchange, source, case_id, targets)?;
-                continue;
-            }
-            DependencyRecord::KafkaDelivery(exchange) => {
-                kafka.register_delivery(*exchange, source, case_id, targets)?;
-                continue;
-            }
-            DependencyRecord::MotanExchange(exchange) => {
-                motan.register_exchange(*exchange, source, case_id, targets)?;
-                continue;
-            }
+
             DependencyRecord::MysqlConnection(_)
             | DependencyRecord::RedisPubSubPush(_)
             | DependencyRecord::RedisConnection(_)
-            | DependencyRecord::MemcachedConnection(_)
-            | DependencyRecord::KafkaConnection(_)
-            | DependencyRecord::MotanConnection(_)
             | DependencyRecord::ProxyError(_)
             | DependencyRecord::ConnectFailure
             | DependencyRecord::Native(_) => continue,
@@ -254,53 +240,6 @@ pub(crate) fn register_dependency_records(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "event_type", rename_all = "snake_case")]
-enum DebugDependencyRecord {
-    MotanExchange(Box<motan::RecordedExchange>),
-    #[serde(other)]
-    Other,
-}
-
-pub(crate) async fn load_motan_debug_file(
-    path: &Path,
-    motan: &mut motan::MotanReplayState,
-    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
-) -> Result<()> {
-    let file = match tokio::fs::File::open(path).await {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "failed to read dependency debug replay file {}",
-                    path.display()
-                )
-            });
-        }
-    };
-    let mut input = BufReader::new(file).lines();
-    let mut line_index = 0;
-    while let Some(line) = input.next_line().await? {
-        line_index += 1;
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let record: DebugDependencyRecord = serde_json::from_str(line).with_context(|| {
-            format!(
-                "failed to parse dependency debug replay line {} in {}",
-                line_index,
-                path.display()
-            )
-        })?;
-        if let DebugDependencyRecord::MotanExchange(exchange) = record {
-            motan.register_heartbeat(*exchange, targets)?;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn authorize(
     records: &mut [(usize, DependencyRecord)],
     references: &BTreeSet<replay::RecordedReference>,
@@ -366,3 +305,6 @@ pub(crate) struct AppendedSource {
 pub(crate) mod global;
 
 pub(crate) mod projection;
+
+#[cfg(test)]
+mod tests;

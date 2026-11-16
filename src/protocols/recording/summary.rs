@@ -4,53 +4,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use traffic_protocol::observation::RecordingSummary;
-use traffic_protocol::observation::termination;
-mod kafka;
-mod memcached;
-mod motan;
 mod udp;
-use kafka::*;
-use memcached::*;
-use motan::*;
 use udp::*;
-
-#[derive(Default)]
-pub(crate) struct ExistingSummary {
-    memcached: MemcachedSummaryBuilder,
-    kafka: KafkaDependencySummary,
-    motan: MotanSummaryBuilder,
-}
-impl RecordingSummary for ExistingSummary {
-    fn observe(&mut self, value: &Value) {
-        match value["event_type"].as_str() {
-            Some("memcached_connection") => self.memcached.record_connection(value),
-            Some("memcached_exchange") => self.memcached.record_exchange(value),
-            Some("motan_connection") => self.motan.record_connection(value),
-            Some("motan_exchange") => self.motan.record_exchange(value),
-            Some("kafka_connection") => record_kafka_connection_summary(&mut self.kafka, value),
-            Some("kafka_produce") => record_kafka_record_summary(&mut self.kafka, value, true),
-            Some("kafka_fetch") => record_kafka_fetch_summary(&mut self.kafka, value),
-            Some("kafka_delivery") => record_kafka_record_summary(&mut self.kafka, value, false),
-            _ => {}
-        }
-    }
-    fn finish(self: Box<Self>) -> Result<BTreeMap<String, Value>> {
-        let mut fields = BTreeMap::new();
-        if self.memcached.has_activity() {
-            fields.insert(
-                "memcached".into(),
-                serde_json::to_value(self.memcached.finish())?,
-            );
-        }
-        if self.kafka.has_activity() {
-            fields.insert("kafka".into(), serde_json::to_value(self.kafka)?);
-        }
-        if self.motan.has_activity() {
-            fields.insert("motan".into(), serde_json::to_value(self.motan.finish())?);
-        }
-        Ok(fields)
-    }
-}
 
 #[derive(Default)]
 pub(crate) struct TransportSummary {

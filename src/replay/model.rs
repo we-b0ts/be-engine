@@ -407,7 +407,7 @@ mod tests {
                 host: "vintage-node.trp.test".to_string(),
                 port: 8881,
             },
-            ReplayProtocol::Motan,
+            ReplayProtocol::Redis,
             Some("198.19.0.1".parse().unwrap()),
         )
         .unwrap();
@@ -449,10 +449,10 @@ mod tests {
         )
         .unwrap();
 
-        register_replay_target(&mut targets, &target, ReplayProtocol::Memcached).unwrap();
+        register_replay_target(&mut targets, &target, ReplayProtocol::Redis).unwrap();
 
         let target = targets.get(&target).unwrap();
-        assert_eq!(target.protocol, ReplayProtocol::Memcached);
+        assert_eq!(target.protocol, ReplayProtocol::Redis);
         assert_eq!(target.fake_ip, "198.19.0.8".parse::<Ipv4Addr>().unwrap());
     }
 
@@ -466,7 +466,7 @@ mod tests {
                     host: host.to_string(),
                     port: 8881,
                 },
-                ReplayProtocol::Motan,
+                ReplayProtocol::Redis,
                 Some("198.19.0.9".parse().unwrap()),
             )
             .unwrap();

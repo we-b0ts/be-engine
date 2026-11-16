@@ -8,7 +8,6 @@ mod context;
 mod http;
 pub(crate) use http::close_timing::project as close_timing;
 mod identity;
-mod motan;
 mod output;
 #[cfg(test)]
 mod tests;
@@ -22,7 +21,6 @@ pub(crate) use output::{PrimaryMetadata, PrimaryObservation, PrimaryOutput};
 
 pub(crate) enum PrimaryProtocol<'a> {
     Http(http::HttpPrimary<'a>),
-    Motan(motan::MotanPrimary),
 }
 
 pub(crate) trait NativePrimaryAdapter {
@@ -35,14 +33,12 @@ impl NativePrimaryAdapter for PrimaryProtocol<'_> {
     fn api(&self) -> &ApiIdentity {
         match self {
             Self::Http(adapter) => adapter.api(),
-            Self::Motan(adapter) => adapter.api(),
         }
     }
 
     fn native_version(&self) -> NativeProtocolVersion {
         match self {
             Self::Http(adapter) => adapter.native_version(),
-            Self::Motan(adapter) => adapter.native_version(),
         }
     }
 
@@ -54,7 +50,6 @@ impl NativePrimaryAdapter for PrimaryProtocol<'_> {
         );
         match self {
             Self::Http(adapter) => adapter.execute(context).await,
-            Self::Motan(adapter) => adapter.execute(context).await,
         }
     }
 }
@@ -84,9 +79,9 @@ impl<'a> PrimaryProtocol<'a> {
             (NativeProtocolVersion::Http, false) => Ok(Self::Http(
                 http::HttpPrimary::from_recorded(bytes, metadata)?,
             )),
-            (NativeProtocolVersion::Motan1 | NativeProtocolVersion::Motan2, true) => Ok(
-                Self::Motan(motan::MotanPrimary::from_recorded(bytes, metadata)?),
-            ),
+            (NativeProtocolVersion::Motan1 | NativeProtocolVersion::Motan2, _) => {
+                anyhow::bail!("Motan primary execution has no installed protocol implementation")
+            }
             _ => anyhow::bail!(
                 "primary native input requires a supported version and a complete matching frame"
             ),
@@ -96,7 +91,6 @@ impl<'a> PrimaryProtocol<'a> {
     pub(crate) fn kind(&self) -> ProtocolKind {
         match self {
             Self::Http(_) => ProtocolKind::Http,
-            Self::Motan(_) => ProtocolKind::Motan,
         }
     }
 
@@ -109,7 +103,6 @@ pub(crate) fn contract(protocol: ProtocolKind) -> ProtocolContract {
     use NativeProtocolVersion as V;
     let native_versions: &'static [V] = match protocol {
         ProtocolKind::Http => &[V::Http],
-        ProtocolKind::Motan => &[V::Motan1, V::Motan2],
         _ => &[],
     };
     ProtocolContract {

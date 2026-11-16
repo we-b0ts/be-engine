@@ -123,12 +123,12 @@ pub fn default_providers() -> Arc<DependencyProviders> {
         traffic_extensions::install_protocols(&mut providers.providers, DependencyProtocol::new)
             .expect("extension catalog has unique protocol identities");
         providers
-            .register_evidence("existing", Arc::new(evidence::ExistingEvidence))
-            .expect("unique existing evidence adapter");
-        providers
             .register_evidence("transport", Arc::new(evidence::TransportEvidence))
             .expect("unique transport evidence adapter");
-        for protocol in replay::report::PROTOCOLS {
+        for protocol in replay::report::PROTOCOLS
+            .into_iter()
+            .chain(replay::report::codecs::HISTORICAL_PROTOCOLS)
+        {
             providers
                 .register_report_codec(
                     traffic_protocol::ProtocolId::new(protocol),

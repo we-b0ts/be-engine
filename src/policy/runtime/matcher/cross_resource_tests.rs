@@ -1,6 +1,5 @@
 //! The same format declaration and Case identity state span native carriers.
 use super::*;
-use crate::policy::runtime::MemcachedPolicyContext;
 use crate::protocols::replay::mysql::RecordedMysqlExchange;
 use crate::replay::ReplayCaseStatus;
 use serde_json::json;
@@ -43,7 +42,7 @@ fn payload(id: &str, time: i64, stable: i64) -> Vec<u8> {
 }
 
 #[test]
-fn one_global_time_identity_contract_and_bijection_are_shared_by_redis_mysql_and_memcached() {
+fn one_global_time_identity_contract_and_bijection_are_shared_by_redis_and_mysql() {
     let (_temp, runtime) = runtime();
     let owner = &runtime.request_contracts;
     let source = payload(A, 1000, 7);
@@ -89,10 +88,6 @@ fn one_global_time_identity_contract_and_bijection_are_shared_by_redis_mysql_and
         database: Some("app".into()),
         username: None,
     };
-    let mc = TargetKey {
-        host: "cache.test".into(),
-        port: 11211,
-    };
     for (value, passes) in [
         (target, true),
         (payload(Y, 2000, 7), false),
@@ -133,17 +128,6 @@ fn one_global_time_identity_contract_and_bijection_are_shared_by_redis_mysql_and
             )
             .expect("SQL args reuse the same logical JSON contract");
         assert_eq!(args_result.is_ok(), passes, "MySQL args: {args_result:?}");
-        let mc_result = runtime.preview_memcached(&MemcachedPolicyContext {
-            case_id: Some("case"),
-            target: &mc,
-            command: "set",
-            key: Some(b"session"),
-            recorded_value: Some(&source),
-            actual_value: Some(&value),
-            recorded_request_started_at: DateTime::from_timestamp(1000, 0),
-            actual_observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
-        });
-        assert_eq!(mc_result.is_ok(), passes, "Memcached: {mc_result:?}");
         let redis_result = owner
             .preview_redis_context(&redis, &before, &[b"session".to_vec(), value])
             .unwrap();

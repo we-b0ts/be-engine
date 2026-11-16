@@ -14,16 +14,6 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
-use crate::memcached::MemcachedWireProtocol;
-use crate::protocols::recording::kafka::{
-    KafkaConnectionContext, handle_connected as handle_connected_kafka,
-};
-use crate::protocols::recording::memcached::{
-    ConnectionContext as MemcachedConnectionContext, handle_connected as handle_connected_memcached,
-};
-use crate::protocols::recording::motan::{
-    ConnectionContext as MotanConnectionContext, handle_connected as handle_connected_motan,
-};
 use crate::recording_control::RecordingListener;
 
 use super::{
@@ -174,13 +164,6 @@ async fn handle_connection(
         protocol_override(&config.protocol_detection, &entry.domain, fake_addr.port());
     let detection = if let Some(protocol) = override_protocol {
         Detection::Match(protocol)
-    } else if config.protocol_detection.enabled
-        && config
-            .protocol_detection
-            .kafka_port_hints
-            .contains(&fake_addr.port())
-    {
-        Detection::Match(DetectedProtocol::Kafka)
     } else if config.protocol_detection.enabled || config.record_http {
         peek_client_protocol(&client, state.dependency_providers())
             .await
@@ -319,13 +302,6 @@ async fn proxy_raw_tcp(
             }
         };
     }
-    if protocol == Some(DetectedProtocol::MemcachedText) {
-        let mut first = [0_u8; 1];
-        if client.peek(&mut first).await? > 0 && first[0] == 0x80 {
-            protocol = Some(DetectedProtocol::MemcachedBinary);
-        }
-    }
-
     match protocol.unwrap_or(DetectedProtocol::Raw) {
         DetectedProtocol::Registered(protocol) => {
             let info = traffic_protocol::connection::ConnectionInfo {
@@ -364,64 +340,6 @@ async fn proxy_raw_tcp(
                 upstream,
                 state,
                 info,
-            )
-            .await
-        }
-        DetectedProtocol::MemcachedText | DetectedProtocol::MemcachedBinary => {
-            reject_protocol_tls_if_needed(
-                &client,
-                &state,
-                &entry.domain,
-                fake_addr,
-                client_addr.clone(),
-                "memcached",
-            )
-            .await?;
-            let wire_protocol = if protocol == Some(DetectedProtocol::MemcachedBinary) {
-                MemcachedWireProtocol::Binary
-            } else {
-                MemcachedWireProtocol::Text
-            };
-            handle_connected_memcached(
-                client,
-                upstream,
-                state,
-                memcached_context(&entry, fake_addr, upstream_addr, client_addr),
-                wire_protocol,
-            )
-            .await
-        }
-        DetectedProtocol::Kafka => {
-            handle_connected_kafka(
-                client,
-                upstream,
-                state,
-                KafkaConnectionContext {
-                    client_addr,
-                    target_host: entry.domain.clone(),
-                    target_port: fake_addr.port(),
-                    target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
-                    upstream_addr: upstream_addr.to_string(),
-                },
-            )
-            .await
-        }
-        DetectedProtocol::Motan => {
-            handle_connected_motan(
-                client,
-                upstream,
-                state,
-                MotanConnectionContext {
-                    client_addr,
-                    target_host: entry.domain.clone(),
-                    target_port: fake_addr.port(),
-                    target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
-                    advertised_ip: match fake_addr {
-                        SocketAddr::V4(address) => *address.ip(),
-                        SocketAddr::V6(_) => unreachable!("fake-IP gateway only accepts IPv4"),
-                    },
-                    upstream_addr: upstream_addr.to_string(),
-                },
             )
             .await
         }
@@ -497,21 +415,6 @@ async fn proxy_raw_tcp(
     }
 }
 
-fn memcached_context(
-    entry: &FakeDnsEntry,
-    fake_addr: SocketAddr,
-    upstream_addr: SocketAddr,
-    client_addr: Option<String>,
-) -> MemcachedConnectionContext {
-    MemcachedConnectionContext {
-        client_addr,
-        target_host: entry.domain.clone(),
-        target_port: fake_addr.port(),
-        target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
-        upstream_addr: upstream_addr.to_string(),
-    }
-}
-
 async fn reject_protocol_tls_if_needed(
     client: &TcpStream,
     state: &AppState,
@@ -545,10 +448,6 @@ fn protocol_hint(state: &AppState, port: u16) -> Option<DetectedProtocol> {
     let detection = &state.config().tcp_gateway.protocol_detection;
     if detection.redis_port_hints.contains(&port) {
         Some(DetectedProtocol::Redis)
-    } else if detection.memcached_port_hints.contains(&port) {
-        Some(DetectedProtocol::MemcachedText)
-    } else if detection.kafka_port_hints.contains(&port) {
-        Some(DetectedProtocol::Kafka)
     } else {
         None
     }
@@ -561,8 +460,6 @@ fn plaintext_protocol_port_hint(state: &AppState, port: u16) -> Option<&'static 
     }
     if detection.redis_port_hints.contains(&port) {
         Some("redis")
-    } else if detection.memcached_port_hints.contains(&port) {
-        Some("memcached")
     } else {
         None
     }

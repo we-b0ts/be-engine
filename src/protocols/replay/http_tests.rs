@@ -45,7 +45,7 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 }
 
 #[test]
-fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
+fn response_discovered_target_requires_an_installed_protocol() {
     let record = RecordedHttpExchange {
         native: RecordedHttpMessage {
             id: None,
@@ -95,23 +95,21 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let mut exchanges = Vec::new();
     let mut targets = BTreeMap::new();
 
-    register_http_exchange(
+    let error = register_http_exchange(
         record,
         ReplaySource::Case,
         Some("case"),
         &mut exchanges,
         &mut targets,
     )
-    .unwrap();
-
-    let motan = targets
-        .get(&TargetKey {
-            host: "vintage-node-10-145-1-107.trp.test".to_string(),
-            port: 8881,
-        })
-        .unwrap();
-    assert_eq!(motan.protocol, ReplayProtocol::Motan);
-    assert_eq!(motan.fake_ip, "198.19.0.20".parse::<Ipv4Addr>().unwrap());
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported TCP protocol \"motan\"")
+    );
+    assert!(exchanges.is_empty());
+    assert!(targets.is_empty());
 }
 
 #[test]

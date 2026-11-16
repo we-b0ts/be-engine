@@ -146,6 +146,6 @@ mod tests {
             );
         }
         assert_eq!(counts(&state, "case-a"), before);
-        assert_eq!(counts(&state, "case-b"), [0; 6]);
+        assert_eq!(counts(&state, "case-b"), vec![0; before.len()]);
     }
 }

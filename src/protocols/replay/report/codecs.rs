@@ -6,6 +6,8 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 use traffic_protocol::report::{ReportCodec, ReportSection};
 
+pub(crate) const HISTORICAL_PROTOCOLS: [&str; 3] = ["memcached", "motan", "kafka"];
+
 pub(crate) struct Builtin(pub &'static str);
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

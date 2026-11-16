@@ -243,9 +243,9 @@ pub(crate) fn register_http_exchange(
             "auto" => ReplayProtocol::Auto,
             "http" => ReplayProtocol::Http,
             "https" => ReplayProtocol::Https,
-            "motan" => ReplayProtocol::Motan,
+
             "redis" => ReplayProtocol::Redis,
-            "memcached" => ReplayProtocol::Memcached,
+
             other => {
                 return Err(anyhow!(
                     "http_exchange {} advertises unsupported TCP protocol {other:?}",

@@ -65,7 +65,7 @@ pub(in crate::rewrite) fn source_witness(
         }
         Protocol::Redis => super::capture(&event["response"]),
         Protocol::Memcached => {
-            crate::protocols::replay::memcached::contracts::source_witness(event, surface)
+            anyhow::bail!("Memcached recording has no installed protocol implementation")
         }
         Protocol::Mysql => crate::protocols::replay::mysql_source_witness(event, surface),
         Protocol::Http => {
@@ -182,10 +182,9 @@ pub(in crate::rewrite) fn values(
                 .context("Redis key is missing")?,
             super::redis_payload(surface, event, raw)?,
         )]),
-        Protocol::Memcached => crate::memcached::value_slot::witness_values(
-            raw,
-            surface == Surface::DependencyResponse,
-        ),
+        Protocol::Memcached => {
+            anyhow::bail!("Memcached recording has no installed protocol implementation")
+        }
         Protocol::Http => Ok(crate::protocols::replay::http_witness_value(raw, surface)?
             .map(|payload| vec![(Vec::new(), payload)])
             .unwrap_or_default()),

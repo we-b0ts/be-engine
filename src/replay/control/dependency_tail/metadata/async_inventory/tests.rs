@@ -85,6 +85,8 @@ async fn source_response_selects_the_proven_http_end_without_requiring_backgroun
 
 #[test]
 fn end_only_source_inventory_requires_every_native_intermediate_effect() {
+    use traffic_protocol::DependencyProvider;
+
     let rules: BTreeMap<String, crate::policy::AsyncApiRules> = BTreeMap::from([(
         "POST /jobs".into(),
         serde_json::from_value(json!([
@@ -102,58 +104,55 @@ fn end_only_source_inventory_requires_every_native_intermediate_effect() {
     assert!(scope.select_response(Some(&json!({}))).0);
     let connection = uuid::Uuid::new_v4();
     let end = uuid::Uuid::new_v4();
+    let intermediate = |ordinal| {
+        json!({
+            "event_type":traffic_protocol_fixture::EVENT,"channel":connection,"ordinal":ordinal,
+            "peer":{"address":"native.test","port":7001},"input":[],"reply":[],
+            "latency_micros":0,"wire_complete":true
+        })
+    };
     let rows = vec![
-        json!({"event_type":"memcached_exchange","connection_id":connection,"sequence":1}),
-        json!({"event_type":"motan_exchange","connection_id":connection,"sequence":2,"heartbeat":false}),
-        json!({"event_type":"motan_exchange","heartbeat":true}),
-        json!({"event_type":"kafka_produce","connection_id":connection,"request_sequence":3,"sequence":31}),
-        json!({"event_type":"kafka_produce","connection_id":connection,"request_sequence":3,"sequence":32}),
-        json!({"event_type":"kafka_fetch","connection_id":connection,"sequence":4}),
-        json!({"event_type":"kafka_delivery","connection_id":connection,"fetch_sequence":4,"sequence":41}),
-        json!({"event_type":"redis_pub_sub_push","rpc_request":{"connection_id":connection,"sequence":5}}),
+        intermediate(1),
+        intermediate(2),
+        json!({"event_type":"control_observation","capture":{"semantic_required":false}}),
+        intermediate(3),
         json!({"event_type":"http_exchange","id":end,"outcome":"response","method":"POST","uri":"/done","authority":"executor.test","scheme":"http","response_status":200}),
     ];
+    let mut evidence = crate::protocols::default_providers().evidence().clone();
+    evidence
+        .register(
+            traffic_protocol_fixture::NAME,
+            traffic_protocol_fixture::Provider.evidence().unwrap(),
+        )
+        .unwrap();
     let raw = rows
         .iter()
         .map(|row| format!("{row}\n"))
         .collect::<String>();
-    let (refs, stop) = complete_inventory(
-        &scope,
-        raw.as_bytes(),
-        crate::protocols::default_providers().evidence(),
-    )
-    .unwrap();
+    let (refs, stop) = complete_inventory(&scope, raw.as_bytes(), &evidence).unwrap();
     assert_eq!(
         refs.len(),
-        8,
+        4,
         "one declared end does not replace the actual variable dependency inventory"
     );
     assert!(!stop);
-    for reference in [
-        RecordedReference::connection("memcached", connection, 1),
-        RecordedReference::connection("motan", connection, 2),
-        RecordedReference::connection("kafka_produce", connection, 31),
-        RecordedReference::connection("kafka_produce", connection, 32),
-        RecordedReference::connection("kafka_fetch", connection, 4),
-        RecordedReference::connection("kafka_delivery", connection, 41),
-        RecordedReference::connection("redis_rpc_push", connection, 5),
-        RecordedReference::exchange("http", end),
-    ] {
+    for ordinal in 1..=3 {
+        let reference = RecordedReference::new(
+            traffic_protocol_fixture::NAME,
+            json!({"channel":connection,"ordinal":ordinal}),
+        )
+        .unwrap();
         assert!(refs.contains(&reference));
     }
+    assert!(refs.contains(&RecordedReference::exchange("http", end)));
     let mut incomplete = rows;
-    incomplete[3].as_object_mut().unwrap().remove("sequence");
+    incomplete[3].as_object_mut().unwrap().remove("ordinal");
     let incomplete = incomplete
         .iter()
         .map(|row| format!("{row}\n"))
         .collect::<String>();
     assert!(
-        complete_inventory(
-            &scope,
-            incomplete.as_bytes(),
-            crate::protocols::default_providers().evidence()
-        )
-        .is_err(),
-        "native request sequence cannot stand in for a missing effect identity"
+        complete_inventory(&scope, incomplete.as_bytes(), &evidence).is_err(),
+        "a missing native effect identity must keep the inventory incomplete"
     );
 }

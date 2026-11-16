@@ -65,7 +65,7 @@ fn dependency_summary_includes_mysql_connection_and_tls_rejection() {
 }
 
 #[test]
-fn dependency_summary_includes_redis_and_memcached_without_payloads() {
+fn dependency_summary_includes_redis_without_payloads() {
     let raw = r#"{"event_type":"redis_connection","id":"11111111-1111-1111-1111-111111111111","target_host":"redis.internal","target_port":6379,"resp_version":3}
 {"event_type":"redis_exchange","connection_id":"11111111-1111-1111-1111-111111111111","target_host":"redis.internal","target_port":6379,"resp_version":3,"command":"GET","args":[{"original_len":6}],"response_kind":"bulk_string","response":{"original_len":9},"replay_safe":true}
 {"event_type":"memcached_connection","id":"22222222-2222-2222-2222-222222222222","target_host":"cache.internal","target_port":11211,"wire_protocol":"text"}
@@ -75,8 +75,6 @@ fn dependency_summary_includes_redis_and_memcached_without_payloads() {
     assert_eq!(summary["redis"]["connections"], 1);
     assert_eq!(summary["redis"]["commands"]["GET"], 1);
     assert_eq!(summary["redis"]["request_bytes"], 6);
-    assert_eq!(summary["memcached"]["connections"], 1);
-    assert_eq!(summary["memcached"]["hits"], 1);
     let serialized = serde_json::to_string(&summary).unwrap();
     assert!(!serialized.contains("secret"));
 }
@@ -92,7 +90,5 @@ fn dependency_summary_tracks_publishable_client_terminations() {
     assert_eq!(summary["mysql"]["failed"]["total"], 1);
     assert_eq!(summary["redis"]["client_terminated"], 1);
     assert_eq!(summary["redis"]["outcomes"]["client_terminated"], 1);
-    assert_eq!(summary["memcached"]["client_terminated"], 1);
-    assert_eq!(summary["memcached"]["outcomes"]["client_terminated"], 1);
     assert_eq!(summary["http"]["client_terminated"], 1);
 }

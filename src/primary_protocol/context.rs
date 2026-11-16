@@ -6,10 +6,8 @@ use tokio::{sync::watch, time::Instant};
 
 pub(crate) struct ExecutionSettings<'a> {
     pub(crate) http_origin: &'a str,
-    pub(crate) motan_upstream: Option<&'a str>,
     pub(crate) request_timeout: Duration,
     pub(crate) max_response_bytes: usize,
-    pub(crate) motan_limits: motan_protocol::Limits,
     pub(crate) socketio_timing: crate::interaction::replay::timing::SocketIoTiming,
 }
 

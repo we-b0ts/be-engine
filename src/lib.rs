@@ -35,9 +35,8 @@ mod http;
 mod interaction;
 mod internal_runtime;
 mod json_value;
-mod kafka;
+
 pub mod local_interception;
-mod memcached;
 mod motan;
 mod mysql;
 mod network_probe;
@@ -146,8 +145,7 @@ pub use config::{
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
     MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
-    MotanBackgroundDependencyReport, MotanGatewayConfig, MotanGatewayRuleConfig,
-    MotanProtocolConfigOptions, MotanProtocolConfigResult, MysqlBackgroundDependencyFeedback,
+    MotanBackgroundDependencyReport, MysqlBackgroundDependencyFeedback,
     MysqlBackgroundDependencyPlan, MysqlBackgroundDependencyReport, MysqlBackgroundSelector,
     MysqlBackgroundTableSeries, MysqlConfig, MysqlRouteConfig, MysqlTableSeries,
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
@@ -155,8 +153,8 @@ pub use config::{
     RedisBackgroundDependencyReport, RedisKeyPatternConfig, RepositoryConfigInitOptions,
     RepositoryConfigInitResult, TcpApplicationProtocol, TcpGatewayConfig,
     TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
-    UdpGatewayConfig, enable_repository_motan_protocol, initialize_repository_config,
-    plan_allowed_unused_http_hosts, plan_background_dependency, plan_breeze_endpoint_capture,
+    UdpGatewayConfig, initialize_repository_config, plan_allowed_unused_http_hosts,
+    plan_background_dependency, plan_breeze_endpoint_capture,
     plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
     plan_case_path_pattern_feedback, plan_motan_background_dependency,
     plan_mysql_background_dependency, plan_redis_background_dependency,
@@ -446,14 +444,10 @@ impl AppState {
             .map(|api| {
                 (
                     api.to_string(),
-                    if api.method().as_str() == "MOTAN" {
-                        config.motan_gateway.max_cases_per_api
-                    } else {
-                        config
-                            .http_gateway
-                            .per_api_case_limits
-                            .limit_for(api.path_pattern())
-                    },
+                    config
+                        .http_gateway
+                        .per_api_case_limits
+                        .limit_for(api.path_pattern()),
                 )
             })
             .collect();
@@ -483,9 +477,8 @@ impl AppState {
         let client = http::client::new_proxy_client();
         let forwarded_http_client = http::client::new_unpooled_proxy_client();
 
-        let case_matching_ready = !(config.http_gateway.enabled
-            && config.http_gateway.ready.enabled
-            || config.motan_gateway.enabled);
+        let case_matching_ready =
+            !(config.http_gateway.enabled && config.http_gateway.ready.enabled);
         let recording_lifecycle = RecordingLifecycle::from_config(&config);
         let capture_registry = recorder.capture.clone();
         Ok(Self {
@@ -526,14 +519,6 @@ impl AppState {
 
     pub(crate) fn should_record_api(&self, method: &hyper::Method, uri: &hyper::Uri) -> bool {
         self.inner.recording_apis.is_empty() || self.recording_api_pattern(method, uri).is_some()
-    }
-
-    pub(crate) fn should_record_motan_api(&self, api_pattern: &str) -> bool {
-        let method = "MOTAN".parse().expect("MOTAN is a valid HTTP token");
-        let uri = api_pattern
-            .parse()
-            .expect("generated Motan API path is a valid URI");
-        self.should_record_api(&method, &uri)
     }
 
     pub(crate) fn recording_api_pattern(

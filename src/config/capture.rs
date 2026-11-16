@@ -24,7 +24,6 @@ pub(super) fn compile(document: &mut Mapping, capture: &CaptureConfig) -> Result
     for protocol in &capture.ingress {
         let gateway = match protocol {
             CaptureProtocol::Http => "http_gateway",
-            CaptureProtocol::Motan => "motan_gateway",
             _ => anyhow::bail!(
                 "recorder.capture.ingress does not support {}",
                 protocol.as_str()
@@ -33,6 +32,14 @@ pub(super) fn compile(document: &mut Mapping, capture: &CaptureConfig) -> Result
         require(document, gateway, "enabled", "ingress", *protocol)?;
     }
     for protocol in &capture.dependencies {
+        ensure!(
+            crate::protocols::default_providers()
+                .registrations()
+                .iter()
+                .any(|entry| { entry.provider.name() == protocol.as_str() }),
+            "recorder.capture.dependencies requires an installed {} protocol implementation",
+            protocol.as_str()
+        );
         require(document, "dns_mock", "enabled", "dependencies", *protocol)?;
         require(
             document,

@@ -38,6 +38,13 @@ owns immutable event plans, ordered candidate postings, finite claims, bounded
 pending admissions, shared request waiting, scope/lane candidate selection and
 actual delivery receipts. Its value-rule preparation binds protocol-projected
 locations to shared field contracts and codecs.
+The current built-in execution set is HTTP, Redis and MySQL. Memcached, Kafka
+and Motan capture/Replay drivers and the Motan primary gateway are retired.
+Historical native records retain the open record path and require their actual
+installed provider at admission. Application compatibility checks use the
+run-supplied catalog. Installed providers own their evidence event registrations.
+Historical report codecs continue reading existing audit results. Current
+session snapshots include only active built-in execution inventories.
 `traffic-value` owns format-independent values, codec recognition, prepared
 document access and logical edit authorization. `traffic-codec-json` owns
 duplicate-rejecting decoding and token-preserving JSON rendering.

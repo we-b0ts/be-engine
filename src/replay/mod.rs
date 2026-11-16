@@ -47,8 +47,6 @@ mod dns;
 mod egress_counter;
 mod exchange;
 pub(crate) mod global;
-#[cfg(test)]
-pub(crate) mod global_test_support;
 mod snapshot;
 mod startup;
 mod target_observation;

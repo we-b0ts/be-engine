@@ -21,7 +21,6 @@ fn business_http_capture_builds_ingress_and_https_dependency_facilities() {
     assert!(config.tcp_gateway.protocol_detection.enabled);
     assert!(!config.http.enabled);
     assert!(!config.udp_gateway.enabled);
-    assert!(!config.motan_gateway.enabled);
     assert!(!config.mysql.enabled);
     assert_eq!(
         config.artifacts.as_ref().unwrap().root_dir,
@@ -54,10 +53,7 @@ fn ingress_and_dependency_roles_do_not_enable_each_other() {
 
 #[test]
 fn native_protocol_roles_reuse_transparent_dependency_capture() {
-    let config = parse(
-        "capture:\n  ingress: [motan]\n  dependencies: [redis, mysql, memcached, motan, kafka]\n",
-    );
-    assert!(config.motan_gateway.enabled);
+    let config = parse("capture:\n  dependencies: [redis, mysql]\n");
     assert!(!config.http_gateway.enabled);
     assert!(config.dns_mock.enabled);
     assert!(config.tcp_gateway.enabled);
@@ -84,6 +80,18 @@ fn capture_rejects_duplicate_or_unsupported_protocol_roles() {
             "unexpected error for {raw:?}: {error}"
         );
     }
+}
+
+#[test]
+fn retired_protocols_require_an_installed_implementation() {
+    for protocol in ["motan", "memcached", "kafka"] {
+        let raw = format!("capture: {{dependencies: [{protocol}]}}");
+        let error = serde_yaml::from_str::<AppConfig>(&raw).unwrap_err();
+        assert!(error.to_string().contains("installed"), "{error}");
+        assert!(error.to_string().contains(protocol), "{error}");
+    }
+    let error = serde_yaml::from_str::<AppConfig>("motan_gateway: {enabled: true}").unwrap_err();
+    assert!(error.to_string().contains("motan_gateway"), "{error}");
 }
 
 #[test]
@@ -146,7 +154,7 @@ fn capture_rejects_explicit_disabling_of_required_facilities() {
         "capture: {ingress: [motan]}\nmotan_gateway: {enabled: false}\n",
     )
     .unwrap_err();
-    assert!(error.to_string().contains("motan_gateway"), "{error}");
+    assert!(error.to_string().contains("ingress"), "{error}");
 
     let raw = format!("{HTTP_CAPTURE}tcp_gateway:\n  protocol_detection:\n    enabled: false\n");
     let error = serde_yaml::from_str::<AppConfig>(&raw).unwrap_err();

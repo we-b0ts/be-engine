@@ -58,7 +58,6 @@ hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-rustls = { version = "0.27", features = ["http1", "webpki-roots"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", "tokio"] }
 tower-service = "0.3"
-kafka-protocol = { version = "0.17", default-features = false, features = ["broker", "client", "messages_enums"] }
 libc = "0.2"
 motan-codec = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
 motan-breeze = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }

@@ -176,6 +176,7 @@ pub(super) enum MemcachedResourceSelector {
     CacheService { port: u16 },
 }
 
+#[cfg(test)]
 impl MemcachedResourceSelector {
     pub(super) fn port(&self) -> u16 {
         match self {

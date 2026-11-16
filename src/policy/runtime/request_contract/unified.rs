@@ -384,7 +384,6 @@ impl RequestContracts {
     }
 
     pub(super) fn observe_unified_source(&self, case: &str, event: &Value) -> Result<()> {
-        self.observe_unified_memcached_source(case, event)?;
         self.observe_unified_http_source(case, event)?;
         self.observe_unified_mysql_source(case, event)?;
         if self.compiled.is_none()

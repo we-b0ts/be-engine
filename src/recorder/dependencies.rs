@@ -132,8 +132,7 @@ mod tests {
     use super::*;
     use crate::DependencyExchangeOutcome;
     use crate::protocols::recording::events::{
-        MotanExchangeEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent,
-        RedisExchangeEvent,
+        MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent, RedisExchangeEvent,
     };
     use crate::recorder::capture_body;
 
@@ -442,65 +441,6 @@ mod tests {
         assert_eq!(quit_fact["capture"]["semantic_required"], false);
     }
 
-    #[tokio::test]
-    async fn motan_heartbeat_is_retained_as_a_control_fact() {
-        let temp = tempfile::tempdir().unwrap();
-        let recorder = Recorder::new(temp.path()).await.unwrap();
-        let case = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "api".to_string(),
-            uri_group: None,
-        };
-        let connection_id = Uuid::new_v4();
-        let heartbeat = RecorderEvent::MotanExchange(motan_exchange(
-            connection_id,
-            1,
-            "com.weibo.api.motan.rpc.heartbeat#heartbeat",
-            true,
-        ));
-        let business = RecorderEvent::MotanExchange(motan_exchange(
-            connection_id,
-            2,
-            "cn.sina.api.data.service.SinaUserService#getUser",
-            false,
-        ));
-
-        for event in [&heartbeat, &business] {
-            recorder
-                .append_case_dependency(&case, event, "active_window")
-                .await
-                .unwrap();
-        }
-        let case_dir = recorder.case_staging_dir(&case);
-        recorder
-            .flush_case_dependency_files(&case_dir)
-            .await
-            .unwrap();
-
-        let semantic =
-            crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
-                .await
-                .unwrap();
-        assert!(semantic.contains("SinaUserService#getUser"));
-        assert!(semantic.contains("motan.rpc.heartbeat"));
-        let heartbeat = semantic
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .find(|value| value["heartbeat"] == true)
-            .unwrap();
-        assert_eq!(heartbeat["capture"]["semantic_required"], false);
-
-        super::super::summary::write_case_dependency_summary(&case_dir, recorder.evidence.clone())
-            .await
-            .unwrap();
-        let summary =
-            crate::recorder::test_io::read_to_string(case_dir.join("dependencies-summary.json"))
-                .await
-                .unwrap();
-        assert!(summary.contains("SinaUserService#getUser"));
-        assert!(!summary.contains("motan.rpc.heartbeat"));
-    }
-
     fn mysql_query(
         connection_id: Uuid,
         sequence: u64,
@@ -597,53 +537,6 @@ mod tests {
             session_setup: false,
             outcome,
             duration_ms: 0,
-            replay_safe: true,
-            parse_warnings: Vec::new(),
-        }
-    }
-
-    fn motan_exchange(
-        connection_id: Uuid,
-        sequence: u64,
-        command: &str,
-        heartbeat: bool,
-    ) -> MotanExchangeEvent {
-        MotanExchangeEvent {
-            id: Uuid::new_v4(),
-            connection_id,
-            sequence,
-            timestamp: Utc::now(),
-            client_addr: None,
-            target_host: "vintage-node-10-0-0-1.trp.test".to_string(),
-            target_port: 8881,
-            target_addr: "vintage-node-10-0-0-1.trp.test:8881".to_string(),
-            advertised_ip: "198.19.0.20".parse().unwrap(),
-            upstream_addr: "10.0.0.1:8881".to_string(),
-            codec_version: 1,
-            group: None,
-            interface_name: Some(if heartbeat {
-                "com.weibo.api.motan.rpc.heartbeat".to_string()
-            } else {
-                "cn.sina.api.data.service.SinaUserService".to_string()
-            }),
-            method_name: Some(if heartbeat {
-                "heartbeat".to_string()
-            } else {
-                "getUser".to_string()
-            }),
-            parameter_desc: Some(if heartbeat {
-                "void".to_string()
-            } else {
-                "long".to_string()
-            }),
-            method_sign: None,
-            command: command.to_string(),
-            request: capture_body(b"request", 1024),
-            response_status: "value".to_string(),
-            response: capture_body(b"response", 1024),
-            heartbeat,
-            outcome: DependencyExchangeOutcome::Response,
-            duration_ms: 1,
             replay_safe: true,
             parse_warnings: Vec::new(),
         }

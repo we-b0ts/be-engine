@@ -39,9 +39,6 @@ pub(crate) async fn detect_with_providers(
             ClientProtocolDetection::Match(DetectedClientProtocol::Redis) => {
                 return Ok(Some(ReplayProtocol::Redis));
             }
-            ClientProtocolDetection::Match(
-                DetectedClientProtocol::MemcachedText | DetectedClientProtocol::MemcachedBinary,
-            ) => return Ok(Some(ReplayProtocol::Memcached)),
             ClientProtocolDetection::Match(DetectedClientProtocol::Http) => {
                 return Ok(Some(ReplayProtocol::Http));
             }
@@ -79,7 +76,6 @@ mod tests {
     async fn detects_protocol_from_runtime_traffic() {
         for (payload, expected) in [
             (b"*1\r\n$4\r\nPING\r\n".as_slice(), ReplayProtocol::Redis),
-            (b"get key\r\n".as_slice(), ReplayProtocol::Memcached),
             (
                 b"GET /resource HTTP/1.1\r\nHost: api.example.test\r\n\r\n".as_slice(),
                 ReplayProtocol::Http,

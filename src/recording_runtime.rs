@@ -103,11 +103,6 @@ impl AppState {
             tasks.spawn(async move { gateway::http::run(gateway_state).await });
         }
 
-        if self.config().motan_gateway.enabled {
-            let gateway_state = self.clone();
-            tasks.spawn(async move { gateway::motan::run(gateway_state).await });
-        }
-
         if self.config().mysql.enabled {
             let mysql_state = self.clone();
             tasks.spawn(async move { crate::protocols::mysql::run(mysql_state).await });
@@ -122,7 +117,6 @@ impl AppState {
             tcp_gateway_enabled = self.config().tcp_gateway.enabled,
             udp_gateway_enabled = self.config().udp_gateway.enabled,
             http_gateway_enabled = self.config().http_gateway.enabled,
-            motan_gateway_enabled = self.config().motan_gateway.enabled,
             mysql_enabled = self.config().mysql.enabled,
             "traffic recorder proxy started"
         );

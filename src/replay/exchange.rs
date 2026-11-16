@@ -1,10 +1,9 @@
-use std::future::Future;
 use std::io::ErrorKind;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::time::{Instant, sleep, timeout_at};
+use tokio::time::{Instant, timeout_at};
 
 use crate::dependency::DependencyExchangeOutcome;
 use crate::dependency::termination::ConnectionControl;
@@ -87,12 +86,6 @@ impl ReplayExchangeTiming {
             );
         }
         Ok(())
-    }
-
-    pub(crate) async fn delay_response(self) {
-        if !self.duration.is_zero() {
-            sleep(self.duration).await;
-        }
     }
 
     pub(crate) async fn delay_response_from_request(self, started: Instant, fast: bool) {
@@ -247,44 +240,6 @@ impl ReplayExchangeTiming {
         self.validate_client_termination(elapsed)?;
         Ok(elapsed)
     }
-
-    pub(crate) async fn await_client_termination_signal_at<F>(
-        self,
-        termination: F,
-        started: Instant,
-    ) -> Result<Duration>
-    where
-        F: Future<Output = Result<()>>,
-    {
-        if !self.outcome.is_client_terminated() {
-            return Err(anyhow!(
-                "cannot await client termination for a response exchange"
-            ));
-        }
-        let deadline = started + self.duration + CLIENT_TERMINATION_LATE_TOLERANCE;
-        match timeout_at(deadline, termination).await {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(anyhow!(
-                    "client did not terminate dependency connection within recorded timing window"
-                ));
-            }
-        }
-        let elapsed = started.elapsed();
-        self.validate_client_termination(elapsed)?;
-        Ok(elapsed)
-    }
-}
-
-pub(crate) fn is_connection_termination(kind: ErrorKind) -> bool {
-    matches!(
-        kind,
-        ErrorKind::BrokenPipe
-            | ErrorKind::ConnectionAborted
-            | ErrorKind::ConnectionReset
-            | ErrorKind::NotConnected
-            | ErrorKind::UnexpectedEof
-    )
 }
 
 /// A failed verification is reported before waiting here. Releasing a test's
@@ -307,12 +262,13 @@ mod tests {
     use super::*;
     use crate::{DependencyTermination, TerminationSide};
     use tokio::io::AsyncWriteExt;
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn delays_normal_response_by_recorded_duration() {
         let timing = ReplayExchangeTiming::from_recorded(20, DependencyExchangeOutcome::Response);
         let started = Instant::now();
-        timing.delay_response().await;
+        timing.delay_response_from_request(started, false).await;
         assert!(started.elapsed() >= Duration::from_millis(20));
     }
 

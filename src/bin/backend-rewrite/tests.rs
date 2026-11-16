@@ -85,7 +85,6 @@ fn exposes_only_the_rewrite_coordinator_surface() {
         [
             "init",
             "startup",
-            "config",
             "next",
             "status",
             "wait",

@@ -23,7 +23,6 @@ struct RecorderFields {
     http: HttpConfig,
     http_response_rewrite: HttpResponseRewriteConfig,
     http_gateway: HttpGatewayConfig,
-    motan_gateway: MotanGatewayConfig,
     mysql: MysqlConfig,
     recording: RecordingConfig,
     tls: TlsConfig,

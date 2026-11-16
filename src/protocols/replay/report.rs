@@ -15,12 +15,12 @@ pub(super) mod unused_source;
 pub(crate) mod validation;
 use super::redis as redis_state;
 use super::*;
-use crate::{protocols::replay::kafka, protocols::replay::memcached, protocols::replay::motan};
+
 use traffic_replay::report::{
     Change, GlobalReportProjection, GlobalReportRuntime, ReportRows, Row,
 };
 
-pub(crate) const PROTOCOLS: [&str; 6] = ["mysql", "redis", "memcached", "http", "kafka", "motan"];
+pub(crate) const PROTOCOLS: [&str; 3] = ["mysql", "redis", "http"];
 pub(crate) fn semantics(protocol: &str) -> Option<String> {
     (protocol == "mysql").then(|| "mysql-transaction-diagnostics-v6-source-read-proof".to_owned())
 }
@@ -29,9 +29,6 @@ pub(crate) struct ReportView<'a> {
     pub http: &'a [http::ReplayHttpExchange],
     pub http_events: &'a http::HttpReplayEvents,
     pub redis: &'a redis_state::RedisReplayState,
-    pub memcached: &'a memcached::MemcachedReplayState,
-    pub kafka: &'a kafka::KafkaReplayState,
-    pub motan: &'a motan::MotanReplayState,
 }
 
 impl<'a> From<&'a ReplayProtocols> for ReportView<'a> {
@@ -41,9 +38,6 @@ impl<'a> From<&'a ReplayProtocols> for ReportView<'a> {
             http: &protocols.http_exchanges,
             http_events: &protocols.http_events,
             redis: &protocols.redis,
-            memcached: &protocols.memcached,
-            kafka: &protocols.kafka,
-            motan: &protocols.motan,
         }
     }
 }
@@ -66,9 +60,7 @@ impl GlobalReportProjection for ReportView<'_> {
             "mysql" => self.mysql.global_report_usage().layout().to_vec(),
             "http" => self.http_events.global_report.layout().to_vec(),
             "redis" => self.redis.global_report_layout(),
-            "memcached" => self.memcached.global_report_usage().layout().to_vec(),
-            "kafka" => self.kafka.global_report_usage().layout().to_vec(),
-            "motan" => self.motan.global_report_usage().layout().to_vec(),
+
             _ => anyhow::bail!("unknown Global projection protocol"),
         })
     }
@@ -89,12 +81,7 @@ impl GlobalReportProjection for ReportView<'_> {
             ),
             "redis" if extras => self.redis.visit_global_report_extras(visitor),
             "redis" => self.redis.visit_global_report_rows(visitor),
-            "memcached" if extras => self.memcached.visit_global_report_extras(visitor),
-            "memcached" => self.memcached.visit_global_report_rows(visitor),
-            "motan" if extras => self.motan.visit_global_report_extras(visitor),
-            "motan" => self.motan.visit_global_report_rows(visitor),
-            "kafka" if extras => self.kafka.visit_global_report_extras(visitor),
-            "kafka" => self.kafka.visit_global_report_rows(visitor),
+
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
     }
@@ -128,9 +115,7 @@ impl GlobalReportRuntime for ReplayProtocols {
             "mysql" => self.mysql.global_report_snapshot(),
             "http" => self.http_events.global_report.snapshot(),
             "redis" => self.redis.global_report_snapshot(),
-            "memcached" => self.memcached.global_report_usage().snapshot(),
-            "motan" => self.motan.global_report_usage().snapshot(),
-            "kafka" => self.kafka.global_report_usage().snapshot(),
+
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
     }
@@ -139,9 +124,7 @@ impl GlobalReportRuntime for ReplayProtocols {
             "mysql" => self.mysql.initialize_global_report_usage(visible),
             "http" => self.http_events.global_report.initialize(visible),
             "redis" => self.redis.initialize_global_report_usage(visible),
-            "memcached" => self.memcached.initialize_global_report_usage(visible),
-            "motan" => self.motan.initialize_global_report_usage(visible),
-            "kafka" => self.kafka.initialize_global_report_usage(visible),
+
             _ => anyhow::bail!("unknown Global projection protocol"),
         }
         Ok(())

@@ -251,11 +251,7 @@ fn validate_native_frames(event: &Value) -> Result<()> {
             crate::redis::frame_kind(&bytes::Bytes::from(response))?;
         }
         Some("memcached_exchange") => {
-            let envelope = crate::protocols::replay::memcached::contracts::source_witness(
-                event,
-                Surface::DependencyResponse,
-            )?;
-            crate::memcached::value_slot::witness_values(&envelope, true)?;
+            anyhow::bail!("Memcached recording has no installed protocol implementation");
         }
         Some("motan_exchange") => {
             ensure!(

@@ -189,10 +189,13 @@ impl EvidenceRegistry {
     }
 
     pub fn supports_interaction_inventory(&self, event: &Value) -> bool {
+        if event["capture"]["semantic_required"] == false {
+            return true;
+        }
         event["event_type"]
             .as_str()
             .and_then(|kind| self.events.get(kind))
-            .is_none_or(|index| {
+            .is_some_and(|index| {
                 self.registrations[*index]
                     .adapter
                     .supports_interaction_inventory()
@@ -464,6 +467,7 @@ mod tests {
             json!({"event_type":"custom_delivery", "native_stream":"orders", "native_offset":17});
         let mut registry = EvidenceRegistry::default();
         assert!(registry.finite_reference(&event).unwrap().is_none());
+        assert!(!registry.supports_interaction_inventory(&event));
         registry
             .register("custom", Arc::new(NativeReferences))
             .unwrap();
@@ -471,6 +475,7 @@ mod tests {
             serde_json::to_value(registry.finite_reference(&event).unwrap()).unwrap(),
             json!({"protocol":"custom", "stream":"orders", "offset":17})
         );
+        assert!(registry.supports_interaction_inventory(&event));
         let mut observation = event;
         observation["capture"] = json!({"semantic_required":false});
         assert!(registry.finite_reference(&observation).unwrap().is_none());

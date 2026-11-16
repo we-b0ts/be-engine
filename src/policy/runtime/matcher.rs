@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 mod cross_resource_tests;
 mod http_native;
-mod memcached;
 pub(crate) mod mysql_native;
 pub(crate) mod mysql_selectors;
 pub(super) mod mysql_values;
@@ -104,18 +103,6 @@ pub(crate) struct MysqlPolicyContext<'a> {
     pub(crate) sql: Option<&'a str>,
     pub(crate) recorded: Option<&'a [RecordedMysqlValue]>,
     pub(crate) actual: Option<&'a [RecordedMysqlValue]>,
-}
-
-#[derive(Debug)]
-pub(crate) struct MemcachedPolicyContext<'a> {
-    pub(crate) case_id: Option<&'a str>,
-    pub(crate) target: &'a TargetKey,
-    pub(crate) command: &'a str,
-    pub(crate) key: Option<&'a [u8]>,
-    pub(crate) recorded_value: Option<&'a [u8]>,
-    pub(crate) actual_value: Option<&'a [u8]>,
-    pub(crate) recorded_request_started_at: Option<DateTime<Utc>>,
-    pub(crate) actual_observed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -319,30 +306,6 @@ impl ReplayPolicyRuntime {
                         && rule.replay_scope != super::config::ReplayScope::RecordingRun
                         && rule_matches_case(rule, case)
                         && rule_matches_http(rule, target, method, uri)
-                })
-                .map(|rule| rule.id.clone()),
-        );
-    }
-
-    pub(crate) fn observe_recorded_memcached_exchange(
-        &mut self,
-        case_id: Option<&str>,
-        target: &TargetKey,
-        command: &str,
-        key: Option<&[u8]>,
-    ) {
-        let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
-            return;
-        };
-        self.applicable_dependency_rule_ids.extend(
-            self.loaded
-                .document
-                .dependency_rules
-                .iter()
-                .filter(|rule| {
-                    rule.protocol == DependencyProtocol::Memcached
-                        && rule_matches_case(rule, case)
-                        && rule_matches_memcached(rule, target, command, key)
                 })
                 .map(|rule| rule.id.clone()),
         );
@@ -761,17 +724,6 @@ fn exact_mysql_params(
     }
 }
 
-fn exact_memcached_value(
-    recorded: Option<&[u8]>,
-    actual: Option<&[u8]>,
-) -> Result<DependencyRuleDecision, String> {
-    if recorded == actual {
-        Ok(DependencyRuleDecision::default())
-    } else {
-        Err("Memcached value did not match the recording".to_string())
-    }
-}
-
 fn rule_matches_case(rule: &ReplayDependencyRule, case: &CaseIdentity) -> bool {
     if rule.when.is_some() && !case.conditions.contains(&rule.id) {
         return false;
@@ -843,35 +795,6 @@ fn rule_matches_http(
             http.method.eq_ignore_ascii_case(method)
                 && path_pattern_matches(&http.path, &uri_path(uri))
         })
-}
-
-fn rule_matches_memcached(
-    rule: &ReplayDependencyRule,
-    target: &TargetKey,
-    command: &str,
-    key: Option<&[u8]>,
-) -> bool {
-    rule.memcached.as_ref().is_some_and(|memcached| {
-        memcached.resource.port() == target.port
-            && memcached.command.eq_ignore_ascii_case(command)
-            && key.is_some_and(|key| {
-                let prefix = memcached.key.prefix.as_bytes();
-                let suffix = memcached.key.suffix.as_bytes();
-                key.strip_prefix(prefix)
-                    .and_then(|middle| middle.strip_suffix(suffix))
-                    .is_some_and(is_u64_ascii)
-            })
-    })
-}
-
-fn is_u64_ascii(value: &[u8]) -> bool {
-    !value.is_empty()
-        && value.len() <= 20
-        && value.iter().all(u8::is_ascii_digit)
-        && std::str::from_utf8(value)
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .is_some()
 }
 
 fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) -> bool {

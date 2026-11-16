@@ -24,9 +24,6 @@ impl GlobalProjection for Records {
                 | "mysql_exchange"
                 | "redis_pub_sub_push"
                 | "redis_connection"
-                | "memcached_connection"
-                | "kafka_connection"
-                | "motan_connection"
                 | "proxy_error"
         );
         Ok(match phase {
@@ -53,9 +50,7 @@ struct Registration<'a> {
     http: &'a mut Vec<http::ReplayHttpExchange>,
     blackholes: &'a mut Vec<http::ReplayHttpBlackhole>,
     redis: &'a mut redis::RedisReplayState,
-    memcached: &'a mut memcached::MemcachedReplayState,
-    kafka: &'a mut kafka::KafkaReplayState,
-    motan: &'a mut motan::MotanReplayState,
+
     targets: &'a mut BTreeMap<TargetKey, ReplayTarget>,
     identities: &'a mut HashMap<Uuid, MysqlDependencyIdentity>,
     rules: &'a [crate::BackgroundDependencyRuleConfig],
@@ -87,9 +82,7 @@ impl GlobalRegistrar for Registration<'_> {
             http,
             blackholes,
             redis,
-            memcached,
-            kafka,
-            motan,
+
             targets,
             identities,
             rules,
@@ -119,29 +112,17 @@ impl GlobalRegistrar for Registration<'_> {
                 DependencyRecord::RedisConnection(connection) => {
                     redis.register_connection(*connection, targets)?
                 }
-                DependencyRecord::MemcachedConnection(connection) => {
-                    memcached.register_connection(*connection, targets)?
-                }
-                DependencyRecord::KafkaConnection(connection) => {
-                    kafka.register_connection(*connection, targets)?
-                }
-                DependencyRecord::MotanConnection(connection) => {
-                    motan.register_connection(*connection, targets)?
-                }
+
                 DependencyRecord::ProxyError(error) => {
                     redis::RedisReplayState::reject_proxy_error(&error)?;
-                    memcached::MemcachedReplayState::reject_proxy_error(&error)?;
-                    motan::MotanReplayState::reject_proxy_error(&error)?;
-                    ensure!(
-                        error.protocol != "kafka",
-                        "unsafe Kafka dependency proxy error: {}",
-                        error.error
-                    );
+
+                    reject_retired_proxy_error(&error)?;
                 }
                 _ => {}
             },
             Phase::Exchanges => match record {
                 DependencyRecord::Native(record) => {
+                    validate_installed_provider(&record, &native.providers)?;
                     native.register(
                         &record,
                         source_kind,
@@ -177,21 +158,7 @@ impl GlobalRegistrar for Registration<'_> {
                     targets,
                     rules,
                 )?,
-                DependencyRecord::MemcachedExchange(record) => {
-                    memcached.register_global_exchange(*record, source_kind, reference, targets)?
-                }
-                DependencyRecord::MotanExchange(record) => {
-                    motan.register_global_exchange(*record, source_kind, reference, targets)?
-                }
-                DependencyRecord::KafkaProduce(record) => {
-                    kafka.register_global_produce(*record, source_kind, reference, targets)?
-                }
-                DependencyRecord::KafkaFetch(record) => {
-                    kafka.register_fetch(*record, source_kind, None, targets)?
-                }
-                DependencyRecord::KafkaDelivery(record) => {
-                    kafka.register_global_delivery(*record, source_kind, reference, targets)?
-                }
+
                 _ => {}
             },
         }
@@ -210,9 +177,6 @@ impl GlobalRegistrar for Registration<'_> {
                 self.http,
                 self.blackholes,
                 self.redis,
-                self.memcached,
-                self.kafka,
-                self.motan,
                 self.targets,
                 self.identities,
                 self.rules,
@@ -231,9 +195,7 @@ pub(crate) async fn load(
     http: &mut Vec<http::ReplayHttpExchange>,
     blackholes: &mut Vec<http::ReplayHttpBlackhole>,
     redis: &mut redis::RedisReplayState,
-    memcached: &mut memcached::MemcachedReplayState,
-    kafka: &mut kafka::KafkaReplayState,
-    motan: &mut motan::MotanReplayState,
+
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     rules: &[crate::BackgroundDependencyRuleConfig],
@@ -250,9 +212,7 @@ pub(crate) async fn load(
             http,
             blackholes,
             redis,
-            memcached,
-            kafka,
-            motan,
+
             targets,
             identities,
             rules,

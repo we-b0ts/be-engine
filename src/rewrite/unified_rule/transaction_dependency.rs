@@ -196,45 +196,6 @@ fn redis_setex_json_checks_the_actual_value_slot_and_every_option() {
 }
 
 #[test]
-fn memcached_request_allows_value_length_changes_and_retains_flags() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    for change_flags in [false, true] {
-        let fixture = Fixture::new();
-        let source = br#"{"members":[1,2],"business":"exact"}"#;
-        let target = br#"{"members":[2, 1],"business":"exact"}"#;
-        let event = json!({"event_type":"memcached_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
-            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":11211,
-            "wire_protocol":"text","command":"set","opcode":null,"key":raw_body(b"session"),
-            "args":[raw_body(b"0"),raw_body(b"0"),raw_body(source.len().to_string().as_bytes())],"value":raw_body(source),
-            "extras":null,"cas":null,"quiet":false,"noreply":false,"response_frames":[raw_body(b"STORED\r\n")],"no_response":false,"outcome":"response","replay_safe":true});
-        install(&fixture, event, |raw| {
-            let mut envelope: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-            envelope["value"] = json!(STANDARD.encode(target));
-            envelope["args"][2] = json!(STANDARD.encode(target.len().to_string()));
-            if change_flags {
-                envelope["args"][0] = json!(STANDARD.encode(b"1"));
-            }
-            serde_json::to_vec(&envelope).unwrap()
-        });
-        fixture.confirm();
-        let result = fixture.plan().unwrap();
-        if change_flags {
-            let report = &result.traffic_e2e_report;
-            assert_eq!(report["status"], "planned_needs_replay");
-            assert_eq!(
-                report["preflight"]["target_comparison_failures"][0]["surface"],
-                "dependency.request"
-            );
-        } else {
-            assert_eq!(
-                result.traffic_e2e_report["preflight"]["independent_target_validations"],
-                2
-            );
-        }
-    }
-}
-
-#[test]
 fn http_body_rule_keeps_path_query_and_endpoint_native() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     for change_query in [false, true] {
@@ -362,5 +323,21 @@ fn dependency_only_rules_cannot_replace_the_finished_primary_response_oracle() {
             assert!(fixture.state().rule_plan.is_none());
         }
         assert_eq!(fs::read(fixture.policy()).unwrap(), original_policy);
+    }
+}
+
+#[test]
+fn retired_memcached_evidence_cannot_authorize_a_rule_transaction() {
+    let event = json!({"event_type":"memcached_exchange"});
+    for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
+        let error =
+            preflight::dependency::source_witness(surface, &event, std::path::Path::new("."))
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no installed protocol implementation"),
+            "{error}"
+        );
     }
 }

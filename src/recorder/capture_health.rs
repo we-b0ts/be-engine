@@ -1,16 +1,16 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(test)]
 use anyhow::Result;
 use chrono::Utc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(test)]
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::AppState;
 
 use super::ProxyErrorEvent;
-
-const RAW_COPY_BUFFER_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RawTrafficDirection {
@@ -87,6 +87,7 @@ impl ConnectionCaptureHealth {
             .clone()
     }
 
+    #[cfg(test)]
     pub(crate) async fn write_raw<W>(
         &self,
         state: &AppState,
@@ -103,30 +104,6 @@ impl ConnectionCaptureHealth {
         self.note_activity(state, direction);
         writer.write_all(bytes).await?;
         Ok(bytes.len() as u64)
-    }
-
-    pub(crate) async fn copy_raw<R, W>(
-        &self,
-        state: &AppState,
-        direction: RawTrafficDirection,
-        reader: &mut R,
-        writer: &mut W,
-    ) -> Result<u64>
-    where
-        R: AsyncRead + Unpin,
-        W: AsyncWrite + Unpin,
-    {
-        let mut copied = 0_u64;
-        let mut buffer = [0_u8; RAW_COPY_BUFFER_BYTES];
-        loop {
-            let read = reader.read(&mut buffer).await?;
-            if read == 0 {
-                return Ok(copied);
-            }
-            self.note_activity(state, direction);
-            writer.write_all(&buffer[..read]).await?;
-            copied += read as u64;
-        }
     }
 
     pub(crate) fn note_activity(&self, state: &AppState, direction: RawTrafficDirection) {

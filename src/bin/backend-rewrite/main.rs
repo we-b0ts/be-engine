@@ -20,7 +20,6 @@ use traffic_e2e::{
     status_rewrite, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
-mod config_protocol;
 mod dependency_attribution;
 mod evidence;
 mod expert;
@@ -103,8 +102,6 @@ enum RewriteCommand {
     Init(project_init::ProjectInitArgs),
     /// Inspect or update target startup environment and mount inputs.
     Startup(startup::StartupArgs),
-    /// Apply an idempotent, typed update to initialized repository configuration.
-    Config(config_protocol::ConfigArgs),
     /// Advance deterministic stages and return the only allowed next action.
     Next(NextArgs),
     /// Show bounded coordinator state without advancing it.
@@ -463,7 +460,6 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::Regression(args) => regression::run(target_root, args, pretty),
         RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
         RewriteCommand::Startup(args) => startup::run(target_root, args, pretty),
-        RewriteCommand::Config(args) => config_protocol::run(target_root, args, pretty),
         RewriteCommand::Next(args) => print_json(
             &start_rewrite_next(RewriteNextOptions {
                 target_root,

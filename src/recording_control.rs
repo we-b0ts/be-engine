@@ -32,7 +32,6 @@ pub(crate) enum RecordingListener {
     TcpGateway,
     UdpGateway,
     HttpGateway,
-    MotanGateway,
     Mysql,
 }
 
@@ -44,7 +43,6 @@ impl RecordingListener {
             Self::TcpGateway => "tcp_gateway",
             Self::UdpGateway => "udp_gateway",
             Self::HttpGateway => "http_gateway",
-            Self::MotanGateway => "motan_gateway",
             Self::Mysql => "mysql",
         }
     }
@@ -101,16 +99,11 @@ impl RecordingLifecycle {
         if config.http_gateway.enabled {
             expected.insert(RecordingListener::HttpGateway);
         }
-        if config.motan_gateway.enabled {
-            expected.insert(RecordingListener::MotanGateway);
-        }
         if config.mysql.enabled {
             expected.insert(RecordingListener::Mysql);
         }
-        let expected_upstreams = expected_upstreams(
-            config.http_gateway.enabled && config.http_gateway.ready.enabled,
-            config.motan_gateway.enabled,
-        );
+        let expected_upstreams =
+            expected_upstreams(config.http_gateway.enabled && config.http_gateway.ready.enabled);
         let source_ready = expected_upstreams.is_empty();
         Self {
             inner: Arc::new(Mutex::new(RecordingLifecycleState {
@@ -226,16 +219,10 @@ impl RecordingLifecycle {
     }
 }
 
-fn expected_upstreams(
-    http_readiness_enabled: bool,
-    motan_enabled: bool,
-) -> BTreeSet<RecordingListener> {
+fn expected_upstreams(http_readiness_enabled: bool) -> BTreeSet<RecordingListener> {
     let mut expected = BTreeSet::new();
     if http_readiness_enabled {
         expected.insert(RecordingListener::HttpGateway);
-    }
-    if motan_enabled {
-        expected.insert(RecordingListener::MotanGateway);
     }
     expected
 }
@@ -622,32 +609,6 @@ mod tests {
         let ready = lifecycle.snapshot();
         assert!(ready.ready);
         assert_eq!(ready.phase, "ready");
-    }
-
-    #[test]
-    fn readiness_waits_for_every_enabled_gateway_upstream() {
-        let mut config = test_config();
-        config.motan_gateway.enabled = true;
-        let lifecycle = RecordingLifecycle::from_config(&config);
-
-        lifecycle.mark_listener_ready(RecordingListener::DnsMock);
-        lifecycle.mark_listener_ready(RecordingListener::TcpGateway);
-        lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
-        lifecycle.mark_listener_ready(RecordingListener::MotanGateway);
-
-        assert!(!lifecycle.mark_upstream_ready(RecordingListener::HttpGateway));
-        let http_only = lifecycle.snapshot();
-        assert_eq!(http_only.phase, "waiting_for_source");
-        assert_eq!(http_only.upstreams_ready, vec!["http_gateway"]);
-        assert_eq!(http_only.upstreams_pending, vec!["motan_gateway"]);
-
-        assert!(lifecycle.mark_upstream_ready(RecordingListener::MotanGateway));
-        let all_upstreams = lifecycle.snapshot();
-        assert_eq!(all_upstreams.phase, "settling");
-        assert!(all_upstreams.upstreams_pending.is_empty());
-
-        lifecycle.mark_source_ready();
-        assert!(lifecycle.snapshot().ready);
     }
 
     #[tokio::test]

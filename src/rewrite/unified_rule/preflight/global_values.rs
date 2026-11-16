@@ -677,13 +677,7 @@ fn compare_prepared(
                 )?;
             }
             Some(Protocol::Memcached) => {
-                let keys = before
-                    .iter()
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>();
-                crate::protocols::replay::memcached::contracts::validate_witness(
-                    source, target, surface, &keys, clocks,
-                )?;
+                anyhow::bail!("Memcached recording has no installed protocol implementation");
             }
             _ => {}
         }

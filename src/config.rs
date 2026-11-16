@@ -29,13 +29,11 @@ mod http_gateway;
 mod http_response_rewrite;
 mod initialization;
 mod managed_fields;
-mod motan_gateway;
 pub(crate) mod mysql_tables;
 pub(crate) mod native_policy;
 pub(crate) mod process_owned_dependencies;
 mod recording;
 mod repository_initialization;
-mod repository_protocol;
 pub(crate) mod rule_document;
 pub(crate) mod source_traffic_policy;
 mod unified_policy_path;
@@ -90,7 +88,6 @@ pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
 pub use initialization::{DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT};
-pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
 pub use mysql_tables::MysqlTableSeries;
 pub use process_owned_dependencies::{
     BackgroundDependencyRuleConfig, MysqlBackgroundSelector, MysqlBackgroundTableSeries,
@@ -102,9 +99,6 @@ pub use recording::{
 };
 pub use repository_initialization::{
     RepositoryConfigInitOptions, RepositoryConfigInitResult, initialize_repository_config,
-};
-pub use repository_protocol::{
-    MotanProtocolConfigOptions, MotanProtocolConfigResult, enable_repository_motan_protocol,
 };
 pub use source_traffic_policy::{SourceTrafficBreezeCaptureConfig, SourceTrafficPolicyConfig};
 pub const DEFAULT_DNS_MOCK_PORT: u16 = 4_053;
@@ -127,7 +121,6 @@ pub struct AppConfig {
     pub http: HttpConfig,
     pub http_response_rewrite: HttpResponseRewriteConfig,
     pub http_gateway: HttpGatewayConfig,
-    pub motan_gateway: MotanGatewayConfig,
     pub mysql: MysqlConfig,
     pub recording: RecordingConfig,
     pub tls: TlsConfig,
@@ -348,7 +341,6 @@ impl AppConfig {
         process_owned_dependencies::validate(&self.process_owned_dependencies)?;
         self.http_response_rewrite.validate()?;
         http_gateway::validate_config(&self.http_gateway)?;
-        motan_gateway::validate_config(&self.motan_gateway)?;
         allowed_unused_http::validate_config(&self.http_gateway)?;
         self.http_gateway
             .per_api_case_limits
@@ -394,7 +386,6 @@ impl AppConfig {
         self.http_gateway
             .per_api_case_limits
             .override_for_run(limit);
-        self.motan_gateway.max_cases_per_api = limit.get();
     }
 
     fn validate_artifacts(&self) -> Result<()> {
@@ -705,7 +696,6 @@ mod tests {
         config.override_per_api_case_limit_for_run(NonZeroUsize::new(5).unwrap());
 
         assert_eq!(config.http_gateway.per_api_case_limits.default, 5);
-        assert_eq!(config.motan_gateway.max_cases_per_api, 5);
     }
 
     #[test]

@@ -258,7 +258,6 @@ mod tests {
         assert!(config.tcp_gateway.record_http);
         assert!(config.tcp_gateway.mitm_https);
         assert!(!config.udp_gateway.enabled);
-        assert!(!config.motan_gateway.enabled);
         assert!(!config.mysql.enabled);
         assert!(!config.http_gateway.record_streaming);
         assert!(config.recording.redact_headers.is_empty());
