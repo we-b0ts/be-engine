@@ -264,6 +264,10 @@ decodes authenticated evidence into request/response messages and timing facts.
 Offline global-value preflight prepares and compares those messages through the
 same codec/policy executor used by live Replay. The application retains witness
 authentication, immutable Source checks, coverage accounting and plan publication.
+Session output adapters prepare native headers, parts and termination boundaries
+before shared delivery publishes their actual flush receipts. Aggregate reports
+count installed protocols through the open `dependency_protocols` map. Historical
+named report sections retain their existing read contract.
 Historical Redis read-back execution, native identity capture execution and
 dedicated dependency Source-session policy validators are retired. Input preflight validates immutable requests and
 freezes actual signing inputs through its focused input owner. Registered value

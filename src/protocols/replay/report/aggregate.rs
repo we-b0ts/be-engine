@@ -98,12 +98,22 @@ pub struct ReplayAggregateCounts {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ReplayEventCounts {
     pub network: NetworkEventCounts,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependency_protocols: BTreeMap<String, NativeEventCounts>,
     pub mysql: MysqlEventCounts,
     pub http: HttpEventCounts,
     pub redis: CommandProtocolCounts,
     pub memcached: CommandProtocolCounts,
     pub kafka: CommandProtocolCounts,
     pub motan: CommandProtocolCounts,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NativeEventCounts {
+    pub matched: usize,
+    pub unmatched: usize,
+    pub unused_case: usize,
+    pub unused_global: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -645,6 +655,16 @@ fn merge_statuses(target: &mut BTreeMap<String, usize>, source: &BTreeMap<String
 
 impl ReplayEventCounts {
     fn add(&mut self, other: &Self) {
+        for (protocol, counts) in &other.dependency_protocols {
+            let total = self
+                .dependency_protocols
+                .entry(protocol.clone())
+                .or_default();
+            total.matched += counts.matched;
+            total.unmatched += counts.unmatched;
+            total.unused_case += counts.unused_case;
+            total.unused_global += counts.unused_global;
+        }
         self.network.unrecorded_targets += other.network.unrecorded_targets;
         self.network.matched_connection_failures += other.network.matched_connection_failures;
         self.network.unused_connection_failures += other.network.unused_connection_failures;

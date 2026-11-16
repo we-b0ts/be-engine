@@ -11,6 +11,31 @@ use super::aggregate::{
 };
 
 #[test]
+fn registered_native_protocol_counts_aggregate_without_historical_sections() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value(7, &source.join("api"), &[("case-a", "ended")], 0);
+    for protocol in ["redis", "memcached", "motan", "kafka"] {
+        report.as_object_mut().unwrap().remove(protocol);
+    }
+    report["dependency_protocols"] = json!({
+        "custom-rpc": {"matched_count":3,"unmatched_count":0,"unmatched":[],
+            "unused_case":[],"unused_global":[],"unused_global_count":0}
+    });
+    write_report(&source, "api", report.clone());
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+    assert!(aggregate.is_complete());
+    assert!(!aggregate.is_dirty());
+    assert_eq!(
+        aggregate.counts.events.dependency_protocols["custom-rpc"].matched,
+        3
+    );
+    report["dependency_protocols"]["custom-rpc"]["matched_count"] = json!("invalid");
+    write_report(&source, "api", report);
+    assert!(aggregate_replay_reports(&source).is_err());
+}
+
+#[test]
 fn startup_debt_is_diagnostic_during_independent_api_acceptance() {
     for status in ["verified", "phase_unverified"] {
         let temp = TempDir::new().unwrap();

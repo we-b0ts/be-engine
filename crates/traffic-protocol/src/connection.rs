@@ -95,6 +95,14 @@ pub trait RequestInput: Send {}
 impl RequestInput for () {}
 
 pub trait ResponseFramer: Send {
+    /// Prepare session-local encoding and logical boundaries before shared delivery.
+    fn prepare_output(
+        &mut self,
+        output: Box<dyn crate::output::OutputStream>,
+    ) -> Result<Box<dyn crate::output::OutputStream>> {
+        Ok(output)
+    }
+
     fn frame(&mut self, response: Bytes) -> Result<Bytes> {
         Ok(response)
     }

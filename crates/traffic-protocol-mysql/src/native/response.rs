@@ -1,11 +1,12 @@
 //! Typed result cells expose physical locations and retain native wire metadata.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use anyhow::{Result, ensure};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use traffic_protocol::message::{MessageEncoder, ProjectedMessage, ProtocolMessage};
+use traffic_protocol::output::{OutputChunk, OutputStream};
 
 use crate::{message::project_value, recorded::RecordedMysqlResponse};
 
@@ -16,6 +17,20 @@ pub(super) struct ResponseMessage {
 }
 
 impl ResponseMessage {
+    pub(super) fn into_output(self, status: u16) -> Result<Box<dyn OutputStream>> {
+        let mut output = crate::output::response(
+            &self.response,
+            crate::model::ResultRowEncoding::Text,
+            status,
+        );
+        let parts = output.part_count();
+        let mut chunks = VecDeque::new();
+        while let Some(chunk) = output.next()? {
+            chunks.push_back(chunk);
+        }
+        Ok(Box::new(RenderedResponse { parts, chunks }))
+    }
+
     pub(super) fn new(
         response: RecordedMysqlResponse,
         source_status_before: Option<u16>,
@@ -45,6 +60,21 @@ impl ResponseMessage {
             response,
             source_status_before,
         })
+    }
+}
+
+struct RenderedResponse {
+    parts: usize,
+    chunks: VecDeque<OutputChunk>,
+}
+
+impl OutputStream for RenderedResponse {
+    fn part_count(&self) -> usize {
+        self.parts
+    }
+
+    fn next(&mut self) -> Result<Option<OutputChunk>> {
+        Ok(self.chunks.pop_front())
     }
 }
 

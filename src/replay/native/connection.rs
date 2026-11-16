@@ -196,6 +196,7 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                         .native
                         .render_response(matched.index, matched.observed)?
                 };
+                let response = framer.prepare_output(response)?;
                 let mut output = traffic_protocol::output::FramedOutput::new(response, framer);
                 traffic_replay::output::deliver(io, &mut output, matched.ticket.sequence()).await?;
                 ensure!(

@@ -5,7 +5,6 @@ use std::sync::{
 };
 
 use anyhow::{Context, Result, ensure};
-use bytes::Bytes;
 use tokio::io::AsyncBufReadExt;
 use traffic_protocol::connection::{
     ConnectionInfo, ConnectionIo, NativeFuture, RequestHost, ResponseFramer, ServerSession,
@@ -161,8 +160,22 @@ struct Framer {
     successful: bool,
 }
 impl ResponseFramer for Framer {
-    fn frame(&mut self, bytes: Bytes) -> Result<Bytes> {
-        let envelope: ResponseMessage = serde_json::from_slice(&bytes)?;
+    fn prepare_output(
+        &mut self,
+        mut output: Box<dyn OutputStream>,
+    ) -> Result<Box<dyn OutputStream>> {
+        use traffic_protocol::output::OutputBoundary;
+        let chunk = output
+            .next()?
+            .context("MySQL response envelope is absent")?;
+        ensure!(
+            output.part_count() == 0
+                && chunk.boundary == OutputBoundary::End
+                && chunk.complete
+                && output.next()?.is_none(),
+            "MySQL response envelope has unexpected output boundaries"
+        );
+        let envelope: ResponseMessage = serde_json::from_slice(&chunk.bytes)?;
         if matches!(envelope.response.status.as_str(), "ok" | "resultset") {
             self.successful = true;
             self.status = crate::session_status::after_response(
@@ -172,13 +185,7 @@ impl ResponseFramer for Framer {
                 envelope.source_status_before,
             );
         }
-        let mut output =
-            crate::output::response(&envelope.response, ResultRowEncoding::Text, self.status);
-        let mut bytes = Vec::new();
-        while let Some(chunk) = output.next()? {
-            bytes.extend_from_slice(&chunk.bytes);
-        }
-        Ok(bytes.into())
+        envelope.into_output(self.status)
     }
 }
 
@@ -214,5 +221,59 @@ async fn read(io: &mut dyn ConnectionIo, limit: usize) -> Result<Option<MysqlPac
         }
         sequence = sequence.wrapping_add(1);
         io.read_exact(&mut header).await?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use traffic_protocol::{
+        message::{MessageEncoder, ProtocolMessage},
+        output::OutputBoundary,
+    };
+
+    #[test]
+    fn session_output_preserves_headers_rows_and_end_for_shared_delivery() {
+        let response = ResponseMessage::new(
+            serde_json::from_value(serde_json::json!({
+                "status":"resultset",
+                "columns":[{"name":"fixture","family":"integer","sql_type":"INT"}],
+                "rows":[[{"kind":"integer","value":7}]]
+            }))
+            .unwrap(),
+            None,
+        )
+        .unwrap();
+        let values = response
+            .project()
+            .unwrap()
+            .values
+            .into_iter()
+            .map(|(path, value)| (path, value.bytes))
+            .collect();
+        let mut framer = Framer {
+            status: SERVER_STATUS_AUTOCOMMIT,
+            sql: "SELECT 7 AS fixture".into(),
+            successful: false,
+        };
+        let mut output = framer
+            .prepare_output(response.output(&values).unwrap())
+            .unwrap();
+        assert!(framer.successful);
+        assert_eq!(output.part_count(), 1);
+        let mut boundaries = Vec::new();
+        while let Some(chunk) = output.next().unwrap() {
+            if chunk.complete {
+                boundaries.push(chunk.boundary);
+            }
+        }
+        assert_eq!(
+            boundaries,
+            [
+                OutputBoundary::Headers,
+                OutputBoundary::Part,
+                OutputBoundary::End
+            ]
+        );
     }
 }

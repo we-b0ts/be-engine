@@ -1,9 +1,11 @@
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
-use super::{CommandProtocolCounts, HttpEventCounts, MysqlEventCounts, ReplayEventCounts};
+use super::{
+    CommandProtocolCounts, HttpEventCounts, MysqlEventCounts, NativeEventCounts, ReplayEventCounts,
+};
 
 #[derive(Clone, Copy)]
 enum SuccessDetailScope {
@@ -28,6 +30,7 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
         ),
     };
     Ok(ReplayEventCounts {
+        dependency_protocols: native_counts(report, path)?,
         network: super::NetworkEventCounts {
             unrecorded_targets: optional_len(report, "unrecorded_targets", path)?,
             matched_connection_failures: if let Some(value) = report.get("connect_failures") {
@@ -149,6 +152,9 @@ fn protocol_counts(
     path: &Path,
 ) -> Result<CommandProtocolCounts> {
     let Some(value) = report.get(protocol) else {
+        if report.get("dependency_protocols").is_some() {
+            return Ok(CommandProtocolCounts::default());
+        }
         bail!("replay report {} is missing {protocol}", path.display());
     };
     if !value.is_object() {
@@ -174,6 +180,39 @@ fn protocol_counts(
         unused_global: global_count(value, "unused_global", "unused_global_count", path)?,
         warnings: optional_len(value, "warnings", path)?,
     })
+}
+
+fn native_counts(report: &Value, path: &Path) -> Result<BTreeMap<String, NativeEventCounts>> {
+    let Some(sections) = report.get("dependency_protocols") else {
+        return Ok(BTreeMap::new());
+    };
+    let sections = sections
+        .as_object()
+        .context("native protocol counts must be an object")?;
+    sections
+        .iter()
+        .map(|(protocol, section)| {
+            let unmatched = required_usize(section, "unmatched_count", path)?;
+            anyhow::ensure!(
+                unmatched >= required_len(section, "unmatched", path)?,
+                "native protocol {protocol:?} retains more failures than its declared count"
+            );
+            Ok((
+                protocol.clone(),
+                NativeEventCounts {
+                    matched: required_usize(section, "matched_count", path)?,
+                    unmatched,
+                    unused_case: required_len(section, "unused_case", path)?,
+                    unused_global: global_count(
+                        section,
+                        "unused_global",
+                        "unused_global_count",
+                        path,
+                    )?,
+                },
+            ))
+        })
+        .collect()
 }
 
 fn success_count(
