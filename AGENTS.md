@@ -7,10 +7,14 @@ HTTP, HTTPS, HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, and Redis
 traffic to JSONL files, then groups, replays, and
 verifies recorded contracts.
 
-The primary crate is in `src/` and builds three default binaries. `traffic-e2e` exposes
+The root `src/` owns three CLI entrypoints and a public API facade.
+`traffic-e2e-app` composes application services from the implementation-independent
+`traffic-engine`, `traffic-rewrite-core`, `traffic-recorder` and
+`traffic-recording-store` libraries, plus installed protocol, codec and policy
+providers. `traffic-e2e` exposes
 the low-level recording, replay, configuration, and diagnostic
 engine; `backend-rewrite` exposes AI-facing rewrite orchestration directly on
-the same crate; `backend-rewrite-admin` exposes explicit administrator-owned
+the shared application services; `backend-rewrite-admin` exposes explicit administrator-owned
 startup snapshot repair outside ordinary AI workflows. Standard engine
 workflow commands are `config init`, `record`, `prepare`,
 `run-api`, `run`, `status`, `recover`, and `abort`; managed recording, replay,

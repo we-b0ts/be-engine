@@ -2877,6 +2877,43 @@ dependencies = [
 name = "traffic-e2e"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "flate2",
+ "getrandom 0.3.4",
+ "hyper",
+ "libc",
+ "motan-json",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "traffic-contract",
+ "traffic-e2e-app",
+ "traffic-policy-execution",
+ "traffic-protocol-fixture",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-recorder",
+ "traffic-recording-store",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "traffic-e2e-app"
+version = "0.1.0"
+dependencies = [
  "aes-gcm",
  "anyhow",
  "base64",
@@ -2929,6 +2966,7 @@ dependencies = [
  "traffic-codec-json",
  "traffic-codec-protobuf",
  "traffic-contract",
+ "traffic-engine",
  "traffic-extensions",
  "traffic-jwt",
  "traffic-model",
@@ -2945,15 +2983,25 @@ dependencies = [
  "traffic-protocol-http",
  "traffic-protocol-mysql",
  "traffic-protocol-redis",
- "traffic-recording",
+ "traffic-recorder",
+ "traffic-recording-store",
  "traffic-replay",
  "traffic-response-rewrite",
+ "traffic-rewrite-core",
  "traffic-value",
  "url",
  "uuid",
  "webpki-roots 1.0.8",
  "x509-parser",
  "zip",
+]
+
+[[package]]
+name = "traffic-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
 ]
 
 [[package]]
@@ -3313,7 +3361,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "traffic-recording"
+name = "traffic-recorder"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "traffic-model",
+ "traffic-protocol",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-recording-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3353,6 +3419,17 @@ dependencies = [
  "traffic-policy",
  "traffic-value",
  "url",
+]
+
+[[package]]
+name = "traffic-rewrite-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

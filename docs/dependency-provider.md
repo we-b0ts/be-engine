@@ -281,7 +281,8 @@ Replay 的值规则复用现有类型化值 contract，并独立保留 native �
 | `traffic-protocol-http` | Hyper connection driver、响应流模型、body capture 与 content coding |
 | `traffic-protocol-mysql` | MySQL wire、continuation、SQL 解析、录制 FIFO、结果投影与原生响应边界 |
 | `traffic-protocol-redis` | RESP framing、命令解释、录制会话及确认后的订阅状态 |
-| `traffic-recording` | 共用录制时钟与发号 |
+| `traffic-recorder` | 共用录制时钟、发号、捕获队列与持久化 |
+| `traffic-recording-store` | 已封存 Source 的认证读取与派生索引 |
 | `traffic-replay` | 编译事件计划、通用候选索引、有限 claim、请求等待执行、pending 与真实回执 |
 | `traffic-contract` | Scalar/JSON/Protobuf codec、字段契约类型、时间运算与共享身份提案和状态 |
 | `traffic-response-rewrite` | 纯声明式文档改写内核 |

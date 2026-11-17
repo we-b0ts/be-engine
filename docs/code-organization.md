@@ -23,6 +23,28 @@ ownership.
 
 Use a Rust workspace with the root `traffic-e2e` application composing the
 `traffic-e2e`, `backend-rewrite`, and `backend-rewrite-admin` binaries.
+The root `src/` owns the three CLI entrypoints and the public API facade.
+`traffic-e2e-app` owns application state, configuration, protocol adapters,
+installed codecs and policies, Target processes, Replay/E2E evidence,
+recording supervision and rewrite application services. `traffic-engine` owns
+execution lifecycle ordering and interruption dispatch through an injected
+`ExecutionDriver`. `e2e_run/execute/engine_driver` implements that port using
+application services. `traffic-rewrite-core` owns typed workflow state, attempt
+transitions, atomic snapshots and process locks. `WorkflowData` supplies the
+application's serializable records. Rewrite policy, issue classification,
+Source validation, worker feedback and decision history retain their application
+owners. `rewrite/model` binds the core state to those concrete records and
+`rewrite/store` applies application overlays around core storage.
+`traffic-recorder` owns recording clocks, captured events, recording-local
+extensions, capture admission, the bounded writer queue, central ledger,
+output receipts and sealing. It receives the evidence registry and a
+borrowed `CaptureScope` from its host. The queued scope retains the host's
+original activity reservations until persistence completes.
+The production dependency closure of these frameworks and
+`traffic-recording-store` must contain only implementation-independent contracts.
+Application composition supplies concrete protocol, codec and policy providers.
+`tests/framework_dependencies.rs` enforces this boundary across local production
+dependencies, including build and target-specific dependencies.
 Extract libraries incrementally when their responsibility and dependency
 direction are explicit. `traffic-model` owns protocol-independent recording
 identities, ownership and outcomes. `traffic-protocol-mysql` and
@@ -32,8 +54,10 @@ must not depend on the root application, its configuration, `AppState`, or
 event contract; the application owns capture and Replay execution.
 
 `traffic-protocol` owns registration and bounded frame I/O, and the HTTP provider
-owns its native Hyper driver and response stream model. `traffic-recording`
-owns shared recording identities and sequence allocation. `traffic-replay`
+owns its native Hyper driver and response stream model. `traffic-recording-store`
+owns authenticated immutable Source access, record references, derived storage
+and canonical frozen-attribution identities. The writer and its readers share
+the persisted schemas from `traffic-model`. `traffic-replay`
 owns immutable event plans, ordered candidate postings, finite claims, bounded
 pending admissions, shared request waiting, scope/lane candidate selection and
 actual delivery receipts. Its value-rule preparation binds protocol-projected
@@ -187,7 +211,7 @@ signing keys and whole-document comparison for nested values.
 Its `transformation` module binds registered value transformations to a Source-selected
 codec document. Policies receive logical values and return authorized logical paths.
 The executor supplies decoding and delegates rendering to the retained document.
-`traffic-recording::source` owns immutable scope resolution, authenticated file
+`traffic-recording-store::source` owns immutable scope resolution, authenticated file
 stamps, byte-bounded readers, finite record references and paged storage. Native
 index builders enrich these shared locations with protocol metadata.
 Registered evidence adapters project native Source request and response
@@ -1577,7 +1601,9 @@ retain the same responsibility and 1000-line requirements as `src/`.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
 - `record_service` owns the standalone Source/Recorder supervision and recording
-  lifecycle. Its `options` child projects optional Recorder configuration while
+  lifecycle within `traffic-e2e-app`. Its process supervision, interception,
+  gateway coordination and Kubernetes readiness use the application runtime.
+  Its `options` child projects optional Recorder configuration while
   retaining HTTP rules; `coordination` owns optional Redis discovery/leases and
   best-effort address refresh independently of Source and request supervision;
   `api_policy` loads and validates the gateway's startup JSON using SDK route
@@ -1622,7 +1648,9 @@ retain the same responsibility and 1000-line requirements as `src/`.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and
   diagnostics; CLI entry points delegate to it. `command_output` owns shared
   broken-pipe-safe diagnostic output for those library and CLI callers.
-- `lib.rs` owns application wiring, shared state, and crate exports.
+- The root `lib.rs` reexports the application API.
+  `traffic-e2e-app/src/lib.rs` owns application state, bindings and exports.
+  `traffic-engine/src/lib.rs` owns the injected execution lifecycle.
   `replay_exports` owns the public Replay contract façade, separating its growing
   policy/assertion/diagnostic API from application-state composition. Feature
   implementations remain in their owned modules.
