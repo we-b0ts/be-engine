@@ -88,6 +88,7 @@ impl ActiveCaseRegistry {
 
     /// A notification has its own capture lifetime. Without a proven request
     /// correlation it cannot borrow the currently active Case's ownership.
+    #[allow(dead_code)]
     pub(crate) fn unattributed_observation_targets(&self) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
         let observed_case = state.active.first().map(|case| case.case.id);
