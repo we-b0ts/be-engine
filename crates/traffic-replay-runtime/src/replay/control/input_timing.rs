@@ -7,7 +7,7 @@ use crate::replay::control::dependency_tail::RecordedReference;
 use tokio::time::Instant as MonoInstant;
 mod fast;
 mod source;
-pub use traffic_engine::replay::control::input_timing::{Query, connect};
+pub use traffic_engine::replay::control::input_timing::Query;
 
 #[derive(Debug)]
 pub(crate) struct PreparedSource {

@@ -36,6 +36,7 @@ mod attribution;
 mod deferred;
 pub(crate) use traffic_engine::replay::dependencies;
 mod loading;
+#[cfg(test)]
 use traffic_engine::replay::loading_config;
 mod dns;
 mod reconciliation;
@@ -446,8 +447,6 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
     let port = u16::from_be(addr.sin_port);
     Ok(SocketAddr::new(IpAddr::V4(ip), port))
 }
-
-pub(crate) use traffic_engine::replay::recording_evidence;
 
 #[cfg(test)]
 pub(crate) use crate::adapters::ReplayState;

@@ -1,5 +1,4 @@
 //! Finite HTTP uses the application entrypoint and shared registered value execution.
-use super::*;
 use crate::replay::{ReplayConfig, ReplayLifecycleConfig, ReplayRuntime};
 use std::{path::Path, sync::Arc};
 use tokio::{

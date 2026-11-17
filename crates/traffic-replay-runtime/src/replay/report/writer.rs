@@ -1,3 +1,4 @@
+#[cfg(any(test, feature = "test-support"))]
 use super::*;
 pub use traffic_engine::replay::report::writer::*;
 #[cfg(any(test, feature = "test-support"))]

@@ -9,7 +9,6 @@ use traffic_protocol::io::delivery::{DeliveryProgress, PrefixDelivery};
 
 mod source;
 use crate::replay::protocol_runtime::primary_close::SourceStream;
-pub use traffic_engine::replay::control::primary_close::connect;
 
 #[derive(Debug)]
 pub(crate) struct Timeline {

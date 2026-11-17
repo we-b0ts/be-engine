@@ -1,6 +1,8 @@
 //! Historical key declaration and report schema.
 mod config;
-pub(crate) use config::{IdentityField, KeyContract, KeyFormat, Transform};
+pub(crate) use config::{IdentityField, KeyContract};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use config::{KeyFormat, Transform};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

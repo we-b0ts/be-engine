@@ -3,8 +3,12 @@ use crate::protocols::DependencyProviders;
 use crate::replay::{self, ReplayEgressCounterReader, ReplayLifecycleConfig};
 use anyhow::Result;
 use loading::SourceLoader;
-use std::{net::SocketAddr, sync::Arc};
-pub use traffic_engine::{MysqlReplayConfig, ReplayAllowedUnusedHttpConfig, ReplayConfig};
+#[cfg(any(test, feature = "test-support"))]
+use std::net::SocketAddr;
+use std::sync::Arc;
+#[cfg(any(test, feature = "test-support"))]
+pub use traffic_engine::ReplayAllowedUnusedHttpConfig;
+pub use traffic_engine::{MysqlReplayConfig, ReplayConfig};
 pub async fn run_replay(config: ReplayConfig) -> Result<()> {
     run_replay_with_lifecycle(config, ReplayLifecycleConfig::default()).await
 }

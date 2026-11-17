@@ -1,5 +1,4 @@
 //! Generic Replay entrypoint fixtures for finite HTTP assembly tests.
-use super::*;
 use crate::replay::{MysqlReplayConfig, ReplayAllowedUnusedHttpConfig, ReplayRuntime};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;

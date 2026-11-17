@@ -289,10 +289,6 @@ pub(crate) mod http_test_support;
 mod native_http_tests;
 #[cfg(test)]
 mod native_mysql_tests;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use http_test_support::{
-    snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
-};
 
 #[cfg(test)]
 mod native_protocol_tests;

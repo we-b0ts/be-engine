@@ -41,7 +41,6 @@ pub use egress_counter::*;
 pub use exchange::*;
 pub use loading_config::*;
 pub use model::*;
-use policy::ReplayPolicy;
 pub use reconciliation::BatchReconciliation;
 pub use reconciliation::validate_completed_receipt_with;
 pub use report::global_evidence::GlobalDependencyPage;

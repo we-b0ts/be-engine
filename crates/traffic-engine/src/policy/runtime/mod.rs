@@ -155,6 +155,3 @@ pub(crate) use request_contract::discover as discover_dependency_request_candida
 pub(crate) use test_fixture::redis_time::RedisTimeShiftFeedback;
 #[cfg(test)]
 pub(crate) use test_fixture::write_policy as write_policy_fixture;
-
-#[cfg(test)]
-pub(crate) use test_fixture::redis_time::RedisTimeShiftSelector;

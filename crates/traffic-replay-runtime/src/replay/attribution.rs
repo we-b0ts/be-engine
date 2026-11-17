@@ -8,8 +8,7 @@ mod inventory;
 #[cfg(test)]
 mod tests;
 
-pub use traffic_engine::replay::attribution::attribution_scope_key;
-pub use traffic_engine::replay::attribution::{prewarm_attribution_indexes, views};
+use traffic_engine::replay::attribution::views;
 
 pub(super) struct Frozen {
     pub run_value_scopes: BTreeMap<Uuid, Arc<str>>,

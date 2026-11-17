@@ -2,8 +2,6 @@
 use super::*;
 use crate::dependency::observation::{RecordingManifest, SemanticInventory};
 
-pub use traffic_engine::replay::reconciliation::validate_completed_receipt_with;
-
 #[derive(Debug, Clone)]
 pub(super) struct BatchScope {
     source_inventory_id: String,

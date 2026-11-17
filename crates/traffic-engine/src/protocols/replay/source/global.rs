@@ -23,7 +23,6 @@ impl GlobalProjection for Records {
         })
     }
     fn decode(entry: GlobalEntry, source: &Arc<RecordSource>) -> Result<Self::Item> {
-        use traffic_protocol::evidence::RecordSource as _;
         let reference = source.reference(entry.location);
         let record = serde_json::from_value(entry.record)?;
         let record = match record {
