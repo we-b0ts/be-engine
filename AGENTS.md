@@ -8,10 +8,13 @@ traffic to JSONL files, then groups, replays, and
 verifies recorded contracts.
 
 The root `src/` owns three CLI entrypoints and a public API facade.
-`traffic-e2e-app` composes application services from the implementation-independent
-`traffic-engine`, `traffic-rewrite-core`, `traffic-recorder` and
-`traffic-recording-store` libraries, plus installed protocol, codec and policy
-providers. `traffic-e2e` exposes
+`traffic-e2e-app` composes the independent `traffic-rewrite` coordinator and
+`traffic-replay-runtime` session service over shared `traffic-engine` services.
+`traffic-engine` owns recording supervision, E2E execution, configuration and
+immutable evidence adapters. Its concrete protocol, codec and policy bindings
+remain in place during incremental extraction. `traffic-replay`,
+`traffic-rewrite-core`, `traffic-recorder` and `traffic-recording-store` retain
+implementation-independent kernels and contracts. `traffic-e2e` exposes
 the low-level recording, replay, configuration, and diagnostic
 engine; `backend-rewrite` exposes AI-facing rewrite orchestration directly on
 the shared application services; `backend-rewrite-admin` exposes explicit administrator-owned

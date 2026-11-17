@@ -9,7 +9,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed={BUILD_REVISION_ENV}");
     println!("cargo:rerun-if-env-changed=CARGO_MANIFEST_DIR");
     let manifest_root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let repository_root = if manifest_root.ends_with("crates/traffic-e2e-app") {
+    let repository_root = if manifest_root.ends_with("crates/traffic-engine") {
         manifest_root.parent().unwrap().parent().unwrap()
     } else {
         &manifest_root

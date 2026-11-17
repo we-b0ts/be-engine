@@ -69,6 +69,7 @@ enum Command {
 }
 
 pub(crate) fn run() -> Result<()> {
+    traffic_e2e::initialize_application();
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let mut cli = Cli::parse();
     if let Command::Record(options) = &mut cli.command {

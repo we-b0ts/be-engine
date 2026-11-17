@@ -22,7 +22,7 @@ fn framework_production_dependencies_remain_implementation_independent() {
         .map(|package| (package["name"].as_str().unwrap(), package))
         .collect();
     let contracts = BTreeSet::from([
-        "traffic-engine",
+        "traffic-replay",
         "traffic-rewrite-core",
         "traffic-recorder",
         "traffic-recording-store",
@@ -33,7 +33,7 @@ fn framework_production_dependencies_remain_implementation_independent() {
         "traffic-time",
     ]);
     for framework in [
-        "traffic-engine",
+        "traffic-replay",
         "traffic-rewrite-core",
         "traffic-recorder",
         "traffic-recording-store",
@@ -57,6 +57,59 @@ fn framework_production_dependencies_remain_implementation_independent() {
                 let mut dependency_chain = chain.clone();
                 dependency_chain.push(dependency_name);
                 pending.push((dependency_name, dependency_chain));
+            }
+        }
+    }
+}
+
+#[test]
+fn service_libraries_keep_application_composition_above_them() {
+    let output = Command::new(env!("CARGO"))
+        .args(["metadata", "--format-version=1", "--no-deps", "--locked"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    for package in metadata["packages"].as_array().unwrap() {
+        let name = package["name"].as_str().unwrap();
+        if ![
+            "traffic-engine",
+            "traffic-rewrite",
+            "traffic-replay-runtime",
+        ]
+        .contains(&name)
+        {
+            continue;
+        }
+        for dependency in package["dependencies"].as_array().unwrap() {
+            if dependency["kind"] == "dev" {
+                continue;
+            }
+            let dependency = dependency["name"].as_str().unwrap();
+            assert!(
+                !["traffic-e2e", "traffic-e2e-app"].contains(&dependency),
+                "{name} depends on application composition {dependency}"
+            );
+            if ["traffic-rewrite", "traffic-replay-runtime"].contains(&name) {
+                assert!(
+                    !dependency.starts_with("traffic-protocol-")
+                        && !dependency.starts_with("traffic-codec-")
+                        && !dependency.starts_with("traffic-policy-")
+                        && dependency != "traffic-extensions",
+                    "{name} directly installs a concrete implementation {dependency}"
+                );
+            }
+            if name == "traffic-engine" {
+                assert!(
+                    ![
+                        "traffic-rewrite",
+                        "traffic-rewrite-core",
+                        "traffic-replay-runtime"
+                    ]
+                    .contains(&dependency),
+                    "engine services depend on an upper workflow/runtime owner {dependency}"
+                );
             }
         }
     }

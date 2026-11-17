@@ -1,0 +1,118 @@
+//! Signing-key sources. Values are resolved from target startup inputs, never
+//! serialized into plans, policy, command arguments, or diagnostics.
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, ensure};
+
+pub use traffic_jwt::key::SigningKeySource;
+pub(crate) use traffic_jwt::key::{validate_reference, validate_source};
+
+/// Private, immutable key snapshot. It is deliberately neither Debug nor Serialize.
+#[derive(Clone)]
+pub struct ResolvedSigningKey {
+    root: PathBuf,
+    source: SigningKeySource,
+    value: Vec<u8>,
+    witnesses: Vec<(PathBuf, String)>,
+}
+
+impl ResolvedSigningKey {
+    pub(crate) fn resolve(root: &Path, source: &SigningKeySource) -> Result<Self> {
+        Ok(Self {
+            root: root.into(),
+            source: source.clone(),
+            value: resolve_source(root, source)?,
+            witnesses: source_witnesses(root, source)?,
+        })
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.value
+    }
+    pub fn witnesses(&self) -> impl Iterator<Item = &(PathBuf, String)> {
+        self.witnesses.iter()
+    }
+    pub fn ensure_current(&self) -> Result<()> {
+        ensure!(
+            resolve_source(&self.root, &self.source)? == self.value,
+            "JWT signing input changed after planning; obtain fresh evidence and plan again"
+        );
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(crate) fn for_test(value: &[u8]) -> Self {
+        Self {
+            root: PathBuf::new(),
+            source: SigningKeySource::TargetEnv {
+                name: "TEST_KEY".into(),
+            },
+            value: value.into(),
+            witnesses: vec![],
+        }
+    }
+}
+
+pub fn resolve_source(root: &Path, source: &SigningKeySource) -> Result<Vec<u8>> {
+    validate_source(source)?;
+    let value = match source {
+        SigningKeySource::TargetEnv { name } => {
+            crate::startup::startup_environment_value(root, name).map_err(|_| anyhow::anyhow!("cannot resolve JWT signing key from target startup environment"))?.context("JWT signing key is absent from the effective target environment; explicitly select a mounted file if the application loads dotenv itself")?
+        }
+        SigningKeySource::TargetFile { path, field } => {
+            let (_, config) = crate::e2e_run::resolve_project(root)?;
+            let snapshot = crate::startup::load_startup_snapshot(root, &config.target_startup)?;
+            ensure!(
+                snapshot
+                    .mounts()
+                    .iter()
+                    .any(|m| !m.writable && path.starts_with(&m.path)),
+                "JWT key file must be within a declared read-only startup mount"
+            );
+            let host = crate::startup::startup_mount_source(root, path)?;
+            let entries = dotenvy::from_path_iter(&host)
+                .map_err(|_| anyhow::anyhow!("cannot parse JWT startup key file"))?;
+            let mut found = None;
+            for entry in entries {
+                let (name, value) =
+                    entry.map_err(|_| anyhow::anyhow!("invalid JWT startup key file entry"))?;
+                if name == *field {
+                    ensure!(found.is_none(), "duplicate JWT key field in startup file");
+                    found = Some(value);
+                }
+            }
+            found.context("JWT signing key field is absent from startup file")?
+        }
+    };
+    ensure!(!value.trim().is_empty(), "JWT signing key is empty");
+    Ok(value.into_bytes())
+}
+
+fn source_witnesses(root: &Path, source: &SigningKeySource) -> Result<Vec<(PathBuf, String)>> {
+    let paths = match source {
+        SigningKeySource::TargetEnv { .. } => {
+            crate::startup::startup_environment_witness_paths(root)?
+        }
+        SigningKeySource::TargetFile { path, .. } => vec![
+            root.join(crate::repository::LOCAL_STARTUP_MANIFEST_PATH),
+            crate::startup::startup_mount_source(root, path)?,
+        ],
+    };
+    paths
+        .into_iter()
+        .map(|path| {
+            use sha2::{Digest, Sha256};
+            let metadata = std::fs::symlink_metadata(&path)?;
+            ensure!(
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.len() <= 16 * 1024 * 1024,
+                "signing input witness must be a bounded regular file"
+            );
+            let bytes = std::fs::read(&path)?;
+            ensure!(
+                bytes.len() <= 16 * 1024 * 1024,
+                "signing input witness exceeds bound"
+            );
+            Ok((path, format!("sha256:{:x}", Sha256::digest(bytes))))
+        })
+        .collect()
+}

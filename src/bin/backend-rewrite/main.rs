@@ -62,6 +62,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    traffic_e2e::initialize_application();
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let cli = Cli::parse();
     let log_filter = match log_filter(&cli.log_level) {

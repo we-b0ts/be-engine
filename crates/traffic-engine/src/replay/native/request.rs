@@ -1,0 +1,93 @@
+//! Native requests enter the common observe/select/wait/commit execution loop.
+use super::*;
+use traffic_contract::{compare::Comparison, identity::IdentityDecision};
+use traffic_protocol::message::ProtocolMessage;
+
+pub struct Request {
+    pub protocol: ProtocolId,
+    pub endpoint: Endpoint,
+    pub message: Arc<dyn ProtocolMessage>,
+    pub observed: DateTime<Utc>,
+    pub bytes: usize,
+    pub diagnostics: diagnosis::CandidateDiagnostics,
+}
+
+pub struct Matched {
+    pub index: usize,
+    pub ticket: admission::ClaimTicket,
+    pub observed: DateTime<Utc>,
+    pub delay: std::time::Duration,
+    pub case: Option<String>,
+    pub epoch: u64,
+    pub run_owned: bool,
+}
+
+pub struct Rejected {
+    pub reason: String,
+    pub blocker: Option<usize>,
+}
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.reason)
+    }
+}
+impl std::fmt::Debug for Rejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+impl std::error::Error for Rejected {}
+impl From<anyhow::Error> for Rejected {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            reason: error.to_string(),
+            blocker: None,
+        }
+    }
+}
+
+pub fn identity(
+    owner: &dyn policy::ValueRuleHost,
+    inventory: &Inventory,
+    index: usize,
+    comparison: &Comparison,
+) -> Result<IdentityDecision> {
+    let scope = inventory.scope(index);
+    owner.preview_identity_pairs(
+        &scope,
+        &comparison.identity_pairs(),
+        inventory.core.exchanges[index].source.source == ReplaySource::Case,
+    )
+}
+
+impl Inventory {
+    pub fn render_response(
+        &self,
+        index: usize,
+        observed: DateTime<Utc>,
+    ) -> Result<Box<dyn traffic_protocol::output::OutputStream>> {
+        let exchange = &self.core.exchanges[index];
+        let scope = self.scope(index);
+        let clocks = self.clocks(index, observed, true);
+        let rendered = exchange.response.render_delivery_with_documents(
+            clocks,
+            self.contracts.metadata(),
+            &exchange.delivery,
+            |selected| {
+                self.contracts
+                    .identity_deliveries(&scope, selected)
+                    .map(|(values, _)| values)
+            },
+            |source, delivered| {
+                self.contracts
+                    .translate_document(&scope, source, delivered, clocks)
+            },
+        )?;
+        let proposed = identity(self.contracts.as_ref(), self, index, &rendered.comparison)?;
+        let response = exchange.native.response.output(&rendered.values)?;
+        self.contracts
+            .commit_comparison(rendered.comparison, proposed)?;
+        Ok(response)
+    }
+}

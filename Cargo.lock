@@ -2914,6 +2914,16 @@ dependencies = [
 name = "traffic-e2e-app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "traffic-engine",
+ "traffic-replay-runtime",
+ "traffic-rewrite",
+]
+
+[[package]]
+name = "traffic-engine"
+version = "0.1.0"
+dependencies = [
  "aes-gcm",
  "anyhow",
  "base64",
@@ -2966,7 +2976,6 @@ dependencies = [
  "traffic-codec-json",
  "traffic-codec-protobuf",
  "traffic-contract",
- "traffic-engine",
  "traffic-extensions",
  "traffic-jwt",
  "traffic-model",
@@ -2987,21 +2996,12 @@ dependencies = [
  "traffic-recording-store",
  "traffic-replay",
  "traffic-response-rewrite",
- "traffic-rewrite-core",
  "traffic-value",
  "url",
  "uuid",
  "webpki-roots 1.0.8",
  "x509-parser",
  "zip",
-]
-
-[[package]]
-name = "traffic-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "tokio",
 ]
 
 [[package]]
@@ -3408,6 +3408,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "traffic-replay-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "futures-util",
+ "hyper",
+ "libc",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tracing",
+ "traffic-contract",
+ "traffic-engine",
+ "traffic-model",
+ "traffic-policy-value",
+ "traffic-protocol",
+ "traffic-protocol-fixture",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-replay",
+ "traffic-value",
+ "uuid",
+]
+
+[[package]]
 name = "traffic-response-rewrite"
 version = "0.1.0"
 dependencies = [
@@ -3419,6 +3452,42 @@ dependencies = [
  "traffic-policy",
  "traffic-value",
  "url",
+]
+
+[[package]]
+name = "traffic-rewrite"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64",
+ "chrono",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "jsonwebtoken",
+ "libc",
+ "md-5",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "syn 2.0.118",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "traffic-contract",
+ "traffic-engine",
+ "traffic-policy",
+ "traffic-protocol",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-recording-store",
+ "traffic-replay-runtime",
+ "traffic-rewrite-core",
+ "traffic-value",
+ "uuid",
 ]
 
 [[package]]
