@@ -38,13 +38,13 @@ pub(super) fn decode(event: &Value, payload: &[u8], side: MessageSide) -> Result
                 .map(str::parse)
                 .transpose()?,
         },
-        request: Arc::new(RequestMessage {
+        request: Some(Arc::new(RequestMessage {
             command: request.command,
             sql: request.sql,
             params: request.params,
             database: event["database"].as_str().map(str::to_owned),
             username: event["username"].as_str().map(str::to_owned),
-        }),
+        })),
         response,
     })
 }
@@ -66,8 +66,12 @@ mod tests {
         for side in [MessageSide::Request, MessageSide::Response] {
             let payload = crate::witness::source_payload(&event, side).unwrap();
             let decoded = Native.decode_evidence(&event, &payload, side).unwrap();
-            let before = exchange.request.project().unwrap();
-            let after = decoded.request.project().unwrap();
+            let before = exchange
+                .request()
+                .expect("native request")
+                .project()
+                .unwrap();
+            let after = decoded.request.as_ref().unwrap().project().unwrap();
             assert_eq!(before.structure, after.structure);
             assert!(
                 before

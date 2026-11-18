@@ -58,6 +58,8 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
                 endpoint: &self.endpoint,
                 active_case: observation.case.as_deref(),
                 request: self.message.as_ref(),
+                session: self.session,
+                lane: self.lane.as_deref(),
                 metadata: native.contracts.metadata(),
             },
             |exchange| native.clocks(exchange.index, self.observed, false),
@@ -104,7 +106,10 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         )?;
         let delay = native.core.exchanges[index].native.response_delay;
         let run_owned = native.core.exchanges[index].source.source.is_run_owned();
-        let ticket = state.native.core.claim(index)?;
+        let ticket = match self.session {
+            Some(owner) => state.native.core.claim_bound(index, owner)?,
+            None => state.native.core.claim(index)?,
+        };
         if let Err(error) = state
             .native
             .contracts

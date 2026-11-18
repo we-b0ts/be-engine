@@ -28,7 +28,7 @@ pub(super) fn effective_with_evidence(
     evidence: &traffic_protocol::evidence::EvidenceRegistry,
 ) -> Result<SemanticInventory> {
     let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
-        "mandatory-scope-coverage/v4",
+        "mandatory-scope-coverage/v5",
         evidence.revisions(),
         manifest,
         decisions,
@@ -36,7 +36,7 @@ pub(super) fn effective_with_evidence(
     let directory = crate::dependency_index::store::cache_directory(root);
     crate::dependency_index::store::private_directory(&directory)?;
     let cache = directory.join(format!(
-        "semantic-inventory-v4-{}.json",
+        "semantic-inventory-v5-{}.json",
         key.trim_start_matches("sha256:")
     ));
     if let Ok(inventory) = crate::dependency_index::store::read_json::<SemanticInventory>(&cache)
@@ -64,13 +64,13 @@ pub(super) fn effective_with_evidence(
         if !crate::dependency_index::proof::is_evidence(&value) {
             continue;
         }
-        let selector = crate::dependency_index::proof::selector(&value);
+        let selector = evidence.proof_selector(&value);
         let raw = selector
             .get("capture")
             .context("current Source fact lacks capture metadata")?;
         let capture: CaptureMetadata = serde_json::from_value(raw.clone())?;
         ensure!(
-            !raw_tcp_has_payload(&selector) || capture.semantic_required,
+            !raw_tcp_has_payload(&value) || capture.semantic_required,
             "unparsed TCP payload cannot be classified as protocol control"
         );
         if !capture.semantic_required {
@@ -117,7 +117,7 @@ pub(super) fn effective_with_evidence(
         captured.observe_mandatory(
             &selector,
             &capture.attribution,
-            crate::protocols::evidence::supports(&selector, &capture.attribution, evidence),
+            crate::protocols::evidence::supports(&value, &capture.attribution, evidence),
         );
         let owner = decisions
             .get(&capture.exchange_id)
@@ -125,7 +125,7 @@ pub(super) fn effective_with_evidence(
         inventory.observe_mandatory(
             &selector,
             owner,
-            crate::protocols::evidence::supports(&selector, owner, evidence),
+            crate::protocols::evidence::supports(&value, owner, evidence),
         );
     }
     ensure!(

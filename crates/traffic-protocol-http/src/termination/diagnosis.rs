@@ -42,7 +42,7 @@ impl IoDiagnosis {
             .values()
             .any(|failure| {
                 failure.at >= started
-                    && crate::dependency::termination::is_connection_termination(failure.kind)
+                    && traffic_protocol::transport::is_connection_termination(failure.kind)
             })
     }
 
@@ -94,7 +94,7 @@ impl ClientTermination {
     pub fn diagnosis(&self, started: Instant) -> serde_json::Value {
         serde_json::json!({
             "engine_stopped": self.engine_stopped(),
-            "client_first": observed_since(self.observation.observed(crate::dependency::TerminationSide::Client), started),
+            "client_first": observed_since(self.observation.observed(traffic_model::TerminationSide::Client), started),
             "client_connection_end": observed_since(self.cancelled(), started),
             "io_errors": self.io_diagnosis.since(started),
         })

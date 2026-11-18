@@ -187,7 +187,7 @@ impl Native {
                     .and_then(Value::as_u64)
                     .unwrap_or_default(),
             ),
-            request: Arc::new(request),
+            input: traffic_protocol::connection::RecordedInput::Request(Arc::new(request)),
             response: Arc::new(response),
         }))
     }

@@ -79,6 +79,33 @@ impl Host {
 }
 
 impl CaptureHost for Host {
+    fn begin_message(
+        &self,
+        reference: ProtocolRef,
+    ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>> {
+        Box::pin(async move {
+            ensure!(
+                reference.protocol() == self.protocol.as_str(),
+                "native message reference changed protocol"
+            );
+            let targets = self
+                .state
+                .inner
+                .active_cases
+                .current_targets_for_message(reference.clone());
+            ensure!(
+                targets.capture.is_some(),
+                "recording capture admission is closed"
+            );
+            Ok(Some(Box::new(Exchange {
+                state: self.state.clone(),
+                protocol: self.protocol,
+                reference,
+                targets,
+            }) as Box<dyn CaptureExchange>))
+        })
+    }
+
     fn transport(&self) -> CaptureTransport {
         self.transport.clone()
     }

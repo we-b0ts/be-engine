@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub(super) const VERSION: u32 = 5;
+pub(super) const VERSION: u32 = 6;
 pub const FRAGMENT: &str = ".dependency-index.json";
 
 pub use traffic_recording_store::source::{FileStamp, RecordLocation};
@@ -13,12 +13,13 @@ pub struct IndexedRecord {
     pub location: RecordLocation,
     pub key: String,
     pub connection_id: Option<String>,
+    #[serde(default)]
+    pub summary: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedMysqlRecord {
     pub location: RecordLocation,
-    /// Compact endpoint, SQL fingerprint and prefilter facts, without query text or rows.
     pub summary: serde_json::Value,
 }
 
@@ -39,16 +40,42 @@ pub struct FileIndex {
     pub events: usize,
     pub endpoints: Vec<Endpoint>,
     pub metadata: Vec<(usize, serde_json::Value)>,
-    pub http: Vec<IndexedRecord>,
-    pub redis: Vec<IndexedRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mysql: Option<Vec<IndexedMysqlRecord>>,
-    pub redis_lanes: BTreeMap<String, usize>,
+    pub indexes: BTreeMap<String, Vec<IndexedRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proof_records: Option<Vec<ProofRecord>>,
 }
 
 impl FileIndex {
+    pub fn records(&self, index: &str) -> &[IndexedRecord] {
+        self.indexes
+            .get(index)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+    pub fn mysql_records(&self) -> Vec<IndexedMysqlRecord> {
+        self.records("mysql")
+            .iter()
+            .map(|record| IndexedMysqlRecord {
+                location: record.location.clone(),
+                summary: record.summary.clone(),
+            })
+            .collect()
+    }
+    pub fn set_mysql_records(&mut self, records: Vec<IndexedMysqlRecord>) {
+        self.indexes.insert(
+            "mysql".into(),
+            records
+                .into_iter()
+                .map(|record| IndexedRecord {
+                    location: record.location,
+                    summary: record.summary,
+                    key: String::new(),
+                    connection_id: None,
+                })
+                .collect(),
+        );
+    }
+
     pub fn register_endpoint(&mut self, host: String, port: u16, protocol: String) {
         let endpoint = Endpoint {
             host,

@@ -106,6 +106,12 @@ pub fn default_providers() -> Arc<DependencyProviders> {
         providers
             .register_evidence("transport", Arc::new(evidence::TransportEvidence))
             .expect("unique transport evidence adapter");
+        providers
+            .register_evidence_index_fallback(
+                "historical",
+                Arc::new(evidence::historical::Historical),
+            )
+            .expect("unique historical index adapter");
         for protocol in replay::report::codecs::HISTORICAL_PROTOCOLS {
             providers
                 .register_report_codec(

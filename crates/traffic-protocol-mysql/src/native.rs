@@ -34,7 +34,11 @@ impl NativeProtocol for Native {
     }
 
     fn report_summary(&self, exchange: &RecordedExchange) -> Result<Value> {
-        Ok(exchange.request.project()?.structure)
+        Ok(exchange
+            .request()
+            .expect("native request")
+            .project()?
+            .structure)
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>> {
@@ -75,13 +79,13 @@ impl NativeProtocol for Native {
             endpoint,
             lane: Some(connection.to_string()),
             response_delay: Duration::from_millis(record.duration_ms),
-            request: Arc::new(RequestMessage {
+            input: traffic_protocol::connection::RecordedInput::Request(Arc::new(RequestMessage {
                 command: record.command,
                 sql: record.sql,
                 params: record.params,
                 database: record.database,
                 username: record.username,
-            }),
+            })),
             response: Arc::new(response),
         }))
     }

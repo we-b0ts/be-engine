@@ -108,7 +108,8 @@ impl LedgerWriter {
             "recording dependency ledger is already sealed"
         );
         match &record.event {
-            LifecycleRecord::Started { exchange_id, .. } => anyhow::ensure!(
+            LifecycleRecord::Started { exchange_id, .. }
+            | LifecycleRecord::MessageStarted { exchange_id, .. } => anyhow::ensure!(
                 self.lifecycle.insert(*exchange_id, false).is_none(),
                 "duplicate physical dependency admission"
             ),

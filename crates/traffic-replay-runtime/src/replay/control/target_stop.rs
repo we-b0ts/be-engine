@@ -58,5 +58,6 @@ pub(super) async fn confirm<P: ReplayProtocolSet>(
         "stopped Target requires the active Case"
     );
     state.target_session_stopped = true;
+    state.native.core.lifecycle.notify_waiters();
     Ok(true)
 }

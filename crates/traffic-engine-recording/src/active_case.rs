@@ -442,28 +442,42 @@ impl ActiveCaseRegistry {
     }
 
     pub fn current_targets_for_event(&self) -> DependencyTargets {
-        self.targets_for_request(false, false)
+        self.targets_for_request(false, false, false)
     }
 
     #[allow(dead_code)]
     pub fn current_targets_for_request_with_tail(&self, track_tail: bool) -> DependencyTargets {
-        self.targets_for_request(track_tail, true)
+        self.targets_for_request(track_tail, true, false)
     }
 
     pub fn current_targets_for_http_request(&self, track_tail: bool) -> DependencyTargets {
-        self.targets_for_request(track_tail, true)
+        self.targets_for_request(track_tail, true, false)
     }
 
     pub fn current_targets_for_start(
         &self,
         protocol: crate::dependency::observation::ProtocolRef,
     ) -> DependencyTargets {
-        let targets = self.targets_for_request(true, true);
+        let targets = self.targets_for_request(true, true, false);
         targets.bind_protocol(protocol);
         targets
     }
 
-    fn targets_for_request(&self, track_tail: bool, start_capture: bool) -> DependencyTargets {
+    pub fn current_targets_for_message(
+        &self,
+        reference: crate::dependency::observation::ProtocolRef,
+    ) -> DependencyTargets {
+        let targets = self.targets_for_request(true, true, true);
+        targets.bind_protocol(reference);
+        targets
+    }
+
+    fn targets_for_request(
+        &self,
+        track_tail: bool,
+        start_capture: bool,
+        message: bool,
+    ) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
         let active_count = state.active.len();
         let (cases, ambiguous_active_cases, mut reservations) = match state.active.as_slice() {
@@ -488,7 +502,15 @@ impl ActiveCaseRegistry {
         let capture = start_capture
             .then(|| {
                 self.capture.as_ref().and_then(|registry| {
-                    registry.begin(phase, observed_case, cases.first().map(|(case, _)| case.id))
+                    if message {
+                        registry.begin_message(
+                            phase,
+                            observed_case,
+                            cases.first().map(|(case, _)| case.id),
+                        )
+                    } else {
+                        registry.begin(phase, observed_case, cases.first().map(|(case, _)| case.id))
+                    }
                 })
             })
             .flatten();

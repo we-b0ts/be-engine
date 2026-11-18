@@ -5,6 +5,7 @@ use crate::observation::{NativeSummaries, NativeSummary, RecordingSummary, Traff
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use traffic_model::recording::ProtocolRef;
+pub mod index;
 mod payload;
 #[cfg(test)]
 mod payload_tests;
@@ -19,7 +20,7 @@ pub use timing::SourceTiming;
 pub use value::{ValueEvidence, ValueObservation, ValueQuery, ValueReader};
 
 pub struct MessageEvidence {
-    pub request: Arc<dyn crate::message::ProtocolMessage>,
+    pub request: Option<Arc<dyn crate::message::ProtocolMessage>>,
     pub response: Option<Arc<dyn crate::message::ProtocolMessage>>,
     pub timing: SourceTiming,
 }
@@ -39,6 +40,18 @@ pub trait RecordSource {
 
 pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
+    fn proof_selector(&self, event: &Value) -> Value {
+        serde_json::json!({"event_type":event["event_type"], "capture":event["capture"], "capture_complete":event["capture_complete"]})
+    }
+    fn capture_complete(&self, _event: &Value) -> bool {
+        true
+    }
+    fn lookup_projection(&self, event: &Value) -> Result<index::IndexProjection> {
+        self.index_projection(event)
+    }
+    fn index_projection(&self, event: &Value) -> Result<index::IndexProjection> {
+        Ok(index::IndexProjection::record(event.clone()))
+    }
     fn event_types(&self) -> &'static [&'static str];
     fn discovery_annotations(
         &self,
@@ -146,6 +159,7 @@ struct Registration {
 #[derive(Clone, Default)]
 pub struct EvidenceRegistry {
     registrations: Vec<Registration>,
+    index_fallbacks: Vec<Registration>,
     events: BTreeMap<&'static str, usize>,
     summaries: BTreeMap<&'static str, usize>,
 }
@@ -157,6 +171,89 @@ impl std::fmt::Debug for EvidenceRegistry {
 }
 
 impl EvidenceRegistry {
+    /// Read-only historical projections never reserve executable event names.
+    pub fn register_index_fallback(
+        &mut self,
+        name: &str,
+        adapter: Arc<dyn EvidenceAdapter>,
+    ) -> Result<()> {
+        ensure!(
+            !name.is_empty() && !adapter.schema().is_empty(),
+            "index adapter identity is empty"
+        );
+        ensure!(
+            self.registrations
+                .iter()
+                .chain(&self.index_fallbacks)
+                .all(|entry| entry.name != name),
+            "evidence adapter is already registered"
+        );
+        for kind in adapter.event_types() {
+            ensure!(
+                !kind.is_empty()
+                    && self
+                        .index_fallbacks
+                        .iter()
+                        .all(|entry| !entry.adapter.event_types().contains(kind)),
+                "index fallback event type is empty or already registered"
+            );
+        }
+        self.index_fallbacks.push(Registration {
+            name: name.into(),
+            adapter,
+        });
+        Ok(())
+    }
+
+    fn index_adapter(&self, event: &Value) -> Option<&dyn EvidenceAdapter> {
+        let kind = event["event_type"].as_str()?;
+        self.events
+            .get(kind)
+            .map(|index| &self.registrations[*index])
+            .or_else(|| {
+                self.index_fallbacks
+                    .iter()
+                    .find(|entry| entry.adapter.event_types().contains(&kind))
+            })
+            .map(|entry| entry.adapter.as_ref())
+    }
+
+    pub fn capture_complete(&self, event: &Value) -> bool {
+        event["capture_complete"] != false
+            && event["capture_incomplete"] != true
+            && event["capture_failure"] != true
+            && event["_capture_complete"] != false
+            && self
+                .index_adapter(event)
+                .is_none_or(|adapter| adapter.capture_complete(event))
+    }
+    pub fn proof_selector(&self, event: &Value) -> Value {
+        let mut selected = match self.index_adapter(event) {
+            Some(adapter) => adapter.proof_selector(event),
+            None => {
+                serde_json::json!({"event_type":event["event_type"],"capture":event["capture"]})
+            }
+        };
+        if let Some(fields) = selected.as_object_mut() {
+            fields.insert(
+                "_capture_complete".into(),
+                self.capture_complete(event).into(),
+            );
+        }
+        selected
+    }
+    pub fn lookup_projection(&self, event: &Value) -> Result<index::IndexProjection> {
+        match self.index_adapter(event) {
+            Some(adapter) => adapter.lookup_projection(event),
+            None => Ok(index::IndexProjection::record(event.clone())),
+        }
+    }
+    pub fn index_projection(&self, event: &Value) -> Result<index::IndexProjection> {
+        match self.index_adapter(event) {
+            Some(adapter) => adapter.index_projection(event),
+            None => index::compact_unknown(event),
+        }
+    }
     pub fn discovery_annotations(
         &self,
         event: &Value,
@@ -295,7 +392,10 @@ impl EvidenceRegistry {
             "evidence adapter schema is empty"
         );
         ensure!(
-            self.registrations.iter().all(|entry| entry.name != name),
+            self.registrations
+                .iter()
+                .chain(&self.index_fallbacks)
+                .all(|entry| entry.name != name),
             "evidence adapter is already registered"
         );
         let mut events = self.events.clone();
@@ -344,7 +444,10 @@ impl EvidenceRegistry {
         name: &str,
         adapter: Option<Arc<dyn EvidenceAdapter>>,
     ) -> Result<()> {
-        let mut replacement = Self::default();
+        let mut replacement = Self {
+            index_fallbacks: self.index_fallbacks.clone(),
+            ..Self::default()
+        };
         for entry in &self.registrations {
             if entry.name != old_name {
                 replacement.register(&entry.name, entry.adapter.clone())?;
@@ -379,6 +482,7 @@ impl EvidenceRegistry {
     pub fn revisions(&self) -> BTreeMap<&str, &str> {
         self.registrations
             .iter()
+            .chain(&self.index_fallbacks)
             .map(|entry| (entry.name.as_str(), entry.adapter.schema()))
             .collect()
     }

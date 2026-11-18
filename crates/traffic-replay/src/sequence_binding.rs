@@ -82,6 +82,43 @@ impl SequenceBinding {
         }
     }
 
+    pub fn expected_messages(&self, source: crate::ReplaySource) -> Option<Vec<usize>> {
+        if source == crate::ReplaySource::Case {
+            self.runtime.as_ref().map(|runtime| {
+                runtime
+                    .expected()
+                    .filter(|event| event.kind == EventKind::Message)
+                    .and_then(|event| self.positions.get(&event.dependency_sequence).copied())
+                    .into_iter()
+                    .collect()
+            })
+        } else {
+            self.run.as_ref().map(|run| {
+                run.runtimes
+                    .iter()
+                    .filter_map(|runtime| {
+                        let event = runtime.expected()?;
+                        (event.kind == EventKind::Message)
+                            .then(|| run.positions.get(&event.dependency_sequence).copied())
+                            .flatten()
+                    })
+                    .collect()
+            })
+        }
+    }
+
+    pub fn subscriptions(&self) -> Vec<tokio::sync::watch::Receiver<u64>> {
+        self.runtimes
+            .iter()
+            .map(|runtime| runtime.subscribe())
+            .chain(
+                self.run
+                    .iter()
+                    .flat_map(|run| run.runtimes.iter().map(|runtime| runtime.subscribe())),
+            )
+            .collect()
+    }
+
     pub fn attach_run(&mut self, run: SequenceBinding) {
         self.run = Some(Box::new(run));
     }

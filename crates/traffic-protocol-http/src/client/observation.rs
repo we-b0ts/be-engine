@@ -1,8 +1,4 @@
 //! Bind each pooled physical connection to independent upstream observations.
-use crate::dependency::{
-    TerminationSide,
-    termination::{ConnectionControl, ConnectionTermination, ObservedIo, ObservedTermination},
-};
 use anyhow::{Context as _, Result};
 use bytes::Bytes;
 use http_body_util::Full;
@@ -24,7 +20,12 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::TcpStream,
 };
+use tokio_rustls::rustls;
 use tower_service::Service;
+use traffic_model::TerminationSide;
+use traffic_protocol::transport::{
+    ConnectionControl, ConnectionTermination, ObservedIo, ObservedTermination,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct UpstreamTermination(pub ConnectionTermination);
@@ -135,7 +136,7 @@ impl std::fmt::Display for UpstreamFailure {
 }
 
 pub async fn send_observed(
-    client: &crate::ProxyClient,
+    client: &super::ProxyClient,
     mut request: Request<Full<Bytes>>,
     started: Instant,
 ) -> Result<Response<Incoming>, UpstreamFailure> {

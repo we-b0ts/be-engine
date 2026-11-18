@@ -8,22 +8,22 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::{FileStamp, PageManifest, PageWriter, Paged, RecordLocation, RecordStream, store};
-pub use recording::seal_recording_scopes;
+pub use recording::{seal_recording_scopes, seal_recording_scopes_with_evidence};
 
 pub const GLOBAL_FRAGMENT: &str = ".global-replay-index.json";
-const VERSION: u32 = 7;
+const VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalEntry {
     pub location: RecordLocation,
     pub record: Value,
-    pub mysql_row_shape: Option<(usize, bool)>,
+    #[serde(default)]
+    pub native: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,19 +33,14 @@ pub struct NotificationEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub ordinal: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_echo: Option<[u8; 32]>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_request: Option<(Vec<u8>, crate::redis::socketio_rpc::Identity)>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_namespace: Option<String>,
+    #[serde(default)]
+    pub native: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationLane {
     pub record: Value,
-    pub kind: u8,
-    pub subject: Vec<u8>,
+    pub identity: Value,
     pub pages: PageManifest,
 }
 
@@ -56,12 +51,12 @@ pub struct GlobalIndex {
     pub sha256: String,
     pub records: PageManifest,
     pub notifications: Vec<NotificationLane>,
+    pub providers: BTreeMap<String, String>,
 }
 
 struct LaneBuilder {
     record: Value,
-    kind: u8,
-    subject: Vec<u8>,
+    identity: Value,
     writer: PageWriter<NotificationEntry>,
 }
 
@@ -69,7 +64,8 @@ pub struct GlobalBuilder {
     root: PathBuf,
     stamp: FileStamp,
     records: PageWriter<GlobalEntry>,
-    lanes: BTreeMap<(String, u64), LaneBuilder>,
+    lanes: BTreeMap<Vec<u8>, LaneBuilder>,
+    evidence: traffic_protocol::evidence::EvidenceRegistry,
     notification_count: usize,
     offset: u64,
     hash: Sha256,
@@ -78,7 +74,20 @@ pub struct GlobalBuilder {
 
 impl GlobalBuilder {
     pub fn new(root: &Path, stamp: FileStamp) -> Result<Self> {
+        Self::with_evidence(
+            root,
+            stamp,
+            crate::protocols::default_providers().evidence().clone(),
+        )
+    }
+
+    pub fn with_evidence(
+        root: &Path,
+        stamp: FileStamp,
+        evidence: traffic_protocol::evidence::EvidenceRegistry,
+    ) -> Result<Self> {
         Ok(Self {
+            evidence,
             root: root.to_owned(),
             stamp,
             records: PageWriter::new_in(&root.join(".global-replay-pages"))?,
@@ -98,167 +107,42 @@ impl GlobalBuilder {
     ) -> Result<()> {
         self.hash.update(raw);
         self.offset += raw.len() as u64;
-        let Some(mut record) = record else {
+        let Some(record) = record else {
             return Ok(());
         };
-        if self.notification(&record, &location)? {
-            return Ok(());
-        }
-        let mysql_row_shape = if record["event_type"] == "mysql_exchange" {
-            let columns = record["response"]["columns"].as_array().map_or(0, Vec::len);
-            let shape = record["response"]["rows"].as_array().map(|rows| {
-                (
-                    rows.len(),
-                    rows.iter()
-                        .all(|row| row.as_array().is_some_and(|row| row.len() == columns)),
-                )
-            });
-            if let Some(rows) = record.pointer_mut("/response/rows") {
-                *rows = Value::Array(Vec::new());
-            }
-            shape
-        } else {
-            None
-        };
-        match record["event_type"].as_str() {
-            Some("redis_exchange")
-                if !matches!(
-                    record["command"].as_str(),
-                    Some(
-                        "SUBSCRIBE"
-                            | "PSUBSCRIBE"
-                            | "SSUBSCRIBE"
-                            | "UNSUBSCRIBE"
-                            | "PUNSUBSCRIBE"
-                            | "SUNSUBSCRIBE"
-                    )
-                ) =>
-            {
-                erase_data(&mut record["response"])
-            }
-            Some("memcached_exchange") => {
-                if let Some(frames) = record["response_frames"].as_array_mut() {
-                    for frame in frames {
-                        erase_data(frame);
-                    }
-                }
-            }
-            Some("motan_exchange") => erase_data(&mut record["response"]),
-            Some("http_exchange") => erase_data(&mut record["response_body"]),
-            Some("kafka_produce" | "kafka_delivery") => {
-                let captures = [&record["key"], &record["value"]].into_iter().chain(
-                    record["headers"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .map(|header| &header["value"]),
+        let owner = self.evidence.owner(&record).map(ToOwned::to_owned);
+        let projection = self.evidence.index_projection(&record)?;
+        if let Some(stream) = projection.stream {
+            let key = serde_json::to_vec(&(owner, &stream.identity))?;
+            if !self.lanes.contains_key(&key) {
+                self.lanes.insert(
+                    key.clone(),
+                    LaneBuilder {
+                        record: projection.record,
+                        identity: stream.identity,
+                        writer: PageWriter::new_in(&self.root.join(".global-replay-pages"))?,
+                    },
                 );
-                if captures.into_iter().all(safe_capture) {
-                    record["key"] = Value::Null;
-                    record["value"] = Value::Null;
-                    record["headers"] = Value::Array(Vec::new());
-                }
             }
-            Some("redis_pub_sub_push") => erase_data(&mut record["response"]),
-            _ => {}
+            self.lanes
+                .get_mut(&key)
+                .expect("inserted native lane")
+                .writer
+                .push(NotificationEntry {
+                    location,
+                    duration_ms: stream.duration_ms,
+                    timestamp: stream.timestamp,
+                    ordinal: self.notification_count,
+                    native: stream.metadata,
+                })?;
+            self.notification_count += 1;
+            return Ok(());
         }
         self.records.push(GlobalEntry {
             location,
-            record,
-            mysql_row_shape,
+            record: projection.record,
+            native: projection.metadata,
         })
-    }
-
-    fn notification(&mut self, record: &Value, location: &RecordLocation) -> Result<bool> {
-        if record["event_type"] != "redis_pub_sub_push"
-            || !record["rpc_request"].is_null()
-            || record["replay_safe"] != true
-            || record["response"]["truncated"] == true
-        {
-            return Ok(false);
-        }
-        let (Some(connection), Some(sequence), Some(duration_ms)) = (
-            record["connection_id"].as_str(),
-            record["subscription_sequence"].as_u64(),
-            record["duration_ms"].as_u64(),
-        ) else {
-            return Ok(false);
-        };
-        if sequence == 0 {
-            return Ok(false);
-        }
-        let capture = &record["response"];
-        let Some(data) = capture["data"].as_str() else {
-            return Ok(false);
-        };
-        let raw = match capture["encoding"].as_str() {
-            Some("base64") => match base64::engine::general_purpose::STANDARD.decode(data) {
-                Ok(raw) => raw,
-                Err(_) => return Ok(false),
-            },
-            Some("utf8") => data.as_bytes().to_vec(),
-            _ => return Ok(false),
-        };
-        if raw.len() > 64 * 1024 * 1024 {
-            return Ok(false);
-        }
-        let frame = match crate::redis::parse_pubsub_push(&raw) {
-            Ok(Some(frame)) => frame,
-            _ => return Ok(false),
-        };
-        let kind = match frame.subscription_kind {
-            crate::redis::RedisSubscriptionKind::Channel => 0,
-            crate::redis::RedisSubscriptionKind::Pattern => 1,
-            crate::redis::RedisSubscriptionKind::ShardChannel => 2,
-        };
-        let key = (connection.to_owned(), sequence);
-        if !self.lanes.contains_key(&key) {
-            let mut header = record.clone();
-            erase_data(&mut header["response"]);
-            header["duration_ms"] = 0.into();
-            self.lanes.insert(
-                key.clone(),
-                LaneBuilder {
-                    record: header,
-                    kind,
-                    subject: frame.subject.clone(),
-                    writer: PageWriter::new_in(&self.root.join(".global-replay-pages"))?,
-                },
-            );
-        }
-        let lane = self.lanes.get_mut(&key).unwrap();
-        let identity = ["target_host", "target_port", "database", "username"];
-        if lane.kind != kind
-            || lane.subject != frame.subject
-            || identity
-                .iter()
-                .any(|field| lane.record[field] != record[field])
-        {
-            return Ok(false);
-        }
-        lane.writer.push(NotificationEntry {
-            location: location.clone(),
-            duration_ms,
-            timestamp: record
-                .get("timestamp")
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()?
-                .flatten(),
-            ordinal: self.notification_count,
-            adapter_echo: crate::redis::socketio_rpc::echo_digest(&frame.channel, &frame.payload),
-            adapter_namespace: crate::redis::socketio_rpc::notification_namespace(
-                &frame.channel,
-                &frame.payload,
-            ),
-            adapter_request: crate::redis::socketio_rpc::notification_request(
-                &frame.channel,
-                &frame.payload,
-            )
-            .map(|identity| (frame.channel, identity)),
-        })?;
-        self.notification_count += 1;
-        Ok(true)
     }
 
     pub fn set_scoped(&mut self) {
@@ -274,8 +158,7 @@ impl GlobalBuilder {
         for lane in self.lanes.into_values() {
             notifications.push(NotificationLane {
                 record: lane.record,
-                kind: lane.kind,
-                subject: lane.subject,
+                identity: lane.identity,
                 pages: lane.writer.finish()?.persist().relative_to(&self.root)?,
             });
         }
@@ -285,31 +168,13 @@ impl GlobalBuilder {
             sha256: format!("{:x}", self.hash.finalize()),
             records: self.records.finish()?.persist().relative_to(&self.root)?,
             notifications,
+            providers: self
+                .evidence
+                .revisions()
+                .into_iter()
+                .map(|(name, revision)| (name.to_owned(), revision.to_owned()))
+                .collect(),
         })
-    }
-}
-
-fn erase_data(capture: &mut Value) {
-    if safe_capture(capture)
-        && let Some(data) = capture.get_mut("data")
-    {
-        *data = Value::String(String::new());
-    }
-}
-
-fn safe_capture(capture: &Value) -> bool {
-    if capture.is_null() {
-        return true;
-    }
-    if capture["truncated"] == true {
-        return false;
-    }
-    match (capture["encoding"].as_str(), capture["data"].as_str()) {
-        (Some("utf8"), Some(_)) => true,
-        (Some("base64"), Some(data)) => base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .is_ok(),
-        _ => false,
     }
 }
 
@@ -354,18 +219,40 @@ pub fn load_global_index_cancellable(
     validate: impl Fn(&Value) -> Result<()>,
     cancelled: &AtomicBool,
 ) -> Result<(GlobalIndex, PathBuf)> {
+    load_global_index_with_evidence(
+        path,
+        validate,
+        cancelled,
+        crate::protocols::default_providers().evidence(),
+    )
+}
+
+pub fn load_global_index_with_evidence(
+    path: &Path,
+    validate: impl Fn(&Value) -> Result<()>,
+    cancelled: &AtomicBool,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+) -> Result<(GlobalIndex, PathBuf)> {
+    let revisions: BTreeMap<String, String> = evidence
+        .revisions()
+        .into_iter()
+        .map(|(name, revision)| (name.to_owned(), revision.to_owned()))
+        .collect();
     store::check_cancelled(cancelled)?;
     let source = super::scoped::resolve(path)?;
     let stamp = FileStamp::read_native(&source.path)?;
     let parent = path
         .parent()
         .context("Global dependency file has no parent")?;
-    if let Some(sealed) = recording::load(path, &stamp) {
+    if let Some(sealed) = recording::load(path, &stamp)
+        && sealed.0.providers == revisions
+    {
         store::check_cancelled(cancelled)?;
         return Ok(sealed);
     }
     if super::scoped::view_path(path).is_none()
         && let Some(index) = load_sealed_index(path, parent, &stamp, cancelled)?
+        && index.providers == revisions
     {
         return Ok((index, parent.to_owned()));
     }
@@ -376,6 +263,7 @@ pub fn load_global_index_cancellable(
     if let Ok(index) = store::read_json::<GlobalIndex>(&fragment)
         && index.version == VERSION
         && index.stamp == stamp
+        && index.providers == revisions
     {
         source.validate()?;
         ensure!(
@@ -384,21 +272,22 @@ pub fn load_global_index_cancellable(
         );
         return Ok((index, root));
     }
-    let index = build_index(path, &root, &stamp, &validate, cancelled)?;
+    let index = build_index_with_evidence(path, &root, &stamp, &validate, cancelled, evidence)?;
     source.validate()?;
     store::write_json(&fragment, &index)?;
     Ok((index, root))
 }
 
-fn build_index(
+fn build_index_with_evidence(
     path: &Path,
     root: &Path,
     stamp: &FileStamp,
     validate: &dyn Fn(&Value) -> Result<()>,
     cancelled: &AtomicBool,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
 ) -> Result<GlobalIndex> {
     let mut input = RecordStream::open(path)?;
-    let mut builder = GlobalBuilder::new(root, stamp.clone())?;
+    let mut builder = GlobalBuilder::with_evidence(root, stamp.clone(), evidence.clone())?;
     if super::scoped::view_path(path).is_some() {
         builder.set_scoped();
     }

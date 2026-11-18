@@ -31,7 +31,8 @@ pub(super) async fn write_dependency_summary(
         // Blank lines and the final line terminator participate in byte offsets.
         let mut input = input;
         let stamp = input.stamp.clone();
-        let mut case_index = case_dependencies.then(|| Builder::new(stamp.clone()));
+        let mut case_index =
+            case_dependencies.then(|| Builder::with_evidence(stamp.clone(), (*evidence).clone()));
         let scope_membership_sha256 = if case_dependencies {
             input.scope_membership_sha256()?
         } else {
@@ -44,7 +45,11 @@ pub(super) async fn write_dependency_summary(
         let mut global_index = if case_dependencies {
             None
         } else {
-            Some(GlobalBuilder::new(&dir, stamp.clone())?)
+            Some(GlobalBuilder::with_evidence(
+                &dir,
+                stamp.clone(),
+                (*evidence).clone(),
+            )?)
         };
         let mut summary = DependencySummaryBuilder::new((*evidence).clone());
         if scoped && let Some(index) = &mut global_index {

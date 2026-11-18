@@ -32,6 +32,11 @@ pub enum InputKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum CaptureEvent {
+    #[serde(rename = "message_started")]
+    MessageStarted {
+        exchange_id: Uuid,
+        dependency_sequence: u64,
+    },
     #[serde(rename = "wire_output_started")]
     OutputStarted {
         exchange_id: Uuid,

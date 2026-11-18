@@ -4,8 +4,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use traffic_protocol::{
     capture::CaptureSnapshot,
     connection::{
-        CaptureExchange, CaptureHost, CaptureOutput, ConnectionIo, NativeFuture, Operation,
-        RequestHost, ResponseDelivery, ResponseFramer,
+        CaptureExchange, CaptureHost, CaptureOutput, NativeFuture, Operation, RequestHost,
+        ResponseDelivery, ResponseFramer,
     },
     message::{MessageEncoder, ProtocolMessage},
 };
@@ -48,7 +48,7 @@ struct Reply;
 impl ResponseDelivery for Reply {
     fn write<'a>(
         self: Box<Self>,
-        io: &'a mut dyn ConnectionIo,
+        io: &'a mut dyn traffic_protocol::connection::OutputIo,
         framer: &'a mut dyn ResponseFramer,
     ) -> NativeFuture<'a, ()> {
         Box::pin(async move {

@@ -135,7 +135,7 @@ pub fn load_mysql_file(path: &Path) -> Result<FileIndex> {
     let base = load_file(path)?;
     // New Recorder summaries already contain SQL-free MySQL metadata. Legacy
     // fragments alone need the optional extension pass over their original file.
-    if base.mysql.is_some() {
+    if base.indexes.contains_key("mysql") {
         return Ok(base);
     }
     let stamp = base.stamp.clone();
@@ -147,7 +147,7 @@ pub fn load_mysql_file(path: &Path) -> Result<FileIndex> {
     if let Ok(index) = read_json::<FileIndex>(&cache)
         && index.version == VERSION
         && index.stamp == stamp
-        && index.mysql.is_some()
+        && index.indexes.contains_key("mysql")
     {
         return Ok(index);
     }

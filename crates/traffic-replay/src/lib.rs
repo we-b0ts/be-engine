@@ -38,6 +38,7 @@ pub use ingress::AdmissionQueue;
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Request,
+    Message,
     ResponseHeaders,
     ResponsePart,
     ResponseEnd,
@@ -55,6 +56,9 @@ pub enum EventKind {
 }
 
 impl EventKind {
+    fn is_admission(self) -> bool {
+        matches!(self, Self::Request | Self::Message)
+    }
     fn started(self) -> Self {
         match self {
             Self::ResponseHeaders => Self::ResponseHeadersStarted,
@@ -134,7 +138,7 @@ impl SequencePlan {
                 "Source dependency sequence is zero"
             );
             previous = source.sequence;
-            let slot = if source.kind == EventKind::Request {
+            let slot = if source.kind.is_admission() {
                 let slot = slots.len();
                 ensure!(
                     slots.insert(source.dependency_sequence, slot).is_none(),
@@ -294,7 +298,7 @@ impl SequenceScheduler {
         let Some(next) = self.plan.events.get(self.cursor) else {
             bail!("request arrived after the recorded event sequence completed");
         };
-        if next.source.kind != EventKind::Request
+        if !next.source.kind.is_admission()
             || next.source.dependency_sequence != dependency_sequence
         {
             return Ok(Admission::Waiting(next.source));
@@ -316,8 +320,7 @@ impl SequenceScheduler {
         let Some(next) = self.plan.events.get(self.cursor).copied() else {
             return Ok(None);
         };
-        if next.source.kind == EventKind::Request
-            || next.source.dependency_sequence != dependency_sequence
+        if next.source.kind.is_admission() || next.source.dependency_sequence != dependency_sequence
         {
             return Ok(None);
         }

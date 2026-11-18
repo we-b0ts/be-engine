@@ -7,6 +7,8 @@ pub struct Request {
     pub protocol: ProtocolId,
     pub endpoint: Endpoint,
     pub message: Arc<dyn ProtocolMessage>,
+    pub session: Option<Uuid>,
+    pub lane: Option<String>,
     pub observed: DateTime<Utc>,
     pub bytes: usize,
     pub diagnostics: diagnosis::CandidateDiagnostics,
@@ -61,12 +63,14 @@ pub fn identity(
     )
 }
 
+pub struct ResponsePlan {
+    pub output: Box<dyn traffic_protocol::output::OutputStream>,
+    pub comparison: Comparison,
+    pub identity: IdentityDecision,
+}
+
 impl Inventory {
-    pub fn render_response(
-        &self,
-        index: usize,
-        observed: DateTime<Utc>,
-    ) -> Result<Box<dyn traffic_protocol::output::OutputStream>> {
+    pub fn render_response(&self, index: usize, observed: DateTime<Utc>) -> Result<ResponsePlan> {
         let exchange = &self.core.exchanges[index];
         let scope = self.scope(index);
         let clocks = self.clocks(index, observed, true);
@@ -86,8 +90,10 @@ impl Inventory {
         )?;
         let proposed = identity(self.contracts.as_ref(), self, index, &rendered.comparison)?;
         let response = exchange.native.response.output(&rendered.values)?;
-        self.contracts
-            .commit_comparison(rendered.comparison, proposed)?;
-        Ok(response)
+        Ok(ResponsePlan {
+            output: response,
+            comparison: rendered.comparison,
+            identity: proposed,
+        })
     }
 }

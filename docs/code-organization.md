@@ -377,6 +377,15 @@ session controls and credential sanitization remain in the protocol library.
 The finite provider currently rejects Pub/Sub, incomplete terminations, reusable
 snapshots and historical stateful permissions that require additional capabilities.
 The older native capture primitives remain available in the protocol library.
+Shared native contracts distinguish real requests from finite server emissions.
+`message_started` captures each independent message without retaining an idle
+subscription's startup/Case reservation. Native output readiness is separate
+from socket writes; real flush receipts commit both finite consumption and
+prepared output-policy results. Stateful providers may acquire exclusive opaque
+Source lane bindings. Connection exit releases those bindings.
+The independent fixture validates startup listeners, eager/lazy messages and
+notifications interleaved between a request and its reply. See
+[dependency message lifecycle](protocol-message-lifecycle.md).
 `traffic-protocol-http::native` supplies finite HTTP/1 capture and server sessions,
 chunked transfer decoding, stored exchange projection and response rendering.
 Replay installs this provider through the extension catalog. The application
@@ -384,6 +393,14 @@ retains the recording binding. Shared native hosts provide certificate
 termination through the `accept_tls` port. Protocols
 select upgrade timing and ALPN. HTTPS upstream certificate verification uses the
 system trust roots in the HTTP connector.
+HTTP's `client`, `termination`, `wire_events` and `stream_capture` own native
+connection and streaming mechanics. Recording adapters supply capture receipts,
+ownership, invalidation and publication through focused ports. Evidence providers
+own compact Source projections, lookup keys and notification identities; shared
+index builders own authenticated locations and paging. MySQL's `index` and
+`source_intervals` own SQL metadata and native status continuity. Historical
+retired-protocol index adapters preserve read-only metadata without granting
+execution or interaction-tail capabilities.
 `traffic-replay::input` owns live input leases before a request body is complete.
 Native sessions acquire those leases through `RequestHost::begin_input`. Shared
 Case cleanup and session finalization observe their I/O ownership. Native record

@@ -205,7 +205,10 @@ fn projection(
     side: traffic_protocol::evidence::MessageSide,
 ) -> Result<traffic_protocol::message::ProjectedMessage> {
     match side {
-        traffic_protocol::evidence::MessageSide::Request => evidence.request.project(),
+        traffic_protocol::evidence::MessageSide::Request => evidence
+            .request
+            .context("native request evidence is unavailable")?
+            .project(),
         traffic_protocol::evidence::MessageSide::Response => evidence
             .response
             .context("native response evidence is unavailable")?

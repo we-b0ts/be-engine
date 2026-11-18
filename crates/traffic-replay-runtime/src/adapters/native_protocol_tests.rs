@@ -63,6 +63,7 @@ struct Recording {
     case: String,
     providers: Arc<DependencyProviders>,
     source_bytes: Vec<u8>,
+    startup_listener: bool,
 }
 
 async fn record() -> Recording {
@@ -74,6 +75,10 @@ async fn record_with_startup(startup: bool) -> Recording {
 }
 
 async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
+    record_scenario(startup, fixed, false).await
+}
+
+async fn record_scenario(startup: bool, fixed: &'static str, notifications: bool) -> Recording {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let directory = tempfile::tempdir().unwrap();
     let native_upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -133,10 +138,15 @@ async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
     .unwrap();
     let upstream = tokio::spawn(async move {
         let (mut stream, _) = native_upstream.accept().await.unwrap();
-        let operations = if startup {
-            vec!["warm", "fetch", "next"]
+        let first = if notifications && !startup {
+            "listen"
         } else {
-            vec!["fetch", "next"]
+            "fetch"
+        };
+        let operations = if startup {
+            vec![if notifications { "listen" } else { "warm" }, first, "next"]
+        } else {
+            vec![first, "next"]
         };
         for operation in operations {
             let request = traffic_protocol_fixture::read(&mut stream).await.unwrap();
@@ -144,11 +154,35 @@ async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
                 request,
                 json!({"id":42,"operation":operation,"fixed":fixed})
             );
+            if notifications && operation == "next" {
+                stream
+                    .write_all(
+                        &traffic_protocol_fixture::encode(
+                            &json!({"notification":true,"id":42,"index":1}),
+                        )
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                stream.flush().await.unwrap();
+            }
             stream
                 .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
                 .await
                 .unwrap();
             stream.flush().await.unwrap();
+            if notifications && operation == first {
+                stream
+                    .write_all(
+                        &traffic_protocol_fixture::encode(
+                            &json!({"notification":true,"id":42,"index":0}),
+                        )
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                stream.flush().await.unwrap();
+            }
         }
     });
     let recording = state.clone();
@@ -158,7 +192,8 @@ async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
     });
     let startup_dependency = if startup {
         let mut stream = TcpStream::connect(native_address).await.unwrap();
-        let request = json!({"id":42,"operation":"warm","fixed":fixed});
+        let request =
+            json!({"id":42,"operation":if notifications {"listen"} else {"warm"},"fixed":fixed});
         stream
             .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
             .await
@@ -181,11 +216,26 @@ async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
             Some(stream) => stream,
             None => TcpStream::connect(native_address).await.unwrap(),
         };
-        for operation in ["fetch", "next"] {
+        for operation in [
+            if notifications && !startup {
+                "listen"
+            } else {
+                "fetch"
+            },
+            "next",
+        ] {
             let request = json!({"id":42,"operation":operation,"fixed":fixed});
             let wire = traffic_protocol_fixture::encode(&request).unwrap();
             for piece in wire.chunks(3) {
                 dependency.write_all(piece).await.unwrap();
+            }
+            if notifications && operation == "next" {
+                assert_eq!(
+                    traffic_protocol_fixture::read(&mut dependency)
+                        .await
+                        .unwrap(),
+                    json!({"notification":true,"id":42,"index":1})
+                );
             }
             assert_eq!(
                 traffic_protocol_fixture::read(&mut dependency)
@@ -193,6 +243,16 @@ async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
                     .unwrap(),
                 request
             );
+            if notifications && operation != "next" {
+                for index in 0..1 {
+                    assert_eq!(
+                        traffic_protocol_fixture::read(&mut dependency)
+                            .await
+                            .unwrap(),
+                        json!({"notification":true,"id":42,"index":index})
+                    );
+                }
+            }
         }
         drop(dependency);
         stream
@@ -249,6 +309,7 @@ async fn record_with_value(startup: bool, fixed: &'static str) -> Recording {
         case: manifest.inputs[0].case_id.to_string(),
         providers,
         source_bytes,
+        startup_listener: startup && notifications,
     }
 }
 
@@ -265,6 +326,7 @@ struct Replay {
     session: PathBuf,
     case: String,
     task: tokio::task::JoinHandle<Result<()>>,
+    startup_connection: Option<TcpStream>,
 }
 
 impl Replay {
@@ -323,9 +385,10 @@ impl Replay {
             .unwrap()
             .parse()
             .unwrap();
+        let mut startup_connection = None;
         if deliver_startup {
             let mut target = TcpStream::connect(address).await.unwrap();
-            let request = json!({"id":1042,"operation":"warm","fixed":"original"});
+            let request = json!({"id":1042,"operation":if recording.startup_listener {"listen"} else {"warm"},"fixed":"original"});
             target
                 .write_all(&traffic_protocol_fixture::encode(&request).unwrap())
                 .await
@@ -334,6 +397,9 @@ impl Replay {
                 traffic_protocol_fixture::read(&mut target).await.unwrap(),
                 request
             );
+            if recording.startup_listener {
+                startup_connection = Some(target);
+            }
         }
         assert_eq!(
             control(&session, "begin", Some(&recording.case)).await["ok"],
@@ -349,6 +415,7 @@ impl Replay {
             session,
             case: recording.case.clone(),
             task,
+            startup_connection,
         }
     }
 
@@ -661,6 +728,73 @@ async fn a_failed_native_request_reports_registered_policy_findings_and_source_r
             std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
             recording.source_bytes
         );
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn independent_server_messages_record_and_replay_with_shared_policy_and_finite_receipts() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for startup in [false, true] {
+        let recording = record_scenario(startup, "original", true).await;
+        let trace =
+            std::fs::read_to_string(recording.root.join("dependency-lifecycle.jsonl")).unwrap();
+        assert_eq!(
+            trace
+                .lines()
+                .filter(|line| line.contains("message_started"))
+                .count(),
+            2
+        );
+        for lazy in [false, true] {
+            let mut replay = Replay::start_with_startup(&recording, lazy, startup).await;
+            let mut target = match replay.startup_connection.take() { Some(target) => target, None => TcpStream::connect(replay.address).await.unwrap() };
+            let listen = json!({"id":1042,"operation":if startup {"fetch"} else {"listen"},"fixed":"original"});
+            target
+                .write_all(&traffic_protocol_fixture::encode(&listen).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                traffic_protocol_fixture::read(&mut target).await.unwrap(),
+                listen
+            );
+            for index in 0..1 {
+                assert_eq!(
+                    traffic_protocol_fixture::read(&mut target).await.unwrap(),
+                    json!({"notification":true,"id":1042,"index":index})
+                );
+            }
+            let next = json!({"id":1042,"operation":"next","fixed":"original"});
+            target
+                .write_all(&traffic_protocol_fixture::encode(&next).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(traffic_protocol_fixture::read(&mut target).await.unwrap(), json!({"notification":true,"id":1042,"index":1}));
+            assert_eq!(
+                traffic_protocol_fixture::read(&mut target).await.unwrap(),
+                next
+            );
+            drop(target);
+            let report = replay.finish().await;
+            assert_eq!(
+                report["dependency_protocols"][NATIVE]["matched_count"], 4 + usize::from(startup),
+                "{report}"
+            );
+            assert_eq!(
+                report["dependency_protocols"][NATIVE]["unused_case"],
+                json!([])
+            );
+            assert_eq!(
+                report["batch_reconciliation"]["dependency_inventory_verified"], true,
+                "{report}"
+            );
+            assert_eq!(
+                std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+                recording.source_bytes
+            );
+        }
+        }
     })
     .await
     .unwrap();

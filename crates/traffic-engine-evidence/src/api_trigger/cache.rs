@@ -121,7 +121,7 @@ pub fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> Result<O
         let relative = path.strip_prefix(&root)?.to_owned();
         let mut index = crate::dependency_index::load_file(&path)?;
         if let Some(file) = transaction_files.get(&relative) {
-            index.mysql = Some(file.records.clone());
+            index.set_mysql_records(file.records.clone());
         }
         evidence.push(EvidenceFile {
             request: Some(request),

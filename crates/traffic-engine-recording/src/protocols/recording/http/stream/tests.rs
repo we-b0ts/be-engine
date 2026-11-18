@@ -2,6 +2,9 @@ use super::*;
 use crate::{
     AppState, http::termination::ClientTermination, protocols::recording::events::HttpExchangeEvent,
 };
+use bytes::Bytes;
+use chrono::Utc;
+use http_body_util::{BodyExt, Full};
 use std::collections::BTreeMap;
 use std::time::Instant;
 use uuid::Uuid;
@@ -47,7 +50,7 @@ async fn engine_body_drop_without_peer_termination_remains_a_capture_failure() {
     assert_eq!(diagnosis["prefix_flushed"], false);
 }
 
-fn context(state: &AppState, termination: ClientTermination) -> CaptureContext {
+fn context(state: &AppState, termination: ClientTermination) -> stream_capture::CaptureContext {
     let event = HttpExchangeEvent {
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
@@ -68,13 +71,13 @@ fn context(state: &AppState, termination: ClientTermination) -> CaptureContext {
         duration_ms: 0,
         error: None,
     };
-    CaptureContext {
+    native_context(CaptureContext {
         targets: state.capture_dependency_targets(),
         state: state.clone(),
         event,
         started: Instant::now(),
         termination,
-    }
+    })
 }
 
 #[tokio::test]
@@ -147,11 +150,10 @@ async fn close_delimited_eof(engine_cleanup: bool) {
         .await
         .unwrap();
     let termination = ClientTermination::default();
-    let mut body = CaptureBody {
-        body: response.into_body(),
-        capture: Capture::new(context(&state, termination.clone())),
-        ending: None,
-    };
+    let mut body = CaptureBody::new(
+        response.into_body(),
+        Capture::new(context(&state, termination.clone())),
+    );
     assert_eq!(
         body.frame().await.unwrap().unwrap().into_data().unwrap(),
         "prefix"
@@ -167,7 +169,7 @@ async fn close_delimited_eof(engine_cleanup: bool) {
     if !engine_cleanup {
         // A subsequent global cleanup cannot revoke an already observed EOF.
         termination.connection_observation().observe_engine_stop();
-        body.capture.finish(true, None);
+        body.finish(true, None);
     }
     drop(body);
     assert_eq!(
@@ -255,11 +257,10 @@ async fn cancellation_with_backpressure(flushed: bool) {
         .await
         .unwrap();
     let termination = ClientTermination::default();
-    let mut body = CaptureBody {
-        body: response.into_body(),
-        capture: Capture::new(context(&state, termination.clone())),
-        ending: None,
-    };
+    let mut body = CaptureBody::new(
+        response.into_body(),
+        Capture::new(context(&state, termination.clone())),
+    );
     let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
     assert_eq!(frame.as_ref(), b"prefix");
     let (downstream, _reader) = tokio::io::duplex(if flushed { 64 } else { 1 });
@@ -277,7 +278,7 @@ async fn cancellation_with_backpressure(flushed: bool) {
             .is_err()
         );
     }
-    assert_eq!(body.capture.prefix.is_complete(), flushed);
+    assert_eq!(body.prefix_is_complete(), flushed);
     termination
         .connection_observation()
         .observe_client_io_error(&std::io::ErrorKind::ConnectionReset.into());

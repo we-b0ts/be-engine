@@ -497,16 +497,29 @@ fn compare_prepared(
     }
     let service = context.host;
     let rules = providers.bindings().for_protocol(owner.kind.as_str());
-    let request = crate::value_extensions::prepare_message_with_policy(
-        source.request.as_ref(),
-        &rules.request,
-        service.document_policy(context.clocks),
-    )?;
-    let comparison =
-        request.compare(target.request.as_ref(), context.clocks, service.metadata())?;
+    let comparison = match (&source.request, &target.request) {
+        (Some(source), Some(target)) => {
+            let request = crate::value_extensions::prepare_message_with_policy(
+                source.as_ref(),
+                &rules.request,
+                service.document_policy(context.clocks),
+            )?;
+            Some(request.compare(target.as_ref(), context.clocks, service.metadata())?)
+        }
+        (None, None) => {
+            ensure!(
+                side == MessageSide::Response,
+                "native output-only evidence has no request"
+            );
+            None
+        }
+        _ => anyhow::bail!("native evidence request presence differs"),
+    };
     if side == MessageSide::Response {
         ensure!(
-            comparison.passed(),
+            comparison
+                .as_ref()
+                .is_none_or(|comparison| comparison.passed()),
             "response witness request context differs"
         );
         let source = source
@@ -524,7 +537,7 @@ fn compare_prepared(
         )?;
         return response.compare(target.as_ref(), clocks, service.metadata());
     }
-    Ok(comparison)
+    comparison.context("native request evidence is absent")
 }
 
 fn recorded(
@@ -574,7 +587,12 @@ fn compare_source_message(
             &bindings.response,
         )
     } else {
-        (exchange.request.as_ref(), &bindings.request)
+        (
+            exchange
+                .request()
+                .context("native output-only evidence has no request")?,
+            &bindings.request,
+        )
     };
     let prepared = crate::value_extensions::prepare_message_with_policy(
         message,

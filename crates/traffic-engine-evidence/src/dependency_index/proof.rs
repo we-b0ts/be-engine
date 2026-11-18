@@ -7,65 +7,15 @@ use std::path::Path;
 mod tests;
 
 pub fn selector(value: &Value) -> Value {
-    // Keep request selectors and lifecycle facts, without response or body data.
-    let mut selected = value
-        .as_object()
-        .map(|fields| {
-            fields
-                .iter()
-                .filter(|(name, _)| {
-                    !matches!(
-                        name.as_str(),
-                        "request_body"
-                            | "response_body"
-                            | "request"
-                            | "response"
-                            | "response_frames"
-                            | "value"
-                            | "headers"
-                            | "raw"
-                            | "request_headers"
-                            | "protected_request_headers"
-                    )
-                })
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect::<serde_json::Map<_, _>>()
-        })
-        .map_or_else(|| value.clone(), Value::Object);
-    if let Some(fields) = selected.as_object_mut() {
-        fields.insert(
-            "_capture_complete".into(),
-            Value::Bool(capture_complete(value)),
-        );
-        if let Some(Value::String(raw)) = fields.get_mut("uri")
-            && let Ok(uri) = raw.parse::<hyper::Uri>()
-        {
-            *raw = uri.path().to_owned();
-        }
-        if let Some(Value::Object(headers)) = fields.get_mut("response_headers") {
-            headers.retain(|name, _| name.eq_ignore_ascii_case("content-type"));
-        }
-        for field in ["sql", "params", "args"] {
-            if fields.get(field).is_some_and(|value| {
-                serde_json::to_vec(value).map_or(true, |bytes| bytes.len() > 64 * 1024)
-            }) {
-                fields.remove(field);
-                fields.insert("_source_proof_requires_original".into(), Value::Bool(true));
-            }
-        }
-    }
-    selected
+    crate::protocols::default_providers()
+        .evidence()
+        .proof_selector(value)
 }
 
 pub fn capture_complete(value: &Value) -> bool {
-    value["replay_safe"] != false
-        && value["response"]["status"] != "incomplete"
-        && value["capture_incomplete"] != true
-        && value["capture_failure"] != true
-        && value["request_body"]["truncated"] != true
-        && value["response_body"]["truncated"] != true
-        && value["response"]["truncated"] != true
-        && value["response"]["rows_truncated"] != true
+    crate::protocols::default_providers()
+        .evidence()
+        .capture_complete(value)
 }
 
 pub fn is_evidence(value: &Value) -> bool {

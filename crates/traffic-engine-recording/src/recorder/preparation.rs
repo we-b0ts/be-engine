@@ -4,6 +4,7 @@ use super::*;
 use traffic_protocol::connection::NativeFuture;
 
 pub trait SourcePreparation: Send + Sync {
+    fn evidence(&self) -> &traffic_protocol::evidence::EvidenceRegistry;
     fn validate_record(&self, value: &serde_json::Value) -> Result<()>;
     fn safety_issue(&self, value: &serde_json::Value) -> Option<String>;
     fn indexes<'a>(&'a self, run: &'a Path) -> NativeFuture<'a, Vec<PathBuf>>;
@@ -34,9 +35,11 @@ impl Recorder {
         let run = self.run_dir.clone();
         let preparation = self.source_preparation.clone();
         let result = tokio::task::spawn_blocking(move || {
-            crate::dependency_index::global::seal_recording_scopes(&run, |value| {
-                preparation.validate_record(value)
-            })
+            crate::dependency_index::global::seal_recording_scopes_with_evidence(
+                &run,
+                |value| preparation.validate_record(value),
+                preparation.evidence(),
+            )
         })
         .await
         .context("recording dependency index task failed")

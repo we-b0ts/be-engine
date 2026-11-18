@@ -40,7 +40,7 @@ impl CandidateDiagnostics {
         let facts = serde_json::json!({"surface":"dependency.request",
             "clocks":inventory.clocks(exchange.index, request.observed, false).observations()});
         let analysis = traffic_policy_value::diagnosis::message::analyze(
-            exchange.native.request.as_ref(),
+            exchange.native.request().expect("request candidate"),
             request.message.as_ref(),
             inventory.providers.bindings().codecs(),
             inventory.contracts.metadata().policies(),

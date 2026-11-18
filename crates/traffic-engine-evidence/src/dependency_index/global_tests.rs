@@ -58,7 +58,7 @@ fn global_payload_pages_preserve_all_protocol_evidence_and_mysql_widths() {
     let reader = Arc::new(Mutex::new(RecordReader::new(1)));
     let source = RecordSource::new(&path, index.stamp.clone(), reader.clone());
     let entries = inventory.read_page(0).unwrap();
-    assert_eq!(entries[1].mysql_row_shape, Some((2, false)));
+    assert_eq!(entries[1].native["row_shape"], json!([2, false]));
     for (entry, original) in entries.into_iter().zip(records) {
         assert!(!entry.record.to_string().contains("response-only-value"));
         assert_eq!(

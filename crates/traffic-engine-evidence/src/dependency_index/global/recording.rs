@@ -1,5 +1,5 @@
 //! Portable indexes for the original scopes of a sealed recording.
-use super::{FileStamp, GlobalIndex, VERSION, build_index, store};
+use super::{FileStamp, GlobalIndex, VERSION, build_index_with_evidence, store};
 use crate::dependency::observation::MANIFEST_FILE;
 use crate::dependency_index::{build::digest, recording, scoped};
 use anyhow::{Result, ensure};
@@ -20,6 +20,23 @@ struct SealedIndex {
 }
 
 pub fn seal_recording_scopes(run: &Path, validate: impl Fn(&Value) -> Result<()>) -> Result<()> {
+    seal_recording_scopes_with_evidence(
+        run,
+        validate,
+        crate::protocols::default_providers().evidence(),
+    )
+}
+
+pub fn seal_recording_scopes_with_evidence(
+    run: &Path,
+    validate: impl Fn(&Value) -> Result<()>,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+) -> Result<()> {
+    let revisions: std::collections::BTreeMap<String, String> = evidence
+        .revisions()
+        .into_iter()
+        .map(|(name, revision)| (name.to_owned(), revision.to_owned()))
+        .collect();
     let (run, _) = recording::manifest(run)?;
     let manifest_path = run.join(MANIFEST_FILE);
     let manifest_stamp = FileStamp::read_native(&manifest_path)?;
@@ -29,13 +46,14 @@ pub fn seal_recording_scopes(run: &Path, validate: impl Fn(&Value) -> Result<()>
     let cancelled = AtomicBool::new(false);
     for scope in SCOPES {
         let view = indexes.join(format!("{scope}-scope.json"));
-        if load(&view, &stamp).is_some() {
+        if load(&view, &stamp).is_some_and(|(index, _)| index.providers == revisions) {
             continue;
         }
         let scope_stamp = FileStamp::read_native(&view)?;
         let output = indexes.join(format!("{scope}-dependencies"));
         store::private_directory(&output)?;
-        let index = build_index(&view, &output, &stamp, &validate, &cancelled)?;
+        let index =
+            build_index_with_evidence(&view, &output, &stamp, &validate, &cancelled, evidence)?;
         ensure!(
             FileStamp::read_native(&view)? == scope_stamp
                 && FileStamp::read_native(&manifest_path)? == manifest_stamp,

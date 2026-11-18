@@ -84,14 +84,14 @@ fn recorder_and_legacy_metadata_preserve_non_sql_status_continuity() {
         .collect();
     std::fs::write(&path, raw).unwrap();
     let recorder = store::load_file(&path).unwrap();
-    assert_eq!(recorder.mysql.as_ref().unwrap().len(), 3);
+    assert_eq!(recorder.records("mysql").len(), 3);
     let mut old = recorder.clone();
-    old.mysql = None;
+    old.indexes.remove("mysql");
     let legacy = super::super::mysql::extend(&path, old).unwrap();
     assert_eq!(
-        serde_json::to_value(&recorder.mysql).unwrap(),
-        serde_json::to_value(&legacy.mysql).unwrap()
+        serde_json::to_value(recorder.mysql_records()).unwrap(),
+        serde_json::to_value(legacy.mysql_records()).unwrap()
     );
-    let encoded = serde_json::to_string(&legacy.mysql).unwrap();
+    let encoded = serde_json::to_string(&legacy.mysql_records()).unwrap();
     assert!(!encoded.contains("private") && !encoded.contains("SELECT 1"));
 }
