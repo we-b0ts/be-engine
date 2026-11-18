@@ -1,16 +1,18 @@
 #[cfg(any(test, feature = "test-support"))]
 use std::collections::BTreeSet;
+#[cfg(any(test, feature = "test-support"))]
 use std::fs;
-use std::path::{Component, Path, PathBuf};
-use std::time::Instant;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+#[cfg(any(test, feature = "test-support"))]
+use anyhow::ensure;
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::model::*;
+use traffic_recording_store::source::store::check_cancelled;
 #[cfg(test)]
 pub(super) use traffic_recording_store::source::store::file_cache_directory;
-pub(super) use traffic_recording_store::source::store::{Lock, check_cancelled};
 pub use traffic_recording_store::source::store::{
     cache_directory, private_directory, read_json, write_json,
 };
@@ -70,6 +72,7 @@ pub fn recording_files(source: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn case_id(path: &Path) -> Result<String> {
     Ok(path
         .parent()
@@ -109,101 +112,14 @@ fn prepare_cancellable(
 ) -> Result<(RunIndex, DependencyIndexReport)> {
     check_cancelled(cancelled)?;
     let (root, files) = recording_files(source)?;
-    let global = root.join("global-dependencies.jsonl");
-    let global_bytes = if super::scoped::exists(&global) {
-        super::global::load_global_index_cancellable(&global, validate, cancelled)?;
-        super::scoped::selected_bytes(&global)?
-    } else {
-        0
-    };
-    let run: Value = serde_json::from_slice(&fs::read(root.join("recording-run.json"))?)?;
-    let run_id = run["run_id"].as_str().unwrap_or_default().to_owned();
-    let storage = cache_directory(&root);
-    private_directory(&storage)?;
-    let _lock = Lock::acquire(&storage.join("build.lock"), cancelled)?;
-    let output = storage.join("manifest.json");
-    if let Ok(index) = read_json::<RunIndex>(&output)
-        && valid_run(&root, &files, &run_id, &index)?
-    {
-        let mut report = report("reused", &output, &index);
-        report.global_source_bytes = global_bytes;
-        return Ok((index, report));
-    }
-    let started = Instant::now();
-    let file_bytes = files
-        .iter()
-        .map(|p| super::scoped::selected_bytes(p))
-        .collect::<Result<Vec<_>>>()?;
-    let total_bytes = file_bytes.iter().sum::<u64>();
-    let mut index = RunIndex {
-        version: VERSION,
-        run_id,
-        files: Vec::new(),
-        source_bytes: total_bytes,
-    };
-    let mut prepared_bytes = 0;
-    tracing::info!(
-        total_files = files.len(),
-        total_bytes,
-        "preparing dependency index"
-    );
-    for ((position, path), selected_bytes) in files.iter().enumerate().zip(file_bytes) {
-        let file_index = load_file_cancellable(path, cancelled)?;
-        prepared_bytes += selected_bytes;
-        index.files.push(IndexedFile {
-            path: path.strip_prefix(&root)?.into(),
-            case_id: case_id(path)?,
-            index: file_index,
-        });
-        if position % 100 == 0 || position + 1 == files.len() {
-            tracing::info!(
-                prepared_files = position + 1,
-                total_files = files.len(),
-                prepared_bytes,
-                total_bytes,
-                elapsed_seconds = started.elapsed().as_secs(),
-                "preparing dependency index"
-            );
-        }
-    }
-    ensure!(
-        valid_run(&root, &files, &index.run_id, &index)?,
-        "recording changed during dependency index preparation"
-    );
-    check_cancelled(cancelled)?;
-    write_json(&output, &index)?;
-    let mut report = report("built", &output, &index);
-    report.global_source_bytes = global_bytes;
-    Ok((index, report))
-}
-
-fn report(status: &'static str, path: &Path, index: &RunIndex) -> DependencyIndexReport {
-    DependencyIndexReport {
-        status,
-        files: index.files.len(),
-        source_bytes: index.source_bytes,
-        index_path: path.into(),
-        global_source_bytes: 0,
-    }
-}
-
-fn valid_run(root: &Path, files: &[PathBuf], run_id: &str, index: &RunIndex) -> Result<bool> {
-    if index.version != VERSION || index.run_id != run_id || index.files.len() != files.len() {
-        return Ok(false);
-    }
-    for (file, indexed) in files.iter().zip(&index.files) {
-        if indexed
-            .path
-            .components()
-            .any(|c| !matches!(c, Component::Normal(_)))
-            || root.join(&indexed.path) != *file
-            || indexed.index.version != VERSION
-            || indexed.index.stamp != FileStamp::read(file)?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    traffic_recording_store::source::index::prepare_run(
+        &root,
+        &files,
+        cancelled,
+        crate::protocols::default_providers().evidence(),
+        super::proof::is_evidence,
+        validate,
+    )
 }
 
 /// Dropping this future cancels the blocking builder, including lock waits.

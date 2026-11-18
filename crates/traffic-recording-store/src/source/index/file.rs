@@ -5,12 +5,13 @@ use crate::source::store::{
 use crate::source::{FileStamp, scoped};
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
-use std::path::Path;
+use std::{path::Path, sync::atomic::AtomicBool};
+use traffic_protocol::evidence::EvidenceRegistry;
 
 pub fn load_file(
     path: &Path,
-    cancelled: &std::sync::atomic::AtomicBool,
-    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+    cancelled: &AtomicBool,
+    evidence: &EvidenceRegistry,
     select_proof: fn(&Value) -> bool,
 ) -> Result<FileIndex> {
     check_cancelled(cancelled)?;
@@ -53,4 +54,30 @@ pub fn load_file(
     check_cancelled(cancelled)?;
     write_json(&output, &index)?;
     Ok(index)
+}
+
+pub fn load_file_with_proofs(
+    path: &Path,
+    evidence: &EvidenceRegistry,
+    select_proof: fn(&Value) -> bool,
+) -> Result<FileIndex> {
+    let cancelled = AtomicBool::new(false);
+    let index = load_file(path, &cancelled, evidence, select_proof)?;
+    if index.proof_records.is_some() {
+        return Ok(index);
+    }
+
+    let root = crate::source::store::cache_directory(path);
+    private_directory(&root)?;
+    let cache = root.join("file-proof-v1.json");
+    if let Ok(cached) = read_json::<FileIndex>(&cache)
+        && cached.stamp == index.stamp
+        && cached.version == index.version
+        && cached.proof_records.is_some()
+    {
+        return Ok(cached);
+    }
+    let built = build_file(path, &cancelled, evidence, select_proof)?;
+    write_json(&cache, &built)?;
+    Ok(built)
 }

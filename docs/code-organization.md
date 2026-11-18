@@ -107,8 +107,8 @@ Shared engine responsibilities are assigned to the following packages.
 - `traffic-recording-model` owns native capture events and primary Case bindings.
 - `traffic-engine-config` owns project documents, configuration loading and
   Source policy projections.
-- `traffic-engine-evidence` owns authenticated evidence adapters, dependency
-  indexes, witnesses, attribution defaults and provider catalogs.
+- `traffic-engine-evidence` owns authenticated evidence queries, witnesses,
+  attribution defaults and provider composition for stored dependency indexes.
 - `traffic-engine-replay` owns shared Replay preparation, reports, TLS and
   asynchronous completion adapters.
 - `traffic-engine-verification` owns runtime policy execution, request rules,
