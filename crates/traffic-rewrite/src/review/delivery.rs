@@ -33,7 +33,6 @@ fn snapshot(
             integration: handoff.is_some(),
             quality_check: None,
             handoff_id: handoff.map(str::to_owned),
-            hardcode_ai_verified: Vec::new(),
         },
         None,
         false,

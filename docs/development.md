@@ -406,7 +406,7 @@ backend-rewrite --target-root /absolute/canonical review check \
 
 This stage scans the whole PR, enforces changed production Rust files <=1000
 complete physical lines, validates startup ownership for added Tokio spawns,
-and checks Source/Replay isolation and source-sensitive domains. Read the
+and checks Source/Replay isolation. Read the
 [Source review contract](../plugins/ai-software-engineering/skills/backend-rewrite/references/source-review-rules.md)
 for syntax scope, test-only exclusions and exact evidence. The engine never
 executes fmt, tests, Clippy or another repository command; the final assignee
@@ -2753,15 +2753,10 @@ Only final `review check --pre-revalidation` runs the built-in
 target `replay-isolation` quality gate. It
 examines only Rust lines added relative to `delivery.pr_base`, including
 staged, unstaged, untracked, test, comment, and documentation lines. It does not
-parse Rust syntax. New `.trp.test` occurrences are always rejected. New
-case-insensitive `sample.test` or `demo.test` occurrences require an exact
-`--hardcode-ai-verified TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN`
-argument and a matching commit trailer
-that identifies the source repository revision and source file line where the
-same hardcode was verified. The target occurrence must already be committed at
-that exact position. See the backend-rewrite workflow reference for the
-canonical trailer format. Unchanged legacy occurrences are outside this
-added-line gate.
+parse Rust syntax. New `.trp.test` occurrences are rejected in all added Rust
+lines. Production Rust paths are also checked for Replay fake IPs, private
+runtime state and recording artifacts.
+
 
 The runner sends HTTP requests itself; the target image does not read cases or
 write response reports. The configured port is shared by the image

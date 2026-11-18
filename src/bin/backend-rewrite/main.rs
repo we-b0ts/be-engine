@@ -436,12 +436,6 @@ struct TargetQualityRunArgs {
     /// API acceptance whose integrated target revision issued this gate.
     #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: traffic_e2e::RewriteApiSelector,
-    /// Confirm one production-source-proven domain occurrence; repeat per target location.
-    #[arg(
-        long,
-        value_name = "TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN"
-    )]
-    hardcode_ai_verified: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -618,7 +612,6 @@ async fn run(cli: Cli) -> Result<()> {
                     target_root,
                     gate_id: args.gate_id,
                     api: args.api,
-                    hardcode_ai_verified: args.hardcode_ai_verified,
                 })?,
                 pretty,
             ),

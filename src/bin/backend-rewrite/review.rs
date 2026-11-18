@@ -61,12 +61,6 @@ enum ReviewCommand {
         /// JSON document containing spawn ownership and code evidence.
         #[arg(long)]
         evidence: Option<PathBuf>,
-        /// Confirm one production-source-proven domain occurrence; repeat per location.
-        #[arg(
-            long,
-            value_name = "TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN"
-        )]
-        hardcode_ai_verified: Vec<String>,
     },
     /// Admit a published global integration report without rerunning its checks.
     Accept {
@@ -107,7 +101,6 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
             handoff_id,
             batch_handoffs,
             evidence,
-            hardcode_ai_verified,
         } => {
             let scope = api.map(|api| RewriteWorkScope::Api { api });
             let integration = integration || pre_revalidation;
@@ -123,7 +116,6 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
                 scope,
                 handoff_id,
                 evidence,
-                hardcode_ai_verified,
             };
             let report = if pre_revalidation {
                 traffic_e2e::check_rewrite_pre_revalidation(options)?

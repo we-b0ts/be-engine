@@ -8,8 +8,6 @@ use super::fingerprint;
 #[path = "target_replay_isolation.rs"]
 mod replay_isolation;
 
-pub use replay_isolation::source_evidence_unchanged;
-
 const REPORT_SCHEMA_VERSION: u8 = 3;
 const POLICY_VERSION: &str = "delivery-quality-v4";
 
@@ -91,37 +89,21 @@ impl QualityReportMethods for QualityReport {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub fn run(root: &Path, base: &str, hardcode_ai_verified: &[String]) -> Result<QualityReport> {
-    run_for(
-        QualityScope::Integration,
-        root,
-        base,
-        None,
-        hardcode_ai_verified,
-    )
+pub fn run(root: &Path, base: &str) -> Result<QualityReport> {
+    run_for(QualityScope::Integration, root, base, None)
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub fn run_worker(
-    root: &Path,
-    base: &str,
-    hardcode_ai_verified: &[String],
-) -> Result<QualityReport> {
-    run_for(QualityScope::Worker, root, base, None, hardcode_ai_verified)
+pub fn run_worker(root: &Path, base: &str) -> Result<QualityReport> {
+    run_for(QualityScope::Worker, root, base, None)
 }
 
-pub fn run_pre_revalidation(
-    root: &Path,
-    base: &str,
-    quality_check: &str,
-    hardcode_ai_verified: &[String],
-) -> Result<QualityReport> {
+pub fn run_pre_revalidation(root: &Path, base: &str, quality_check: &str) -> Result<QualityReport> {
     run_for(
         QualityScope::PreRevalidation,
         root,
         base,
         Some(quality_check),
-        hardcode_ai_verified,
     )
 }
 
@@ -130,13 +112,12 @@ fn run_for(
     root: &Path,
     base: &str,
     quality_check: Option<&str>,
-    hardcode_ai_verified: &[String],
 ) -> Result<QualityReport> {
     Ok(QualityReport {
         schema_version: REPORT_SCHEMA_VERSION,
         scope: Some(scope),
         policy_fingerprint: policy_fingerprint_for(scope, quality_check)?,
-        replay_isolation: replay_isolation::inspect_at_base(root, base, hardcode_ai_verified)?,
+        replay_isolation: replay_isolation::inspect_at_base(root, base)?,
         quality_check: quality_check.map(str::to_owned),
         commands: Vec::new(),
     })

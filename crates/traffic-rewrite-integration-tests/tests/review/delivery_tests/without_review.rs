@@ -130,7 +130,6 @@ fn oversized_spawn_and_isolation_findings_do_not_block_handoff_or_integration() 
         integration: true,
         quality_check: Some("cargo-clippy".into()),
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(final_report.status, ReviewStatus::ChangesRequired);

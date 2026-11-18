@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
@@ -41,33 +41,6 @@ pub fn project_root_in_worktree(
         project_root.display()
     );
     Ok(project_root)
-}
-
-/// Convert a target-project-relative path into the tree path accepted by
-/// `git show REV:path` in the containing repository.
-pub fn git_object_path(target_root: &Path, project_relative: &Path) -> Result<PathBuf> {
-    ensure!(
-        !project_relative.as_os_str().is_empty() && !project_relative.is_absolute(),
-        "managed source path must be target-relative"
-    );
-    let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
-    let directory = managed
-        .iter()
-        .filter(|directory| project_relative.starts_with(&directory.target_relative))
-        .max_by_key(|directory| directory.target_relative.components().count())
-        .context("source path is outside delivery.managed_paths")?;
-    let relative = project_relative
-        .strip_prefix(&directory.target_relative)
-        .context("failed to map managed source path")?;
-    ensure!(
-        !relative.as_os_str().is_empty()
-            && relative
-                .components()
-                .all(|component| matches!(component, Component::Normal(_))),
-        "source path is outside delivery.managed_paths: {}",
-        project_relative.display()
-    );
-    Ok(directory.repository_relative.join(relative))
 }
 
 pub fn managed_file_path(target_root: &Path, target_relative: &Path) -> Result<PathBuf> {
@@ -148,10 +121,6 @@ mod tests {
             project_root_in_worktree(&target, &worktree.join("services/backend")).unwrap(),
             worktree.join("services/backend")
         );
-        assert_eq!(
-            git_object_path(&target, Path::new("src/main.rs")).unwrap(),
-            Path::new("services/backend/src/main.rs")
-        );
     }
 
     #[test]
@@ -167,10 +136,6 @@ mod tests {
         assert_eq!(
             project_root_in_worktree(repository.path(), repository.path()).unwrap(),
             fs::canonicalize(repository.path()).unwrap()
-        );
-        assert_eq!(
-            git_object_path(repository.path(), Path::new("src/main.rs")).unwrap(),
-            Path::new("src/main.rs")
         );
     }
 

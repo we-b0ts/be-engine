@@ -16,7 +16,6 @@ pub struct RewriteReviewOptions {
     /// Confirms the agent passed this tool on the final committed candidate.
     pub quality_check: Option<String>,
     pub handoff_id: Option<String>,
-    pub hardcode_ai_verified: Vec<String>,
 }
 
 pub use traffic_rewrite_model::rewrite::review::model::ReviewAssignment;

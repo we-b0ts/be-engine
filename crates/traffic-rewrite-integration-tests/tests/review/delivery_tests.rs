@@ -81,7 +81,6 @@ fn options(root: &Path, worktree: &Path, scope: Option<RewriteWorkScope>) -> Rew
         scope,
         evidence: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     }
 }
 
@@ -135,39 +134,33 @@ fn change_project_configuration(root: &Path) {
 }
 
 #[test]
-fn worker_review_blocks_sensitive_domains_in_production_and_test_code() {
+fn worker_review_blocks_replay_hostnames_in_production_and_test_code() {
     let target = target();
     let directory = tempfile::tempdir().unwrap();
     let worker = worktree(target.path(), directory.path(), "worker");
     let scope = worker_scope(target.path(), &worker);
-    for relative in ["src/domain.rs", "tests/domain.rs"] {
+    for relative in ["src/cache.rs", "tests/cache.rs"] {
         let path = worker.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        for domain in ["demo.test", "sample.test"] {
-            fs::write(&path, format!("const DOMAIN: &str = \"{domain}\";\n")).unwrap();
-            let report = check(options(target.path(), &worker, Some(scope.clone()))).unwrap();
-            assert_eq!(
-                report.status,
-                ReviewStatus::ChangesRequired,
-                "{relative}: {domain}"
-            );
-            let isolation =
-                serde_json::to_value(&report.quality.as_ref().unwrap().replay_isolation).unwrap();
-            assert!(
-                isolation["violations"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|finding| {
-                        finding["file"] == relative
-                            && finding["matched"] == domain
-                            && finding["rule"] == "source_hardcoded_domain"
-                            && !finding["required_change"].as_str().unwrap().is_empty()
-                    }),
-                "{isolation}"
-            );
-            assert!(worker::runtime::report(delivery(target.path(), &scope, &report)).is_err());
-        }
+        fs::write(&path, "const CACHE: &str = \"cache.trp.test\";\n").unwrap();
+        let report = check(options(target.path(), &worker, Some(scope.clone()))).unwrap();
+        assert_eq!(report.status, ReviewStatus::ChangesRequired, "{relative}");
+        let isolation =
+            serde_json::to_value(&report.quality.as_ref().unwrap().replay_isolation).unwrap();
+        assert!(
+            isolation["violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| {
+                    finding["file"] == relative
+                        && finding["matched"] == ".trp.test"
+                        && finding["rule"] == "replay_hostname"
+                        && !finding["required_change"].as_str().unwrap().is_empty()
+                }),
+            "{isolation}"
+        );
+        assert!(worker::runtime::report(delivery(target.path(), &scope, &report)).is_err());
         fs::remove_file(path).unwrap();
     }
 }
@@ -178,7 +171,7 @@ fn worker_review_includes_pr_violations_inherited_before_dispatch() {
     fs::create_dir_all(target.path().join("src")).unwrap();
     fs::write(
         target.path().join("src/inherited.rs"),
-        "pub const DOMAIN: &str = \"demo.test\";\n",
+        "pub const CACHE: &str = \"cache.trp.test\";\n",
     )
     .unwrap();
     git(target.path(), &["add", "src/inherited.rs"]);
@@ -556,17 +549,11 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     assert!(!terminal_current(target.path(), &state));
     fs::write(target.path().join("lib.rs"), code).unwrap();
 
-    // Source-proof metadata changes require review even without a code change.
     git(
         target.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "update source evidence\n\nHardcode-Source-Evidence: lib.rs:1:1 <= source@revision:lib.rs:1:1",
-        ],
+        &["commit", "--allow-empty", "-qm", "update commit metadata"],
     );
-    assert!(!terminal_current(target.path(), &state));
+    assert!(terminal_current(target.path(), &state));
     assert!(gate(target.path(), &state, "master").unwrap().is_none());
     assert!(!counter.exists());
 

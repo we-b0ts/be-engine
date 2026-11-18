@@ -35,7 +35,6 @@ fn options(
             integration: true,
             quality_check: None,
             handoff_id: Some("commit-a".into()),
-            hardcode_ai_verified: vec![],
         })
         .ok()
         .map(|r| r.report_path),

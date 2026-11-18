@@ -99,7 +99,6 @@ fn unchanged_purposes_require_final_review_and_actual_batch_before_progress_comp
             scope: None,
             handoff_id: None,
             evidence: None,
-            hardcode_ai_verified: Vec::new(),
         })
         .unwrap();
         review::accept(target.path().into(), report.report_path).unwrap();
@@ -203,7 +202,6 @@ fn changed_purpose_needs_a_fresh_accepted_receipt_and_keeps_rework_gates() {
         integration: true,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: vec![],
     })
     .unwrap();
     assert!(!review::admission_current(target.path(), &state));

@@ -75,7 +75,6 @@ fn options(root: &Path, worktree: &Path) -> RewriteReviewOptions {
         scope: None,
         evidence: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     }
 }
 

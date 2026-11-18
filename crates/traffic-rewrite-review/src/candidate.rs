@@ -137,10 +137,6 @@ pub fn validate_accepted(
         &["merge-base", "--is-ancestor", &report.head_revision, "HEAD"],
     )
     .context("accepted review commit is not an ancestor of the published target")?;
-    ensure!(
-        crate::quality::source_evidence_unchanged(root, &report.head_revision)?,
-        "source-evidence commit trailers changed after review; rerun review check"
-    );
     checks_passed(root, report, project)
 }
 

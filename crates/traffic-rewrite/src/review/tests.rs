@@ -12,7 +12,6 @@ pub(crate) fn worker_report(root: &Path, scope: RewriteWorkScope) -> PathBuf {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .map(|report| report.report_path)
     .unwrap_or_else(|_| root.join("missing-review.json"))

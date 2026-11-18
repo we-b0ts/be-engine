@@ -530,10 +530,6 @@ fn parses_the_bounded_rewrite_surface() {
             "target-quality-fnv1a64-0123456789abcdef",
             "--api",
             "/api/widgets/*",
-            "--hardcode-ai-verified",
-            "src/client.rs:42:18=legacy@abcdef1:src/main/java/Client.java:96:27",
-            "--hardcode-ai-verified",
-            "src/other.rs:7:9=legacy@abcdef1:src/main/java/Other.java:31:12",
         ])
         .is_ok()
     );

@@ -97,7 +97,6 @@ fn admitted_source_receipt_keeps_changed_engine_retry_guidance_visible() {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     review::accept(root.into(), report.report_path).unwrap();

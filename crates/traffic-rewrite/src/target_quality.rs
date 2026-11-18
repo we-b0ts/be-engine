@@ -12,7 +12,6 @@ pub struct RewriteTargetQualityOptions {
     pub target_root: std::path::PathBuf,
     pub gate_id: String,
     pub api: super::RewriteApiSelector,
-    pub hardcode_ai_verified: Vec<String>,
 }
 
 /// Legacy command compatibility. Never starts a compiler, scanner, or detached check.

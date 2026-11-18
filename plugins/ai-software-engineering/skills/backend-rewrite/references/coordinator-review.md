@@ -32,7 +32,7 @@ Inspect final findings and exact source locations. Keep line-limit splitting,
 formatting and other routine cleanup in the final-review worktree. Resolve
 spawn evidence with the actual startup/request trigger and task lifecycle; do
 not relabel evidence from another version. Follow
-[source-review-rules.md](source-review-rules.md), including exact hardcode proofs.
+[source-review-rules.md](source-review-rules.md).
 
 For behavior decisions, route a real finding with `review rework --report
 /absolute/failed-candidate-report.json --finding ID --owner 'api:/path'`, or the

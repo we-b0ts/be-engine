@@ -64,7 +64,6 @@ fn failed_candidate() -> (
         scope: None,
         handoff_id: None,
         evidence: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(report.status, ReviewStatus::ChangesRequired);

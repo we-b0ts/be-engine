@@ -467,7 +467,7 @@ This legacy action/command no longer executes quality checks in the coordinator.
 `target-quality run` validates an already accepted current quality receipt.
 Ordinary Replay no longer waits for source-review receipts. Follow current
 status; final proof is issued only by `pre_revalidation_review_required`.
-Source/Replay-isolation, public-domain hardcodes, file-size and spawn-ownership
+Source/Replay-isolation, file-size and spawn-ownership
 checks are consolidated there. Ordinary integration only merges and resolves
 conflicts; identity admission never executes source review or repository tools.
 

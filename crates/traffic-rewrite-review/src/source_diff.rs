@@ -8,7 +8,7 @@ mod cache;
 mod layout;
 
 pub use cache::scope as with_git_read_cache;
-pub use layout::{git_object_path, managed_file_path, project_root_in_worktree};
+pub use layout::{managed_file_path, project_root_in_worktree};
 
 const IGNORED_DIRECTORIES: &[&str] = &[".git", ".traffic-e2e", "node_modules", "target", "vendor"];
 const NON_PRODUCTION_DIRECTORIES: &[&str] =
@@ -21,7 +21,6 @@ pub struct AddedLine {
 }
 
 pub struct AddedRustLines {
-    pub merge_base: String,
     pub scanned_files: usize,
     pub files: Vec<PathBuf>,
     pub lines: Vec<AddedLine>,
@@ -39,7 +38,6 @@ pub fn added_rust_lines(target_root: &Path, pr_base: &str) -> Result<AddedRustLi
 pub fn changed_rust_lines(target_root: &Path, base: &str) -> Result<AddedRustLines> {
     let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
     let mut aggregate = AddedRustLines {
-        merge_base: base.to_string(),
         scanned_files: 0,
         files: Vec::new(),
         lines: Vec::new(),
@@ -115,7 +113,6 @@ pub fn ensure_changed_paths_managed(target_root: &Path, base: &str) -> Result<()
 }
 
 fn changed_rust_lines_in_directory(target_root: &Path, base: &str) -> Result<AddedRustLines> {
-    let merge_base = base.to_string();
     let mut files = BTreeSet::new();
     collect_changed_paths(
         target_root,
@@ -128,7 +125,7 @@ fn changed_rust_lines_in_directory(target_root: &Path, base: &str) -> Result<Add
                 "--name-only",
                 "-z",
                 "--diff-filter=ACMRT",
-                &merge_base,
+                base,
                 "--",
                 ".",
             ],
@@ -150,14 +147,14 @@ fn changed_rust_lines_in_directory(target_root: &Path, base: &str) -> Result<Add
         )?,
         &mut files,
     )?;
-    let renamed_from = renamed_paths(target_root, &merge_base)?;
+    let renamed_from = renamed_paths(target_root, base)?;
 
     let mut lines = Vec::new();
     for relative in &files {
         if is_tracked(target_root, relative)? {
             lines.extend(tracked_added_lines(
                 target_root,
-                &merge_base,
+                base,
                 relative,
                 renamed_from.get(relative).map(PathBuf::as_path),
             )?);
@@ -166,7 +163,6 @@ fn changed_rust_lines_in_directory(target_root: &Path, base: &str) -> Result<Add
         }
     }
     Ok(AddedRustLines {
-        merge_base,
         scanned_files: files.len(),
         files: files.into_iter().collect(),
         lines,
@@ -267,24 +263,6 @@ pub fn is_safe_relative_rust_path(path: &Path) -> bool {
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
-}
-
-pub fn is_safe_target_relative_rust_path(path: &Path) -> bool {
-    if !path.extension().is_some_and(|extension| extension == "rs")
-        || path.as_os_str().is_empty()
-        || path.is_absolute()
-    {
-        return false;
-    }
-    let mut normal_seen = false;
-    for component in path.components() {
-        match component {
-            Component::ParentDir if !normal_seen => {}
-            Component::Normal(_) => normal_seen = true,
-            _ => return false,
-        }
-    }
-    normal_seen
 }
 
 fn is_tracked(target_root: &Path, relative: &Path) -> Result<bool> {

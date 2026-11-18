@@ -106,7 +106,6 @@ fn multiple_failures_drain_the_sweep_then_all_repairs_must_be_accepted() {
         integration: false,
         quality_check: Some("cargo-clippy".into()),
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(report.status, crate::review::ReviewStatus::Passed);

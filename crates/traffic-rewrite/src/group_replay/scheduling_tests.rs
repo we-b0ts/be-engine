@@ -54,7 +54,6 @@ fn setup(activity: Activity) -> (tempfile::TempDir, RewriteState) {
             integration: true,
             quality_check: None,
             handoff_id: None,
-            hardcode_ai_verified: Vec::new(),
         })
         .unwrap();
         assert_eq!(report.status, review::ReviewStatus::Passed);

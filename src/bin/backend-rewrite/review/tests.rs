@@ -55,10 +55,6 @@ fn exposes_worker_and_integrated_review_commands() {
             "/api",
             "--evidence",
             "/tmp/evidence.json",
-            "--hardcode-ai-verified",
-            "src/client.rs:3:4=source@abcdef1:src/client.go:5:6",
-            "--hardcode-ai-verified",
-            "src/client.rs:8:9=source@abcdef1:src/client.go:10:11",
         ],
         vec![
             "test",

@@ -43,8 +43,8 @@ fn review_receipts_are_stage_bound_and_never_execute_repository_commands() {
     // An unusable manifest would fail any Cargo command. Ordinary reviews must
     // perform no repository commands even when Rust is detected.
     fs::write(root.path().join("Cargo.toml"), "invalid Cargo manifest\n").unwrap();
-    let worker = run_worker(root.path(), "integration", &[]).unwrap();
-    let integration = run(root.path(), "integration", &[]).unwrap();
+    let worker = run_worker(root.path(), "integration").unwrap();
+    let integration = run(root.path(), "integration").unwrap();
     assert!(worker.passed_for(QualityScope::Worker));
     worker.ensure_passed_for(QualityScope::Worker).unwrap();
     assert!(integration.passed());
@@ -76,30 +76,6 @@ fn review_receipts_are_stage_bound_and_never_execute_repository_commands() {
 }
 
 #[test]
-fn source_sensitive_domains_in_tests_still_block_both_review_stages() {
-    let root = repository();
-    fs::create_dir(root.path().join("tests")).unwrap();
-    fs::write(
-        root.path().join("tests/auth.rs"),
-        "const EMAIL: &str = \"fixture@demo.test\";\nconst API: &str = \"sample.test\";\n",
-    )
-    .unwrap();
-    for report in [
-        run_worker(root.path(), "integration", &[]).unwrap(),
-        run(root.path(), "integration", &[]).unwrap(),
-    ] {
-        let scope = report.scope.unwrap();
-        assert!(!report.passed_for(scope));
-        let error = report.ensure_passed_for(scope).unwrap_err().to_string();
-        assert!(error.starts_with("target replay isolation gate failed:"));
-        assert!(error.contains("tests/auth.rs"));
-        assert!(error.contains("demo.test"));
-        assert!(error.contains("sample.test"));
-        assert!(error.contains("Hardcode-Source-Evidence"));
-    }
-}
-
-#[test]
 fn frozen_commit_base_scans_inherited_violations_after_the_branch_moves() {
     use crate::source_diff::git_text;
     let root = crate::worker::tests::configured_target();
@@ -107,22 +83,22 @@ fn frozen_commit_base_scans_inherited_violations_after_the_branch_moves() {
         .unwrap()
         .trim()
         .to_string();
-    assert!(run(root.path(), &base, &[]).unwrap().passed());
+    assert!(run(root.path(), &base).unwrap().passed());
     fs::write(
         root.path().join("lib.rs"),
-        "pub const DOMAIN: &str = \"demo.test\";\n",
+        "pub const CACHE: &str = \"cache.trp.test\";\n",
     )
     .unwrap();
     git_text(root.path(), &["add", "lib.rs"]).unwrap();
-    git_text(root.path(), &["commit", "-qm", "inherited domain"]).unwrap();
-    let report = run(root.path(), &base, &[]).unwrap();
+    git_text(root.path(), &["commit", "-qm", "inherited Replay hostname"]).unwrap();
+    let report = run(root.path(), &base).unwrap();
     assert!(!report.passed());
     assert!(
         report
             .ensure_passed()
             .unwrap_err()
             .to_string()
-            .contains("demo.test")
+            .contains(".trp.test")
     );
 }
 
@@ -138,7 +114,7 @@ fn final_quality_is_agent_reported_and_never_executes_repository_commands() {
         "golangci-lint",
         "project-quality",
     ] {
-        let report = run_pre_revalidation(root.path(), "integration", tool, &[]).unwrap();
+        let report = run_pre_revalidation(root.path(), "integration", tool).unwrap();
         report.ensure_pre_revalidation(tool).unwrap();
         assert_eq!(report.quality_check.as_deref(), Some(tool));
         assert!(report.commands.is_empty());
@@ -159,10 +135,10 @@ fn final_quality_is_agent_reported_and_never_executes_repository_commands() {
 #[test]
 fn final_quality_requires_the_current_tool_and_cannot_be_relabelled() {
     let root = repository();
-    let good = run_pre_revalidation(root.path(), "integration", "cargo-clippy", &[]).unwrap();
+    let good = run_pre_revalidation(root.path(), "integration", "cargo-clippy").unwrap();
     good.ensure_pre_revalidation("cargo-clippy").unwrap();
     assert!(good.ensure_pre_revalidation("eslint").is_err());
-    let ordinary = run(root.path(), "integration", &[]).unwrap();
+    let ordinary = run(root.path(), "integration").unwrap();
     assert!(ordinary.ensure_pre_revalidation("cargo-clippy").is_err());
     for tool in [None, Some("".to_string()), Some("eslint".to_string())] {
         let mut invalid = good.clone();
@@ -176,7 +152,7 @@ fn final_quality_requires_the_current_tool_and_cannot_be_relabelled() {
     relabelled.scope = Some(QualityScope::PreRevalidation);
     relabelled.quality_check = Some("cargo-clippy".into());
     assert!(relabelled.ensure_pre_revalidation("cargo-clippy").is_err());
-    let other = run_pre_revalidation(root.path(), "integration", "eslint", &[]).unwrap();
+    let other = run_pre_revalidation(root.path(), "integration", "eslint").unwrap();
     assert_ne!(good.policy_fingerprint, other.policy_fingerprint);
     let mut old_schema = good;
     old_schema.schema_version = 2;
@@ -186,7 +162,7 @@ fn final_quality_requires_the_current_tool_and_cannot_be_relabelled() {
 #[test]
 fn historical_command_results_do_not_authorize_current_final_quality() {
     let root = repository();
-    let mut report = run_pre_revalidation(root.path(), "integration", "cargo-clippy", &[]).unwrap();
+    let mut report = run_pre_revalidation(root.path(), "integration", "cargo-clippy").unwrap();
     report.commands.push(QualityCommandReport {
         name: "rust-clippy".into(),
         argv: vec!["cargo".into(), "clippy".into()],
@@ -204,10 +180,10 @@ fn final_agent_quality_report_does_not_bypass_isolation() {
     let root = repository();
     fs::write(
         root.path().join("src/lib.rs"),
-        "pub const DOMAIN: &str = \"demo.test\";\n",
+        "pub const CACHE: &str = \"cache.trp.test\";\n",
     )
     .unwrap();
-    let report = run_pre_revalidation(root.path(), "integration", "cargo-clippy", &[]).unwrap();
+    let report = run_pre_revalidation(root.path(), "integration", "cargo-clippy").unwrap();
     assert!(
         report
             .ensure_pre_revalidation("cargo-clippy")

@@ -40,7 +40,6 @@ fn options(root: &Path, scope: RewriteWorkScope) -> RewriteReviewOptions {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     }
 }
 
@@ -194,7 +193,6 @@ fn local_review_does_not_mutate_workflow_and_integrated_receipt_survives_resume(
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(report.status, ReviewStatus::Passed);
@@ -285,7 +283,6 @@ fn assigned_worktree_delivery(route_workers: bool) {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     };
     let report = check(opts.clone()).unwrap();
     assert_eq!(report.status, ReviewStatus::EvidenceRequired);
@@ -350,7 +347,6 @@ fn assigned_worktree_delivery(route_workers: bool) {
         integration: true,
         quality_check: None,
         handoff_id: delivery.handoff_id.clone(),
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(candidate.status, ReviewStatus::Passed);
@@ -405,7 +401,6 @@ fn assigned_worktree_delivery(route_workers: bool) {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(refreshed.status, ReviewStatus::EvidenceRequired);
@@ -518,7 +513,6 @@ fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     };
     let report = check(options.clone()).unwrap();
     assert_eq!(report.worktree, target_worktree);
@@ -643,7 +637,6 @@ fn review_covers_managed_siblings_without_executing_cargo() {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(
@@ -668,7 +661,6 @@ fn review_covers_managed_siblings_without_executing_cargo() {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
 
@@ -700,7 +692,6 @@ fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent(
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(report.status, ReviewStatus::ChangesRequired);
@@ -759,7 +750,6 @@ fn failing_integrated_review(root: &Path) -> RewriteReviewReport {
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap()
 }
@@ -872,7 +862,6 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
         integration: false,
         quality_check: None,
         handoff_id: None,
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(refreshed.status, ReviewStatus::ChangesRequired);
@@ -910,7 +899,6 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
         integration: true,
         quality_check: None,
         handoff_id: feedback.handoff_id.clone(),
-        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(integrated.status, ReviewStatus::Passed);

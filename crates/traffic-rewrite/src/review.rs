@@ -239,7 +239,6 @@ fn check_candidate(
             &root,
             &validation.scan_base_revision,
             &project.quality_check,
-            &options.hardcode_ai_verified,
         )?;
         if !quality.passed_for(super::quality::QualityScope::PreRevalidation) {
             status = ReviewStatus::ChangesRequired;
@@ -316,7 +315,6 @@ fn check_candidate(
         validation: Some(validation),
         integration,
         pre_revalidation: final_context,
-        hardcode_ai_verified: options.hardcode_ai_verified,
         accepted_target_fingerprint: None,
         required_gates,
         next_step: if identity_only {

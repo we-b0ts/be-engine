@@ -12,6 +12,5 @@ pub enum Request {
     TargetQuality {
         api: String,
         gate_id: String,
-        hardcode_ai_verified: Vec<String>,
     },
 }

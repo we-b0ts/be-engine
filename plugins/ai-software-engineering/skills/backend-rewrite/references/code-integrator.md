@@ -100,14 +100,13 @@ backend-rewrite --target-root /absolute/canonical review check \
 Use the exact tool identifier returned by the engine. `--quality-check TOOL`
 attests that you successfully ran it on this final committed candidate. The
 engine checks the identifier against the canonical configuration, performs
-Source, keyword and Replay-isolation checks, and binds the attestation to code,
+Source and Replay-isolation checks, and binds the attestation to code,
 build inputs and final scope. It does not execute fmt, tests, Clippy or another
 repository tool, and does not independently certify the agent's execution. Do
 not supply this flag for a failed, omitted or stale tool run. Do not substitute
 `--integration`, a batch report or a worker report; keep scope/handoff selectors
 out of this global check. Progress, policy and private runtime keep their
-existing separate handling. Supply current Source evidence and exact hardcode
-mappings when required.
+existing separate handling. Supply current Source evidence when required.
 
 Inspect the report status and retain the quality-tool and project-test commands
 and results in your agent response. Repair routine formatting/lint failures

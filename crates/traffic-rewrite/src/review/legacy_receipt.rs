@@ -26,9 +26,9 @@ pub(crate) fn inspect(options: RewriteReviewOptions) -> Result<RewriteReviewRepo
     let (mut status, evidence_files) = evidence::evaluate(root, &findings, &evidence)?;
     let quality = if status == ReviewStatus::Passed {
         let quality = if report.integration.is_some() {
-            crate::quality::run(root, base, &options.hardcode_ai_verified)?
+            crate::quality::run(root, base)?
         } else {
-            crate::quality::run_worker(root, base, &options.hardcode_ai_verified)?
+            crate::quality::run_worker(root, base)?
         };
         let scope = if report.integration.is_some() {
             crate::quality::QualityScope::Integration

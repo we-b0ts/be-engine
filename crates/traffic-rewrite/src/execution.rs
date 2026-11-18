@@ -26,7 +26,6 @@ enum Request {
     TargetQuality {
         api: String,
         gate_id: String,
-        hardcode_ai_verified: Vec<String>,
     },
 }
 
@@ -188,16 +187,13 @@ pub async fn execute(target_root: PathBuf, id: &str) -> Result<RewriteActionEnve
             )
             .await
         }
-        Request::TargetQuality {
-            api,
-            gate_id,
-            hardcode_ai_verified,
-        } => super::target_quality::run(RewriteTargetQualityOptions {
-            target_root: target_root.clone(),
-            api: api.parse()?,
-            gate_id: gate_id.clone(),
-            hardcode_ai_verified: hardcode_ai_verified.clone(),
-        }),
+        Request::TargetQuality { api, gate_id } => {
+            super::target_quality::run(RewriteTargetQualityOptions {
+                target_root: target_root.clone(),
+                api: api.parse()?,
+                gate_id: gate_id.clone(),
+            })
+        }
     };
     let _lock = store.lock()?;
     let mut current = load(&target_root)?.context("coordinator operation marker disappeared")?;
@@ -242,19 +238,13 @@ pub fn retry(context: RewriteContext, id: &str) -> Result<RewriteActionEnvelope>
         execution.id == id && execution.finished && execution.error.is_some(),
         "retry requires the current failed coordinator operation"
     );
-    if let Request::TargetQuality {
-        api,
-        gate_id,
-        hardcode_ai_verified,
-    } = &execution.request
-    {
+    if let Request::TargetQuality { api, gate_id } = &execution.request {
         // Old failed quality operations resume receipt admission, never another
         // coordinator-side check. Missing receipts route back to the integrator.
         let options = RewriteTargetQualityOptions {
             target_root: context.target_root.clone(),
             api: api.parse()?,
             gate_id: gate_id.clone(),
-            hardcode_ai_verified: hardcode_ai_verified.clone(),
         };
         let store = RewriteStore::new(&context.target_root)?;
         let Some(lock) = store.try_lock()? else {

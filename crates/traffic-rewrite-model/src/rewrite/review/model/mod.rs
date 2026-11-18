@@ -62,8 +62,6 @@ pub struct RewriteReviewReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_revalidation: Option<String>,
     #[serde(default)]
-    pub hardcode_ai_verified: Vec<String>,
-    #[serde(default)]
     pub accepted_target_fingerprint: Option<String>,
 }
 
