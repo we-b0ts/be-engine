@@ -1,5 +1,5 @@
 //! Native storage commands determine which payloads a witness exposes.
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use traffic_protocol::evidence::{MessageSide, ValueEvidence, ValueQuery, ValueReader};
 
@@ -9,6 +9,15 @@ pub(super) fn query(
     query: ValueQuery<'_>,
     reader: &dyn ValueReader,
 ) -> Result<ValueEvidence> {
+    if event["event_type"] == "redis_pub_sub_push" {
+        ensure!(
+            query.side == MessageSide::Response,
+            "Redis notifications have no request"
+        );
+        let push =
+            crate::parse_pubsub_push(payload)?.context("Redis notification has no push frame")?;
+        return Ok(ValueEvidence::select(&[push.payload], query, reader));
+    }
     let arguments = if query.side == MessageSide::Request {
         serde_json::from_slice::<Vec<Vec<u8>>>(payload)?
     } else {

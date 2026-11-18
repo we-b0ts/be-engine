@@ -1,16 +1,28 @@
-//! Native RESP recording through shared capture permits and output receipts.
-use super::*;
+//! RESP recording correlates replies and captures confirmed pushes separately.
+use std::time::Instant;
+
 use anyhow::Context;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use tokio::io::AsyncWriteExt;
 use traffic_model::{capture::capture_body, trace::OutputKind};
 use traffic_protocol::{
-    capture::CaptureSnapshot,
-    connection::{CaptureHost, ConnectionIo, NativeFuture},
+    capture::{CaptureEvidence, CaptureSnapshot},
+    connection::{CaptureExchange, CaptureHost, ConnectionIo, NativeFuture},
 };
 use uuid::Uuid;
 
+use super::{notification::CapturedPush, subscription::Subscriptions, *};
+use crate::{RedisCommand, RedisFrame, RedisFrameKind, capture::CaptureSessionState};
+
 pub(super) struct Capture(pub ConnectionInfo);
+
+struct Pending {
+    sequence: u64,
+    command: RedisCommand,
+    permit: Box<dyn CaptureExchange>,
+    started: Instant,
+    wall: DateTime<Utc>,
+}
 
 impl CaptureSession for Capture {
     fn run(
@@ -23,92 +35,160 @@ impl CaptureSession for Capture {
             let connection_id = Uuid::new_v4();
             let mut client = crate::BufferedReader::new(client, self.0.max_frame_bytes);
             let mut upstream = crate::BufferedReader::new(upstream, self.0.max_frame_bytes);
-            let mut session = crate::capture::CaptureSessionState {
+            let mut session = CaptureSessionState {
                 resp_version: 2,
                 database: 0,
                 username: None,
                 subscriptions: Default::default(),
             };
-            let mut sequence = 0;
-            while let Some(frame) = crate::read_frame(&mut client).await? {
-                let command = crate::redis_command(&frame.raw)?;
-                sequence += 1;
-                let reference = ProtocolRef::connection("redis", connection_id, sequence);
-                let Some(permit) = host
-                    .begin(reference, crate::access::classify_command(&command))
-                    .await?
-                else {
-                    client
-                        .inner
-                        .write_all(b"-ERR recording access denied\r\n")
-                        .await?;
-                    client.inner.flush().await?;
-                    continue;
-                };
-                let request_started_at = Utc::now();
-                let started = std::time::Instant::now();
-                let (arguments, session_setup, safe, warnings) =
-                    crate::capture::sanitize_and_classify(&command);
-                upstream.inner.write_all(&frame.raw).await?;
-                upstream.inner.flush().await?;
-                let response = crate::read_frame(&mut upstream)
-                    .await?
-                    .context("Redis upstream ended before a complete response")?;
-                let receipt = permit.prepare_output(OutputKind::End)?;
-                client.inner.write_all(&response.raw).await?;
-                client.inner.flush().await?;
-                receipt.commit();
-                let supported = session.resp_version == 2
-                    && !crate::is_pubsub_command(&command.name)
-                    && !crate::builtins::redis_is_unsupported(&command);
-                let event = crate::events::RedisExchangeEvent {
-                    id: Uuid::new_v4(),
-                    connection_id,
-                    sequence,
-                    timestamp: Utc::now(),
-                    request_started_at,
-                    client_addr: self.0.client_addr.clone(),
-                    target_host: self.0.endpoint.host.clone(),
-                    target_port: self.0.endpoint.port,
-                    target_addr: traffic_protocol::observation::format_endpoint(
-                        &self.0.endpoint.host,
-                        self.0.endpoint.port,
-                    ),
-                    upstream_addr: self.0.upstream_addr.clone().unwrap_or_default(),
-                    resp_version: session.resp_version,
-                    database: session.database,
-                    username: session.username.clone(),
-                    command: command.name.clone(),
-                    args: arguments
-                        .iter()
-                        .map(|value| capture_body(value, self.0.max_frame_bytes))
-                        .collect(),
-                    response_kind: response.kind.as_str().into(),
-                    response: capture_body(&response.raw, self.0.max_frame_bytes),
-                    rpc_callback_capture: None,
-                    cache_snapshot_rule: None,
-                    cache_snapshot_hit: false,
-                    session_setup,
-                    outcome: DependencyExchangeOutcome::Response,
-                    duration_ms: started.elapsed().as_millis(),
-                    replay_safe: safe && supported,
-                    parse_warnings: warnings,
-                };
-                permit.complete(CaptureSnapshot::capture(&event)?).await?;
-                if response.kind != crate::RedisFrameKind::Error {
-                    session.apply_successful_setup(&command, &response.raw, sequence);
-                }
-                if !supported {
-                    upstream.inner.write_all(&client.buffer.split()).await?;
-                    client.inner.write_all(&upstream.buffer.split()).await?;
-                    tokio::io::copy_bidirectional(&mut client.inner, &mut upstream.inner).await?;
-                    return Ok(());
-                }
-                if command.name == "QUIT" {
-                    return Ok(());
+            let mut subscriptions = Subscriptions::<(u64, Instant)>::default();
+            let mut sequence = 0_u64;
+            let mut pending = None;
+            loop {
+                tokio::select! {
+                    frame = crate::read_frame(&mut client), if pending.is_none() => {
+                        let Some(frame) = frame? else { break };
+                        let command = crate::redis_command(&frame.raw)?;
+                        sequence = sequence.checked_add(1).context("Redis capture sequence overflow")?;
+                        let reference = ProtocolRef::connection("redis", connection_id, sequence);
+                        let Some(permit) = host.begin(reference, crate::access::classify_command(&command)).await? else {
+                            client.inner.write_all(b"-ERR recording access denied\r\n").await?;
+                            client.inner.flush().await?;
+                            continue;
+                        };
+                        let started = Instant::now();
+                        let wall = Utc::now();
+                        upstream.inner.write_all(&frame.raw).await?;
+                        upstream.inner.flush().await?;
+                        pending = Some(Pending {sequence, command, permit, started, wall});
+                    }
+                    frame = crate::read_frame(&mut upstream), if pending.is_some() || subscriptions.active() => {
+                        let Some(frame) = frame? else {
+                            ensure!(pending.is_none(), "Redis upstream ended before a complete response");
+                            break;
+                        };
+                        if subscriptions.active() && let Some(push) = crate::parse_pubsub_push(&frame.raw)? {
+                            let anchor = subscriptions.get(&push)
+                                .context("Redis notification has no confirmed subscription")?.anchor;
+                            self.capture_push(&*host, &mut *client.inner, &frame, &session, connection_id, anchor).await?;
+                            continue;
+                        }
+
+                        let request = pending.take().context("Redis response has no admitted command")?;
+                        let supported = session.resp_version == 2 && !crate::builtins::redis_is_unsupported(&request.command);
+                        let (arguments, session_setup, safe, mut warnings) =
+                            crate::capture::sanitize_and_classify(&request.command);
+                        let confirmation = if supported {
+                            match subscriptions.confirmation(&request.command, &frame.raw, false) {
+                                Ok(confirmation) => confirmation,
+                                Err(error) => {
+                                    warnings.push(error.to_string());
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        let replay_safe = safe && supported && warnings.is_empty();
+                        let receipt = request.permit.prepare_output(OutputKind::End)?;
+                        client.inner.write_all(&frame.raw).await?;
+                        client.inner.flush().await?;
+                        let delivered = Instant::now();
+                        let timestamp = Utc::now();
+                        receipt.commit();
+                        let event = crate::events::RedisExchangeEvent {
+                            id: Uuid::new_v4(),
+                            connection_id,
+                            sequence: request.sequence,
+                            timestamp,
+                            request_started_at: request.wall,
+                            client_addr: self.0.client_addr.clone(),
+                            target_host: self.0.endpoint.host.clone(),
+                            target_port: self.0.endpoint.port,
+                            target_addr: traffic_protocol::observation::format_endpoint(&self.0.endpoint.host, self.0.endpoint.port),
+                            upstream_addr: self.0.upstream_addr.clone().unwrap_or_default(),
+                            resp_version: session.resp_version,
+                            database: session.database,
+                            username: session.username.clone(),
+                            command: request.command.name.clone(),
+                            args: arguments.iter().map(|value| capture_body(value, self.0.max_frame_bytes)).collect(),
+                            response_kind: frame.kind.as_str().into(),
+                            response: capture_body(&frame.raw, self.0.max_frame_bytes),
+                            rpc_callback_capture: None,
+                            cache_snapshot_rule: None,
+                            cache_snapshot_hit: false,
+                            session_setup,
+                            outcome: DependencyExchangeOutcome::Response,
+                            duration_ms: delivered.duration_since(request.started).as_millis(),
+                            replay_safe,
+                            parse_warnings: warnings,
+                        };
+                        request.permit.complete(CaptureSnapshot::capture(&event)?).await?;
+                        if !supported || (crate::is_pubsub_command(&request.command.name) && !replay_safe) {
+                            upstream.inner.write_all(&client.buffer.split()).await?;
+                            client.inner.write_all(&upstream.buffer.split()).await?;
+                            tokio::io::copy_bidirectional(&mut client.inner, &mut upstream.inner).await?;
+                            break;
+                        }
+                        if let Some(confirmation) = confirmation {
+                            subscriptions.apply(confirmation, Some((request.sequence, delivered)))?;
+                        } else if frame.kind != RedisFrameKind::Error {
+                            if request.command.name == "RESET" {
+                                subscriptions.clear();
+                                session.resp_version = 2;
+                                session.database = 0;
+                                session.username = None;
+                            } else {
+                                session.apply_successful_setup(&request.command, &frame.raw, request.sequence);
+                            }
+                        }
+                        if request.command.name == "QUIT" {
+                            break;
+                        }
+                    }
                 }
             }
             Ok(())
         })
+    }
+}
+
+impl Capture {
+    async fn capture_push(
+        &self,
+        host: &dyn CaptureHost,
+        client: &mut dyn ConnectionIo,
+        frame: &RedisFrame,
+        session: &CaptureSessionState,
+        connection_id: Uuid,
+        (subscription_sequence, confirmed): (u64, Instant),
+    ) -> Result<()> {
+        let mut push = CapturedPush {
+            id: Uuid::new_v4(),
+            event: crate::events::RedisPubSubPushEvent {
+                timestamp: Utc::now(),
+                target_host: self.0.endpoint.host.clone(),
+                target_port: self.0.endpoint.port,
+                database: session.database,
+                username: session.username.clone(),
+                connection_id,
+                subscription_sequence,
+                rpc_request: None,
+                response: capture_body(&frame.raw, self.0.max_frame_bytes),
+                duration_ms: 0,
+                replay_safe: session.resp_version == 2,
+            },
+        };
+        let permit = host
+            .begin_message(push.capture_facts().reference)
+            .await?
+            .context("Redis notification capture admission is closed")?;
+        let receipt = permit.prepare_output(OutputKind::End)?;
+        client.write_all(&frame.raw).await?;
+        client.flush().await?;
+        push.event.timestamp = Utc::now();
+        push.event.duration_ms = u64::try_from(confirmed.elapsed().as_millis())?;
+        receipt.commit();
+        permit.complete(CaptureSnapshot::capture(&push)?).await
     }
 }

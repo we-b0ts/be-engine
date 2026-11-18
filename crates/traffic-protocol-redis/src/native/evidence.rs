@@ -3,6 +3,19 @@ use super::*;
 use traffic_protocol::evidence::{MessageEvidence, MessageSide, SourceTiming};
 
 pub(super) fn decode(event: &Value, payload: &[u8], side: MessageSide) -> Result<MessageEvidence> {
+    if event["event_type"] == "redis_pub_sub_push" {
+        ensure!(
+            side == MessageSide::Response,
+            "Redis notifications have no request"
+        );
+        return Ok(MessageEvidence {
+            request: None,
+            response: Some(Arc::new(super::notification::NotificationMessage::decode(
+                Bytes::copy_from_slice(payload),
+            )?)),
+            timing: SourceTiming::Notification,
+        });
+    }
     let args: Vec<Vec<u8>> = if side == MessageSide::Request {
         serde_json::from_slice(payload)?
     } else {
