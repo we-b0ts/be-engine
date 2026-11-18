@@ -949,50 +949,11 @@ exemptions are retired. Finite sharing does not authorize unused work. Use the
 same unified rule transaction described below; preserve target initialization,
 refresh and readiness behavior when the dependency drives business state.
 
-When a response-driving source hostname is absent from dependency evidence but
-occurs in the configured Breeze snapshot, preview and enable its logical
-resource instead of listing dynamic ports or backend domains:
-
-```bash
-traffic-e2e config recorder plan breeze-resource-capture \
-  --target-root ../target \
-  --resource usercounter \
-  --source-revision <immutable-source-image-revision> \
-  --evidence 'src/UserCounter.java:load uses usercounter'
-
-traffic-e2e config recorder apply breeze-resource-capture \
-  --target-root ../target \
-  --resource usercounter \
-  --source-revision <immutable-source-image-revision> \
-  --evidence 'src/UserCounter.java:load uses usercounter'
-```
-
-The short resource name must resolve uniquely. The plan reports and persists
-the exact descriptor identity, refuses IP-only resources because DNS bypass
-does not include literal IPs, and identifies resources sharing captured
-domains. Apply is add-only, atomic, and stale-safe. Start a new recording after
-the change; existing artifacts remain unchanged.
-
-For an active backend rewrite, the AI-facing coordinator accepts the
-source-visible backend endpoint instead of a Breeze resource selector:
-
-```bash
-backend-rewrite --target-root ../target route \
-  --cause missing-recorded-resource \
-  --evidence-id <current-evidence-id> \
-  --endpoint counter.example.com:9332 \
-  --source-ref 'src/UserCounter.java:load reads the counter backend'
-
-backend-rewrite --target-root ../target recorder-capture apply \
-  <returned-plan-id>
-```
-
-The coordinator reverse-resolves a unique canonical resource from configured
-snapshots, using a source-proven port to disambiguate a shared domain when
-needed. It applies the capture rule immediately and parks only the affected API.
-Other API work continues. Once no API remains runnable, all accumulated rules
-require one full-scope externally produced standard batch; callers must not
-produce a separate recording per rule.
+The Recorder accepts explicit names, suffixes, and wildcard patterns under
+`recorder.dns_mock.bypass_domains`. Remove a matching entry to record that
+dependency in a fresh batch. The old `dns_mock.bypass_strategies` key is
+ignored. Remove any `capture_breeze` effects from `project.policy` before
+loading it with this version.
 
 Pass the recorder config for direct replay:
 
@@ -2282,21 +2243,15 @@ query current evidence and plan again. The retired `dependency-rule` commands do
 This recovery is for missing evidence; a partially applied ownership rule with
 available evidence resumes through `rule apply`.
 
-Use `backend-rewrite route` for a source-proven missing recorded resource,
-Recorder/Replay capability gap, external-data blocker, or source change. For a
-missing dependency, use `--cause missing-recorded-resource --endpoint
-'hostname[:port]'`; the coordinator resolves the endpoint through configured
-Breeze snapshots and returns a recorder-capture plan only when the unique
-resource is currently bypassed. Query IDs and evidence IDs are bound to the
-workflow revision and active issue, so stale evidence is rejected.
+Use `backend-rewrite route` for a source-proven unrecorded IP, Recorder/Replay
+capability gap, external-data blocker, or source change. Query IDs and evidence
+IDs are bound to the workflow revision and active issue, so stale evidence is rejected.
 
 An accepted system/source repair route snapshots a coordinator-defined revision
 and returns `repair verify <repair-id>`. The caller cannot provide an acceptance
-command, and `next` cannot bypass the repair. Successful
-verification decides whether to rerun the same cases or require fresh external
-standard recording evidence. A successful `missing-recorded-resource` route instead
-returns the existing recorder-capture apply command and never enters system
-repair.
+command, and `next` cannot bypass the repair. Successful verification decides
+whether to rerun the same cases or require fresh external standard recording
+evidence.
 
 A fresh external recording requirement from repair verification also takes over
 any pending capture refresh. The coordinator retains applied rules and the old

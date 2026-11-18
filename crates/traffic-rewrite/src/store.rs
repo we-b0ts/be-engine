@@ -66,6 +66,18 @@ impl RewriteStore {
             "unsupported rewrite state version {}",
             state.version
         );
+        // Snapshot-based capture plans no longer have an apply path.
+        for slice in
+            std::iter::once(&mut state.active_slice).chain(state.parked_slices.values_mut())
+        {
+            if slice
+                .recorder_capture_plan
+                .as_ref()
+                .is_some_and(|plan| plan.http_response.is_none())
+            {
+                slice.recorder_capture_plan = None;
+            }
+        }
         super::worker::events::overlay(&self.target_root, &mut state)?;
         super::rule_plans::events::overlay(&self.target_root, &mut state)?;
         super::repository_analysis::refresh(&self.target_root, &mut state)?;
@@ -159,6 +171,37 @@ mod tests {
         drop(lock);
         assert_eq!(store.lock_state().unwrap(), RewriteLockState::Absent);
         assert!(store.try_lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn loading_discards_retired_capture_plans_from_active_and_parked_apis() {
+        let target = tempfile::tempdir().unwrap();
+        let store = RewriteStore::new(target.path()).unwrap();
+        let mut state = test_state();
+        state.recorder_capture_plan = Some(crate::model::RewriteRecorderCapturePlanRecord {
+            http_response: None,
+            id: "capture-plan".into(),
+            issue_id: "issue-1".into(),
+            evidence_id: "evidence-1".into(),
+            endpoint: "cache.example.test".into(),
+            source_evidence: "CacheClient.java:42".into(),
+            source_revision: "source-1".into(),
+            project_config_revision: "config-1".into(),
+            resource_identity: "cache".into(),
+            target_fingerprint: "target-1".into(),
+        });
+        state
+            .parked_slices
+            .insert("GET /parked".into(), state.active_slice.clone());
+        store.save(&state).unwrap();
+
+        let loaded = store.load_snapshot().unwrap().unwrap();
+        assert!(loaded.recorder_capture_plan.is_none());
+        assert!(
+            loaded.parked_slices["GET /parked"]
+                .recorder_capture_plan
+                .is_none()
+        );
     }
 
     #[test]

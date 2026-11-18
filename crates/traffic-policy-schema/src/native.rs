@@ -98,7 +98,6 @@ pub enum NativeEffect {
     InputJwt(InputJwtEffect),
     InputSignedTimestamp(InputSignedTimestampEffect),
     CaptureHttp(CaptureHttpEffect),
-    CaptureBreeze(CaptureBreezeEffect),
     CaptureHttpResponse(CaptureResponseEffect),
     ProcessOwned(ProcessOwnedEffect),
     FiniteSharing(FiniteSharingEffect),
@@ -241,9 +240,7 @@ impl NativeEffect {
     pub fn domain(&self) -> NativeDomain {
         match self {
             Self::InputJwt(_) | Self::InputSignedTimestamp(_) => NativeDomain::Input,
-            Self::CaptureHttp(_) | Self::CaptureBreeze(_) | Self::CaptureHttpResponse(_) => {
-                NativeDomain::Capture
-            }
+            Self::CaptureHttp(_) | Self::CaptureHttpResponse(_) => NativeDomain::Capture,
             Self::ProcessOwned(_) => NativeDomain::Classification,
             _ => NativeDomain::Runtime,
         }
@@ -268,7 +265,6 @@ impl NativeEffect {
             Self::InputJwt(_) => "input_token_rebase",
             Self::InputSignedTimestamp(_) => "input_signed_timestamp_rebase",
             Self::CaptureHttp(_) => "capture_http_scope",
-            Self::CaptureBreeze(_) => "capture_breeze_scope",
             Self::CaptureHttpResponse(_) => "capture_response_urls",
             Self::ProcessOwned(_) => "process_ownership",
             Self::FiniteSharing(_) => "finite_recording_sharing",

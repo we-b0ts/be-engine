@@ -68,7 +68,6 @@ pub fn project_native(rules: &[CompiledNativeRule]) -> Result<NativeRuntimeProje
             // legacy request-rule document represents custom signatures.
             n::NativeEffect::InputSignedTimestamp(_) => (),
             n::NativeEffect::CaptureHttp(_)
-            | n::NativeEffect::CaptureBreeze(_)
             | n::NativeEffect::CaptureHttpResponse(_)
             | n::NativeEffect::ProcessOwned(_) => continue,
         }

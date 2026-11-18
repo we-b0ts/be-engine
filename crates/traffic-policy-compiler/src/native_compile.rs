@@ -448,7 +448,6 @@ fn validate_effect(rule: &NativeRule, context: &crate::CompilationContext<'_>) -
             crate::validation::signed_timestamp(effect)
         }
         NativeEffect::CaptureHttp(_)
-        | NativeEffect::CaptureBreeze(_)
         | NativeEffect::CaptureHttpResponse(_)
         | NativeEffect::ProcessOwned(_)
         | NativeEffect::FiniteSharing(_) => source::validate(rule, context),

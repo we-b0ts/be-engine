@@ -42,8 +42,7 @@ use super::process_owned_dependencies::{
     BackgroundDependencyRuleConfig as B, RedisKeyPatternConfig,
 };
 use super::source_traffic_policy::{
-    SOURCE_TRAFFIC_POLICY_VERSION, SourceTrafficBreezeCaptureConfig, SourceTrafficHttpPolicyConfig,
-    SourceTrafficPolicyConfig,
+    SOURCE_TRAFFIC_POLICY_VERSION, SourceTrafficHttpPolicyConfig, SourceTrafficPolicyConfig,
 };
 
 pub fn project_source_policy(rules: &[CompiledNativeRule]) -> Result<SourceTrafficPolicyConfig> {
@@ -51,7 +50,6 @@ pub fn project_source_policy(rules: &[CompiledNativeRule]) -> Result<SourceTraff
         version: SOURCE_TRAFFIC_POLICY_VERSION,
         http: SourceTrafficHttpPolicyConfig::default(),
         http_response_rewrite: vec![],
-        breeze_capture: vec![],
         process_owned_dependencies: vec![],
         process_dependency_tasks: Default::default(),
         async_api: Default::default(),
@@ -70,14 +68,6 @@ pub fn project_source_policy(rules: &[CompiledNativeRule]) -> Result<SourceTraff
                     .http
                     .case_path_patterns
                     .extend(effect.case_paths.iter().cloned());
-            }
-            n::NativeEffect::CaptureBreeze(effect) => {
-                output
-                    .breeze_capture
-                    .push(SourceTrafficBreezeCaptureConfig {
-                        snapshot_dir: effect.snapshot_dir.clone(),
-                        capture_resources: effect.resources.clone(),
-                    })
             }
             n::NativeEffect::CaptureHttpResponse(effect) => output
                 .http_response_rewrite

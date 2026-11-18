@@ -1,11 +1,5 @@
 use std::collections::HashSet;
 
-use anyhow::{Result, ensure};
-use tracing::{info, trace};
-
-use crate::breeze::snapshot::Snapshot;
-use crate::{DnsBypassStrategyConfig, DnsMockConfig};
-
 #[derive(Debug, Clone, Default)]
 pub struct DomainMatcher {
     exact: HashSet<String>,
@@ -14,61 +8,6 @@ pub struct DomainMatcher {
 }
 
 impl DomainMatcher {
-    pub fn from_config(config: &DnsMockConfig) -> Result<Self> {
-        let mut matcher = Self::from_patterns(&config.bypass_domains);
-
-        for strategy in &config.bypass_strategies {
-            match strategy {
-                DnsBypassStrategyConfig::Breeze {
-                    snapshot_dir,
-                    capture_resources,
-                } => {
-                    let snapshot = Snapshot::load(snapshot_dir)?;
-                    let mut bypass_domains = snapshot.domains();
-                    ensure!(
-                        !bypass_domains.is_empty(),
-                        "Breeze bypass snapshot contains no hostname:port backends: {}",
-                        snapshot_dir.display()
-                    );
-                    let mut captured_domains = HashSet::new();
-                    for selector in capture_resources {
-                        let resource = snapshot.resolve(selector)?;
-                        ensure!(
-                            !resource.domains.is_empty(),
-                            "Breeze capture resource {:?} contains no hostname backend; IP literals are not part of DNS bypass",
-                            resource.identity
-                        );
-                        captured_domains.extend(resource.domains.iter().cloned());
-                    }
-                    bypass_domains.retain(|domain| !captured_domains.contains(domain));
-                    let loaded_domains = bypass_domains.len();
-                    let loaded_files = snapshot.file_count();
-                    trace!(
-                        snapshot_dir = %snapshot_dir.display(),
-                        domains = ?bypass_domains,
-                        "loaded Breeze bypass domains"
-                    );
-                    matcher.exact.extend(bypass_domains);
-                    info!(
-                        strategy = "breeze",
-                        snapshot_dir = %snapshot_dir.display(),
-                        files = loaded_files,
-                        domains = loaded_domains,
-                        capture_resources = capture_resources.len(),
-                        captured_domains = captured_domains.len(),
-                        "DNS bypass strategy loaded"
-                    );
-                }
-            }
-        }
-
-        matcher.suffixes.sort();
-        matcher.suffixes.dedup();
-        matcher.wildcards.sort();
-        matcher.wildcards.dedup();
-        Ok(matcher)
-    }
-
     pub fn from_patterns(patterns: &[String]) -> Self {
         let mut matcher = Self::default();
         for pattern in patterns {
@@ -86,6 +25,10 @@ impl DomainMatcher {
                 matcher.exact.insert(pattern);
             }
         }
+        matcher.suffixes.sort();
+        matcher.suffixes.dedup();
+        matcher.wildcards.sort();
+        matcher.wildcards.dedup();
         matcher
     }
 
@@ -151,8 +94,6 @@ fn wildcard_matches(pattern: &str, value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     #[test]
@@ -173,76 +114,5 @@ mod tests {
         assert!(!matcher.matches("dingtalk.com"));
         assert!(matcher.matches("api1.service.example.com"));
         assert!(!matcher.matches("api12.service.example.com"));
-    }
-
-    #[test]
-    fn breeze_snapshot_extracts_only_hostname_port_backends() {
-        let directory = tempfile::tempdir().unwrap();
-        let snapshot = directory.path().join("status.content.kv");
-        fs::write(
-            &snapshot,
-            "status.content.kv\nbackends:\n- RM1.EOS.GRID.sample.test:9028,rs1.hebe.grid.sample.test:9028\nresource.with.dots\n10.0.0.1:6379\n",
-        )
-        .unwrap();
-        let config = DnsMockConfig {
-            bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: directory.path().to_path_buf(),
-                capture_resources: Vec::new(),
-            }],
-            ..DnsMockConfig::default()
-        };
-
-        let matcher = DomainMatcher::from_config(&config).unwrap();
-
-        assert_eq!(matcher.exact_count(), 2);
-        assert!(matcher.matches("rm1.eos.grid.sample.test"));
-        assert!(matcher.matches("RS1.HEBE.GRID.sample.test."));
-        assert!(!matcher.matches("resource.with.dots"));
-        assert!(!matcher.matches("10.0.0.1"));
-    }
-
-    #[test]
-    fn breeze_strategy_fails_when_snapshot_has_no_backends() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("empty"), "status.content.kv\n").unwrap();
-        let config = DnsMockConfig {
-            bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: directory.path().to_path_buf(),
-                capture_resources: Vec::new(),
-            }],
-            ..DnsMockConfig::default()
-        };
-
-        let error = DomainMatcher::from_config(&config).unwrap_err();
-
-        assert!(error.to_string().contains("no hostname:port backends"));
-    }
-
-    #[test]
-    fn breeze_capture_resource_removes_its_domains_from_bypass() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(
-            directory.path().join("usercounter-descriptor"),
-            "123\nusercounter\nbackends:\n- counter.example.com:7917,shared.example.com:7917\n",
-        )
-        .unwrap();
-        fs::write(
-            directory.path().join("other-descriptor"),
-            "123\nother\nbackends:\n- other.example.com:6379,shared.example.com:6379\n",
-        )
-        .unwrap();
-        let config = DnsMockConfig {
-            bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: directory.path().to_path_buf(),
-                capture_resources: vec!["usercounter-descriptor".to_string()],
-            }],
-            ..DnsMockConfig::default()
-        };
-
-        let matcher = DomainMatcher::from_config(&config).unwrap();
-
-        assert!(!matcher.matches("counter.example.com"));
-        assert!(!matcher.matches("shared.example.com"));
-        assert!(matcher.matches("other.example.com"));
     }
 }

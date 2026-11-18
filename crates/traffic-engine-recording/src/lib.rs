@@ -182,15 +182,7 @@ impl AppState {
         .context("process-owned dependency initializer task failed")?
         .context("failed to initialize process-owned dependency rules")?;
         let cache_snapshots = CacheSnapshotStore::new(&config.recording);
-        let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
-            .context("failed to initialize DNS bypass matcher")?;
-        for route in &config.upstream_routes {
-            anyhow::ensure!(
-                !dns_bypass_matcher.matches(&route.host),
-                "upstream route for {} conflicts with DNS bypass",
-                route.host
-            );
-        }
+        let dns_bypass_matcher = DomainMatcher::from_patterns(&config.dns_mock.bypass_domains);
         let recording_output_dir = config.recording_output_dir();
         let recording_api_limits = recording_apis
             .iter()

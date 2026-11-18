@@ -1,8 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::{DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR};
@@ -16,51 +15,8 @@ pub struct DnsMockConfig {
     pub fake_cidr: String,
     pub ttl_seconds: u32,
     pub bypass_domains: Vec<String>,
-    pub bypass_strategies: Vec<DnsBypassStrategyConfig>,
     pub hosts: BTreeMap<String, Vec<Ipv4Addr>>,
     pub registry_path: PathBuf,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
-pub enum DnsBypassStrategyConfig {
-    Breeze {
-        snapshot_dir: PathBuf,
-        #[serde(skip)]
-        capture_resources: Vec<String>,
-    },
-}
-
-impl DnsMockConfig {
-    pub(super) fn validate(&self) -> Result<()> {
-        for strategy in &self.bypass_strategies {
-            match strategy {
-                DnsBypassStrategyConfig::Breeze {
-                    snapshot_dir,
-                    capture_resources,
-                } => {
-                    if snapshot_dir.as_os_str().is_empty() {
-                        bail!("dns_mock Breeze bypass snapshot_dir must not be empty");
-                    }
-                    let mut unique = BTreeSet::new();
-                    for resource in capture_resources {
-                        if resource.is_empty()
-                            || resource != resource.trim()
-                            || resource.contains(['\r', '\n', '/', '\\'])
-                        {
-                            bail!(
-                                "dns_mock Breeze capture resource must be one filename-safe line without surrounding whitespace"
-                            );
-                        }
-                        if !unique.insert(resource) {
-                            bail!("duplicate dns_mock Breeze capture resource {resource:?}");
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 impl Default for DnsMockConfig {
@@ -76,47 +32,8 @@ impl Default for DnsMockConfig {
             fake_cidr: DEFAULT_FAKE_CIDR.to_string(),
             ttl_seconds: 60,
             bypass_domains: Vec::new(),
-            bypass_strategies: Vec::new(),
             hosts: BTreeMap::new(),
             registry_path: PathBuf::from("./recordings/fake_dns_registry.json"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_duplicate_or_noncanonical_capture_resources() {
-        let duplicate = DnsMockConfig {
-            bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: PathBuf::from("/snapshot"),
-                capture_resources: vec!["usercounter".to_string(), "usercounter".to_string()],
-            }],
-            ..DnsMockConfig::default()
-        };
-        assert!(
-            duplicate
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("duplicate")
-        );
-
-        let invalid = DnsMockConfig {
-            bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: PathBuf::from("/snapshot"),
-                capture_resources: vec![" usercounter ".to_string()],
-            }],
-            ..DnsMockConfig::default()
-        };
-        assert!(
-            invalid
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("filename-safe")
-        );
     }
 }

@@ -26,7 +26,6 @@ pub enum RuleKind {
     InputJwt,
     InputSignedTimestamp,
     CaptureHttp,
-    CaptureBreeze,
     CaptureHttpResponse,
     ProcessOwned,
     FiniteSharing,

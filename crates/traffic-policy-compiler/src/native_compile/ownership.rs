@@ -393,7 +393,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
         }
         NativeEffect::FiniteSharing(_)
         | NativeEffect::CaptureHttp(_)
-        | NativeEffect::CaptureBreeze(_)
         | NativeEffect::CaptureHttpResponse(_)
         | NativeEffect::ProcessOwned(_) => (),
     }

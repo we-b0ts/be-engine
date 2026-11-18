@@ -11,7 +11,6 @@ pub fn owns(rule: &CompiledNativeRule) -> bool {
     matches!(
         rule.rule.effect,
         NativeEffect::CaptureHttp(_)
-            | NativeEffect::CaptureBreeze(_)
             | NativeEffect::CaptureHttpResponse(_)
             | NativeEffect::ProcessOwned(_)
             | NativeEffect::FiniteSharing(_)

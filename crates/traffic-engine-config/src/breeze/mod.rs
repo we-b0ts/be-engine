@@ -6,8 +6,6 @@ use anyhow::{Context, Result, bail, ensure};
 pub const SOCKS_DIR: &str = "/data1/breeze/socks";
 const MAX_DESCRIPTOR_ENTRIES: usize = 4_096;
 
-pub mod snapshot;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Descriptor {
     pub identity: String,

@@ -142,8 +142,8 @@ The configuration snapshots inspected during P0 had these SHA-256 identities:
 | `verification.yaml` | `425f368e27647ef4bdbd84364ce41d4d182aa78925f04e590774201a04ca5854` |
 
 The reference contains 185 HTTP case patterns, one Source HTTP response rewrite,
-27 process-owned rules (15 MySQL, 9 Redis, 3 HTTP; 21 have API origins), and an
-empty Breeze capture list. Verification contains 60 dependency entries:
+and 27 process-owned rules (15 MySQL, 9 Redis, 3 HTTP; 21 have API origins).
+Verification contains 60 dependency entries:
 53 ordinary entries (27 MySQL, 15 Redis, 11 HTTP) and 7 dynamic captures.
 Response requirements cover JSON, DOCX and headers. Inbound JWT translation
 uses five locations and three profiles. These counts describe this snapshot,
@@ -154,7 +154,7 @@ not a fixed engine limit or proof that other supported domains are unnecessary.
 | S01 | Source HTTP case path patterns and Source revision. | Typed capture admission; preserve route scope, source identity and recorded request ownership. |
 | S02 | `allowed_unused_http_hosts`, empty in the reference. | Explicit unused classification scope; never repair an unmatched Target request. |
 | S03 | Source HTTP response rewrite, including the sandbox `base_url` pointer. | Capture-side input effect with exact authority, method/path, status/content-type and pointer scope. Preserve original observation and transformed delivery provenance. |
-| S04 | Breeze snapshot directory/resource selection and existing specialized response plugins. | Native capture/startup owners; descriptor, resource, proxy and plugin lifecycles are not generic codec behavior. |
+| S04 | Specialized response plugins. | Native capture/startup owners manage proxy and plugin lifecycles. |
 | S05 | HTTP naming/configuration refresh and DingTalk process connections. | Source-proven process ownership, bounded by endpoint/method/path. |
 | S06 | Redis HSCAN process loops and bounded key families. | Recorder ownership plus protocol cursor/session rules; a scan does not create infinite generic response inventory. |
 | S07 | API work that continues after its HTTP response. | `async_api` selects the first matching Source request/response scenario. Once all ends match, immediately close admission and drain; a single end follows this same rule. Partial matches permit a fixed one-second probe. A subsequent relevant request start requires a fresh end to regain the probe, or complete all matches; otherwise five minutes of relevant business I/O silence close the Case with completion unobserved. Probe/idle closure requires no relevant request in flight. Redis replies may require native nil. After a complete primary response there is no absolute async deadline; an uncovered ending never stops Source or becomes a timeout failure. Explicit shutdown and actual capture failure can interrupt observation. All captured dependencies remain strict finite obligations. |

@@ -134,7 +134,7 @@ impl Proposal {
             };
             ensure!(
                 !matches!(rule, PolicyRule::Native(rule) if matches!(rule.effect,
-                    NativeEffect::CaptureBreeze(_) | NativeEffect::CaptureHttpResponse(_))),
+                    NativeEffect::CaptureHttpResponse(_))),
                 "Source capture and ordered response-rewrite effects cannot be replaced by a value-rule change"
             );
             ensure!(

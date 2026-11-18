@@ -10,7 +10,6 @@ pub(super) fn validate(
     scope: &NativeSourceScope<'_>,
     rule: &n::NativeRule,
     files: &[PathBuf],
-    artifacts: &mut BTreeSet<PathBuf>,
 ) -> Result<usize> {
     match &rule.effect {
         n::NativeEffect::CaptureHttp(effect) => {
@@ -47,26 +46,6 @@ pub(super) fn validate(
                 "capture scope has no observed Source API path; recording is required before proving this selector"
             );
             Ok(matched)
-        }
-        n::NativeEffect::CaptureBreeze(effect) => {
-            let path = if effect.snapshot_dir.is_absolute() {
-                effect.snapshot_dir.clone()
-            } else {
-                scope.target_root.join(&effect.snapshot_dir)
-            };
-            let snapshot = crate::breeze::snapshot::Snapshot::load(&path)?;
-            // The owner resolves the full descriptor inventory, so freeze every
-            // descriptor rather than only today's selected filename.
-            artifacts.extend(
-                snapshot
-                    .resources()
-                    .iter()
-                    .map(|resource| resource.descriptor_path.clone()),
-            );
-            for resource in &effect.resources {
-                snapshot.resolve(resource)?;
-            }
-            Ok(effect.resources.len())
         }
         n::NativeEffect::CaptureHttpResponse(effect) => {
             let projected = super::super::capture_response(rule, effect);

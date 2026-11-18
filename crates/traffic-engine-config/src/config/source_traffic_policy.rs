@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+use super::AppConfig;
 use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
-use super::{AppConfig, DnsBypassStrategyConfig};
 
 pub mod http_response;
 
@@ -24,8 +24,6 @@ pub struct SourceTrafficPolicyConfig {
     pub http: SourceTrafficHttpPolicyConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty", with = "http_response")]
     pub http_response_rewrite: Vec<super::HttpResponseRewriteRuleConfig>,
-    #[serde(default)]
-    pub breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,
     #[serde(default)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
     #[serde(skip)]
@@ -45,14 +43,6 @@ pub struct SourceTrafficHttpPolicyConfig {
     pub allowed_unused_http_hosts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SourceTrafficBreezeCaptureConfig {
-    pub snapshot_dir: PathBuf,
-    #[serde(default)]
-    pub capture_resources: Vec<String>,
-}
-
 impl SourceTrafficPolicyConfig {
     #[cfg(any(test, feature = "test-support"))]
     pub fn empty() -> Self {
@@ -60,7 +50,6 @@ impl SourceTrafficPolicyConfig {
             version: SOURCE_TRAFFIC_POLICY_VERSION,
             http: SourceTrafficHttpPolicyConfig::default(),
             http_response_rewrite: Vec::new(),
-            breeze_capture: Vec::new(),
             process_owned_dependencies: Vec::new(),
             process_dependency_tasks: BTreeMap::new(),
             async_api: BTreeMap::new(),
@@ -99,14 +88,6 @@ impl SourceTrafficPolicyConfig {
             SOURCE_TRAFFIC_POLICY_VERSION
         );
         crate::policy::compile_async_api(&self.async_api)?;
-        let mut snapshots = BTreeSet::new();
-        for capture in &self.breeze_capture {
-            ensure!(
-                !capture.snapshot_dir.as_os_str().is_empty()
-                    && snapshots.insert(&capture.snapshot_dir),
-                "coordinator Breeze capture snapshot_dir values must be non-empty and unique"
-            );
-        }
         super::HttpResponseRewriteConfig {
             enabled: true,
             rules: self.http_response_rewrite.clone(),
@@ -129,32 +110,6 @@ impl SourceTrafficPolicyConfig {
     pub fn apply_to(&self, config: &mut AppConfig) -> Result<()> {
         config.http_gateway.case_path_patterns = self.http.case_path_patterns.clone();
         config.http_gateway.allowed_unused_http_hosts = self.http.allowed_unused_http_hosts.clone();
-        for overlay in &self.breeze_capture {
-            let mut matches = config
-                .dns_mock
-                .bypass_strategies
-                .iter_mut()
-                .filter(|strategy| match strategy {
-                    DnsBypassStrategyConfig::Breeze { snapshot_dir, .. } => {
-                        snapshot_dir == &overlay.snapshot_dir
-                    }
-                });
-            let strategy = matches.next().with_context(|| {
-                format!(
-                    "source traffic Breeze capture {:?} has no matching recorder strategy",
-                    overlay.snapshot_dir
-                )
-            })?;
-            ensure!(
-                matches.next().is_none(),
-                "source traffic Breeze capture {:?} matches multiple recorder strategies",
-                overlay.snapshot_dir
-            );
-            let DnsBypassStrategyConfig::Breeze {
-                capture_resources, ..
-            } = strategy;
-            *capture_resources = overlay.capture_resources.clone();
-        }
         config
             .http_response_rewrite
             .rules

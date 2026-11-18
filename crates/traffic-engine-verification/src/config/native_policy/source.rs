@@ -63,11 +63,9 @@ pub fn validate_source(
             pending_effect_evidence.insert(rule.id.clone());
         }
         let count = match &rule.effect {
-            n::NativeEffect::CaptureHttp(_)
-            | n::NativeEffect::CaptureBreeze(_)
-            | n::NativeEffect::CaptureHttpResponse(_) => {
+            n::NativeEffect::CaptureHttp(_) | n::NativeEffect::CaptureHttpResponse(_) => {
                 obligations.insert(SourceObligation::FreshRecording);
-                capture::validate(&scope, rule, &files, &mut inventory.artifact_paths)?
+                capture::validate(&scope, rule, &files)?
             }
             n::NativeEffect::ProcessOwned(effect) => {
                 obligations.insert(SourceObligation::AttributionReview);

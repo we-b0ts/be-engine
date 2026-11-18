@@ -26,21 +26,6 @@ pub(super) fn rules(
             proof,
         ));
     }
-    for capture in &config.breeze_capture {
-        if capture.capture_resources.is_empty() {
-            continue;
-        }
-        let hash = crate::fingerprint(capture.snapshot_dir.to_string_lossy().as_bytes());
-        let id = format!("source-breeze-{}", hash.rsplit(':').next().unwrap_or(&hash));
-        rules.push(rule(
-            id,
-            n::NativeEffect::CaptureBreeze(n::CaptureBreezeEffect {
-                snapshot_dir: capture.snapshot_dir.clone(),
-                resources: capture.capture_resources.clone(),
-            }),
-            proof,
-        ));
-    }
     for capture in &config.http_response_rewrite {
         let contract = match &capture.plugin {
             Some(super::super::HttpResponseRewritePluginConfig::Policy(definition)) => {

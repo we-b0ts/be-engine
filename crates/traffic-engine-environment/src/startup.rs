@@ -128,7 +128,7 @@ mod tests {
         assert!(validate_mount_path(Path::new("/app/config")).is_ok());
         assert!(validate_mount_path(Path::new("/app")).is_err());
         assert!(validate_mount_path(Path::new("/data1")).is_ok());
-        assert!(validate_mount_path(Path::new("/data1/breeze/snapshot")).is_ok());
+        assert!(validate_mount_path(Path::new("/data1/mounts/cache")).is_ok());
     }
 
     #[test]

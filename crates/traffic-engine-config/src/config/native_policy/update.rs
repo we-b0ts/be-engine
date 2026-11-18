@@ -147,10 +147,6 @@ fn unchanged(rule: &n::NativeRule, proposed: &SourceTrafficPolicyConfig) -> Resu
     let compiled = crate::policy::compile_native(rule)?;
     let previous = project_source_policy(&[compiled])?;
     Ok(match &rule.effect {
-        n::NativeEffect::CaptureBreeze(_) => previous
-            .breeze_capture
-            .iter()
-            .all(|capture| proposed.breeze_capture.contains(capture)),
         n::NativeEffect::CaptureHttpResponse(_) => previous
             .http_response_rewrite
             .iter()
@@ -164,9 +160,6 @@ fn unchanged(rule: &n::NativeRule, proposed: &SourceTrafficPolicyConfig) -> Resu
 }
 fn same_key(left: &n::NativeRule, right: &n::NativeRule) -> bool {
     match (&left.effect, &right.effect) {
-        (n::NativeEffect::CaptureBreeze(left), n::NativeEffect::CaptureBreeze(right)) => {
-            left.snapshot_dir == right.snapshot_dir
-        }
         (n::NativeEffect::CaptureHttpResponse(_), n::NativeEffect::CaptureHttpResponse(_))
         | (n::NativeEffect::ProcessOwned(_), n::NativeEffect::ProcessOwned(_)) => {
             left.id == right.id

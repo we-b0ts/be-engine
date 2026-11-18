@@ -132,7 +132,7 @@ the change wrapper and the complete desired maps for the named sections.
 a section-only change. Both modes remain evidence-bound and show additions and
 removals in the plan before apply.
 Capture HTTP consolidation must preserve the exact existing path union, Source
-revision and selectors. Breeze capture and ordered Source-response rewrites
+revision and selectors. Ordered Source-response rewrites
 cannot be deleted or replaced through this value-rule transaction. Prospective
 recorder configuration is checked even when no new Source effect is selected.
 

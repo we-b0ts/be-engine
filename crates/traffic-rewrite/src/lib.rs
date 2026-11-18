@@ -203,9 +203,8 @@ pub use model::{
     RewriteWorkerDispatchState, RewriteWorkerDispatchView, RewriteWorkflowView,
 };
 pub use recorder_capture::{
-    RewriteHttpResponseCapturePlanOptions, RewriteRecorderCapturePlanOptions,
-    apply_rewrite_recorder_capture, plan_rewrite_http_response_capture,
-    plan_rewrite_recorder_capture,
+    RewriteHttpResponseCapturePlanOptions, apply_rewrite_recorder_capture,
+    plan_rewrite_http_response_capture,
 };
 pub use repair::{
     RewriteRepairCancelOptions, RewriteReplayRetryOptions, cancel_misrouted_rewrite_repair,

@@ -471,20 +471,6 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "recorder-capture",
-            "plan",
-            "--evidence-id",
-            "evidence-1",
-            "--endpoint",
-            "counter.example.com:9332",
-            "--source-evidence",
-            "CounterService.java:88 reads the counter backend",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "recorder-capture",
             "apply",
             "recorder-capture-plan-0123456789abcdef",
         ])
@@ -616,34 +602,6 @@ fn parses_the_bounded_rewrite_surface() {
             "support source-equivalent request matching",
             "--acceptance-command",
             "backend-rewrite next",
-        ])
-        .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "route",
-            "--cause",
-            "missing-recorded-resource",
-            "--evidence-id",
-            "evidence-1",
-            "--source-ref",
-            "src/client.rs:42",
-            "--endpoint",
-            "cache.example.com",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "route",
-            "--cause",
-            "missing-recorded-resource",
-            "--evidence-id",
-            "evidence-1",
-            "--source-ref",
-            "src/client.rs:42",
         ])
         .is_err()
     );

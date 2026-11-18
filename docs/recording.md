@@ -545,8 +545,7 @@ For a deployment without project YAML, mount that same policy and supply
 
 An explicitly configured missing, non-regular or invalid policy fails startup;
 there is no fallback to literal-path grouping on errors. Policy overlays must
-also be compatible with the standalone Recorder configuration; for example,
-Breeze capture entries require a matching DNS bypass strategy. Restart the
+also be compatible with the standalone Recorder configuration. Restart the
 container after changing policy; files are not watched or reloaded during a run.
 With `/api/teams/*/skills`, requests for different team IDs share the
 `apis/api-teams-wildcard-skills/` group and its case limit. Previously published

@@ -12,42 +12,12 @@ use super::store::RewriteStore;
 use super::{
     RewriteContext, action, evidence, fingerprint, inventory, recording, traffic_operation,
 };
-use crate::{BreezeEndpointCaptureFeedback, plan_breeze_endpoint_capture};
 
-mod capture_plan;
 pub(crate) mod http_response;
-use capture_plan::CapturePlan;
 use http_response::HttpResponseCaptureSpec;
 pub use http_response::{
     RewriteHttpResponseCapturePlanOptions, plan_rewrite_http_response_capture,
 };
-
-#[derive(Debug, Clone)]
-pub struct RewriteRecorderCapturePlanOptions {
-    pub evidence_id: String,
-    pub endpoint: String,
-    pub source_evidence: String,
-}
-
-pub fn plan_rewrite_recorder_capture(
-    context: RewriteContext,
-    options: RewriteRecorderCapturePlanOptions,
-) -> Result<RewriteRecorderCaptureReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
-    let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
-    let mut state = store
-        .load()?
-        .context("rewrite workflow has not been initialized")?;
-    inventory::initialize_legacy(&mut state);
-    let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
-        .context("recorder-capture evidence is stale or belongs to no concurrent API work item")?;
-    super::worker::ensure_api_confirmed(&state, &api, "planning recorder capture")?;
-    let report =
-        inventory::with_slice_mut(&mut state, &api, |state| plan(&target_root, state, options))?;
-    store.save(&state)?;
-    Ok(report)
-}
 
 pub fn apply_rewrite_recorder_capture(
     context: RewriteContext,
@@ -99,68 +69,32 @@ pub(super) struct AppliedRecorderCapture {
     pub current_target_fingerprint: String,
 }
 
-pub(super) fn plan(
+pub(super) fn plan_http_response(
     target_root: &Path,
     state: &mut RewriteState,
-    options: RewriteRecorderCapturePlanOptions,
+    evidence_id: String,
+    source_evidence: String,
+    spec: HttpResponseCaptureSpec,
 ) -> Result<RewriteRecorderCaptureReport> {
-    plan_with_capture_requirement(target_root, state, options, false, None)
-}
-
-pub(super) fn plan_missing_recorded_resource(
-    target_root: &Path,
-    state: &mut RewriteState,
-    options: RewriteRecorderCapturePlanOptions,
-) -> Result<RewriteRecorderCaptureReport> {
-    plan_with_capture_requirement(target_root, state, options, true, None)
-}
-
-fn plan_with_capture_requirement(
-    target_root: &Path,
-    state: &mut RewriteState,
-    options: RewriteRecorderCapturePlanOptions,
-    require_current_bypass: bool,
-    http_response: Option<HttpResponseCaptureSpec>,
-) -> Result<RewriteRecorderCaptureReport> {
+    let endpoint = spec.rule.authorities[0].clone();
     let issue = capture_issue(state)?;
-    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
-    validate_single_line("source evidence", &options.source_evidence)?;
+    validate_plan_evidence(target_root, state, &issue.id, &evidence_id)?;
+    validate_single_line("source evidence", &source_evidence)?;
     let source_revision = state
         .source_revision
         .clone()
         .context("recorder capture planning requires a finalized source revision")?;
     let project_config_revision = fingerprint::project_config_revision(target_root)?;
-    let traffic_plan = if let Some(spec) = &http_response {
-        CapturePlan::HttpResponse(http_response::Plan::build(
-            target_root,
-            spec,
-            &source_revision,
-            &options.source_evidence,
-        )?)
-    } else {
-        CapturePlan::Breeze(Box::new(plan_breeze_endpoint_capture(
-            BreezeEndpointCaptureFeedback {
-                project_config_path: project_config(target_root),
-                rules_path: source_traffic_policy_path(target_root)?,
-                endpoint: options.endpoint.clone(),
-                source_revision: source_revision.clone(),
-                source_evidence: options.source_evidence.clone(),
-            },
-        )?))
-    };
-    if require_current_bypass {
-        ensure!(
-            traffic_plan.has_current_bypass(),
-            "backend endpoint {:?} resolves to Breeze resource {:?}, but all of its backend domains are already captured and are not currently bypassed",
-            options.endpoint,
-            traffic_plan.resource_identity()
-        );
-    }
+    let traffic_plan =
+        http_response::Plan::build(target_root, &spec, &source_revision, &source_evidence)?;
     ensure!(
         fingerprint::project_config_revision(target_root)? == project_config_revision,
         "recorder config changed during capture planning; rerun plan"
     );
-    let resource_identity = traffic_plan.resource_identity().to_string();
+    let resource_identity = traffic_plan.report["resource_identity"]
+        .as_str()
+        .context("HTTP response capture plan has no resource identity")?
+        .to_owned();
     let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let record = RewriteRecorderCapturePlanRecord {
         id: format!(
@@ -168,31 +102,27 @@ fn plan_with_capture_requirement(
             fingerprint::id(&[
                 &state.workflow_id,
                 &issue.id,
-                &options.evidence_id,
-                &options.endpoint,
-                &options.source_evidence,
+                &evidence_id,
+                &endpoint,
+                &source_evidence,
                 &source_revision,
                 &project_config_revision,
                 &resource_identity,
                 &target_fingerprint,
-                &http_response
-                    .as_ref()
-                    .map(http_response::identity)
-                    .unwrap_or_default(),
+                &http_response::identity(&spec),
             ])
             .trim_start_matches("fnv1a64:")
         ),
         issue_id: issue.id.clone(),
-        evidence_id: options.evidence_id,
-        endpoint: options.endpoint,
-        source_evidence: options.source_evidence,
+        evidence_id: evidence_id,
+        endpoint: endpoint,
+        source_evidence: source_evidence,
         source_revision,
         project_config_revision,
         resource_identity,
         target_fingerprint,
-        http_response,
+        http_response: Some(spec),
     };
-    let traffic_e2e_report = traffic_plan.report()?;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = Some(record.clone());
@@ -201,7 +131,7 @@ fn plan_with_capture_requirement(
         plan_id: record.id.clone(),
         issue_id: issue.id,
         api: state.api.clone(),
-        traffic_e2e_report,
+        traffic_e2e_report: traffic_plan.report,
         recording_refresh_pending: state.recording_refresh.is_some(),
         awaiting_apis: awaiting_apis(state),
         next_command: apply_command(target_root, &record.id),
@@ -230,12 +160,19 @@ pub(super) fn apply(
         fingerprint::repository_fingerprint(target_root)? == record.target_fingerprint,
         "target repository changed after capture planning; rerun plan before applying"
     );
-    if let Some(spec) = &record.http_response {
-        http_response::revalidate(target_root, state, spec)?;
-    }
-    let plan = build_plan(target_root, &record)?;
+    let spec = record
+        .http_response
+        .as_ref()
+        .context("Breeze snapshot capture plans have been retired")?;
+    http_response::revalidate(target_root, state, spec)?;
+    let plan = http_response::Plan::build(
+        target_root,
+        spec,
+        &record.source_revision,
+        &record.source_evidence,
+    )?;
     ensure!(
-        plan.resource_identity() == record.resource_identity,
+        plan.report["resource_identity"].as_str() == Some(record.resource_identity.as_str()),
         "capture rule resolution changed after planning; rerun plan"
     );
     let report = plan.apply()?;
@@ -381,29 +318,6 @@ pub(super) fn validate_plan_evidence(
     Ok(())
 }
 
-fn build_plan(
-    target_root: &Path,
-    record: &RewriteRecorderCapturePlanRecord,
-) -> Result<CapturePlan> {
-    if let Some(spec) = &record.http_response {
-        return Ok(CapturePlan::HttpResponse(http_response::Plan::build(
-            target_root,
-            spec,
-            &record.source_revision,
-            &record.source_evidence,
-        )?));
-    }
-    Ok(CapturePlan::Breeze(Box::new(plan_breeze_endpoint_capture(
-        BreezeEndpointCaptureFeedback {
-            project_config_path: project_config(target_root),
-            rules_path: source_traffic_policy_path(target_root)?,
-            endpoint: record.endpoint.clone(),
-            source_revision: record.source_revision.clone(),
-            source_evidence: record.source_evidence.clone(),
-        },
-    )?)))
-}
-
 fn project_config(target_root: &Path) -> PathBuf {
     target_root.join(".traffic-e2e/project.yaml")
 }
@@ -515,14 +429,8 @@ fn ensure_traffic_idle(target_root: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::process::Command;
-
     use super::*;
-    use crate::model::{
-        RewriteApiProgress, RewriteApiStatus, RewriteAttemptDelta,
-        RewriteDependencyRuleAppliedRecord, RewriteIssueOwner,
-    };
+    use crate::model::{RewriteApiProgress, RewriteApiStatus, RewriteDependencyRuleAppliedRecord};
 
     #[test]
     fn waiting_api_status_exposes_the_consolidated_refresh_state() {
@@ -600,150 +508,5 @@ mod tests {
             drained["action"]["commands"]["advance"]["argv"],
             serde_json::json!(["backend-rewrite", "--target-root", "/target", "next"])
         );
-    }
-
-    #[test]
-    fn capture_plan_is_evidence_bound_stale_safe_and_applies_immediately() {
-        let target = tempfile::tempdir().unwrap();
-        let snapshot = target.path().join("snapshot");
-        fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
-        fs::create_dir_all(target.path().join("src")).unwrap();
-        fs::create_dir(&snapshot).unwrap();
-        fs::write(
-            snapshot.join("static.config+counter"),
-            "123\ncounter\nbackends:\n- counter.example.com:9332\n",
-        )
-        .unwrap();
-        let mut recorder = crate::config::AppConfig::default();
-        recorder.dns_mock.enabled = true;
-        recorder.dns_mock.bypass_strategies =
-            vec![crate::config::DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: snapshot.clone(),
-                capture_resources: Vec::new(),
-            }];
-        crate::workflow_test_support::install_project_config(
-            target.path(),
-            "master",
-            recorder,
-            None,
-        );
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "pub fn value() -> u8 { 1 }\n",
-        )
-        .unwrap();
-        git_ok(target.path(), &["init"]);
-        git_ok(target.path(), &["config", "user.email", "test@example.com"]);
-        git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
-        git_ok(target.path(), &["add", "."]);
-        git_ok(target.path(), &["commit", "-m", "baseline"]);
-
-        let mut state = crate::test_state();
-        state.phase = RewritePhase::ImplementationRequired;
-        state.source_revision = Some("source-image-1".to_string());
-        state.target_fingerprint =
-            Some(fingerprint::repository_fingerprint(target.path()).unwrap());
-        state.attempt_delta = Some(RewriteAttemptDelta {
-            previous_attempt: 1,
-            current_attempt: 2,
-            response_passed_delta: 0,
-            response_nonpassing_delta: 0,
-            improved: false,
-            regressed: false,
-        });
-        state.active_issue = Some(RewriteIssue {
-            id: "issue-counter".to_string(),
-            kind: RewriteIssueKind::Response,
-            owner: RewriteIssueOwner::TargetCode,
-            summary: "counter response differs".to_string(),
-            pointer_pattern: None,
-            representative: None,
-            egress_rejections: None,
-            recorder_capture_diagnosis: None,
-            response_diagnosis: None,
-            possible_causes: Vec::new(),
-            observed_target_fingerprint: state.target_fingerprint.clone().unwrap(),
-            attempt: 2,
-        });
-        let query_id = evidence::commands(target.path(), &state)
-            .into_iter()
-            .find(|command| command.query_id.contains("attempt-delta"))
-            .unwrap()
-            .query_id;
-        let evidence_id = evidence::query(target.path(), &state, &query_id)
-            .unwrap()
-            .evidence_id;
-        let config = target.path().join(".traffic-e2e/policy.yaml");
-        let original = fs::read_to_string(&config).unwrap();
-
-        let planned = plan(
-            target.path(),
-            &mut state,
-            RewriteRecorderCapturePlanOptions {
-                evidence_id,
-                endpoint: "counter.example.com:9332".to_string(),
-                source_evidence: "src/CounterService.java:88 reads counter backend".to_string(),
-            },
-        )
-        .unwrap();
-        assert_eq!(fs::read_to_string(&config).unwrap(), original);
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "pub fn value() -> u8 { 2 }\n",
-        )
-        .unwrap();
-        assert!(
-            apply(target.path(), &mut state, &planned.plan_id)
-                .unwrap_err()
-                .to_string()
-                .contains("target repository changed")
-        );
-        assert_eq!(fs::read_to_string(&config).unwrap(), original);
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "pub fn value() -> u8 { 1 }\n",
-        )
-        .unwrap();
-
-        let applied = apply(target.path(), &mut state, &planned.plan_id).unwrap();
-        assert_eq!(applied.api, "GET /api");
-        assert_eq!(state.phase, RewritePhase::AwaitingRecordingRefresh);
-        let identity = applied.traffic_e2e_report["resource_identity"]
-            .as_str()
-            .unwrap();
-        let updated = crate::policy::parse_policy(&fs::read_to_string(config).unwrap()).unwrap();
-        assert!(updated.rules.iter().any(|rule| {
-            rule.as_native().is_some_and(|rule| {
-                matches!(
-                    &rule.effect,
-                    crate::policy::native::NativeEffect::CaptureBreeze(capture)
-                    if capture.resources == [identity] && capture.snapshot_dir == snapshot
-                )
-            })
-        }));
-        let loaded =
-            crate::AppConfig::load(target.path().join(".traffic-e2e/project.yaml")).unwrap();
-        assert!(
-            loaded
-                .dns_mock
-                .bypass_strategies
-                .iter()
-                .any(|strategy| matches!(
-                    strategy,
-                    crate::config::DnsBypassStrategyConfig::Breeze { capture_resources, .. }
-                if capture_resources == &[identity]
-                ))
-        );
-        assert_eq!(awaiting_apis(&state), ["GET /api"]);
-    }
-
-    fn git_ok(repository: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(repository)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git command failed: {args:?}");
     }
 }

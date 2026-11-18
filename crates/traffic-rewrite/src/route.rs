@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use super::model::{RewriteRecorderCaptureReport, RewriteRouteReport, RewriteState};
+use super::model::{RewriteRouteReport, RewriteState};
 use super::store::RewriteStore;
-use super::{inventory, recorder_capture, repair, worker};
+use super::{inventory, repair, worker};
 use crate::RecordingApi;
 
 #[derive(Debug, Clone)]
@@ -23,9 +23,6 @@ pub enum RewriteRouteCause {
         case_id: String,
         origin: String,
     },
-    MissingRecordedResource {
-        endpoint: String,
-    },
     RecorderCapabilityGap {
         required_change: String,
     },
@@ -41,7 +38,6 @@ pub enum RewriteRouteCause {
 #[serde(untagged)]
 pub enum RewriteRouteOutcome {
     CaptureInvestigation(super::ip_capture::RewriteIpCaptureReport),
-    RecorderCapture(RewriteRecorderCaptureReport),
     SystemRepair(RewriteRouteReport),
 }
 
@@ -91,18 +87,6 @@ fn route_in_state(
                 origin,
             )?,
         )),
-        RewriteRouteCause::MissingRecordedResource { endpoint } => {
-            let report = recorder_capture::plan_missing_recorded_resource(
-                target_root,
-                state,
-                super::RewriteRecorderCapturePlanOptions {
-                    evidence_id,
-                    endpoint,
-                    source_evidence: source_ref,
-                },
-            )?;
-            Ok(RewriteRouteOutcome::RecorderCapture(report))
-        }
         cause => {
             let (kind, required_change) = system_repair(cause);
             let report = repair::route(
@@ -131,9 +115,8 @@ fn system_repair(cause: RewriteRouteCause) -> (&'static str, String) {
         RewriteRouteCause::ExternalDataBlocker { required_change } => {
             ("external_data_blocker", required_change)
         }
-        RewriteRouteCause::MissingRecordedResource { .. }
-        | RewriteRouteCause::UnrecordedIp { .. } => {
-            unreachable!("missing recorded resources are handled before system repair")
+        RewriteRouteCause::UnrecordedIp { .. } => {
+            unreachable!("unrecorded IPs are handled before system repair")
         }
     }
 }
@@ -150,120 +133,8 @@ mod tests {
     use crate::{evidence, fingerprint};
 
     #[test]
-    fn missing_recorded_resource_routes_to_capture_plan_without_system_repair() {
-        let (target, mut state, evidence_id) = fixture(None, false);
-        let rules = target.path().join(".traffic-e2e/policy.yaml");
-        let original_rules = fs::read_to_string(&rules).unwrap();
-
-        let outcome = route_in_state(
-            target.path(),
-            &mut state,
-            RewriteRouteOptions {
-                target_root: target.path().to_path_buf(),
-                cause: RewriteRouteCause::MissingRecordedResource {
-                    endpoint: "counter.example.com".to_string(),
-                },
-                evidence_id,
-                source_ref: "CounterService.java:88 reads the response-driving counter".to_string(),
-            },
-        )
-        .unwrap();
-
-        let RewriteRouteOutcome::RecorderCapture(report) = outcome else {
-            panic!("missing recorded resource entered system repair")
-        };
-        assert_eq!(
-            report.traffic_e2e_report["resource_identity"],
-            "static.config+counter"
-        );
-        assert_eq!(report.traffic_e2e_report["changed"], true);
-        assert_eq!(
-            report.next_command.argv.last().map(String::as_str),
-            Some(report.plan_id.as_str())
-        );
-        assert_eq!(state.phase, RewritePhase::ImplementationRequired);
-        assert!(state.route.is_none());
-        assert!(state.recorder_capture_plan.is_some());
-        assert_eq!(fs::read_to_string(rules).unwrap(), original_rules);
-    }
-
-    #[test]
-    fn missing_recorded_resource_rejects_a_resource_that_is_already_captured() {
-        let (target, mut state, evidence_id) = fixture(Some("static.config+counter"), false);
-
-        let error = route_in_state(
-            target.path(),
-            &mut state,
-            RewriteRouteOptions {
-                target_root: target.path().to_path_buf(),
-                cause: RewriteRouteCause::MissingRecordedResource {
-                    endpoint: "counter.example.com:9332".to_string(),
-                },
-                evidence_id,
-                source_ref: "CounterService.java:88 reads counter".to_string(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("domains are already captured"));
-        assert_eq!(state.phase, RewritePhase::ImplementationRequired);
-        assert!(state.route.is_none());
-        assert!(state.recorder_capture_plan.is_none());
-    }
-
-    #[test]
-    fn missing_recorded_resource_requires_a_port_for_a_shared_domain() {
-        let (target, mut state, evidence_id) = fixture(None, true);
-
-        let error = route_in_state(
-            target.path(),
-            &mut state,
-            RewriteRouteOptions {
-                target_root: target.path().to_path_buf(),
-                cause: RewriteRouteCause::MissingRecordedResource {
-                    endpoint: "counter.example.com".to_string(),
-                },
-                evidence_id,
-                source_ref: "CounterService.java:88 reads counter".to_string(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("shared by multiple Breeze resources")
-        );
-        assert!(state.route.is_none());
-        assert!(state.recorder_capture_plan.is_none());
-    }
-
-    #[test]
-    fn missing_recorded_resource_rejects_a_domain_captured_by_another_resource() {
-        let (target, mut state, evidence_id) = fixture(Some("static.config+other"), true);
-
-        let error = route_in_state(
-            target.path(),
-            &mut state,
-            RewriteRouteOptions {
-                target_root: target.path().to_path_buf(),
-                cause: RewriteRouteCause::MissingRecordedResource {
-                    endpoint: "counter.example.com:9332".to_string(),
-                },
-                evidence_id,
-                source_ref: "CounterService.java:88 reads counter".to_string(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("not currently bypassed"));
-        assert!(state.route.is_none());
-        assert!(state.recorder_capture_plan.is_none());
-    }
-
-    #[test]
     fn capability_gap_still_enters_system_repair() {
-        let (target, mut state, evidence_id) = fixture(None, false);
+        let (target, mut state, evidence_id) = fixture();
 
         let outcome = route_in_state(
             target.path(),
@@ -291,51 +162,15 @@ mod tests {
         assert!(state.recorder_capture_plan.is_none());
     }
 
-    fn fixture(
-        captured_resource: Option<&str>,
-        shared_domain: bool,
-    ) -> (tempfile::TempDir, RewriteState, String) {
+    fn fixture() -> (tempfile::TempDir, RewriteState, String) {
         let target = tempfile::tempdir().unwrap();
-        let snapshot = target.path().join("snapshot");
-        fs::create_dir(&snapshot).unwrap();
         fs::create_dir(target.path().join("src")).unwrap();
-        fs::write(
-            snapshot.join("static.config+counter"),
-            "123\ncounter\nbackends:\n- counter.example.com:9332\n",
-        )
-        .unwrap();
-        if shared_domain {
-            fs::write(
-                snapshot.join("static.config+other"),
-                "123\nother\nbackends:\n- counter.example.com:9444\n",
-            )
-            .unwrap();
-        }
-        let mut recorder = crate::config::AppConfig::default();
-        recorder.dns_mock.enabled = true;
-        recorder.dns_mock.bypass_strategies =
-            vec![crate::config::DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: snapshot.clone(),
-                capture_resources: Vec::new(),
-            }];
         crate::workflow_test_support::install_project_config(
             target.path(),
             "master",
-            recorder,
+            crate::config::AppConfig::default(),
             None,
         );
-        if let Some(captured_resource) = captured_resource {
-            let mut rules = crate::config::SourceTrafficPolicyConfig::empty();
-            rules.breeze_capture = vec![crate::config::SourceTrafficBreezeCaptureConfig {
-                snapshot_dir: snapshot,
-                capture_resources: vec![captured_resource.to_string()],
-            }];
-            fs::write(
-                target.path().join(".traffic-e2e/policy.yaml"),
-                rules.render().unwrap(),
-            )
-            .unwrap();
-        }
         fs::write(
             target.path().join("src/lib.rs"),
             "pub fn value() -> u8 { 1 }\n",

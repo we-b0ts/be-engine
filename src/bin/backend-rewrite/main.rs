@@ -131,7 +131,7 @@ enum RewriteCommand {
     Evidence(evidence::EvidenceArgs),
     /// Plan/apply/recover self-contained rules using current Source-backed evidence.
     Rule(RuleArgs),
-    /// Plan or apply one source-proven Breeze resource capture rule.
+    /// Plan or apply a source-proven HTTP response capture rule.
     RecorderCapture(recorder_capture::RecorderCaptureArgs),
     /// Submit a source-backed non-target-code attribution for controlled routing.
     Route(RouteArgs),
@@ -240,11 +240,11 @@ struct RouteArgs {
     /// One-line source file/symbol proof for the reported cause.
     #[arg(long)]
     source_ref: String,
-    /// Missing-resource hostname[:port], or literal IP:port for unrecorded-ip.
+    /// Literal IP:port for an unrecorded IP dependency.
     #[arg(
         long,
         value_name = "ENDPOINT",
-        required_if_eq_any([("cause", "missing-recorded-resource"), ("cause", "unrecorded-ip")]),
+        required_if_eq("cause", "unrecorded-ip"),
         conflicts_with = "required_change"
     )]
     endpoint: Option<String>,
@@ -441,7 +441,6 @@ struct TargetQualityRunArgs {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RouteCauseArg {
     UnrecordedIp,
-    MissingRecordedResource,
     RecorderCapabilityGap,
     ReplayCapabilityGap,
     ExternalDataBlocker,
@@ -630,9 +629,6 @@ impl RouteCauseArg {
         required_change: Option<String>,
     ) -> Result<RewriteRouteCause> {
         match (self, endpoint, required_change) {
-            (Self::MissingRecordedResource, Some(endpoint), None) => {
-                Ok(RewriteRouteCause::MissingRecordedResource { endpoint })
-            }
             (Self::RecorderCapabilityGap, None, Some(required_change)) => {
                 Ok(RewriteRouteCause::RecorderCapabilityGap { required_change })
             }

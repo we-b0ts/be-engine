@@ -1,5 +1,5 @@
 //! Acquisition, origin classification and finite sharing have separate effects.
-use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
+use std::{collections::BTreeMap, net::SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,13 +11,6 @@ use crate::{Resource, SourceScalar};
 pub struct CaptureHttpEffect {
     pub source_revision: String,
     pub case_paths: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CaptureBreezeEffect {
-    pub snapshot_dir: PathBuf,
-    pub resources: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -18,7 +18,6 @@ mod background_memcached_feedback;
 mod background_motan_feedback;
 mod background_mysql_feedback;
 mod background_redis_feedback;
-mod breeze_capture_feedback;
 mod capture;
 mod case_limits;
 mod dns;
@@ -70,13 +69,9 @@ pub use background_redis_feedback::{
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan,
     RedisBackgroundDependencyReport, plan_redis_background_dependency,
 };
-pub use breeze_capture_feedback::{
-    BreezeEndpointCaptureFeedback, BreezeResourceCaptureFeedback, BreezeResourceCapturePlan,
-    BreezeResourceCaptureReport, plan_breeze_endpoint_capture, plan_breeze_resource_capture,
-};
 pub use capture::{CaptureConfig, CaptureProtocol};
 pub use case_limits::HttpGatewayCaseLimitsConfig;
-pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
+pub use dns::DnsMockConfig;
 pub use feedback::validate_case_path_pattern;
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
@@ -96,7 +91,7 @@ pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TrafficJsonlMode,
 };
-pub use source_traffic_policy::{SourceTrafficBreezeCaptureConfig, SourceTrafficPolicyConfig};
+pub use source_traffic_policy::SourceTrafficPolicyConfig;
 pub const DEFAULT_DNS_MOCK_PORT: u16 = 4_053;
 pub const DEFAULT_TCP_GATEWAY_PORT: u16 = 4_001;
 pub const DEFAULT_UDP_GATEWAY_PORT: u16 = 4_002;
@@ -331,7 +326,6 @@ impl AppConfig {
 
     pub fn validate(&self) -> Result<()> {
         self.validate_artifacts()?;
-        self.dns_mock.validate()?;
         upstream_routes::validate(self)?;
         self.recording.validate()?;
         process_owned_dependencies::validate(&self.process_owned_dependencies)?;
@@ -610,11 +604,6 @@ mod tests {
                 "allowed_unused_http_hosts",
             ),
             (
-                "breeze-capture",
-                "dns_mock:\n  bypass_strategies:\n  - strategy: breeze\n    snapshot_dir: /snapshot\n    capture_resources: [resource]\n",
-                "capture_resources",
-            ),
-            (
                 "process-owned",
                 "recording:\n  process_owned_dependencies: []\n",
                 "process_owned_dependencies",
@@ -854,9 +843,6 @@ mod tests {
             bypass_domains = ["preview-wss.internal.example.test", ".internal.example.com"]
             registry_path = "./recordings/test_fake_dns_registry.json"
 
-            [[dns_mock.bypass_strategies]]
-            strategy = "breeze"
-            snapshot_dir = "/data1/breeze/snapshot"
             [dns_mock.hosts]
             "db-10-185-28-119.test" = ["10.185.28.119"]
             "multi-db.test" = ["10.0.0.1", "10.0.0.2"]
@@ -892,13 +878,6 @@ mod tests {
                 "preview-wss.internal.example.test".to_string(),
                 ".internal.example.com".to_string()
             ]
-        );
-        assert_eq!(
-            config.dns_mock.bypass_strategies,
-            vec![DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: PathBuf::from("/data1/breeze/snapshot"),
-                capture_resources: Vec::new(),
-            }]
         );
         assert_eq!(
             config.dns_mock.registry_path,

@@ -226,10 +226,7 @@ mod tests {
         );
         assert_eq!(config.udp_gateway.listen.port(), DEFAULT_UDP_GATEWAY_PORT);
         assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
-        assert!(config.dns_mock.bypass_strategies.is_empty());
         assert!(config.dns_mock.hosts.is_empty());
-        assert!(!raw.contains("strategy: breeze"));
-        assert!(!raw.contains("snapshot_dir: /data1/breeze/snapshot"));
         assert!(!config.http_response_rewrite.enabled);
         assert!(config.http_response_rewrite.rules.is_empty());
         assert!(config.http_gateway.rules[0].methods.is_empty());

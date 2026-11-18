@@ -90,16 +90,12 @@ pub(super) fn plan(
         rule: options.rule,
         pattern_checked: options.pattern_checked,
     };
-    let plan = super::plan_with_capture_requirement(
+    let plan = super::plan_http_response(
         target_root,
         state,
-        super::RewriteRecorderCapturePlanOptions {
-            evidence_id: options.evidence_id,
-            endpoint: spec.rule.authorities[0].clone(),
-            source_evidence: options.source_evidence,
-        },
-        false,
-        Some(spec),
+        options.evidence_id,
+        options.source_evidence,
+        spec,
     )?;
     Ok(RewriteHttpResponseCaptureReport::Planned { plan })
 }

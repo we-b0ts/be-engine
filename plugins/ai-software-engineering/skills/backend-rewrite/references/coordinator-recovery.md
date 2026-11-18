@@ -10,9 +10,7 @@ state-mutating command in this guide.
 cause that requires a system/source change, together with current evidence, a
 source reference, and the required change. The route captures an
 engine-defined system/source revision and returns an opaque repair ID;
-never supply an invented acceptance command. `missing-recorded-resource` is a
-validated route cause but resolves to a recorder-capture plan and never enters
-this phase.
+never supply an invented acceptance command.
 
 The responsible implementation/system worker or external owner applies the
 required repair. The coordinator does not repair code while idle. Read global
@@ -98,12 +96,6 @@ counts alone establish neither IP origin nor a missing capture mechanism.
 Use `recorder-capability-gap` only when the recorder lacks a required mechanism.
 Use `replay-capability-gap` for a proven response decoding or semantic assertion
 capability gap.
-A configured Breeze resource bypassed during recording is reported as
-`missing-recorded-resource` and becomes an API-scoped recorder-capture refresh,
-not system repair. Follow
-[coordinator-rule-actions.md](coordinator-rule-actions.md) after source
-inspection proves the explicit route inputs.
-
 ## Status And Recovery
 
 Use `backend-rewrite status [--api '<assigned path-or-pattern>']` to reconstruct a lost or

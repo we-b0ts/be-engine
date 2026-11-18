@@ -284,22 +284,6 @@ mod tests {
             Cli::try_parse_from([
                 "traffic-e2e",
                 "config",
-                "recorder",
-                "plan",
-                "breeze-resource-capture",
-                "--resource",
-                "usercounter",
-                "--source-revision",
-                "abc123",
-                "--evidence",
-                "src/UserCounter.java:load uses usercounter",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
-                "config",
                 "replay",
                 "plan",
                 "response-rule",

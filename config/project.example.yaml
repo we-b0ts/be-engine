@@ -55,7 +55,6 @@ recorder:
     upstream_dns: 10.10.10.10:53
     bypass_domains:
     - doh.pub
-    bypass_strategies: []
     hosts:
       db-10-185-28-119.test:
       - 10.185.28.119

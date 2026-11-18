@@ -237,7 +237,6 @@ pub fn native_kind_owner(effect: &NativeEffect) -> (RuleKind, ExecutionOwner) {
         E::InputJwt(_) => (K::InputJwt, O::PrimaryInput),
         E::InputSignedTimestamp(_) => (K::InputSignedTimestamp, O::PrimaryInput),
         E::CaptureHttp(_) => (K::CaptureHttp, O::Capture),
-        E::CaptureBreeze(_) => (K::CaptureBreeze, O::Capture),
         E::CaptureHttpResponse(_) => (K::CaptureHttpResponse, O::Capture),
         E::ProcessOwned(_) => (K::ProcessOwned, O::Attribution),
         E::FiniteSharing(_) => (K::FiniteSharing, O::FiniteSharing),

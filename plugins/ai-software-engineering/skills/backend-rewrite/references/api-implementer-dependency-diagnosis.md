@@ -67,7 +67,7 @@ merely because plan/apply requires a fresh context.
 
 Treat a recording omission as a bounded hypothesis when a response or Replay difference traces through source code to one exact response-driving
 backend endpoint, but the representative recording contains no corresponding
-dependency target or exchange. The absence alone is not proof of Breeze bypass,
+dependency target or exchange. The absence alone is not proof of a configured DNS bypass,
 an external-data blocker, or a Recorder capability gap.
 
 Prove the hypothesis in this order:
@@ -89,13 +89,11 @@ When those checks prove that the source consumes an exact response-driving
 endpoint that is absent from recorded dependencies, return the evidence ID, the
 `hostname[:port]`, and one single-line source file/symbol proof to the
 workflow coordinator. The hostname is required and the port is optional; include a
-source-proven port when available. Never guess a Breeze resource or descriptor.
+source-proven port when available.
 
-A configured resource bypass is a capture-rule input, not proof that the
-capture mechanism is unsupported. If returned feedback identifies an unknown,
-ambiguous, or already captured endpoint, retain the source/recording proof and
-error and continue diagnosis. Use `recorder-capability-gap` only when the
-required capture mechanism itself is unsupported.
+Check whether an explicit `dns_mock.bypass_domains` entry matches the endpoint.
+Use `recorder-capability-gap` only when the required capture mechanism itself is
+unsupported.
 
 An extra read may result from an absolute timestamp in an earlier successfully
 replayed response. Check [Rule Discovery From Source Diagnosis](api-implementer-diagnosis.md#rule-discovery-from-source-diagnosis)

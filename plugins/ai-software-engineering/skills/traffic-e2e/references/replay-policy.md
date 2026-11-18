@@ -221,7 +221,7 @@ Use a typed native owner for additional protocol, contextual or stateful behavio
 - `input_signed_timestamp`: source-verified sorted-field MD5 JSON timestamp
   rebasing with a frozen startup signing input; see
   [signed timestamp request rules](../../../../../docs/signed-timestamp-request-rules.md);
-- `capture_http`, `capture_breeze`, `capture_http_response`, `process_owned`
+- `capture_http`, `capture_http_response`, `process_owned`
   and `finite_sharing`: acquisition, classification and finite sharing.
 
 Follow discovered capability metadata for the exact effect schema. Source proof

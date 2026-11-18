@@ -173,42 +173,6 @@ classifications do not implement initial load, refresh, fallback or readiness
 state in Target. `async_api` separately records one finite asynchronous case
 through its configured end resource, dependency failure or engine deadline.
 
-## Recorder Capture
-
-Use this route only after the worker proves that source code consumes one exact
-response-driving endpoint absent from recorded dependencies and returns one
-source file/symbol proof. The hostname is required; the port is optional and
-should be included when source evidence proves it.
-
-Run:
-
-```text
-backend-rewrite route \
-  --cause missing-recorded-resource \
-  --evidence-id <returned-evidence-id> \
-  --endpoint <source-proven-hostname[:port]> \
-  --source-ref '<single-line source file/symbol proof>'
-```
-
-The route reverse-resolves the hostname through configured Breeze snapshots,
-accepts only one canonical resource, and verifies that the resource is not
-already captured. A source-proven port may disambiguate resources sharing a
-domain. Shared or unknown domains, already captured resources, and IP literals
-are rejected; never supply a guessed Breeze descriptor or resource name. A
-successful route returns the ordinary recorder-capture plan report and does not
-enter `system_repair_required`.
-
-Execute the exact returned apply argv. Apply is immediate, add-only, atomic,
-and stale-safe. If serialized Replay verification is live, inspect
-`status` and wait before retrying. A successful apply reports
-`recording_refresh_pending=true`, lists waiting APIs, and returns either another
-API's next command or the consolidated external recording requirement. For a
-scoped waiting API, poll current `status`; never execute its stale acceptance.
-
-After capture apply, continue runnable work and
-read [coordinator-recording.md](coordinator-recording.md) when the engine
-returns the consolidated refresh.
-
 ## HTTP Response URL Capture
 
 For a source-proven IP omission, run the defect preflight using current issue
@@ -233,8 +197,8 @@ proven pointer and source-consumption result. Set its required
 `BACKEND_REWRITE_SOURCE_EVIDENCE` input to a one-line source file/line/symbol
 proof; a field name alone is insufficient. The plan previews the acquisition
 rule and returns the exact apply command. Apply persists rules in
-the file named by `project.policy`, then follows the same consolidated refresh as
-Breeze capture. `status` restores pending apply commands. Workers return the
+the file named by `project.policy` and requests a consolidated recording refresh.
+`status` restores pending apply commands. Workers return the
 source inputs; the coordinator performs the state mutations.
 
 For `recorder-capture plan-http-response`, first omit `--pattern-checked`.

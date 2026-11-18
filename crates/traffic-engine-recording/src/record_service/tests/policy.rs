@@ -89,7 +89,7 @@ fn explicitly_configured_missing_or_invalid_policy_fails_configuration() {
         "version: 2\nhttp:\n  case_path_patterns: wrong-type\n",
         "version: 2\nunknown_field: true\n",
         "version: 2\nhttp:\n  allowed_unused_http_hosts: ['https://config.example']\n",
-        "version: 2\nbreeze_capture:\n- snapshot_dir: /missing-strategy\n  capture_resources: []\n",
+        "format: traffic-policy/v3\nrules:\n- id: retired-capture\n  match: {}\n  effect: {kind: capture_breeze, snapshot_dir: /obsolete, resources: [cache]}\n  proof: {source: src/cache.rs, fact: Reads a cache resource}\n",
     ] {
         std::fs::write(&path, policy).unwrap();
         assert!(

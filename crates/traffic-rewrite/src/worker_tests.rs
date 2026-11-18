@@ -7,8 +7,7 @@ use crate::ResponseRuleKind;
 
 use crate::{
     RewriteContext, RewriteDependencyOwnership, RewriteDependencyRulePlanOptions,
-    RewriteDependencyRuleSelector, RewriteRecorderCapturePlanOptions, RewriteRouteCause,
-    RewriteRouteOptions, RewriteRulePlanOptions,
+    RewriteDependencyRuleSelector, RewriteRouteCause, RewriteRouteOptions, RewriteRulePlanOptions,
 };
 
 fn api_scope(state: &RewriteState) -> RewriteWorkScope {
@@ -140,18 +139,6 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
         )
         .unwrap_err(),
         "planning a dependency rule",
-    );
-    assert_confirmation_error(
-        super::super::plan_rewrite_recorder_capture(
-            context(),
-            RewriteRecorderCapturePlanOptions {
-                evidence_id: evidence_id.clone(),
-                endpoint: "cache.example.com:6379".to_string(),
-                source_evidence: "src/cache.rs:read".to_string(),
-            },
-        )
-        .unwrap_err(),
-        "planning recorder capture",
     );
     assert_confirmation_error(
         super::super::route_rewrite(RewriteRouteOptions {

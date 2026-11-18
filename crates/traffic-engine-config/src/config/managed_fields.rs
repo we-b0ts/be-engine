@@ -26,8 +26,7 @@ pub(super) fn reject_inline(path: &Path, raw: &str) -> Result<()> {
         )?;
     }
     reject_key(recorder, "async_api", "async_api")?;
-    reject_http_fields(recorder)?;
-    reject_breeze_fields(recorder)
+    reject_http_fields(recorder)
 }
 
 fn reject_http_fields(recorder: &Mapping) -> Result<()> {
@@ -53,27 +52,6 @@ fn reject_http_fields(recorder: &Mapping) -> Result<()> {
                 )?;
             }
         }
-    }
-    Ok(())
-}
-
-fn reject_breeze_fields(recorder: &Mapping) -> Result<()> {
-    let Some(strategies) = value(recorder, "dns_mock")
-        .and_then(Value::as_mapping)
-        .and_then(|dns| value(dns, "bypass_strategies"))
-        .and_then(Value::as_sequence)
-    else {
-        return Ok(());
-    };
-    for (index, strategy) in strategies.iter().enumerate() {
-        let Some(strategy) = strategy.as_mapping() else {
-            continue;
-        };
-        reject_key(
-            strategy,
-            "capture_resources",
-            &format!("dns_mock.bypass_strategies[{index}].capture_resources"),
-        )?;
     }
     Ok(())
 }

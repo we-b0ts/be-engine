@@ -25,20 +25,6 @@ pub fn validate(rule: &NativeRule, context: &crate::CompilationContext<'_>) -> R
                 traffic_protocol_http::path_pattern::validate_path_pattern(path)?;
             }
         }
-        NativeEffect::CaptureBreeze(effect) => {
-            empty_match(rule)?;
-            ensure!(
-                !effect.snapshot_dir.as_os_str().is_empty(),
-                "Breeze capture requires a snapshot directory"
-            );
-            ensure!(
-                (1..=4096).contains(&effect.resources.len()),
-                "Breeze capture requires bounded resources"
-            );
-            for resource in &effect.resources {
-                text(resource, "Breeze resource", 1024)?;
-            }
-        }
         NativeEffect::CaptureHttpResponse(effect) => {
             empty_match(rule)?;
             ensure!(
