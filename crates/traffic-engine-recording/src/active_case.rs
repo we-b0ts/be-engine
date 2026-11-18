@@ -89,6 +89,13 @@ pub enum DependencyDrainResult {
     ObservationTimedOut,
 }
 
+#[derive(Clone, Copy)]
+enum CaptureStart {
+    Observation,
+    Request,
+    Message { process_owned: bool },
+}
+
 #[derive(Clone)]
 pub struct DependencyTargets {
     pub cases: Vec<(CaseContext, &'static str)>,
@@ -447,23 +454,23 @@ impl ActiveCaseRegistry {
     }
 
     pub fn current_targets_for_event(&self) -> DependencyTargets {
-        self.targets_for_request(false, false, false)
+        self.targets_for_request(false, CaptureStart::Observation)
     }
 
     #[allow(dead_code)]
     pub fn current_targets_for_request_with_tail(&self, track_tail: bool) -> DependencyTargets {
-        self.targets_for_request(track_tail, true, false)
+        self.targets_for_request(track_tail, CaptureStart::Request)
     }
 
     pub fn current_targets_for_http_request(&self, track_tail: bool) -> DependencyTargets {
-        self.targets_for_request(track_tail, true, false)
+        self.targets_for_request(track_tail, CaptureStart::Request)
     }
 
     pub fn current_targets_for_start(
         &self,
         protocol: crate::dependency::observation::ProtocolRef,
     ) -> DependencyTargets {
-        let targets = self.targets_for_request(true, true, false);
+        let targets = self.targets_for_request(true, CaptureStart::Request);
         targets.bind_protocol(protocol);
         targets
     }
@@ -471,23 +478,26 @@ impl ActiveCaseRegistry {
     pub fn current_targets_for_message(
         &self,
         reference: crate::dependency::observation::ProtocolRef,
+        process_owned: bool,
     ) -> DependencyTargets {
-        let targets = self.targets_for_request(true, true, true);
+        let targets =
+            self.targets_for_request(!process_owned, CaptureStart::Message { process_owned });
         targets.bind_protocol(reference);
         targets
     }
 
-    fn targets_for_request(
-        &self,
-        track_tail: bool,
-        start_capture: bool,
-        message: bool,
-    ) -> DependencyTargets {
+    fn targets_for_request(&self, track_tail: bool, start: CaptureStart) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
         let active_count = state.active.len();
+        let admit_case = !matches!(
+            start,
+            CaptureStart::Message {
+                process_owned: true
+            }
+        );
         let (cases, ambiguous_active_cases, mut reservations) = match state.active.as_slice() {
             [] => (Vec::new(), 0, Vec::new()),
-            [registration] if registration.accepting_dependencies => (
+            [registration] if admit_case && registration.accepting_dependencies => (
                 vec![(registration.case.clone(), "active_window")],
                 0,
                 vec![registration.dependencies.reserve()],
@@ -504,21 +514,14 @@ impl ActiveCaseRegistry {
         } else {
             crate::dependency::observation::CapturePhase::Runtime
         };
-        let capture = start_capture
-            .then(|| {
-                self.capture.as_ref().and_then(|registry| {
-                    if message {
-                        registry.begin_message(
-                            phase,
-                            observed_case,
-                            cases.first().map(|(case, _)| case.id),
-                        )
-                    } else {
-                        registry.begin(phase, observed_case, cases.first().map(|(case, _)| case.id))
-                    }
-                })
-            })
-            .flatten();
+        let admitted_case = cases.first().map(|(case, _)| case.id);
+        let capture = self.capture.as_ref().and_then(|registry| match start {
+            CaptureStart::Observation => None,
+            CaptureStart::Request => registry.begin(phase, observed_case, admitted_case),
+            CaptureStart::Message { .. } => {
+                registry.begin_message(phase, observed_case, admitted_case)
+            }
+        });
         if bootstrap_open {
             reservations.push(state.bootstrap_dependencies.reserve());
         }

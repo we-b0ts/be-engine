@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use tokio::io::AsyncWriteExt;
 use traffic_model::{capture::capture_body, trace::OutputKind};
 use traffic_protocol::{
-    capture::{CaptureEvidence, CaptureSnapshot},
+    capture::CaptureSnapshot,
     connection::{CaptureExchange, CaptureHost, ConnectionIo, NativeFuture},
 };
 use uuid::Uuid;
@@ -180,7 +180,7 @@ impl Capture {
             },
         };
         let permit = host
-            .begin_message(push.capture_facts().reference)
+            .begin_message(&CaptureSnapshot::capture(&push)?)
             .await?
             .context("Redis notification capture admission is closed")?;
         let receipt = permit.prepare_output(OutputKind::End)?;

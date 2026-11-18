@@ -86,12 +86,13 @@ impl CaptureSession for Capture {
                             let event = emission::Emission { channel, ordinal: messages, anchor: subscription,
                                 peer: PeerAddress { address: self.0.endpoint.host.clone(), port: self.0.endpoint.port },
                                 body: body.to_vec(), offset_micros: u64::try_from(started.elapsed().as_micros())? };
-                            let permit = host.begin_message(event.reference()).await?.context("fixture message capture denied")?;
+                            let event = CaptureSnapshot::capture(&event)?;
+                            let permit = host.begin_message(&event).await?.context("fixture message capture denied")?;
                             let receipt = permit.prepare_output(OutputKind::End)?;
                             client_write.write_all(&encode_payload(body)?).await?;
                             client_write.flush().await?;
                             receipt.commit();
-                            permit.complete(CaptureSnapshot::capture(&event)?).await?;
+                            permit.complete(event).await?;
                         } else {
                             let (ordinal, input, started, permit) = pending.pop_front().context("fixture response has no request")?;
                             let listen = serde_json::from_slice::<Value>(&input)?["operation"] == "listen";

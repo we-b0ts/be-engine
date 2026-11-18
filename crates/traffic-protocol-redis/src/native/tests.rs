@@ -141,9 +141,9 @@ impl CaptureExchange for Permit {
 impl CaptureHost for CaptureSink {
     fn begin_message(
         &self,
-        reference: ProtocolRef,
+        event: &CaptureSnapshot,
     ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>> {
-        self.begin(reference, Operation::Unknown)
+        self.begin(event.facts().reference.clone(), Operation::Unknown)
     }
 
     fn begin(
