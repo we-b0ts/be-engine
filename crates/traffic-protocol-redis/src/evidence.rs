@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 use traffic_model::recording::ProtocolRef;
-use traffic_protocol::evidence::{EvidenceAdapter, SourceTiming};
+use traffic_protocol::evidence::{EvidenceAdapter, MessageSide, SourceTiming};
 use traffic_protocol::observation::{NativeSummary, TrafficInteraction, format_endpoint};
 
 mod index;
@@ -49,7 +49,7 @@ impl EvidenceAdapter for NativeEvidence {
     }
 
     fn schema(&self) -> &'static str {
-        "redis/semantic-evidence/v3"
+        "redis/semantic-evidence/v4"
     }
     fn event_types(&self) -> &'static [&'static str] {
         &["redis_exchange", "redis_pub_sub_push", "redis_connection"]
@@ -102,10 +102,10 @@ impl EvidenceAdapter for NativeEvidence {
         &self,
         protocol: &str,
         event: &Value,
-        side: traffic_protocol::evidence::MessageSide,
+        side: MessageSide,
         _secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
     ) -> Result<Option<Vec<u8>>> {
-        if protocol != "redis" || event["event_type"] != "redis_exchange" {
+        if protocol != "redis" {
             return Ok(None);
         }
         let decode = |value: &Value| -> Result<Vec<u8>> {
@@ -119,7 +119,15 @@ impl EvidenceAdapter for NativeEvidence {
                 _ => anyhow::bail!("unsupported Source payload encoding"),
             }
         };
-        let payload = if side == traffic_protocol::evidence::MessageSide::Request {
+        if event["event_type"] == "redis_pub_sub_push" {
+            return (side == MessageSide::Response)
+                .then(|| decode(&event["response"]))
+                .transpose();
+        }
+        if event["event_type"] != "redis_exchange" {
+            return Ok(None);
+        }
+        let payload = if side == MessageSide::Request {
             let args = event["args"]
                 .as_array()
                 .context("Source Redis arguments missing")?
@@ -133,11 +141,12 @@ impl EvidenceAdapter for NativeEvidence {
         Ok(Some(payload))
     }
     fn supports_replay(&self, event: &Value) -> bool {
-        event["replay_safe"] != false
-            && matches!(
-                event["event_type"].as_str(),
-                Some("redis_exchange" | "redis_pub_sub_push")
-            )
+        if event["event_type"] == "redis_pub_sub_push" {
+            return event["replay_safe"] == true
+                && event["rpc_request"].is_null()
+                && event["response"]["truncated"] != true;
+        }
+        event["replay_safe"] != false && event["event_type"] == "redis_exchange"
     }
     fn supports_input_timing(&self, event_type: &str) -> bool {
         matches!(event_type, "redis_exchange" | "redis_pub_sub_push")
@@ -162,6 +171,9 @@ impl EvidenceAdapter for NativeEvidence {
             Some("redis_exchange") => ("redis", event),
             Some("redis_pub_sub_push") if event["rpc_request"].is_object() => {
                 ("redis_rpc_push", &event["rpc_request"])
+            }
+            Some("redis_pub_sub_push") => {
+                return crate::native::notification::reference(event).map(Some);
             }
             _ => return Ok(None),
         };

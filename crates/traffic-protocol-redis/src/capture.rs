@@ -37,7 +37,7 @@ impl CaptureEvidence for RedisExchangeEvent {
         let successful_control = self.outcome == DependencyExchangeOutcome::Response
             && self.response_kind != "error"
             && self.replay_safe
-            && (self.session_setup || self.command == "PING");
+            && (self.session_setup || (self.command == "PING" && self.response_kind != "array"));
         facts.case_dependency = !is_client_library_info_exchange(self)
             && !successful_control
             && !self.cache_snapshot_hit;

@@ -139,6 +139,13 @@ impl CaptureExchange for Permit {
     }
 }
 impl CaptureHost for CaptureSink {
+    fn begin_message(
+        &self,
+        reference: ProtocolRef,
+    ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>> {
+        self.begin(reference, Operation::Unknown)
+    }
+
     fn begin(
         &self,
         _: ProtocolRef,
@@ -157,6 +164,8 @@ impl CaptureHost for CaptureSink {
         })
     }
 }
+
+mod pubsub;
 
 #[tokio::test]
 async fn native_recording_redacts_credentials_and_produces_executable_records() {

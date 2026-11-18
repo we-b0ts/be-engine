@@ -6,6 +6,7 @@ pub fn classify_command(command: &RedisCommand) -> OperationClass {
     let name = command.name.as_str();
     match name {
         "AUTH" | "HELLO" | "SELECT" | "PING" | "QUIT" | "RESET" => OperationClass::Session,
+        _ if crate::is_pubsub_command(name) => OperationClass::Session,
         "CLIENT" => classify_subcommand(
             command,
             &["GETNAME", "ID", "INFO", "LIST"],

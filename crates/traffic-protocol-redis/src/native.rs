@@ -15,8 +15,10 @@ use crate::{
 };
 
 mod evidence;
+pub(crate) mod notification;
 mod recording;
 mod server;
+mod subscription;
 
 #[cfg(test)]
 mod tests;
@@ -38,17 +40,19 @@ impl NativeProtocol for Native {
     }
 
     fn report_summary(&self, exchange: &RecordedExchange) -> Result<Value> {
-        let request = exchange.request().expect("native request").project()?;
+        let Some(request) = exchange.request() else {
+            return Ok(json!({"notification":exchange.response.project()?.structure}));
+        };
+        let request = request.project()?;
         Ok(
             json!({"command":request.structure["command"],"database":request.structure["database"],"arguments":request.structure["arguments"]}),
         )
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>> {
-        ensure!(
-            event["event_type"] != "redis_pub_sub_push",
-            "Redis notification serving is unavailable"
-        );
+        if event["event_type"] == "redis_pub_sub_push" {
+            return notification::recorded(event).map(Some);
+        }
         if event["event_type"] == "redis_connection" {
             ensure!(
                 event["replay_safe"] != false,
@@ -69,10 +73,6 @@ impl NativeProtocol for Native {
             "Redis native serving currently requires RESP2"
         );
         ensure!(record.database >= 0, "Redis database must be nonnegative");
-        ensure!(
-            !crate::is_pubsub_command(&record.command),
-            "Redis subscription serving is unavailable"
-        );
         let command = crate::RedisCommand {
             name: record.command.clone(),
             args: decoded.args.clone(),
@@ -83,8 +83,10 @@ impl NativeProtocol for Native {
         let mut version = record.resp_version;
         let mut database = record.database;
         let mut username = record.username.clone();
-        if crate::builtins::redis_builtin(&command, &mut version, &mut database, &mut username)
-            .is_some()
+        let subscribed_ping = command.name == "PING" && record.response_kind == "array";
+        if !subscribed_ping
+            && crate::builtins::redis_builtin(&command, &mut version, &mut database, &mut username)
+                .is_some()
         {
             ensure!(
                 record.response_kind != "error",
@@ -118,7 +120,7 @@ impl NativeProtocol for Native {
     fn recorded_endpoint(&self, event: &Value) -> Result<Option<Endpoint>> {
         if !matches!(
             event["event_type"].as_str(),
-            Some("redis_exchange" | "redis_connection")
+            Some("redis_exchange" | "redis_connection" | "redis_pub_sub_push")
         ) {
             return Ok(None);
         }
