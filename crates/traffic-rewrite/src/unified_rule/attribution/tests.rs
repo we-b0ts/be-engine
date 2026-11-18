@@ -1,5 +1,6 @@
 //! Public Source-only planning works before any Replay or implementation lease.
 use super::*;
+use crate::dependency_index::recording::dependency_path;
 use crate::policy::{NativeEffect, compile_policy, parse_policy};
 use crate::protocols::recording::events::{HttpExchangeEvent, RecorderEvent};
 use crate::recorder::{CaseContext, Recorder, capture_body};
@@ -103,7 +104,7 @@ async fn source_only_owner_rule_can_plan_and_apply_without_a_replay_or_api_worke
     let (target, state, file) = fixture().await;
     assert!(state.attempts.is_empty() && state.worker_bindings.is_empty());
     let source = state.case_source.as_ref().unwrap();
-    let immutable = fs::read(source.join("dependencies.jsonl")).unwrap();
+    let immutable = fs::read(dependency_path(source)).unwrap();
     let plan = plan_rewrite_unified_rule(
         RewriteContext {
             target_root: target.path().into(),
@@ -161,10 +162,7 @@ async fn source_only_owner_rule_can_plan_and_apply_without_a_replay_or_api_worke
         crate::dependency_review::required_action(target.path(), &after),
         Some(crate::RewriteAction::DependencyAttributionRequired { .. })
     ));
-    assert_eq!(
-        fs::read(source.join("dependencies.jsonl")).unwrap(),
-        immutable
-    );
+    assert_eq!(fs::read(dependency_path(source)).unwrap(), immutable);
 }
 
 #[tokio::test]
@@ -330,11 +328,7 @@ async fn async_only_owner_plan_rechecks_sealed_source_bytes_at_apply() {
         plan.traffic_e2e_report["preflight"]["source_scope"],
         Value::Null
     );
-    let central = state
-        .case_source
-        .as_ref()
-        .unwrap()
-        .join("dependencies.jsonl");
+    let central = dependency_path(state.case_source.as_ref().unwrap());
     let mut changed = fs::read(&central).unwrap();
     changed.push(b'\n');
     fs::write(central, changed).unwrap();
@@ -353,10 +347,16 @@ async fn async_only_owner_plan_rechecks_sealed_source_bytes_at_apply() {
 async fn nested_async_rule_plan_publishes_policy_consumed_by_recording() {
     let (target, state, file) = fixture().await;
     let source = state.case_source.as_ref().unwrap();
-    let frozen = ["dependencies.jsonl", "dependency-manifest.json"]
-        .into_iter()
-        .map(|name| (name, fs::read(source.join(name)).unwrap()))
-        .collect::<Vec<_>>();
+    let frozen = [
+        dependency_path(source),
+        source.join("dependency-manifest.json"),
+    ]
+    .into_iter()
+    .map(|path| {
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    })
+    .collect::<Vec<_>>();
     fs::write(
         &file,
         format!("format: traffic-policy/v3\nsource_revision: {REVISION}\nrecording:\n  async_api:\n    'GET /api':\n      - when_response: {{'/status': queued}}\n        end:\n          - http: {{method: GET, endpoint: 'worker.test:80', path: /queued}}\n      - when: {{}}\n        end:\n          - http: {{method: GET, endpoint: 'worker.test:80', path: /refresh}}\n"),
@@ -403,14 +403,17 @@ async fn nested_async_rule_plan_publishes_policy_consumed_by_recording() {
     assert!(scope.scenario_index().is_none());
     assert!(scope.select_response(Some(&json!({}))).0);
     assert_eq!(scope.scenario_index(), Some(1));
-    let event: serde_json::Value = serde_json::from_slice(&frozen[0].1).unwrap();
+    let mut ledger = crate::dependency_index::RecordStream::open(&dependency_path(source)).unwrap();
+    let (_, bytes) = ledger.next().unwrap().unwrap();
+    let event: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    assert!(ledger.next().unwrap().is_none());
     assert_eq!(
         scope.observe_recorded(&event).unwrap().unwrap().end_reason,
         crate::recorder::async_api::AsyncEndReason::Resource
     );
     assert!(scope.all_ends_matched());
-    for (name, bytes) in frozen {
-        assert_eq!(fs::read(source.join(name)).unwrap(), bytes, "{name}");
+    for (path, bytes) in frozen {
+        assert_eq!(fs::read(&path).unwrap(), bytes, "{}", path.display());
     }
 }
 
@@ -475,14 +478,10 @@ async fn pending_owner_plan_status_does_not_hash_frozen_evidence() {
     let state_path = crate::internal_runtime::root(target.path()).join("rewrite/state.json");
     let policy_path = target.path().join(".traffic-e2e/policy.yaml");
     let source = initial.case_source.as_ref().unwrap();
-    let frozen = [
-        &state_path,
-        &policy_path,
-        &source.join("dependencies.jsonl"),
-    ]
-    .into_iter()
-    .map(|path| (path.to_owned(), fs::read(path).unwrap()))
-    .collect::<BTreeMap<_, _>>();
+    let frozen = [&state_path, &policy_path, &dependency_path(source)]
+        .into_iter()
+        .map(|path| (path.to_owned(), fs::read(path).unwrap()))
+        .collect::<BTreeMap<_, _>>();
     reset_artifact_capture_stats();
     let mut first = None;
     for _ in 0..2 {

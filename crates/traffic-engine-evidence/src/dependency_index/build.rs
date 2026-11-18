@@ -52,7 +52,7 @@ impl Builder {
         }
     }
 
-    /// Observe exact on-disk bytes, including their line terminator.
+    /// Observe a physical record location and its materialized semantic bytes.
     pub fn observe_at(
         &mut self,
         location: &RecordLocation,
@@ -62,28 +62,13 @@ impl Builder {
         if self.offset != location.offset {
             self.scoped = true;
         }
-        self.offset = location.offset;
-        self.observe(location.line, raw, value)
-    }
-
-    pub fn set_scoped(&mut self) {
-        self.scoped = true;
-    }
-
-    pub fn observe(&mut self, line: usize, raw: &[u8], value: Option<&Value>) -> Result<()> {
-        let offset = self.offset;
+        self.offset = location.offset + location.length;
         self.hash.update(raw);
-        self.offset += raw.len() as u64;
         let Some(value) = value else {
             return Ok(());
         };
         self.index.events += 1;
-        let location = RecordLocation {
-            line,
-            offset,
-            length: raw.len() as u64,
-            sha256: digest(raw),
-        };
+        let line = location.line;
         if super::proof::is_evidence(value) {
             self.index
                 .proof_records
@@ -118,6 +103,20 @@ impl Builder {
                 });
         }
         Ok(())
+    }
+
+    pub fn set_scoped(&mut self) {
+        self.scoped = true;
+    }
+
+    pub fn observe(&mut self, line: usize, raw: &[u8], value: Option<&Value>) -> Result<()> {
+        let location = RecordLocation {
+            line,
+            offset: self.offset,
+            length: raw.len() as u64,
+            sha256: digest(raw),
+        };
+        self.observe_at(&location, raw, value)
     }
 
     pub fn finish(mut self) -> Result<FileIndex> {

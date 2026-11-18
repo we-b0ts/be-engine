@@ -61,8 +61,16 @@ pub fn view_path(path: &Path) -> Option<PathBuf> {
 
 pub fn resolve(path: &Path) -> Result<Source> {
     let Some(view) = view_path(path) else {
+        let physical = if path
+            .file_name()
+            .is_some_and(|name| name == "dependencies.jsonl")
+        {
+            super::recording::dependency_path(path.parent().context("dependency has no directory")?)
+        } else {
+            path.into()
+        };
         return Ok(Source {
-            path: path.into(),
+            path: physical,
             locations: None,
             view: None,
         });
@@ -100,7 +108,7 @@ pub fn resolve(path: &Path) -> Result<Source> {
             || root.join("recording-run.json").is_file(),
         "dependency scope has no recording boundary"
     );
-    let path = root.join("dependencies.jsonl");
+    let path = super::recording::dependency_path(&root);
     let ledger = FileStamp::read_native(&path)?;
     let mut end = 0;
     let mut line = 0;
@@ -164,7 +172,14 @@ pub fn resolve(path: &Path) -> Result<Source> {
 }
 
 pub fn exists(path: &Path) -> bool {
-    view_path(path).is_some_and(|p| p.is_file()) || path.is_file()
+    view_path(path).is_some_and(|p| p.is_file())
+        || path.is_file()
+        || path
+            .file_name()
+            .is_some_and(|name| name == "dependencies.jsonl")
+            && path
+                .parent()
+                .is_some_and(|root| root.join(traffic_model::compact::DEPENDENCIES).is_file())
 }
 
 pub fn case_path(directory: &Path) -> PathBuf {
@@ -236,6 +251,14 @@ pub fn case_directory(path: &Path) -> Result<PathBuf> {
 
 pub fn read_bytes(path: &Path) -> Result<Vec<u8>> {
     let source = resolve(path)?;
+    if super::compact::is_compact(&source.path) {
+        let mut stream = super::RecordStream::open(path)?;
+        let mut bytes = Vec::new();
+        while let Some((_, record)) = stream.next()? {
+            bytes.extend_from_slice(record);
+        }
+        return Ok(bytes);
+    }
     let Some(locations) = &source.locations else {
         return Ok(fs::read(source.path)?);
     };

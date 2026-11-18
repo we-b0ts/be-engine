@@ -49,7 +49,7 @@ pub fn seal(root: &Path) -> Result<Option<PathBuf>> {
     let manifest_path = root.join(MANIFEST_FILE);
     let manifest_stamp = FileStamp::read_native(&manifest_path)?;
     let manifest_sha256 = digest(&fs::read(&manifest_path)?);
-    let ledger_path = root.join("dependencies.jsonl");
+    let ledger_path = recording::dependency_path(&root);
     let ledger = FileStamp::read_native(&ledger_path)?;
     recording::authenticate(&root)?;
     let scopes = scope_digests(&manifest);
@@ -168,7 +168,7 @@ fn current(root: &Path, ledger: &FileStamp) -> Result<Arc<Catalog>> {
     ensure!(
         FileStamp::read_native(&manifest_path)? == manifest
             && FileStamp::read_native(&catalog_path)? == catalog
-            && FileStamp::read_native(&root.join("dependencies.jsonl"))? == *ledger,
+            && FileStamp::read_native(&recording::dependency_path(root))? == *ledger,
         "recording changed while loading its Case index catalog"
     );
     let contents = Arc::new(contents);

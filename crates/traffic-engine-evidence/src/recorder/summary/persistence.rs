@@ -42,7 +42,9 @@ pub(super) async fn write_dependency_summary(
         if scoped && let Some(index) = &mut case_index {
             index.set_scoped();
         }
-        let mut global_index = if case_dependencies {
+        // Scoped recordings publish their authenticated per-scope Global
+        // indexes at seal. The root-level fragment only serves flat inputs.
+        let mut global_index = if case_dependencies || scoped {
             None
         } else {
             Some(GlobalBuilder::with_evidence(
@@ -52,9 +54,6 @@ pub(super) async fn write_dependency_summary(
             )?)
         };
         let mut summary = DependencySummaryBuilder::new((*evidence).clone());
-        if scoped && let Some(index) = &mut global_index {
-            index.set_scoped();
-        }
         while let Some((location, raw)) = input.next()? {
             let value = if raw.iter().all(u8::is_ascii_whitespace) {
                 None

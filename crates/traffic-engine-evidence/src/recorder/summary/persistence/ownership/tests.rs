@@ -95,7 +95,7 @@ impl Fixture {
             .await
             .unwrap();
         recorder.flush_all_dependency_files().await.unwrap();
-        let bytes = fs::read(recorder.run_dir.join("dependencies.jsonl")).unwrap();
+        let bytes = fs::read(recorder.run_dir.join(traffic_model::compact::DEPENDENCIES)).unwrap();
         Self {
             _temp: temp,
             recorder,
@@ -107,13 +107,10 @@ impl Fixture {
     }
 
     fn index_paths(&self) -> Vec<PathBuf> {
-        let mut paths = vec![self.recorder.run_dir.join(GLOBAL_FRAGMENT)];
-        paths.extend(
-            self.cases
-                .iter()
-                .map(|case| self.recorder.case_dir(case).join(FRAGMENT)),
-        );
-        paths
+        self.cases
+            .iter()
+            .map(|case| self.recorder.case_dir(case).join(FRAGMENT))
+            .collect()
     }
 
     fn index_snapshots(&self) -> BTreeMap<PathBuf, (Vec<u8>, FileStamp)> {
@@ -135,11 +132,22 @@ async fn real_writer_finalizes_multiple_append_prefixes_and_chowns_every_new_fra
     assert!(fixture.prefix_sizes[1] < fixture.bytes.len() as u64);
     fixture.recorder.finish_run().await.unwrap();
     assert_eq!(
-        fs::read(fixture.recorder.run_dir.join("dependencies.jsonl")).unwrap(),
+        fs::read(
+            fixture
+                .recorder
+                .run_dir
+                .join(traffic_model::compact::DEPENDENCIES)
+        )
+        .unwrap(),
         fixture.bytes
     );
-    let final_stamp =
-        FileStamp::read_native(&fixture.recorder.run_dir.join("dependencies.jsonl")).unwrap();
+    let final_stamp = FileStamp::read_native(
+        &fixture
+            .recorder
+            .run_dir
+            .join(traffic_model::compact::DEPENDENCIES),
+    )
+    .unwrap();
     for (case, bytes) in fixture.cases.iter().zip(&fixture.scopes) {
         let directory = fixture.recorder.case_dir(case);
         let index: FileIndex = store::read_json(&directory.join(FRAGMENT)).unwrap();
@@ -150,9 +158,14 @@ async fn real_writer_finalizes_multiple_append_prefixes_and_chowns_every_new_fra
         );
         assert_eq!(index.sha256, format!("{:x}", Sha256::digest(bytes)));
     }
-    let global: GlobalIndex =
-        store::read_json(&fixture.recorder.run_dir.join(GLOBAL_FRAGMENT)).unwrap();
-    assert_eq!(global.stamp, final_stamp);
+    assert!(!fixture.recorder.run_dir.join(GLOBAL_FRAGMENT).exists());
+    assert!(
+        !fixture
+            .recorder
+            .run_dir
+            .join(".global-replay-pages")
+            .exists()
+    );
     for path in fixture.index_paths() {
         let metadata = fs::symlink_metadata(path).unwrap();
         assert_eq!(
@@ -175,7 +188,10 @@ async fn selected_and_unselected_byte_tampering_cannot_refresh_any_fragment() {
         fixture.recorder.finish_run().await.unwrap();
         owner().assign_to(&fixture.recorder.run_dir).await.unwrap();
         let before = fixture.index_snapshots();
-        let central = fixture.recorder.run_dir.join("dependencies.jsonl");
+        let central = fixture
+            .recorder
+            .run_dir
+            .join(traffic_model::compact::DEPENDENCIES);
         let mut changed = fs::read(&central).unwrap();
         let position = changed
             .windows(label.len())
@@ -197,7 +213,7 @@ async fn selected_and_unselected_byte_tampering_cannot_refresh_any_fragment() {
 }
 
 #[tokio::test]
-async fn a_bad_later_scope_hash_does_not_rewrite_an_earlier_global_fragment() {
+async fn a_bad_scope_hash_preserves_all_case_fragments() {
     let fixture = Fixture::new(false).await;
     fixture.recorder.finish_run().await.unwrap();
     let path = fixture.recorder.case_dir(&fixture.cases[1]).join(FRAGMENT);

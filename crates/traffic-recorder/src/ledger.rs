@@ -121,6 +121,17 @@ impl std::fmt::Debug for CaptureReservation {
 }
 
 impl CaptureRegistry {
+    pub fn primary_boundary(&self, case_id: Uuid, boundary: traffic_model::trace::PrimaryBoundary) {
+        if self
+            .0
+            .writer
+            .try_record_lifecycle(LifecycleRecord::PrimaryBoundary { case_id, boundary })
+            .is_err()
+        {
+            self.mark_inventory_gap();
+        }
+    }
+
     pub fn input(
         &self,
         case_id: Uuid,

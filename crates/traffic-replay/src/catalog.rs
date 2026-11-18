@@ -93,6 +93,7 @@ impl SequenceCatalog {
                 }
                 CaptureEvent::Bound { .. }
                 | CaptureEvent::Sealed { .. }
+                | CaptureEvent::PrimaryBoundary { .. }
                 | CaptureEvent::Input { .. } => continue,
             };
             source.push(SourceEvent {

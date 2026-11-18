@@ -7,7 +7,24 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-use traffic_model::recording::{MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest};
+use traffic_model::{
+    compact::{DEPENDENCIES, EVENTS},
+    recording::{COMPACT_RECORDING_SCHEMA, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest},
+};
+
+pub fn supported_recording_schema(schema: &str) -> bool {
+    schema == COMPACT_RECORDING_SCHEMA
+        || cfg!(any(test, feature = "test-support")) && schema == RECORDING_SCHEMA
+}
+
+pub fn dependency_path(root: &Path) -> PathBuf {
+    let compact = root.join(DEPENDENCIES);
+    if compact.exists() {
+        compact
+    } else {
+        root.join("dependencies.jsonl")
+    }
+}
 
 pub fn root(path: &Path) -> Option<PathBuf> {
     path.ancestors()
@@ -19,11 +36,16 @@ pub fn manifest(path: &Path) -> Result<(PathBuf, RecordingManifest)> {
     let root = root(path).context("recording requires the current central dependency manifest; old recording semantics are unsupported")?;
     let manifest: RecordingManifest = serde_json::from_slice(&fs::read(root.join(MANIFEST_FILE))?)?;
     ensure!(
-        manifest.schema == RECORDING_SCHEMA,
+        supported_recording_schema(&manifest.schema),
         "unsupported recording schema; create a new recording with the current engine"
     );
     ensure!(manifest.sealed, "recording evidence is not sealed");
     ensure!(!manifest.run_id.is_empty(), "recording has no run identity");
+    ensure!(
+        (manifest.schema == COMPACT_RECORDING_SCHEMA)
+            == super::compact::is_compact(&dependency_path(&root)),
+        "recording manifest and dependency storage format disagree"
+    );
     Ok((root, manifest))
 }
 
@@ -146,8 +168,13 @@ pub fn authenticate(path: &Path) -> Result<()> {
             "recording changed during authentication"
         );
     }
+    let (dependencies, events) = if manifest.schema == COMPACT_RECORDING_SCHEMA {
+        (DEPENDENCIES, EVENTS)
+    } else {
+        ("dependencies.jsonl", "dependency-lifecycle.jsonl")
+    };
     ensure!(
-        seen.contains("dependencies.jsonl") && seen.contains("dependency-lifecycle.jsonl"),
+        seen.contains(dependencies) && seen.contains(events),
         "recording seal omits dependency inventory or lifecycle evidence"
     );
     ensure!(

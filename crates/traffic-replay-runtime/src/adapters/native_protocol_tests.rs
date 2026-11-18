@@ -19,6 +19,9 @@ use traffic_contract::{
 use traffic_engine::test_support::serve_recording_connection as handle_connection;
 use traffic_policy_value::{MessageSide, RuleBinding, ValueRule};
 
+#[path = "compact_redis_test.rs"]
+mod compact_redis;
+
 const NATIVE: &str = traffic_protocol_fixture::NAME;
 
 fn providers() -> Arc<DependencyProviders> {
@@ -292,8 +295,12 @@ async fn record_scenario(startup: bool, fixed: &'static str, notifications: bool
     assert!(manifest.sealed && manifest.capture_complete);
     assert_eq!(manifest.inputs.len(), 1);
     assert!(manifest.semantic_inventory.unsupported_by_scope.is_empty());
-    let source_bytes = std::fs::read(root.join("dependencies.jsonl")).unwrap();
-    let rows = String::from_utf8_lossy(&source_bytes)
+    let source_bytes = std::fs::read(root.join(traffic_model::compact::DEPENDENCIES)).unwrap();
+    let semantic_bytes = crate::dependency_index::scoped::read_bytes(
+        &root.join(traffic_model::compact::DEPENDENCIES),
+    )
+    .unwrap();
+    let rows = String::from_utf8_lossy(&semantic_bytes)
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
@@ -482,7 +489,7 @@ async fn registered_protocol_records_seals_loads_matches_renders_and_delivers_wi
                     "ingress":report["http_ingress"],"sequence":report["dependency_sequence_missing"]})
             );
             assert_eq!(
-                std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+                std::fs::read(recording.root.join(traffic_model::compact::DEPENDENCIES)).unwrap(),
                 recording.source_bytes
             );
         }
@@ -537,7 +544,7 @@ async fn registered_protocol_keeps_unselected_fields_strict_and_rejections_uncon
                 .all(|occurrence| occurrence.capture_complete)
         );
         assert_eq!(
-            std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+            std::fs::read(recording.root.join(traffic_model::compact::DEPENDENCIES)).unwrap(),
             recording.source_bytes
         );
     })
@@ -631,7 +638,7 @@ async fn registered_protocol_global_evidence_uses_native_projection_and_generic_
                 page.items
             );
             assert_eq!(
-                std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+                std::fs::read(recording.root.join(traffic_model::compact::DEPENDENCIES)).unwrap(),
                 recording.source_bytes
             );
         }
@@ -662,7 +669,7 @@ async fn registered_protocol_uses_authored_global_json_rules_through_normal_repl
             let report = replay.finish().await;
             assert_eq!(report["dependency_protocols"][NATIVE]["matched_count"], 2);
             assert_eq!(report["batch_reconciliation"]["dependency_inventory_verified"], true);
-            assert_eq!(std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(), recording.source_bytes);
+            assert_eq!(std::fs::read(recording.root.join(traffic_model::compact::DEPENDENCIES)).unwrap(), recording.source_bytes);
         }
     }).await.unwrap();
 }
@@ -725,7 +732,7 @@ async fn a_failed_native_request_reports_registered_policy_findings_and_source_r
                 .any(|finding| finding["policy"] == "unordered-joined-string")
         );
         assert_eq!(
-            std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+            std::fs::read(recording.root.join(traffic_model::compact::DEPENDENCIES)).unwrap(),
             recording.source_bytes
         );
     })
@@ -739,7 +746,7 @@ async fn independent_server_messages_record_and_replay_with_shared_policy_and_fi
         for startup in [false, true] {
         let recording = record_scenario(startup, "original", true).await;
         let trace =
-            std::fs::read_to_string(recording.root.join("dependency-lifecycle.jsonl")).unwrap();
+            std::fs::read_to_string(recording.root.join(traffic_model::compact::EVENTS)).unwrap();
         assert_eq!(
             trace
                 .lines()
@@ -790,7 +797,7 @@ async fn independent_server_messages_record_and_replay_with_shared_policy_and_fi
                 "{report}"
             );
             assert_eq!(
-                std::fs::read(recording.root.join("dependencies.jsonl")).unwrap(),
+                std::fs::read(recording.root.join(traffic_model::compact::DEPENDENCIES)).unwrap(),
                 recording.source_bytes
             );
         }

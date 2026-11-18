@@ -112,6 +112,9 @@ impl RecordReader {
         );
         self.source_bytes += location.length;
         source.validate()?;
+        if super::compact::is_compact(path) {
+            return Ok(Arc::new(super::compact::decode(path, &bytes)?));
+        }
         let bytes = Arc::new(bytes);
         if bytes.len() <= self.capacity {
             while self.bytes + bytes.len() > self.capacity {

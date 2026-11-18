@@ -382,9 +382,8 @@ async fn a_client_abort_proof_can_reassign_unused_occurrences_from_multiple_late
         .unwrap(),
     )
     .unwrap();
-    let cache = crate::dependency_index::store::cache_directory(
-        &recorder.run_dir().join("dependencies.jsonl"),
-    );
+    let cache =
+        crate::dependency_index::store::cache_directory(&dependency_path(recorder.run_dir()));
     let cached_cases = || {
         fs::read_dir(&cache)
             .unwrap()

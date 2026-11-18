@@ -54,7 +54,8 @@ async fn published_case_index_survives_later_appends_and_copy_without_a_rebuild(
     let published: FileIndex = store::read_json(&first.join(FRAGMENT)).unwrap();
     recorder.finish_run().await.unwrap();
     let original = recorder.run_dir.as_ref();
-    let ledger = FileStamp::read_native(&original.join("dependencies.jsonl")).unwrap();
+    let ledger =
+        FileStamp::read_native(&original.join(traffic_model::compact::DEPENDENCIES)).unwrap();
     assert!(published.stamp.size < ledger.size);
     let copied = temporary
         .path()

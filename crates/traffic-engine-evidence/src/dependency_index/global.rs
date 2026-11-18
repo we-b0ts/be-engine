@@ -106,7 +106,7 @@ impl GlobalBuilder {
         record: Option<Value>,
     ) -> Result<()> {
         self.hash.update(raw);
-        self.offset += raw.len() as u64;
+        self.offset += location.length;
         let Some(record) = record else {
             return Ok(());
         };

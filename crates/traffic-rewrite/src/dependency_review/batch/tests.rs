@@ -1,4 +1,5 @@
 use super::*;
+use crate::dependency_index::recording::dependency_path;
 use crate::{
     dependency::observation::MANIFEST_FILE,
     model::RewriteApiStatus,
@@ -233,12 +234,17 @@ async fn a_warm_coverage_query_does_not_parse_or_index_semantic_source() {
     // Synthetic fixture: the bytes have a valid seal but intentionally are not
     // semantic JSON. Coverage cannot certify them; actual Source proof must fail.
     let opaque = b"semantic parsing is deliberately unavailable in this fixture\n";
-    fs::write(source.join("dependencies.jsonl"), opaque).unwrap();
+    let ledger = dependency_path(source);
+    fs::write(&ledger, opaque).unwrap();
     let (_, mut manifest) = crate::dependency_index::recording::manifest(source).unwrap();
     let identity = manifest
         .files
         .iter_mut()
-        .find(|file| file.path == "dependencies.jsonl")
+        .find(|file| {
+            ledger
+                .file_name()
+                .is_some_and(|name| name == file.path.as_str())
+        })
         .unwrap();
     identity.length = opaque.len() as u64;
     identity.sha256 = source::digest(opaque);

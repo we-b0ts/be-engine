@@ -661,7 +661,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(run.join("dependency-manifest.json")).unwrap())
                 .unwrap();
-        assert_eq!(manifest["schema"], "traffic-recording/v4");
+        assert_eq!(manifest["schema"], "traffic-recording/v5");
         assert_eq!(manifest["sealed"], true);
         assert_eq!(manifest["capture_complete"], true);
         let inputs = manifest["inputs"].as_array().unwrap();

@@ -20,7 +20,7 @@ use crate::{
 pub(super) fn complete_source(manifest: &RecordingManifest) -> Result<()> {
     ensure!(
         manifest.sealed
-            && manifest.schema == crate::dependency::observation::RECORDING_SCHEMA
+            && crate::dependency_index::recording::supported_recording_schema(&manifest.schema)
             && manifest.capture_complete
             && !manifest.coverage.inventory_gaps
             && manifest.coverage.capture_failures == 0

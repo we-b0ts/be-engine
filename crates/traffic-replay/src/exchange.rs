@@ -283,22 +283,6 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             .context("native semantic reference is ambiguous in its Case inventory")
     }
 
-    fn candidates(&self, key: CandidateKey, source: ReplaySource) -> CandidateCursor {
-        if let Some(expected) = self.lifecycle.sequence.expected_in(source) {
-            let selected = self.candidates.lookup(&key).into_indices();
-            CandidateCursor::new(
-                expected
-                    .iter()
-                    .copied()
-                    .filter(|index| selected.binary_search(index).is_ok())
-                    .collect::<Vec<_>>()
-                    .into(),
-            )
-        } else {
-            self.candidates.lookup(&key)
-        }
-    }
-
     pub fn select(
         &self,
         context: MatchContext<'_, R>,
@@ -315,21 +299,30 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         validate: impl Fn(&PreparedExchange<R>, &R::Comparison) -> Result<()>,
         observe: impl Fn(&PreparedExchange<R>, &R::Comparison) -> Result<()>,
     ) -> Result<Selection<R::Comparison>> {
-        let structure = serde_json::to_vec(&context.request.project()?.structure)?;
-        let key = CandidateKey {
-            scope: ScopePartition::new(ReplaySource::Case, context.active_case),
-            protocol: context.protocol,
-            endpoint: context.endpoint.clone(),
-            structure,
+        let case = self.lifecycle.sequence.expected_in(ReplaySource::Case);
+        let run = self.lifecycle.sequence.expected_in(ReplaySource::Startup);
+        let structure = context.request.project()?.structure;
+        let lookup_key = (case.is_none() || run.is_none())
+            .then(|| serde_json::to_vec(&structure))
+            .transpose()?;
+        let candidates = |expected: Option<Arc<[usize]>>, scope| {
+            expected.map_or_else(
+                || {
+                    self.candidates.lookup(&CandidateKey {
+                        scope,
+                        protocol: context.protocol,
+                        endpoint: context.endpoint.clone(),
+                        structure: lookup_key.clone().expect("unsequenced lookup key"),
+                    })
+                },
+                CandidateCursor::new,
+            )
         };
-        let case = self.candidates(key.clone(), ReplaySource::Case);
-        let run = self.candidates(
-            CandidateKey {
-                scope: ScopePartition::Run,
-                ..key
-            },
-            ReplaySource::Startup,
+        let case = candidates(
+            case,
+            ScopePartition::new(ReplaySource::Case, context.active_case),
         );
+        let run = candidates(run, ScopePartition::Run);
         let previews = RefCell::new(HashMap::new());
         let failed = RefCell::new(None);
         let inspected = std::cell::Cell::new(0_usize);
@@ -339,10 +332,13 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             case,
             run,
             |exchange, _| {
-                if !self
-                    .lifecycle
-                    .live_status(exchange.index, exchange.status)
-                    .is_available()
+                if exchange.protocol != context.protocol
+                    || exchange.native.endpoint != *context.endpoint
+                    || exchange.request.as_ref().map(R::structure) != Some(&structure)
+                    || !self
+                        .lifecycle
+                        .live_status(exchange.index, exchange.status)
+                        .is_available()
                 {
                     return false;
                 }
@@ -432,46 +428,39 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         active_case: Option<&str>,
         anchors: &[ProtocolRef],
     ) -> Option<usize> {
-        let case_expected = self
-            .lifecycle
-            .sequence
-            .expected_messages(ReplaySource::Case);
-        let run_expected = self
-            .lifecycle
-            .sequence
-            .expected_messages(ReplaySource::Startup);
-        anchors
-            .iter()
-            .flat_map(|anchor| self.emissions.get(anchor).into_iter().flatten())
-            .copied()
-            .filter(|index| {
+        let select_scope = |source| {
+            let matches = |index: &usize| {
                 let exchange = &self.exchanges[*index];
                 let scope = &exchange.source;
-                if exchange.protocol != protocol
-                    || exchange.native.endpoint != *endpoint
-                    || !self
+                let owned = if source == ReplaySource::Case {
+                    scope.source == ReplaySource::Case && scope.case_id.as_deref() == active_case
+                } else {
+                    scope.source.is_run_owned()
+                };
+                owned
+                    && exchange.protocol == protocol
+                    && exchange.native.endpoint == *endpoint
+                    && self
                         .lifecycle
                         .live_status(*index, exchange.status)
                         .is_available()
-                {
-                    return false;
-                }
-                if scope.source == ReplaySource::Case {
-                    scope.case_id.as_deref() == active_case
-                        && case_expected
-                            .as_ref()
-                            .is_none_or(|expected| expected.contains(index))
-                } else {
-                    scope.source.is_run_owned()
-                        && run_expected
-                            .as_ref()
-                            .is_none_or(|expected| expected.contains(index))
-                }
-            })
-            .min_by_key(|index| {
-                let source = &self.exchanges[*index].source;
-                (source.source != ReplaySource::Case, source.position)
-            })
+                    && matches!(&exchange.native.input,
+                        traffic_protocol::connection::RecordedInput::Emission { after, .. }
+                        if anchors.contains(after))
+            };
+            let position = |index: &usize| self.exchanges[*index].source.position;
+            if let Some(expected) = self.lifecycle.sequence.expected_messages(source) {
+                expected.into_iter().filter(matches).min_by_key(position)
+            } else {
+                anchors
+                    .iter()
+                    .flat_map(|anchor| self.emissions.get(anchor).into_iter().flatten())
+                    .copied()
+                    .filter(matches)
+                    .min_by_key(position)
+            }
+        };
+        select_scope(ReplaySource::Case).or_else(|| select_scope(ReplaySource::Startup))
     }
 
     pub fn claim_bound(&mut self, index: usize, owner: Uuid) -> Result<ClaimTicket> {

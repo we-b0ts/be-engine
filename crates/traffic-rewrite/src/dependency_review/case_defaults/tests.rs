@@ -1,5 +1,6 @@
 use super::load;
 use crate::dependency::attribution::DependencyOwner;
+use crate::dependency_index::recording::dependency_path;
 use crate::protocols::recording::events::{RecorderEvent, RedisPubSubPushEvent};
 use crate::recorder::{CaseContext, capture_body};
 use crate::{AppConfig, AppState};
@@ -91,7 +92,7 @@ async fn historical(inside_window: bool) -> (tempfile::TempDir, RewriteState, Uu
         .unwrap()
         .save(&state)
         .unwrap();
-    let bytes = fs::read(app.recorder().run_dir().join("dependencies.jsonl")).unwrap();
+    let bytes = fs::read(dependency_path(app.recorder().run_dir())).unwrap();
     (target, state, case.id, bytes)
 }
 
@@ -237,14 +238,7 @@ async fn historical_case_inputs_bypass_analysis_and_freeze_as_finite_case_eviden
         super::super::snapshot::identity(target.path(), &state.recording_run_id).unwrap()
     );
     assert_eq!(
-        fs::read(
-            state
-                .case_source
-                .as_ref()
-                .unwrap()
-                .join("dependencies.jsonl")
-        )
-        .unwrap(),
+        fs::read(dependency_path(state.case_source.as_ref().unwrap())).unwrap(),
         original
     );
     assert!(
@@ -331,14 +325,7 @@ process_dependencies:
     );
     assert!(super::super::analysis::required_action(target.path(), &state).is_some());
     assert_eq!(
-        fs::read(
-            state
-                .case_source
-                .as_ref()
-                .unwrap()
-                .join("dependencies.jsonl")
-        )
-        .unwrap(),
+        fs::read(dependency_path(state.case_source.as_ref().unwrap())).unwrap(),
         original
     );
 }

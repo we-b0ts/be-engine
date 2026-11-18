@@ -220,6 +220,11 @@ impl ActiveCaseRegistry {
             .iter_mut()
             .find(|registration| registration.case.id == case_id)
             .ok_or(ActiveCaseActivationError::ReservationMissing)?;
+        if !registration.activated
+            && let Some(capture) = &self.capture
+        {
+            capture.primary_boundary(case_id, traffic_model::trace::PrimaryBoundary::Start);
+        }
         registration.accepting_dependencies = true;
         registration.activated = true;
         Ok(())

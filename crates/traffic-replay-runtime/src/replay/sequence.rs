@@ -112,10 +112,24 @@ pub(super) fn load(source: &Path) -> Result<Option<Arc<SequenceCatalog>>> {
     let Some(root) = crate::dependency_index::recording::root(source) else {
         return Ok(None);
     };
-    let input = std::fs::File::open(root.join("dependency-lifecycle.jsonl"))
-        .context("recording has no ordered dependency event journal")?;
-    let records = BufReader::new(input)
-        .lines()
-        .map(|line| -> Result<RecordedEvent<CaptureEvent>> { Ok(serde_json::from_str(&line?)?) });
+    let compact = root.join(traffic_model::compact::EVENTS);
+    let (path, compact) = if compact.exists() {
+        (compact, true)
+    } else {
+        (root.join("dependency-lifecycle.jsonl"), false)
+    };
+    let input =
+        std::fs::File::open(path).context("recording has no ordered dependency event journal")?;
+    let records =
+        BufReader::new(input)
+            .lines()
+            .map(|line| -> Result<RecordedEvent<CaptureEvent>> {
+                let line = line?;
+                if compact {
+                    traffic_model::compact::decode_event(&line)
+                } else {
+                    Ok(serde_json::from_str(&line)?)
+                }
+            });
     SequenceCatalog::try_prepare(records).map(Some)
 }

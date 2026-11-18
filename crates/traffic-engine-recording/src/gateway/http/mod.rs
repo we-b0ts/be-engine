@@ -30,6 +30,7 @@ mod admission;
 pub mod interaction;
 mod lifecycle;
 mod ordinary;
+mod primary_boundary;
 mod ready;
 mod recovery;
 mod response;
@@ -518,7 +519,8 @@ async fn handle_gateway_request(
 
     match (case_guard, active_case_id) {
         (Some(case_guard), Some(case_id)) => {
-            lifecycle::run_matched_request(
+            let capture = lifecycle_state.recorder().capture.clone();
+            let response = lifecycle::run_matched_request(
                 lifecycle_state,
                 case_id,
                 case_guard,
@@ -526,7 +528,8 @@ async fn handle_gateway_request(
                 timeout_response.expect("matched case timeout response"),
                 request,
             )
-            .await
+            .await;
+            primary_boundary::track(response, capture, case_id)
         }
         _ => request.await,
     }

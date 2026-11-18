@@ -1,4 +1,5 @@
 //! Protocol-independent authenticated access to immutable recording evidence.
+mod compact;
 mod model;
 pub mod pages;
 pub mod reader;

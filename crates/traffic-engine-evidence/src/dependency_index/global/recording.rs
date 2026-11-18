@@ -42,7 +42,7 @@ pub fn seal_recording_scopes_with_evidence(
     let manifest_stamp = FileStamp::read_native(&manifest_path)?;
     let manifest_sha256 = digest(&std::fs::read(&manifest_path)?);
     let indexes = run.join("indexes");
-    let stamp = FileStamp::read_native(&run.join("dependencies.jsonl"))?;
+    let stamp = FileStamp::read_native(&recording::dependency_path(&run))?;
     let cancelled = AtomicBool::new(false);
     for scope in SCOPES {
         let view = indexes.join(format!("{scope}-scope.json"));
@@ -106,7 +106,7 @@ pub(super) fn load(path: &Path, stamp: &FileStamp) -> Option<(GlobalIndex, PathB
     }
     if FileStamp::read_native(&manifest).ok()? != manifest_stamp
         || FileStamp::read_native(&view).ok()? != scope_stamp
-        || FileStamp::read_native(&run.join("dependencies.jsonl")).ok()? != *stamp
+        || FileStamp::read_native(&recording::dependency_path(run)).ok()? != *stamp
     {
         return None;
     }
