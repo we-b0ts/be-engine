@@ -1,0 +1,173 @@
+//! Coordinator lifecycle for case-local identities and response header dates.
+use super::*;
+use crate::GeneratedValueRulePlan;
+
+pub(super) fn plan(
+    target_root: &Path,
+    state: &mut RewriteState,
+    mut options: RewriteRulePlanOptions,
+) -> Result<RewriteRuleReport> {
+    crate::policy::retired_authoring()?;
+    validate_companions(
+        options.dynamic_value.is_some(),
+        options.mysql_time.is_some(),
+        options.redis_time.is_some(),
+    )?;
+    ensure!(
+        options.jwt.is_none()
+            && options.body_codec == ResponseBodyCodec::Json
+            && options.kind.is_none()
+            && options.time.is_none()
+            && options.json_pointer.is_none()
+            && options.source_example.is_none()
+            && options.target_example.is_none()
+            && options.separator.is_none()
+            && options.unordered_paths.is_empty()
+            && options.unordered_joined_string_paths.is_empty()
+            && options.docx_timestamps.is_empty(),
+        "generated value rules cannot carry request/body rule options"
+    );
+    ensure!(
+        (usize::from(options.dynamic_value.is_some())
+            + usize::from(options.dependency_request.is_some())
+            + usize::from(!options.header_dates.is_empty())
+            + usize::from(!options.response_jwts.is_empty()))
+            == 1,
+        "plan one generated value rule family at a time"
+    );
+    let issue = state
+        .active_issue
+        .clone()
+        .context("rewrite workflow has no active issue")?;
+    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
+    if let Some(rule) = &mut options.dynamic_value {
+        ensure!(
+            matches!(
+                issue.kind,
+                super::super::model::RewriteIssueKind::Response
+                    | super::super::model::RewriteIssueKind::Replay
+                    | super::super::model::RewriteIssueKind::Dependency
+            ),
+            "dynamic identity rules require Replay dependency evidence"
+        );
+        rule.api = super::super::api_selector::public_api(&state.api).into();
+        if rule.source_evidence.is_empty() {
+            rule.source_evidence = options.source_evidence.clone().unwrap_or_default();
+        }
+    }
+    if let Some(rule) = &mut options.dependency_request {
+        let api = &state.api;
+        let (method, path) = api
+            .split_once(' ')
+            .context("dependency request scope requires HTTP method and path")?;
+        let object = rule
+            .as_object_mut()
+            .context("dependency request rule requires an object")?;
+        object.insert("case".into(), json!({"method":method,"path":path}));
+        object
+            .entry("source_evidence")
+            .or_insert_with(|| json!(options.source_evidence.clone().unwrap_or_default()));
+    }
+    for rule in &mut options.header_dates {
+        if rule.source_evidence.is_empty() {
+            rule.source_evidence = options.source_evidence.clone().unwrap_or_default();
+        }
+    }
+    for rule in &mut options.response_jwts {
+        if rule.source_evidence.is_empty() {
+            rule.source_evidence = options.source_evidence.clone().unwrap_or_default();
+        }
+    }
+    let kind = if !options.response_jwts.is_empty() {
+        "response_jwt"
+    } else if options.mysql_time.is_some() {
+        "dynamic_value_mysql_time"
+    } else if options.redis_time.is_some() {
+        "dynamic_value_redis_time"
+    } else if options.dynamic_value.is_some() {
+        "dynamic_value"
+    } else if options.dependency_request.is_some() {
+        "dependency_request"
+    } else {
+        "response_header_date"
+    };
+    let selection = serde_json::to_string(&(
+        options.dynamic_value.as_ref(),
+        options.mysql_time.as_ref(),
+        options.redis_time.as_ref(),
+        &options.header_dates,
+        &options.dependency_request,
+        &options.response_jwts,
+    ))?;
+    let mut record = RewriteRulePlanRecord {
+        unified: None,
+        generated_witnesses: Vec::new(),
+        id: format!(
+            "plan-{}",
+            fingerprint::id(&[
+                &state.workflow_id,
+                &issue.id,
+                kind,
+                &selection,
+                &options.evidence_id
+            ])
+            .trim_start_matches("fnv1a64:")
+        ),
+        issue_id: issue.id.clone(),
+        kind: kind.into(),
+        json_pointer: String::new(),
+        time: None,
+        source_evidence: options.source_evidence,
+        source_example: None,
+        target_example: None,
+        separator: None,
+        response_body: None,
+        jwt: None,
+        evidence_id: options.evidence_id,
+        dynamic_value: options.dynamic_value,
+        mysql_time: options.mysql_time,
+        redis_time: options.redis_time,
+        dependency_request: options.dependency_request,
+        header_dates: options.header_dates,
+        response_jwts: options.response_jwts,
+    };
+    let plan = build_unfrozen(target_root, state, &record)?;
+    record.generated_witnesses = plan.evidence_witnesses();
+    if let Some(pending) = state.rule_plan.as_ref().filter(|pending| {
+        pending.issue_id == record.issue_id
+            && pending.evidence_id == record.evidence_id
+            && super::has_generated_rule(pending)
+    }) {
+        GeneratedValueRulePlan::ensure_evidence_current(&pending.generated_witnesses)?;
+        ensure!(
+            !pending.generated_witnesses.iter().any(|(path, identity)| {
+                record
+                    .generated_witnesses
+                    .iter()
+                    .any(|(current_path, current_identity)| {
+                        current_path == path && current_identity != identity
+                    })
+            }),
+            "generated value evidence changed after planning"
+        );
+    }
+    let report = plan.report().clone();
+    state.rule_plan = Some(record.clone());
+    state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
+    state.bump();
+    Ok(RewriteRuleReport {
+        plan_id: record.id.clone(),
+        issue_id: issue.id,
+        traffic_e2e_report: serde_json::to_value(report)?,
+        next_command: action::rule_apply_command(target_root, &record.id),
+    })
+}
+
+pub(super) use traffic_rewrite_rules::rewrite::response_rule::generated_values::{
+    build_unfrozen, validate_companions,
+};
+
+#[cfg(test)]
+#[path = "generated_values/tests.rs"]
+pub(super) mod tests;

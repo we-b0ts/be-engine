@@ -1,5 +1,4 @@
 //! Compatibility export for shared field-policy settings.
-pub use traffic_policy_value::fields::TimePolicy;
 
 #[cfg(test)]
 mod tests {

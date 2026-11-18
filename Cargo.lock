@@ -2924,68 +2924,40 @@ dependencies = [
 name = "traffic-engine"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "base64",
- "brz-http-gateway",
- "brz-redis",
  "bytes",
  "chrono",
- "clap",
- "dotenvy",
- "flate2",
  "futures-util",
- "getrandom 0.3.4",
- "hmac",
- "http-body",
  "http-body-util",
  "hyper",
- "hyper-rustls",
  "hyper-util",
  "jsonwebtoken",
  "libc",
- "md-5",
- "motan-breeze",
- "motan-codec",
- "motan-hessian2",
  "motan-json",
- "motan-protocol",
- "motan-simple",
- "proc-macro2",
- "rcgen",
- "redis-protocol",
- "rustls",
- "rustls-pemfile",
  "serde",
  "serde_json",
- "serde_path_to_error",
  "serde_yaml",
  "sha2",
- "sqlparser",
  "sqlx",
- "subtle",
- "syn 2.0.118",
  "tempfile",
  "tokio",
- "tokio-rustls",
  "tokio-tungstenite",
  "toml",
- "tower-service",
  "tracing",
- "tracing-subscriber",
- "traffic-codec-json",
- "traffic-codec-protobuf",
  "traffic-contract",
+ "traffic-engine-config",
+ "traffic-engine-e2erun",
+ "traffic-engine-environment",
+ "traffic-engine-evidence",
+ "traffic-engine-policy",
+ "traffic-engine-recording",
+ "traffic-engine-replay",
+ "traffic-engine-verification",
  "traffic-extensions",
- "traffic-jwt",
- "traffic-model",
  "traffic-policy",
  "traffic-policy-compiler",
- "traffic-policy-content",
- "traffic-policy-document",
  "traffic-policy-execution",
- "traffic-policy-generated",
- "traffic-policy-schema",
  "traffic-policy-value",
  "traffic-protocol",
  "traffic-protocol-fixture",
@@ -2994,13 +2966,336 @@ dependencies = [
  "traffic-protocol-redis",
  "traffic-recorder",
  "traffic-recording-store",
- "traffic-replay",
+ "url",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "traffic-engine-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "clap",
+ "flate2",
+ "hyper",
+ "md-5",
+ "motan-codec",
+ "motan-protocol",
+ "redis-protocol",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "traffic-codec-json",
+ "traffic-contract",
+ "traffic-engine-environment",
+ "traffic-engine-policy",
+ "traffic-engine-replay",
+ "traffic-extensions",
+ "traffic-model",
+ "traffic-policy",
+ "traffic-policy-compiler",
+ "traffic-policy-schema",
+ "traffic-policy-value",
+ "traffic-protocol",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-recorder",
+ "traffic-recording-model",
  "traffic-response-rewrite",
  "traffic-value",
  "url",
  "uuid",
+ "zip",
+]
+
+[[package]]
+name = "traffic-engine-e2erun"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "jsonwebtoken",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "traffic-contract",
+ "traffic-engine-config",
+ "traffic-engine-environment",
+ "traffic-engine-evidence",
+ "traffic-engine-policy",
+ "traffic-engine-recording",
+ "traffic-engine-replay",
+ "traffic-engine-verification",
+ "traffic-policy",
+ "traffic-policy-execution",
+ "traffic-protocol",
+ "traffic-protocol-mysql",
+ "traffic-recorder",
+ "traffic-recording-store",
+ "url",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "traffic-engine-environment"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
+ "traffic-engine",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-engine-evidence"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "getrandom 0.3.4",
+ "hmac",
+ "hyper",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "traffic-contract",
+ "traffic-engine-config",
+ "traffic-engine-environment",
+ "traffic-engine-policy",
+ "traffic-engine-recording",
+ "traffic-engine-replay",
+ "traffic-engine-verification",
+ "traffic-extensions",
+ "traffic-model",
+ "traffic-policy-value",
+ "traffic-protocol",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-recorder",
+ "traffic-recording-model",
+ "traffic-recording-store",
+ "url",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "traffic-engine-policy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "hyper",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "traffic-codec-protobuf",
+ "traffic-contract",
+ "traffic-engine-config",
+ "traffic-engine-evidence",
+ "traffic-extensions",
+ "traffic-jwt",
+ "traffic-policy",
+ "traffic-policy-compiler",
+ "traffic-policy-document",
+ "traffic-policy-execution",
+ "traffic-policy-schema",
+ "traffic-policy-value",
+ "traffic-protocol-http",
+ "url",
+]
+
+[[package]]
+name = "traffic-engine-recording"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "brz-http-gateway",
+ "brz-redis",
+ "bytes",
+ "chrono",
+ "clap",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "libc",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "toml",
+ "tower-service",
+ "tracing",
+ "tracing-subscriber",
+ "traffic-engine-config",
+ "traffic-engine-environment",
+ "traffic-engine-evidence",
+ "traffic-engine-replay",
+ "traffic-engine-verification",
+ "traffic-model",
+ "traffic-protocol",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-recorder",
+ "traffic-recording-model",
+ "traffic-replay",
+ "url",
+ "uuid",
  "webpki-roots 1.0.8",
+ "zip",
+]
+
+[[package]]
+name = "traffic-engine-replay"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures-util",
+ "hyper",
+ "libc",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "traffic-contract",
+ "traffic-engine-config",
+ "traffic-engine-environment",
+ "traffic-engine-evidence",
+ "traffic-engine-policy",
+ "traffic-engine-recording",
+ "traffic-extensions",
+ "traffic-model",
+ "traffic-policy-compiler",
+ "traffic-policy-schema",
+ "traffic-policy-value",
+ "traffic-protocol",
+ "traffic-protocol-fixture",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-replay",
+ "traffic-value",
+ "uuid",
  "x509-parser",
+ "zip",
+]
+
+[[package]]
+name = "traffic-engine-verification"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "futures-util",
+ "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "jsonwebtoken",
+ "md-5",
+ "motan-breeze",
+ "motan-codec",
+ "motan-hessian2",
+ "motan-json",
+ "motan-protocol",
+ "motan-simple",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "traffic-codec-protobuf",
+ "traffic-contract",
+ "traffic-engine-config",
+ "traffic-engine-environment",
+ "traffic-engine-evidence",
+ "traffic-engine-policy",
+ "traffic-engine-replay",
+ "traffic-extensions",
+ "traffic-jwt",
+ "traffic-model",
+ "traffic-policy-compiler",
+ "traffic-policy-content",
+ "traffic-policy-execution",
+ "traffic-policy-generated",
+ "traffic-policy-schema",
+ "traffic-policy-value",
+ "traffic-protocol",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-recording-model",
+ "traffic-value",
+ "url",
+ "uuid",
  "zip",
 ]
 
@@ -3379,6 +3674,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "traffic-recording-model"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "traffic-model",
+ "traffic-protocol",
+ "traffic-protocol-http",
+ "traffic-protocol-mysql",
+ "traffic-protocol-redis",
+ "traffic-recorder",
+ "uuid",
+]
+
+[[package]]
 name = "traffic-recording-store"
 version = "0.1.0"
 dependencies = [
@@ -3483,10 +3794,47 @@ dependencies = [
  "traffic-protocol",
  "traffic-protocol-mysql",
  "traffic-protocol-redis",
- "traffic-recording-store",
  "traffic-replay-runtime",
+ "traffic-rewrite-agents",
+ "traffic-rewrite-attribution",
  "traffic-rewrite-core",
+ "traffic-rewrite-evidence",
+ "traffic-rewrite-model",
+ "traffic-rewrite-review",
+ "traffic-rewrite-rules",
+ "traffic-rewrite-runtime",
  "traffic-value",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-rewrite-agents"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "traffic-engine",
+ "traffic-rewrite-model",
+ "traffic-rewrite-review",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-rewrite-attribution"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hyper",
+ "serde",
+ "serde_json",
+ "traffic-engine",
+ "traffic-rewrite-evidence",
+ "traffic-rewrite-model",
+ "traffic-rewrite-rules",
+ "traffic-rewrite-runtime",
  "uuid",
 ]
 
@@ -3499,6 +3847,125 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "traffic-rewrite-evidence"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "hyper",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "traffic-engine",
+ "traffic-policy",
+ "traffic-protocol",
+ "traffic-protocol-mysql",
+ "traffic-rewrite-model",
+ "traffic-rewrite-review",
+ "traffic-rewrite-rules",
+ "traffic-value",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-rewrite-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "jsonwebtoken",
+ "libc",
+ "md-5",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "traffic-engine",
+ "traffic-protocol-mysql",
+ "traffic-rewrite",
+ "traffic-rewrite-agents",
+ "traffic-rewrite-evidence",
+ "traffic-rewrite-model",
+ "traffic-rewrite-review",
+ "traffic-rewrite-rules",
+ "traffic-rewrite-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-rewrite-model"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "traffic-engine",
+ "traffic-recording-store",
+ "traffic-rewrite-core",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-rewrite-review"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn 2.0.118",
+ "tempfile",
+ "traffic-engine",
+ "traffic-rewrite-model",
+]
+
+[[package]]
+name = "traffic-rewrite-rules"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "hyper",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "traffic-engine",
+ "traffic-policy",
+ "traffic-protocol",
+ "traffic-rewrite-model",
+ "traffic-rewrite-runtime",
+ "traffic-value",
+ "uuid",
+]
+
+[[package]]
+name = "traffic-rewrite-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "libc",
+ "serde",
+ "serde_json",
+ "traffic-engine",
+ "traffic-rewrite-model",
+ "uuid",
 ]
 
 [[package]]

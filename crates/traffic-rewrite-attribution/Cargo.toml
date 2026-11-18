@@ -1,0 +1,19 @@
+[package]
+name = "traffic-rewrite-attribution"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+
+[dependencies]
+traffic-rewrite-runtime = { path = "../traffic-rewrite-runtime" }
+hyper = "1"
+traffic-rewrite-evidence = { path = "../traffic-rewrite-evidence" }
+serde = { version = "1", features = ["derive"] }
+traffic-engine = { path = "../traffic-engine" }
+traffic-rewrite-model = { path = "../traffic-rewrite-model" }
+traffic-rewrite-rules = { path = "../traffic-rewrite-rules" }
+anyhow = "1"
+serde_json = "1"
+uuid = { version = "1", features = ["serde"] }

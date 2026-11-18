@@ -1,0 +1,18 @@
+[package]
+name = "traffic-recording-model"
+version = "0.1.0"
+edition = "2024"
+description = "Native recording event schemas"
+
+[dependencies]
+traffic-protocol = { path = "../traffic-protocol" }
+traffic-model = { path = "../traffic-model" }
+traffic-recorder = { path = "../traffic-recorder" }
+traffic-protocol-http = { path = "../traffic-protocol-http" }
+traffic-protocol-mysql = { path = "../traffic-protocol-mysql" }
+traffic-protocol-redis = { path = "../traffic-protocol-redis" }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+
+serde_json = "1"

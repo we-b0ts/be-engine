@@ -27,12 +27,49 @@ The root `src/` owns the three CLI entrypoints and the public API facade.
 `traffic-e2e-app` owns default composition and compatibility wrappers. Its
 entrypoints bind the rewrite coordinator before calling independent services.
 `traffic-rewrite` owns the complete rewrite workflow, assignment and attempt
-coordination, Source validation, policy transactions, protected evidence queries,
-worker feedback and decision history. Its public API is usable directly as a
+coordination, policy transactions, authorization of protected evidence queries,
+and snapshot persistence. Its public API is usable directly as a
 library. `traffic-rewrite-core` owns typed workflow state, attempt transitions,
 atomic snapshots and process locks. `WorkflowData` supplies the coordinator's
-serializable records. `rewrite/model` binds those records to the core and
-`rewrite/store` applies coordinator overlays around core storage.
+serializable records. `model` binds those records to the core and
+`store` applies coordinator overlays around core storage.
+
+`traffic-rewrite-model` owns persisted coordinator records, compact ownership
+proof groups and archived decision history. `traffic-rewrite-rules` owns immutable
+rule proposals, proposal construction and revalidation, Source membership and
+rule-bound proof bindings, preflight, artifact witnesses and bounded rule
+discovery. Its planners cover unified rules, response verification, JWTs,
+dependency rules and Source HTTP response capture. It also owns the pending
+plan journal and reads the current workflow through a coordinator callback. The
+coordinator supplies evidence admission and owns workflow transitions, policy
+application and recovery. `traffic-rewrite-runtime` owns
+traffic-operation reservations and Replay admission checks. `traffic-rewrite-review`
+owns source-change analysis, source review, candidate identity and quality-receipt
+validation, including final Cargo/toolchain input bindings.
+`traffic-rewrite-evidence` owns bounded Case diagnostics, issue-bound query
+identities, rule hints, authenticated witness-value and Target observation readers,
+bounded attribution occurrence/hypothesis projections and actual Replay evidence
+validation for ownership claims. Coordinator
+entrypoints apply work-scope authorization and attach assignment context.
+`traffic-rewrite-agents` defines three roles. Implementers own API dispatch
+identities, slot leases, runtime replacement, feedback and retained deliveries.
+Experts own assistance eligibility, reservations, confirmation, report delivery
+and closure. Repository analysts own route grouping, submission validation and
+the immutable grouping catalog. The earlier worker commands use the implementer
+binding and feedback rules. Implementers and experts share a durable feedback
+journal. The coordinator provides workflow admission, review and traffic state,
+and publishes the resulting role updates without an inverse crate dependency.
+`traffic-rewrite-attribution` owns Source ownership admission, submission contracts,
+rule-bound decision updates, acceptance reconciliation, final Replay receipt
+validation and frozen ownership identities. The coordinator supplies snapshot
+and final candidate review checks.
+`traffic-rewrite-integration-tests` owns cross-library rule publication, recovery
+and concurrent Replay regression suites, plus agent command workflows,
+real-worktree delivery and batch integration compatibility tests, and final
+candidate admission and revalidation regressions. Its fixtures and fault injection use
+the coordinator's opt-in `test-support` feature. The coordinator
+retains workflow transitions, authorization, snapshot overlays and policy
+publication transactions.
 
 `traffic-replay-runtime` owns live Replay sessions, mutable runtime state,
 admission and finite execution, control serving, native connection delivery,
@@ -42,20 +79,45 @@ entrypoints accept configuration and optional provider installations. The
 implementation-independent `traffic-replay` kernel retains finite matching,
 claims, candidate indexes and delivery contracts.
 
-`traffic-engine` owns shared application-runtime services, including recording
-supervision, E2E process execution, configuration, Target isolation, authenticated
-Source access, report readers and installed protocol, codec and policy adapters.
-Its `execution` module retains lifecycle ordering and interruption dispatch
-through the injected `ExecutionDriver`. `e2e_run/execute/engine_driver` implements
-that port with the shared services. The engine's `coordination::Coordinator`
-port supplies frozen attribution identities and Source-upgrade locking.
-Application composition installs a stateless coordinator binding. Each operation
-supplies its own Target root, so concurrent projects retain independent state.
-Standalone execution derives attribution from sealed Source data and requires
-the coordinator binding when an existing workflow owns that data.
-The engine's concrete adapters remain an explicit incremental-refactoring
-boundary. The engine has no dependency on either service library, application
-composition or the rewrite state kernel.
+`traffic-engine` provides repository initialization and public compatibility
+exports over independently owned engine services. Its concrete protocol, codec
+and policy bindings use the shared service packages.
+
+`traffic-engine-e2erun` owns managed E2E execution, selected Case lifecycles,
+assertion and session publication, Target OCI build/start/stop, runtime preflight
+assets and execution input identities. Its project contracts come from
+`traffic-engine-config`. The `execution` module owns lifecycle ordering and
+interruption dispatch through `ExecutionDriver`. The E2E application driver binds
+that port to the shared runtime services.
+
+The shared `traffic-engine-evidence::coordination::Coordinator` port supplies
+frozen attribution identities and Source-upgrade locking. Application composition
+installs a stateless coordinator binding. Each operation supplies its own Target
+root, so concurrent projects retain independent state. Standalone execution
+derives attribution from sealed Source data and requires the coordinator binding
+when an existing workflow owns that data. The engine service packages have no
+production dependency on application composition or the rewrite coordinator.
+
+Shared engine responsibilities are assigned to the following packages.
+
+- `traffic-engine-environment` owns repository paths, Source snapshots, startup
+  inputs and managed process output contracts.
+- `traffic-engine-policy` owns installed policy authoring, compilation and frozen
+  signing-key contracts.
+- `traffic-recording-model` owns native capture events and primary Case bindings.
+- `traffic-engine-config` owns project documents, configuration loading and
+  Source policy projections.
+- `traffic-engine-evidence` owns authenticated evidence adapters, dependency
+  indexes, witnesses, attribution defaults and provider catalogs.
+- `traffic-engine-replay` owns shared Replay preparation, reports, TLS and
+  asynchronous completion adapters.
+- `traffic-engine-verification` owns runtime policy execution, request rules,
+  primary assertions, value comparison and authenticated Source validation.
+- `traffic-engine-recording` owns recording supervision, capture adapters,
+  gateways and local interception.
+
+`traffic-engine` composes these services for E2E execution and Target process
+isolation. Compatibility exports retain existing engine module paths.
 
 `traffic-recorder` owns recording clocks, captured events, recording-local
 extensions, capture admission, the bounded writer queue, central ledger,
@@ -1675,7 +1737,7 @@ retain the same responsibility and 1000-line requirements as `src/`.
   `traffic-e2e-app/src/lib.rs` owns default composition and compatibility wrappers.
   `traffic-engine/src/lib.rs` owns shared recording and execution state.
   `traffic-engine/src/execution.rs` owns the injected execution lifecycle.
-  `traffic-rewrite/src/rewrite` owns the complete coordinator.
+  `traffic-rewrite/src` owns the complete coordinator.
   `traffic-replay-runtime/src/replay` owns live Replay state and execution.
   Shared `traffic-engine/src/replay` modules own configuration, client contracts,
   immutable Source inventories and report readers.

@@ -11,7 +11,7 @@ const PROBE_CA_PATH: &str = "/traffic-e2e/trust/replay-ca.pem";
 const PROBE_ORIGIN_HEADER: &str = "__TRAFFIC_E2E_PROBE_ORIGIN_HEADER__";
 const PROBE_ORIGIN: &str = "__TRAFFIC_E2E_PROBE_ORIGIN__";
 
-pub(crate) async fn run() -> Result<()> {
+pub async fn run() -> Result<()> {
     let ca = std::fs::read(PROBE_CA_PATH)
         .with_context(|| format!("failed to read initialization probe CA {PROBE_CA_PATH}"))?;
     let ca =

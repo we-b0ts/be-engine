@@ -188,7 +188,7 @@ fn initialize_repository_config_with(
         generated.push(gitignore.clone());
     }
     super::edit::create_many_atomic(&files)?;
-    let target_image_tag = crate::target_container::image_tag(&target_root)?;
+    let target_image_tag = traffic_engine_e2erun::target_image_tag(&target_root)?;
 
     Ok(RepositoryConfigInitResult {
         target_root,
@@ -390,7 +390,7 @@ fn validate_target_binary_name(name: &str) -> Result<()> {
 }
 
 fn target_cache_project(target_root: &Path) -> Result<String> {
-    let tag = crate::target_container::image_tag(target_root)?;
+    let tag = traffic_engine_e2erun::target_image_tag(target_root)?;
     tag.strip_prefix("traffic-e2e/")
         .and_then(|value| value.strip_suffix("-target:cache"))
         .map(str::to_string)
