@@ -1,0 +1,8 @@
+[package]
+name = "traffic-codec-bytes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+traffic-value = { path = "../traffic-value" }
+anyhow = "1"

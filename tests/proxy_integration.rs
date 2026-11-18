@@ -17,6 +17,8 @@ use traffic_e2e::{
 
 #[path = "proxy_integration/kubeconfig.rs"]
 mod kubeconfig;
+#[path = "proxy_integration/providers.rs"]
+mod providers;
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
 // before AppState binds it. Serialize this file's integration tests to prevent
@@ -54,7 +56,10 @@ async fn records_http_proxy_exchange() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let (providers, configured) = providers::counted_http_provider();
+    let state = traffic_e2e::AppState::new_with_providers(config, providers)
+        .await
+        .unwrap();
     let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
@@ -88,6 +93,8 @@ async fn records_http_proxy_exchange() {
     let completed: chrono::DateTime<chrono::Utc> =
         serde_json::from_value(exchange["timestamp"].clone()).unwrap();
     assert!((completed - started).num_milliseconds() >= 120);
+    // The listener accepts one readiness probe and one recorded request.
+    assert_eq!(configured.load(std::sync::atomic::Ordering::Relaxed), 2);
 }
 
 #[tokio::test]

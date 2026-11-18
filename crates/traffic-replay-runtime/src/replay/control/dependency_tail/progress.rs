@@ -1,0 +1,120 @@
+//! Bound idle business waits independently of real resource delivery time.
+use super::*;
+
+pub(super) struct NoProgress {
+    timeout: Duration,
+    idle_since: Option<Instant>,
+    counts: Option<Vec<usize>>,
+}
+
+impl NoProgress {
+    pub(super) fn new(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            idle_since: None,
+            counts: None,
+        }
+    }
+
+    pub(super) fn observe(
+        &mut self,
+        now: Instant,
+        in_flight: bool,
+        counts: impl Into<Vec<usize>>,
+    ) -> bool {
+        let counts = counts.into();
+        if in_flight
+            || self
+                .counts
+                .as_ref()
+                .is_some_and(|previous| *previous != counts)
+        {
+            self.idle_since = None;
+        }
+        self.counts = Some(counts);
+        if in_flight {
+            return false;
+        }
+        let since = *self.idle_since.get_or_insert(now);
+        now.saturating_duration_since(since) >= self.timeout
+    }
+
+    pub(super) fn failure_reason(&self, remaining: usize) -> String {
+        format!(
+            "recorded dependencies remain unconsumed (pending: {remaining}); check whether Target executes the recorded calls. Replay stopped waiting after {} ms without Case dependency progress and with no resource I/O in flight",
+            self.timeout.as_millis()
+        )
+    }
+}
+
+pub(crate) fn counts<P: ReplayProtocolSet>(state: &RuntimeState<P>, case: &str) -> Vec<usize> {
+    let mut counts = Vec::with_capacity(8);
+    state
+        .protocols
+        .append_matched_dependency_counts(case, &mut counts);
+    let case = Some(case);
+    if !state.native.core.exchanges.is_empty() {
+        counts.push(
+            state
+                .native
+                .core
+                .exchanges
+                .iter()
+                .filter(|exchange| {
+                    exchange.source.case_id.as_deref() == case
+                        && state
+                            .native
+                            .core
+                            .lifecycle
+                            .live_status(exchange.index, exchange.status)
+                            .is_consumed()
+                })
+                .count(),
+        );
+    }
+    counts
+}
+
+pub(super) fn waiting<P: ReplayProtocolSet>(
+    tail: &CaseTail,
+    state: &RuntimeState<P>,
+    progress: &NoProgress,
+    now: Instant,
+    remaining: usize,
+    in_flight: bool,
+) -> serde_json::Value {
+    let pending: Vec<_> = tail.selected.iter().filter_map(|selected| {
+        let status = exchange_status(state, selected.exchange)?;
+        (!status.is_consumed()
+            && !permits_tail_omission(state, selected)
+)
+            .then(|| serde_json::json!({"reference":selected.reference,"state":format!("{status:?}")}))
+    }).take(8).collect();
+    serde_json::json!({
+        "no_progress_timeout_ms":progress.timeout.as_millis(),
+        "source_post_input_allowance_ms":tail.interaction_post_input.map(|allowance| allowance.as_millis()),
+        "idle_ms":progress.idle_since.map(|since| now.saturating_duration_since(since).as_millis()).unwrap_or_default(),
+        "actual_io_in_flight":in_flight,
+        "pending_source_dependencies":remaining,
+        "returned":pending.len(),"omitted":remaining.saturating_sub(pending.len()),
+        "references":pending,
+        "matched_dependency_counts":progress.counts,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn progress_renews_idle_but_resource_io_uses_its_own_time_budget() {
+        let mut idle = NoProgress::new(Duration::from_secs(5));
+        let start = Instant::now();
+        assert!(!idle.observe(start, false, [101; 6]));
+        assert!(!idle.observe(start + Duration::from_secs(4), false, [102; 6]));
+        assert!(!idle.observe(start + Duration::from_secs(8), false, [102; 6]));
+        assert!(!idle.observe(start + Duration::from_secs(9), true, [102; 6]));
+        assert!(!idle.observe(start + Duration::from_secs(90), true, [102; 6]));
+        assert!(!idle.observe(start + Duration::from_secs(91), false, [102; 6]));
+        assert!(idle.observe(start + Duration::from_secs(96), false, [102; 6]));
+    }
+}

@@ -1,0 +1,222 @@
+use std::collections::HashSet;
+use std::net::SocketAddr;
+
+use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct HttpResponseRewriteConfig {
+    pub enabled: bool,
+    pub rules: Vec<HttpResponseRewriteRuleConfig>,
+}
+
+impl Default for HttpResponseRewriteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HttpResponseRewriteRuleConfig {
+    pub name: String,
+    #[serde(default)]
+    pub authorities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_codes: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<HttpResponseRewritePluginConfig>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_evidence: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum HttpResponseRewritePluginConfig {
+    Policy(traffic_policy::PolicyDefinition),
+    PlutoEciKubeconfig {
+        kubectl_binary: String,
+        proxy_listen: SocketAddr,
+    },
+    Documents {
+        rules: Vec<traffic_response_rewrite::DocumentRule>,
+    },
+}
+
+impl HttpResponseRewriteConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled && !self.rules.is_empty()
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        let mut names = HashSet::new();
+        for rule in &self.rules {
+            let name = rule.name.trim();
+            if name.is_empty() {
+                bail!("HTTP response rewrite rule name must not be empty");
+            }
+            if rule.plugin.is_some() && !names.insert(name) {
+                bail!("duplicate HTTP response rewrite rule name {name:?}");
+            }
+            validate_values(name, "authorities", &rule.authorities)?;
+            validate_values(name, "methods", &rule.methods)?;
+            validate_values(name, "content_types", &rule.content_types)?;
+            if rule.authorities.is_empty() {
+                bail!("HTTP response rewrite rule {name:?} must include authorities");
+            }
+            match (&rule.path_pattern, rule.path.is_empty()) {
+                (Some(pattern), true) => crate::path_pattern::validate_path_pattern(pattern)?,
+                (None, false) if rule.path.starts_with('/') => {}
+                _ => bail!(
+                    "HTTP response rewrite rule {name:?} requires exactly one absolute path or path_pattern"
+                ),
+            }
+            if rule
+                .status_codes
+                .iter()
+                .any(|status| !(100..=599).contains(status))
+            {
+                bail!("HTTP response rewrite rule {name:?} has an invalid status code");
+            }
+            match (&rule.plugin, rule.pointers.is_empty()) {
+                (Some(plugin), true) => plugin.validate(name)?,
+                (None, false) => validate_pointers(name, &rule.pointers)?,
+                _ => bail!(
+                    "HTTP response rewrite rule {name:?} requires exactly one of pointers or a plugin"
+                ),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_pointers(name: &str, pointers: &[String]) -> Result<()> {
+    let mut seen = HashSet::new();
+    for pointer in pointers {
+        if !seen.insert(pointer) || (!pointer.is_empty() && !pointer.starts_with('/')) {
+            bail!(
+                "HTTP response rewrite rule {name:?} has a duplicate or invalid JSON pointer {pointer:?}"
+            );
+        }
+        let mut chars = pointer.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
+                bail!(
+                    "HTTP response rewrite rule {name:?} has an invalid JSON pointer escape {pointer:?}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+impl HttpResponseRewritePluginConfig {
+    fn validate(&self, rule_name: &str) -> Result<()> {
+        match self {
+            Self::Policy(definition) => {
+                traffic_extensions::policies().prepare_transform_definition(definition)?;
+                Ok(())
+            }
+            Self::PlutoEciKubeconfig {
+                kubectl_binary,
+                proxy_listen,
+            } => {
+                if kubectl_binary.trim().is_empty() {
+                    bail!(
+                        "HTTP response rewrite rule {rule_name:?} kubectl_binary must not be empty"
+                    );
+                }
+                if !matches!(
+                    proxy_listen.ip(),
+                    std::net::IpAddr::V4(ip) if ip.is_loopback()
+                ) || proxy_listen.port() == 0
+                {
+                    bail!(
+                        "HTTP response rewrite rule {rule_name:?} proxy_listen must be an IPv4 loopback address with a non-zero port"
+                    );
+                }
+                Ok(())
+            }
+            Self::Documents { rules } => {
+                let configuration = serde_json::from_value(serde_json::json!({"rules":rules}))?;
+                traffic_extensions::policies().prepare_transform("documents", &configuration)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn validate_values(rule_name: &str, field: &str, values: &[String]) -> Result<()> {
+    if values.iter().any(|value| value.trim().is_empty()) {
+        bail!("HTTP response rewrite rule {rule_name:?} has an empty {field} value");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn parses_pluto_eci_kubeconfig_rule() {
+        let config: crate::AppConfig = toml::from_str(
+            r#"
+            [http_response_rewrite]
+            enabled = true
+
+            [dns_mock]
+            enabled = true
+
+            [tcp_gateway]
+            enabled = true
+            record_http = true
+
+            [[http_response_rewrite.rules]]
+            name = "pluto-kubeconfig"
+            authorities = ["cs.aliyuncs.com"]
+            methods = ["GET"]
+            path = "/api/v2/k8s/c142fe56e07d04a749c1630fb5f1b680b/user_config"
+            status_codes = [200]
+            content_types = ["application/json"]
+            plugin = { name = "pluto-eci-kubeconfig", kubectl_binary = "kubectl", proxy_listen = "127.0.0.1:8001" }
+            "#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+        assert!(config.http_response_rewrite.enabled);
+        assert_eq!(config.http_response_rewrite.rules.len(), 1);
+    }
+
+    #[test]
+    fn rejects_non_loopback_proxy_listen() {
+        let config: crate::AppConfig = toml::from_str(
+            r#"
+            [http_response_rewrite]
+            enabled = true
+
+            [[http_response_rewrite.rules]]
+            name = "pluto-kubeconfig"
+            authorities = ["cs.aliyuncs.com"]
+            path = "/api/v2/k8s/c142fe56e07d04a749c1630fb5f1b680b/user_config"
+            plugin = { name = "pluto-eci-kubeconfig", kubectl_binary = "kubectl", proxy_listen = "10.0.0.1:8001" }
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.http_response_rewrite.validate().is_err());
+    }
+}

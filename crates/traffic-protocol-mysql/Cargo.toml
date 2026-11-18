@@ -1,0 +1,33 @@
+[package]
+name = "traffic-protocol-mysql"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+
+[dependencies]
+traffic-contract = { path = "../traffic-contract" }
+traffic-value = { path = "../traffic-value" }
+traffic-policy-execution = { path = "../traffic-policy-execution" }
+traffic-policy-value = { path = "../traffic-policy-value" }
+
+chrono = { version = "0.4", features = ["serde"] }
+traffic-model = { path = "../traffic-model" }
+base64 = "0.22"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+sqlparser = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
+anyhow = "1"
+bytes = "1"
+rustls = "0.23"
+uuid = { version = "1", features = ["serde", "v4"] }
+traffic-protocol = { path = "../traffic-protocol" }
+traffic-replay = { path = "../traffic-replay" }
+tokio = { version = "1", features = ["io-util", "net", "sync", "macros", "rt"] }
+tracing = "0.1"
+tokio-rustls = "0.26"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "io-util"] }

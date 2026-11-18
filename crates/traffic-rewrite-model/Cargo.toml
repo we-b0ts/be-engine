@@ -1,0 +1,22 @@
+[package]
+name = "traffic-rewrite-model"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+
+[dependencies]
+traffic-engine = { path = "../traffic-engine" }
+traffic-rewrite-core = { path = "../traffic-rewrite-core" }
+traffic-recording-store = { path = "../traffic-recording-store" }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -3,14 +3,22 @@
 ## Overview
 
 This is a Rust traffic E2E engine and backend rewrite coordinator. It records
-HTTP, HTTPS, HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, Redis, Memcached,
-and constrained Kafka traffic to JSONL files, then groups, replays, and
+HTTP, HTTPS, HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, and Redis
+traffic to JSONL files, then groups, replays, and
 verifies recorded contracts.
 
-The primary crate is in `src/` and builds three default binaries. `traffic-e2e` exposes
+The root `src/` owns three CLI entrypoints and a public API facade.
+`traffic-e2e-app` composes the independent `traffic-rewrite` coordinator and
+`traffic-replay-runtime` session service over shared `traffic-engine` services.
+`traffic-engine` provides repository initialization and the shared service facade.
+`traffic-engine-e2erun` owns managed E2E execution and Target lifecycle. Shared
+environment, configuration, evidence, policy, recording, Replay and verification
+adapters live in the corresponding `traffic-engine-*` packages. `traffic-replay`,
+`traffic-rewrite-core`, `traffic-recorder` and `traffic-recording-store` retain
+implementation-independent kernels and contracts. `traffic-e2e` exposes
 the low-level recording, replay, configuration, and diagnostic
 engine; `backend-rewrite` exposes AI-facing rewrite orchestration directly on
-the same crate; `backend-rewrite-admin` exposes explicit administrator-owned
+the shared application services; `backend-rewrite-admin` exposes explicit administrator-owned
 startup snapshot repair outside ordinary AI workflows. Standard engine
 workflow commands are `config init`, `record`, `prepare`,
 `run-api`, `run`, `status`, `recover`, and `abort`; managed recording, replay,
@@ -38,9 +46,9 @@ Before opening or updating an MR, run at least the following. Replace
 `origin/master` when the MR targets another branch:
 
 ```bash
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 CODE_ORG_BASE=origin/master \
   plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
 ```
@@ -48,8 +56,8 @@ CODE_ORG_BASE=origin/master \
 Useful focused tests:
 
 ```bash
-cargo test mysql::wire
-cargo test recorder::mysql::semantic
+cargo test -p traffic-protocol-mysql
+cargo test -p traffic-protocol-mysql capture::semantic
 cargo test proxy_integration
 ```
 

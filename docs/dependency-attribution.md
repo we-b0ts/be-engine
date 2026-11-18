@@ -1,6 +1,6 @@
 # Dependency attribution and verification
 
-Current recordings use `traffic-recording/v3`, policy documents use
+Current recordings use `traffic-recording/v4`, policy documents use
 `traffic-policy/v3`, and ownership submissions use `dependency-attribution/v3`.
 Old recording, report and workflow ownership semantics are unsupported.
 

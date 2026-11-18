@@ -883,9 +883,9 @@ HTTP response rewriting is an opt-in recording feature for responses that
 publish a later connection target. The `pluto-eci-kubeconfig` built-in plugin
 rewrites the Kubernetes API server in Pluto ECI's
 `user_config` JSON response from an IPv4 address to a synthetic `.test` domain.
-The `vintage-naming` plugin rewrites legacy Motan node addresses published by
-Vintage naming responses. The `vintage-cache-config` plugin rewrites cache
-node addresses published inside Vintage `/1/config/service` responses.
+Declarative `documents` rules select addresses in JSON and embedded JSON/YAML
+responses. Request query and response-document predicates express service-specific
+selection. See [dependency protocols and response rules](dependency-provider.md).
 
 HTTP URL acquisition is a `capture_http_response` native effect in the unified
 policy named by `project.policy`:
@@ -960,41 +960,14 @@ The fake-IP gateway terminates the synthetic HTTPS connection and forwards the
 decrypted request over plain HTTP to the managed proxy; the proxy independently
 uses the original kubeconfig for HTTPS and client authentication to Kubernetes.
 
-For Vintage, configure an exact `/naming/service` rule. By default it matches
-every service and cluster; optional `services` and `clusters` filters can
-intentionally limit interception to a known subset. The plugin handles
-`lookup` and `lookupforupdate`, replacing every IPv4 `host` in every `nodes`
-array with a stable fake IP while preserving the node port and all unknown
-response fields. It deliberately leaves `getsign` unchanged, so recording does
-not alter the SDK's local-cache or snapshot decisions. Empty filters match
-every service or cluster.
-
-Vintage v1 reports application failures, including a missing service, as HTTP
-200 responses whose outer `code` is not `200`. These responses publish no
-connection targets and pass through unchanged so the SDK retains its normal
-fallback behavior. A successful outer response that is malformed or contains
-an unsafe node address still fails the exchange instead of leaking an
-unrecorded target.
-
-Each discovered original IPv4 address receives one stable
-`fake-node-<address>.trp.test` alias. The name deliberately identifies a
-replay-only fake node without claiming that the node belongs to Vintage. The
-rewritten HTTP exchange records the alias, original IP, fake IP, port, service,
-and cluster. Replay reserves the
-same fake IP before assigning any other target, so an SDK that caches the
-recorded naming response still connects to the Motan replay endpoint. A fake-IP
-collision or an address outside the configured replay CIDR fails replay
-startup instead of silently routing to a different target.
-
-For Vintage cache configuration, configure an exact `/1/config/service` rule.
-The plugin handles `action=lookup` responses whose outer `body.nodes[].value`
-fields contain YAML. Within each top-level cache resource, it rewrites every
-`IPv4:port` scalar below `master`, `slave`, `master_l1`, and `slave_l1`,
-including nested lists, while preserving all other YAML values. The response
-rewrite only discovers and reserves addresses; normal Recorder protocol
-detection classifies later Redis or Memcached traffic, and replay resolves an
-address's protocol from the recorded dependency exchanges or, if necessary,
-from the incoming connection.
+Service discovery and cache configuration use explicit document declarations.
+For a JSON string containing node objects, select `format: ipv4` with the
+node's sibling `port_field`. For YAML connection strings, select
+`format: host_port` with the desired protocol hint. `query` limits request
+operations and `when` selects successful business envelopes. Configure
+`transforms` explicitly when topology reduction or L1 removal is required.
+The framework discovers original addresses, registers routes, and persists
+original/delivered digests with the applied rule identities.
 
 Matched response bodies with `gzip`, `x-gzip`, or `deflate` content encoding
 are decoded within `recording.max_decoded_body_bytes` before rewriting. The
@@ -3650,13 +3623,10 @@ Useful focused test commands:
 
 ```bash
 cargo test mysql::wire
-cargo test recorder::mysql::semantic
+cargo test -p traffic-protocol-mysql capture::semantic
 cargo test proxy_integration
 cargo test redis::
-cargo test memcached::
 cargo test replay::command_protocol_tests
-cargo test kafka::
-cargo test motan
 ```
 
 Network or root-requiring behavior should be covered with isolated unit tests

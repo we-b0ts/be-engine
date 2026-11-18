@@ -1,0 +1,55 @@
+[package]
+name = "traffic-rewrite"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = ["traffic-rewrite-attribution/test-support", "traffic-engine/test-support", "traffic-rewrite-review/test-support", "dep:tempfile"]
+
+[dependencies]
+traffic-rewrite-agents = { path = "../traffic-rewrite-agents" }
+traffic-rewrite-attribution = { path = "../traffic-rewrite-attribution" }
+tempfile = { version = "3", optional = true }
+traffic-rewrite-evidence = { path = "../traffic-rewrite-evidence" }
+traffic-rewrite-review = { path = "../traffic-rewrite-review" }
+traffic-rewrite-rules = { path = "../traffic-rewrite-rules" }
+traffic-rewrite-runtime = { path = "../traffic-rewrite-runtime" }
+traffic-rewrite-model = { path = "../traffic-rewrite-model" }
+traffic-engine = { path = "../traffic-engine" }
+traffic-rewrite-core = { path = "../traffic-rewrite-core" }
+traffic-policy = { path = "../traffic-policy" }
+traffic-value = { path = "../traffic-value" }
+traffic-protocol = { path = "../traffic-protocol" }
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = { version = "9.3", default-features = false }
+sha2 = "0.10"
+hyper = { version = "1", features = ["client", "http1", "server"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+serde_yaml = "0.9"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+traffic-rewrite-attribution = { path = "../traffic-rewrite-attribution", features = ["test-support"] }
+traffic-rewrite-evidence = { path = "../traffic-rewrite-evidence", features = ["test-support"] }
+traffic-rewrite-review = { path = "../traffic-rewrite-review", features = ["test-support"] }
+traffic-rewrite-rules = { path = "../traffic-rewrite-rules", features = ["test-support"] }
+traffic-rewrite-model = { path = "../traffic-rewrite-model", features = ["test-support"] }
+traffic-contract = { path = "../traffic-contract", features = ["test-support"] }
+traffic-engine = { path = "../traffic-engine", features = ["test-support"] }
+traffic-protocol-mysql = { path = "../traffic-protocol-mysql", features = ["test-support"] }
+traffic-protocol-redis = { path = "../traffic-protocol-redis" }
+traffic-replay-runtime = { path = "../traffic-replay-runtime", features = ["test-support"] }
+aes-gcm = "0.10"
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", "tokio"] }
+md-5 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }

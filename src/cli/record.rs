@@ -135,8 +135,8 @@ fn check_plugin_commands(config: &AppConfig, search_path: Option<&OsStr>) -> Res
                 })?;
             }
             Some(
-                HttpResponseRewritePluginConfig::VintageNaming { .. }
-                | HttpResponseRewritePluginConfig::VintageCacheConfig,
+                HttpResponseRewritePluginConfig::Documents { .. }
+                | HttpResponseRewritePluginConfig::Policy(_),
             )
             | None => {}
         }

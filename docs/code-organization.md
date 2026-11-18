@@ -21,19 +21,599 @@ ownership.
 
 ## Package Shape
 
-Keep this repository as one Rust crate while the companion `traffic-e2e`,
-`backend-rewrite`, and `backend-rewrite-admin` binaries share the same engine
-and coordinator library.
-Introduce a workspace only when independently versioned packages or a real
-package dependency boundary appears. Ask before creating one when the boundary
-is unclear.
+Use a Rust workspace with the root `traffic-e2e` application composing the
+`traffic-e2e`, `backend-rewrite`, and `backend-rewrite-admin` binaries.
+The root `src/` owns the three CLI entrypoints and the public API facade.
+`traffic-e2e-app` owns default composition and compatibility wrappers. Its
+entrypoints bind the rewrite coordinator before calling independent services.
+`traffic-rewrite` owns the complete rewrite workflow, assignment and attempt
+coordination, policy transactions, authorization of protected evidence queries,
+and snapshot persistence. Its public API is usable directly as a
+library. `traffic-rewrite-core` owns typed workflow state, attempt transitions,
+atomic snapshots and process locks. `WorkflowData` supplies the coordinator's
+serializable records. `model` binds those records to the core and
+`store` applies coordinator overlays around core storage.
+
+`traffic-rewrite-model` owns persisted coordinator records, compact ownership
+proof groups and archived decision history. `traffic-rewrite-rules` owns immutable
+rule proposals, proposal construction and revalidation, Source membership and
+rule-bound proof bindings, preflight, artifact witnesses and bounded rule
+discovery. Its planners cover unified rules, response verification, JWTs,
+dependency rules and Source HTTP response capture. It also owns the pending
+plan journal and reads the current workflow through a coordinator callback. The
+coordinator supplies evidence admission and owns workflow transitions, policy
+application and recovery. `traffic-rewrite-runtime` owns
+traffic-operation reservations and Replay admission checks. `traffic-rewrite-review`
+owns source-change analysis, source review, candidate identity and quality-receipt
+validation, including final Cargo/toolchain input bindings.
+`traffic-rewrite-evidence` owns bounded Case diagnostics, issue-bound query
+identities, rule hints, authenticated witness-value and Target observation readers,
+bounded attribution occurrence/hypothesis projections and actual Replay evidence
+validation for ownership claims. Coordinator
+entrypoints apply work-scope authorization and attach assignment context.
+`traffic-rewrite-agents` defines three roles. Implementers own API dispatch
+identities, slot leases, runtime replacement, feedback and retained deliveries.
+Experts own assistance eligibility, reservations, confirmation, report delivery
+and closure. Repository analysts own route grouping, submission validation and
+the immutable grouping catalog. The earlier worker commands use the implementer
+binding and feedback rules. Implementers and experts share a durable feedback
+journal. The coordinator provides workflow admission, review and traffic state,
+and publishes the resulting role updates without an inverse crate dependency.
+`traffic-rewrite-attribution` owns Source ownership admission, submission contracts,
+rule-bound decision updates, acceptance reconciliation, final Replay receipt
+validation and frozen ownership identities. The coordinator supplies snapshot
+and final candidate review checks.
+`traffic-rewrite-integration-tests` owns cross-library rule publication, recovery
+and concurrent Replay regression suites, plus agent command workflows,
+real-worktree delivery and batch integration compatibility tests, and final
+candidate admission and revalidation regressions. Its fixtures and fault injection use
+the coordinator's opt-in `test-support` feature. The coordinator
+retains workflow transitions, authorization, snapshot overlays and policy
+publication transactions.
+
+`traffic-replay-runtime` owns live Replay sessions, mutable runtime state,
+admission and finite execution, control serving, native connection delivery,
+cleanup and session report publication. Its protocol adapters load Source data
+and bind the shared native inventory to installed providers. Public Replay
+entrypoints accept configuration and optional provider installations. The
+implementation-independent `traffic-replay` kernel retains finite matching,
+claims, candidate indexes and delivery contracts.
+
+`traffic-engine` provides repository initialization and public compatibility
+exports over independently owned engine services. Its concrete protocol, codec
+and policy bindings use the shared service packages.
+
+`traffic-engine-e2erun` owns managed E2E execution, selected Case lifecycles,
+assertion and session publication, Target OCI build/start/stop, runtime preflight
+assets and execution input identities. Its project contracts come from
+`traffic-engine-config`. The `execution` module owns lifecycle ordering and
+interruption dispatch through `ExecutionDriver`. The E2E application driver binds
+that port to the shared runtime services.
+
+The shared `traffic-engine-evidence::coordination::Coordinator` port supplies
+frozen attribution identities and Source-upgrade locking. Application composition
+installs a stateless coordinator binding. Each operation supplies its own Target
+root, so concurrent projects retain independent state. Standalone execution
+derives attribution from sealed Source data and requires the coordinator binding
+when an existing workflow owns that data. The engine service packages have no
+production dependency on application composition or the rewrite coordinator.
+
+Shared engine responsibilities are assigned to the following packages.
+
+- `traffic-engine-environment` owns repository paths, Source snapshots, startup
+  inputs and managed process output contracts.
+- `traffic-engine-policy` owns installed policy authoring, compilation and frozen
+  signing-key contracts.
+- `traffic-recording-model` owns native capture events and primary Case bindings.
+- `traffic-engine-config` owns project documents, configuration loading and
+  Source policy projections.
+- `traffic-engine-evidence` owns authenticated evidence adapters, dependency
+  indexes, witnesses, attribution defaults and provider catalogs.
+- `traffic-engine-replay` owns shared Replay preparation, reports, TLS and
+  asynchronous completion adapters.
+- `traffic-engine-verification` owns runtime policy execution, request rules,
+  primary assertions, value comparison and authenticated Source validation.
+- `traffic-engine-recording` owns recording supervision, capture adapters,
+  gateways and local interception.
+
+`traffic-engine` composes these services for E2E execution and Target process
+isolation. Compatibility exports retain existing engine module paths.
+
+`traffic-recorder` owns recording clocks, captured events, recording-local
+extensions, capture admission, the bounded writer queue, central ledger,
+output receipts and sealing. It receives the evidence registry and a
+borrowed `CaptureScope` from its host. The queued scope retains the host's
+original activity reservations until persistence completes.
+The production dependency closure of `traffic-replay`, `traffic-rewrite-core`,
+`traffic-recorder` and `traffic-recording-store` must contain only
+implementation-independent contracts. Shared engine adapters supply concrete
+protocol, codec and policy installations. `tests/framework_dependencies.rs`
+enforces both this closure and the service-to-composition dependency direction,
+including build and target-specific dependencies.
+Extract libraries incrementally when their responsibility and dependency
+direction are explicit. `traffic-model` owns protocol-independent recording
+identities, ownership and outcomes. `traffic-protocol-mysql` and
+`traffic-protocol-redis` own their native framing and messages. Lower libraries
+must not depend on the root application, its configuration, `AppState`, or
+`ReplayState`. Protocol extensions publish typed facts through the framework's
+event contract; the application owns capture and Replay execution.
+
+`traffic-protocol` owns registration and bounded frame I/O, and the HTTP provider
+owns its native Hyper driver and response stream model. `traffic-recording-store`
+owns authenticated immutable Source access, record references, derived storage
+and canonical frozen-attribution identities. The writer and its readers share
+the persisted schemas from `traffic-model`. `traffic-replay`
+owns immutable event plans, ordered candidate postings, finite claims, bounded
+pending admissions, shared request waiting, scope/lane candidate selection and
+actual delivery receipts. Its value-rule preparation binds protocol-projected
+locations to shared field contracts and codecs.
+The current built-in execution set is HTTP, Redis and MySQL. Memcached, Kafka
+and Motan capture/Replay drivers and the Motan primary gateway are retired.
+Historical native records retain the open record path and require their actual
+installed provider at admission. Application compatibility checks use the
+run-supplied catalog. Installed providers own their evidence event registrations.
+Historical report codecs continue reading existing audit results. Current
+session snapshots include only active built-in execution inventories.
+`traffic-value` owns format-independent values, codec recognition, prepared
+document access and logical edit authorization. `traffic-codec-json` owns
+duplicate-rejecting decoding and token-preserving JSON rendering.
+`traffic-codec-protobuf` owns typed projections, schema preparation and original
+wire remainders. String and opaque-byte codecs retain independent implementations.
+`traffic-policy` owns registered comparison, transformation and evidence-analysis
+contracts. Open policy definitions persist implementation identity, version and
+options. Implementations choose Source applicability and expose child-rule
+composition. `traffic-policy-time` owns registered duration and timestamp
+comparison, temporal analysis and scoped cross-message observation state over
+standard observed-clock facts. `traffic-time` owns exact temporal arithmetic,
+textual grammar recognition and temporal declarations shared by those
+implementations and compatibility adapters.
+`traffic-policy-identity` owns registered identity representation validation,
+format comparison and entity key projection. The comparison host retains shared equality and injectivity
+through its value-correspondence service.
+`traffic-policy-unordered` owns multiset comparison, joined-string collection
+comparison and canonicalization, and speculative child pairing through
+transactional host checkpoints. `traffic-extensions` is the
+application extension catalog, with feature-selected installations in one file.
+Framework crates depend on the extension contracts and receive their execution
+owners through application composition.
+Native providers install their report codecs together with their connection and
+evidence capabilities. HTTP header-report layouts, MySQL SQL signatures and
+transaction guidance, and Redis report identities belong to the corresponding
+protocol crates. `traffic-protocol::report` aggregates provider-owned diagnostic
+facts, limitations and next steps. Rewrite retains issue state, protected evidence
+access and command construction. Shared report collection preserves both native
+report sections and historical layouts, including their actual delivery receipts.
+Each report adapter validates its historical session layout when present.
+Shared reconciliation validates the open protocol inventories independently of
+the installed historical layouts. Failed candidate comparisons retain bounded
+Source references and registered value-analysis findings. Shared diagnosis and
+discovery carry those findings to API hints through the standard finding contract.
+`traffic-policy-schema` owns persisted compatibility declarations, physical
+selectors, bounded proofs and their pure validation. Its validation entrypoints
+receive the policy and codec registries. Application adapters supply the installed
+catalog. CLI enum integration is selected through its `cli` feature.
+`traffic-policy-compiler` owns prepared value/native declarations, field ownership
+conflicts, capability requirements and execution plans. Its entry points receive
+explicit policy and codec registries through `CompilationContext`. Codecs expose
+optional static `FieldSchema` information. Registered comparison implementations
+validate their own applicability through `ComparisonPolicy::validate_schema`.
+The compiler delegates both operations and checks conditional literals against
+that shared field description. Application composition supplies authored-document
+expansion and runtime-adapter admission.
+Native selector validation delegates to the corresponding protocol libraries.
+`traffic-policy-document` owns authored documents, native-rule lowering,
+Source-proof inheritance, canonical rendering and completion declarations.
+`AuthoringContext` supplies registries and the application's native admission
+port. Runtime key snapshots and complete compilation round-trip verification
+retain their application owner. The application adapts its prepared global
+formats at this document boundary.
+`traffic-policy-execution` owns codec-group preparation, field composition,
+strict document comparison and derived value materialization over prepared rules.
+`ExecutionContext` supplies codec installations and comparison metadata, while
+`FormatHost` supplies field declarations and frozen signing-key access.
+The shared `ValueRule` port exposes borrowed field contracts and prepared codec
+bindings. Compilation implements this port beside its carrier selectors.
+Selected fields retain declared or inferred origins, so explicit ownership and
+delivery permissions apply to every registered implementation. Codec-group caches
+retain installation identities alongside their prepared inputs.
+`traffic-policy-generated` owns typed UUID, random, named-template and encrypted
+document value contracts. It receives the codec installations, comparison
+metadata, plaintext format host and frozen key bytes explicitly. Its field
+verifier composes through the shared comparison port, including plaintext
+identity proposals and response-local IV relationships.
+`traffic-protocol-http::data_stream` owns complete SSE/JSON-line event framing,
+physical data ranges, byte-offset correspondence and lossless data replacement.
+Application stream bindings compare those projected data values through the shared
+execution library. Its `request_contract` owns native endpoint selectors, URI
+multiplicity, method/body positions and immutable request fingerprints. The host
+supplies body equivalence and canonical body bytes. `headers::audit` returns native
+header differences and protected observations. Replay owns their Case provenance,
+retention budgets, publication and dirty-state aggregation.
+`traffic-jwt` owns compact JWS authentication, NumericDate comparisons and nonce
+formats, including RS256 public-key authentication. Signing-key source validation is pure there. Startup resolution and
+immutable key witnesses retain application ownership.
+`traffic-policy-content` owns phase-independent content comparison, bounded
+structured-value diagnosis and compatibility diagnostic DTOs. Its Protobuf,
+Hessian2 and joined-value entrypoints receive the installed policy registry.
+JSON field evaluation receives a token verifier. JWT comparison receives
+authenticated key material through `VerificationKey`. The application retains
+key resolution, immutable evidence checks, Case reports and result publication.
+Opaque body declarations and automatic diagnostic recognition delegate to this
+content owner. These pure entrypoints also serve Source preflight.
+Native HTTP interaction framing, Source transcripts, namespace-session facts and
+client execution live under `traffic-protocol-http::interaction`. Client drivers
+receive timing and actual-observation ports from their host. Authenticated Source
+loading, Case admission, persistence and dependency cleanup remain application
+responsibilities. Its `verification` module owns transport identity, native ACK
+correlation, stream envelopes and complete interaction closure. `ValueComparator`
+receives the selected business values and independent observation clocks. The
+application supplies registered value execution and authenticated delivery proofs
+through this port, and retains report aggregation and encrypted artifact access.
+Socket.IO's `delivery_windows` owns original namespace scope, native input ACK
+checkpoints and finite Source delivery intervals. Its host supplies authenticated
+metadata and lazily loads original output events when a checkpoint requires them.
+Native MySQL table selectors, SQL value templates, placeholder
+validation and savepoint correspondence live in its protocol library. Pure policy
+compilation returns prepared declarations. Application composition then validates
+the installed runtime adapters before publishing a compiled policy. Policy
+comparison normalization is an optional provider
+capability. `traffic-policy-value::diagnosis` supplies bounded traversal and delegates
+canonical values to that installed provider.
+MySQL's `cleanup_selection` owns native transaction-end candidate indexes and wire
+predecessor precedence. `SessionInventory` extends its read-only session facts with
+an exchange count. Replay supplies availability and actual delivery facts through
+that port, then retains claims, matching decisions and delivery publication.
+`traffic-replay::rules::RuleRuntime` supplies message preparation, comparison and
+opaque delivery settings to the finite inventory. `traffic-policy-value` owns the
+application's field-rule message preparation and delivery implementation.
+`traffic-contract` retains field-contract compatibility, strict whole-document
+comparison, codec-independent logical difference projection and shared identity
+proposals/stores. Identity delivery receives a prepared validation policy.
+Its codec
+compatibility entrypoints receive the application's codec registry. Comparison
+metadata supplies the policy registry. Neither path loads the extension catalog.
+Legacy identity, time, duration and unordered declarations lower to the registered execution
+port. Registered implementations own observation merge and scope behavior, while
+the framework owns atomic checkpoints and aggregate publication. Exact fallback
+is a framework equality contract. Native leaf verification
+and authenticated read provenance enter the comparator through
+capabilities supplied by callers. `traffic-contract::provenance` owns bounded,
+case-local delivered-value records, causal frontiers and copy proofs. The host
+supplies eligible compiled rule scopes and lazily projects its selected fields.
+`traffic-policy-value::host` owns the shared value-service port. Runtime bindings
+supply its registered comparison metadata, identity, clock and document-policy
+services. The Replay execution loop receives those capabilities through the port.
+`traffic-policy-value::diagnosis::bodies` receives the installed codec registry
+for Source recognition and uses that selected implementation to decode Target.
+`traffic-policy-value::scalar` owns shared scalar recognition, Source-selected
+decoders and authorized encoding through the prepared codec document. Native
+carrier bindings supply their rule identity and retain physical value locations.
+Pending read provenance retains the prepared scalar decoder.
+`traffic-policy-value::fields` owns carrier-independent format declarations and
+Source field selection over the supplied policy registry. Its `formats` module
+owns URL, compact JWT and named-template value checks. The host supplies frozen
+signing keys and whole-document comparison for nested values.
+Its `transformation` module binds registered value transformations to a Source-selected
+codec document. Policies receive logical values and return authorized logical paths.
+The executor supplies decoding and delegates rendering to the retained document.
+`traffic-recording-store::source` owns immutable scope resolution, authenticated file
+stamps, byte-bounded readers, finite record references and paged storage. Native
+index builders enrich these shared locations with protocol metadata.
+Registered evidence adapters project native Source request and response
+envelopes. The host supplies authenticated storage and secret access through
+`RecordSource` and `EvidenceSecrets`. Policy evidence delegates envelope
+construction to the registered native owner.
+Their value-query port selects native payload documents and virtual native
+fields, then delegates logical selection to the host's `ValueReader`. The
+application reader uses the installed codec registry and enforces observation
+limits. Native providers return standard present, missing or unavailable
+observations and provider-owned annotations. Rewrite owns authentication,
+assignment binding and report publication.
+Process-summary projection uses the same registered evidence owner. The host
+supplies a detail limit and publishes the resulting named native views. Redis
+owns snapshot decoding, endpoint truncation and omitted-endpoint counts beside
+its recording accumulator.
+Dependency rule discovery decodes authenticated envelopes through their installed
+native providers and visits projected value locations. Codec recognition and
+policy analysis use the shared executor for each value. Native discovery
+annotations, including MySQL physical SQL fields and token pointers, come from
+the evidence adapter. A root field finding retains its physical binding
+requirement instead of producing an empty global field selector.
+Native HTTP header occurrences and Redis RESP value positions live beside their
+protocol libraries. Value bindings receive the policy registry and comparison
+metadata. Implicit scalar applicability delegates to the shared field plan and its
+installed implementations. Historical planner DTOs retain their existing rejection
+contract, while frozen-evidence checks continue serving pending journals.
+Redis `storage::StorageExchange` supplies immutable RESP facts, original scope and
+authenticated response access. The protocol library owns complete read-commutation,
+absent-state, state-epoch and closed-TTL Source proofs over that port. The host
+supplies preparation clocks, installs complete proofs atomically and retains live
+delivery receipts, failure state and audit publication.
+Its `storage::append` owns original byte offsets, cumulative RESP lengths and
+read/reset fences. `storage::activity` proves complete SET/GET/DEL lifetimes and
+accepts value decoding, selected metadata and stable-field equivalence through
+`ValueModel`. The application binds that port to its installed value contracts.
+`storage::snapshot` owns native response equivalence, bootstrap seed selection,
+complete key coverage and bounded evidence collection. `Rule` supplies the
+authorized selector and current seed ownership. The application authenticates
+evidence access, binds the fingerprint to the current declaration and Source
+directory, and installs the proven overlay.
+Redis `socketio_rpc` owns bounded Socket.IO Redis-adapter envelopes.
+`pubsub::echo` owns exact publication identities, disjoint Source intervals,
+finite notification selection and native payload rendering. `pubsub::identity`
+owns manager, namespace-session and callback correspondence. Its broadcast
+comparison accepts independently observed namespace-session receipts from the
+host. Case ownership, authenticated payload loading, finite admission and
+successful delivery publication stay with the application adapters.
+Native MySQL value selection, physical column origins, observed native temporal
+metadata and scalar output representations live in `traffic-protocol-mysql::value_rules`.
+Its `ValuePolicy` port receives the shared execution context, document formats and
+optional scalar declarations. `DeliveryHost` supplies identity decisions without
+publishing them. Protected witness authorization, Case state and delivery commit
+remain application responsibilities. Shared delivered-time field enumeration and
+domain-separated declaration fingerprints retain their value-contract owners.
+Encoded SQL values use the installed codec registry for recognition, comparison
+and rendering. Selections retain their prepared Source document through delivery.
+Native MySQL semantic decoding and prepared-statement state belong to its
+protocol library. Its capture queue owns request/response FIFO correlation,
+continuation assembly, logical response boundaries and native termination-prefix
+validation. Its recording upstream connector owns MySQL's self-signed TLS policy.
+The protocol-independent transport contract owns peer FIN/RST
+observations, monotonic end clocks and transparent forwarding after decoder
+failure. Redis capture state owns successful session controls, credential
+redaction, confirmed subscription subjects and original subscription anchors.
+HTTP body capture owns content-coding interpretation and header redaction.
+Native recording projections decode their own stored payloads through the
+host-supplied `RecordSource` interface. Authenticated storage access and finite
+delivery receipts retain framework ownership.
+Native capture facts supply the common outcome explicitly. Snapshot construction
+validates its shared transport contract and any compatible flattened outcome.
+Protocol evidence adapters interpret their own native safety fields.
+`traffic-protocol-redis::native` owns the installed RESP2 request/response
+recording and server sessions, stored-record decoding and response projection.
+The shared `recorder/native` and `replay/native` hosts own admission, persistence,
+value-policy execution, finite consumption and actual output receipts. Redis
+session controls and credential sanitization remain in the protocol library.
+The finite provider currently rejects Pub/Sub, incomplete terminations, reusable
+snapshots and historical stateful permissions that require additional capabilities.
+The older native capture primitives remain available in the protocol library.
+`traffic-protocol-http::native` supplies finite HTTP/1 capture and server sessions,
+chunked transfer decoding, stored exchange projection and response rendering.
+Replay installs this provider through the extension catalog. The application
+retains the recording binding. Shared native hosts provide certificate
+termination through the `accept_tls` port. Protocols
+select upgrade timing and ALPN. HTTPS upstream certificate verification uses the
+system trust roots in the HTTP connector.
+`traffic-replay::input` owns live input leases before a request body is complete.
+Native sessions acquire those leases through `RequestHost::begin_input`. Shared
+Case cleanup and session finalization observe their I/O ownership. Native record
+projection receives the host's `EvidenceSecrets` port for Source decryption.
+Provider aliases retain one business protocol owner across transport variants.
+`traffic-protocol-mysql::native` owns finite SQL request projection, result-cell
+locations, Classic greeting, CLIENT_SSL upgrade and text response framing. Replay
+uses the same registered inventory, policy execution, claims, delivery receipts
+and reports for MySQL, HTTP and Redis. SQL token order and literal positions are
+preserved. Basic transaction commands retain finite Source consumption. Prepared
+commands, native transaction equivalences, projection permissions and incomplete
+cleanup serving currently require additional capabilities. Its recording connector
+uses the same registered capture host as HTTP and Redis. Each native provider
+decodes authenticated evidence into request/response messages and timing facts.
+Offline global-value preflight prepares and compares those messages through the
+same codec/policy executor used by live Replay. The application retains witness
+authentication, immutable Source checks, coverage accounting and plan publication.
+Session output adapters prepare native headers, parts and termination boundaries
+before shared delivery publishes their actual flush receipts. Aggregate reports
+count installed protocols through the open `dependency_protocols` map. Historical
+named report sections retain their existing read contract.
+Historical Redis read-back execution, native identity capture execution and
+dedicated dependency Source-session policy validators are retired. Input preflight validates immutable requests and
+freezes actual signing inputs through its focused input owner. Registered value
+comparison and identity delivery retain the shared value-service port. Rewrite
+policy guidance omits the retired native state adapters.
+`traffic-model` owns dependency ownership scopes and `traffic-protocol` owns
+endpoint identities. MySQL session control and Source transaction analysis use
+these immutable inputs to project original wire positions, complete read prefixes,
+transaction spans and bounded rejection reasons. Replay retains scope selection,
+live claim state, value rules and actual delivery coverage.
+MySQL transaction and isolation constraints consume a read-only `SessionContext`
+supplied by Replay. Their protocol library owns native member traces, status
+continuity, equivalent first-read groups, baseline probes and session restoration
+facts. The framework supplies actual admission/delivery observations, input
+windows and complete value-comparison results, then applies returned constraints
+to its finite inventory. Authenticated `RecordSource` sizes bound native evidence
+materialization before payload reads.
+The MySQL recording connection driver owns its complete native handshake, TLS
+upgrade, authentication, FIFO exchange tracking, packet flushes and peer
+termination handling in `traffic-protocol-mysql::capture::connection`.
+Application composition under `protocols/mysql` supplies recording access
+decisions, capture ownership, persistence, certificates and actual output receipts
+through the native host interface. The recorder's registry and ledger retain
+connection cancellation, attribution and sealed storage.
+Native `OutputStream` plans supply encoded chunks and finite header/part/end
+boundaries. `traffic-replay::output` owns transport writes, flushes, ordered
+barriers and contiguous part receipts. The caller retains final wire publication
+and semantic commit. MySQL response, PREPARE and continuation framing belong to
+its protocol library. Registered native encoders enter the same delivery path
+through `MessageEncoder::output`, including multipart native frames.
+`traffic-protocol-mysql::server` owns server greeting, CLIENT_SSL negotiation,
+the once-only login acknowledgement, native command dispatch and prepared-statement
+lifetime. Its generic `Session` retains opaque host-owned context. `ServerHost`
+supplies business selection, statement metadata, delivery and observations.
+The application binds these ports to shared admission, Case/transaction ownership,
+protected evidence and response-delivery accounting.
+Redis storage positions and RESP value ranges belong to its
+protocol library. Recorder retains capture clocks, ownership and persistence.
+`traffic-protocol-redis::session_binding` owns native physical-session
+eligibility and selected socket bindings. Replay supplies recorded facts through
+read-only `RecordedSession` and `SessionExchange` projections. Shared finite
+admission and delivery receipts retain their existing Replay owner. MySQL Source
+control classification and its native conformance tests live together under
+`traffic-protocol-mysql::session_control`; the Replay adapter preserves original
+positions while projecting interleaved protocol records into that classifier.
+Native capture payloads and physical value locations belong to the HTTP,
+MySQL and Redis libraries. Protocol references retain open identity fields, and
+semantic evidence support is supplied by the registered native evidence owner.
+`traffic-protocol-http::recorded` owns the stored HTTP payload schema and capture
+decoding. Its URI and response modules own native URI parsing, query observations
+and response assembly. Replay supplies query selection and comparison policy.
+Header capture uses the protocol library's shared header representation. Replay's HTTP adapter
+keeps authenticated response references, protected-header provenance, actual
+delivery and lifecycle state beside that native payload. Flat recordings retain
+their stored field layout through deserialization at this boundary.
+`traffic-protocol-redis::recorded` owns stored connection and exchange schemas,
+capture decoding, notification payloads and notification references. Replay keeps
+lifecycle authorization beside the native exchange and retains the historical
+flat witness serialization. Native notification evidence supplies its Source
+exchange identity through the protocol-owned accessor.
+Its `decode_replay` validates native completeness, peer termination and subscription
+confirmation before projecting arguments and response bytes. The host supplies
+authenticated cleanup authorization. `request_identity` owns the stable native
+request fingerprint shared by admission and evidence.
+`CaptureEvidence` supplies native completeness, references and control facts.
+The ledger owns capture lifetime and sealed persistence through that interface.
+The recording queue holds protocol-independent `CapturedEvent` snapshots.
+Native evidence adapters project process-traffic observations and aggregate
+their own summary formats. Shared process aggregation retains attribution,
+bounded observation counts and publication.
+Open native connection capabilities supply capture sessions, serving sessions and
+Source exchange projections. Native drivers retain transport framing, handshake
+and session state. Recording hosts authorize captures and preserve their original
+ownership through output receipts and persistence. Replay hosts retain shared
+selection, identity/time rules, sequence waits, response materialization and actual
+write/flush receipts. Registered exchanges participate in Case tails, startup
+closure, cancellation and reconciliation through framework capture identities.
+Value-rule bindings retain one semantic definition across protocol selectors and
+their effective signature participates in protected evidence identity.
+`traffic-protocol-fixture` is a development-only native implementation used by
+normal recording/replay conformance tests. It depends on the protocol contracts
+and model libraries.
+`traffic-response-rewrite` owns pure document selection, decoding,
+address discovery and materialization. The root HTTP adapter owns route
+registration, managed processes and provenance. See
+[dependency protocols and response rules](dependency-provider.md).
+Its registered document transformation requests `network.route` resources before
+materializing addresses. Recording's HTTP adapter supplies actual route results,
+normalizes native headers and retains original/delivered body provenance.
+An open recording policy declaration carries the same implementation identity,
+version and options through authoring, Source preflight, plan/apply and recording.
+Value discovery receives registered analyzers and retains findings independently
+of rule proposals. API hint rendering consumes those findings' policy identity,
+explanation and requirements through one path.
+Source-only observations expose logical values and original bytes through the
+same evidence port, including observations with an equal or unavailable Target.
+Proposals carry either a field definition or a complete additive policy fragment,
+so acquisition and comparison suggestions use the same discovery pipeline.
+
+`RuntimeState<P>` owns shared Replay session context and an application-supplied
+protocol set. `protocols/replay` supplies native connection dispatch, Source record
+decoding, inventory preparation, sequence references and lifecycle projections.
+Its Source loader retains native registration and session identity state while
+Replay owns the startup pipeline, authenticated traversal and rule publication.
+Native evidence adapters project finite references into the open `ProtocolRef`
+format. Shared inventories index complete references within their Case and reject
+ambiguous resolution without claiming an exchange. Protocol inventory adapters
+project delivery state and native omission proofs through the protocol-set port.
+Case failure and progress projections feed the shared cleanup and idle watchdog.
+Native session snapshots and stored session-evidence validators retain their
+protocol formats while Replay owns finalization and batch receipt validation.
+MySQL diagnostic schemas and bounded SQL summaries live in its protocol library.
+`Runtime<P>` owns listeners, control transport and startup from an injected Source
+loader. Application entrypoints retain the public configuration and select native
+providers before projecting the framework configuration. Native evidence adapters
+supply request clocks and open dispatch references. The primary adapter projects
+its recorded close input, while dependency adapters project output clocks and
+actual flushed prefixes. Replay owns their shared timeline, close validation and
+Case cancellation. Buffered flush receipts live in `traffic-protocol::io::delivery`.
+Replay's policy lifecycle depends on the application-supplied `ReplayPolicy` and
+`RequestRuleRuntime` ports. Compiled native selectors and protocol metadata remain
+in `policy/runtime` application bindings. The framework loads and publishes
+policies, anchors request clocks, waits for durable hypothesis evidence and
+admits private response constraints through these ports. Registered native
+inventories consume `ValueRuleHost` for comparison commits, clocks and identity
+deliveries. `value_contract/state` supplies the application correspondence and
+read-provenance stores across those carriers. Native policy bindings validate
+physical inputs before invoking that store. The control transport dispatches
+open parameters and receives application-owned status flags, query results and
+case cleanup through the same runtime port. Shared value matching, codecs and finite execution retain their
+`traffic-contract` and `traffic-replay` owners.
+Command diagnostics and reports accept typed native extensions. The finite Redis
+provider uses the shared `dependency_protocols` report inventory. Shared report
+DTOs retain connection, request, finite-use and lane-barrier facts. Primary response assertion adapters
+live in `primary_protocol/assertion`, while content codecs and comparison kernels
+retain their independent library owners. Native report aggregation remains in
+the application report composition.
+Report codecs also supply a `DiagnosticSchema` for native report sections,
+failure arrays, safe signatures, paired observations and match metadata. Replay
+owns Case filtering, diagnostic bounds, clustering, final publication and its
+rollback. Open `dependency_protocols` sections use the shared report format.
+Finalization and interrupted publication consume the session's injected codec
+registry. Portable Source report preparation accepts an injected Source loader,
+record validator and report projection. Recorder's Source preparation capability
+supplies native indexes and portable reports, while Recorder retains preparation
+ordering, artifact ownership and best-effort failure handling. Asynchronous
+scenario ordering, early signals, event deduplication, generations and completion
+masks remain under `recorder/async_api`. Application completion bindings under
+`protocols/recording/async_api` supply `CompletionRule` and cached
+`CompletionEvent` projections. MySQL transaction continuity for terminal
+observations lives in `traffic-protocol-mysql::completion`. Redis reply framing
+and terminal response facts live in `traffic-protocol-redis::capture::response`.
+`CompletionSource` supplies Source scenario selection and opaque native
+requirements to Replay tail waits. Registered capture snapshots enter the same
+completion, deduplication and generation accounting as application adapters.
+`EvidenceAdapter` supplies native recording summaries and endpoint projections.
+Recorder retains event counts, authenticated traversal, bounded startup endpoint
+aggregation and summary publication. Native HTTP, Redis and MySQL summary
+implementations live in their protocol libraries. Recording event assembly and
+protocol-aware construction live under `protocols/recording`. Native request
+selectors and primary HTTP capture adapters retain application ownership there.
+Primary case descriptors use open kind identities and native Source-binding
+documents. Native constructors live under `primary_protocol/recording`.
+Shared timestamp provenance consumes `PhysicalOrigin` fingerprints and typed
+read/write observations. HTTP, Redis and MySQL libraries project their native
+positions to opaque `ValueOrigin` values with their existing fingerprints.
+Registered JSON projections bind the compiled global field policy through
+`ValueRuleHost::document_policy` and the shared rule executor. Native leaf
+verification, selected paths and complete document comparison retain the same
+compiled global policy across carriers. Eager
+installation and deferred append use the same preparation path.
+Application composition supplies the actual dependency providers to Source preparation.
+Application queries compose their installed codecs under
+`protocols/replay/report/evidence`.
+Native report codecs project stored unused rows and their identity requirements.
+Replay authenticates and publishes Source occurrences for both those rows and
+registered protocol inventories, using the same frozen capture facts.
+`replay/dependencies` owns authenticated Source traversal and common transport
+validation. `replay/deferred` owns serialized installation, endpoint validation,
+shared rule-source observation, execution-plan publication and failed-install
+retry rejection. Native append checkpoints retain stable positions across those
+steps. The application retains the frozen native session-identity snapshot used
+by each deferred registration. `replay/global` owns bounded, two-phase Source
+traversal and producer completion. Application-supplied `GlobalProjection` and
+`GlobalRegistrar` capabilities provide native record selection, decoding,
+metadata prerequisites and registration. Producer cancellation, final Source
+validation and failed-consumer joining use the shared traversal path.
+
+`traffic-replay::report` owns immutable Global rows, sparse visibility and
+delivery deltas. Native inventories project their complete Source layout and
+actual delivery state through `GlobalReportProjection` and
+`GlobalReportRuntime`. The composed projection rejects overlapping inventory
+owners. `traffic-protocol::report` owns the open evidence codec contract.
+Application bindings under `protocols/replay/report` retain native evidence
+formats and historical report field locations. Shared report publication,
+artifact validation and pagination consume those capabilities. Registered
+native protocols supply their own summaries and participate in the same
+Source-only preparation and live Global publication path.
+
+Run tests and Clippy across the workspace so extracted library tests remain
+part of the ordinary verification path. Product source files in `crates/`
+retain the same responsibility and 1000-line requirements as `src/`.
 
 ## Current Boundaries
 
-- `replay/redis/append/cancelled` owns automatic cancelled-cache eligibility,
+- `protocols/replay/redis/append/cancelled` owns automatic cancelled-cache eligibility,
   bounded authenticated primary-content ceilings and separate omission audits.
   Native APPEND retains key identity, exact prefix matching and actual wire
-  lengths/consumption. `replay/http/cancelled` owns real dependency FIN/RST after
+  lengths/consumption. `protocols/replay/http/cancelled` owns real dependency FIN/RST after
   trusted primary close metadata; input timing supplies only clocks and flushed
   prefix facts. Neither owner converts cancellation into recorded EOF.
 
@@ -97,11 +677,11 @@ is unclear.
   response-event clocks through `AnchorClocks`; explicit request and delivery
   provenance remain separate. Protocol adapters retain native value framing.
   Built-in validation never supplies positive coverage for an authored rule.
-  `replay/contract_value` renders stored time counterparts only with authenticated
+  `value_contract/response_delivery` renders stored time counterparts only with authenticated
   preceding write/read proofs, including recognized textual times; recognition
   alone still permits comparison without generating delivery translations.
 
-- `replay/mysql/session_setup` recognizes narrow successful nonsemantic driver
+- `protocols/replay/mysql/session_setup` recognizes narrow successful nonsemantic driver
   observations. Native registration and Source transaction/read-span proof use
   that same boundary; business SQL, AUTOCOMMIT, errors and status-changing or
   unknown session effects retain their existing finite contracts.
@@ -112,13 +692,13 @@ is unclear.
   Session variables, named locks, output writes and unknown/nested effects
   retain the original conservative setup requirement.
 
-- `replay/redis/connection_scope` owns physical-session eligibility. A proven
+- `protocols/replay/redis/connection_scope` owns physical-session eligibility. A proven
   subscription suffix starts at its first SUBSCRIBE; preceding ordinary pool
   operations retain finite lane order without acquiring that socket's owner.
   Explicit setup, transactions, unknown session effects and subscriptions with
   an unproven start retain the full-lane boundary.
 
-- `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
+- `protocols/replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
   `preparation` proves immutable identity, clocks and subscription slots;
   `causal` proves preceding same-session native emits from Source dependency
@@ -127,7 +707,7 @@ is unclear.
   and an independently observed live SID, then queues the original notification
   without changing Global ownership. `control/native_event` admits bounded
   metadata from the trusted transport driver within the active request epoch;
-  `interaction/replay/feedback` carries that observation interface separately
+  `traffic-protocol-http::interaction::client/feedback` carries that observation interface separately
   from protocol parsing and control transport. No expected output enters the
   input executor, and recorded ACK payloads retain their existing references.
   `replay/global/notifications` exposes authenticated Unattributed notification
@@ -135,7 +715,7 @@ is unclear.
   or changing Source ownership. Such slots have no subscription-age timer fallback;
   physical record order is retained across separate Source ownership views.
   Ordinary native notification clocks also admit bounded same-namespace client
-  events with ACK IDs. `interaction/socketio/native_receipts` correlates
+  events with ACK IDs. `traffic-protocol-http::interaction::socketio/native_receipts` correlates
   actual sent inputs and received ACK metadata independently of business
   completion and fast timing; the native clock retains Source windows, original
   subscription ownership and the current request epoch. An input without an ACK
@@ -163,7 +743,7 @@ is unclear.
   `pubsub/delivery` owns epoch/subscription fences, the actual
   wire write and finite receipt. Protocol envelopes and Global inputs retain
   their native owners; unselected fields and original captures stay unchanged.
-  `replay/redis/pubsub/namespace_sessions` owns SID-directed emit correspondence:
+  `protocols/replay/redis/pubsub/namespace_sessions` owns SID-directed emit correspondence:
   it selects only unique namespace identities from original Source protocol
   observations, then binds them to CONNECT receipts from the actual Target
   transport within the current Case request epoch. The input executor receives
@@ -171,7 +751,7 @@ is unclear.
   proven room identity; business rooms, payloads, namespaces, process identity
   bijections and finite delivery remain strict. Case transitions and cleanup
   retire the live correspondence.
-  `replay/assertion/interaction/client_ack` separately owns original client
+  `primary_protocol/assertion/interaction/client_ack` separately owns original client
   request provenance and exact native reply pairing for fast replay. It pairs
   plain ACKs by unique namespace/id request identity and preserves observed
   completion ordering. Its `mixed` child aligns bounded runs containing text
@@ -181,7 +761,7 @@ is unclear.
   `replay/control/input_timing/fast` owns ordered Socket.IO cuts using original
   Case request identities, actual native admission and the stream interval cap.
   It projects clean tail timing, frame counts and native ACK receipt identities
-  separately from payloads. `interaction/replay/heartbeat_tail` recognizes
+  separately from payloads. `traffic-protocol-http::interaction::client/heartbeat_tail` recognizes
   Source heartbeat-timeout candidates from the Engine.IO handshake, wire tail
   and paired ACKs. The Socket.IO executor uses real outputs and dependency
   delivery before cutting an eligible tail. Response assertion keeps comparing
@@ -198,12 +778,12 @@ is unclear.
   their incomplete-capture facts.
   Protocol delivery owns claims, consumption and dirty reporting. See
   [dependency termination](dependency-termination.md).
-  `replay/mysql/wire_diagnostics` owns opt-in connection-local protocol envelopes
+  `protocols/replay/mysql/wire_diagnostics` owns opt-in connection-local protocol envelopes
   and request counters. It exposes packet lengths, sequence numbers and leading
   tags separately from transport flush results, without SQL or response values.
   Protocol encoding and delivery remain in their existing owners.
 
-- `interaction/model` owns versioned input programs and independent output
+- `traffic-protocol-http::interaction::model` owns versioned input programs and independent output
   observations. `policy` validates protocol completion profiles and bounded
   execution budgets; `lifecycle`, `socketio`, `stream` and `observation` own pure
   framing, completion correlation and monotonic case decisions. They do not read
@@ -212,7 +792,7 @@ is unclear.
   the raw stream body. `interaction/private` reads historical encrypted input
   and output envelopes; its old writers exist only as compatibility test fixtures.
   New initial and upgrade request headers reuse Recorder's configured header capture.
-  `interaction/replay/timing` owns the replay timing choice, monotonic Source-offset
+  `traffic-protocol-http::interaction::client/timing` owns the replay timing choice, monotonic Source-offset
   mapping and metadata feedback interface. `replay/control/input_timing` admits
   active-case timing queries from immutable inputs and finite dependency facts;
   its Source reader never opens expected outputs. Redis adapters project exact
@@ -225,11 +805,11 @@ is unclear.
   await the input driver's actual transport cancellation, without changing
   response completion or finite dependency consumption.
   `recorded_request/socketio_order` projects the recorded server event and ACK
-  identities and offsets before execution. `interaction/replay/event_order`
+  identities and offsets before execution. `traffic-protocol-http::interaction::client/event_order`
   tracks their live arrivals across namespaces. Ordered fast dispatch requires
   both the preceding server events and admission of the proven Redis, MySQL,
   and HTTP Case request prefix. Ambiguous timestamps keep conservative timing
-  and cannot create a request barrier. `interaction/replay/socketio/dispatch` supplies readiness
+  and cannot create a request barrier. `traffic-protocol-http::interaction::client/socketio/dispatch` supplies readiness
   and diagnostic feedback. The driver bounds each dispatch, including its wire
   send, to five seconds after the previous actual send. `input_timing/fast`
   owns the existing compression cap and commits clock cuts only after both
@@ -238,11 +818,11 @@ is unclear.
   Native coalescing/retiming retains native ownership; successful native completion
   projects exact covered Source references into the delivery journal for compression.
   `heartbeat` records and validates the input program's causal PING/PONG bindings;
-  `interaction/replay/socketio/heartbeat` schedules those responses from actual
+  `traffic-protocol-http::interaction::client/socketio/heartbeat` schedules those responses from actual
   Target PING packets, separately from business completion barriers. Explicit
   peer Close observations retain pending business identities without inventing
   completion or accepting unobserved transport truncation.
-  `interaction/websocket_transport` owns bounded raw-frame boundary and real
+  `traffic-protocol-http::interaction::websocket_transport` owns bounded raw-frame boundary and real
   peer FIN/RST observations without retaining payloads. Its continuous read tap
   preserves read-ahead and unfinished fragmentation, independently of decoded
   message observation and application completion. Typed client transport-end
@@ -313,10 +893,10 @@ is unclear.
   `recording_case` wires these case lifecycle operations into application state;
   its `interaction` child owns the lease/publication barrier. `record_service/proxy` owns
   external admission lease scheduling and transparent ingress transport; the
-  gateway SDK owns atomic Redis reservation operations. `interaction/replay`
+  gateway SDK owns atomic Redis reservation operations. `traffic-protocol-http::interaction::client`
   drives only recorded inputs against fresh Target connections; response assertion
   compares independent output observations.
-  `interaction/replay/socketio/transport` retains its reader through normal
+  `traffic-protocol-http::interaction::client/socketio/transport` retains its reader through normal
   peer-close completion, so flushing a client close cannot release the Case
   while the peer is processing an earlier namespace disconnect. The scheduler
   bounds that close I/O and interrupts it on an actual dependency rejection;
@@ -385,7 +965,7 @@ is unclear.
   startup debt a Case failure. The on-demand Source process evidence query retains
   the diagnostic entry point. Actual API response and dependency
   checks remain strict; the final batch receipt still requires startup closure.
-  `replay/http/ingress` owns genuine parsed-header admission before request-body
+  `protocols/replay/http/ingress` owns genuine parsed-header admission before request-body
   collection. A bounded metadata ledger freezes observation identity, observed
   Case and startup phase; a RAII atomic guard retains actual unfinished body I/O
   without claiming Source inventory. Native complete-body matching reuses that
@@ -402,7 +982,7 @@ is unclear.
   boundary, so mutex contention cannot move an already observed request into a
   later Case or erase its startup admission token. A proven Process head moves
   its guard by incrementing the run counter before releasing the Case counter.
-  `replay/http/stream_delivery/full_delivery` retains ordinary response claims
+  `protocols/replay/http/stream_delivery/full_delivery` retains ordinary response claims
   through the final body frame and the existing HTTP/TLS writer flush signal.
   Empty responses retain their header-flush obligation; dropped bodies and
   transports that close before flush fail the original claim. Protocol matching
@@ -463,8 +1043,8 @@ is unclear.
   discarding the whole API ownership graph. Protected witness and Redis argument
   queries retain their own assignment, attempt, native identity and authentication
   checks before creating that envelope.
-  Its MySQL selector reads one authenticated materialized SQL cell; the pure
-  `replay/mysql/contracts/value_view` adapter reuses bounded native parameter
+  The registered MySQL evidence adapter reads one authenticated materialized SQL
+  cell. `traffic-protocol-mysql::witness` reuses bounded native parameter
   decoding and physical field resolution. It does not pair statements or
   authorize formats, and preserves exact decimal text and native NULL/bytes.
   `rewrite/evidence/redis_argument` owns bounded native argument selection for
@@ -508,7 +1088,7 @@ is unclear.
   Global JWT formats verify signatures and claims using immutable key snapshots
   loaded before comparison, then stage complete-token correspondence.
   `request_rules/derived` and
-  `replay/policy/request_contract/derived_inputs` independently reconstruct actual
+  `policy/runtime/request_contract/derived_inputs` independently reconstruct actual
   native input re-signing at its precise send clock using frozen startup keys.
   Private `replay/control/derived_input` admission anchors complete delivered
   token values before HTTP exposure. The global comparator retains pairing and
@@ -569,7 +1149,7 @@ is unclear.
   and later MySQL global JSON requests. The MySQL copy adapter checks both
   deliveries precede the independent SQL request; physical-column contracts
   retain their own position-bound provenance.
-  `replay/http/contracts/time_copies` stages HTTP JSON/SSE time provenance and
+  `protocols/replay/http/contracts/time_copies` stages HTTP JSON/SSE time provenance and
   publishes it only on successful delivery; MySQL/Redis reuse their read hooks.
   The private response control snapshot carries no payloads. The SSE adapter
   checks delivery-before-frame causality against the independent stream starts;
@@ -601,7 +1181,7 @@ is unclear.
   version-4 manifest and verifies its authenticated reference before expansion.
   `policy_evidence/limits` keeps whole-session observation, candidate membership
   and private directory capacity aligned across capture and publication.
-  `replay/assertion/native/header_jwt` owns unique header carrier selection;
+  `primary_protocol/assertion/native/header_jwt` owns unique header carrier selection;
   `assertion/jwt/url` owns strict URL remainder and signed nonce echoes. Body and
   header adapters reuse the same private key snapshots and JWT verifier. Header
   ownership never implies a JSON body codec or a response-status exemption.
@@ -639,20 +1219,21 @@ is unclear.
   Case response oracle, CA or listener. `global_evidence/preparation` owns portable
   source/policy/version binding and prewarm import; failure remains explicit and
   does not change Recorder's original completion contract.
-- `value_codec` prepares immutable typed codec plans and bounded schema reuse;
-  its Scalar/JSON/Protobuf providers statically dispatch decoding, comparison
-  views and authorized encoding. Decoded documents retain original bytes and
-  native Protobuf presence/unknown fields independently of logical JSON views.
+- `value_codec` composes registered implementations into immutable codec plans.
+  Providers own schema validation and physical-field overlap. The JSON provider
+  also supplies explicit native scalar decoding. Decoded documents retain
+  original bytes and native Protobuf presence/unknown fields independently of
+  logical JSON views.
   `value_contract/encoded/prepared` caches only bounded immutable overlapping
   schema plans, never live clocks, Target values or comparison decisions;
   decoded Source values may be shared within a comparison. The pure value kernel
   still evaluates every applicable permission and supplied clock independently.
-  `replay/policy/request_contract/mysql_selection` owns immutable SQL selector
+  `policy/runtime/request_contract/mysql_selection` owns immutable SQL selector
   preparation and bounded raw-token reuse; bound parameters and live applicability
   never belong in that cache. Ordinary value selectors and native SQL effects use
   the same `sql_template/table` admission and physical-table binding. Value and
   mixed field ownership checks retain the complete declared table range.
-  `replay/mysql/contracts/preflight_identity` owns derived SQL witness copies for
+  `protocols/replay/mysql/contracts/preflight_identity` owns derived SQL witness copies for
   composed request identity/value planning. Global MySQL scalar declarations and
   global JSON formats share the case identity store for result delivery; no
   separate identity read-back renderer, SELECT template or response-field claim
@@ -668,7 +1249,7 @@ is unclear.
   a Target slot; an unrelated search edge retains Source-only guidance instead
   of aborting discovery or creating an independent Target validation.
   `mysql/sql/lexical_cache` shares only bounded immutable lexer output, including
-  invalid-input results. `replay/mysql/candidates` indexes immutable Case/resource
+  invalid-input results. `protocols/replay/mysql/candidates` indexes immutable Case/resource
   scopes and compatible command families in original inventory order; live
   availability, rule decisions, projection precedence and consumption remain in
   the MySQL matcher.
@@ -690,11 +1271,11 @@ is unclear.
   independent attribution proof; they never change a Replay report or consumption.
   Current-format sessions freeze ownership in `replay/attribution`; legacy API-origin
   discovery and transaction promotion cannot override central scope membership.
-  `replay/mysql/transaction_scope` retains physical Target connection and transaction
+  `protocols/replay/mysql/transaction_scope` retains physical Target connection and transaction
   boundaries without moving later Case requests into another owner's inventory.
 
 - `mysql/savepoint` owns bounded savepoint command parsing and Source name
-  lifetimes. `replay/mysql/savepoints` owns connection-local Source/Target name
+  lifetimes. `protocols/replay/mysql/savepoints` owns connection-local Source/Target name
   bindings, with side-effect-free candidate previews and post-delivery commits.
   `transaction_equivalence/source` retains complete Source interval proof;
   `transaction_equivalence` retains the outer transaction delivery witness and
@@ -707,16 +1288,17 @@ is unclear.
   control. `transaction_ownership` reuses the Source name lifetime proof for
   Global-started intervals and versions its disposable proof cache separately.
 
-- `mysql/isolation` owns closed isolation-setting/probe syntax without expanding
-  the generic session-setup whitelist. `replay/mysql/isolation/source` proves
+- `traffic-protocol-mysql::isolation` owns closed isolation-setting/probe syntax.
+  `traffic-protocol-mysql::isolation_session::source` proves
   original baseline probes and complete override/transaction/restoration scopes
   during preparation, including a complete scope reasserting its known baseline.
   Same-level settings before its first business operation retain exact Source
   references under that one proof; successful real Target completion alone can
   authorize their finite omission alongside restoration.
-  Its parent binds NEXT settings to actual Target sockets,
-  observes successful deliveries through the existing transaction owner and
-  grants only proven Source restoration omission. Its Source proof classifies
+  Its parent binds NEXT settings to actual Target sockets and
+  observes successful deliveries through the native transaction constraints.
+  Replay supplies a read-only view of actual admission and delivery and applies
+  proven Source restoration omissions. The Source proof classifies
   complete read-only scopes; its live owner requires every original read and a
   successful real Target end before allowing an already optional read-only
   Source end to differ between COMMIT and ROLLBACK. Candidate fencing stays in
@@ -727,7 +1309,7 @@ is unclear.
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.
 
-- `replay/redis/append` owns explicitly authorized Case-local APPEND byte
+- `protocols/replay/redis/append` owns explicitly authorized Case-local APPEND byte
   reservations, derived lengths, delivery completion and fingerprint-only range
   audits. Its `trace` child validates complete immutable Source byte order,
   resets and observation fences; `source` reuses that preparation for native
@@ -852,17 +1434,17 @@ is unclear.
   pattern identification waits; `rewrite/regression_scope/recording` validates
   the pin and selectors against that adopted snapshot without rediscovery.
 
-- `config/mysql_tables` owns shared bounded physical-table selection for
-  process-owned reads, SQL-time rules and dynamic identity captures. `replay/policy/sql_template/table`
+- `traffic-protocol-mysql::table_selector` owns shared bounded physical-table selection for
+  process-owned reads, SQL-time rules and dynamic identity captures. `policy/runtime/sql_template/table`
   binds whole table identifiers and qualifiers and checks template intersections; matcher and
   evidence planning retain source/target physical-table equality. CLI table
   bounds live in `bin/backend-rewrite/dependency_rule/mysql_tables`.
   Runtime table-series matching keeps numeric bounds and canonical zero-padding
-  without expanding physical names. `replay/policy/matcher/mysql_selectors`
+  without expanding physical names. `policy/runtime/matcher/mysql_selectors`
   owns immutable per-policy SQL selector compilation shared by observation,
   PREPARE metadata, request-value validation and response-time selection; case
   scope, request anchors, parameter values and consumption remain live state.
-  `replay/policy/matcher/mysql_values` owns pure scalar-slot extraction, binding
+  `policy/runtime/matcher/mysql_values` owns pure scalar-slot extraction, binding
   the Source physical table before extracting Target values for dynamic runtime,
   immutable planning evidence and binding-audit restoration.
 
@@ -906,14 +1488,14 @@ is unclear.
 
 - `redis/wire` owns generic RESP2 Pub/Sub framing; `redis/socketio_rpc` owns the
   bounded Redis-adapter JSON codec without application semantics.
-  `recorder/redis/pubsub` owns confirmed subscription state and its `capture`
-  child persists generic frames; its `evidence` child retains subscription
-  confirmations and same-command Global mirrors without changing Case ownership.
-  `recorder/redis/rpc` retains RPC attribution across connections without
+  `traffic-protocol-redis::capture` owns confirmed subscription state and native
+  connection/exchange projection. The `protocols/redis/pubsub/capture` binding
+  persists generic frames; its `evidence` sibling retains subscription
+  confirmations with their original Case ownership.
+  `protocols/redis/rpc` retains RPC attribution across connections without
   extending a completed PUBLISH's in-flight lifetime. A callback reacquires
   its original Case only while admission remains open; later callbacks retain
-  exact publisher references in Global evidence. `recorder/redis/events`
-  projects connection/exchange records. `replay/redis/pubsub` owns finite push
+  exact publisher references in Global evidence. `protocols/replay/redis/pubsub` owns finite push
   evidence, subscription routing and delivery; its `adapter` child owns
   Socket.IO Redis-adapter identity correlation. Its `echo` child associates exact
   finite Source PUBLISH payloads with recorded self-echo notifications and delivers
@@ -954,7 +1536,7 @@ is unclear.
 - Top-level `http` owns reusable HTTP forwarding policy. `proxy/http` and
   `gateway/http` own their respective runtimes, while `recorder/http` owns
   recorded HTTP case persistence.
-- `replay/policy/request_contract` owns explicit dependency request selectors,
+- `policy/runtime/request_contract` owns explicit dependency request selectors,
   atomic comparison decisions, case-local time/nonce state and protected failed
   request witnesses. Its config and overlap children validate ownership; its
   `key` child owns bounded Redis key-window derivation, shaped key captures,
@@ -962,8 +1544,8 @@ is unclear.
   fingerprint-only planning/audit projection. This is request comparison policy;
   protocol lanes and finite consumption remain with the Redis matcher. Its
   evidence child validates immutable recording witnesses. Redis matching and
-  HTTP matching call it only for case-owned exchanges. `replay/http/multipart`
-  owns bounded multipart parsing; `replay/http/matching` owns HTTP selection.
+  HTTP matching call it only for case-owned exchanges. `protocols/replay/http/multipart`
+  owns bounded multipart parsing; `protocols/replay/http/matching` owns HTTP selection.
   Generated-value feedback and coordinator adapters keep the existing
   evidence/plan/apply/fresh-Replay transaction. Its `read_back` child owns
   explicit same-key Redis write-to-read scalar bindings and derived delivery
@@ -983,7 +1565,7 @@ is unclear.
   and commits them only after all request checks pass. HTTP JSON comparison uses the common
   global value kernel with dependency-local clocks; protected request witnesses
   retain independently observed Target bytes before candidate normalization.
-  `replay/policy/case_condition` owns bounded scalar conditions on immutable
+  `policy/runtime/case_condition` owns bounded scalar conditions on immutable
   inbound Source JSON. Runtime adapters retain matching rule IDs, and evidence
   planners freeze the same request artifact before admitting a conditional
   rule; dependency payloads cannot choose their own inbound branch.
@@ -1006,7 +1588,7 @@ is unclear.
   for the actual unused Case rows from in-memory preparation metadata at
   finalization. It binds the projection to the admitted recording manifest and
   carries it inside the session report.
-  `replay/report/aggregate/runner` validates runner-selected report locations,
+  `protocols/replay/report/aggregate/runner` validates runner-selected report locations,
   session identity and complete shared-session coverage while preserving the
   public recording report discovery boundary. `e2e_run/final_evidence` selects
   the prepared recording witnesses for every case in that session before
@@ -1074,13 +1656,13 @@ is unclear.
   metadata cache grants verification authority.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
-- `replay/assertion/time` adapts response time configuration and diagnostics to
+- `primary_protocol/assertion/time` adapts response time configuration and diagnostics to
   the shared `value_contract/time` formats, fixed windows and precision rules.
   `policy/http_global` owns the one global HTTP header format map;
   `value_contract/http_headers` adapts case-insensitive names and ordered
   occurrences into the shared scalar kernel. Request matching stages its
   identity proposals with body/native proposals before one commit.
-  `replay/http/request_headers` retains general audit evidence, protected-value
+  `protocols/replay/http/request_headers` retains general audit evidence, protected-value
   handling and unselected-header modes. Its time-reference child resolves
   independent request starts; its fingerprint child identifies immutable inputs.
   Ordinary SDK headers retain strict presence and value comparison. Global
@@ -1104,7 +1686,9 @@ is unclear.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
 - `record_service` owns the standalone Source/Recorder supervision and recording
-  lifecycle. Its `options` child projects optional Recorder configuration while
+  lifecycle within `traffic-engine`. Its process supervision, interception,
+  gateway coordination and Kubernetes readiness use the application runtime.
+  Its `options` child projects optional Recorder configuration while
   retaining HTTP rules; `coordination` owns optional Redis discovery/leases and
   best-effort address refresh independently of Source and request supervision;
   `api_policy` loads and validates the gateway's startup JSON using SDK route
@@ -1149,7 +1733,14 @@ is unclear.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and
   diagnostics; CLI entry points delegate to it. `command_output` owns shared
   broken-pipe-safe diagnostic output for those library and CLI callers.
-- `lib.rs` owns application wiring, shared state, and crate exports.
+- The root `lib.rs` reexports the application API.
+  `traffic-e2e-app/src/lib.rs` owns default composition and compatibility wrappers.
+  `traffic-engine/src/lib.rs` owns shared recording and execution state.
+  `traffic-engine/src/execution.rs` owns the injected execution lifecycle.
+  `traffic-rewrite/src` owns the complete coordinator.
+  `traffic-replay-runtime/src/replay` owns live Replay state and execution.
+  Shared `traffic-engine/src/replay` modules own configuration, client contracts,
+  immutable Source inventories and report readers.
   `replay_exports` owns the public Replay contract façade, separating its growing
   policy/assertion/diagnostic API from application-state composition. Feature
   implementations remain in their owned modules.
@@ -1176,52 +1767,52 @@ is unclear.
   Recorder invalidations carry a conservative typed recovery intent separately
   from explanatory JSON; diagnostic presentation never authorizes continuation.
   `recorder/http/dependency` retains HTTP evidence and dependency admission
-  ownership across service cancellation. `replay/http/transport` owns HTTP/TLS
-  delivery and `replay/http/termination` validates and completes zero-response
+  ownership across service cancellation. `protocols/replay/http/transport` owns HTTP/TLS
+  delivery and `protocols/replay/http/termination` validates and completes zero-response
   exchanges. `tcp_gateway/recording` owns gateway evidence persistence.
 - Protocol and semantic modules own parsing, encoding, and interpretation.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
-- `replay/policy/evidence_policy` owns the shared policy fingerprint check for
+- `policy/runtime/evidence_policy` owns the shared policy fingerprint check for
   rule evidence. `e2e_run/evidence` reads runner-selected Replay report identity;
   `rewrite/evidence/policy_freshness` projects read-only diagnostics and routes
   refresh through the existing coordinator command and gates.
-- `replay/policy/config/document.rs` owns the common dependency rule list codec;
+- `policy/runtime/config/document.rs` owns the common dependency rule list codec;
   runtime rule families are partitioned internally without a separate binding section.
-- `replay/policy/dynamic_values` owns bounded case-local MySQL/Redis/HTTP capture and
+- `policy/runtime/dynamic_values` owns bounded case-local MySQL/Redis/HTTP capture and
   correlation; its SQL, HTTP and string adapters normalize comparison copies.
-  Redis captures reuse `replay/redis/key_selector` for exact/affix/numeric key
+  Redis captures reuse `protocols/replay/redis/key_selector` for exact/affix/numeric key
   schema and matching; capture comparison retains complete key equality, while
   generated-value feedback selects exact recording witnesses for broad rules.
   Its audit child owns binding fingerprints and planner reconstruction.
   Its `path_segment` child owns bounded HTTP path templates, shaped fields and
   shared timestamp validation; `path_candidates` owns mechanical path witnesses.
-  `replay/json_order/decode` owns shared bounded, duplicate-rejecting JSON
+  `traffic-codec-json` owns shared bounded, duplicate-rejecting JSON
   decoding for Redis values and dynamic identities.
-  `replay/policy/response_headers` owns header date selectors and validation;
-  `replay/assertion/headers/date` owns parameter/date comparison and candidates.
-  `replay/policy/feedback/generated_values` owns immutable witness checks and
+  `traffic-policy-schema::response_headers` owns header date selectors and validation;
+  `primary_protocol/assertion/headers/date` owns parameter/date comparison and candidates.
+  `policy/runtime/feedback/generated_values` owns immutable witness checks and
   policy edits, with separate identity and header evidence children.
   `rewrite/rule/generated_values` owns coordinator plan/apply adaptation,
   `rewrite/evidence/rule_guidance/generated_values` owns diagnostic hints, and
   `bin/backend-rewrite/rule_args` owns the corresponding CLI inputs.
-- `replay/redis/snapshot_seed` owns marked Global seed admission against current
+- `protocols/replay/redis/snapshot_seed` owns marked Global seed admission against current
   process-owned request selectors, including historical revision-bound names.
   `snapshot_overlay` reuses that name compatibility with complete immutable
   coverage and response-consistency validation; recorded provenance is unchanged.
-- `replay/redis/matching` owns command selection and source-lane order
-  diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
+- `protocols/replay/redis/matching` owns command selection and source-lane order
+  diagnostics. `protocols/replay/redis/connection_scope` distinguishes ordinary pool
   reuse (including server-side script execution and cache operations) from
   recorded stateful lanes and owns their exclusive target connection
-  claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
-  `replay/redis/cross_case` owns finite sharing of source-proven Redis reads
+  claims; runtime Redis I/O and session setup remain in `protocols/replay/redis/mod.rs`.
+  `protocols/replay/redis/cross_case` owns finite sharing of source-proven Redis reads
   across cases in one completed recording. Its indexed load and proof paths
   dispatch the original event type before decoding exchanges; notification
   frames retain their Pub/Sub owner and have no invented request sequence.
   Policy feedback owns promotion of
   the corresponding time-shift rule.
-  `replay/redis/request_identity` owns the native request fingerprint shared by
+  `protocols/replay/redis/request_identity` owns the native request fingerprint shared by
   Replay admission and authenticated unmatched-request diagnostics.
 - `http/rewrite/json_urls` owns JSON Pointer URL substitution and discovered
   HTTP routes. Recorder configuration owns concise rule validation and the
@@ -1549,12 +2140,12 @@ explicit repository-wide audit.
   capability limits, shared by value policies, identity normalization and
   statement parsing; cache admission remains a separate responsibility. Its
   `projection` child resolves bounded single-table SELECT fields, aliases and row-selection clauses without owning
-  recorded evidence. `replay/mysql/projection.rs` validates evidence and maps
+  recorded evidence. `protocols/replay/mysql/projection.rs` validates evidence and maps
   result columns and cells onto the target projection; the matcher retains
   identity, policy and exchange-consumption decisions.
-  `replay/mysql/session_setup.rs` owns builtin
+  `protocols/replay/mysql/session_setup.rs` owns builtin
   initialization recognition; `sql_match.rs` owns text/prepared correlation.
-  `replay/mysql/sql_match/predicate` uses sqlparser's MySQL grammar and owns
+  `protocols/replay/mysql/sql_match/predicate` uses sqlparser's MySQL grammar and owns
   bounded pure-predicate equivalence for single-table SELECTs and strict-envelope
   direct-table JOIN SELECTs; `sql_match/cache` owns Replay-local
   compiled templates, constant normalization and fresh parameter binding.
@@ -1568,11 +2159,11 @@ explicit repository-wide audit.
   matching. Tuple fields are never normalized as independent sets.
   These do not change shared SQL normalization or ownership/policy selectors.
   The matcher checks live scope, dynamic policy and finite exchange availability
-  on every call, while `replay/mysql/projection` validates and projects the
+  on every call, while `protocols/replay/mysql/projection` validates and projects the
   delivered resultset and PREPARE metadata.
   `mysql/autocommit` recognizes single literal session assignments shared by
   Replay protocol handling and evidence classification.
-  `replay/mysql/optional_session` classifies optional transaction setup and
+  `protocols/replay/mysql/optional_session` classifies optional transaction setup and
   cleanup from immutable connection sequence/status evidence; its `read` child
   owns bounded query classification with common locking/side-effect exclusions,
   independently of SQL equivalence. It owns compact immutable Global read-span
@@ -1586,9 +2177,9 @@ explicit repository-wide audit.
   read-only span, including retained zero-effect COM_PING continuity witnesses.
   Case-local completed read spans may restart across consistent inactive
   boundaries; active-transaction gaps and Global post-read gaps remain strict.
-  `replay/mysql/transaction_equivalence/source` separately proves complete
+  `traffic-protocol-mysql::transaction_source` separately proves complete
   ordinary implicit read/write transaction segments, their write counts and
-  first-write-through-end windows, retaining unsafe-evidence reasons. Its sibling
+  first-write-through-end windows, retaining unsafe-evidence reasons. Its child
   `source_evidence` stores immutable Global ordinary-read identity/status facts,
   without SQL/result bodies or consumption rights. It can bridge only a Case's
   pre-write active sequence gap in an established implicit span with complete,
@@ -1598,15 +2189,17 @@ explicit repository-wide audit.
   witnesses. The Source scanner may resume at a later
   independently known inactive start; earlier rejected spans remain diagnosed
   and connection-level incompleteness still prevents setup omission. Its
-  `source/error_rollback` child retains a complete contiguous active prefix,
+  `error_rollback` child retains a complete contiguous active prefix,
   native DML ERR without status flags, and immediate successful plain ROLLBACK
   as a strict segment. It requires known inactive Source boundaries and exact
   identity/sequence continuity, never fills gaps with Global reads or infers
   missing ERR flags. The existing explicit physical Target transaction witness
   must deliver every prefix member, the error and the real end in order; this
-  proof grants neither autocommit equivalence nor end omission. Its parent
-  owns connection-local Target BEGIN/end witnesses, ordered finite Source window
-  correspondence and delivery-confirmed setup coverage. Multi-write windows
+  proof grants neither autocommit equivalence nor end omission.
+  `traffic-protocol-mysql::transaction_delivery` owns connection-local Target
+  BEGIN/end witnesses, ordered Source window correspondence and native setup
+  coverage constraints. The Replay adapter supplies actual wire receipts and
+  shared rule comparison, then updates finite inventory and reports. Multi-write windows
   include every read after the first write, through the actual matching end.
   Preceding reads remain finite ordinary dependencies. The live matcher
   rejects a required member on an inactive autocommitting
@@ -1635,7 +2228,7 @@ explicit repository-wide audit.
   proof facts; Source-only prewarming cannot provide a Target witness.
   `rewrite/evidence/mysql_diagnosis` projects targeted Source/Target transaction
   guidance without asserting ownership or a capability gap from unused counts.
-  `replay/mysql/cleanup_selection` owns immutable scope/end/predecessor indexes
+  `protocols/replay/mysql/cleanup_selection` owns immutable scope/end/predecessor indexes
   and gives a required transaction end precedence over identical optional cleanup
   only after its immediately preceding recorded exchange has been consumed.
   Availability and consumption remain live checks; end selection does not rebuild
@@ -1660,12 +2253,12 @@ explicit repository-wide audit.
   construction of engine evidence plans; its parent owns coordinator rule
   lifecycle and state transitions. `config/process_owned_dependencies/mysql/evidence.rs`
   owns correlation of bounded MySQL report summaries with complete immutable
-  exchanges, shared by planning and `replay/report/background_overlay/mysql.rs`.
+  exchanges, shared by planning and `protocols/replay/report/ownership/mysql.rs`.
   That Replay adapter owns reversible MySQL report reclassification only; its
   parent reads immutable case dependencies once for all protocol projections.
-  `config/mysql_tables.rs` owns physical table selector
+  `traffic-protocol-mysql::table_selector` owns physical table selector
   validation, matching, and intersection independently of SQL template expansion.
-- `replay/redis/pubsub/echo/window` proves disjoint finite Source publication
+- `protocols/replay/redis/pubsub/echo/window` proves disjoint finite Source publication
   intervals for repeated identical adapter broadcasts. Echo preparation caches
   these intervals before Target admission; protocol matching and actual delivery
   retain finite ownership. `dependency_index/global` and the Pub/Sub inventory
@@ -1694,24 +2287,24 @@ explicit repository-wide audit.
   MySQL calls. It distinguishes call-consumption facts from unresolved source
   ownership and rule discovery; matching and omission decisions remain with Replay.
 
-- `replay/policy/matcher/mysql_values` owns explicit scalar and exact nested-JSON
+- `policy/runtime/matcher/mysql_values` owns explicit scalar and exact nested-JSON
   SQL time-location validation across text and prepared calls. It shares the fixed
-  request-relative timestamp comparator in `replay/assertion/time` through
-  `replay/policy/value`, and consumes the case anchors owned by
-  `replay/policy/request_contract`. Snapshot case reports publish the captured
+  request-relative timestamp comparator in `primary_protocol/assertion/time` through
+  `policy/runtime/value`, and consumes the case anchors owned by
+  `policy/runtime/request_contract`. Snapshot case reports publish the captured
   request times for evidence-backed planning. It reuses
-  `replay/mysql/sql_match` value
+  `protocols/replay/mysql/sql_match` value
   materialization; the MySQL matcher retains identity and finite consumption.
   SQL time metadata previews allow unbound placeholders only during prepare;
   execution retains time and stable-value validation for SELECT and writes.
-  `replay/mysql/sql_match` also proves exact bound-token equality between two
+  `protocols/replay/mysql/sql_match` also proves exact bound-token equality between two
   prepared forms independently of semantic predicate support; projection owns
   materialized result-column metadata and delivery adaptation.
-  `replay/policy/sql_template` owns pure bounded template extraction, and
-  `replay/policy/config/mysql` owns rule-schema validation. Its sibling
+  `policy/runtime/sql_template` owns pure bounded template extraction, and
+  `policy/runtime/config/mysql` owns rule-schema validation. Its sibling
   `config/mysql_time` owns compact relative-time defaults and legacy syntax conversion;
   the policy document renderer keeps SQL value maps on one line.
-  `replay/policy/feedback/mysql_time` owns atomic policy plan/apply; its evidence
+  `policy/runtime/feedback/mysql_time` owns atomic policy plan/apply; its evidence
   child correlates immutable writes. Coordinator dependency rules persist the plan
   and invalidate validation without changing dependency ownership.
   `feedback/generated_values/mysql_time` jointly proves explicitly selected
@@ -1772,10 +2365,10 @@ explicit repository-wide audit.
   ordinary value decoding uses the shared 64 MiB bound. `dependency/http_limits` owns
   the 64 MiB raw-body and derived HTTP witness/record byte budgets, shared by
   recording defaults, Replay, Source proof and dependency diagnostics.
-- `replay/policy/response/jwt` owns explicit JWT response selectors, response-only
+- `traffic-policy-schema::response::jwt` owns explicit JWT response selectors, response-only
   algorithms, typed public/startup key references and companion time fields.
   Its `key_source` child validates exact recorded MySQL selectors; `input`
-  provides bounded field-specific CLI diagnostics. `replay/assertion/jwt/keys`
+  provides bounded field-specific CLI diagnostics. `primary_protocol/assertion/jwt/keys`
   resolves startup keys or one immutable case-local recorded public key;
   `rsa` authenticates RS256 signatures without request transformation, and
   `companions` validates signed iat/exp and TTL derivations. The shared pure
@@ -1787,11 +2380,11 @@ explicit repository-wide audit.
   the existing coordinator rule transaction. JSON subtree ownership remains
   in `response/json_validation` and the shared pointer-overlap validator.
 
-- `replay/policy/response/json_pointer` owns JSON response selector validation,
+- `traffic-policy-schema::location` owns JSON response selector validation,
   array expansion, evidence matching, and subtree overlap checks. The assertion
   comparator owns value comparison and rule applicability using those resolved
   locations; feedback keeps plan/apply evidence validation and persistence.
-- `replay/policy/response/time_rule` owns explicit timestamp-format, comparison-mode and duration-unit
+- `traffic-policy-schema::response::time_rule` owns explicit timestamp-format, comparison-mode and duration-unit
   contracts. `value_contract/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
   `feedback/time_plan` preflights proposed response time rules with this same
@@ -1799,16 +2392,16 @@ explicit repository-wide audit.
   `rewrite/plan_recovery` retires unavailable or policy-stale pending plans
   without applying them. SQL-time recovery mirrors the dynamic-binding policy
   admission condition and requests fresh Replay only for the plan's owner slice.
-- `replay/assertion/docx` owns bounded OPC ZIP expansion and DOCX part comparison.
+- `primary_protocol/assertion/docx` owns bounded OPC ZIP expansion and DOCX part comparison.
   ZIP timestamps, compression choices, entry order, and offsets are container
   metadata; configured XML timestamp elements reuse request-relative time
   validation, while unselected decompressed parts remain exact.
-  `replay/policy/feedback/response_body/docx_plan` owns evidence-backed DOCX
+  `policy/runtime/feedback/response_body/docx_plan` owns evidence-backed DOCX
   plan construction, while the sibling `plan_apply` owns shared atomic apply
   and offline re-verification for every structured response-body codec.
 
-- `replay/http/recording` owns bounded standard-run HTTP evidence traversal;
-  `replay/http/diagnosis` owns read-only published HTTP request queries and
+- `protocols/replay/http/recording` owns bounded standard-run HTTP evidence traversal;
+  `protocols/replay/http/diagnosis` owns read-only published HTTP request queries and
   protocol envelope projection; its `observations` child selects authenticated
   identities before expanding one requested pair. `rewrite/evidence/http_requests`
   binds query cursors to the API issue and published report and returns commands.
@@ -1816,45 +2409,47 @@ explicit repository-wide audit.
   rule-aware residuals come from the existing runtime value-contract comparator.
   `policy_evidence` retains authenticated independent Target reads, including
   orphan requests, without turning candidate associations into successful matches.
-  `replay/http/selector` owns exact dependency endpoint selection, and
-  `replay/http/identity` owns request fingerprints and canonical JSON identity.
-  `replay/http/cross_case` owns finite HTTP sharing and
+  `protocols/replay/http/selector` owns exact dependency endpoint selection, and
+  `protocols/replay/http/identity` owns request fingerprints and canonical JSON identity.
+  `protocols/replay/http/cross_case` owns finite HTTP sharing and
   post-failure request correlation. Its `evidence` child owns bounded discovery and its
-  disposable cache. `replay/policy/feedback/http_cross_case` owns strict policy
+  disposable cache. `policy/runtime/feedback/http_cross_case` owns strict policy
   plan/apply. Coordinator dependency rules own dispatch, source proof and
   verification invalidation; neither matcher nor evidence loader changes
   recorded files, target state, or coordinator completion.
-  `replay/http/request_headers` owns post-match outbound request-header auditing,
+  `protocols/replay/http/request_headers` owns post-match outbound request-header auditing,
   its built-in exclusions, and protected difference observations. It does not
   select exchanges or change response delivery. `request_headers` retains
   encryption ownership, including dependency-header decryption; dependency
   reports and aggregation own dirty propagation and bounded diagnosis.
 
-- `replay/http/unordered` retains bounded order-difference diagnostics over
+- `protocols/replay/http/unordered` retains bounded order-difference diagnostics over
   immutable Source and independent Target request evidence. Collection semantics
   come from global `json.fields` and the shared whole-element comparator. This
   diagnostic adapter never authorizes matching, shares exchanges or changes
   finite consumption.
 
-- `replay/redis/value` owns conservative JSON equality for complete string-write
+- `protocols/replay/redis/value` owns conservative JSON equality for complete string-write
   arguments and bounded collection-order diagnostics. Its selector types describe
   observations only; they do not define policy or an alternative matcher. Global
   `json.fields` and the shared content kernel own value permissions. Unknown
   payloads remain exact bytes. Redis matching retains keys, lanes and finite
   consumption; native usage accounting covers its remaining stateful effects.
-- `replay/json_order` owns shared dependency JSON object identity and explicit
-  array normalization; HTTP identity and Redis values consume it.
+- `traffic-codec-json::canonical` owns stable native JSON document fingerprints.
+  `traffic-policy-unordered` owns collection canonical values. HTTP and Redis
+  compatibility adapters invoke the installed policy through the bounded
+  `traffic-policy-value::diagnosis` traversal.
   `replay/recording_evidence` owns standard-run evidence file boundaries shared
-  by protocol-specific visitors. `replay/assertion/protobuf/wire` owns bounded
+  by protocol-specific visitors. `primary_protocol/assertion/protobuf/wire` owns bounded
   binary decoding; its `unordered_evidence` sibling exposes typed order witnesses
   without authorizing a schema or a rule.
 
-- `replay/redis/shared_read` owns key/hash selection for finite shared reads.
+- `protocols/replay/redis/shared_read` owns key/hash selection for finite shared reads.
   It does not interpret response values. Global JSON delivery and the physical
   write/read provenance store own temporal copies; there is no separate Redis
   JSON timestamp renderer or authored lock behavior.
-  `replay/redis/key_selector` owns physical key/hash selectors and
-  `replay/redis/json` owns bounded duplicate-rejecting JSON decoding.
+  `protocols/replay/redis/key_selector` owns physical key/hash selectors and
+  `protocols/replay/redis/json` owns bounded duplicate-rejecting JSON decoding.
 
 - `policy/redis_global` owns physical scalar key patterns. The shared identity
   store and `request_contract/redis_fields/keys` relate complete values across
@@ -1872,7 +2467,7 @@ explicit repository-wide audit.
   issue, immutable inventory and attempt. Omitted overview rows cannot establish
   absence of a failure or borrow another Case's rejection.
 
-- `replay/assertion/interaction/socketio` adapts each Socket.IO business argument
+- `primary_protocol/assertion/interaction/socketio` adapts each Socket.IO business argument
   to the existing global JSON kernel at its own root. It keeps packet metadata,
   event names, argument order and binary attachment declarations strict. Source
   preflight, independent Target proof and final assertions share this adapter.
@@ -1891,7 +2486,7 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
-  `replay/redis/admission` owns bounded waits for initial expiry-refresh
+  `protocols/replay/redis/admission` owns bounded waits for initial expiry-refresh
   predecessors and earlier activity GETs that have been claimed but have not
   finished delivery. `redis/activity/read_barrier` owns the same-lifetime,
   rule-bound activity predecessor check; admission preserves the original SET
@@ -1906,7 +2501,7 @@ explicit repository-wide audit.
   the parent keeps script/key/envelope and unselected argument checks. It does
   not execute Lua or grant new native permissions.
 
-- `replay/policy/request_contract/global_value` adapts global JSON comparison
+- `policy/runtime/request_contract/global_value` adapts global JSON comparison
   and typed identity delivery to protocol callers. Its `identity` child creates
   isolated, bounded delivery views containing the selected request's staged
   identity proposals. Response echoes resolve those proposals before publication;
@@ -1937,7 +2532,7 @@ explicit repository-wide audit.
   Delivery adapters reconstruct only those selected slots. API encryption
   bindings retain private key snapshots and IV relationships; decoded plaintext
   without legacy overrides reuses the global JSON comparator.
-- `replay/http/multipart` owns bounded protocol equivalence for complete Source
+- `protocols/replay/http/multipart` owns bounded protocol equivalence for complete Source
   form-data. Matching, final header audits and protected witness verification
   share its parser; it does not change recorded bytes, other headers, finite
   consumption or cross-case sharing fingerprints.
@@ -1947,7 +2542,7 @@ explicit repository-wide audit.
   I/O; Replay and plan initialization resolve the existing managed key snapshots
   once. `policy/authoring/signatures` lowers API token locations to the existing
   JWT/MD5 owners and renders only lossless generated shapes. Global JWT leaves
-  reuse authenticated parsing and NumericDate comparison in `request_rules/jwt`,
+  reuse authenticated parsing and NumericDate comparison in `traffic-jwt`,
   then compare claims through the shared JSON policy and publish complete token
   and claim identity proposals atomically. Global formats allow historical
   tokens; explicitly generated native responses retain their issuance checks.
@@ -1968,17 +2563,19 @@ explicit repository-wide audit.
   nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do
   not enter errors or reports.
   `policy/time_scope` validates explicit shared, array-element and identity-bound
-  clock scopes. `value_contract/json/clock_scope` resolves immutable array
-  coordinates or identity fingerprints; the existing comparison owner retains
-  relation budgets and cross-message validation.
+  clock scopes. `traffic-contract::compare::scope` resolves immutable array
+  coordinates or identity fingerprints. Registered temporal observation state
+  owns relationship budgets and cross-message validation.
   `value_contract/identities` owns bounded case/domain renaming proposals,
   equality and injectivity, and historical input anchors. The request-contract
   identity adapter commits accepted proposals and translates only declared
   physical leaves. MySQL result and Redis RESP owners retain wire framing and
   publish complete delivery batches before bytes become visible. The private
-  `replay/control/identity` bridge joins runner-owned response constraints to
-  dependency state before case cleanup; generated tokens never enter reports.
-- `replay/policy/native_projection` translates typed effects to existing domain
+  `value_contract/response_constraints` client and request-contract service join
+  runner-owned response constraints to dependency state before case cleanup.
+  Replay's extension dispatcher supplies active-case isolation and bounded
+  transport for these application-owned operations.
+- `policy/runtime/native_projection` translates typed effects to existing domain
   data. Its SourceSession exercises a complete immutable Source trace in private
   state; it cannot claim live Target work or certify Target correctness.
 - Protocol adapters keep envelope/session/lane/transaction/claim/delivery and
@@ -2011,7 +2608,7 @@ explicit repository-wide audit.
   response effects retain explicit body/header ownership. Preflight and Replay
   keep interaction body contracts inactive without weakening message assertions
   or dropping header date/JWT validation.
-  `replay/assertion/interaction/contracts` owns the explicit SSE envelope/data
+  `primary_protocol/assertion/interaction/contracts` owns the explicit SSE envelope/data
   adapter shared by Source/Target preflight and Replay; `value_contract/json/identity`
   owns pure payload identity comparisons, while the case store retains accepted
   relationships across physical observations. Policy SSE slots retain separate

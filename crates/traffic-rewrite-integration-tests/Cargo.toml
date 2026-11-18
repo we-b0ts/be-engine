@@ -1,0 +1,29 @@
+[package]
+name = "traffic-rewrite-integration-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+traffic-rewrite-agents = { path = "../traffic-rewrite-agents" }
+traffic-rewrite-review = { path = "../traffic-rewrite-review" }
+tempfile = "3"
+traffic-rewrite-evidence = { path = "../traffic-rewrite-evidence", features = ["test-support"] }
+traffic-rewrite-rules = { path = "../traffic-rewrite-rules", features = ["test-support"] }
+traffic-rewrite-runtime = { path = "../traffic-rewrite-runtime" }
+traffic-rewrite-model = { path = "../traffic-rewrite-model", features = ["test-support"] }
+traffic-engine = { path = "../traffic-engine", features = ["test-support"] }
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = { version = "9.3", default-features = false }
+sha2 = "0.10"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full", "test-util"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+traffic-protocol-mysql = { path = "../traffic-protocol-mysql", features = ["test-support"] }
+md-5 = "0.10"
+traffic-rewrite = { path = "../traffic-rewrite", features = ["test-support"] }

@@ -180,6 +180,7 @@ struct StartupRecaptureArgs {
 }
 
 fn main() -> ExitCode {
+    traffic_e2e::initialize_application();
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

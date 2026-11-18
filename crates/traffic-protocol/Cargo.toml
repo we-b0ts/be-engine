@@ -1,0 +1,18 @@
+[package]
+name = "traffic-protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+traffic-model = { path = "../traffic-model" }
+anyhow = "1"
+bytes = "1"
+chrono = "0.4"
+http = "1"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "net", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }

@@ -1,0 +1,24 @@
+[package]
+name = "traffic-engine-environment"
+version = "0.1.0"
+edition = "2024"
+description = "Managed Source snapshots and startup environment contracts"
+
+[features]
+test-support = ["dep:tempfile"]
+
+[dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+dotenvy = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+tempfile = { version = "3", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+traffic-engine = { path = "../traffic-engine" }
+tempfile = "3"

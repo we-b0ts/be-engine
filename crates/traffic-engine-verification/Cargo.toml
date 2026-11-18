@@ -1,0 +1,69 @@
+[package]
+name = "traffic-engine-verification"
+version = "0.1.0"
+edition = "2024"
+description = "Primary input and response policy verification"
+
+[features]
+test-support = ["dep:tempfile", "traffic-engine-replay/test-support", "traffic-engine-policy/test-support"]
+
+[dependencies]
+traffic-engine-replay = { path = "../traffic-engine-replay" }
+traffic-engine-evidence = { path = "../traffic-engine-evidence" }
+traffic-engine-config = { path = "../traffic-engine-config" }
+traffic-recording-model = { path = "../traffic-recording-model" }
+traffic-engine-policy = { path = "../traffic-engine-policy" }
+traffic-engine-environment = { path = "../traffic-engine-environment" }
+traffic-policy-content = { path = "../traffic-policy-content" }
+traffic-policy-generated = { path = "../traffic-policy-generated" }
+traffic-policy-execution = { path = "../traffic-policy-execution" }
+traffic-policy-compiler = { path = "../traffic-policy-compiler" }
+traffic-jwt = { path = "../traffic-jwt" }
+traffic-policy-schema = { path = "../traffic-policy-schema", features = ["cli"] }
+traffic-contract = { path = "../traffic-contract" }
+traffic-policy-value = { path = "../traffic-policy-value" }
+traffic-value = { path = "../traffic-value" }
+traffic-codec-protobuf = { path = "../traffic-codec-protobuf" }
+traffic-extensions = { path = "../traffic-extensions" }
+traffic-model = { path = "../traffic-model" }
+traffic-protocol = { path = "../traffic-protocol" }
+traffic-protocol-http = { path = "../traffic-protocol-http" }
+traffic-protocol-mysql = { path = "../traffic-protocol-mysql" }
+traffic-protocol-redis = { path = "../traffic-protocol-redis" }
+aes-gcm = "0.10"
+anyhow = "1"
+base64 = "0.22"
+# Recorder leases remain compatible with gateway 0.2.14. Later SDKs pull
+# brz-json/preserve_order into the engine and change persisted JSON identities.
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
+futures-util = { version = "0.3", features = ["sink"] }
+hmac = "0.12"
+jsonwebtoken = { version = "9.3", default-features = false }
+md-5 = "0.10"
+sha2 = "0.10"
+subtle = "2"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", "tokio"] }
+motan-codec = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
+motan-breeze = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
+motan-hessian2 = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4", default-features = false }
+motan-protocol = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
+motan-simple = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = { version = "3", optional = true }
+
+
+[dev-dependencies]
+motan-json = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
+tempfile = "3"
