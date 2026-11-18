@@ -44,7 +44,7 @@ The coordinator uses the current evidence ID and source-backed selector:
 backend-rewrite --target-root /path/to/target dependency-rule plan http cross-case \
   --evidence-id <returned-evidence-id> \
   --rule-id erp-client-token \
-  --host agent.erp.sample.test --port 80 \
+  --host agent.example.test --port 80 \
   --method POST --path /api/oauth/client-token \
   --source-evidence 'wecode/service/erp_client.py:ErpClient._ensure_token stores a shared token until expiry'
 ```
@@ -69,7 +69,7 @@ dependency_rules:
     source_evidence: 'wecode/service/erp_client.py:ErpClient._ensure_token stores a shared token until expiry'
     protocol: http
     target:
-      host: agent.erp.sample.test
+      host: agent.example.test
       port: 80
     http:
       method: POST

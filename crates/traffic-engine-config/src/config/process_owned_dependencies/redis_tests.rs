@@ -83,7 +83,7 @@ fn event(host: &str, port: u16, command: &str, key: &str) -> RecorderEvent {
 fn matches_ports_command_and_key_shape_without_domain_identity() {
     let rule = rule();
     assert!(rule.matches(&event(
-        "rs20917.hebe.grid.sample.test",
+        "redis-20917.example.test",
         20917,
         "ZCOUNT",
         "1042015:202607:financeStock.wtm2",
@@ -95,19 +95,19 @@ fn matches_ports_command_and_key_shape_without_domain_identity() {
         "1042015:202608:other.wtm2",
     )));
     assert!(!rule.matches(&event(
-        "rs20920.hebe.grid.sample.test",
+        "redis-20920.example.test",
         20920,
         "ZCOUNT",
         "1042015:202607:financeStock.wtm2",
     )));
     assert!(!rule.matches(&event(
-        "rs20917.hebe.grid.sample.test",
+        "redis-20917.example.test",
         20917,
         "GET",
         "1042015:202607:financeStock.wtm2",
     )));
     assert!(!rule.matches(&event(
-        "rs20917.hebe.grid.sample.test",
+        "redis-20917.example.test",
         20917,
         "ZCOUNT",
         "1042015:202607:financeStock.other",

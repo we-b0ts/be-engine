@@ -31,7 +31,7 @@ impl Fixture {
                 "{}\n",
                 json!({
                     "event_type": "redis_exchange",
-                    "target_host": "rs20917.hebe.grid.sample.test",
+                    "target_host": "redis-20917.example.test",
                     "target_port": 20917,
                     "command": "ZCOUNT",
                     "args": [capture(key), capture("1550.0"), capture("1.7976931348623157E308")],
@@ -98,7 +98,7 @@ fn report(dependencies: &Path) -> Value {
                 "index": 0,
                 "case_id": "case-a",
                 "target": {
-                    "host": "rs20917.hebe.grid.sample.test",
+                    "host": "redis-20917.example.test",
                     "port": 20917,
                 },
                 "command": "ZCOUNT",
@@ -435,7 +435,7 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
         args.extend(fields.into_iter().map(capture));
         json!({
             "event_type": "redis_exchange",
-            "target_host": "rs50600.eos.grid.sample.test",
+            "target_host": "redis-50600.example.test",
             "target_port": 50600,
             "command": command,
             "args": args,

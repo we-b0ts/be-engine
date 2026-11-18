@@ -32,7 +32,7 @@ without a hint or `applicable_rule_planners` entry:
 ```bash
 backend-rewrite --target-root /path/to/target dependency-rule plan redis time-shift \
   --evidence-id <current-dirty-cluster-evidence-id> --rule-id tauth-token-time \
-  --host rm7455.eos.grid.sample.test --port 7455 \
+  --host redis-7455.example.test --port 7455 \
   --command HGET --key token_v2 --hash-field 3061639762 \
   --json-pointer /timestamp --timestamp-format unix-milliseconds \
   --source-evidence 'app/services/tauth.py:67 _is_token_valid: timestamp is Unix milliseconds; age < 3h gates cache reuse; timestamp is not signed'
@@ -71,7 +71,7 @@ There is no new recording, offline failure reclassification or acceptance on app
 dependency_rules:
   - id: tauth-token-time
     protocol: redis
-    target: {host: rm7455.eos.grid.sample.test, port: 7455}
+    target: {host: redis-7455.example.test, port: 7455}
     redis:
       command: HGET
       key: token_v2
