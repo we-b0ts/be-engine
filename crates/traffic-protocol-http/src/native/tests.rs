@@ -1,7 +1,7 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use traffic_protocol::{
-    connection::{ConnectionIo, NativeFuture, RequestHost, ResponseDelivery, ResponseFramer},
+    connection::{NativeFuture, RequestHost, ResponseDelivery, ResponseFramer},
     message::{MessageEncoder, ProtocolMessage},
 };
 
@@ -30,7 +30,7 @@ impl RequestHost for Host {
 impl ResponseDelivery for Delivery {
     fn write<'a>(
         self: Box<Self>,
-        io: &'a mut dyn ConnectionIo,
+        io: &'a mut dyn traffic_protocol::connection::OutputIo,
         framer: &'a mut dyn ResponseFramer,
     ) -> NativeFuture<'a, ()> {
         Box::pin(async move {
@@ -166,7 +166,11 @@ async fn native_capture_persists_protocol_owned_data_that_can_project_for_replay
         .unwrap()
         .unwrap();
     assert_eq!(exchange.endpoint.host, "api.test");
-    let request = exchange.request.project().unwrap();
+    let request = exchange
+        .request()
+        .expect("native request")
+        .project()
+        .unwrap();
     assert_eq!(request.values["/body"].bytes.as_ref(), br#"{"id":42}"#);
     assert_eq!(
         exchange.response.project().unwrap().values["/body"]

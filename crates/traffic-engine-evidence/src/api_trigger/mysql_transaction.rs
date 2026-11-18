@@ -74,7 +74,7 @@ pub(super) fn associate(
     let mut invalid = BTreeSet::new();
     for (file_index, file) in files.iter().enumerate() {
         let case = file.scope_key()?;
-        for record in file.index.mysql.iter().flatten() {
+        for record in file.index.records("mysql") {
             if !owners.values().any(|r| matches!(r, BackgroundDependencyRuleConfig::Mysql {selector,..}
                 if record.summary["target_host"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&selector.target_host))
                     && record.summary["target_port"].as_u64()==Some(u64::from(selector.target_port))

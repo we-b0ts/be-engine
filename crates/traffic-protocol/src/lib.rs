@@ -329,6 +329,14 @@ impl<Kind: Copy + PartialEq> ProviderRegistry<Kind> {
         );
         self.evidence.register(name, adapter)
     }
+
+    pub fn register_evidence_index_fallback(
+        &mut self,
+        name: &str,
+        adapter: std::sync::Arc<dyn evidence::EvidenceAdapter>,
+    ) -> anyhow::Result<()> {
+        self.evidence.register_index_fallback(name, adapter)
+    }
 }
 
 #[cfg(test)]

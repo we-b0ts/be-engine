@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use traffic_model::recording::ProtocolRef;
 use traffic_protocol::message::{MessageEncoder, ProjectedMessage, ProjectedValue};
+mod emissions;
 
 const PROTOCOL: ProtocolId = ProtocolId::new("external-protocol");
 struct Message(&'static str);
@@ -45,7 +46,9 @@ fn inventory(source: ReplaySource) -> ExchangeInventory {
                     endpoint: endpoint(),
                     lane: Some("native-session".into()),
                     response_delay: std::time::Duration::ZERO,
-                    request: Arc::new(Message(value)),
+                    input: traffic_protocol::connection::RecordedInput::Request(Arc::new(Message(
+                        value,
+                    ))),
                     response: Arc::new(Message(value)),
                 },
                 SourceContext {
@@ -66,6 +69,8 @@ fn select(inventory: &ExchangeInventory, source: ReplaySource, value: &'static s
     inventory
         .select(
             MatchContext {
+                session: None,
+                lane: None,
                 protocol: PROTOCOL,
                 endpoint: &endpoint(),
                 active_case: (source == ReplaySource::Case).then_some("case"),
@@ -155,7 +160,9 @@ fn native_reference_resolution_retains_case_ownership_and_rejects_ambiguity() {
                 endpoint: endpoint(),
                 lane: None,
                 response_delay: std::time::Duration::ZERO,
-                request: Arc::new(Message("duplicate")),
+                input: traffic_protocol::connection::RecordedInput::Request(Arc::new(Message(
+                    "duplicate",
+                ))),
                 response: Arc::new(Message("duplicate")),
             },
             SourceContext {
@@ -181,6 +188,8 @@ fn comparison_observers_receive_failed_candidates_without_consuming_their_invent
     let selected = inventory
         .select_observed(
             MatchContext {
+                session: None,
+                lane: None,
                 protocol: PROTOCOL,
                 endpoint: &endpoint(),
                 active_case: Some("case"),
@@ -207,6 +216,8 @@ fn comparison_observers_receive_failed_candidates_without_consuming_their_invent
     );
     let failed = inventory.select_observed(
         MatchContext {
+            session: None,
+            lane: None,
             protocol: PROTOCOL,
             endpoint: &endpoint(),
             active_case: Some("case"),

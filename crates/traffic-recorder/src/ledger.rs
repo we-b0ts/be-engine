@@ -152,6 +152,25 @@ impl CaptureRegistry {
         observed_case: Option<Uuid>,
         admitted_case: Option<Uuid>,
     ) -> Option<CaptureReservation> {
+        self.begin_interaction(phase, observed_case, admitted_case, false)
+    }
+
+    pub fn begin_message(
+        &self,
+        phase: CapturePhase,
+        observed_case: Option<Uuid>,
+        admitted_case: Option<Uuid>,
+    ) -> Option<CaptureReservation> {
+        self.begin_interaction(phase, observed_case, admitted_case, true)
+    }
+
+    fn begin_interaction(
+        &self,
+        phase: CapturePhase,
+        observed_case: Option<Uuid>,
+        admitted_case: Option<Uuid>,
+        message: bool,
+    ) -> Option<CaptureReservation> {
         let exchange_id = Uuid::new_v4();
         let started_at = Utc::now();
         let mut state = self.0.state.lock().expect("capture registry poisoned");
@@ -159,19 +178,24 @@ impl CaptureRegistry {
             state.inventory_gaps = true;
             return None;
         }
-        let started = self
-            .0
-            .writer
-            .clock
-            .begin_dependency(|sequence| LifecycleRecord::Started {
-                exchange_id,
-                dependency_sequence: sequence,
-                process_epoch: self.0.process_epoch,
-                phase,
-                observed_case,
-                admitted_case,
-                started_at,
-            });
+        let started = self.0.writer.clock.begin_dependency(|sequence| {
+            if message {
+                LifecycleRecord::MessageStarted {
+                    exchange_id,
+                    dependency_sequence: sequence,
+                }
+            } else {
+                LifecycleRecord::Started {
+                    exchange_id,
+                    dependency_sequence: sequence,
+                    process_epoch: self.0.process_epoch,
+                    phase,
+                    observed_case,
+                    admitted_case,
+                    started_at,
+                }
+            }
+        });
         let (sequence, event) = match started {
             Ok(started) => started,
             Err(_) => {

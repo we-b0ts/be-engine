@@ -27,6 +27,9 @@ pub trait GlobalProjection: Send + Sync + 'static {
 
 pub trait GlobalRegistrar {
     type Projection: GlobalProjection;
+    fn evidence(&self) -> Option<traffic_protocol::evidence::EvidenceRegistry> {
+        None
+    }
     fn prepare(
         &mut self,
         index: &GlobalIndex,
@@ -101,8 +104,16 @@ pub async fn load<R: GlobalRegistrar>(
     registrar: &mut R,
 ) -> Result<()> {
     let source_path = path.to_owned();
+    let evidence = registrar
+        .evidence()
+        .unwrap_or_else(|| crate::protocols::default_providers().evidence().clone());
     let (index, root) = tokio::task::spawn_blocking(move || {
-        crate::dependency_index::global::load_global_index(&source_path, R::Projection::validate)
+        crate::dependency_index::global::load_global_index_with_evidence(
+            &source_path,
+            R::Projection::validate,
+            &std::sync::atomic::AtomicBool::new(false),
+            &evidence,
+        )
     })
     .await
     .context("Global index preparation failed")??;

@@ -64,6 +64,10 @@ impl SequenceCatalog {
                         if started { kind.started() } else { kind },
                     )
                 }
+                CaptureEvent::MessageStarted {
+                    dependency_sequence,
+                    ..
+                } => (dependency_sequence, EventKind::Message),
                 CaptureEvent::Started {
                     dependency_sequence,
                     ..

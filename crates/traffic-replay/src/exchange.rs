@@ -14,6 +14,9 @@ use traffic_protocol::{
 };
 use uuid::Uuid;
 
+mod sessions;
+pub use sessions::SessionBindings;
+
 use crate::{
     Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle, ReplayExchangeStatus, ReplaySource,
     command::{CommandExchangeScope, PreferredMatch, preferred_match_indexed_with_priority},
@@ -43,7 +46,7 @@ pub struct PreparedExchange<R: RuleRuntime = ExactRules> {
     pub protocol: ProtocolId,
     pub native: RecordedExchange,
     pub source: SourceContext,
-    pub request: R::Prepared,
+    pub request: Option<R::Prepared>,
     pub response: R::Prepared,
     pub delivery: R::Delivery,
     pub status: ReplayExchangeStatus,
@@ -101,11 +104,13 @@ type LaneIdentity = (ScopePartition, ProtocolId, Endpoint, String);
 pub struct ExchangeInventory<R: RuleRuntime = ExactRules> {
     pub exchanges: Vec<PreparedExchange<R>>,
     pub lifecycle: Lifecycle,
+    pub sessions: SessionBindings,
     candidates: CandidateIndex<CandidateKey>,
     lanes: LaneIndex,
     lane_ids: HashMap<LaneIdentity, Uuid>,
     cases: CaseMembership,
     references: BTreeMap<String, BTreeMap<ProtocolRef, Option<usize>>>,
+    emissions: BTreeMap<ProtocolRef, Vec<usize>>,
 }
 
 impl<R: RuleRuntime> Default for ExchangeRules<R> {
@@ -122,11 +127,13 @@ impl<R: RuleRuntime> Default for ExchangeInventory<R> {
         Self {
             exchanges: Default::default(),
             lifecycle: Default::default(),
+            sessions: Default::default(),
             candidates: Default::default(),
             lanes: Default::default(),
             lane_ids: Default::default(),
             cases: Default::default(),
             references: Default::default(),
+            emissions: Default::default(),
         }
     }
 }
@@ -155,6 +162,8 @@ pub struct MatchContext<'a, R: RuleRuntime = ExactRules> {
     pub endpoint: &'a Endpoint,
     pub active_case: Option<&'a str>,
     pub request: &'a dyn ProtocolMessage,
+    pub session: Option<Uuid>,
+    pub lane: Option<&'a str>,
     pub metadata: &'a R::Metadata,
 }
 
@@ -175,7 +184,10 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             "Case exchange has no owner"
         );
         let index = self.exchanges.len();
-        let request = R::prepare(native.request.as_ref(), &rules.request)?;
+        let request = native
+            .request()
+            .map(|request| R::prepare(request, &rules.request))
+            .transpose()?;
         let response = R::prepare(native.response.as_ref(), &rules.response)?;
         let scope = ScopePartition::new(source.source, source.case_id.as_deref());
         let lane_id = native
@@ -197,9 +209,13 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             scope,
             protocol,
             endpoint: native.endpoint.clone(),
-            structure: serde_json::to_vec(R::structure(&request))?,
+            structure: request
+                .as_ref()
+                .map(|request| serde_json::to_vec(R::structure(request)))
+                .transpose()?
+                .unwrap_or_default(),
         };
-        if native.lane.is_some() {
+        if native.lane.is_some() && request.is_some() {
             self.lanes.register(
                 LaneKey {
                     owner: LaneOwner::new(source.source),
@@ -210,7 +226,9 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                 index,
             );
         }
-        self.candidates.register(key, index);
+        if request.is_some() {
+            self.candidates.register(key, index);
+        }
         self.cases
             .register(source.source, source.case_id.as_deref(), index);
         if source.source == ReplaySource::Case {
@@ -221,6 +239,13 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                 .entry(native.reference.clone())
                 .and_modify(|slot| *slot = None)
                 .or_insert(Some(index));
+        }
+        if let traffic_protocol::connection::RecordedInput::Emission { after, .. } = &native.input {
+            ensure!(
+                after.protocol() == protocol.as_str(),
+                "native emission anchor changed protocol"
+            );
+            self.emissions.entry(after.clone()).or_default().push(index);
         }
         self.exchanges.push(PreparedExchange {
             index,
@@ -321,6 +346,18 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                 {
                     return false;
                 }
+                if context
+                    .lane
+                    .is_some_and(|lane| exchange.native.lane.as_deref() != Some(lane))
+                    || !self.sessions.accepts(
+                        exchange.protocol,
+                        &exchange.native.endpoint,
+                        exchange.native.lane.as_deref(),
+                        context.session,
+                    )
+                {
+                    return false;
+                }
                 inspected.set(inspected.get() + 1);
                 if inspected.get() > 16_384 {
                     *failed.borrow_mut() = Some(anyhow::anyhow!(
@@ -329,7 +366,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                     return false;
                 }
                 match R::compare(
-                    &exchange.request,
+                    exchange.request.as_ref().expect("request candidate"),
                     context.request,
                     clocks(exchange),
                     context.metadata,
@@ -380,6 +417,73 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             }
             PreferredMatch::NotFound => Selection::NotFound,
         })
+    }
+
+    /// Only provider-selected, actually delivered anchors may enter this path.
+    /// Emissions never participate in Target request candidate selection.
+    pub fn has_messages_after(&self, reference: &ProtocolRef) -> bool {
+        self.emissions.contains_key(reference)
+    }
+
+    pub fn select_message(
+        &self,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        active_case: Option<&str>,
+        anchors: &[ProtocolRef],
+    ) -> Option<usize> {
+        let case_expected = self
+            .lifecycle
+            .sequence
+            .expected_messages(ReplaySource::Case);
+        let run_expected = self
+            .lifecycle
+            .sequence
+            .expected_messages(ReplaySource::Startup);
+        anchors
+            .iter()
+            .flat_map(|anchor| self.emissions.get(anchor).into_iter().flatten())
+            .copied()
+            .filter(|index| {
+                let exchange = &self.exchanges[*index];
+                let scope = &exchange.source;
+                if exchange.protocol != protocol
+                    || exchange.native.endpoint != *endpoint
+                    || !self
+                        .lifecycle
+                        .live_status(*index, exchange.status)
+                        .is_available()
+                {
+                    return false;
+                }
+                if scope.source == ReplaySource::Case {
+                    scope.case_id.as_deref() == active_case
+                        && case_expected
+                            .as_ref()
+                            .is_none_or(|expected| expected.contains(index))
+                } else {
+                    scope.source.is_run_owned()
+                        && run_expected
+                            .as_ref()
+                            .is_none_or(|expected| expected.contains(index))
+                }
+            })
+            .min_by_key(|index| {
+                let source = &self.exchanges[*index].source;
+                (source.source != ReplaySource::Case, source.position)
+            })
+    }
+
+    pub fn claim_bound(&mut self, index: usize, owner: Uuid) -> Result<ClaimTicket> {
+        let exchange = &self.exchanges[index];
+        let lane = exchange
+            .native
+            .lane
+            .as_deref()
+            .context("stateful native Source has no session lane")?;
+        self.sessions
+            .bind(exchange.protocol, &exchange.native.endpoint, lane, owner)?;
+        self.claim(index)
     }
 
     pub fn claim(&mut self, index: usize) -> Result<ClaimTicket> {

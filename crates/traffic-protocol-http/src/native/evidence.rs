@@ -75,7 +75,7 @@ pub(super) fn decode(event: &Value, payload: &[u8], side: MessageSide) -> Result
         None
     };
     Ok(MessageEvidence {
-        request,
+        request: Some(request),
         response,
         timing: SourceTiming::Request {
             started_at: value["request_started_at"]
@@ -110,8 +110,12 @@ mod tests {
             let payload =
                 serde_json::to_vec(&crate::witness::from_record(&record, side).unwrap()).unwrap();
             let decoded = Native.decode_evidence(&event, &payload, side).unwrap();
-            let before = exchange.request.project().unwrap();
-            let after = decoded.request.project().unwrap();
+            let before = exchange
+                .request()
+                .expect("native request")
+                .project()
+                .unwrap();
+            let after = decoded.request.as_ref().unwrap().project().unwrap();
             assert_eq!(before.structure, after.structure);
             assert!(
                 before

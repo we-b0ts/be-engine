@@ -73,6 +73,27 @@ fn service_libraries_keep_application_composition_above_them() {
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     for package in metadata["packages"].as_array().unwrap() {
         let name = package["name"].as_str().unwrap();
+        if name.starts_with("traffic-protocol-") {
+            for dependency in package["dependencies"].as_array().unwrap() {
+                if dependency["kind"] == "dev" {
+                    continue;
+                }
+                let dependency = dependency["name"].as_str().unwrap();
+                assert!(
+                    !dependency.starts_with("traffic-engine")
+                        && !dependency.starts_with("traffic-rewrite")
+                        && ![
+                            "traffic-e2e",
+                            "traffic-e2e-app",
+                            "traffic-recorder",
+                            "traffic-recording-store",
+                            "traffic-replay-runtime"
+                        ]
+                        .contains(&dependency),
+                    "native provider {name} depends on host-owned service {dependency}"
+                );
+            }
+        }
         if ![
             "traffic-engine",
             "traffic-rewrite",

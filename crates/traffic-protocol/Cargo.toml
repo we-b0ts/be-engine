@@ -7,6 +7,7 @@ edition = "2024"
 traffic-model = { path = "../traffic-model" }
 anyhow = "1"
 bytes = "1"
+base64 = "0.22"
 chrono = "0.4"
 http = "1"
 libc = "0.2"

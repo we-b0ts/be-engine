@@ -40,7 +40,7 @@ fn indexed_lookup_reads_only_candidates_and_preserves_duplicates() {
     let file = &index.files[0].index;
     let key = http_key("example.test", 80, "get", "/wanted");
     let candidates: Vec<_> = file
-        .http
+        .records("http")
         .iter()
         .filter(|record| record.key == key)
         .collect();
@@ -70,12 +70,9 @@ fn changed_inventory_and_source_invalidate_index() {
     fs::write(&file, http("/new")).unwrap();
     let (index, report) = prepare(dir.path()).unwrap();
     assert_eq!(report.status, "built");
-    assert!(
-        index
-            .files
-            .iter()
-            .any(|file| file.index.http[0].key == http_key("example.test", 80, "GET", "/new"))
-    );
+    assert!(index.files.iter().any(
+        |file| file.index.records("http")[0].key == http_key("example.test", 80, "GET", "/new")
+    ));
     fs::remove_file(file).unwrap();
     assert_eq!(prepare(dir.path()).unwrap().1.files, 1);
 }
@@ -85,7 +82,7 @@ fn reader_checks_integrity_even_for_cached_records() {
     let dir = recording();
     let path = write_case(dir.path(), "one", &http("/one"));
     let index = load_file(&path).unwrap();
-    let record = &index.http[0].location;
+    let record = &index.records("http")[0].location;
     let mut reader = RecordReader::new(4096);
     reader.read(&path, &index.stamp, record).unwrap();
     reader.read(&path, &index.stamp, record).unwrap();
@@ -121,7 +118,11 @@ fn byte_budget_evicts_records_without_affecting_source() {
     let mut reader = RecordReader::new(first.len());
     for position in [0, 1, 0] {
         reader
-            .read(&path, &index.stamp, &index.http[position].location)
+            .read(
+                &path,
+                &index.stamp,
+                &index.records("http")[position].location,
+            )
             .unwrap();
     }
     assert_eq!(reader.hits, 0);
@@ -160,7 +161,7 @@ fn concurrent_builders_publish_one_valid_inventory() {
         for handle in handles {
             let (index, _) = handle.join().unwrap();
             assert_eq!(index.files.len(), 1);
-            assert_eq!(index.files[0].index.http.len(), 1);
+            assert_eq!(index.files[0].index.records("http").len(), 1);
         }
     });
     assert_eq!(prepare(dir.path()).unwrap().1.status, "reused");
@@ -227,7 +228,7 @@ fn same_size_edit_invalidates_cached_fragment() {
     fs::write(&file, http("/new")).unwrap();
     let second = load_file(&file).unwrap();
     assert_eq!(first.stamp.size, second.stamp.size);
-    assert_ne!(first.http[0].key, second.http[0].key);
+    assert_ne!(first.records("http")[0].key, second.records("http")[0].key);
     assert_ne!(first.sha256, second.sha256);
 }
 

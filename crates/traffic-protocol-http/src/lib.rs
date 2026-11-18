@@ -1,7 +1,10 @@
 //! HTTP wire recognition and native message adaptation.
 pub mod body_capture;
+pub mod client;
 pub mod content_encoding;
+pub mod forward;
 pub mod headers;
+pub mod index;
 pub mod interaction;
 pub mod message;
 pub mod multipart;
@@ -11,6 +14,9 @@ pub mod path_pattern;
 pub mod query_token;
 pub mod response_headers;
 pub mod sse;
+pub mod stream_capture;
+pub mod termination;
+pub mod wire_events;
 use traffic_protocol::{Peer, Probe, Recognition};
 
 pub fn recognize(probe: Probe<'_>) -> Recognition {

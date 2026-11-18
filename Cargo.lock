@@ -3472,6 +3472,7 @@ name = "traffic-protocol"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bytes",
  "chrono",
  "http",
@@ -3511,6 +3512,7 @@ dependencies = [
  "http-body-util",
  "httparse",
  "hyper",
+ "hyper-rustls",
  "hyper-util",
  "rustls-native-certs",
  "serde",
@@ -3519,11 +3521,13 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "tower-service",
  "traffic-codec-json",
  "traffic-contract",
  "traffic-model",
  "traffic-policy-value",
  "traffic-protocol",
+ "traffic-replay",
  "url",
  "uuid",
 ]

@@ -7,8 +7,21 @@ use traffic_model::recording::ProtocolRef;
 use traffic_protocol::evidence::EvidenceAdapter;
 use traffic_protocol::observation::{TrafficInteraction, optional_endpoint};
 
+pub mod historical;
+
 pub struct TransportEvidence;
 impl EvidenceAdapter for TransportEvidence {
+    fn lookup_projection(
+        &self,
+        event: &Value,
+    ) -> Result<traffic_protocol::evidence::index::IndexProjection> {
+        let mut projection = traffic_protocol::evidence::index::compact_unknown(event)?;
+        if event["event_type"] == "proxy_error" {
+            projection.observations.push(event.clone());
+        }
+        Ok(projection)
+    }
+
     fn schema(&self) -> &'static str {
         "transport/evidence/v1"
     }

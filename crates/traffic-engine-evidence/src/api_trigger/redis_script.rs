@@ -29,7 +29,7 @@ pub(super) fn associate(
     for file in files.iter().filter(|file| file.request.is_some()) {
         let case = case_id(&file.path)?;
         let mut previous = BTreeMap::<String, (Value, String)>::new();
-        for record in &file.index.redis {
+        for record in file.index.records("redis") {
             let bytes = reader.read(&file.path, &file.index.stamp, &record.location)?;
             let event: Value = serde_json::from_slice(&bytes)?;
             let Some(connection) = event["connection_id"].as_str() else {

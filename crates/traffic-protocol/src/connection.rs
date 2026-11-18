@@ -14,6 +14,9 @@ use crate::{
 
 pub type NativeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+pub trait OutputIo: AsyncWrite + Unpin + Send {}
+impl<T: AsyncWrite + Unpin + Send + ?Sized> OutputIo for T {}
+
 pub trait ConnectionIo: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ConnectionIo for T {}
 
@@ -59,8 +62,27 @@ pub struct RecordedExchange {
     pub endpoint: Endpoint,
     pub lane: Option<String>,
     pub response_delay: std::time::Duration,
-    pub request: Arc<dyn ProtocolMessage>,
+    pub input: RecordedInput,
     pub response: Arc<dyn MessageEncoder>,
+}
+
+/// Native input semantics. An emission is enabled only after the referenced
+/// real Target interaction was successfully delivered on the same connection.
+/// The emission offset is relative to that successful delivery receipt.
+pub enum RecordedInput {
+    Request(Arc<dyn ProtocolMessage>),
+    Emission {
+        after: ProtocolRef,
+        offset: std::time::Duration,
+    },
+}
+impl RecordedExchange {
+    pub fn request(&self) -> Option<&dyn ProtocolMessage> {
+        match &self.input {
+            RecordedInput::Request(request) => Some(request.as_ref()),
+            _ => None,
+        }
+    }
 }
 
 /// Native framing, handshakes, TLS upgrades and session-local controls own their
@@ -74,6 +96,26 @@ pub trait ServerSession: Send {
 }
 
 pub trait RequestHost: Send + Sync {
+    fn release_session(&self) {}
+    /// Bind a stateful native session to one Source lane. A continuation must
+    /// name a successful delivery retained on this physical connection.
+    fn execute_bound(
+        &self,
+        _request: Arc<dyn ProtocolMessage>,
+        _after: Option<ProtocolRef>,
+    ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
+        Box::pin(async { anyhow::bail!("native session binding is unavailable") })
+    }
+    fn forget_anchor(&self, _reference: &ProtocolRef) {}
+    /// Wait for an eligible finite Source message. Native session state selects
+    /// anchors; the host authenticates them against this connection's receipts.
+    fn next_message(
+        &self,
+        _anchors: Vec<ProtocolRef>,
+    ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
+        Box::pin(async { anyhow::bail!("server messages are unavailable") })
+    }
+
     fn begin_input(&self) -> NativeFuture<'_, Box<dyn RequestInput>> {
         Box::pin(async { Ok(Box::new(()) as Box<dyn RequestInput>) })
     }
@@ -111,9 +153,19 @@ pub trait ResponseFramer: Send {
 /// The host retains response bytes, claims and delivery receipts. Native framing
 /// may adjust session metadata before the host performs the actual write/flush.
 pub trait ResponseDelivery: Send {
+    /// Wait for Source output admission without borrowing the physical writer.
+    fn ready(&mut self) -> NativeFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Protocol session state can retain this receipt as an emission anchor.
+    fn retain_as_anchor(&mut self) {}
+    fn reference(&self) -> Option<ProtocolRef> {
+        None
+    }
+
     fn write<'a>(
         self: Box<Self>,
-        io: &'a mut dyn ConnectionIo,
+        io: &'a mut dyn OutputIo,
         framer: &'a mut dyn ResponseFramer,
     ) -> NativeFuture<'a, ()>;
 }
@@ -160,6 +212,13 @@ pub struct CaptureTransport {
 }
 
 pub trait CaptureHost: Send + Sync {
+    fn begin_message(
+        &self,
+        _reference: ProtocolRef,
+    ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>> {
+        Box::pin(async { anyhow::bail!("server message capture is unavailable") })
+    }
+
     fn transport(&self) -> CaptureTransport {
         CaptureTransport::default()
     }

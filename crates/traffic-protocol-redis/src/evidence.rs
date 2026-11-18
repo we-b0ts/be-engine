@@ -5,8 +5,39 @@ use traffic_model::recording::ProtocolRef;
 use traffic_protocol::evidence::{EvidenceAdapter, SourceTiming};
 use traffic_protocol::observation::{NativeSummary, TrafficInteraction, format_endpoint};
 
+mod index;
+
 pub struct NativeEvidence;
 impl EvidenceAdapter for NativeEvidence {
+    fn proof_selector(&self, event: &Value) -> Value {
+        index::proof(event)
+    }
+    fn capture_complete(&self, event: &Value) -> bool {
+        index::complete(event)
+    }
+    fn lookup_projection(
+        &self,
+        event: &Value,
+    ) -> Result<traffic_protocol::evidence::index::IndexProjection> {
+        let mut projection =
+            traffic_protocol::evidence::index::IndexProjection::record(Value::Null);
+        if let Some(endpoint) = crate::index::endpoint(event) {
+            projection.endpoints.push(endpoint);
+        }
+        if event["event_type"] == "redis_connection" {
+            projection.observations.push(event.clone());
+        }
+        if let Some(lookup) = crate::index::lookup(event)? {
+            projection.lookups.push(lookup);
+        }
+        Ok(projection)
+    }
+    fn index_projection(
+        &self,
+        event: &Value,
+    ) -> Result<traffic_protocol::evidence::index::IndexProjection> {
+        index::project(event)
+    }
     fn query_value(
         &self,
         event: &Value,
@@ -18,7 +49,7 @@ impl EvidenceAdapter for NativeEvidence {
     }
 
     fn schema(&self) -> &'static str {
-        "redis/semantic-evidence/v2"
+        "redis/semantic-evidence/v3"
     }
     fn event_types(&self) -> &'static [&'static str] {
         &["redis_exchange", "redis_pub_sub_push", "redis_connection"]

@@ -25,6 +25,9 @@ pub fn strict(
 }
 
 impl SourcePreparation for Preparation {
+    fn evidence(&self) -> &traffic_protocol::evidence::EvidenceRegistry {
+        &self.evidence
+    }
     fn safety_issue(&self, value: &serde_json::Value) -> Option<String> {
         self.evidence.recording_safety_issue(value)
     }

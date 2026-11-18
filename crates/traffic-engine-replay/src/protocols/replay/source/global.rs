@@ -40,11 +40,27 @@ struct Registration<'a> {
 }
 impl GlobalRegistrar for Registration<'_> {
     type Projection = Records;
-    fn prepare(&mut self, index: &GlobalIndex, _: &Path, _: Arc<RecordSource>) -> Result<()> {
-        ensure!(
-            index.notifications.is_empty(),
-            "recorded notifications require a native notification capability"
-        );
+    fn evidence(&self) -> Option<traffic_protocol::evidence::EvidenceRegistry> {
+        Some(self.native.providers.evidence().clone())
+    }
+    fn prepare(
+        &mut self,
+        index: &GlobalIndex,
+        root: &Path,
+        source: Arc<RecordSource>,
+    ) -> Result<()> {
+        for lane in &index.notifications {
+            let pages = crate::dependency_index::Paged::<
+                crate::dependency_index::global::NotificationEntry,
+            >::restore(lane.pages.clone().resolve(root)?)?;
+            for page in 0..pages.pages() {
+                for entry in pages.read_page(page)? {
+                    let reference = source.reference(entry.location);
+                    let record = reference.load()?;
+                    self.register(Phase::Exchanges, (record, reference))?;
+                }
+            }
+        }
         Ok(())
     }
     fn register(&mut self, _: Phase, item: <Records as GlobalProjection>::Item) -> Result<()> {

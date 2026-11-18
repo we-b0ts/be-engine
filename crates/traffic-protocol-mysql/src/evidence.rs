@@ -5,8 +5,28 @@ use traffic_model::recording::ProtocolRef;
 use traffic_protocol::evidence::{EvidenceAdapter, SourceTiming};
 use traffic_protocol::observation::{TrafficInteraction, optional_endpoint};
 
+mod index;
+
 pub struct NativeEvidence;
 impl EvidenceAdapter for NativeEvidence {
+    fn proof_selector(&self, event: &Value) -> Value {
+        index::proof(event)
+    }
+    fn capture_complete(&self, event: &Value) -> bool {
+        index::complete(event)
+    }
+    fn lookup_projection(
+        &self,
+        event: &Value,
+    ) -> Result<traffic_protocol::evidence::index::IndexProjection> {
+        index::lookup(event)
+    }
+    fn index_projection(
+        &self,
+        event: &Value,
+    ) -> Result<traffic_protocol::evidence::index::IndexProjection> {
+        index::project(event)
+    }
     fn discovery_annotations(
         &self,
         event: &Value,

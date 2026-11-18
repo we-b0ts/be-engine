@@ -168,7 +168,7 @@ impl Inventory {
         capture: Option<&CaptureMetadata>,
         contracts: &dyn policy::ValueRuleHost,
     ) -> Result<(
-        traffic_policy_value::PreparedMessage,
+        Option<traffic_policy_value::PreparedMessage>,
         traffic_policy_value::PreparedMessage,
     )> {
         let start = capture.map(|capture| capture.started_at);
@@ -190,11 +190,16 @@ impl Inventory {
         });
         let response_policy = contracts.document_policy(response_clocks);
         let prepared = (
-            crate::value_extensions::prepare_message_with_policy(
-                exchange.request.as_ref(),
-                &rules.request,
-                request_policy,
-            )?,
+            exchange
+                .request()
+                .map(|request| {
+                    crate::value_extensions::prepare_message_with_policy(
+                        request,
+                        &rules.request,
+                        request_policy,
+                    )
+                })
+                .transpose()?,
             crate::value_extensions::prepare_message_with_policy(
                 exchange.response.as_ref(),
                 &rules.response,
@@ -205,11 +210,14 @@ impl Inventory {
         source_clocks.case.target = source_clocks.case.source;
         source_clocks.dependency.target = source_clocks.dependency.source;
         source_clocks.delivery.target = source_clocks.delivery.source;
-        let request = prepared.0.compare(
-            exchange.request.as_ref(),
-            source_clocks,
-            contracts.metadata(),
-        )?;
+        let request = prepared
+            .0
+            .as_ref()
+            .zip(exchange.request())
+            .map(|(prepared, request)| {
+                prepared.compare(request, source_clocks, contracts.metadata())
+            })
+            .transpose()?;
         let mut response_clocks = source_clocks;
         response_clocks.observation = Some(source_clocks.delivery);
         let response = prepared.1.compare(
@@ -218,12 +226,14 @@ impl Inventory {
             contracts.metadata(),
         )?;
         ensure!(
-            request.passed() && response.passed(),
+            request.as_ref().is_none_or(|request| request.passed()) && response.passed(),
             "Source projected value contract failed: request={:?}, response={:?}",
-            request.differences,
+            request.as_ref().map(|request| &request.differences),
             response.differences
         );
-        contracts.observe_source_comparison(&request);
+        if let Some(request) = &request {
+            contracts.observe_source_comparison(request);
+        }
         contracts.observe_source_comparison(&response);
         Ok(prepared)
     }

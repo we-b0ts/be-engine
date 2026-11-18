@@ -15,6 +15,7 @@ use traffic_protocol::{
 };
 
 mod capture;
+pub mod emission;
 mod server;
 
 pub const NAME: &str = "fixture-rpc";
@@ -182,13 +183,20 @@ impl NativeProtocol for Native {
         "fixture-rpc-report/v1"
     }
     fn report_summary(&self, exchange: &RecordedExchange) -> Result<Value> {
-        let operation = exchange
-            .request
-            .evidence(&json!({"pointer":"/operation"}))?;
-        Ok(json!({"wire_format":"fixture","operation":operation["value"]}))
+        if let Some(request) = exchange.request() {
+            let operation = request.evidence(&json!({"pointer":"/operation"}))?;
+            Ok(json!({"wire_format":"fixture","operation":operation["value"]}))
+        } else {
+            Ok(json!({"wire_format":"fixture","server_message":true}))
+        }
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>> {
+        if event["event_type"] == emission::EVENT {
+            return serde_json::from_value::<emission::Emission>(event.clone())?
+                .project()
+                .map(Some);
+        }
         if event["event_type"] != EVENT {
             return Ok(None);
         }
@@ -202,12 +210,14 @@ impl NativeProtocol for Native {
             },
             lane: Some(call.channel.to_string()),
             response_delay: std::time::Duration::from_micros(call.latency_micros),
-            request: Arc::new(Message(Bytes::from(call.input))),
+            input: traffic_protocol::connection::RecordedInput::Request(Arc::new(Message(
+                Bytes::from(call.input),
+            ))),
             response: Arc::new(Message(Bytes::from(call.reply))),
         }))
     }
     fn recorded_endpoint(&self, event: &Value) -> Result<Option<Endpoint>> {
-        if event["event_type"] != EVENT {
+        if event["event_type"] != EVENT && event["event_type"] != emission::EVENT {
             return Ok(None);
         }
         let peer: capture::PeerAddress = serde_json::from_value(event["peer"].clone())?;
@@ -226,19 +236,32 @@ impl NativeProtocol for Native {
 
 struct Evidence;
 impl EvidenceAdapter for Evidence {
+    fn proof_selector(&self, event: &Value) -> Value {
+        traffic_protocol::evidence::index::select_without(event, &["input", "reply", "body"], &[])
+    }
     fn schema(&self) -> &'static str {
         "fixture-rpc/v1"
     }
     fn event_types(&self) -> &'static [&'static str] {
-        &[EVENT]
+        &[EVENT, emission::EVENT]
     }
     fn supports_replay(&self, event: &Value) -> bool {
-        serde_json::from_value::<capture::Call>(event.clone()).is_ok_and(|call| call.wire_complete)
+        if event["event_type"] == emission::EVENT {
+            serde_json::from_value::<emission::Emission>(event.clone()).is_ok()
+        } else {
+            serde_json::from_value::<capture::Call>(event.clone())
+                .is_ok_and(|call| call.wire_complete)
+        }
     }
     fn finite_reference(
         &self,
         event: &Value,
     ) -> Result<Option<traffic_model::recording::ProtocolRef>> {
+        if event["event_type"] == emission::EVENT {
+            return Ok(Some(
+                serde_json::from_value::<emission::Emission>(event.clone())?.reference(),
+            ));
+        }
         let call: capture::Call = serde_json::from_value(event.clone())?;
         Ok(Some(call.reference()))
     }

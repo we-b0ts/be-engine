@@ -99,7 +99,7 @@ pub fn startup_records(
             records.insert(*line, serde_json::from_value(value.clone())?);
         }
     }
-    for entry in &index.redis {
+    for entry in index.records("redis") {
         let raw = reader.read(path, &index.stamp, &entry.location)?;
         records.insert(entry.location.line, serde_json::from_slice(&raw)?);
     }

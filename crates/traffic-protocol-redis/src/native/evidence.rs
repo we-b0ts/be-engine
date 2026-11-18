@@ -22,7 +22,7 @@ pub(super) fn decode(event: &Value, payload: &[u8], side: MessageSide) -> Result
         None
     };
     Ok(MessageEvidence {
-        request: Arc::new(RequestMessage {
+        request: Some(Arc::new(RequestMessage {
             command: event["command"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Redis evidence command is absent"))?
@@ -37,7 +37,7 @@ pub(super) fn decode(event: &Value, payload: &[u8], side: MessageSide) -> Result
                 .as_i64()
                 .ok_or_else(|| anyhow::anyhow!("Redis evidence database is absent"))?,
             username: event["username"].as_str().map(str::to_owned),
-        }),
+        })),
         response,
         timing: SourceTiming::Unsupported,
     })
@@ -64,8 +64,12 @@ mod tests {
                 b"$8\r\n{\"id\":7}\r\n".to_vec()
             };
             let decoded = Native.decode_evidence(&event, &payload, side).unwrap();
-            let before = exchange.request.project().unwrap();
-            let after = decoded.request.project().unwrap();
+            let before = exchange
+                .request()
+                .expect("native request")
+                .project()
+                .unwrap();
+            let after = decoded.request.as_ref().unwrap().project().unwrap();
             assert_eq!(before.structure, after.structure);
             assert_eq!(
                 before.values["/args/0"].bytes,

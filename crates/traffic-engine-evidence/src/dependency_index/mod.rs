@@ -10,6 +10,8 @@ mod model;
 mod mysql;
 pub mod mysql_transactions;
 mod pages;
+#[cfg(test)]
+mod projection_tests;
 pub mod proof;
 mod reader;
 pub mod reconciliation;

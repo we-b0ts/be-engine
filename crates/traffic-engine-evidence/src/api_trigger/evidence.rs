@@ -194,7 +194,7 @@ pub(super) fn build(
         // Independence is checked against the captured identity in observe().
         // Another resource on the trigger's route is still a foreign request.
         let eligible = |state: &&mut RuleOrigins<'_>| !state.origins.is_empty();
-        for record in file.index.mysql.iter().flatten() {
+        for record in file.index.records("mysql") {
             let candidates: Vec<_> = states
                 .iter_mut()
                 .filter(eligible)
@@ -227,7 +227,7 @@ pub(super) fn build(
                 )?;
             }
         }
-        for record in &file.index.redis {
+        for record in file.index.records("redis") {
             let candidates: Vec<_> = states
                 .iter_mut()
                 .filter(eligible)
