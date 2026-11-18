@@ -94,7 +94,7 @@ fn lookup_builder_preserves_provider_namespaces_and_authenticated_source_locatio
     std::fs::write(&path, &raw).unwrap();
     let stamp = FileStamp::read(&path).unwrap();
     let evidence = registry("external/v1");
-    let mut builder = Builder::with_evidence(stamp.clone(), evidence.clone());
+    let mut builder = Builder::with_evidence(stamp.clone(), evidence.clone(), proof::is_evidence);
     builder.observe(1, raw.as_bytes(), Some(&record)).unwrap();
     let index = builder.finish().unwrap();
     let entries = index.records("external-lookup");

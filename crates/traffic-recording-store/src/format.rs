@@ -246,7 +246,7 @@ impl DependencyRow {
 }
 
 pub fn encode_event(
-    event: &crate::trace::RecordedEvent<crate::trace::CaptureEvent>,
+    event: &traffic_model::trace::RecordedEvent<traffic_model::trace::CaptureEvent>,
 ) -> Result<Vec<u8>> {
     let mut row = format!("{}\t{}\t", event.sequence, event.offset_micros).into_bytes();
     serde_json::to_writer(&mut row, &event.event)?;
@@ -254,9 +254,11 @@ pub fn encode_event(
     Ok(row)
 }
 
-pub fn decode_event(row: &str) -> Result<crate::trace::RecordedEvent<crate::trace::CaptureEvent>> {
+pub fn decode_event(
+    row: &str,
+) -> Result<traffic_model::trace::RecordedEvent<traffic_model::trace::CaptureEvent>> {
     let mut columns = row.splitn(3, '\t');
-    Ok(crate::trace::RecordedEvent {
+    Ok(traffic_model::trace::RecordedEvent {
         sequence: columns.next().context("missing event sequence")?.parse()?,
         offset_micros: columns.next().context("missing event offset")?.parse()?,
         event: serde_json::from_str(columns.next().context("missing event body")?)?,
@@ -266,7 +268,7 @@ pub fn decode_event(row: &str) -> Result<crate::trace::RecordedEvent<crate::trac
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture::capture_body;
+    use traffic_model::capture::capture_body;
 
     #[test]
     fn compact_rows_preserve_inline_threshold_and_external_binary_fields() {

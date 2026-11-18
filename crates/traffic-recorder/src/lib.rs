@@ -1,16 +1,19 @@
 //! Recording admission, durable event queues, finite capture receipts and sealing.
 
-pub mod artifact_file;
+pub use traffic_recording_store::{artifact_file, storage};
 mod clock;
 mod extensions;
 pub use clock::RecordingClock;
 pub use extensions::RecordingExtensions;
 pub use traffic_protocol::capture::CaptureSnapshot as CapturedEvent;
 mod event;
-mod jsonl;
+mod jsonl {
+    pub use traffic_recording_store::writer::{
+        BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool,
+    };
+}
 pub mod ledger;
 pub mod source_process;
-pub mod storage;
 #[cfg(test)]
 mod tests;
 mod writer;

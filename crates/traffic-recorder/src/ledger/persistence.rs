@@ -13,31 +13,22 @@ use uuid::Uuid;
 use crate::CaptureContext;
 use crate::GlobalDependencyAttribution;
 use traffic_model::attribution::DependencyOwner;
-use traffic_model::compact::{self, DependencyRow, PayloadRef};
 use traffic_model::recording::*;
 use traffic_protocol::capture::{CaptureEvidence, CaptureSnapshot};
+use traffic_recording_store::writer::LedgerFiles;
 
 use super::LifecycleRecord;
 
-mod event_order;
-mod segments;
-
 pub struct LedgerWriter {
     root: PathBuf,
+    storage: LedgerFiles,
     process_epoch: Uuid,
     run_epoch: Uuid,
     clock: RecordingClock,
-    offset: u64,
-    records: usize,
     unattributed: u64,
     synthetic: u64,
     synthetic_failures: u64,
     lifecycle: BTreeMap<Uuid, bool>,
-    ledger_hash: Sha256,
-    lifecycle_hash: Sha256,
-    lifecycle_length: u64,
-    last_event_sequence: u64,
-    unordered_events: bool,
     cases: BTreeMap<Uuid, Vec<ScopeRecordLocation>>,
     startup: Vec<ScopeRecordLocation>,
     process: Vec<ScopeRecordLocation>,
@@ -49,7 +40,6 @@ pub struct LedgerWriter {
     sealed: bool,
     process_dependency_tasks: BTreeMap<String, String>,
     semantic_inventory: SemanticInventory,
-    payloads: segments::PayloadSegments,
     evidence: std::sync::Arc<traffic_protocol::evidence::EvidenceRegistry>,
 }
 
@@ -64,20 +54,14 @@ impl LedgerWriter {
         Self {
             evidence,
             root: root.into(),
+            storage: LedgerFiles::new(root),
             process_epoch,
             run_epoch: clock.recording_id(),
             clock,
-            offset: 0,
-            records: 0,
             unattributed: 0,
             synthetic: 0,
             synthetic_failures: 0,
             lifecycle: BTreeMap::new(),
-            ledger_hash: Sha256::new(),
-            lifecycle_hash: Sha256::new(),
-            lifecycle_length: 0,
-            last_event_sequence: 0,
-            unordered_events: false,
             cases: BTreeMap::new(),
             startup: vec![],
             process: vec![],
@@ -91,7 +75,6 @@ impl LedgerWriter {
             sealed: false,
             process_dependency_tasks: BTreeMap::new(),
             semantic_inventory: SemanticInventory::default(),
-            payloads: Default::default(),
         }
     }
 
@@ -141,15 +124,7 @@ impl LedgerWriter {
             | LifecycleRecord::Input { .. }
             | LifecycleRecord::PrimaryBoundary { .. } => {}
         }
-        let line = compact::encode_event(record)?;
-        files
-            .append(&self.root.join(compact::EVENTS), &line)
-            .await?;
-        self.lifecycle_hash.update(&line);
-        self.lifecycle_length += line.len() as u64;
-        self.unordered_events |= record.sequence <= self.last_event_sequence;
-        self.last_event_sequence = record.sequence;
-        Ok(())
+        self.storage.append_event(files, record).await
     }
 
     pub async fn append(
@@ -299,32 +274,15 @@ impl LedgerWriter {
                 crate::supports_replay(&value, &metadata.attribution, &self.evidence),
             );
         }
-        let serde_json::Value::Object(value) = value else {
-            anyhow::bail!("recorded dependency is not an object");
-        };
-        let (mut row, payloads) = DependencyRow::split(value)?;
-        for payload in payloads {
-            let reference = self
-                .payloads
-                .append(&self.root, files, payload.bytes())
-                .await?;
-            row.link(payload, reference);
-        }
-        let line = row.encode()?;
+        let position = self.storage.append_dependency(files, value).await?;
         let location = ScopeRecordLocation {
-            line: self.records + 1,
-            offset: self.offset,
-            length: line.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&line)),
+            line: position.line,
+            offset: position.offset,
+            length: position.length,
+            sha256: position.sha256,
             exchange_id: metadata.exchange_id,
             effect_index: metadata.effect_index,
         };
-        files
-            .append(&self.root.join(compact::DEPENDENCIES), &line)
-            .await?;
-        self.ledger_hash.update(&line);
-        self.offset += line.len() as u64;
-        self.records += 1;
         // Every raw observation is retained centrally. Maintenance and snapshot
         // reuse remain observations without creating business consumption slots.
         match metadata.attribution {
@@ -499,23 +457,7 @@ impl LedgerWriter {
             })?,
         )
         .await?;
-        // Empty runs still have explicit ledger identities and discoverable views.
-        files
-            .append(&self.root.join(compact::DEPENDENCIES), b"")
-            .await?;
-        files.flush_all().await?;
-        let events = if self.unordered_events {
-            let root = self.root.clone();
-            tokio::task::spawn_blocking(move || event_order::seal(&root))
-                .await
-                .context("dependency event ordering task failed")??
-        } else {
-            LedgerFileIdentity {
-                path: compact::EVENTS.into(),
-                length: self.lifecycle_length,
-                sha256: format!("{:x}", self.lifecycle_hash.clone().finalize()),
-            }
-        };
+        let mut identities = self.storage.seal(files).await?;
         self.global_scopes().await?;
         let inputs = self
             .inputs
@@ -525,15 +467,6 @@ impl LedgerWriter {
         for directory in inputs {
             self.case_scope(&directory).await?;
         }
-        let mut identities = vec![
-            LedgerFileIdentity {
-                path: compact::DEPENDENCIES.into(),
-                length: self.offset,
-                sha256: format!("{:x}", self.ledger_hash.clone().finalize()),
-            },
-            events,
-        ];
-        identities.extend(self.payloads.identities());
         for name in [
             "indexes/startup-scope.json",
             "indexes/process-scope.json",
@@ -581,7 +514,7 @@ impl LedgerWriter {
                 && coverage.admitted == coverage.terminal
                 && self.inputs.values().all(|input| input.complete),
             coverage,
-            records: self.records as u64,
+            records: self.storage.records() as u64,
             unattributed_records: self.unattributed,
             semantic_inventory: self.semantic_inventory.clone(),
             inputs: self.inputs.values().cloned().collect(),

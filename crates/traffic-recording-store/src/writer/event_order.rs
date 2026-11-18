@@ -5,9 +5,10 @@ use std::{
     path::Path,
 };
 
+use crate::format::EVENTS;
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
-use traffic_model::{compact::EVENTS, recording::LedgerFileIdentity};
+use traffic_model::recording::LedgerFileIdentity;
 
 pub(super) fn seal(root: &Path) -> Result<LedgerFileIdentity> {
     let path = root.join(EVENTS);

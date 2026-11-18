@@ -25,7 +25,7 @@ mod tests;
 
 pub use build::Builder;
 pub use model::DependencyIndexReport;
-pub use model::{FRAGMENT, FileIndex, FileStamp, RecordLocation};
+pub use model::{FRAGMENT, FileIndex, FileStamp, MysqlRecords, RecordLocation};
 pub use pages::{PageManifest, PageWriter, Paged};
 pub use reader::RecordReader;
 pub use reference::{RecordRef, RecordSource};

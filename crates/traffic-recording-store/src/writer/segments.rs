@@ -1,5 +1,5 @@
-use super::{LedgerFileIdentity, Path, PayloadRef, Result, Sha256, compact};
-use crate::jsonl::JsonlWriterPool;
+use super::{JsonlWriterPool, LedgerFileIdentity, Path, Result, Sha256};
+use crate::format::{PayloadRef, SEGMENT_BYTES};
 use sha2::Digest;
 
 #[derive(Default)]
@@ -16,7 +16,7 @@ impl PayloadSegments {
         files: &mut JsonlWriterPool,
         bytes: &[u8],
     ) -> Result<PayloadRef> {
-        if self.length >= compact::SEGMENT_BYTES {
+        if self.length >= SEGMENT_BYTES {
             let identity = self.current_identity();
             files.flush_and_remove(&root.join(&identity.path)).await?;
             self.sealed.push(identity);
@@ -62,11 +62,12 @@ impl PayloadSegments {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::writer::JsonlBufferSettings;
 
     #[tokio::test]
     async fn rollover_occurs_after_the_whole_value_crosses_the_target_size() {
         let root = tempfile::tempdir().unwrap();
-        let mut files = JsonlWriterPool::new(crate::JsonlBufferSettings {
+        let mut files = JsonlWriterPool::new(JsonlBufferSettings {
             capacity: 4096,
             flush_interval: std::time::Duration::from_secs(10),
         });

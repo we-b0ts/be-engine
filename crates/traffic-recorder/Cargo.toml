@@ -9,13 +9,13 @@ test-support = []
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
-libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time", "macros"] }
 tracing = "0.1"
 traffic-model = { path = "../traffic-model" }
+traffic-recording-store = { path = "../traffic-recording-store" }
 traffic-protocol = { path = "../traffic-protocol" }
 uuid = { version = "1", features = ["serde", "v4"] }
 

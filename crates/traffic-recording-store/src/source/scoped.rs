@@ -179,7 +179,7 @@ pub fn exists(path: &Path) -> bool {
             .is_some_and(|name| name == "dependencies.jsonl")
             && path
                 .parent()
-                .is_some_and(|root| root.join(traffic_model::compact::DEPENDENCIES).is_file())
+                .is_some_and(|root| root.join(crate::format::DEPENDENCIES).is_file())
 }
 
 pub fn case_path(directory: &Path) -> PathBuf {

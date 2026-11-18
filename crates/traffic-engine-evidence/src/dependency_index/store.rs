@@ -7,11 +7,10 @@ use std::time::Instant;
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
-use super::build::build_file;
 use super::model::*;
-pub(super) use traffic_recording_store::source::store::{
-    Lock, check_cancelled, decode_json, file_cache_directory,
-};
+#[cfg(test)]
+pub(super) use traffic_recording_store::source::store::file_cache_directory;
+pub(super) use traffic_recording_store::source::store::{Lock, check_cancelled};
 pub use traffic_recording_store::source::store::{
     cache_directory, private_directory, read_json, write_json,
 };
@@ -88,46 +87,12 @@ fn load_file_cancellable(
     path: &Path,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<FileIndex> {
-    check_cancelled(cancelled)?;
-    let source = super::scoped::resolve(path)?;
-    let stamp = FileStamp::read_native(&source.path)?;
-    if let Some(index) = super::case_recording::load(&source, &stamp) {
-        check_cancelled(cancelled)?;
-        return Ok(index);
-    }
-    let fragment = path
-        .parent()
-        .context("dependency file has no parent")?
-        .join(FRAGMENT);
-    if source.view.is_none()
-        && let Ok(index) = read_json::<FileIndex>(&fragment)
-        && index.version == VERSION
-        && index.stamp == stamp
-    {
-        return Ok(index);
-    }
-    let cache = file_cache_directory(path, &source)?;
-    private_directory(&cache)?;
-    let _lock = Lock::acquire(&cache.join("build.lock"), cancelled)?;
-    let output = cache.join("file.json");
-    if let Ok(index) = read_json::<FileIndex>(&output)
-        && index.version == VERSION
-        && index.stamp == stamp
-    {
-        if source.view.is_some() {
-            source.validate()?;
-            ensure!(
-                FileStamp::read_native(&source.path)? == stamp,
-                "dependency ledger changed while loading its scope index"
-            );
-        }
-        return Ok(index);
-    }
-    let index = build_file(path, cancelled)?;
-    source.validate()?;
-    check_cancelled(cancelled)?;
-    write_json(&output, &index)?;
-    Ok(index)
+    traffic_recording_store::source::index::load_file(
+        path,
+        cancelled,
+        crate::protocols::default_providers().evidence(),
+        super::proof::is_evidence,
+    )
 }
 
 /// Only configured API-origin MySQL discovery requests this optional extension.

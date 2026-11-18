@@ -381,3 +381,28 @@ async fn uncompressed_close_retains_missing_heartbeat_evidence() {
     assert!(response.observation.end.offset_ms >= 80);
     server.await.unwrap();
 }
+
+#[test]
+fn fast_pong_is_capped_and_uses_the_live_ping_payload() {
+    let mut input = program();
+    input.socket_io_heartbeat = Some(crate::interaction::model::SocketIoHeartbeats {
+        responses: vec![crate::interaction::model::HeartbeatResponse {
+            input_sequence: 2,
+            ping_ordinal: 1,
+            delay_ms: 300,
+        }],
+    });
+    let started = tokio::time::Instant::now();
+    for (cap, delay) in [(None, 300), (Some(Duration::from_millis(5)), 5)] {
+        let mut heartbeats = super::super::heartbeat::Heartbeats::new(&input, false, cap);
+        assert!(heartbeats.next_due().is_none());
+        assert!(!heartbeats.ping("from-target".into(), started).unwrap());
+        assert_eq!(
+            heartbeats.next_due(),
+            Some(started + Duration::from_millis(delay))
+        );
+        assert_eq!(heartbeats.take_due().data, "3from-target");
+        assert!(!heartbeats.ping("unanswered".into(), started).unwrap());
+        assert!(heartbeats.next_due().is_none());
+    }
+}

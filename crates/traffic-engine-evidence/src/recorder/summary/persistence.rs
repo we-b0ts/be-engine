@@ -31,8 +31,13 @@ pub(super) async fn write_dependency_summary(
         // Blank lines and the final line terminator participate in byte offsets.
         let mut input = input;
         let stamp = input.stamp.clone();
-        let mut case_index =
-            case_dependencies.then(|| Builder::with_evidence(stamp.clone(), (*evidence).clone()));
+        let mut case_index = case_dependencies.then(|| {
+            Builder::with_evidence(
+                stamp.clone(),
+                (*evidence).clone(),
+                crate::dependency_index::proof::is_evidence,
+            )
+        });
         let scope_membership_sha256 = if case_dependencies {
             input.scope_membership_sha256()?
         } else {

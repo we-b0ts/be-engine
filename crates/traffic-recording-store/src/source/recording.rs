@@ -1,16 +1,17 @@
 //! Manifest-owned discovery. Directory contents cannot invent Case ownership.
+use crate::format::{DEPENDENCIES, EVENTS};
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs,
-    io::Read,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
-use traffic_model::{
-    compact::{DEPENDENCIES, EVENTS},
-    recording::{COMPACT_RECORDING_SCHEMA, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest},
+use traffic_model::recording::{
+    COMPACT_RECORDING_SCHEMA, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest,
 };
+use traffic_model::trace::{CaptureEvent, RecordedEvent};
 
 pub fn supported_recording_schema(schema: &str) -> bool {
     schema == COMPACT_RECORDING_SCHEMA
@@ -47,6 +48,27 @@ pub fn manifest(path: &Path) -> Result<(PathBuf, RecordingManifest)> {
         "recording manifest and dependency storage format disagree"
     );
     Ok((root, manifest))
+}
+
+/// Stream the events of a sealed recording in the order stored by its writer.
+pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<CaptureEvent>>>> {
+    let (root, manifest) = manifest(path)?;
+    let compact = manifest.schema == COMPACT_RECORDING_SCHEMA;
+    let name = if compact {
+        EVENTS
+    } else {
+        "dependency-lifecycle.jsonl"
+    };
+    let file = fs::File::open(root.join(name))
+        .context("recording has no ordered dependency event journal")?;
+    Ok(BufReader::new(file).lines().map(move |line| {
+        let line = line?;
+        if compact {
+            crate::format::decode_event(&line)
+        } else {
+            Ok(serde_json::from_str(&line)?)
+        }
+    }))
 }
 
 pub fn cases(path: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {

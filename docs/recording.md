@@ -718,6 +718,11 @@ Replay authenticates the sealed inventory and prepares bounded native indexes.
 Scoped recordings publish portable startup, process and unattributed indexes
 under `indexes/`.
 
+Fast Replay caps the recorded gaps before sequenced response headers, parts and
+completion. Requests and actual wire receipts still advance the Source cursor.
+Engine.IO replies use the live Target ping payload, with capped delays for
+recorded pong bindings. Missing pongs retain their recorded behavior.
+
 Source proof retains original central byte positions and content hashes. Derived
 indexes and independent attribution overlays do not modify the sealed recording.
 Legacy API-origin ownership discovery and transaction promotion cannot replace a

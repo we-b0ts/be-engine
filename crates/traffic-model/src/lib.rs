@@ -8,4 +8,3 @@ pub mod trace;
 pub use outcome::*;
 
 pub mod capture;
-pub mod compact;

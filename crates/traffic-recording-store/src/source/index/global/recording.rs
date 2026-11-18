@@ -1,12 +1,12 @@
 //! Portable indexes for the original scopes of a sealed recording.
 use super::{FileStamp, GlobalIndex, VERSION, build_index_with_evidence, store};
-use crate::dependency::observation::MANIFEST_FILE;
-use crate::dependency_index::{build::digest, recording, scoped};
+use crate::source::{digest, recording, scoped};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use traffic_model::recording::MANIFEST_FILE;
 
 const SCOPES: [&str; 3] = ["startup", "process", "unattributed"];
 const INDEX_FILE: &str = "index.json";
@@ -17,14 +17,6 @@ struct SealedIndex {
     scope: String,
     scope_stamp: FileStamp,
     index: GlobalIndex,
-}
-
-pub fn seal_recording_scopes(run: &Path, validate: impl Fn(&Value) -> Result<()>) -> Result<()> {
-    seal_recording_scopes_with_evidence(
-        run,
-        validate,
-        crate::protocols::default_providers().evidence(),
-    )
 }
 
 pub fn seal_recording_scopes_with_evidence(

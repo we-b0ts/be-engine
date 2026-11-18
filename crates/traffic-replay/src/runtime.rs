@@ -2,7 +2,10 @@
 use crate::{Admission, DeliveryTicket, EventKind, SequencePlan, SequenceScheduler, SourceEvent};
 use anyhow::{Context, Result, ensure};
 use std::sync::{Arc, Mutex};
-use tokio::{sync::watch, time::Instant};
+use tokio::{
+    sync::watch,
+    time::{Duration, Instant},
+};
 
 const MAX_PENDING_REQUESTS: usize = 256;
 const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
@@ -13,6 +16,7 @@ pub struct SequenceRuntime {
     changed: watch::Sender<u64>,
     requests_changed: watch::Sender<u64>,
     plan: Arc<SequencePlan>,
+    fast_gap_cap: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -20,19 +24,47 @@ struct State {
     scheduler: SequenceScheduler,
     pending: usize,
     pending_bytes: usize,
+    progressed_at: Option<Instant>,
+}
+
+impl State {
+    fn record_progress(&mut self, previous: Option<SourceEvent>) {
+        if self.scheduler.previous() != previous {
+            self.progressed_at = Some(Instant::now());
+        }
+    }
+
+    fn output_due(&self, dependency: u64, cap: Duration) -> Option<Instant> {
+        let next = self.scheduler.expected().filter(|event| {
+            event.dependency_sequence == dependency
+                && matches!(
+                    event.kind.delivered(),
+                    EventKind::ResponseHeaders | EventKind::ResponsePart | EventKind::ResponseEnd
+                )
+        })?;
+        let previous = self.scheduler.previous()?;
+        let gap = Duration::from_micros(next.offset_micros.saturating_sub(previous.offset_micros));
+        self.progressed_at?.checked_add(gap.min(cap))
+    }
 }
 
 impl SequenceRuntime {
     pub fn new(plan: Arc<SequencePlan>) -> Arc<Self> {
+        Self::with_fast_gap_cap(plan, None)
+    }
+
+    pub fn with_fast_gap_cap(plan: Arc<SequencePlan>, fast_gap_cap: Option<Duration>) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(State {
                 scheduler: SequenceScheduler::new(plan.clone()),
                 pending: 0,
                 pending_bytes: 0,
+                progressed_at: None,
             }),
             changed: watch::channel(0).0,
             requests_changed: watch::channel(0).0,
             plan,
+            fast_gap_cap,
         })
     }
 
@@ -95,10 +127,14 @@ impl SequenceRuntime {
 
     pub fn admit(self: &Arc<Self>, dependency: u64) -> Result<SequenceClaim> {
         let mut state = self.state.lock().expect("sequence runtime poisoned");
+        let previous = state.scheduler.previous();
         ensure!(
             state.scheduler.admit(dependency)? == Admission::Accepted,
             "request is earlier than its recorded sequence"
         );
+        if self.fast_gap_cap.is_some() {
+            state.record_progress(previous);
+        }
         drop(state);
         self.notify();
         Ok(SequenceClaim(Arc::new(Claim {
@@ -254,6 +290,7 @@ impl SequenceClaim {
     ) -> Result<()> {
         let mut changed = self.0.runtime.subscribe();
         loop {
+            let mut due = None;
             {
                 let mut delivery = self.0.delivery.lock().expect("sequence delivery poisoned");
                 let mut state = self
@@ -278,17 +315,35 @@ impl SequenceClaim {
                     .scheduler
                     .expected()
                     .is_some_and(|event| event.kind.delivered() == EventKind::ResponseHeaders);
-                if matches!(*delivery, Delivery::Waiting)
-                    && !(after_headers && headers)
-                    && let Some(ticket) = state.scheduler.reserve_delivery(self.0.dependency)?
-                {
-                    let source = state.scheduler.receipt_source(ticket);
-                    *delivery = Delivery::Reserved { ticket, source };
-                    drop(state);
-                    drop(delivery);
-                    self.0.runtime.notify();
-                    return Ok(());
+                if matches!(*delivery, Delivery::Waiting) && !(after_headers && headers) {
+                    due = self
+                        .0
+                        .runtime
+                        .fast_gap_cap
+                        .and_then(|cap| state.output_due(self.0.dependency, cap))
+                        .filter(|due| *due > Instant::now());
+                    if due.is_none() {
+                        let previous = state.scheduler.previous();
+                        if let Some(ticket) = state.scheduler.reserve_delivery(self.0.dependency)? {
+                            let source = state.scheduler.receipt_source(ticket);
+                            *delivery = Delivery::Reserved { ticket, source };
+                            if self.0.runtime.fast_gap_cap.is_some() {
+                                state.record_progress(previous);
+                            }
+                            drop(state);
+                            drop(delivery);
+                            self.0.runtime.notify();
+                            return Ok(());
+                        }
+                    }
                 }
+            }
+            if let Some(due) = due.filter(|due| *due < deadline) {
+                tokio::select! {
+                    result = changed.changed() => { result.context("recorded output sequence closed")?; }
+                    _ = tokio::time::sleep_until(due) => {}
+                }
+                continue;
             }
             tokio::time::timeout_at(deadline, changed.changed())
                 .await
@@ -320,6 +375,14 @@ impl SequenceClaim {
             {
                 return 0;
             }
+            if self
+                .0
+                .runtime
+                .fast_gap_cap
+                .is_some_and(|cap| !cap.is_zero())
+            {
+                return 1;
+            }
             self.0
                 .runtime
                 .state
@@ -347,6 +410,7 @@ impl SequenceClaim {
                     || state.scheduler.consecutive_parts(self.0.dependency, count) == count),
             "wire receipt crosses a recorded output barrier"
         );
+        let previous = state.scheduler.previous();
         state.scheduler.finish_delivery(ticket, true)?;
         for _ in 1..count {
             ticket = state
@@ -354,6 +418,9 @@ impl SequenceClaim {
                 .reserve_delivery(self.0.dependency)?
                 .context("contiguous output reservation is unavailable")?;
             state.scheduler.finish_delivery(ticket, true)?;
+        }
+        if self.0.runtime.fast_gap_cap.is_some() {
+            state.record_progress(previous);
         }
         *delivery = if source.kind.is_terminal() {
             Delivery::Published { ticket, source }

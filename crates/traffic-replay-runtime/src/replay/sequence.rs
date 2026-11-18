@@ -1,10 +1,8 @@
 //! Prepare immutable event postings once, outside Target request execution.
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use traffic_model::trace::{CaptureEvent, RecordedEvent};
+use anyhow::Result;
 use traffic_replay::SequenceCatalog;
 use traffic_replay::SequenceRuntime;
 
@@ -47,6 +45,12 @@ impl<P: super::ReplayProtocolSet> traffic_replay::request::ExecutionState
 pub(crate) use traffic_replay::SequenceBinding as Binding;
 
 impl<P: super::ReplayProtocolSet> super::RuntimeState<P> {
+    fn sequence_runtime(&self, plan: Arc<traffic_replay::SequencePlan>) -> Arc<SequenceRuntime> {
+        let cap = super::control::input_timing::source_fast_cap(self)
+            .map(std::time::Duration::from_millis);
+        SequenceRuntime::with_fast_gap_cap(plan, cap)
+    }
+
     pub(super) fn activate_sequence(&mut self, case: Option<&str>) {
         if let Some(runtime) = self.active_sequence.take()
             && !runtime.complete()
@@ -64,7 +68,7 @@ impl<P: super::ReplayProtocolSet> super::RuntimeState<P> {
         self.active_sequence = case
             .and_then(|case| self.case_execution_plans.get(case))
             .and_then(|plan| plan.sequence.clone())
-            .map(SequenceRuntime::new);
+            .map(|plan| self.sequence_runtime(plan));
         let run = self
             .run_sequence
             .as_ref()
@@ -109,27 +113,9 @@ mod run;
 pub(super) use run::RunBindings;
 
 pub(super) fn load(source: &Path) -> Result<Option<Arc<SequenceCatalog>>> {
-    let Some(root) = crate::dependency_index::recording::root(source) else {
+    if crate::dependency_index::recording::root(source).is_none() {
         return Ok(None);
-    };
-    let compact = root.join(traffic_model::compact::EVENTS);
-    let (path, compact) = if compact.exists() {
-        (compact, true)
-    } else {
-        (root.join("dependency-lifecycle.jsonl"), false)
-    };
-    let input =
-        std::fs::File::open(path).context("recording has no ordered dependency event journal")?;
-    let records =
-        BufReader::new(input)
-            .lines()
-            .map(|line| -> Result<RecordedEvent<CaptureEvent>> {
-                let line = line?;
-                if compact {
-                    traffic_model::compact::decode_event(&line)
-                } else {
-                    Ok(serde_json::from_str(&line)?)
-                }
-            });
+    }
+    let records = crate::dependency_index::recording::events(source)?;
     SequenceCatalog::try_prepare(records).map(Some)
 }

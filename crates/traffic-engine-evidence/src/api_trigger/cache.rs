@@ -4,6 +4,7 @@ use super::{
     evidence::{EvidenceFile, build},
     request,
 };
+use crate::dependency_index::MysqlRecords;
 use crate::{config::BackgroundDependencyRuleConfig, dependency_index::FileStamp};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};

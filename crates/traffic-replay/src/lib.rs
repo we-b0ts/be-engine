@@ -284,6 +284,12 @@ impl SequenceScheduler {
         self.plan.events.get(self.cursor).map(|event| event.source)
     }
 
+    fn previous(&self) -> Option<SourceEvent> {
+        self.cursor
+            .checked_sub(1)
+            .map(|index| self.plan.events[index].source)
+    }
+
     /// Call after the current native request and shared value rules have matched.
     /// A later request stays outside the finite claim until its recorded turn.
     pub fn admit(&mut self, dependency_sequence: u64) -> Result<Admission> {

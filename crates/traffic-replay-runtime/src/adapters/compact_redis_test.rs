@@ -1,5 +1,5 @@
 use super::*;
-use traffic_model::compact::{self, PayloadRef};
+use crate::dependency_index::recording;
 use traffic_protocol_redis::{BufferedReader, encode_array, read_frame};
 
 const CHANNEL: &[u8] = b"codex-compact-verify";
@@ -150,10 +150,9 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
         assert!(manifest.capture_complete);
         assert!(!root.join(".global-replay-index.json").exists());
         assert!(!root.join(".global-replay-pages").exists());
-        let events = std::fs::read_to_string(root.join(compact::EVENTS))?
-            .lines().map(compact::decode_event).collect::<Result<Vec<_>>>()?;
+        let events = recording::events(&root)?.collect::<Result<Vec<_>>>()?;
         assert!(events.windows(2).all(|pair| pair[0].sequence < pair[1].sequence));
-        let semantic = crate::dependency_index::scoped::read_bytes(&root.join(compact::DEPENDENCIES))?;
+        let semantic = crate::dependency_index::scoped::read_bytes(&recording::dependency_path(&root))?;
         let rows = std::str::from_utf8(&semantic)?.lines()
             .map(serde_json::from_str::<Value>).collect::<serde_json::Result<Vec<_>>>()?;
         let request = |command| {
@@ -181,24 +180,30 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
             anyhow::bail!("expected two primary boundaries, got {primary:?}");
         };
         assert!(*opened < start(blocked) && end(blocked) < *closed);
-        let payload = std::fs::metadata(root.join(PayloadRef::path(0)))?.len();
+        let payload: u64 = manifest.files.iter().filter(|file| file.path.starts_with("payload/")).map(|file| file.length).sum();
         assert!(payload > value.len() as u64);
         let recording = Recording {
             _directory: directory,
-            source_bytes: std::fs::read(root.join(compact::DEPENDENCIES))?,
+            source_bytes: std::fs::read(recording::dependency_path(&root))?,
             root,
             case: manifest.inputs[0].case_id.to_string(),
             providers,
             startup_listener: false,
         };
-        for lazy in [false, true] {
-            let replay = Replay::start(&recording, lazy).await;
+        for (lazy, timing) in [
+            (false, crate::replay::ReplayStreamTiming::Recorded),
+            (true, crate::replay::ReplayStreamTiming::Recorded),
+            (true, crate::replay::ReplayStreamTiming::Fast),
+        ] {
+            let replay = Replay::start_with_timing(&recording, lazy, false, None, Some(timing)).await;
+            let started = tokio::time::Instant::now();
             exercise(replay.address, &value).await?;
+            let exchange_ms = started.elapsed().as_millis();
             let report = replay.finish().await;
             assert_eq!(report["dependency_protocols"]["redis"]["matched_count"], 7, "{report}");
             assert_eq!(report["dependency_protocols"]["redis"]["unused_case"], json!([]), "{report}");
             assert_eq!(report["batch_reconciliation"]["dependency_inventory_verified"], true, "{report}");
-            eprintln!("real Redis inventory matched=7 lazy={lazy} event_count={} dependency_bytes={} payload_bytes={payload} semantic_jsonl_bytes={}", events.len(), recording.source_bytes.len(), semantic.len());
+            eprintln!("real Redis inventory matched=7 lazy={lazy} timing={timing:?} exchange_ms={exchange_ms} event_count={} dependency_bytes={} payload_bytes={payload} semantic_jsonl_bytes={}", events.len(), recording.source_bytes.len(), semantic.len());
         }
         Ok(())
     }).await?

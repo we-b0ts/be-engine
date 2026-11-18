@@ -1,5 +1,9 @@
 //! Rule-independent, source-bound MySQL transaction intervals. No SQL or row payloads.
-use super::{FileIndex, FileStamp, model::IndexedMysqlRecord, store};
+use super::{
+    FileIndex, FileStamp,
+    model::{IndexedMysqlRecord, MysqlRecords},
+    store,
+};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{

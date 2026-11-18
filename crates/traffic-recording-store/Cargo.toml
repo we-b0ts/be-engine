@@ -8,6 +8,9 @@ test-support = []
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
 traffic-model = { path = "../traffic-model" }
 traffic-protocol = { path = "../traffic-protocol" }
 serde = { version = "1", features = ["derive"] }
@@ -15,3 +18,8 @@ serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
 libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros"] }

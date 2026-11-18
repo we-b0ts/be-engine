@@ -1,11 +1,11 @@
 //! Resolve and verify the payloads referenced by one compact dependency row.
+use crate::format::{DEPENDENCIES, DependencyRow, PayloadRef};
 use anyhow::{Context, Result, ensure};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::Path,
 };
-use traffic_model::compact::{DEPENDENCIES, DependencyRow, PayloadRef};
 
 pub(super) fn is_compact(path: &Path) -> bool {
     path.file_name().is_some_and(|name| name == DEPENDENCIES)
