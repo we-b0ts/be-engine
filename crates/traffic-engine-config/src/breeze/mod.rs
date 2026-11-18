@@ -228,18 +228,18 @@ mod tests {
         descriptor(temp.path(), "breeze_sdk.lock");
         descriptor(
             temp.path(),
-            "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs",
+            "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs",
         );
         descriptor(
             temp.path(),
-            "static.config.api.demo.test+3+config+cloud+redis+user+other@redis:9301@rs",
+            "static.config.api.example.test+3+config+cloud+redis+user+other@redis:9301@rs",
         );
 
         let resolved = resolve_business_resource(temp.path(), "user-video", "mc").unwrap();
 
         assert_eq!(
             resolved.identity,
-            "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs"
+            "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc@cs"
         );
         assert_eq!(resolved.namespace, "user-video");
         assert_eq!(resolved.port, 9448);
@@ -248,25 +248,25 @@ mod tests {
     #[test]
     fn exact_identity_reuses_port_and_rejects_missing_or_duplicate_descriptors() {
         let temp = tempfile::tempdir().unwrap();
-        let identity = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs";
+        let identity = "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc@cs";
         assert_eq!(try_resolve_identity(temp.path(), identity).unwrap(), None);
         assert!(resolve_identity(temp.path(), identity).is_err());
 
         descriptor(
             temp.path(),
-            "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs",
+            "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs",
         );
         assert_eq!(resolve_identity(temp.path(), identity).unwrap().port, 9448);
 
         descriptor(
             temp.path(),
-            "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9449@cs",
+            "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9449@cs",
         );
         assert!(resolve_identity(temp.path(), identity).is_err());
         assert!(
             resolve_identity(
                 temp.path(),
-                "config.api.demo.test+3+config+v1+cache.pool+all:missing@mc@cs"
+                "config.api.example.test+3+config+v1+cache.pool+all:missing@mc@cs"
             )
             .is_err()
         );
@@ -277,11 +277,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         descriptor(
             temp.path(),
-            "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:not-a-port@cs",
+            "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:not-a-port@cs",
         );
         descriptor(
             temp.path(),
-            "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs",
+            "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs",
         );
 
         assert!(resolve_business_resource(temp.path(), "user-video", "mc").is_err());

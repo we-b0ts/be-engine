@@ -61,7 +61,7 @@ recorder:
       - 10.185.28.119
   http_response_rewrite:
     # JSON URL capture belongs to a capture_http_response effect in project.policy:
-    # - name: cs.wegent.intra.demo.test
+    # - name: sandbox.example.test
     #   rules:
     #   - path_pattern: GET /executor-manager/sandboxes/*
     #     pointer: /base_url

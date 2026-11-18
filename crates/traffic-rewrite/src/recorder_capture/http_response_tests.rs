@@ -21,7 +21,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RewriteState) {
     fs::write(case.join("expected-response.json"), "{}").unwrap();
     let event = json!({
         "event_type":"http_exchange","id":"response-1","scheme":"http","method":"GET",
-        "uri":"/executor-manager/sandboxes/123","authority":"cs.wegent.intra.demo.test",
+        "uri":"/executor-manager/sandboxes/123","authority":"sandbox.example.test",
         "response_status":200,"response_headers":{"content-type":["application/json"]},
         "response_body":{"encoding":"base64","truncated":false,"data":STANDARD.encode(br#"{"base_url":"http://10.36.14.118:8080/secret?token=do-not-expose","other":"https://example.test"}"#)}
     });
@@ -106,7 +106,7 @@ fn report_ip(
 fn options(report: &crate::RewriteIpCaptureReport) -> RewriteHttpResponseCapturePlanOptions {
     RewriteHttpResponseCapturePlanOptions {
         evidence_id:report.evidence.evidence_id.clone(),case_id:"case-1".into(),response_id:"response-1".into(),
-        rule:serde_yaml::from_str("name: sandbox-base-url\nauthorities: [cs.wegent.intra.demo.test]\nmethods: [GET]\npath_pattern: /executor-manager/sandboxes/*\npointers: [/base_url]\n").unwrap(),
+        rule:serde_yaml::from_str("name: sandbox-base-url\nauthorities: [sandbox.example.test]\nmethods: [GET]\npath_pattern: /executor-manager/sandboxes/*\npointers: [/base_url]\n").unwrap(),
         source_evidence:"service.py:42 list_tree reads sandbox.base_url and invokes ListDir on it".into(),
         pattern_checked: true,
     }
@@ -199,7 +199,7 @@ fn wrong_pointer_and_changed_recorded_response_cannot_be_applied() {
 
 fn rule(pattern: &str) -> HttpResponseRewriteRuleConfig {
     crate::config::source_traffic_policy::http_response::Document {
-        name: "cs.wegent.intra.demo.test".into(),
+        name: "sandbox.example.test".into(),
         path_pattern: format!("GET {pattern}"),
         pointer: "/base_url".into(),
         source_evidence: "sandbox_id varies; consume base_url".into(),
@@ -301,7 +301,7 @@ fn first_plan_requires_explicit_review_without_a_proof_format_or_apply_command()
     assert!(json["plan_id"].is_string());
     assert_eq!(
         json["traffic_e2e_report"]["rule"]["name"],
-        "cs.wegent.intra.demo.test"
+        "sandbox.example.test"
     );
     assert_eq!(
         json["traffic_e2e_report"]["rule"]["path_pattern"],
@@ -430,7 +430,7 @@ fn checked_pattern_merges_old_ids_and_preserves_uncovered_or_different_rules() {
     let crate::policy::native::NativeEffect::CaptureHttpResponse(effect) = &merged.effect else {
         panic!("wrong effect")
     };
-    assert_eq!(effect.authorities, ["cs.wegent.intra.demo.test"]);
+    assert_eq!(effect.authorities, ["sandbox.example.test"]);
     assert_eq!(effect.methods, ["GET"]);
     let crate::policy::native::CaptureResponseContract::Urls { pointers } = &effect.contract else {
         panic!("wrong response contract")

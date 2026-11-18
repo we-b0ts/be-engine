@@ -311,9 +311,9 @@ async fn vintage_http_remains_a_structured_case_dependency_without_explicit_owne
     let body = serde_json::to_vec(&serde_json::json!({"servers":["127.0.0.1:12345"],"version":1}))
         .unwrap();
     for authority in [
-        "config.api.demo.test",
-        "static.config.api.demo.test",
-        "register.kailash.demo.test",
+        "config.api.example.test",
+        "static.config.api.example.test",
+        "naming.example.test",
     ] {
         for path in ["/1/config/service", "/naming/service"] {
             let mut event = http_dependency(authority, path);

@@ -10,7 +10,7 @@ fn config() -> HttpResponseRewriteConfig {
         r#"
 rules:
   - name: sandbox-base-url
-    authorities: [cs.wegent.intra.demo.test]
+    authorities: [sandbox.example.test]
     methods: [GET]
     path_pattern: /executor-manager/sandboxes/*
     pointers: [/base_url, /other, /missing, /null]
@@ -45,7 +45,7 @@ async fn rewrite(
         RewriteInput {
             method: &Method::GET,
             uri: &"/executor-manager/sandboxes/123?ignored=yes".parse()?,
-            authority: Some("cs.wegent.intra.demo.test"),
+            authority: Some("sandbox.example.test"),
             status: StatusCode::OK,
             headers: &headers,
             body: if gzip { &compressed } else { body },
@@ -172,7 +172,7 @@ fn patterns_and_default_filters_match_only_supported_responses() {
                 &RewriteInput {
                     method: &Method::GET,
                     uri: &path.parse().unwrap(),
-                    authority: Some("cs.wegent.intra.demo.test"),
+                    authority: Some("sandbox.example.test"),
                     status,
                     headers: &headers,
                     body: b"{}"
@@ -188,7 +188,7 @@ fn patterns_and_default_filters_match_only_supported_responses() {
         &RewriteInput {
             method: &Method::GET,
             uri: &"/executor-manager/sandboxes/123/path".parse().unwrap(),
-            authority: Some("cs.wegent.intra.demo.test"),
+            authority: Some("sandbox.example.test"),
             status: StatusCode::OK,
             headers: &headers,
             body: b"{}"

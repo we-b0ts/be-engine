@@ -1,16 +1,10 @@
-FROM docker.io/library/rust:1.86.0-bookworm@sha256:300ec56abce8cc9448ddea2172747d048ed902a3090e6b57babb2bf19f754081
-
-ENV CARGO_HOME=/opt/rust/cargo \
-    RUSTUP_TOOLCHAIN=1.98.1 \
-    RUSTUP_DIST_SERVER=https://rsproxy.cn \
-    RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
+ARG BASE_IMAGE=docker.io/library/rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e
+FROM ${BASE_IMAGE}
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends musl-tools \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add x86_64-unknown-linux-musl
 
-RUN rustup toolchain install "${RUSTUP_TOOLCHAIN}" \
-        --profile minimal \
-        --target x86_64-unknown-linux-musl
-
+ENV CARGO_HOME=/opt/rust/cargo
 COPY .cargo/config.toml ${CARGO_HOME}/config.toml

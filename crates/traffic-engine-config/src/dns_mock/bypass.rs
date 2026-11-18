@@ -158,13 +158,13 @@ mod tests {
     #[test]
     fn matches_exact_suffix_and_wildcard_patterns() {
         let matcher = DomainMatcher::from_patterns(&[
-            "preview-wss-wegent.intra.demo.test".to_string(),
+            "preview-wss.internal.example.test".to_string(),
             ".internal.example.com".to_string(),
             "*.dingtalk.com".to_string(),
             "api?.service.example.com".to_string(),
         ]);
 
-        assert!(matcher.matches("preview-wss-wegent.intra.demo.test"));
+        assert!(matcher.matches("preview-wss.internal.example.test"));
         assert!(matcher.matches("api.internal.example.com"));
         assert!(matcher.matches("internal.example.com"));
         assert!(!matcher.matches("notinternal.example.com"));

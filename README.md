@@ -470,7 +470,7 @@ registry_path = "./.traffic-e2e/local/artifacts/fake_dns_registry.json"
 # Exact names, suffixes starting with ".", and glob wildcards using "*" or "?"
 # are returned from upstream DNS unchanged.
 bypass_domains = [
-  "preview-wss-wegent.intra.demo.test",
+  "preview-wss.internal.example.test",
   ".metrics.internal.example.com",
   "*.dingtalk.com",
 ]
@@ -535,8 +535,8 @@ sudo traffic-e2e diagnose interception fake-ip up \
 Test the DNS mock with `dig`:
 
 ```bash
-dig @127.0.0.153 -p 4053 demo.test A +short
-dig demo.test A +short
+dig @127.0.0.153 -p 4053 example.com A +short
+dig example.com A +short
 ```
 
 To keep a domain out of recording, add it to `bypass_domains`. Exact entries

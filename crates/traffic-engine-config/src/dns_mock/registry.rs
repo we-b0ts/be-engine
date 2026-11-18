@@ -477,7 +477,7 @@ mod tests {
         let registry = FakeDnsRegistry::load_or_new("198.18.0.0/15", Some(&path), &[]).unwrap();
         let entry = registry
             .allocate_or_update(
-                "preview-wss-wegent.intra.demo.test",
+                "preview-wss.internal.example.test",
                 vec![Ipv4Addr::new(1, 1, 1, 1)],
             )
             .await
@@ -487,12 +487,12 @@ mod tests {
         let registry = FakeDnsRegistry::load_or_new(
             "198.18.0.0/15",
             Some(&path),
-            &["preview-wss-wegent.intra.demo.test".to_string()],
+            &["preview-wss.internal.example.test".to_string()],
         )
         .unwrap();
         assert_eq!(
             registry.get_by_fake_ip(entry.fake_ip).await.unwrap().domain,
-            "preview-wss-wegent.intra.demo.test"
+            "preview-wss.internal.example.test"
         );
     }
 

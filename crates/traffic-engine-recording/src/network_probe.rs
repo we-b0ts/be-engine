@@ -3,7 +3,7 @@ use std::time::Duration;
 use clap::ValueEnum;
 use serde::Serialize;
 
-pub const IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e2e-network-probe:0.0.1@sha256:6804ffe944eb4709c4f8387e984dfcf524be14241c571756a6b6b85a8cb13f8e";
+pub const IMAGE: &str = "be-engine-network-probe:local";
 pub const POSITIVE_URL: &str = "https://demo.test/";
 pub const POSITIVE_AUTHORITY: &str = "demo.test";
 pub const NEGATIVE_URL: &str = "https://example.com/";

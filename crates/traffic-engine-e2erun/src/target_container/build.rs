@@ -316,11 +316,11 @@ fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
 fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str) -> Result<()> {
     ensure!(
         dockerfile.contains(&format!("FROM {} AS builder", super::TARGET_BUILDER_IMAGE)),
-        "target Dockerfile must use the pinned traffic-e2e Rust builder"
+        "target Dockerfile must use the configured traffic-e2e Rust builder image"
     );
     ensure!(
         dockerfile.contains(&format!("FROM {}", super::TARGET_RUNTIME_IMAGE)),
-        "target Dockerfile must use the pinned traffic-e2e Rust runtime as its final stage"
+        "target Dockerfile must use the configured traffic-e2e Rust runtime as its final stage"
     );
     ensure!(
         dockerfile
@@ -575,8 +575,11 @@ mod tests {
         validate_dockerfile_contract(
             &config,
             &base.replace(
-                "FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime",
-                "COPY --from=shared-source src /build/shared/src\nFROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime",
+                &format!("FROM {}", super::super::TARGET_RUNTIME_IMAGE),
+                &format!(
+                    "COPY --from=shared-source src /build/shared/src\nFROM {}",
+                    super::super::TARGET_RUNTIME_IMAGE
+                ),
             ),
         )
         .unwrap();

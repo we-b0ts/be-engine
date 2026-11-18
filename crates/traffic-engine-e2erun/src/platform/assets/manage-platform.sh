@@ -149,9 +149,9 @@ source_image_id=$(jq -er '.image_id' "$TRAFFIC_E2E_SOURCE_RUNTIME") || {
     exit 1
 }
 
-anchor_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62'
-recorder_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107'
-network_probe_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-network-probe:0.0.1@sha256:6804ffe944eb4709c4f8387e984dfcf524be14241c571756a6b6b85a8cb13f8e'
+anchor_image='be-engine-network-anchor:local'
+recorder_image='be-engine-recorder-runtime:local'
+network_probe_image='be-engine-network-probe:local'
 
 repo_name=$(basename "$TRAFFIC_E2E_TARGET_ROOT" | tr -cs 'A-Za-z0-9_.-' '-')
 repo_name=${repo_name#-}
@@ -452,11 +452,17 @@ run_preflight() {
     }
     resolve_or_build_recording_adapter
     detect_source_java_runtime
-    docker pull "$anchor_image" >/dev/null
-    docker pull "$recorder_image" >/dev/null
+    local image
+    local -a required_images=("$anchor_image" "$recorder_image")
     if ! "$source_uses_java"; then
-        docker pull "$network_probe_image" >/dev/null
+        required_images+=("$network_probe_image")
     fi
+    for image in "${required_images[@]}"; do
+        if ! docker image inspect "$image" >/dev/null 2>&1; then
+            printf 'error: image %s is missing; run scripts/build-runtime-images.sh first\n' "$image" >&2
+            return 1
+        fi
+    done
     docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \
         "$anchor_image" >/dev/null
     anchor_started=true

@@ -5,7 +5,7 @@ use crate::config::SourceTrafficPolicyConfig;
 
 const REVISION: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const EVIDENCE: &str = "TopUserServiceImpl.java:691 scheduled local cache warm";
-const DESCRIPTOR: &str = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
+const DESCRIPTOR: &str = "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
 
 struct Fixture {
     _temp: tempfile::TempDir,

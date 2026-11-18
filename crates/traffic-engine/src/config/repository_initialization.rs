@@ -302,6 +302,14 @@ fn render_missing_target_delivery(
         let project = target_cache_project(target_root)?;
         let dockerfile = TARGET_DOCKERFILE_TEMPLATE
             .replace(
+                "__TARGET_BUILDER_IMAGE__",
+                env!("TRAFFIC_E2E_TARGET_BUILDER_IMAGE"),
+            )
+            .replace(
+                "__TARGET_RUNTIME_IMAGE__",
+                env!("TRAFFIC_E2E_TARGET_RUNTIME_IMAGE"),
+            )
+            .replace(
                 TARGET_TEMPLATE_CACHE_ID,
                 &format!("traffic-e2e-{project}-target"),
             )
@@ -729,7 +737,7 @@ mod tests {
         let lock = fs::read_to_string(target.path().join(TARGET_CARGO_LOCK_PATH)).unwrap();
         assert!(lock.contains("name = \"brz-logs\""));
         assert!(lock.contains("name = \"brz-http-server\""));
-        assert!(!lock.contains("git+ssh://git@git.intra.demo.test"));
+        assert!(!lock.contains("git+"));
         let main = fs::read_to_string(target.path().join(TARGET_MAIN_PATH)).unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
         assert!(main.contains("#[http_server::get(\"/healthz\", group = readiness_apis)]"));
@@ -752,7 +760,6 @@ mod tests {
         assert!(!dockerfile.contains("COPY . ."));
         assert!(!dockerfile.contains("--mount=type=ssh"));
         assert!(!dockerfile.contains("git ls-remote"));
-        assert!(!dockerfile.contains("git.intra.demo.test"));
         assert!(!dockerfile.contains("__TARGET_"));
         for rule in TARGET_DOCKERIGNORE_RULES {
             assert!(

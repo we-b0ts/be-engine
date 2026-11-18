@@ -116,7 +116,7 @@ fn redis_event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
 #[test]
 fn matches_exact_get_key_series_on_an_existing_descriptor() {
     let temp = tempfile::tempdir().unwrap();
-    let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
+    let filename = "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
     std::fs::write(temp.path().join(filename), "").unwrap();
     let identity = filename.replace(":9448", "");
     let matcher =
@@ -165,7 +165,7 @@ fn matches_exact_get_key_series_on_an_existing_descriptor() {
 #[test]
 fn resolves_source_registered_descriptor_after_recorder_initialization() {
     let temp = tempfile::tempdir().unwrap();
-    let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
+    let filename = "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
     let identity = filename.replace(":9448", "");
     let matcher =
         BackgroundDependencyMatcher::from_rules_in(&[memcached_rule(identity)], temp.path())
@@ -193,7 +193,7 @@ fn resolves_source_registered_descriptor_after_recorder_initialization() {
 #[tokio::test]
 async fn initial_load_completion_uses_matching_exchange_count() {
     let temp = tempfile::tempdir().unwrap();
-    let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
+    let filename = "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
     std::fs::write(temp.path().join(filename), "").unwrap();
     let identity = filename.replace(":9448", "");
     let matcher = BackgroundDependencyMatcher::from_rules_in(
@@ -215,7 +215,7 @@ async fn initial_load_completion_uses_matching_exchange_count() {
 #[tokio::test]
 async fn initial_load_timeout_is_non_fatal() {
     let temp = tempfile::tempdir().unwrap();
-    let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
+    let filename = "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
     std::fs::write(temp.path().join(filename), "").unwrap();
     let identity = filename.replace(":9448", "");
     let matcher = BackgroundDependencyMatcher::from_rules_in(

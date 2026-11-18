@@ -17,14 +17,15 @@ version before each new release. Git revision remains embedded in the binaries
 and image metadata.
 
 Environment:
-  ENGINE_IMAGE_REPOSITORY  Default: registry.api.demo.test/weibo_rd_if/traffic-e2e-engine
+  ENGINE_IMAGE_REPOSITORY  Default local image repository: be-engine
+  RECORDER_RUNTIME_IMAGE Default: be-engine-recorder-runtime:local.
   ENGINE_BIN_DIR          Existing binary directory (only with --skip-build).
   CARGO_TARGET_DIR        Cargo output directory (default: <repository>/target).
 
 Examples:
   ./scripts/build-engine.sh
-  ./scripts/build-engine.sh --publish
-  ./scripts/build-engine.sh --skip-build --publish
+  ENGINE_IMAGE_REPOSITORY=ghcr.io/owner/be-engine ./scripts/build-engine.sh --publish
+  ./scripts/build-engine.sh --skip-build --tag ghcr.io/owner/be-engine:0.0.1 --publish
 EOF
 }
 
@@ -59,7 +60,10 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
   [[ "$publish" == false ]] || fail 'Commit changes before publishing an engine image.'
   revision+='-dirty'
 fi
-repository="${ENGINE_IMAGE_REPOSITORY:-registry.api.demo.test/weibo_rd_if/traffic-e2e-engine}"
+if [[ "$publish" == true && -z "$image_tag" && -z "${ENGINE_IMAGE_REPOSITORY:-}" ]]; then
+  fail '--publish requires --tag or ENGINE_IMAGE_REPOSITORY.'
+fi
+repository="${ENGINE_IMAGE_REPOSITORY:-be-engine}"
 image_version="$(cat "$repo_root/docker/engine/VERSION")"
 [[ "$image_version" =~ ^0\.0\.[1-9][0-9]*$ ]] ||
   fail 'docker/engine/VERSION must contain a version such as 0.0.1.'
@@ -89,6 +93,7 @@ done
 
 docker buildx build --load --platform linux/amd64 --network none \
   --file "$repo_root/docker/engine/Dockerfile" \
+  --build-arg "RUNTIME_IMAGE=${RECORDER_RUNTIME_IMAGE:-be-engine-recorder-runtime:local}" \
   --build-arg "ENGINE_REVISION=$revision" \
   --build-arg "ENGINE_VERSION=$image_version" \
   --tag "$image_tag" "$staging_dir"

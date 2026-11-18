@@ -3,7 +3,7 @@ use super::*;
 
 fn exchange() -> Value {
     json!({"event_type":"http_exchange","id":Uuid::new_v4(),"scheme":"http",
-        "authority":"config.api.demo.test:80","method":"GET","uri":"/1/config/service?service=example",
+        "authority":"config.api.example.test:80","method":"GET","uri":"/1/config/service?service=example",
         "request_headers":{},"request_body":capture(""),"response_status":200,
         "response_headers":{"content-type":["application/json"]},"response_body":capture("{\"servers\":[]}"),
         "global_dependency_reason":"background_rule","global_dependency_phase":"runtime",
@@ -13,7 +13,7 @@ fn exchange() -> Value {
 fn current_rule() -> crate::BackgroundDependencyRuleConfig {
     crate::BackgroundDependencyRuleConfig::Http {
         name: "renamed-explicit-config-poller".into(),
-        authorities: vec!["config.api.demo.test".into()],
+        authorities: vec!["config.api.example.test".into()],
         methods: vec!["GET".into()],
         path_prefixes: vec!["/1/config/service".into()],
         source_revision: "sha256:215629d09ed4cf9bbc8bcc84371e74de49c9e21e3247f4183861b13c3e0c5fd7"

@@ -851,7 +851,7 @@ mod tests {
             listen = "127.0.0.1:53"
             upstream_dns = "8.8.8.8:53"
             fake_cidr = "198.18.0.0/15"
-            bypass_domains = ["preview-wss-wegent.intra.demo.test", ".internal.example.com"]
+            bypass_domains = ["preview-wss.internal.example.test", ".internal.example.com"]
             registry_path = "./recordings/test_fake_dns_registry.json"
 
             [[dns_mock.bypass_strategies]]
@@ -889,7 +889,7 @@ mod tests {
         assert_eq!(
             config.dns_mock.bypass_domains,
             vec![
-                "preview-wss-wegent.intra.demo.test".to_string(),
+                "preview-wss.internal.example.test".to_string(),
                 ".internal.example.com".to_string()
             ]
         );

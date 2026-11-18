@@ -1,43 +1,33 @@
-ARG RUST_IMAGE=registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1@sha256:99fe1fa7319ef65993c61ca9aa9f3e58a10573a2701a19109adabca46007a670
-ARG RUNTIME_IMAGE=registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
-
+ARG RUST_IMAGE=docker.io/library/rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e
+# Build docker/recorder-runtime first, or pass a published runtime image by digest.
+ARG RUNTIME_IMAGE=be-engine-recorder-runtime:local
 FROM ${RUST_IMAGE} AS builder
 
-ENV CARGO_HOME=/opt/rust/cargo \
-    RUSTUP_TOOLCHAIN=1.98.1
-
-WORKDIR /build/traffic-record
-
-COPY Cargo.toml Cargo.lock ./
+WORKDIR /build
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY .cargo ./.cargo
-
-RUN mkdir src \
-    && printf 'pub fn dependency_cache_anchor() {}\n' > src/lib.rs \
-    && printf 'fn main() {}\n' > src/main.rs \
-    && cargo build --locked --release \
-    && rm -rf src
-
+COPY crates ./crates
 COPY src ./src
 
-RUN touch src/lib.rs src/main.rs \
-    && cargo build --locked --release \
-    && binary="$(find target -type f -path '*/release/traffic-e2e' -print -quit)" \
-    && test -n "${binary}" \
-    && cp "${binary}" /tmp/traffic-e2e
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    --mount=type=ssh \
+    cargo build --locked --release --bin traffic-e2e \
+    && install -m 0755 /build/target/release/traffic-e2e /tmp/traffic-e2e
 
 FROM ${RUNTIME_IMAGE}
 
 ENV RUST_LOG=info
 
-RUN mkdir -p /data/config /data/recordings /data/replay /data/tls
+RUN mkdir -p /data/.traffic-e2e /data/recordings /data/replay /data/tls
 
 COPY --from=builder /tmp/traffic-e2e /usr/local/bin/traffic-e2e
-COPY config/project.example.yaml /data/config/project.yaml
-COPY config/source-traffic-policy.example.yaml /data/config/source-traffic-policy.example.yaml
+COPY config/project.example.yaml /data/.traffic-e2e/project.yaml
+COPY config/policy.example.yaml /data/.traffic-e2e/policy.yaml
 
 WORKDIR /data
 
 EXPOSE 4080
 
 ENTRYPOINT ["/usr/local/bin/traffic-e2e"]
-CMD ["record", "--config", "/data/config/project.yaml", "--no-dns"]
+CMD ["record", "--config", "/data/.traffic-e2e/project.yaml", "--no-dns"]

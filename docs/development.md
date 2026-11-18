@@ -246,15 +246,18 @@ recordings and old Replay output; this change does not garbage-collect them.
 
 `docker/engine/Dockerfile` packages the prebuilt Linux/amd64 `traffic-e2e`,
 `backend-rewrite`, and `backend-rewrite-admin` executables together under
-`/usr/local/bin/`. Build and publish from a clean engine checkout:
+`/usr/local/bin/`. Build the runtime first, then package the engine image:
 
 ```bash
-./scripts/build-engine.sh --publish
+./scripts/build-runtime-images.sh
+./scripts/build-engine.sh
 ```
 
-The script builds all three release binaries once, verifies their revision,
-stages only those executables, builds the image and pushes it to
-`registry.api.demo.test/weibo_rd_if/traffic-e2e-engine:<version>`.
+The script builds and verifies all three release binaries, then packages them
+as `be-engine:<version>`. To publish from a clean checkout, pass
+`--publish --tag ghcr.io/owner/be-engine:<version>` or set
+`ENGINE_IMAGE_REPOSITORY`. Use `RECORDER_RUNTIME_IMAGE` to select a different
+runtime image.
 The image version is recorded in `docker/engine/VERSION`, starting at `0.0.1`;
 increment the patch version for each new release. Git revision remains in the
 binary version output and OCI image labels. Local dirty builds use a `-dev`
@@ -275,20 +278,19 @@ Projects using Kubernetes dependencies copy kubectl from its independent
 Package a verified static Linux/amd64 kubectl independently of the engine:
 
 ```bash
-./scripts/build-kubectl.sh --kubectl /data0/icy/bin/kubectl --publish
+./scripts/build-kubectl.sh --kubectl /path/to/kubectl
 ```
 
 Without `--publish`, this only builds and checks the local image. The default tag
-is `registry.api.demo.test/weibo_rd_if/kubectl:<client-version>` without the leading
-`v`. `--tag IMAGE` overrides it. The script validates the executable format and
+is `be-engine-kubectl:<client-version>` without the leading `v`.
+`--publish` requires an explicit `--tag IMAGE`. The script validates the executable format and
 client platform, stages only the binary, records its version and SHA256 labels,
 and checks it in a network-disabled container. Publication refuses an existing
 tag and inspects the pushed manifest. Docker, `file`, `sha256sum` and Python 3 are
 required; neither the binary nor cluster credentials are committed.
 
-The published `kubectl:1.24.4` manifest is
-`sha256:253a3a69fd34454f6ddf584a1339d7a748c8268a038afe2c5d83836d6c6ec0af`.
-Its binary SHA256 is
+For the Linux/amd64 kubectl v1.24.4 binary, the SHA256 used by the recording
+example is
 `7a5bd1dc2ef61468e2a01bd66cc6590e472cab984229c88d5f67c375b9f13ccc`.
 The scratch image contains only `/usr/local/bin/kubectl`; project recording
 images copy it from a separate build stage as shown in
@@ -306,138 +308,47 @@ distribution images contain no kubeconfig.
 
 ### Runtime images
 
-The repository owns Dockerfiles for project-independent recording and target
-runtime images:
-
-```text
-docker/network-anchor/Dockerfile
-docker/network-probe/Dockerfile
-docker/recorder-runtime/Dockerfile
-docker/builder/Dockerfile
-docker/target-runtime/Dockerfile
-```
-
-Published Linux/amd64 references:
-
-```text
-registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
-registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
-registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1@sha256:99fe1fa7319ef65993c61ca9aa9f3e58a10573a2701a19109adabca46007a670
-registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
-```
-
-Build the inert Linux/amd64 network-namespace anchor without network access:
+Build and load the Linux/amd64 runtime images on the Docker host before
+managed recording, preflight, or Target builds:
 
 ```bash
-docker buildx build \
-  --platform linux/amd64 \
-  --network none \
-  --load \
-  --file docker/network-anchor/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1 \
-  docker/network-anchor
+./scripts/build-runtime-images.sh
 ```
 
-Build the Linux/amd64 Recorder runtime through the host network. When the host
-requires a proxy, pass only the standard proxy build arguments that are already
-present in the environment; do not declare them in the Dockerfile or persist
-them as image environment variables:
+The script produces these local image tags from the Dockerfiles under
+`docker/`, each based on the pinned official Debian 12 slim image.
+
+| Local image | Purpose |
+| --- | --- |
+| `be-engine-network-anchor:local` | Keeps the isolated network namespace alive. |
+| `be-engine-recorder-runtime:local` | Runs Recorder with system networking and the public CA bundle. |
+| `be-engine-target-runtime:local` | Runs the Target entrypoint as UID/GID `998:998`. |
+| `be-engine-network-probe:local` | Runs curl with the public CA bundle as UID/GID `998:998`. |
+
+Set `BE_ENGINE_BUILD_NETWORK=host` if the Docker host intentionally uses host
+networking for package downloads. Standard proxy build arguments are passed
+through without being stored in the images. The Recorder runtime receives its
+engine binary from the caller. For host bind mounts, use the existing
+`--artifact-owner` option to assign the finalized recording run to the host
+user.
+
+Generated Target Dockerfiles use the pinned official Rust builder and the
+local Target runtime. Set `TRAFFIC_E2E_TARGET_BUILDER_IMAGE` or
+`TRAFFIC_E2E_TARGET_RUNTIME_IMAGE` when compiling the engine to accept another
+base image. Existing Target Dockerfiles must use the same references as their
+engine binary. Use image digests for shared registry builds.
+
+Build the optional Rust image with the musl target from the repository root:
 
 ```bash
-docker buildx build \
-  --platform linux/amd64 \
-  --network host \
-  --build-arg HTTP_PROXY \
-  --build-arg HTTPS_PROXY \
-  --build-arg ALL_PROXY \
-  --build-arg NO_PROXY \
-  --load \
-  --file docker/recorder-runtime/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev \
-  docker/recorder-runtime
+docker buildx build --load --platform linux/amd64 \
+  --file docker/builder/Dockerfile --tag be-engine-builder:local .
 ```
 
-The `-dev` runtime intentionally contains no `traffic-e2e` binary. Mount the
-exact installed Linux/amd64 binary read-only at
-`/usr/local/bin/traffic-e2e`. Publish only versioned tags, verify the pushed
-manifest digest, and pin consumers to `tag@sha256`.
-
-Recorder remains root inside this runtime for managed DNS and interception.
-When its recording output is a host bind mount, the host wrapper must pass
-`traffic-e2e internal recorder-run --artifact-owner "$(id -u):$(id -g)"` so finalization
-assigns only the exact run tree back to the invoking host user.
-
-Build the fixed Linux/amd64 network probe through the host network:
-
-```bash
-docker buildx build \
-  --platform linux/amd64 \
-  --network host \
-  --build-arg HTTP_PROXY \
-  --build-arg HTTPS_PROXY \
-  --build-arg ALL_PROXY \
-  --build-arg NO_PROXY \
-  --load \
-  --file docker/network-probe/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-network-probe:0.0.1 \
-  docker/network-probe
-```
-
-Runtime consumers pin the published manifest as
-`traffic-e2e-network-probe:0.0.1@sha256:6804ffe944eb4709c4f8387e984dfcf524be14241c571756a6b6b85a8cb13f8e`.
-The probe contains only curl and the public CA bundle, defaults to `998:998`,
-and is used when the recording source image has no runnable Java environment
-and for every Replay network preflight. It must not contain Java, Recorder,
-Replay, Docker, or networking capabilities.
-
-Build the Linux/amd64 Rust builder through the host network. The explicit
-platform is required because its legacy upstream image omits architecture
-metadata; the published builder itself must inspect as `linux/amd64`:
-
-```bash
-docker buildx build \
-  --platform linux/amd64 \
-  --network host \
-  --build-arg HTTP_PROXY \
-  --build-arg HTTPS_PROXY \
-  --build-arg ALL_PROXY \
-  --build-arg NO_PROXY \
-  --load \
-  --file docker/builder/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1 \
-  .
-```
-
-The builder source pins that upstream by digest. Proxies are one-time build
-inputs only; do not persist them in the image or expose them to target builds.
-The builder intentionally leaves `CARGO_BUILD_TARGET` unset. Its Rust toolchain
-uses the native `x86_64-unknown-linux-gnu` host target and therefore preserves
-Cargo's standard `target/release` artifact layout. A project that explicitly
-cross-compiles owns its target selection and artifact path.
-
-Build the Linux/amd64 target runtime through the host network:
-
-```bash
-docker buildx build \
-  --platform linux/amd64 \
-  --network host \
-  --build-arg HTTP_PROXY \
-  --build-arg HTTPS_PROXY \
-  --build-arg ALL_PROXY \
-  --build-arg NO_PROXY \
-  --load \
-  --file docker/target-runtime/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2 \
-  docker/target-runtime
-```
-
-The target runtime contains common dynamically linked Rust prerequisites and
-the normal public CA bundle, creates `trp-record` as UID/GID `998:998`, and
-defaults to that identity. It reserves `/app` and `/traffic-e2e/trust`; target
-images add only their release binary and explicit
-foreground entrypoint. The runtime clears the Debian base command so Docker
-does not append `bash` to that entrypoint. Publish only versioned tags, verify
-the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.
+The root Dockerfile builds the Recorder CLI from the workspace.
+Until the Motan dependency is migrated, a clean dependency fetch requires
+access to that Git repository. When available, pass the build SSH agent
+explicitly using `--ssh default`.
 
 ## CLI Boundaries
 
@@ -897,7 +808,7 @@ rules:
     match: {}
     effect:
       kind: capture_http_response
-      authorities: [cs.wegent.intra.demo.test]
+      authorities: [sandbox.example.test]
       methods: [GET]
       path: {kind: pattern, value: '/executor-manager/sandboxes/*'}
       status_codes: [200]

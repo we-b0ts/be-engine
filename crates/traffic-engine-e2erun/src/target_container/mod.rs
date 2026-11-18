@@ -21,6 +21,6 @@ pub(crate) const TARGET_DOCKERFILE_RELATIVE: &str = ".traffic-e2e/Dockerfile.tar
 pub(crate) const TARGET_REPLAY_CA_PATH: &str = "/traffic-e2e/trust/replay-ca.pem";
 pub(crate) const TARGET_USER: &str = TRAFFIC_PROCESS_USER;
 
-const TARGET_BUILDER_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1@sha256:99fe1fa7319ef65993c61ca9aa9f3e58a10573a2701a19109adabca46007a670";
+const TARGET_BUILDER_IMAGE: &str = env!("TRAFFIC_E2E_TARGET_BUILDER_IMAGE");
 
-const NETWORK_ANCHOR_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62";
+const NETWORK_ANCHOR_IMAGE: &str = "be-engine-network-anchor:local";

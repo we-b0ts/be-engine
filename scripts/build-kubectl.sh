@@ -9,11 +9,11 @@ Package an existing static Linux/amd64 kubectl in a standalone binary image.
 Only the executable is staged in a temporary Docker build context.
 
   --kubectl PATH  Existing binary; defaults to KUBECTL_BINARY or kubectl on PATH.
-  --tag IMAGE     Defaults to registry.api.demo.test/weibo_rd_if/kubectl:<version>.
+  --tag IMAGE     Defaults to be-engine-kubectl:<version>.
   --publish      Push after local verification; refuses to overwrite an existing tag.
 
 Example:
-  ./scripts/build-kubectl.sh --kubectl /data0/icy/bin/kubectl --publish
+  ./scripts/build-kubectl.sh --kubectl /usr/local/bin/kubectl
 
 The image contains only kubectl; project recording images copy the executable.
 No kubeconfig or credentials enter this image or its build context.
@@ -71,7 +71,10 @@ print(version["gitVersion"])
 ')"
 [[ "$kubectl_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   fail 'kubectl must report a stable semantic client version.'
-image_tag="${image_tag:-registry.api.demo.test/weibo_rd_if/kubectl:${kubectl_version#v}}"
+if [[ "$publish" == true && -z "$image_tag" ]]; then
+  fail '--publish requires an explicit --tag.'
+fi
+image_tag="${image_tag:-be-engine-kubectl:${kubectl_version#v}}"
 kubectl_sha256="$(sha256sum "$staging_dir/kubectl")"
 kubectl_sha256="${kubectl_sha256%% *}"
 printf 'kubectl: %s; SHA256: %s\n' "$kubectl_version" "$kubectl_sha256"

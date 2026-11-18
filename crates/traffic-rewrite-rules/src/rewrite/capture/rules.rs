@@ -133,7 +133,7 @@ mod tests {
     use crate::config::HttpResponseRewriteRuleConfig;
     fn rule(pattern: &str) -> HttpResponseRewriteRuleConfig {
         crate::config::source_traffic_policy::http_response::Document {
-            name: "cs.wegent.intra.demo.test".into(),
+            name: "sandbox.example.test".into(),
             path_pattern: format!("GET {pattern}"),
             pointer: "/base_url".into(),
             source_evidence: "sandbox_id varies; consume base_url".into(),

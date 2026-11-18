@@ -39,7 +39,7 @@ fn http_event(authority: &str, method: &str, uri: &str) -> RecorderEvent {
 fn memcached_rule(timeout_ms: u64) -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Memcached {
         name: "planet-video-cache-warm".to_string(),
-        breeze_identity: "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs"
+        breeze_identity: "config.api.example.test+3+config+v1+cache.pool+all:user-video@mc@cs"
             .to_string(),
         command: "get".to_string(),
         key_start: 0,
