@@ -1,5 +1,5 @@
 //! Bounded structured body evidence and pure configured content comparison.
-use crate::{docx, hessian2, model::ResponseBodyAssertionReport, protobuf, time::RequestTimes};
+use crate::{docx, model::ResponseBodyAssertionReport, protobuf, time::RequestTimes};
 use anyhow::{Context, Result, ensure};
 use traffic_policy_schema::response::{ResponseBodyCodec, ResponseBodyRuleMatch};
 type BodyRecognizer = fn(&[u8]) -> bool;
@@ -34,6 +34,8 @@ pub fn diagnose(
                 order_only: discovery.order_only,
             })
         }
+        ResponseBodyCodec::Hessian2 => anyhow::bail!("Hessian2 response comparison is disabled"),
+        #[cfg(any())]
         ResponseBodyCodec::Hessian2 => {
             let discovery = hessian2::discover_hessian2_order(policies, expected, actual)?;
             Ok(ResponseBodyAssertionReport {
@@ -132,7 +134,9 @@ pub fn evaluate(
                 },
             )
         }
-        traffic_policy_schema::response::ResponseBodyCodec::Hessian2 => {
+        ResponseBodyCodec::Hessian2 => anyhow::bail!("Hessian2 response comparison is disabled"),
+        #[cfg(any())]
+        ResponseBodyCodec::Hessian2 => {
             let unordered_paths = rule
                 .unordered_paths
                 .iter()
@@ -235,7 +239,6 @@ pub fn discover(
 ) -> Result<Option<ResponseBodyAssertionReport>> {
     let recognizers: &[(ResponseBodyCodec, BodyRecognizer)] = &[
         (ResponseBodyCodec::Protobuf, protobuf::is_protobuf_body),
-        (ResponseBodyCodec::Hessian2, hessian2::is_hessian2_body),
         (ResponseBodyCodec::Docx, docx::is_docx_body),
     ];
     let candidates = recognizers

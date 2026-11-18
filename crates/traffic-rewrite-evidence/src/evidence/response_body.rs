@@ -21,7 +21,6 @@ pub fn codec_candidates(facts: &Value) -> Vec<&'static str> {
     if configured(facts) {
         return match body.get("codec").and_then(Value::as_str) {
             Some("protobuf") => vec!["protobuf"],
-            Some("hessian2") => vec!["hessian2"],
             Some("docx") => vec!["docx"],
             _ => Vec::new(),
         };
@@ -31,7 +30,7 @@ pub fn codec_candidates(facts: &Value) -> Vec<&'static str> {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    ["protobuf", "hessian2", "docx"]
+    ["protobuf", "docx"]
         .into_iter()
         .filter(|supported| {
             candidates

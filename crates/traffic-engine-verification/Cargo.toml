@@ -48,11 +48,6 @@ subtle = "2"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", "tokio"] }
-motan-codec = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
-motan-breeze = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
-motan-hessian2 = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4", default-features = false }
-motan-protocol = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
-motan-simple = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 serde_yaml = "0.9"
@@ -65,5 +60,4 @@ tempfile = { version = "3", optional = true }
 
 
 [dev-dependencies]
-motan-json = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
 tempfile = "3"

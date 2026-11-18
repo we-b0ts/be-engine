@@ -302,6 +302,10 @@ fn process_owned(rule: &n::NativeRule, effect: &n::ProcessOwnedEffect) -> Result
                 fields: fields.clone(),
             }
         }
+        n::ProcessSelector::Motan { .. } => {
+            anyhow::bail!("Motan process-owned dependency rules are disabled")
+        }
+        #[cfg(any())]
         n::ProcessSelector::Motan {
             group,
             interface,

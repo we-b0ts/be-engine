@@ -1528,11 +1528,8 @@ retain the same responsibility and 1000-line requirements as `src/`.
   values, timestamp references, request clocks and random shapes. Neither owns lanes,
   subscriptions, signatures or recorded callback results.
 - Top-level `mysql`, `redis`, `memcached`, and `kafka` modules own reusable
-  protocol parsing and encoding only. Top-level `motan` is a traffic-e2e
-  adapter over `motan-protocol` and `motan-codec` from the Breeze Motan Git
-  dependency pinned to `v0.0.4`; reusable Motan framing, encoding, and
-  request-envelope semantics stay in that companion repository. None of these
-  modules owns recording or replay.
+  protocol parsing and encoding only. The Motan wire adapter is retained under
+  `traffic-engine-config/src/motan` outside the active module tree.
 - Top-level `http` owns reusable HTTP forwarding policy. `proxy/http` and
   `gateway/http` own their respective runtimes, while `recorder/http` owns
   recorded HTTP case persistence.
@@ -1669,9 +1666,6 @@ retain the same responsibility and 1000-line requirements as `src/`.
   header formats validate values without granting header omission permissions.
   The unified rule transaction owns global header authoring and complete Source
   coverage; protocol adapters retain framing, signature and finite behavior.
-- `gateway/motan` owns primary Motan request admission, fixed-response routing,
-  matched-source forwarding, and primary-case persistence orchestration for
-  both Motan1 and Motan2.
 - `recorder/<protocol>` owns capture-time protocol adapters, while
   `replay/<protocol>` owns matching and response behavior for recorded
   evidence. Both may depend on the top-level protocol module, never the

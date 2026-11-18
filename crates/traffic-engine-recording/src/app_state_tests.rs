@@ -200,6 +200,7 @@ async fn preflight_probe_publishes_one_exact_global_dependency() {
     );
 }
 
+#[cfg(any())]
 fn motan_dependency(group: &str, interface_name: &str, method_name: &str) -> RecorderEvent {
     RecorderEvent::MotanExchange(MotanExchangeEvent {
         id: Uuid::new_v4(),
@@ -430,6 +431,7 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
 }
 
 #[tokio::test]
+#[cfg(any())]
 async fn background_motan_enters_global_pool_but_not_case_dependencies() {
     let temp = tempfile::tempdir().unwrap();
     let interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc";

@@ -39,7 +39,6 @@ pub use traffic_engine_recording::gateway;
 pub use traffic_engine_recording::http;
 pub use traffic_engine_recording::interaction;
 
-pub use traffic_engine_config::motan;
 pub use traffic_engine_config::mysql;
 pub use traffic_engine_config::path_pattern;
 pub use traffic_engine_e2erun::platform;
@@ -117,20 +116,18 @@ pub use config::{
     HttpGatewayConfig, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig,
     HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
     HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
-    MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
-    MotanBackgroundDependencyReport, MysqlBackgroundDependencyFeedback,
-    MysqlBackgroundDependencyPlan, MysqlBackgroundDependencyReport, MysqlBackgroundSelector,
-    MysqlBackgroundTableSeries, MysqlConfig, MysqlRouteConfig, MysqlTableSeries,
-    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+    MysqlBackgroundDependencyFeedback, MysqlBackgroundDependencyPlan,
+    MysqlBackgroundDependencyReport, MysqlBackgroundSelector, MysqlBackgroundTableSeries,
+    MysqlConfig, MysqlRouteConfig, MysqlTableSeries, RecordingAccessPolicy,
+    RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan,
     RedisBackgroundDependencyReport, RedisKeyPatternConfig, RepositoryConfigInitOptions,
     RepositoryConfigInitResult, TcpApplicationProtocol, TcpGatewayConfig,
     TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
     UdpGatewayConfig, initialize_repository_config, plan_allowed_unused_http_hosts,
     plan_background_dependency, plan_breeze_memcached_background_dependency,
-    plan_case_path_pattern_feedback, plan_motan_background_dependency,
-    plan_mysql_background_dependency, plan_redis_background_dependency,
-    resolve_unified_policy_path,
+    plan_case_path_pattern_feedback, plan_mysql_background_dependency,
+    plan_redis_background_dependency, resolve_unified_policy_path,
 };
 pub use config::{KubernetesConfig, UpstreamRouteConfig, UpstreamTransportConfig};
 pub use dependency::attribution::{AttributionDecision, AttributionProof, DependencyOwner};

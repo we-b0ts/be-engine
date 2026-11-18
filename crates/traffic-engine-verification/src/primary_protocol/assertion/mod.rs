@@ -12,7 +12,6 @@ pub mod jwt;
 mod model;
 pub mod time;
 pub use time::RequestTimes;
-mod motan;
 mod payload;
 pub use interaction::{compare_outputs_global as compare_interaction_global, decode_sse};
 pub use payload::{ResponsePayloadPair, response_payload_pair, response_rule_payload_pair};
@@ -145,6 +144,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
     let actual_content = decrypted_actual.as_deref().unwrap_or(actual_bytes);
     let request: RecordedRequest = serde_json::from_slice(request_bytes)
         .with_context(|| format!("invalid recorded request {}", options.request.display()))?;
+    request.gateway_protocol()?;
     let expected: ExpectedResponse =
         serde_json::from_slice(expected_content).with_context(|| {
             format!(
@@ -308,6 +308,7 @@ struct AssertionInputs {
 
 enum AssertionBody {
     Bytes(Vec<u8>),
+    #[cfg(any())]
     MotanFrame(motan::ComparableResponseFrame),
 }
 
@@ -315,6 +316,7 @@ impl AssertionBody {
     fn body(&self) -> &[u8] {
         match self {
             Self::Bytes(bytes) => bytes,
+            #[cfg(any())]
             Self::MotanFrame(frame) => frame.body(),
         }
     }
@@ -322,13 +324,20 @@ impl AssertionBody {
     fn gateway_metadata_matches(&self, actual: &Self) -> bool {
         match (self, actual) {
             (Self::Bytes(_), Self::Bytes(_)) => true,
+            #[cfg(any())]
             (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
                 expected.carrier() == actual.carrier()
             }
+            #[cfg(any())]
             _ => false,
         }
     }
 
+    fn protocol_body_codec(&self) -> Option<ResponseBodyCodec> {
+        None
+    }
+
+    #[cfg(any())]
     fn protocol_body_codec(&self) -> Option<ResponseBodyCodec> {
         let body_kind = match self {
             Self::MotanFrame(frame) => frame.body_kind(),
@@ -340,8 +349,14 @@ impl AssertionBody {
         }
     }
 
+    fn type_difference(&self, _actual: &Self) -> Option<ResponseDifference> {
+        None
+    }
+
+    #[cfg(any())]
     fn type_difference(&self, actual: &Self) -> Option<ResponseDifference> {
         let (expected, actual) = match (self, actual) {
+            #[cfg(any())]
             (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
                 (expected.body_kind(), actual.body_kind())
             }

@@ -261,6 +261,10 @@ pub fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Redis { .. } => redis::validate(rule)?,
+            BackgroundDependencyRuleConfig::Motan { .. } => {
+                bail!("Motan process-owned dependency rules are disabled");
+            }
+            #[cfg(any())]
             BackgroundDependencyRuleConfig::Motan {
                 group,
                 interface_name,
@@ -601,6 +605,7 @@ fn byte_affixes_overlap(
         && (left_suffix.ends_with(right_suffix) || right_suffix.ends_with(left_suffix))
 }
 
+#[cfg(any())]
 fn validate_motan_identity(
     rule_name: &str,
     field: &str,

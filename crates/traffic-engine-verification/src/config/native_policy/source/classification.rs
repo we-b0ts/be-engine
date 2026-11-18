@@ -254,6 +254,10 @@ fn validate_native_frames(event: &Value) -> Result<()> {
             anyhow::bail!("Memcached recording has no installed protocol implementation");
         }
         Some("motan_exchange") => {
+            anyhow::bail!("Motan recording has no installed protocol implementation");
+        }
+        #[cfg(any())]
+        Some("motan_exchange") => {
             ensure!(
                 event["parse_warnings"]
                     .as_array()

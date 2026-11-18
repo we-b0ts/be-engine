@@ -9,6 +9,7 @@ pub enum DependencyRulePlan {
     Http(BackgroundDependencyPlan),
     Memcached(BreezeMemcachedBackgroundDependencyPlan),
     MemcachedTimestamp(MemcachedTimestampRulePlan),
+    #[cfg(any())]
     Motan(MotanBackgroundDependencyPlan),
     Redis(RedisBackgroundDependencyPlan),
 }

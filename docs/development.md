@@ -346,9 +346,8 @@ docker buildx build --load --platform linux/amd64 \
 ```
 
 The root Dockerfile builds the Recorder CLI from the workspace.
-Until the Motan dependency is migrated, a clean dependency fetch requires
-access to that Git repository. When available, pass the build SSH agent
-explicitly using `--ssh default`.
+Motan gateways, ownership rules, and Hessian2 response comparison are disabled.
+Cargo builds use the configured package registry.
 
 ## CLI Boundaries
 
@@ -602,8 +601,8 @@ options, environment variables, or recorder configuration.
 
 Gateway recording is intentionally conservative. Until the configured ready
 probe succeeds, matching traffic uses the configured fallback strategy and no
-case is created. After ready, only one matched case can be active across the
-HTTP and Motan gateways in the process; overlapping matching requests also use
+case is created. After ready, only one matched case can be active in the
+HTTP gateway; overlapping matching requests also use
 fallback so dependencies are not shared across cases.
 
 A matched request first reserves the single case slot without accepting
@@ -634,66 +633,9 @@ business exchanges. Framing and hop-by-hop headers such as `content-length`,
 `transfer-encoding`, and `connection` are managed by the gateway and cannot be
 configured in `headers`.
 
-Motan primary-case recording uses a separate gateway with the same single
-active-case and dependency-drain lifecycle:
-
-```bash
-backend-rewrite config protocol enable motan \
-  --gateway-port 18081
-```
-
-This typed update is for an already initialized repository. It changes only
-the recorder file referenced by the project: `motan_gateway.listen` is set from
-`--gateway-port`, while the existing `motan_gateway.matched_upstream` remains
-the sole native Motan service endpoint. Configure that recorder endpoint before
-enabling the gateway when the default is not correct. The gateway port must remain distinct from the native service port.
-Repeating the same command returns `status: unchanged`; changing the gateway
-port updates only owned keys and preserves the native endpoint, Motan rules,
-and recorder comments. Its result uses `validation_status: not_run`:
-configuration alone does not claim that real Motan traffic has been validated.
-Set `motan_gateway.enabled = false` to keep HTTP-only recording temporarily.
-
-```toml
-[motan_gateway]
-enabled = true
-listen = "0.0.0.0:18081"
-matched_upstream = "127.0.0.1:8002"
-max_cases_per_api = 100
-rules = []
-```
-
-An empty `rules` array accepts every identified non-heartbeat Motan API. To
-restrict recording, replace `rules = []` with one or more rule tables:
-
-```toml
-[[motan_gateway.rules]]
-name = "record-alchemy"
-apis = ["com.weibo.abtest.traffic.rpc.AlchemyRpcService#getConfig(java.lang.String)"]
-```
-
-`apis` uses the same canonical identity emitted by `motan-replay`. Add
-`groups = ["abtest"]` only when the same API must be distinguished by Motan
-service group.
-
-Run `motan-replay --input-raw :8080 --output-rpc <recorder-ip>:18081` in the
-host or network namespace that can observe the source Motan traffic. During a
-local preflight `<recorder-ip>` is `127.0.0.1`; when capture runs remotely, use
-the address of the host running preflight. The preflight prompt returns this
-command instead of fabricating RPC argument values.
-The gateway decodes Motan1 and Motan2 through the Breeze Motan Git dependency
-pinned to `v0.0.3`. A matched request is forwarded to `matched_upstream`, and
-its raw protocol request and response are published as one primary case.
-Heartbeats, unmatched calls, overlapping calls while another case is active,
-and calls after the per-API limit receive a protocol-valid empty success
-response without reaching the source. Motan2 one-way calls do not receive a
-response, as required by the protocol.
-
-Every published HTTP or Motan primary case contains a protocol-neutral
-`case.json` with `version`, `kind`, `api_key`, `display_name`, and an explicit
-`source_binding`. The orchestration workflow uses the common identity; only
-the source and driver adapters branch by protocol. Both kinds share a recording
-run directory and `dependencies.jsonl`. Motan API directories include a stable
-identity hash so long Java signatures remain filesystem-safe.
+Every published HTTP primary case contains a protocol-neutral `case.json`
+with `version`, `kind`, `api_key`, `display_name`, and an explicit
+`source_binding`.
 
 The HTTP gateway also limits successfully published cases per resolved case
 pattern within one recorder run. The default is
@@ -2139,16 +2081,14 @@ exact read-only `help` command. This list is separate from
 `applicable_rule_planners`, which contains planner entrypoints appropriate to
 the current evidence state; neither list proves that a rule applies. For a
 response body without a configured or protocol-defined codec, the planner
-offers each syntactically valid protobuf, Hessian2, or DOCX codec candidate. Motan1
-`value` responses are already defined as Hessian2 by the protocol, so their
-unwrapped bodies use Hessian2 semantic equality for the verdict without a
-codec rule. The observed body framing is reported separately as `envelope`,
+offers syntactically valid protobuf and DOCX codec candidates. The observed
+body framing is reported separately as `envelope`,
 and `body_diagnosis.used_for_verdict` says whether structured comparison
 determined the verdict. Once one codec is configured, the response rule hint
 instead directs the AI to the reported field/value differences and
 unordered-path candidates. These candidates identify mechanically explainable
 paths but do not prove that order is semantically irrelevant. Every selected
-protobuf/Hessian2 path and every DOCX timestamp selector must include one-line
+protobuf path and every DOCX timestamp selector must include one-line
 source evidence. Codec-only selection is evidence-light because it ignores only
 DOCX/ZIP packaging metadata or changes decoding without relaxing body values.
 Memcached dirty-cluster evidence returns the supported JSON/PB value slot and
@@ -2740,14 +2680,8 @@ evidence, and block direct external egress for UID `998`.
 Source-local port `880` is not a preflight dependency and receives no managed
 switch commands; the configured HTTP Gateway readiness contract remains
 authoritative. The HTTPS probe runs before the one-case readiness request. The
-Java probe command has a 10-second execution bound. Ordinary recording does not repeat this initialization gate, and Motan business traffic
-is not requested or evaluated during initialization preflight.
-
-Later, `traffic-e2e record` applies the Motan gateway failure check. Its result
-reports `motan.status: verified` after at least one
-published Motan case or `not_observed` when that recording still contains no
-Motan request. Gateway errors and failed admitted cases make the recording
-command fail instead of silently completing.
+Java probe command has a 10-second execution bound. Ordinary recording does not
+repeat this initialization gate.
 
 Full success returns overall `status: passed` with separate `target_image`,
 `recording`, `replay_network`, and `target_runtime` results. Target identity,
@@ -3126,7 +3060,7 @@ proof:
 Initialization creates an empty policy and adds no service-specific ownership
 rules. Configuration and service discovery HTTP calls remain ordinary Case dependencies;
 response capture and protocol decoding do not grant process ownership.
-HTTP, Motan and Memcached ownership preserves their existing finite
+HTTP and Memcached ownership preserves their existing finite
 consumption. Redis snapshot-producing selectors affect capture and runtime;
 new authorization conservatively requires fresh recording. Classification-only
 changes may derive a report from immutable complete Source evidence, while
@@ -3162,27 +3096,6 @@ before its atomic write. Automated planning remains exact to one authority,
 method, and path prefix. When an existing multi-selector rule already covers
 that selector, planning reuses the existing rule instead of adding an
 overlapping rule.
-
-Source-proven process-owned Motan traffic uses one exact RPC identity:
-
-```bash
-traffic-e2e config recorder apply process-owned-dependencies \
-  --target-root . \
-  --name kunpeng-refresh \
-  --case-source <exact-finalized-case-source> \
-  --source-revision 0123456789abcdef \
-  --evidence 'MapiConfigLoader.java:init scheduled refresh unrelated to selected API' \
-  motan \
-  --group kunpeng-config-rpc \
-  --interface-name com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc \
-  --method-name getConfigByName
-```
-
-The rule stores no node hostname, port, Vintage alias, or request payload. It
-matches Motan exchanges with the exact Vintage service group, interface, and
-method. Planning requires a matching unused case exchange and rejects the
-selector when the same RPC command appears in unmatched, unsupported, or unsafe
-target traffic.
 
 A process-owned Redis scheduler using exact keys can use a command-specific
 `get`, `scard`, or `hgetall` selector:
@@ -3431,23 +3344,8 @@ recorded peer termination. Legacy successful HTTP
 records without `outcome` retain their response behavior; missing historical
 timeout exchanges cannot be recovered by upgrading Replay.
 
-Legacy Motan dependencies are semantic `motan_connection` and
-`motan_exchange` records. Recorder recognizes the F1F1 outer frame containing
-the F0F0 inner frame, supports codec versions 1 and 2 (including gzip-compressed
-codec-2 method metadata), correlates responses by request ID, and records exact
-binary request/response frames plus method identity. Replay matches business
-calls by codec, method identity, and recorded connection order, waits the
-recorded duration, and patches both response request IDs to the live request.
-Standard Motan heartbeat exchanges stay in `dependencies-debug.jsonl` and out
-of semantic dependencies and summaries; replay may use a recorded debug
-heartbeat response as a reusable template across nodes in the same pool.
-This legacy dependency path supports only the nested Motan1 framing and fails
-closed on Motan2. The primary `motan_gateway` path described above separately
-supports both Motan1 and Motan2 through `breeze/motan`. Recorder deliberately
-does not deserialize arbitrary Java arguments: it preserves exact frame bytes
-and replay uses method identity plus recorded connection order. Those frames
-may contain sensitive business objects, so protect the recording directory as
-production data.
+Historical reports can still contain `motan_connection` and
+`motan_exchange` entries. Native Motan capture and Replay are disabled.
 
 Kafka dependencies are semantic `kafka_connection`, `kafka_produce`,
 `kafka_fetch`, and `kafka_delivery` records. Each Fetch exchange records its

@@ -15,7 +15,6 @@ pub mod api_trigger;
 mod artifacts;
 pub mod background_feedback;
 mod background_memcached_feedback;
-mod background_motan_feedback;
 mod background_mysql_feedback;
 mod background_redis_feedback;
 mod capture;
@@ -56,10 +55,6 @@ pub use background_feedback::{
 pub use background_memcached_feedback::{
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, plan_breeze_memcached_background_dependency,
-};
-pub use background_motan_feedback::{
-    MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
-    MotanBackgroundDependencyReport, plan_motan_background_dependency,
 };
 pub use background_mysql_feedback::{
     MysqlBackgroundDependencyFeedback, MysqlBackgroundDependencyPlan,
@@ -158,6 +153,7 @@ pub enum TcpApplicationProtocol {
     Redis,
     Memcached,
     Kafka,
+    #[cfg(any())]
     Motan,
     Raw,
 }

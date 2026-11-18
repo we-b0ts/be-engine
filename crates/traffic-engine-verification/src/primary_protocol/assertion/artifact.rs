@@ -25,6 +25,7 @@ pub(super) struct RecordedRequest {
 }
 
 impl RecordedRequest {
+    #[cfg(any())]
     pub(super) fn has_motan_frame(&self) -> bool {
         matches!(
             crate::protocol_contract::primary_version(self.protocol_version.as_deref()),
@@ -37,8 +38,9 @@ impl RecordedRequest {
         use crate::protocol_contract::{NativeProtocolVersion, primary_version};
         match primary_version(self.protocol_version.as_deref())? {
             NativeProtocolVersion::Http => Ok(ResponseGatewayProtocol::Http),
-            NativeProtocolVersion::Motan1 => Ok(ResponseGatewayProtocol::Motan1),
-            NativeProtocolVersion::Motan2 => Ok(ResponseGatewayProtocol::Motan2),
+            NativeProtocolVersion::Motan1 | NativeProtocolVersion::Motan2 => {
+                anyhow::bail!("Motan response assertions are disabled")
+            }
             _ => anyhow::bail!("primary protocol has no response assertion adapter"),
         }
     }

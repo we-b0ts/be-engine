@@ -129,6 +129,7 @@ fn http_extension_method_named_motan_uses_the_http_assertion_adapter() {
     assert_eq!(report.gateway_protocol, ResponseGatewayProtocol::Http);
 }
 
+#[cfg(any())]
 #[test]
 fn native_motan_version_selects_native_assertion_independently_of_the_method_label() {
     let (_temp, options) = write_motan2_case(

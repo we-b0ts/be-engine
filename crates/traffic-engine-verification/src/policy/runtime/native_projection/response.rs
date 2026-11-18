@@ -69,6 +69,10 @@ pub(super) fn project(output: &mut NativeRuntimeProjection, rule: &n::NativeRule
                         .or_default();
                 }
                 n::BodyCodec::Hessian2 => {
+                    anyhow::bail!("Hessian2 response comparison is disabled");
+                }
+                #[cfg(any())]
+                n::BodyCodec::Hessian2 => {
                     output
                         .document
                         .response_rules

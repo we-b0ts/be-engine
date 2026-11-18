@@ -3,8 +3,11 @@ use uuid::Uuid;
 
 use super::*;
 use crate::config::AppConfig;
+#[cfg(any())]
 use crate::dependency::DependencyExchangeOutcome;
-use crate::protocols::recording::events::{HttpExchangeEvent, MotanExchangeEvent};
+use crate::protocols::recording::events::HttpExchangeEvent;
+#[cfg(any())]
+use crate::protocols::recording::events::MotanExchangeEvent;
 use crate::recorder::BodyCapture;
 
 fn http_event(authority: &str, method: &str, uri: &str) -> RecorderEvent {
@@ -52,6 +55,7 @@ fn memcached_rule(timeout_ms: u64) -> BackgroundDependencyRuleConfig {
     }
 }
 
+#[cfg(any())]
 fn motan_event(
     group: &str,
     interface_name: &str,
@@ -165,6 +169,7 @@ fn inline_process_owned_dependencies_are_rejected() {
 }
 
 #[test]
+#[cfg(any())]
 fn motan_rule_matches_exact_business_method_but_never_heartbeat() {
     let interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc";
     let method_name = "getConfigByName";
@@ -212,6 +217,7 @@ fn motan_rule_matches_exact_business_method_but_never_heartbeat() {
 }
 
 #[test]
+#[cfg(any())]
 fn parses_and_validates_exact_motan_background_rules() {
     let rules: super::super::SourceTrafficPolicyConfig = serde_yaml::from_str(
         r#"

@@ -139,6 +139,16 @@ pub fn response_rule_payload_pair(
 }
 
 pub(super) fn business_body(
+    _request: &RecordedRequest,
+    bytes: Vec<u8>,
+    _oneway: bool,
+    _label: &str,
+) -> Result<AssertionBody> {
+    Ok(AssertionBody::Bytes(bytes))
+}
+
+#[cfg(any())]
+pub(super) fn business_body(
     request: &RecordedRequest,
     bytes: Vec<u8>,
     oneway: bool,
@@ -156,6 +166,7 @@ pub(super) fn business_body(
 impl AssertionBody {
     pub(super) fn carrier_status(&self) -> Option<u16> {
         match self {
+            #[cfg(any())]
             Self::MotanFrame(frame) => Some(frame.status_code()),
             Self::Bytes(_) => None,
         }

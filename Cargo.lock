@@ -398,12 +398,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cesu8"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1429,69 +1423,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "motan-breeze"
-version = "0.1.0"
-source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.4#eba33de61ae07433a7c60f2376d12268c0368b40"
-dependencies = [
- "motan-json",
- "serde",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "motan-codec"
-version = "0.1.0"
-source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.4#eba33de61ae07433a7c60f2376d12268c0368b40"
-dependencies = [
- "cesu8",
- "flate2",
- "motan-protocol",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "motan-hessian2"
-version = "0.1.0"
-source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.4#eba33de61ae07433a7c60f2376d12268c0368b40"
-dependencies = [
- "cesu8",
- "motan-json",
- "serde",
- "smallvec",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "motan-json"
-version = "0.1.0"
-source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.4#eba33de61ae07433a7c60f2376d12268c0368b40"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "motan-protocol"
-version = "0.1.0"
-source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.4#eba33de61ae07433a7c60f2376d12268c0368b40"
-dependencies = [
- "bytes",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "motan-simple"
-version = "0.1.0"
-source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.4#eba33de61ae07433a7c60f2376d12268c0368b40"
-dependencies = [
- "bytes",
- "motan-json",
- "serde",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2886,7 +2817,6 @@ dependencies = [
  "getrandom 0.3.4",
  "hyper",
  "libc",
- "motan-json",
  "rustls",
  "serde",
  "serde_json",
@@ -2934,7 +2864,6 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "libc",
- "motan-json",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2983,8 +2912,6 @@ dependencies = [
  "flate2",
  "hyper",
  "md-5",
- "motan-codec",
- "motan-protocol",
  "redis-protocol",
  "serde",
  "serde_json",
@@ -3258,12 +3185,6 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "md-5",
- "motan-breeze",
- "motan-codec",
- "motan-hessian2",
- "motan-json",
- "motan-protocol",
- "motan-simple",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3388,7 +3309,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "motan-hessian2",
  "serde",
  "serde_json",
  "traffic-contract",

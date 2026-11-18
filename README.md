@@ -25,6 +25,9 @@ consumes finalized recordings from the conventional artifact directory.
 - MySQL login/query/response packet metadata and raw response payload recording.
 - MySQL CLIENT_SSL recording and Replay TLS using the Replay CA.
 
+Motan and the Hessian2 response codec are disabled in this build. Existing
+report and recording formats retain their protocol identifiers.
+
 ## Install Rust
 
 If this machine does not have Rust yet:
@@ -500,7 +503,7 @@ kafka_port_hints = [9092]
 [[tcp_gateway.protocol_detection.overrides]]
 host = "cache.internal"
 port = 6380
-protocol = "redis" # redis | memcached | kafka | motan | raw
+protocol = "redis" # redis | memcached | kafka | raw
 ```
 
 Set up local DNS capture. This keeps the recorder on non-privileged port

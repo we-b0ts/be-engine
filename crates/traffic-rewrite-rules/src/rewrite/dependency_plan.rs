@@ -3,12 +3,10 @@ use super::model::{RewriteDependencyRulePlanRecord, RewriteDependencyRuleSpec, R
 use crate::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
-    MemcachedTimestampRulePlan, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
-    MysqlBackgroundDependencyFeedback, MysqlBackgroundDependencyPlan,
+    MemcachedTimestampRulePlan, MysqlBackgroundDependencyFeedback, MysqlBackgroundDependencyPlan,
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan, plan_background_dependency,
-    plan_breeze_memcached_background_dependency, plan_motan_background_dependency,
-    plan_mysql_background_dependency, plan_redis_background_dependency,
-    resolve_e2e_response_rule_evidence,
+    plan_breeze_memcached_background_dependency, plan_mysql_background_dependency,
+    plan_redis_background_dependency, resolve_e2e_response_rule_evidence,
 };
 use crate::{
     E2eRunContext, MemcachedTimestampRuleFeedback, RedisKeyPatternConfig,
@@ -157,6 +155,7 @@ pub enum DependencyRulePlan {
     Http(BackgroundDependencyPlan),
     Memcached(BreezeMemcachedBackgroundDependencyPlan),
     MemcachedTimestamp(MemcachedTimestampRulePlan),
+    #[cfg(any())]
     Motan(MotanBackgroundDependencyPlan),
     Redis(RedisBackgroundDependencyPlan),
 }
@@ -184,6 +183,7 @@ impl DependencyRulePlan {
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Memcached(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::MemcachedTimestamp(plan) => Ok(serde_json::to_value(plan.report())?),
+            #[cfg(any())]
             Self::Motan(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Redis(plan) => Ok(serde_json::to_value(plan.report())?),
         }
@@ -200,6 +200,7 @@ impl DependencyRulePlan {
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Memcached(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::MemcachedTimestamp(plan) => Ok(serde_json::to_value(plan.apply()?)?),
+            #[cfg(any())]
             Self::Motan(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Redis(plan) => Ok(serde_json::to_value(plan.apply()?)?),
         }
@@ -231,6 +232,7 @@ impl DependencyRulePlan {
             Self::MemcachedTimestamp(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_rule_id)
             }
+            #[cfg(any())]
             Self::Motan(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_name)
             }
@@ -255,6 +257,7 @@ impl DependencyRulePlan {
             Self::Mysql(plan) => &plan.report().effective_name,
             Self::Memcached(plan) => &plan.report().effective_name,
             Self::MemcachedTimestamp(plan) => &plan.report().effective_rule_id,
+            #[cfg(any())]
             Self::Motan(plan) => &plan.report().effective_name,
             Self::Redis(plan) => &plan.report().effective_name,
         }
@@ -545,6 +548,10 @@ pub fn build_plan(
         RewriteDependencyRuleSpec::RedisCrossCase { .. } => {
             unreachable!("Memcached payload plans return before background evidence resolution")
         }
+        RewriteDependencyRuleSpec::Motan { .. } => {
+            anyhow::bail!("Motan process-owned dependency rules are disabled")
+        }
+        #[cfg(any())]
         RewriteDependencyRuleSpec::Motan {
             group,
             interface_name,

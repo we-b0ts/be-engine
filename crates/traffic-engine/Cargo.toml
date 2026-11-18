@@ -69,6 +69,5 @@ traffic-protocol-fixture = { path = "../traffic-protocol-fixture" }
 traffic-contract = { path = "../traffic-contract", features = ["test-support"] }
 traffic-protocol-mysql = { path = "../traffic-protocol-mysql", features = ["test-support"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "mysql", "chrono", "bigdecimal"] }
-motan-json = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

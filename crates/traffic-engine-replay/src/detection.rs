@@ -41,6 +41,7 @@ pub fn protocol_override(
             TcpApplicationProtocol::Kafka => {
                 DetectedProtocol::Registered(DependencyProtocol::new("kafka"))
             }
+            #[cfg(any())]
             TcpApplicationProtocol::Motan => {
                 DetectedProtocol::Registered(DependencyProtocol::new("motan"))
             }

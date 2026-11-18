@@ -84,6 +84,7 @@ async fn http_static_adapter_executes_real_input_and_retains_independent_clocks(
     assert!(completed_at <= chrono::Utc::now());
 }
 
+#[cfg(any())]
 fn motan2_request() -> Vec<u8> {
     let mut metadata = motan_protocol::Metadata::new();
     metadata.insert(motan_protocol::META_GROUP, "contract-group");
@@ -100,8 +101,8 @@ fn motan2_request() -> Vec<u8> {
 
 #[test]
 fn native_version_and_primary_role_cannot_be_guessed_from_a_payload() {
-    let raw = motan2_request();
-    let bytes = serde_json::to_vec(&json!({"method":"MOTAN","uri":"/rpc/echo","protocol_version":"motan1","frame":{"encoding":"base64","data":STANDARD.encode(raw),"truncated":false}})).unwrap();
+    let raw = include_bytes!("../../../../tests/fixtures/motan/motan1-request.bin");
+    let bytes = serde_json::to_vec(&json!({"method":"MOTAN","uri":"/rpc/echo","protocol_version":"motan2","frame":{"encoding":"base64","data":STANDARD.encode(raw),"truncated":false}})).unwrap();
     assert!(PrimaryProtocol::from_recorded(&bytes).is_err());
     assert!(
         contract(ProtocolKind::Mysql)
@@ -126,8 +127,8 @@ fn an_http_method_named_motan_does_not_declare_a_native_rpc_input() {
 
 #[test]
 fn partial_native_declarations_and_invalid_native_frames_are_rejected() {
-    let raw = motan2_request();
-    let complete = json!({"method":"MOTAN","uri":"/rpc/echo","protocol_version":"motan2","frame":{"encoding":"base64","data":STANDARD.encode(raw),"truncated":false}});
+    let raw = include_bytes!("../../../../tests/fixtures/motan/motan1-request.bin");
+    let complete = json!({"method":"MOTAN","uri":"/rpc/echo","protocol_version":"motan1","frame":{"encoding":"base64","data":STANDARD.encode(raw),"truncated":false}});
     let bytes = serde_json::to_vec(&complete).unwrap();
     assert!(PrimaryProtocol::from_recorded(&bytes).is_err());
     for missing in ["protocol_version", "frame"] {

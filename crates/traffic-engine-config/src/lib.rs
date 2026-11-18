@@ -9,7 +9,6 @@ pub mod config;
 pub mod dns_mock;
 mod interaction;
 pub mod json_value;
-pub mod motan;
 pub mod mysql;
 pub mod path_pattern;
 pub mod protocol_contract;

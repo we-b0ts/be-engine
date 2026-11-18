@@ -8,7 +8,7 @@ pub use recording_control::{
 pub use traffic_engine_config::config::*;
 pub use traffic_engine_config::recording_api::RecordingApi;
 pub use traffic_engine_config::{
-    access_policy, breeze, config, json_value, motan, mysql, path_pattern, recording_api, redis,
+    access_policy, breeze, config, json_value, mysql, path_pattern, recording_api, redis,
 };
 pub use traffic_engine_environment::{
     TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER, command_output, engine_binary,

@@ -96,9 +96,6 @@ pub fn try_rule_hints(root: &Path, query: &str, facts: &Value) -> Result<Vec<Rew
                     "protobuf" => {
                         "The focused-E2E response has a protobuf codec candidate. Declare typed numeric field paths and types before selecting source-proven unordered fields. Encoded bytes alone do not prove a schema or ordering intent."
                     }
-                    "hessian2" => {
-                        "The focused-E2E response has a Hessian2 candidate. Select source-proven sets or joined strings through a typed response_body effect; joined strings require the proven separator."
-                    }
                     "docx" => {
                         "The response has DOCX OPC package differences. Trace the differing part and element to Source before proposing a shared DOCX format and the API codec position. Consult docs/content-policy-layout.md; package members and unselected XML remain strict."
                     }
@@ -269,7 +266,7 @@ pub fn applicable_rule_planners(
             .into_iter()
             .flatten()
             .filter_map(|cluster| cluster["protocol"].as_str())
-            .filter(|p| matches!(*p, "http" | "memcached" | "motan" | "redis" | "mysql"))
+            .filter(|p| matches!(*p, "http" | "memcached" | "redis" | "mysql"))
             .collect::<std::collections::BTreeSet<_>>();
         for protocol in protocols {
             add("dependency_ownership", protocol);

@@ -37,8 +37,6 @@ flate2 = "1"
 md-5 = "0.10"
 sha2 = "0.10"
 hyper = { version = "1", features = ["client", "http1", "server"] }
-motan-codec = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
-motan-protocol = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
 redis-protocol = { version = "6", features = ["bytes"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

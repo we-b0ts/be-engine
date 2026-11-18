@@ -4,11 +4,10 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
     BackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyFeedback, E2eRunContext,
-    MotanBackgroundDependencyFeedback, MysqlBackgroundDependencyFeedback, MysqlBackgroundSelector,
-    MysqlBackgroundTableSeries, RedisBackgroundDependencyFeedback, plan_background_dependency,
-    plan_breeze_memcached_background_dependency, plan_motan_background_dependency,
-    plan_mysql_background_dependency, plan_redis_background_dependency,
-    resolve_single_e2e_response_rule_evidence,
+    MysqlBackgroundDependencyFeedback, MysqlBackgroundSelector, MysqlBackgroundTableSeries,
+    RedisBackgroundDependencyFeedback, plan_background_dependency,
+    plan_breeze_memcached_background_dependency, plan_mysql_background_dependency,
+    plan_redis_background_dependency, resolve_single_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Args)]
@@ -38,6 +37,7 @@ enum BackgroundProtocolArgs {
     /// Process-owned Breeze-backed Memcached get traffic.
     Memcached(MemcachedBackgroundArgs),
     /// Process-owned Motan traffic unrelated to one case.
+    #[cfg(any())]
     Motan(MotanBackgroundArgs),
     /// Process-owned Redis traffic.
     Redis(RedisBackgroundArgs),
@@ -100,6 +100,7 @@ struct MemcachedBackgroundArgs {
     initial_load_timeout_ms: u64,
 }
 
+#[cfg(any())]
 #[derive(Debug, Args)]
 struct MotanBackgroundArgs {
     #[arg(long)]
@@ -240,6 +241,7 @@ pub(super) fn run(
                 super::super::print_json(plan.report())
             }
         }
+        #[cfg(any())]
         BackgroundProtocolArgs::Motan(selector) => {
             let feedback = MotanBackgroundDependencyFeedback {
                 rules_path,
@@ -332,6 +334,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any())]
     fn accepts_exact_motan_background_selector() {
         let parsed = BackgroundTestCli::try_parse_from([
             "test",

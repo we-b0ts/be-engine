@@ -11,7 +11,6 @@ COPY src ./src
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/build/target,sharing=locked \
-    --mount=type=ssh \
     cargo build --locked --release --bin traffic-e2e \
     && install -m 0755 /build/target/release/traffic-e2e /tmp/traffic-e2e
 

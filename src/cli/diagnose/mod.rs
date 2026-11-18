@@ -57,7 +57,7 @@ struct DependencyIndexArgs {
 struct GlobalDependenciesArgs {
     #[arg(long)]
     report: PathBuf,
-    #[arg(long, value_parser = ["mysql", "redis", "memcached", "http", "kafka", "motan"])]
+    #[arg(long, value_parser = ["mysql", "redis", "memcached", "http", "kafka"])]
     protocol: String,
     #[arg(long, default_value_t = 0)]
     offset: usize,
