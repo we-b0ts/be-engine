@@ -4,7 +4,6 @@ use super::{
     evidence::{EvidenceFile, build},
     request,
 };
-use crate::dependency_index::MysqlRecords;
 use crate::{config::BackgroundDependencyRuleConfig, dependency_index::FileStamp};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -106,7 +105,7 @@ pub fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> Result<O
         .iter()
         .any(|r| matches!(r, BackgroundDependencyRuleConfig::Mysql { .. }));
     let transactions = mysql
-        .then(|| crate::dependency_index::mysql_transactions::load(&root, &files))
+        .then(|| crate::api_trigger::mysql_transaction::facts::load(&root, &files))
         .transpose()?;
     let transaction_files: BTreeMap<_, _> = transactions
         .as_ref()
@@ -122,7 +121,7 @@ pub fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> Result<O
         let relative = path.strip_prefix(&root)?.to_owned();
         let mut index = crate::dependency_index::load_file(&path)?;
         if let Some(file) = transaction_files.get(&relative) {
-            index.set_mysql_records(file.records.clone());
+            file.project_into(&mut index);
         }
         evidence.push(EvidenceFile {
             request: Some(request),
@@ -196,7 +195,7 @@ fn paths(index: &mut OriginIndex, root: &Path, relative: bool) -> Result<()> {
 }
 
 pub fn seal(root: &Path, rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
-    crate::dependency_index::mysql_transactions::seal(root)?;
+    crate::api_trigger::mysql_transaction::facts::seal(root)?;
     let rules: Vec<_> = rules
         .iter()
         .filter(|rule| rule.trigger_source().is_some())

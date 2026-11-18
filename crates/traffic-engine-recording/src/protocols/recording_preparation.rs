@@ -41,7 +41,7 @@ impl SourcePreparation for Preparation {
             tokio::task::spawn_blocking(move || {
                 crate::api_trigger::seal(&run, &rules)?;
                 Ok([
-                    crate::dependency_index::mysql_transactions::FRAGMENT,
+                    crate::api_trigger::MYSQL_TRANSACTION_FRAGMENT,
                     ".mysql-ownership.json",
                 ]
                 .into_iter()

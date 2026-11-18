@@ -5,7 +5,7 @@ fn file(path: &str, events: &[(u64, u16, u16)]) -> SourceFile {
     SourceFile {
         path: path.into(), stamp: FileStamp { size:0,device:0,inode:0,modified:(0,0),changed:(0,0) },
         sha256:String::new(), records:events.iter().map(|(seq,before,after)| IndexedMysqlRecord {
-            location:super::super::RecordLocation { line:*seq as usize,offset:0,length:0,sha256:String::new() },
+            location:RecordLocation { line:*seq as usize,offset:0,length:0,sha256:String::new() },
             summary:json!({"connection_id":"connection","query_sequence":seq,"server_status_before":before,
                 "server_status_after":after,"target_host":"db.test","target_port":3306,"database":"app","username":"writer"}),
         }).collect(),
@@ -63,7 +63,7 @@ fn duplicated_wire_identity_cannot_prove_a_transaction() {
 }
 
 #[test]
-fn recorder_and_legacy_metadata_preserve_non_sql_status_continuity() {
+fn provider_projection_preserves_non_sql_status_continuity_without_row_data() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dependencies.jsonl");
     let events = [
@@ -85,13 +85,9 @@ fn recorder_and_legacy_metadata_preserve_non_sql_status_continuity() {
     std::fs::write(&path, raw).unwrap();
     let recorder = store::load_file(&path).unwrap();
     assert_eq!(recorder.records("mysql").len(), 3);
-    let mut old = recorder.clone();
-    old.indexes.remove("mysql");
-    let legacy = super::super::mysql::extend(&path, old).unwrap();
-    assert_eq!(
-        serde_json::to_value(recorder.mysql_records()).unwrap(),
-        serde_json::to_value(legacy.mysql_records()).unwrap()
-    );
-    let encoded = serde_json::to_string(&legacy.mysql_records()).unwrap();
+    let records = recorder.records("mysql");
+    assert_eq!(records[1].summary["command"], "COM_PING");
+    assert_eq!(records[1].summary["server_status_after"], 1);
+    let encoded = serde_json::to_string(records).unwrap();
     assert!(!encoded.contains("private") && !encoded.contains("SELECT 1"));
 }

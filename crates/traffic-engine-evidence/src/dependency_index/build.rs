@@ -2,7 +2,6 @@ use super::FileIndex;
 use anyhow::Result;
 use std::path::Path;
 
-pub use traffic_recording_store::source::digest;
 pub use traffic_recording_store::source::index::Builder;
 
 #[cfg(test)]

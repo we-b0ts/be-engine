@@ -1,4 +1,5 @@
 //! Complete wire-ordered transactions inherit only source-proven API ownership.
+pub(super) mod facts;
 mod scan;
 mod tail;
 use super::{
@@ -47,7 +48,7 @@ pub(super) fn associate(
     files: &[EvidenceFile],
     rules: &[BackgroundDependencyRuleConfig],
     index: &mut OriginIndex,
-    transactions: Option<&crate::dependency_index::mysql_transactions::Facts>,
+    transactions: Option<&crate::api_trigger::mysql_transaction::facts::Facts>,
 ) -> Result<()> {
     let owners: BTreeMap<_, _> = rules
         .iter()

@@ -90,7 +90,7 @@ fn recording_seals_facts_and_ownership_and_replay_imports_them() {
     super::super::seal(&f.root, &rules).unwrap();
     assert!(
         f.root
-            .join(crate::dependency_index::mysql_transactions::FRAGMENT)
+            .join(crate::api_trigger::mysql_transaction::facts::FRAGMENT)
             .is_file()
     );
     assert!(f.root.join(super::super::cache::FRAGMENT).is_file());

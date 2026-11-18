@@ -95,32 +95,6 @@ fn load_file_cancellable(
     )
 }
 
-/// Only configured API-origin MySQL discovery requests this optional extension.
-pub fn load_mysql_file(path: &Path) -> Result<FileIndex> {
-    let base = load_file(path)?;
-    // New Recorder summaries already contain SQL-free MySQL metadata. Legacy
-    // fragments alone need the optional extension pass over their original file.
-    if base.indexes.contains_key("mysql") {
-        return Ok(base);
-    }
-    let stamp = base.stamp.clone();
-    let directory = cache_directory(path);
-    private_directory(&directory)?;
-    let cancelled = std::sync::atomic::AtomicBool::new(false);
-    let _lock = Lock::acquire(&directory.join("build.lock"), &cancelled)?;
-    let cache = directory.join("file-mysql-v5.json");
-    if let Ok(index) = read_json::<FileIndex>(&cache)
-        && index.version == VERSION
-        && index.stamp == stamp
-        && index.indexes.contains_key("mysql")
-    {
-        return Ok(index);
-    }
-    let index = super::mysql::extend(path, base)?;
-    write_json(&cache, &index)?;
-    Ok(index)
-}
-
 pub fn prepare(
     source: &Path,
     validate: fn(&Value) -> Result<()>,

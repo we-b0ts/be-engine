@@ -6,43 +6,6 @@ pub use traffic_recording_store::source::index::{FRAGMENT, FileIndex, IndexedRec
 pub use traffic_recording_store::source::{FileStamp, RecordLocation};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexedMysqlRecord {
-    pub location: RecordLocation,
-    pub summary: serde_json::Value,
-}
-
-pub trait MysqlRecords {
-    fn mysql_records(&self) -> Vec<IndexedMysqlRecord>;
-    fn set_mysql_records(&mut self, records: Vec<IndexedMysqlRecord>);
-}
-
-impl MysqlRecords for FileIndex {
-    fn mysql_records(&self) -> Vec<IndexedMysqlRecord> {
-        self.records("mysql")
-            .iter()
-            .map(|record| IndexedMysqlRecord {
-                location: record.location.clone(),
-                summary: record.summary.clone(),
-            })
-            .collect()
-    }
-    fn set_mysql_records(&mut self, records: Vec<IndexedMysqlRecord>) {
-        self.indexes.insert(
-            "mysql".into(),
-            records
-                .into_iter()
-                .map(|record| IndexedRecord {
-                    location: record.location,
-                    summary: record.summary,
-                    key: String::new(),
-                    connection_id: None,
-                })
-                .collect(),
-        );
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedFile {
     pub path: PathBuf,
     pub case_id: String,

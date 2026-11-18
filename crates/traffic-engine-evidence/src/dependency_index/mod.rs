@@ -7,8 +7,6 @@ pub mod global;
 #[cfg(test)]
 mod global_tests;
 mod model;
-mod mysql;
-pub mod mysql_transactions;
 mod pages;
 #[cfg(test)]
 mod projection_tests;
@@ -25,7 +23,7 @@ mod tests;
 
 pub use build::Builder;
 pub use model::DependencyIndexReport;
-pub use model::{FRAGMENT, FileIndex, FileStamp, MysqlRecords, RecordLocation};
+pub use model::{FRAGMENT, FileIndex, FileStamp, IndexedRecord, RecordLocation};
 pub use pages::{PageManifest, PageWriter, Paged};
 pub use reader::RecordReader;
 pub use reference::{RecordRef, RecordSource};
