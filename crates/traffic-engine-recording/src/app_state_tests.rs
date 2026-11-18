@@ -124,7 +124,10 @@ fn http_dependency(authority: &str, uri: &str) -> RecorderEvent {
 }
 
 fn preflight_probe_dependency(user_agent: &str) -> RecorderEvent {
-    let mut event = http_dependency("demo.test:443", "/");
+    let mut event = http_dependency(
+        &format!("{}:443", crate::network_probe::POSITIVE_AUTHORITY),
+        "/",
+    );
     let RecorderEvent::HttpExchange(exchange) = &mut event else {
         unreachable!();
     };
@@ -292,7 +295,7 @@ fn redis_get_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
 }
 
 #[tokio::test]
-async fn vintage_http_remains_a_structured_case_dependency_without_explicit_ownership() {
+async fn discovery_http_remains_a_structured_case_dependency_without_explicit_ownership() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = case_limit_test_config(&temp);
     config.http_gateway.ready.enabled = false;
@@ -315,7 +318,7 @@ async fn vintage_http_remains_a_structured_case_dependency_without_explicit_owne
         "static.config.api.example.test",
         "naming.example.test",
     ] {
-        for path in ["/1/config/service", "/naming/service"] {
+        for path in ["/config/lookup", "/services/lookup"] {
             let mut event = http_dependency(authority, path);
             let RecorderEvent::HttpExchange(exchange) = &mut event else {
                 unreachable!()

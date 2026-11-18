@@ -550,9 +550,11 @@ fn replay_target_ip(report: &Value, host: &str, port: u16) -> Result<Ipv4Addr> {
         })
         .and_then(|target| target.get("fake_ip"))
         .and_then(Value::as_str)
-        .context("Replay targets do not contain the demo.test HTTPS Global dependency")?
+        .with_context(|| {
+            format!("Replay targets do not contain the {host} HTTPS Global dependency")
+        })?
         .parse()
-        .context("Replay assigned an invalid fake IP to demo.test")
+        .with_context(|| format!("Replay assigned an invalid fake IP to {host}"))
 }
 
 fn has_replay_target(report: &Value, host: &str) -> bool {
@@ -608,7 +610,8 @@ fn ensure_global_match(report: &Value, fake_ip: Ipv4Addr) -> Result<()> {
             && matched.pointer("/target/port").and_then(Value::as_u64) == Some(443)
             && matched.get("method").and_then(Value::as_str) == Some("GET")
             && matched.get("status").and_then(Value::as_u64).is_some(),
-        "Replay positive probe did not consume the expected demo.test Global HTTP exchange"
+        "Replay positive probe did not consume the expected {} Global HTTP exchange",
+        crate::network_probe::POSITIVE_AUTHORITY
     );
     ensure!(
         report
@@ -783,14 +786,14 @@ mod tests {
     fn identifies_positive_and_negative_replay_targets() {
         let report = serde_json::json!({
             "targets": [
-                {"host": "demo.test", "port": 443, "fake_ip": "198.19.0.3", "protocol": "https"}
+                {"host": "example.com", "port": 443, "fake_ip": "198.19.0.3", "protocol": "https"}
             ]
         });
         assert_eq!(
-            replay_target_ip(&report, "demo.test", 443).unwrap(),
+            replay_target_ip(&report, "example.com", 443).unwrap(),
             "198.19.0.3".parse::<Ipv4Addr>().unwrap()
         );
-        assert!(!has_replay_target(&report, "example.com"));
+        assert!(!has_replay_target(&report, "example.org"));
     }
 
     #[test]
@@ -798,12 +801,12 @@ mod tests {
         let report = serde_json::json!({
             "unrecorded_targets": [{
                 "case_id": "case-a",
-                "target": {"host": "example.com", "port": 443},
+                "target": {"host": "example.org", "port": 443},
                 "reason": crate::replay::UNRECORDED_ENDPOINT_REASON,
             }]
         });
 
-        ensure_unrecorded_endpoint_evidence(&report, "example.com", 443).unwrap();
-        assert!(ensure_unrecorded_endpoint_evidence(&report, "example.com", 80).is_err());
+        ensure_unrecorded_endpoint_evidence(&report, "example.org", 443).unwrap();
+        assert!(ensure_unrecorded_endpoint_evidence(&report, "example.org", 80).is_err());
     }
 }

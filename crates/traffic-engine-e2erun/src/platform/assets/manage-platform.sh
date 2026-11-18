@@ -152,6 +152,7 @@ source_image_id=$(jq -er '.image_id' "$TRAFFIC_E2E_SOURCE_RUNTIME") || {
 anchor_image='be-engine-network-anchor:local'
 recorder_image='be-engine-recorder-runtime:local'
 network_probe_image='be-engine-network-probe:local'
+preflight_probe_url='__TRAFFIC_E2E_POSITIVE_PROBE_URL__'
 
 repo_name=$(basename "$TRAFFIC_E2E_TARGET_ROOT" | tr -cs 'A-Za-z0-9_.-' '-')
 repo_name=${repo_name#-}
@@ -418,8 +419,8 @@ run_preflight_https_probe() {
         timeout --foreground 10 docker exec "$source_name" /bin/sh -ec '
             command -v java >/dev/null
             java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e \
-                HttpsProbe https://demo.test/
-        ' || {
+                HttpsProbe "$1"
+        ' sh "$preflight_probe_url" || {
             printf 'error: Java truststore HTTPS probe failed\n' >&2
             return 1
         }
@@ -434,7 +435,7 @@ run_preflight_https_probe() {
             --user-agent traffic-e2e-system-network-preflight \
             --header 'X-Traffic-E2E-Probe-Origin: source' \
             --output /dev/null --write-out 'system network HTTPS probe returned %{http_code}\n' \
-            https://demo.test/ || {
+            "$preflight_probe_url" || {
                 printf 'error: system network HTTPS probe failed\n' >&2
                 return 1
             }

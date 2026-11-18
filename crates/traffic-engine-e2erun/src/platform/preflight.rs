@@ -157,7 +157,8 @@ pub(super) fn validate(manifest_path: &Path, readiness_path: &str) -> Result<Pre
         count_global_probe_dependencies(&run_dir.join("global-dependencies.jsonl"))?;
     ensure!(
         probe_count == 1,
-        "preflight recording must publish exactly one successful demo.test probe as a Global dependency; found {probe_count}"
+        "preflight recording must publish exactly one successful {} probe as a Global dependency; found {probe_count}",
+        crate::network_probe::POSITIVE_AUTHORITY
     );
     let probe_kind = probe_kind
         .context("preflight recording probe is missing its system-selected runtime attribution")?;
@@ -182,15 +183,6 @@ fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<Preflig
                 path.display()
             )
         })?;
-        let authority_matches = event.authority.as_deref().is_some_and(|authority| {
-            authority
-                .strip_suffix(":443")
-                .unwrap_or(authority)
-                .eq_ignore_ascii_case(crate::network_probe::POSITIVE_AUTHORITY)
-        });
-        let uri_matches = event.uri == "/"
-            || event.uri == crate::network_probe::POSITIVE_URL
-            || event.uri == "https://demo.test";
         let has_response_status = event
             .response_status
             .as_ref()
@@ -204,8 +196,10 @@ fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<Preflig
         if event.event_type == "http_exchange"
             && matches!(event.scheme.as_str(), "https" | "fake_ip_https")
             && event.method == "GET"
-            && authority_matches
-            && uri_matches
+            && crate::network_probe::matches_positive_endpoint(
+                event.authority.as_deref(),
+                &event.uri,
+            )
             && has_response_status
             && event.error.is_none()
             && event.capture["attribution"]["kind"] == "startup"
@@ -372,7 +366,7 @@ mod tests {
     fn probe_event(matched_by: &str) -> String {
         format!(
             concat!(
-                r#"{{"event_type":"http_exchange","scheme":"fake_ip_https","method":"GET","uri":"/","authority":"demo.test:443","response_status":302,"error":null,"capture":{{"phase":"runtime","attribution":{{"kind":"startup","initialization_unit":"preflight_probe/{}"}}}}}}"#,
+                r#"{{"event_type":"http_exchange","scheme":"fake_ip_https","method":"GET","uri":"/","authority":"example.com:443","response_status":302,"error":null,"capture":{{"phase":"runtime","attribution":{{"kind":"startup","initialization_unit":"preflight_probe/{}"}}}}}}"#,
                 "\n"
             ),
             matched_by

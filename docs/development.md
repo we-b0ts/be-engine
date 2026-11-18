@@ -2738,8 +2738,8 @@ Initialization and managed runtime do not provision a Breeze sidecar, inject
 Mesh connection settings, or ship Java class patches. Existing projects must
 remove the retired `project.breeze` setting and any obsolete patch-copy steps
 from `Dockerfile.source`. Application-specific startup inputs use the normal
-startup declarations; Breeze SDK use and Vintage response rewrite rules remain
-independent of this startup contract.
+startup declarations. Initialization does not install service discovery or
+response rewrite rules.
 
 Changes confined to the file named by `project.policy` (including case
 pattern discovery) do not require code review
@@ -2784,8 +2784,8 @@ image. The system automatically records exactly one `GET` for the configured
 readiness path with its finalized source response; this validates standard
 recording and is not a business sample. Recording also publishes exactly one
 marked
-`demo.test` Global dependency; Replay must consume it through fake DNS, reject
-payload sent to unrecorded `example.com:443` with `unrecorded_targets`
+`example.com` Global dependency; Replay must consume it through fake DNS, reject
+payload sent to unrecorded `example.org:443` with `unrecorded_targets`
 evidence, and block direct external egress for UID `998`.
 Source-local port `880` is not a preflight dependency and receives no managed
 switch commands; the configured HTTP Gateway readiness contract remains
@@ -3174,7 +3174,7 @@ proof:
 ```
 
 Initialization creates an empty policy and adds no service-specific ownership
-rules. Vintage configuration and naming HTTP calls remain ordinary Case dependencies;
+rules. Configuration and service discovery HTTP calls remain ordinary Case dependencies;
 response capture and protocol decoding do not grant process ownership.
 HTTP, Motan and Memcached ownership preserves their existing finite
 consumption. Redis snapshot-producing selectors affect capture and runtime;

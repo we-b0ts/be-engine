@@ -27,6 +27,10 @@ pub(super) fn render_target_main(readiness_path: &str, http_backend_port: u16) -
 pub(super) fn render_target_startup_probe() -> String {
     TARGET_STARTUP_PROBE_TEMPLATE
         .replace(
+            "__TRAFFIC_E2E_POSITIVE_PROBE_URL__",
+            crate::network_probe::POSITIVE_URL,
+        )
+        .replace(
             "__TRAFFIC_E2E_PROBE_ORIGIN_HEADER__",
             crate::network_probe::ORIGIN_HEADER,
         )

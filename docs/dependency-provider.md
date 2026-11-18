@@ -258,7 +258,7 @@ http:
   response_rewrite:
     - host: config.example.test
       method: GET
-      path: /1/config/service
+      path: /config/lookup
       documents:
         - query: {action: [lookup]}
           when: {/code: 200}
@@ -268,7 +268,7 @@ http:
             - {path: /*/slave, format: host_port, protocol: redis, recursive: true}
 ```
 
-Vintage、CacheService 的业务选择通过配置表达。Kubeconfig 所需的进程、临时凭证文件与路由生命周期仍由框架现有 owner 负责。
+服务发现和地址改写只有在项目配置显式声明规则后才会启用。Kubeconfig 所需的进程、临时凭证文件与路由生命周期仍由框架现有 owner 负责。
 规则变化通过现有 Source proof、plan/apply 和新录制义务进入验证。
 Replay 的值规则复用现有类型化值 contract，并独立保留 native 会话与有限消费约束。
 

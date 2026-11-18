@@ -137,7 +137,6 @@ fn initialize_repository_config_with(
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         upstream_dns: options.upstream_dns,
-        platform_response_rewrite_enabled: false,
     };
     let (_, recorder) = render_validated_recorder_config(&recorder_options)?;
     let policy = super::native_policy::empty_policy()?;
@@ -746,6 +745,7 @@ mod tests {
         assert!(main.contains("Delete this module declaration"));
         assert!(main.contains("startup_probe::run().await?;"));
         let probe = fs::read_to_string(target.path().join(TARGET_STARTUP_PROBE_PATH)).unwrap();
+        assert!(probe.contains(crate::network_probe::POSITIVE_URL));
         assert!(probe.contains(crate::network_probe::ORIGIN_HEADER));
         assert!(probe.contains(crate::network_probe::TARGET_ORIGIN));
         let source_dockerfile =

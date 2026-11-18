@@ -15,7 +15,11 @@ pub(super) fn stage_assets(target_root: &Path) -> Result<PathBuf> {
         .join(Uuid::new_v4().to_string());
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create Platform asset root {}", root.display()))?;
-    write_asset(&root.join("manage-platform.sh"), MANAGER, 0o700)?;
+    let manager = MANAGER.replace(
+        "__TRAFFIC_E2E_POSITIVE_PROBE_URL__",
+        crate::network_probe::POSITIVE_URL,
+    );
+    write_asset(&root.join("manage-platform.sh"), &manager, 0o700)?;
     write_asset(&root.join("recorder-runtime.sh"), RECORDER_RUNTIME, 0o600)?;
     write_asset(&root.join("platform-mounts.sh"), PLATFORM_MOUNTS, 0o600)?;
     write_asset(&root.join("container-runtime.sh"), CONTAINER_RUNTIME, 0o600)?;

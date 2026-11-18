@@ -159,7 +159,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("detect_source_java_runtime"));
     assert!(MANAGER.contains("--entrypoint java \"$adapter_image_id\" -version"));
     assert!(!MANAGER.contains("TRAFFIC_E2E_SOURCE_LANGUAGE"));
-    assert!(MANAGER.contains("traffic-e2e-network-probe:0.0.1"));
+    assert!(MANAGER.contains(crate::network_probe::IMAGE));
     assert!(MANAGER.contains("X-Traffic-E2E-Probe-Origin: source"));
     assert!(String::from_utf8_lossy(HTTPS_PROBE).contains("X-Traffic-E2E-Probe-Origin"));
     assert!(MANAGER.contains(
@@ -168,7 +168,9 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e"));
     assert!(MANAGER.contains("timeout --foreground 10 docker exec \"$source_name\""));
     assert!(!MANAGER.contains("command -v javac"));
-    assert!(!MANAGER.contains("getent ahostsv4 demo.test"));
+    assert!(!MANAGER.contains("getent ahostsv4"));
+    assert!(MANAGER.contains("HttpsProbe \"$1\""));
+    assert_eq!(MANAGER.matches("\"$preflight_probe_url\"").count(), 2);
     assert!(PREFLIGHT_READINESS.contains("phase: \"preflight-readiness-recorded\""));
     assert!(PREFLIGHT_READINESS.contains("TRAFFIC_E2E_SOURCE_READY_PATH"));
     assert!(PREFLIGHT_READINESS.contains("TRAFFIC_E2E_SOURCE_READY_STATUS"));
@@ -188,13 +190,13 @@ fn stages_private_executable_assets() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path();
     let assets = stage_assets(target).unwrap();
+    let manager_path = assets.join("manage-platform.sh");
+    let manager = fs::read_to_string(&manager_path).unwrap();
 
+    assert!(manager.contains("preflight_probe_url='https://example.com/'"));
+    assert!(!manager.contains("__TRAFFIC_E2E_POSITIVE_PROBE_URL__"));
     assert_eq!(
-        fs::metadata(assets.join("manage-platform.sh"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
+        fs::metadata(manager_path).unwrap().permissions().mode() & 0o777,
         0o700
     );
     assert_eq!(

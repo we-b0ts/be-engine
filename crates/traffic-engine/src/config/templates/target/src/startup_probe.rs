@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use reqwest::redirect::Policy;
 
-const PROBE_URL: &str = "https://demo.test/";
+const PROBE_URL: &str = "__TRAFFIC_E2E_POSITIVE_PROBE_URL__";
 const PROBE_CA_PATH: &str = "/traffic-e2e/trust/replay-ca.pem";
 const PROBE_ORIGIN_HEADER: &str = "__TRAFFIC_E2E_PROBE_ORIGIN_HEADER__";
 const PROBE_ORIGIN: &str = "__TRAFFIC_E2E_PROBE_ORIGIN__";
