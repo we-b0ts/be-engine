@@ -231,11 +231,12 @@ async fn coverage_keeps_sealed_input_authentication_and_run_identity_checks() {
 async fn a_warm_coverage_query_does_not_parse_or_index_semantic_source() {
     let (target, state) = recording(&[("GET /api", "/api")], false).await;
     let source = state.case_source.as_ref().unwrap();
-    // Synthetic fixture: the bytes have a valid seal but intentionally are not
-    // semantic JSON. Coverage cannot certify them; actual Source proof must fail.
-    let opaque = b"semantic parsing is deliberately unavailable in this fixture\n";
+    // Preserve the recording epoch but append an incomplete dependency location.
+    // Coverage authenticates the bytes without traversing the dependency ledger.
     let ledger = dependency_path(source);
-    fs::write(&ledger, opaque).unwrap();
+    let mut opaque = fs::read(&ledger).unwrap();
+    opaque.push(b'\n');
+    fs::write(&ledger, &opaque).unwrap();
     let (_, mut manifest) = crate::dependency_index::recording::manifest(source).unwrap();
     let identity = manifest
         .files
@@ -247,14 +248,16 @@ async fn a_warm_coverage_query_does_not_parse_or_index_semantic_source() {
         })
         .unwrap();
     identity.length = opaque.len() as u64;
-    identity.sha256 = source::digest(opaque);
+    identity.sha256 = source::digest(&opaque);
     fs::write(
         source.join(MANIFEST_FILE),
         serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
     let cache = crate::dependency_index::store::cache_directory(source);
-    fs::remove_dir_all(&cache).unwrap();
+    if cache.exists() {
+        fs::remove_dir_all(&cache).unwrap();
+    }
     crate::dependency_index::recording::authenticate(source).unwrap();
     let names = |directory: &Path| -> BTreeMap<PathBuf, crate::dependency_index::FileStamp> {
         fs::read_dir(directory)

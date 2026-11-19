@@ -212,18 +212,22 @@ async fn unused_occurrence_projection_matches_full_source_and_retains_seal_check
     let unknown = json!({"unused_case_exchanges":[{
         "case_id":"selected","source_exchange_id":Uuid::new_v4()}]});
     assert!(projected.unused(&unknown, &selected).is_err());
-    let central = dependency_path(state.case_source.as_ref().unwrap());
-    let mut bytes = fs::read(&central).unwrap();
-    let modified = fs::metadata(&central).unwrap().modified().unwrap();
+    let partition = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies-unattributed.tsv");
+    let mut bytes = fs::read(&partition).unwrap();
+    let modified = fs::metadata(&partition).unwrap().modified().unwrap();
     let position = bytes
         .windows(b"worker.test".len())
         .position(|value| value == b"worker.test")
         .unwrap();
     bytes[position..position + b"worker.test".len()].copy_from_slice(b"tamper.test");
-    fs::write(&central, bytes).unwrap();
+    fs::write(&partition, bytes).unwrap();
     fs::File::options()
         .write(true)
-        .open(&central)
+        .open(&partition)
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(modified))
         .unwrap();
@@ -323,7 +327,11 @@ async fn single_source_information_preserves_sealed_physical_identity_and_shape(
     );
 
     // A warmed index cannot authenticate bytes modified after the recording seal.
-    let path = dependency_path(state.case_source.as_ref().unwrap());
+    let path = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies-unattributed.tsv");
     let mut bytes = fs::read(&path).unwrap();
     let position = bytes
         .windows(b"refresh".len())

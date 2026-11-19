@@ -51,13 +51,14 @@ async fn case_tail_attribution_reuses_unchanged_native_indexes_and_rebuilds_chan
     let (_, manifest) = crate::dependency_index::recording::manifest(root).unwrap();
     let case = manifest.inputs[0].case_id.to_string();
     let process = root.join("indexes/process-scope.json");
-    let original = std::fs::read(&process).unwrap();
+    let process_file = scoped::view_path(&process).unwrap();
+    let original = std::fs::read(&process_file).unwrap();
     let ids = [
         process.clone(),
         root.join("indexes/unattributed-scope.json"),
     ]
     .map(|path| {
-        let scope: ScopeIndex = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let scope = scoped::read_index_with_epoch(&path, manifest.run_epoch).unwrap();
         assert_eq!(scope.locations.len(), 1);
         scope.locations[0].exchange_id
     });
@@ -116,7 +117,7 @@ async fn case_tail_attribution_reuses_unchanged_native_indexes_and_rebuilds_chan
     .unwrap();
     assert_eq!(empty.records.count, 0);
     assert_ne!(changed_cache, cache);
-    assert_eq!(std::fs::read(process).unwrap(), original);
+    assert_eq!(std::fs::read(process_file).unwrap(), original);
 
     // A nonempty changed Process scope prepared outside a Replay attempt
     // is usable from the attempt's independently frozen view.
