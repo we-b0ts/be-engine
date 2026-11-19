@@ -3,7 +3,7 @@ pub use traffic_engine::*;
 pub mod model;
 use traffic_rewrite_rules::rewrite::dependency_review::{decisions, rules, source};
 mod case_defaults {
-    pub use traffic_engine::attribution_defaults::load;
+    pub use traffic_engine::attribution_defaults::{load, load_for_replay};
 }
 pub mod admission;
 pub mod snapshot;

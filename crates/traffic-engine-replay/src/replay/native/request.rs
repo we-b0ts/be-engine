@@ -70,11 +70,38 @@ pub struct ResponsePlan {
 }
 
 impl Inventory {
-    pub fn render_response(&self, index: usize, observed: DateTime<Utc>) -> Result<ResponsePlan> {
+    pub fn render_response(
+        &self,
+        index: usize,
+        observed: DateTime<Utc>,
+        loaded: Option<&dyn traffic_protocol::message::MessageEncoder>,
+    ) -> Result<ResponsePlan> {
         let exchange = &self.core.exchanges[index];
+        let prepared;
+        let (response, encoder) = if let Some(encoder) = loaded {
+            prepared = self
+                .prepared_messages(
+                    &exchange.native,
+                    exchange.source.case_id.as_deref(),
+                    exchange.source.capture.as_ref(),
+                    self.contracts.as_ref(),
+                    Some(encoder),
+                )?
+                .1
+                .context("stored response was not prepared")?;
+            (&prepared, encoder)
+        } else {
+            (
+                exchange
+                    .response
+                    .as_ref()
+                    .context("response was not prepared")?,
+                exchange.native.response.as_ref(),
+            )
+        };
         let scope = self.scope(index);
         let clocks = self.clocks(index, observed, true);
-        let rendered = exchange.response.render_delivery_with_documents(
+        let rendered = response.render_delivery_with_documents(
             clocks,
             self.contracts.metadata(),
             &exchange.delivery,
@@ -89,7 +116,7 @@ impl Inventory {
             },
         )?;
         let proposed = identity(self.contracts.as_ref(), self, index, &rendered.comparison)?;
-        let response = exchange.native.response.output(&rendered.values)?;
+        let response = encoder.output(&rendered.values)?;
         Ok(ResponsePlan {
             output: response,
             comparison: rendered.comparison,

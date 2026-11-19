@@ -15,6 +15,14 @@ pub type SourceUpgradeGuard = Box<dyn Send>;
 /// its own Target root, so concurrent projects retain independent workflow state.
 pub trait Coordinator: Send + Sync {
     fn freeze(&self, target: Option<&Path>, source: &Path, run: &str) -> Result<FrozenAttribution>;
+    fn freeze_for_replay(
+        &self,
+        target: Option<&Path>,
+        source: &Path,
+        run: &str,
+    ) -> Result<FrozenAttribution> {
+        self.freeze(target, source, run)
+    }
     fn identity(&self, target: &Path, source: Option<&Path>, run: &str) -> Result<String>;
     fn lock_source_upgrade(&self, target: &Path) -> Result<SourceUpgradeGuard>;
 }
@@ -33,7 +41,18 @@ pub fn freeze_dependency_attribution(
     if let Some(coordinator) = COORDINATOR.get() {
         return coordinator.freeze(target, source, run);
     }
-    standalone_attribution(target, source, run)
+    standalone_attribution(target, source, run, true)
+}
+
+pub fn freeze_dependency_attribution_for_replay(
+    target: Option<&Path>,
+    source: &Path,
+    run: &str,
+) -> Result<FrozenAttribution> {
+    if let Some(coordinator) = COORDINATOR.get() {
+        return coordinator.freeze_for_replay(target, source, run);
+    }
+    standalone_attribution(target, source, run, false)
 }
 
 pub fn dependency_attribution_identity_for_source(
@@ -44,7 +63,7 @@ pub fn dependency_attribution_identity_for_source(
     if let Some(coordinator) = COORDINATOR.get() {
         return coordinator.identity(target, Some(source), run);
     }
-    Ok(standalone_attribution(Some(target), source, run)?.1)
+    Ok(standalone_attribution(Some(target), source, run, true)?.1)
 }
 
 #[allow(dead_code)]
@@ -57,7 +76,7 @@ pub fn dependency_attribution_snapshot(target: &Path, run: &str) -> Result<Strin
         .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
         .join("recordings")
         .join(run);
-    Ok(standalone_attribution(Some(target), &source, run)?.1)
+    Ok(standalone_attribution(Some(target), &source, run, true)?.1)
 }
 
 pub fn lock_admin_source_upgrade(target: &Path) -> Result<SourceUpgradeGuard> {
@@ -71,6 +90,7 @@ fn standalone_attribution(
     target: Option<&Path>,
     source: &Path,
     run: &str,
+    verify: bool,
 ) -> Result<FrozenAttribution> {
     if let Some(target) = target {
         ensure!(
@@ -87,7 +107,11 @@ fn standalone_attribution(
     );
     let bytes = std::fs::read(root.join(crate::dependency::observation::MANIFEST_FILE))?;
     let inventory = crate::policy_evidence::digest(&bytes);
-    let owners = crate::attribution_defaults::load(source, target)?;
+    let owners = if verify {
+        crate::attribution_defaults::load(source, target)?
+    } else {
+        crate::attribution_defaults::load_for_replay(source, target)?
+    };
     let mut identity = traffic_recording_store::attribution::snapshot_identity(
         run,
         None,

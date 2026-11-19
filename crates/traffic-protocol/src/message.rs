@@ -49,6 +49,10 @@ pub trait ProtocolMessage: Send + Sync {
 }
 
 pub trait MessageEncoder: ProtocolMessage {
+    fn stored(&self) -> Option<&dyn StoredMessage> {
+        None
+    }
+
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes>;
 
     fn output(
@@ -58,5 +62,14 @@ pub trait MessageEncoder: ProtocolMessage {
         Ok(Box::new(crate::output::SingleOutput::new(
             self.encode(values)?,
         )))
+    }
+}
+
+/// An immutable response whose native payload is read only at delivery.
+pub trait StoredMessage: Send + Sync {
+    fn load(&self) -> Result<std::sync::Arc<dyn MessageEncoder>>;
+
+    fn source_structure(&self) -> Option<&serde_json::Value> {
+        None
     }
 }

@@ -38,7 +38,7 @@ impl GlobalSource {
         .await?;
         if let Some(run) = crate::dependency_index::recording::root(path) {
             let process = run.join("indexes/process-scope.json");
-            if process.is_file() {
+            if crate::dependency_index::scoped::exists(&process) {
                 crate::protocols::replay::source::global::load(
                     &process,
                     ReplaySource::Process,

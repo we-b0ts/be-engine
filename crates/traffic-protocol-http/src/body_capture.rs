@@ -111,10 +111,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_case_body_with_gzip_decoding() {
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(br#"{"ok":true}"#).unwrap();
-        let compressed = encoder.finish().unwrap();
+    fn captures_all_gzip_members_in_a_case_body() {
+        let compressed_member = |bytes: &[u8]| {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(bytes).unwrap();
+            encoder.finish().unwrap()
+        };
+        let mut compressed = compressed_member(br#"{"ok":"#);
+        compressed.extend(compressed_member(b"true}"));
         let mut headers = HeaderMap::new();
         headers.insert("content-encoding", "gzip".parse().unwrap());
 

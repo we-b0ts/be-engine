@@ -44,8 +44,18 @@ pub fn project(directory: &std::path::Path, case_id: &str) -> Result<Option<Sour
     let admission = directory.join("admission.json");
     let epoch = if admission.is_file() {
         let admission: Admission = serde_json::from_slice(&std::fs::read(admission)?)?;
+        let scope = crate::dependency_index::scoped::case_path(directory);
+        let matches_local_case = admission.case_id.starts_with("case-")
+            && directory
+                .file_name()
+                .is_some_and(|name| name == admission.case_id.as_str())
+            && matches!(
+                crate::dependency_index::scoped::read_index(&scope)?.scope,
+                traffic_model::recording::ScopeKind::Case { case_id: id }
+                    if id.to_string() == case_id
+            );
         ensure!(
-            admission.case_id == case_id,
+            admission.case_id == case_id || matches_local_case,
             "HTTP timing admission belongs to another Case"
         );
         admission.timestamp.min(request.timestamp)

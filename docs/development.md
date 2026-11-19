@@ -722,13 +722,12 @@ case is allowed to finish for up to
 remaining staging case is retained under `failed/` with
 `recording_incomplete_at_shutdown`.
 
-`recording.max_body_bytes` is the system-wide body limit. It bounds recorded wire bodies and dependency captures, and
-managed replay target responses.
-`recording.max_decoded_body_bytes` may independently allow a larger decoded
-HTTP case body, such as compressed JSON; when omitted it inherits
-`max_body_bytes`. Content decoding reads at most the decoded limit plus one
-byte, so highly compressed input cannot cause unbounded decompression. Both
-effective defaults are 64 MiB.
+`recording.max_body_bytes` still applies to bounded diagnostic captures and
+managed Replay's primary Target response. HTTP, MySQL, and Redis dependency
+captures retain the complete bodies admitted by their protocol readers.
+`recording.max_decoded_body_bytes` controls bounded decoding for response
+rewrite rules. Its default is inherited from `max_body_bytes` and is 64 MiB
+with the default configuration.
 
 ### Rewriting HTTP Responses
 

@@ -137,14 +137,19 @@ pub async fn discover_replay_cases(
     selected_case_ids: &BTreeSet<String>,
 ) -> Result<(ReplayMode, BTreeMap<String, ReplayCase>, Option<String>)> {
     if crate::dependency_index::recording::root(root_dir).is_some() {
-        let (_, files) = crate::dependency_index::recording::cases(root_dir)?;
+        let (_, files) = crate::dependency_index::recording::case_inputs(root_dir)?;
         let mut cases = BTreeMap::new();
-        for dependencies_path in files {
+        let mut aliases = BTreeMap::new();
+        for (case_id, dependencies_path) in files {
             let dir = dependencies_path
                 .parent()
                 .context("Case scope has no directory")?
                 .to_path_buf();
-            let id = path_file_name(&dir).context("Case directory has no identity")?;
+            let id = case_id.to_string();
+            let label = path_file_name(&dir).context("Case directory has no identity")?;
+            if id != label {
+                aliases.insert(label, id.clone());
+            }
             ensure!(
                 cases
                     .insert(
@@ -164,7 +169,11 @@ pub async fn discover_replay_cases(
             !cases.is_empty(),
             "selected recording scope contains no complete Cases"
         );
-        ensure_selected_cases_exist(root_dir, &cases, selected_case_ids)?;
+        let selected_case_ids = selected_case_ids
+            .iter()
+            .map(|id| aliases.get(id).unwrap_or(id).clone())
+            .collect::<BTreeSet<_>>();
+        ensure_selected_cases_exist(root_dir, &cases, &selected_case_ids)?;
         cases.retain(|id, _| selected_case_ids.is_empty() || selected_case_ids.contains(id));
         let single = root_dir
             .join(crate::dependency_index::scoped::CASE_SCOPE)

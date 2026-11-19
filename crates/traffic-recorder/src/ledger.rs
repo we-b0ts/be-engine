@@ -1,5 +1,5 @@
 //! Run-wide request admission and capture lifetime, independent of business ownership.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -7,6 +7,7 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use traffic_model::recording::{CaptureCoverage, CapturePhase, ProtocolRef};
+use traffic_model::trace::OutputKind;
 
 use super::writer::RecorderWriter;
 
@@ -31,8 +32,13 @@ struct State {
     terminal: u64,
     failures: u64,
     inventory_gaps: bool,
-    pending: BTreeMap<Uuid, u64>,
+    pending: BTreeMap<Uuid, PendingAdmission>,
     incomplete: Vec<Uuid>,
+}
+
+struct PendingAdmission {
+    sequence: u64,
+    outputs: BTreeSet<u64>,
 }
 
 #[derive(Clone)]
@@ -40,56 +46,54 @@ pub struct CaptureReservation(Arc<Admission>);
 
 pub struct OutputReservation {
     capture: CaptureReservation,
-    event: traffic_model::trace::RecordedEvent<LifecycleRecord>,
+    output: OutputKind,
+    started_sequence: Option<u64>,
 }
 
 impl OutputReservation {
-    pub fn commit(self) {
-        let LifecycleRecord::OutputStarted { output, .. } = &self.event.event else {
-            unreachable!("reserved output event");
-        };
-        let mut facts = self.capture.0.facts.lock().expect("capture facts poisoned");
-        if facts.wire_terminal {
+    pub fn commit(mut self) {
+        self.finish(true);
+    }
+
+    fn finish(&mut self, delivered: bool) {
+        let Some(started_sequence) = self.started_sequence.take() else {
             return;
+        };
+        let admission = &self.capture.0;
+        let mut facts = admission.facts.lock().expect("capture facts poisoned");
+        let registry = &admission.registry.0;
+        let mut state = registry.state.lock().expect("capture registry poisoned");
+        let Some(pending) = state.pending.get_mut(&admission.exchange_id) else {
+            return;
+        };
+        pending.outputs.remove(&started_sequence);
+        let event = if delivered && !facts.wire_terminal {
+            facts.wire_terminal = matches!(
+                self.output,
+                OutputKind::End
+                    | OutputKind::NoResponse
+                    | OutputKind::TargetStop
+                    | OutputKind::Terminated { .. }
+            );
+            LifecycleRecord::Output {
+                dependency_sequence: admission.sequence,
+                output: self.output,
+            }
+        } else {
+            LifecycleRecord::OutputCancelled {
+                dependency_sequence: admission.sequence,
+                started_sequence,
+            }
+        };
+        if registry.writer.try_record_lifecycle(event).is_err() {
+            state.inventory_gaps = true;
         }
-        let receipt = self
-            .capture
-            .0
-            .registry
-            .0
-            .writer
-            .clock
-            .event(LifecycleRecord::Output {
-                exchange_id: self.capture.0.exchange_id,
-                dependency_sequence: self.capture.0.sequence,
-                output: *output,
-            });
-        use traffic_model::trace::OutputKind;
-        facts.wire_terminal = matches!(
-            output,
-            OutputKind::End
-                | OutputKind::NoResponse
-                | OutputKind::TargetStop
-                | OutputKind::Terminated { .. }
-        );
-        let result = self
-            .capture
-            .0
-            .registry
-            .0
-            .writer
-            .try_record_sequenced_lifecycle(self.event)
-            .and_then(|()| {
-                self.capture
-                    .0
-                    .registry
-                    .0
-                    .writer
-                    .try_record_sequenced_lifecycle(receipt?)
-            });
-        if result.is_err() {
-            self.capture.0.registry.mark_inventory_gap();
-        }
+    }
+}
+
+impl Drop for OutputReservation {
+    fn drop(&mut self) {
+        self.finish(false);
     }
 }
 
@@ -97,6 +101,7 @@ struct Admission {
     registry: CaptureRegistry,
     exchange_id: Uuid,
     sequence: u64,
+    message: bool,
     phase: CapturePhase,
     observed_case: Option<Uuid>,
     admitted_case: Option<Uuid>,
@@ -182,47 +187,48 @@ impl CaptureRegistry {
         admitted_case: Option<Uuid>,
         message: bool,
     ) -> Option<CaptureReservation> {
-        let exchange_id = Uuid::new_v4();
         let started_at = Utc::now();
         let mut state = self.0.state.lock().expect("capture registry poisoned");
         if state.closed {
             state.inventory_gaps = true;
             return None;
         }
-        let started = self.0.writer.clock.begin_dependency(|sequence| {
+        let started = self.0.writer.try_publish_lifecycle(|sequence| {
             if message {
                 LifecycleRecord::MessageStarted {
-                    exchange_id,
                     dependency_sequence: sequence,
                 }
             } else {
                 LifecycleRecord::Started {
-                    exchange_id,
                     dependency_sequence: sequence,
-                    process_epoch: self.0.process_epoch,
                     phase,
                     observed_case,
                     admitted_case,
-                    started_at,
                 }
             }
         });
-        let (sequence, event) = match started {
-            Ok(started) => started,
+        let sequence = match started {
+            Ok(sequence) => sequence,
             Err(_) => {
                 state.inventory_gaps = true;
-                return None;
+                self.0.writer.clock.next_dependency().ok()?
             }
         };
+        let exchange_id = traffic_model::recording::identity::IdentityKind::Dependency
+            .bridge(self.0.writer.clock.recording_id(), sequence);
         state.admitted += 1;
-        state.pending.insert(exchange_id, sequence);
-        if self.0.writer.try_record_sequenced_lifecycle(event).is_err() {
-            state.inventory_gaps = true;
-        }
+        state.pending.insert(
+            exchange_id,
+            PendingAdmission {
+                sequence,
+                outputs: Default::default(),
+            },
+        );
         Some(CaptureReservation(Arc::new(Admission {
             registry: self.clone(),
             exchange_id,
             sequence,
+            message,
             phase,
             observed_case,
             admitted_case,
@@ -278,16 +284,40 @@ impl CaptureRegistry {
         self.0.process_epoch
     }
 
+    pub fn next_case_id(&self) -> Uuid {
+        self.0.writer.clock.next_case_id()
+    }
+
+    pub fn recording_id(&self) -> Uuid {
+        self.0.writer.clock.recording_id()
+    }
+
+    pub fn next_connection_id(&self) -> Uuid {
+        self.0.writer.clock.next_connection_id()
+    }
+
     pub fn finish_incomplete(&self) {
         let mut state = self.0.state.lock().expect("capture registry poisoned");
-        let pending = state.pending.keys().copied().collect::<Vec<_>>();
-        for exchange_id in &pending {
+        let pending = std::mem::take(&mut state.pending);
+        for admission in pending.values() {
+            for &started_sequence in &admission.outputs {
+                if self
+                    .0
+                    .writer
+                    .try_record_lifecycle(LifecycleRecord::OutputCancelled {
+                        dependency_sequence: admission.sequence,
+                        started_sequence,
+                    })
+                    .is_err()
+                {
+                    state.inventory_gaps = true;
+                }
+            }
             if self
                 .0
                 .writer
                 .try_record_lifecycle(LifecycleRecord::Terminal {
-                    exchange_id: *exchange_id,
-                    dependency_sequence: state.pending[exchange_id],
+                    dependency_sequence: admission.sequence,
                     outcome: "incomplete_at_stop".into(),
                     capture_complete: false,
                 })
@@ -298,8 +328,7 @@ impl CaptureRegistry {
         }
         state.terminal += pending.len() as u64;
         state.failures += pending.len() as u64;
-        state.incomplete.extend(pending);
-        state.pending.clear();
+        state.incomplete.extend(pending.into_keys());
     }
 
     pub fn coverage(&self) -> CaptureCoverage {
@@ -320,6 +349,14 @@ impl CaptureRegistry {
 }
 
 impl CaptureReservation {
+    pub fn dependency_id(&self) -> u64 {
+        self.0.sequence
+    }
+
+    pub(crate) fn is_message(&self) -> bool {
+        self.0.message
+    }
+
     pub fn exchange_id(&self) -> Uuid {
         self.0.exchange_id
     }
@@ -344,32 +381,35 @@ impl CaptureReservation {
         }
     }
 
-    /// Reserve ordering before bytes become visible. Publication still requires
-    /// the actual flush, keeping a client's causally subsequent request later.
+    /// Publish the output attempt before bytes become visible. Its delivery
+    /// receipt is published separately after the successful write.
     pub fn prepare_output(
         &self,
         output: traffic_model::trace::OutputKind,
     ) -> Option<OutputReservation> {
-        if self.wire_terminal() {
+        let facts = self.0.facts.lock().expect("capture facts poisoned");
+        if facts.wire_terminal {
             return None;
         }
-        match self
-            .0
-            .registry
-            .0
+        let registry = &self.0.registry.0;
+        let mut state = registry.state.lock().expect("capture registry poisoned");
+        let pending = state.pending.get_mut(&self.0.exchange_id)?;
+        match registry
             .writer
-            .clock
-            .event(LifecycleRecord::OutputStarted {
-                exchange_id: self.0.exchange_id,
+            .try_publish_lifecycle(|_| LifecycleRecord::OutputStarted {
                 dependency_sequence: self.0.sequence,
                 output,
             }) {
-            Ok(event) => Some(OutputReservation {
-                capture: self.clone(),
-                event,
-            }),
+            Ok(started_sequence) => {
+                pending.outputs.insert(started_sequence);
+                Some(OutputReservation {
+                    capture: self.clone(),
+                    output,
+                    started_sequence: Some(started_sequence),
+                })
+            }
             Err(_) => {
-                self.0.registry.mark_inventory_gap();
+                state.inventory_gaps = true;
                 None
             }
         }
@@ -387,31 +427,11 @@ impl CaptureReservation {
         }
     }
     pub fn bind_protocol(&self, protocol_ref: ProtocolRef) {
-        let mut facts = self.0.facts.lock().expect("capture facts poisoned");
-        if facts.protocol_ref == protocol_ref {
-            return;
-        }
-        facts.protocol_ref = protocol_ref.clone();
-        if self
-            .0
-            .registry
-            .0
-            .writer
-            .try_record_lifecycle(LifecycleRecord::Bound {
-                exchange_id: self.0.exchange_id,
-                dependency_sequence: self.0.sequence,
-                protocol_ref,
-            })
-            .is_err()
-        {
-            self.0
-                .registry
-                .0
-                .state
-                .lock()
-                .expect("capture registry poisoned")
-                .inventory_gaps = true;
-        }
+        self.0
+            .facts
+            .lock()
+            .expect("capture facts poisoned")
+            .protocol_ref = protocol_ref;
     }
 
     pub fn finish_metadata(&self, outcome: &str) {
@@ -476,7 +496,6 @@ impl Drop for Admission {
             .0
             .writer
             .try_record_lifecycle(LifecycleRecord::Terminal {
-                exchange_id: self.exchange_id,
                 dependency_sequence: self.sequence,
                 outcome: terminal.0,
                 capture_complete: terminal.1,

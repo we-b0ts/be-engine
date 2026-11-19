@@ -527,8 +527,13 @@ async fn consecutive_cases_lifecycle(
                 .unwrap();
             assert_eq!(key, format!("late-{turn}").as_bytes());
             assert_eq!(exchanges[0]["capture"]["attribution"]["kind"], "case");
+            let origin_case = exchanges[0]["capture"]["attribution"]["origin_case_id"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
             assert_eq!(
-                exchanges[0]["capture"]["attribution"]["origin_case_id"],
+                state.recorder().case_label(origin_case),
                 case.file_name().unwrap().to_string_lossy().as_ref()
             );
             assert_eq!(exchanges[0]["capture"]["phase"], "runtime");

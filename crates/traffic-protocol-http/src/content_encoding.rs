@@ -1,7 +1,7 @@
 use std::io::Read;
 
 use anyhow::{Context, Result};
-use flate2::read::{GzDecoder, ZlibDecoder};
+use flate2::read::{MultiGzDecoder, ZlibDecoder};
 
 pub struct DecodedBody {
     pub body: Vec<u8>,
@@ -19,7 +19,7 @@ pub fn decode(bytes: &[u8], encoding: &str, limit: usize) -> Result<DecodedBody>
     {
         out = match coding {
             "gzip" | "x-gzip" => {
-                let mut decoder = GzDecoder::new(out.as_slice());
+                let mut decoder = MultiGzDecoder::new(out.as_slice());
                 let mut decoded = Vec::new();
                 decoder
                     .by_ref()

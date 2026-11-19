@@ -130,20 +130,19 @@ pub(super) fn each_event(
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             .context("Source dependency has no case identity")?;
-        let role = || {
-            if path
+        let role = if case == "indexes"
+            || path
                 .file_name()
                 .is_some_and(|name| name == "global-dependencies.jsonl")
-            {
-                SourceEventRole::Global
-            } else {
-                SourceEventRole::Case(case)
-            }
+        {
+            SourceEventRole::Global
+        } else {
+            SourceEventRole::Case(case)
         };
         crate::dependency_index::proof::visit(
             path,
-            |event| selected(role(), event),
-            |event| visitor(path, role(), event),
+            |event| selected(role, event),
+            |event| visitor(path, role, event),
         )?;
     }
     Ok(())

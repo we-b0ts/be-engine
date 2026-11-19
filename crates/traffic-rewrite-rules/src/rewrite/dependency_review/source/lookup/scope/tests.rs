@@ -4,7 +4,7 @@ use crate::dependency::observation::ScopeIndex;
 #[test]
 fn sealed_scope_stream_retains_requested_uuid_and_rejects_corrupt_or_escaping_indexes() {
     let directory = tempfile::tempdir().unwrap();
-    let mut scope = ScopeIndex {
+    let mut scope: ScopeIndex = ScopeIndex {
         schema: SCOPE_SCHEMA.into(),
         run_relpath: ".".into(),
         scope: ScopeKind::Process,

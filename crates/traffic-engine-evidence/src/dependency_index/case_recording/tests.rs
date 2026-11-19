@@ -55,8 +55,19 @@ async fn published_case_index_survives_later_appends_and_copy_without_a_rebuild(
     let published: FileIndex = store::read_json(&first.join(FRAGMENT)).unwrap();
     recorder.finish_run().await.unwrap();
     let original = recorder.run_dir.as_ref();
-    let ledger = FileStamp::read_native(&original.join("dependencies.tsv")).unwrap();
+    let ledger_path = crate::dependency_index::recording::dependency_path(original);
+    let ledger = FileStamp::read_native(&ledger_path).unwrap();
     assert!(published.stamp.size < ledger.size);
+    assert!(
+        !original
+            .join("indexes/case-dependency-indexes.json")
+            .exists()
+    );
+    assert!(
+        crate::dependency_index::case_recording::seal(original)
+            .unwrap()
+            .is_some()
+    );
     let copied = temporary
         .path()
         .join("target/.traffic-e2e/recordings/copied");

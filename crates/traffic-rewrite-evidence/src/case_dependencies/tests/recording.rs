@@ -182,7 +182,7 @@ pub(super) fn publish(case: &Path, raw: &str) -> PathBuf {
         let path = root.join(format!("indexes/{name}-scope.json"));
         write(
             &path,
-            &ScopeIndex {
+            &ScopeIndex::<Uuid> {
                 schema: SCOPE_SCHEMA.into(),
                 run_relpath: "..".into(),
                 scope,

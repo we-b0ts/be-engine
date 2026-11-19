@@ -139,18 +139,18 @@ async fn lazy_inventory_matches_eager_and_never_replenishes_consumption() {
 }
 
 #[tokio::test]
-async fn modified_source_fails_preparation_without_activating_case() {
+async fn cached_dependencies_do_not_recheck_source_files_when_activating_a_case() {
     let temp = tempfile::tempdir().unwrap();
     fixture(temp.path()).await;
     let (runtime, _) = load(temp.path(), true).await;
     std::fs::write(temp.path().join("a/dependencies.jsonl"), "{}\n").unwrap();
     assert_eq!(
         begin_case(&request("begin", "a"), runtime.state.clone()).await["ok"],
-        false
+        true
     );
     let state = runtime.state.lock().await;
-    assert!(state.active_case_id.is_none());
-    assert!(state.native.core.exchanges.is_empty());
+    assert_eq!(state.active_case_id.as_deref(), Some("a"));
+    assert_eq!(state.native.core.exchanges.len(), 1);
 }
 
 #[tokio::test]

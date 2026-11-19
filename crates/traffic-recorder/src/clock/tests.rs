@@ -3,10 +3,8 @@ use super::*;
 #[test]
 fn reverse_completion_retains_dependency_identity_and_global_event_order() {
     let clock = RecordingClock::default();
-    let global = clock.next_dependency().unwrap();
-    let begin_global = clock.event((global, "begin")).unwrap();
-    let case = clock.next_dependency().unwrap();
-    let begin_case = clock.event((case, "begin")).unwrap();
+    let (global, begin_global) = clock.begin_dependency(|id| (id, "begin")).unwrap();
+    let (case, begin_case) = clock.begin_dependency(|id| (id, "begin")).unwrap();
     let end_case = clock.event((case, "end")).unwrap();
     let end_global = clock.event((global, "end")).unwrap();
     assert_eq!([global, case], [1, 2]);

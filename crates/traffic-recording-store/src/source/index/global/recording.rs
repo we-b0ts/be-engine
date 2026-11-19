@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use traffic_model::recording::MANIFEST_FILE;
 
-const SCOPES: [&str; 3] = ["startup", "process", "unattributed"];
+const PACKAGED_SCOPES: [&str; 2] = ["startup", "process"];
 const INDEX_FILE: &str = "index.json";
 
 #[derive(Serialize, Deserialize)]
@@ -36,18 +36,19 @@ pub fn seal_recording_scopes_with_evidence(
     let indexes = run.join("indexes");
     let stamp = FileStamp::read_native(&recording::dependency_path(&run))?;
     let cancelled = AtomicBool::new(false);
-    for scope in SCOPES {
+    for scope in PACKAGED_SCOPES {
         let view = indexes.join(format!("{scope}-scope.json"));
-        if load(&view, &stamp).is_some_and(|(index, _)| index.providers == revisions) {
+        if load(&view, &stamp, true).is_some_and(|(index, _)| index.providers == revisions) {
             continue;
         }
-        let scope_stamp = FileStamp::read_native(&view)?;
+        let scope_stamp = FileStamp::read(&view)?;
         let output = indexes.join(format!("{scope}-dependencies"));
         store::private_directory(&output)?;
-        let index =
-            build_index_with_evidence(&view, &output, &stamp, &validate, &cancelled, evidence)?;
+        let index = build_index_with_evidence(
+            &view, &output, &stamp, &validate, &cancelled, evidence, true,
+        )?;
         ensure!(
-            FileStamp::read_native(&view)? == scope_stamp
+            FileStamp::read(&view)? == scope_stamp
                 && FileStamp::read_native(&manifest_path)? == manifest_stamp,
             "recording scope or manifest changed during index publication"
         );
@@ -64,7 +65,7 @@ pub fn seal_recording_scopes_with_evidence(
     Ok(())
 }
 
-pub(super) fn load(path: &Path, stamp: &FileStamp) -> Option<(GlobalIndex, PathBuf)> {
+pub(super) fn load(path: &Path, stamp: &FileStamp, verify: bool) -> Option<(GlobalIndex, PathBuf)> {
     let view = scoped::view_path(path)?;
     let indexes = view.parent()?;
     let run = indexes.parent()?;
@@ -73,8 +74,11 @@ pub(super) fn load(path: &Path, stamp: &FileStamp) -> Option<(GlobalIndex, PathB
     if indexes.file_name()?.to_str()? != "indexes" {
         return None;
     }
-    let scope = view.file_name()?.to_str()?.strip_suffix("-scope.json")?;
-    if !SCOPES.contains(&scope) {
+    let name = view.file_name()?.to_str()?;
+    let scope = name
+        .strip_suffix("-scope.bin")
+        .or_else(|| name.strip_suffix("-scope.json"))?;
+    if !PACKAGED_SCOPES.contains(&scope) {
         return None;
     }
     let output = indexes.join(format!("{scope}-dependencies"));
@@ -87,18 +91,20 @@ pub(super) fn load(path: &Path, stamp: &FileStamp) -> Option<(GlobalIndex, PathB
     let scope_stamp = FileStamp::read_native(&view).ok()?;
     if sealed.scope != scope
         || sealed.index.version != VERSION
+        || sealed.index.stamp.size != stamp.size
         || sealed.manifest_sha256 != digest(&std::fs::read(&manifest).ok()?)
     {
         return None;
     }
     // Copies and Recorder ownership assignment can change the filesystem
     // stamps. Authenticate against the same sealed manifest before rebinding.
-    if sealed.index.stamp != *stamp || sealed.scope_stamp != scope_stamp {
+    if verify && (sealed.index.stamp != *stamp || sealed.scope_stamp != scope_stamp) {
         recording::authenticate(run).ok()?;
     }
-    if FileStamp::read_native(&manifest).ok()? != manifest_stamp
-        || FileStamp::read_native(&view).ok()? != scope_stamp
-        || FileStamp::read_native(&recording::dependency_path(run)).ok()? != *stamp
+    if verify
+        && (FileStamp::read_native(&manifest).ok()? != manifest_stamp
+            || FileStamp::read_native(&view).ok()? != scope_stamp
+            || FileStamp::read_native(&recording::dependency_path(run)).ok()? != *stamp)
     {
         return None;
     }

@@ -1,45 +1,142 @@
 //! Resolve and verify the payloads referenced by one compact dependency row.
-use crate::format::{DEPENDENCIES, DependencyRow, PayloadRef};
+use crate::dependency_columns::{FILE, ReadTerms, TermsStamp};
+use crate::format::{PayloadRef, PendingDependency};
+use crate::partitions;
 use anyhow::{Context, Result, ensure};
 use std::{
-    fs::File,
+    cell::{Cell, RefCell},
+    fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom},
-    path::Path,
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
 };
+use uuid::Uuid;
 
 pub(super) fn is_compact(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| name == DEPENDENCIES)
+    partitions::is_directory(path)
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| partitions::FILES.contains(&name))
 }
 
-pub(super) fn decode(path: &Path, row: &[u8]) -> Result<Vec<u8>> {
-    let root = path
-        .parent()
-        .context("compact dependency has no recording root")?;
-    let record = DependencyRow::decode(row, |reference| {
-        ensure!(
-            std::fs::symlink_metadata(root.join("payload"))?.is_dir(),
-            "dependency payload directory must be a real directory"
-        );
-        let path = root.join(PayloadRef::path(reference.segment));
-        let stamp = super::FileStamp::read_native(&path)?;
+pub(super) fn flat_recording_id(path: &Path) -> Result<Option<Uuid>> {
+    if !is_compact(path) {
+        return Ok(None);
+    }
+    partitions::recording_id(&path.with_file_name(partitions::DIRECTORY)).map(Some)
+}
+
+#[derive(Debug)]
+pub(super) struct Reader {
+    root: PathBuf,
+    recording_id: Uuid,
+    terms: ReadTerms,
+    stamp: Option<TermsStamp>,
+    payload_dir_opened: Cell<bool>,
+    segment: RefCell<Option<Segment>>,
+}
+
+#[derive(Debug)]
+struct Segment {
+    number: u64,
+    file: File,
+    length: u64,
+}
+
+impl Reader {
+    pub(super) fn open(path: &Path, recording_id: Uuid) -> Result<Self> {
+        Self::open_with(path, recording_id, false)
+    }
+
+    pub(super) fn open_for_replay(path: &Path, recording_id: Uuid) -> Result<Self> {
+        Self::open_with(path, recording_id, true)
+    }
+
+    fn open_with(path: &Path, recording_id: Uuid, replay: bool) -> Result<Self> {
+        let root = path
+            .parent()
+            .context("compact dependency has no recording root")?
+            .to_owned();
+        let (terms, stamp) = if replay {
+            (ReadTerms::open_for_replay(&root)?, None)
+        } else {
+            let (terms, stamp) = ReadTerms::open(&root)?;
+            (terms, Some(stamp))
+        };
+        Ok(Self {
+            root,
+            recording_id,
+            terms,
+            stamp,
+            payload_dir_opened: Cell::new(false),
+            segment: RefCell::new(None),
+        })
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        if let Some(stamp) = &self.stamp {
+            stamp.validate(&self.root.join(FILE))?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn read(&self, row: &[u8]) -> Result<serde_json::Value> {
+        PendingDependency::materialize(row, self.recording_id, &self.terms, |reference| {
+            self.read_payload(reference)
+        })
+    }
+
+    pub(super) fn read_header(&self, row: &[u8]) -> Result<serde_json::Value> {
+        PendingDependency::materialize_header(row, self.recording_id, &self.terms)
+    }
+
+    fn read_payload(&self, reference: &PayloadRef) -> Result<Vec<u8>> {
+        let mut segment = self.segment.borrow_mut();
+        if segment
+            .as_ref()
+            .is_none_or(|loaded| loaded.number != reference.segment)
+        {
+            if !self.payload_dir_opened.get() {
+                ensure!(
+                    fs::symlink_metadata(self.root.join("payload"))?.is_dir(),
+                    "dependency payload directory must be a real directory"
+                );
+                self.payload_dir_opened.set(true);
+            }
+            let file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(self.root.join(PayloadRef::path(reference.segment)))?;
+            let metadata = file.metadata()?;
+            ensure!(
+                metadata.is_file(),
+                "dependency payload segment is not a regular file"
+            );
+            *segment = Some(Segment {
+                number: reference.segment,
+                file,
+                length: metadata.len(),
+            });
+        }
+        let segment = segment.as_mut().expect("opened payload segment");
         ensure!(
             reference
                 .offset
                 .checked_add(reference.length)
-                .is_some_and(|end| end <= stamp.size),
+                .is_some_and(|end| end <= segment.length),
             "dependency payload range escapes its segment"
         );
-        let mut file = File::open(path)?;
-        file.seek(SeekFrom::Start(reference.offset))?;
+        segment.file.seek(SeekFrom::Start(reference.offset))?;
         let mut bytes = vec![0; usize::try_from(reference.length)?];
-        file.read_exact(&mut bytes)?;
-        ensure!(
-            super::digest(&bytes) == reference.sha256,
-            "dependency payload checksum mismatch"
-        );
+        segment.file.read_exact(&mut bytes)?;
         Ok(bytes)
-    })?;
-    let mut bytes = serde_json::to_vec(&record)?;
-    bytes.push(b'\n');
-    Ok(bytes)
+    }
+}
+
+pub(super) fn encode_materialized(record: &serde_json::Value, out: &mut Vec<u8>) -> Result<()> {
+    out.clear();
+    serde_json::to_writer(&mut *out, record)?;
+    out.push(b'\n');
+    Ok(())
 }

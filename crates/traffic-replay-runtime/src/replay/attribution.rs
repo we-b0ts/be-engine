@@ -39,8 +39,11 @@ pub(super) fn freeze(
     let target = root
         .ancestors()
         .find(|path| path.join(".traffic-e2e").is_dir());
-    let (decisions, digest) =
-        crate::coordination::freeze_dependency_attribution(target, &root, &manifest.run_id)?;
+    let (decisions, digest) = crate::coordination::freeze_dependency_attribution_for_replay(
+        target,
+        &root,
+        &manifest.run_id,
+    )?;
     let mut frozen = Frozen {
         run_value_scopes: BTreeMap::new(),
         snapshot: Some(digest.clone()),
@@ -51,9 +54,12 @@ pub(super) fn freeze(
             &root, &manifest, cases,
         )?),
     };
-    if let Some(scope) = &mut frozen.batch_scope {
+    if (!decisions.is_empty()
+        || manifest.schema != crate::dependency::observation::COMPACT_RECORDING_SCHEMA)
+        && let Some(scope) = &mut frozen.batch_scope
+    {
         scope.inventory =
-            inventory::effective_with_evidence(&root, &manifest, &decisions, evidence)?;
+            inventory::effective_with_evidence(&root, &manifest, &decisions, evidence, false)?;
     }
     if decisions.is_empty() {
         return Ok(frozen);

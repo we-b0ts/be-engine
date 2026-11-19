@@ -5,7 +5,6 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
-use base64::Engine;
 use chrono::Utc;
 use tokio::io::Interest;
 use tokio::net::UdpSocket;
@@ -16,7 +15,7 @@ use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
 use crate::protocols::recording::events::{RecorderEvent, UdpDatagramEvent};
-use crate::recorder::{BodyCapture, capture_body};
+use crate::recorder::capture_body;
 use crate::recording_control::RecordingListener;
 
 const UDP_RECV_BUFFER_BYTES: usize = 65_535;
@@ -134,7 +133,6 @@ async fn handle_datagram(
         }
     }
 
-    let body = capture_body(payload, state.config().recording.max_body_bytes);
     let event = RecorderEvent::UdpDatagram(UdpDatagramEvent {
         id,
         timestamp: Utc::now(),
@@ -150,8 +148,8 @@ async fn handle_datagram(
         upstream_addr: upstream_addr.map(|addr| addr.to_string()),
         protocol: "udp".to_string(),
         forwarded,
-        payload_text: payload_text(&body),
-        payload: body,
+        payload_text: std::str::from_utf8(payload).ok().map(str::to_owned),
+        payload: capture_body(payload, payload.len()),
         duration_ms: started.elapsed().as_millis(),
         error,
     });
@@ -196,16 +194,6 @@ fn upstream_addr(entry: &FakeDnsEntry, port: u16) -> Result<SocketAddr> {
         .copied()
         .ok_or_else(|| anyhow!("DNS mock entry has no real IPs for {}", entry.domain))?;
     Ok(SocketAddr::new(IpAddr::V4(ip), port))
-}
-
-fn payload_text(payload: &BodyCapture) -> Option<String> {
-    if payload.truncated {
-        return None;
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&payload.data)
-        .ok()?;
-    String::from_utf8(bytes).ok()
 }
 
 fn enable_original_dst(socket: &std::net::UdpSocket) -> Result<()> {
@@ -372,16 +360,18 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut config = crate::AppConfig::default();
         config.recording.output_dir = temp.path().join("recordings");
+        config.recording.max_body_bytes = 4;
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
         let state = crate::AppState::new(config).await.unwrap();
+        let payload = b"metric.path 1 123\n";
         handle_datagram(
             &state,
             "127.0.0.1:15002".parse().unwrap(),
             ReceivedDatagram {
                 peer: "127.0.0.1:42000".parse().unwrap(),
                 original_dst: None,
-                payload: b"metric.path 1 123\n".to_vec(),
+                payload: payload.to_vec(),
             },
         )
         .await
@@ -401,6 +391,11 @@ mod tests {
         assert!(
             raw.contains(r#""payload_text":"metric.path 1 123\n""#),
             "{raw}"
+        );
+        let record: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            record["payload"],
+            serde_json::to_value(capture_body(payload, payload.len())).unwrap()
         );
     }
 }

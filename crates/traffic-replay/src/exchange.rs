@@ -47,7 +47,7 @@ pub struct PreparedExchange<R: RuleRuntime = ExactRules> {
     pub native: RecordedExchange,
     pub source: SourceContext,
     pub request: Option<R::Prepared>,
-    pub response: R::Prepared,
+    pub response: Option<R::Prepared>,
     pub delivery: R::Delivery,
     pub status: ReplayExchangeStatus,
     lane_id: Uuid,
@@ -188,7 +188,12 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             .request()
             .map(|request| R::prepare(request, &rules.request))
             .transpose()?;
-        let response = R::prepare(native.response.as_ref(), &rules.response)?;
+        let response = native
+            .response
+            .stored()
+            .is_none()
+            .then(|| R::prepare(native.response.as_ref(), &rules.response))
+            .transpose()?;
         let scope = ScopePartition::new(source.source, source.case_id.as_deref());
         let lane_id = native
             .lane

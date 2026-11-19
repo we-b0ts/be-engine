@@ -84,12 +84,11 @@ async fn admission_sequences_survive_reverse_completion_in_the_real_writer() {
         .unwrap()
         .map(|event| serde_json::to_value(event.unwrap()).unwrap())
         .collect::<Vec<_>>();
-    let mut sequences = events
+    let sequences = events
         .iter()
         .map(|event| event["sequence"].as_u64().unwrap())
         .collect::<Vec<_>>();
-    sequences.sort_unstable();
-    assert_eq!(sequences, (1..=events.len() as u64).collect::<Vec<_>>());
+    assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
     assert!(events.iter().all(|event| event["offset_micros"].is_u64()));
     let admitted = events
         .iter()
@@ -110,12 +109,9 @@ async fn unattributed_requests_survive_disabled_traffic_and_have_unique_terminal
     assert_eq!(rows[0]["capture"]["phase"], "runtime");
     let root = &state.recorder().run_dir;
     assert!(!root.join("traffic.jsonl").exists());
-    let scope: ScopeIndex = serde_json::from_slice(
-        &tokio::fs::read(root.join("indexes/unattributed-scope.json"))
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let scope = root.join("indexes/unattributed-scope.json");
+    assert!(!scope.exists());
+    let scope = crate::dependency_index::scoped::read_index(&scope).unwrap();
     assert_eq!(scope.locations.len(), 1);
     let manifest: RecordingManifest = serde_json::from_slice(
         &tokio::fs::read(root.join("dependency-manifest.json"))
@@ -142,7 +138,7 @@ async fn unattributed_requests_survive_disabled_traffic_and_have_unique_terminal
         manifest
             .files
             .iter()
-            .any(|f| f.path == "indexes/unattributed-scope.json")
+            .any(|f| f.path == "indexes/unattributed-scope.bin")
     );
 }
 
@@ -270,27 +266,14 @@ async fn sealing_twice_and_late_facts_cannot_mutate_the_authenticated_ledger() {
     state.record_event_for_targets(failure(), start(&state));
     state.recorder().finish_run().await.unwrap();
     let root = &state.recorder().run_dir;
-    let payload = tokio::fs::read(root.join("dependencies.tsv"))
-        .await
-        .unwrap();
-    let lifecycle = tokio::fs::read(root.join("events.tsv")).await.unwrap();
+    let artifacts = ["dependencies.tsv", "dependencies-unattributed.tsv"];
+    let snapshot = || artifacts.map(|file| std::fs::read(root.join(file)).unwrap());
+    let sealed = snapshot();
     state.recorder().finish_run().await.unwrap();
-    assert_eq!(
-        tokio::fs::read(root.join("events.tsv")).await.unwrap(),
-        lifecycle
-    );
+    assert_eq!(snapshot(), sealed);
     state.record_event_for_targets(failure(), start(&state));
     assert!(state.recorder().flush_traffic().await.is_err());
-    assert_eq!(
-        tokio::fs::read(root.join("dependencies.tsv"))
-            .await
-            .unwrap(),
-        payload
-    );
-    assert_eq!(
-        tokio::fs::read(root.join("events.tsv")).await.unwrap(),
-        lifecycle
-    );
+    assert_eq!(snapshot(), sealed);
 }
 
 #[tokio::test]
@@ -308,8 +291,8 @@ async fn writer_shutdown_does_not_rewrite_sealed_scope_files() {
         .unwrap();
     recorder.finish_run().await.unwrap();
     let completion = recorder.writer.completion.clone();
-    let scopes = ["startup", "process", "unattributed"]
-        .map(|name| recorder.run_dir.join(format!("indexes/{name}-scope.json")));
+    let scopes = ["startup", "process", "shutdown", "unattributed"]
+        .map(|name| recorder.run_dir.join(format!("indexes/{name}-scope.bin")));
     let stamps = scopes
         .each_ref()
         .map(|path| crate::dependency_index::FileStamp::read_native(path).unwrap());
@@ -368,6 +351,7 @@ async fn actual_overlapping_http_selectors_require_a_unique_source_task() {
                 timestamp: Utc::now(),
                 request_started_at: Utc::now(),
                 client_addr: None,
+                upstream_addr: None,
                 scheme: "http".into(),
                 method: "GET".into(),
                 uri: "/task/step".into(),

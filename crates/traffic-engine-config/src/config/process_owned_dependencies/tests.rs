@@ -17,6 +17,7 @@ fn http_event(authority: &str, method: &str, uri: &str) -> RecorderEvent {
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         client_addr: None,
+        upstream_addr: None,
         scheme: "https".to_string(),
         method: method.to_string(),
         uri: uri.to_string(),

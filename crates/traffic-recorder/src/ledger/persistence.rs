@@ -2,9 +2,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::RecordingClock;
+use crate::{RecordingClock, clock::recorded, writer::RecordStamps};
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use traffic_model::trace::{RecordedDependency, RecordedEvent};
@@ -14,8 +13,10 @@ use crate::CaptureContext;
 use crate::GlobalDependencyAttribution;
 use traffic_model::attribution::DependencyOwner;
 use traffic_model::recording::*;
-use traffic_protocol::capture::{CaptureEvidence, CaptureSnapshot};
-use traffic_recording_store::writer::LedgerFiles;
+#[cfg(feature = "test-support")]
+use traffic_protocol::capture::CaptureEvidence;
+use traffic_protocol::capture::{CaptureSnapshot, SemanticRequirement};
+use traffic_recording_store::writer::{LedgerFiles, RecordKind, RowStamp};
 
 use super::LifecycleRecord;
 
@@ -24,16 +25,13 @@ pub struct LedgerWriter {
     storage: LedgerFiles,
     process_epoch: Uuid,
     run_epoch: Uuid,
+    #[cfg(feature = "test-support")]
     clock: RecordingClock,
     unattributed: u64,
     synthetic: u64,
     synthetic_failures: u64,
-    lifecycle: BTreeMap<Uuid, bool>,
+    lifecycle: BTreeMap<u64, bool>,
     cases: BTreeMap<Uuid, Vec<ScopeRecordLocation>>,
-    startup: Vec<ScopeRecordLocation>,
-    process: Vec<ScopeRecordLocation>,
-    shutdown: Vec<ScopeRecordLocation>,
-    unknown: Vec<ScopeRecordLocation>,
     inputs: BTreeMap<Uuid, RecordedCase>,
     capture_policy_identity: String,
     source_artifact: SourceArtifactIdentity,
@@ -44,29 +42,27 @@ pub struct LedgerWriter {
 }
 
 impl LedgerWriter {
-    pub fn new(
+    pub async fn new(
         root: &Path,
         process_epoch: Uuid,
         capture_policy_identity: String,
         clock: RecordingClock,
         evidence: std::sync::Arc<traffic_protocol::evidence::EvidenceRegistry>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let run_epoch = clock.recording_id();
+        Ok(Self {
             evidence,
             root: root.into(),
-            storage: LedgerFiles::new(root),
+            storage: LedgerFiles::initialize(root, run_epoch, process_epoch).await?,
             process_epoch,
-            run_epoch: clock.recording_id(),
+            run_epoch,
+            #[cfg(feature = "test-support")]
             clock,
             unattributed: 0,
             synthetic: 0,
             synthetic_failures: 0,
             lifecycle: BTreeMap::new(),
             cases: BTreeMap::new(),
-            startup: vec![],
-            process: vec![],
-            shutdown: vec![],
-            unknown: vec![],
             inputs: BTreeMap::new(),
             capture_policy_identity,
             source_artifact: SourceArtifactIdentity::Unavailable {
@@ -75,7 +71,7 @@ impl LedgerWriter {
             sealed: false,
             process_dependency_tasks: BTreeMap::new(),
             semantic_inventory: SemanticInventory::default(),
-        }
+        })
     }
 
     pub fn set_capture_policy_identity(
@@ -101,32 +97,52 @@ impl LedgerWriter {
             "recording dependency ledger is already sealed"
         );
         match &record.event {
-            LifecycleRecord::Started { exchange_id, .. }
-            | LifecycleRecord::MessageStarted { exchange_id, .. } => anyhow::ensure!(
-                self.lifecycle.insert(*exchange_id, false).is_none(),
+            LifecycleRecord::Started {
+                dependency_sequence,
+                ..
+            }
+            | LifecycleRecord::MessageStarted {
+                dependency_sequence,
+            } => anyhow::ensure!(
+                *dependency_sequence == record.sequence
+                    && self.lifecycle.insert(*dependency_sequence, false).is_none(),
                 "duplicate physical dependency admission"
             ),
-            LifecycleRecord::Terminal { exchange_id, .. } => {
+            LifecycleRecord::Terminal {
+                dependency_sequence,
+                ..
+            } => {
                 let terminal = self
                     .lifecycle
-                    .get_mut(exchange_id)
+                    .get_mut(dependency_sequence)
                     .context("terminal dependency has no admission")?;
                 anyhow::ensure!(!*terminal, "duplicate physical dependency termination");
                 *terminal = true;
             }
-            LifecycleRecord::Bound { exchange_id, .. }
-            | LifecycleRecord::OutputStarted { exchange_id, .. }
-            | LifecycleRecord::Output { exchange_id, .. } => anyhow::ensure!(
-                self.lifecycle.get(exchange_id) == Some(&false),
+            LifecycleRecord::OutputStarted {
+                dependency_sequence,
+                ..
+            }
+            | LifecycleRecord::Output {
+                dependency_sequence,
+                ..
+            }
+            | LifecycleRecord::OutputCancelled {
+                dependency_sequence,
+                ..
+            } => anyhow::ensure!(
+                self.lifecycle.get(dependency_sequence) == Some(&false),
                 "dependency pairing changed after termination or without admission"
             ),
-            LifecycleRecord::Sealed { .. }
+            LifecycleRecord::Bound { .. }
+            | LifecycleRecord::Sealed
             | LifecycleRecord::Input { .. }
             | LifecycleRecord::PrimaryBoundary { .. } => {}
         }
         self.storage.append_event(files, record).await
     }
 
+    #[cfg(feature = "test-support")]
     pub async fn append(
         &mut self,
         files: &mut crate::jsonl::JsonlWriterPool,
@@ -134,6 +150,26 @@ impl LedgerWriter {
         targets: Option<&CaptureContext<'_>>,
         explicit: Option<DependencyOwner>,
         global: Option<&GlobalDependencyAttribution>,
+    ) -> Result<()> {
+        let event = CaptureSnapshot::capture(event)?;
+        let captured_message = targets
+            .and_then(|scope| scope.capture)
+            .map(|capture| capture.is_message());
+        let stamps = self
+            .clock
+            .publish(|batch| RecordStamps::allocate(batch, &event, captured_message))?;
+        self.append_stamped(files, &event, targets, explicit, global, stamps)
+            .await
+    }
+
+    pub(crate) async fn append_stamped(
+        &mut self,
+        files: &mut crate::jsonl::JsonlWriterPool,
+        event: &CaptureSnapshot,
+        targets: Option<&CaptureContext<'_>>,
+        explicit: Option<DependencyOwner>,
+        global: Option<&GlobalDependencyAttribution>,
+        stamps: RecordStamps,
     ) -> Result<()> {
         anyhow::ensure!(
             !self.sealed,
@@ -154,6 +190,9 @@ impl LedgerWriter {
             let mut metadata = if let Some(capture) = targets.and_then(|t| t.capture) {
                 capture.metadata(owner, false)
             } else {
+                let (stamp, started_at) = stamps
+                    .start
+                    .context("debug observation has no sequence stamp")?;
                 let admitted_case = match &owner {
                     DependencyOwner::Case { origin_case_id, .. } => Some(*origin_case_id),
                     _ => None,
@@ -161,14 +200,14 @@ impl LedgerWriter {
                 CaptureMetadata {
                     transformations: Vec::new(),
                     exchange_id: Uuid::new_v4(),
-                    sequence: self.clock.next_dependency()?,
+                    sequence: stamp.sequence,
                     process_epoch: self.process_epoch,
                     phase: capture_phase(targets, global, &owner),
                     observed_case: targets
                         .and_then(|targets| targets.observed_case)
                         .or(admitted_case),
                     admitted_case,
-                    started_at: Utc::now(),
+                    started_at,
                     protocol_ref: facts.reference.clone(),
                     attribution: owner,
                     matched_rule_id: None,
@@ -198,14 +237,13 @@ impl LedgerWriter {
         let capture = targets.and_then(|t| t.capture);
         let mut metadata = if let Some(capture) = capture {
             capture.bind_protocol(facts.reference.clone());
-            capture.note_terminal(terminal, complete);
+            capture.note_terminal(terminal.clone(), complete);
             capture.metadata(owner, semantic_required)
         } else {
             self.synthetic += 1;
             if !complete {
                 self.synthetic_failures += 1;
             }
-            let exchange_id = Uuid::new_v4();
             let admitted_case = match &owner {
                 DependencyOwner::Case { origin_case_id, .. } => Some(*origin_case_id),
                 _ => None,
@@ -214,29 +252,22 @@ impl LedgerWriter {
             let observed_case = targets
                 .and_then(|targets| targets.observed_case)
                 .or(admitted_case);
-            let started_at = Utc::now();
-            let (sequence, started) =
-                self.clock
-                    .begin_dependency(|sequence| LifecycleRecord::Started {
-                        exchange_id,
-                        dependency_sequence: sequence,
-                        process_epoch: self.process_epoch,
-                        phase,
-                        observed_case,
-                        admitted_case,
-                        started_at,
-                    })?;
-            self.lifecycle(files, &started).await?;
-            self.lifecycle(
-                files,
-                &self.clock.event(LifecycleRecord::Terminal {
-                    exchange_id,
+            let (stamp, started_at) = stamps
+                .start
+                .context("dependency observation has no start stamp")?;
+            let sequence = stamp.sequence;
+            let started = recorded(
+                &stamp,
+                LifecycleRecord::Started {
                     dependency_sequence: sequence,
-                    outcome: terminal,
-                    capture_complete: complete,
-                })?,
-            )
-            .await?;
+                    phase,
+                    observed_case,
+                    admitted_case,
+                },
+            );
+            self.lifecycle(files, &started).await?;
+            let exchange_id = traffic_model::recording::identity::IdentityKind::Dependency
+                .bridge(self.run_epoch, sequence);
             CaptureMetadata {
                 transformations: Vec::new(),
                 exchange_id,
@@ -274,7 +305,41 @@ impl LedgerWriter {
                 crate::supports_replay(&value, &metadata.attribution, &self.evidence),
             );
         }
-        let position = self.storage.append_dependency(files, value).await?;
+        let kind = match facts.semantic {
+            SemanticRequirement::Observation => RecordKind::Observation,
+            _ if capture.is_some_and(|capture| capture.is_message()) => RecordKind::Message,
+            _ => RecordKind::Exchange,
+        };
+        let position = self
+            .storage
+            .append_dependency(
+                files,
+                value,
+                &metadata.attribution,
+                kind,
+                &traffic_recording_store::writer::RowLayout {
+                    declaration: facts.recording_layout,
+                    target: facts.recording_target,
+                    upstream: facts.recording_upstream,
+                },
+                stamps.request,
+                stamps.response.context("dependency has no payload stamp")?,
+            )
+            .await?;
+        if let Some(stamp) = stamps.terminal.as_ref() {
+            self.lifecycle(
+                files,
+                &recorded(
+                    stamp,
+                    LifecycleRecord::Terminal {
+                        dependency_sequence: metadata.sequence,
+                        outcome: terminal,
+                        capture_complete: complete,
+                    },
+                ),
+            )
+            .await?;
+        }
         let location = ScopeRecordLocation {
             line: position.line,
             offset: position.offset,
@@ -285,19 +350,22 @@ impl LedgerWriter {
         };
         // Every raw observation is retained centrally. Maintenance and snapshot
         // reuse remain observations without creating business consumption slots.
-        match metadata.attribution {
+        let global_scope = match metadata.attribution {
             DependencyOwner::Case { origin_case_id, .. } => {
-                self.cases.entry(origin_case_id).or_default().push(location)
+                self.cases.entry(origin_case_id).or_default().push(location);
+                return Ok(());
             }
-            DependencyOwner::Startup { .. } => self.startup.push(location),
-            DependencyOwner::Process { .. } => self.process.push(location),
-            DependencyOwner::Shutdown { .. } => self.shutdown.push(location),
+            DependencyOwner::Startup { .. } => ScopeKind::Startup,
+            DependencyOwner::Process { .. } => ScopeKind::Process,
+            DependencyOwner::Shutdown { .. } => ScopeKind::Shutdown,
             DependencyOwner::Unattributed { .. } => {
                 self.unattributed += 1;
-                self.unknown.push(location);
+                ScopeKind::Unattributed
             }
-        }
-        Ok(())
+        };
+        self.storage
+            .append_original_scope(files, global_scope, &location)
+            .await
     }
 
     fn owner(
@@ -382,46 +450,24 @@ impl LedgerWriter {
         if self.sealed {
             return Ok(());
         }
-        let case_id = dir
+        let case_label = dir
             .file_name()
             .and_then(|s| s.to_str())
-            .and_then(|s| s.parse::<Uuid>().ok())
             .context("case directory has no physical identity")?;
+        let case_id = traffic_model::recording::identity::IdentityKind::Case
+            .parse(self.run_epoch, case_label)
+            .context("invalid Case directory identity")?;
         let depth = dir.strip_prefix(&self.root)?.components().count();
         let index = ScopeIndex {
             schema: SCOPE_SCHEMA.into(),
             run_relpath: "../".repeat(depth),
-            scope: ScopeKind::Case { case_id },
+            scope: ScopeKind::Case {
+                case_id: case_label,
+            },
             locations: self.cases.get(&case_id).cloned().unwrap_or_default(),
         };
         tokio::fs::create_dir_all(dir).await?;
         write_json(&dir.join("dependency-scope.json"), &index).await
-    }
-
-    pub async fn global_scopes(&self) -> Result<()> {
-        if self.sealed {
-            return Ok(());
-        }
-        let root = self.root.join("indexes");
-        tokio::fs::create_dir_all(&root).await?;
-        for (name, scope, locations) in [
-            ("startup", ScopeKind::Startup, &self.startup),
-            ("process", ScopeKind::Process, &self.process),
-            ("shutdown", ScopeKind::Shutdown, &self.shutdown),
-            ("unattributed", ScopeKind::Unattributed, &self.unknown),
-        ] {
-            write_json(
-                &root.join(format!("{name}-scope.json")),
-                &ScopeIndex {
-                    schema: SCOPE_SCHEMA.into(),
-                    run_relpath: "..".into(),
-                    scope,
-                    locations: locations.clone(),
-                },
-            )
-            .await?;
-        }
-        Ok(())
     }
 
     pub fn register_input(&mut self, case_id: Uuid, path: String, complete: bool) {
@@ -435,11 +481,24 @@ impl LedgerWriter {
         );
     }
 
+    #[cfg(feature = "test-support")]
     pub async fn seal(
+        &mut self,
+        files: &mut crate::jsonl::JsonlWriterPool,
+        coverage: CaptureCoverage,
+        writer_complete: bool,
+    ) -> Result<()> {
+        let stamp = self.clock.publish(|batch| batch.next())?;
+        self.seal_stamped(files, coverage, writer_complete, stamp)
+            .await
+    }
+
+    pub(crate) async fn seal_stamped(
         &mut self,
         files: &mut crate::jsonl::JsonlWriterPool,
         mut coverage: CaptureCoverage,
         writer_complete: bool,
+        stamp: RowStamp,
     ) -> Result<()> {
         if self.sealed {
             return Ok(());
@@ -449,16 +508,9 @@ impl LedgerWriter {
         coverage.capture_failures += self.synthetic_failures;
         coverage.inventory_gaps |= self.lifecycle.len() as u64 != coverage.admitted
             || self.lifecycle.values().filter(|ended| **ended).count() as u64 != coverage.terminal;
-        self.lifecycle(
-            files,
-            &self.clock.event(LifecycleRecord::Sealed {
-                process_epoch: self.process_epoch,
-                coverage: coverage.clone(),
-            })?,
-        )
-        .await?;
+        self.lifecycle(files, &recorded(&stamp, LifecycleRecord::Sealed))
+            .await?;
         let mut identities = self.storage.seal(files).await?;
-        self.global_scopes().await?;
         let inputs = self
             .inputs
             .values()
@@ -467,14 +519,7 @@ impl LedgerWriter {
         for directory in inputs {
             self.case_scope(&directory).await?;
         }
-        for name in [
-            "indexes/startup-scope.json",
-            "indexes/process-scope.json",
-            "indexes/shutdown-scope.json",
-            "indexes/unattributed-scope.json",
-            "recording-network.json",
-            "dependencies-debug.jsonl",
-        ] {
+        for name in ["recording-network.json", "dependencies-debug.jsonl"] {
             let path = self.root.join(name);
             if path.is_file() {
                 identities.push(file_identity(&self.root, &path).await?);
@@ -520,7 +565,7 @@ impl LedgerWriter {
             inputs: self.inputs.values().cloned().collect(),
             files: identities,
         };
-        write_json(&self.root.join(MANIFEST_FILE), &manifest).await?;
+        write_json(&self.root.join(MANIFEST_FILE), &manifest.archive()).await?;
         self.sealed = true;
         Ok(())
     }

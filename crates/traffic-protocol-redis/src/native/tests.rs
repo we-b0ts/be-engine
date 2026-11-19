@@ -172,7 +172,9 @@ async fn native_recording_redacts_credentials_and_produces_executable_records() 
     let (mut client, capture_client) = tokio::io::duplex(4096);
     let (capture_upstream, mut upstream) = tokio::io::duplex(4096);
     let sink = Arc::new(CaptureSink::default());
-    let recording = Native.capture_session(info()).unwrap();
+    let mut recording_info = info();
+    recording_info.max_frame_bytes = 8;
+    let recording = Native.capture_session(recording_info).unwrap();
     let task = tokio::spawn(recording.run(
         Box::new(capture_client),
         Box::new(capture_upstream),

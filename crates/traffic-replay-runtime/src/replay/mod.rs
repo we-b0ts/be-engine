@@ -203,16 +203,19 @@ impl<P: ReplayProtocolSet> Runtime<P> {
 
 pub(crate) fn find_run_level_dependencies(root: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     (
-        find_upward(root, "indexes/startup-scope.json").or({
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                find_upward(root, "global-dependencies.jsonl")
-            }
-            #[cfg(not(any(test, feature = "test-support")))]
-            {
-                None
-            }
-        }),
+        root.ancestors()
+            .map(|dir| dir.join("indexes/startup-scope.json"))
+            .find(|path| crate::dependency_index::scoped::exists(path))
+            .or({
+                #[cfg(any(test, feature = "test-support"))]
+                {
+                    find_upward(root, "global-dependencies.jsonl")
+                }
+                #[cfg(not(any(test, feature = "test-support")))]
+                {
+                    None
+                }
+            }),
         find_upward(root, "global-dependencies-debug.jsonl"),
     )
 }
@@ -243,7 +246,7 @@ pub(crate) struct RuntimeState<P: ReplayProtocolSet> {
     pub(crate) native: native::Inventory,
     admission_epoch: u64,
     pub(crate) case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
-    sequence_catalog: Option<Arc<traffic_replay::SequenceCatalog>>,
+    sequence_catalog: Option<sequence::Source>,
     pub(crate) active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,
     pub(crate) run_sequence: Option<sequence::RunBindings>,
     sequence_missing: Vec<sequence::MissingDependency>,

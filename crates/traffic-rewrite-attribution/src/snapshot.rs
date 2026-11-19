@@ -57,6 +57,7 @@ fn current(
     target: Option<&Path>,
     explicit_source: Option<&Path>,
     run: &str,
+    verify: bool,
 ) -> Result<Current> {
     let mut state = target
         .map(read_snapshot)
@@ -77,7 +78,11 @@ fn current(
         .or(fallback.as_deref())
         .context("ownership snapshot has no current Source recording")?;
     let inventory = source::inventory_at(source_path, run)?.0;
-    let case_defaults = super::case_defaults::load(source_path, target)?;
+    let case_defaults = if verify {
+        super::case_defaults::load(source_path, target)?
+    } else {
+        super::case_defaults::load_for_replay(source_path, target)?
+    };
     let source_revision = state
         .as_ref()
         .and_then(|state| state.source_revision.clone());
@@ -110,7 +115,7 @@ fn current(
 }
 
 pub fn identity(read_snapshot: SnapshotReader, target: &Path, run: &str) -> Result<String> {
-    current(read_snapshot, Some(target), None, run)?.identity(run)
+    current(read_snapshot, Some(target), None, run, true)?.identity(run)
 }
 
 pub fn identity_for_source(
@@ -119,7 +124,7 @@ pub fn identity_for_source(
     source: &Path,
     run: &str,
 ) -> Result<String> {
-    current(read_snapshot, Some(target), Some(source), run)?.identity(run)
+    current(read_snapshot, Some(target), Some(source), run, true)?.identity(run)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -128,7 +133,7 @@ pub fn overlay(
     target: &Path,
     run: &str,
 ) -> Result<Vec<AttributionDecision>> {
-    Ok(current(read_snapshot, Some(target), None, run)?.expand())
+    Ok(current(read_snapshot, Some(target), None, run, true)?.expand())
 }
 
 pub fn frozen(
@@ -137,7 +142,26 @@ pub fn frozen(
     source: &Path,
     run: &str,
 ) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
-    let current = current(read_snapshot, target, Some(source), run)?;
+    frozen_with_verification(read_snapshot, target, source, run, true)
+}
+
+pub fn frozen_for_replay(
+    read_snapshot: SnapshotReader,
+    target: Option<&Path>,
+    source: &Path,
+    run: &str,
+) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
+    frozen_with_verification(read_snapshot, target, source, run, false)
+}
+
+fn frozen_with_verification(
+    read_snapshot: SnapshotReader,
+    target: Option<&Path>,
+    source: &Path,
+    run: &str,
+    verify: bool,
+) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
+    let current = current(read_snapshot, target, Some(source), run, verify)?;
     let identity = current.identity(run)?;
     let mut owners = current.case_defaults.clone();
     for decision in current.expand() {

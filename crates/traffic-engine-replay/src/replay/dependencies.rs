@@ -43,7 +43,7 @@ pub async fn read_dependency_file<R: DeserializeOwned + Send + 'static>(
         use sha2::Digest;
         let mut hash = sha2::Sha256::new();
         let mut source_bytes = 0_u64;
-        let mut input = crate::dependency_index::RecordStream::open(&original)?;
+        let mut input = crate::dependency_index::RecordStream::open_for_replay(&original)?;
         let mut records = Vec::new();
         let mut facts = Vec::new();
         while let Some((location, raw)) = input.next()? {

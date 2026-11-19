@@ -6,8 +6,10 @@ use anyhow::{Result, bail, ensure};
 
 use crate::continuation::MysqlPacketAssembler;
 use crate::events::{MysqlExchangeEvent, MysqlResponseEvent};
+use crate::semantic::MysqlWirePrefixPacket;
 use crate::{ClientCommand, MysqlPacket};
 use traffic_model::DependencyExchangeOutcome;
+use traffic_model::capture::capture_body;
 
 use super::response::MysqlResponseTracker;
 use super::semantic::{MysqlExchangeContext, MysqlSemanticTracker};
@@ -30,6 +32,12 @@ struct PendingRequest {
     payload_bytes: usize,
     started: Instant,
     progress: ResponseProgress,
+    wire_prefix: Vec<DeliveredPacket>,
+}
+
+struct DeliveredPacket {
+    offset_ms: u128,
+    packet: MysqlPacket,
 }
 
 #[derive(Default)]
@@ -37,17 +45,18 @@ pub struct MysqlQueryCompletion {
     response: Option<MysqlResponseEvent>,
     exchange: Option<MysqlExchangeEvent>,
     started: Option<Instant>,
+    wire_prefix: Vec<DeliveredPacket>,
 }
 
 impl MysqlQueryTracker {
     pub fn new(
-        max_body_bytes: usize,
+        max_debug_body_bytes: usize,
         record_raw_packets: bool,
         context: MysqlExchangeContext,
     ) -> Self {
         Self {
-            response: MysqlResponseTracker::new(max_body_bytes, record_raw_packets),
-            semantic: MysqlSemanticTracker::new(max_body_bytes, context),
+            response: MysqlResponseTracker::new(max_debug_body_bytes, record_raw_packets),
+            semantic: MysqlSemanticTracker::new(context),
             pending_requests: VecDeque::new(),
             pending_query_bytes: 0,
             server_message: MysqlPacketAssembler::default(),
@@ -106,6 +115,7 @@ impl MysqlQueryTracker {
                 .semantic
                 .pending_started_at()
                 .expect("started MySQL semantic exchange"),
+            wire_prefix: Vec::new(),
         });
         self.pending_query_bytes = pending_query_bytes;
         self.ensure_aligned()?;
@@ -132,8 +142,13 @@ impl MysqlQueryTracker {
         self.complete(response, exchange)
     }
 
-    pub fn observe_delivery(&mut self, packet: &MysqlPacket) {
-        self.semantic.observe_delivery(packet);
+    pub fn observe_delivery(&mut self, packet: MysqlPacket) {
+        if let Some(pending) = self.pending_requests.front_mut() {
+            pending.wire_prefix.push(DeliveredPacket {
+                offset_ms: pending.started.elapsed().as_millis(),
+                packet,
+            });
+        }
     }
 
     pub fn take_output(&mut self) -> Option<(u64, ResponseBoundary)> {
@@ -186,6 +201,7 @@ impl MysqlQueryTracker {
                     .pop_front()
                     .ok_or_else(|| anyhow::anyhow!("MySQL completion has no pending request"))?;
                 completion.started = Some(pending.started);
+                completion.wire_prefix = pending.wire_prefix;
                 ensure!(
                     pending.query_sequence == response_sequence,
                     "MySQL FIFO sequence mismatch: pending={}, response={response_sequence}",
@@ -226,6 +242,7 @@ impl MysqlQueryCompletion {
             response,
             exchange,
             started: None,
+            wire_prefix: Vec::new(),
         }
     }
 
@@ -234,9 +251,7 @@ impl MysqlQueryCompletion {
     }
 
     pub fn mark_delivered(&mut self) {
-        if let Some(exchange) = self.exchange.as_mut() {
-            exchange.response.wire_prefix.clear();
-        }
+        self.wire_prefix.clear();
     }
 
     pub fn mark_terminated(&mut self, observed: ObservedTermination) {
@@ -248,16 +263,6 @@ impl MysqlQueryCompletion {
         if let Some(exchange) = self.exchange.as_mut() {
             exchange.outcome = DependencyExchangeOutcome::Terminated(observed.termination);
             exchange.timestamp = traffic_protocol::transport::observed_wall_time(observed.at);
-            if exchange
-                .response
-                .wire_prefix
-                .iter()
-                .any(|prefix| prefix.packet.truncated)
-            {
-                exchange
-                    .parse_warnings
-                    .push("delivered MySQL packet prefix exceeds recording limit".into());
-            }
             exchange.response.status = if exchange.outcome.is_server_terminated() {
                 "server_terminated"
             } else {
@@ -267,8 +272,7 @@ impl MysqlQueryCompletion {
             if let Some(started) = self.started {
                 exchange.duration_ms = observed.at.duration_since(started).as_millis();
             }
-            if exchange
-                .response
+            if self
                 .wire_prefix
                 .iter()
                 .any(|prefix| prefix.offset_ms > exchange.duration_ms)
@@ -336,7 +340,21 @@ impl MysqlQueryCompletion {
         )
     }
 
-    pub fn into_parts(self) -> (Option<MysqlResponseEvent>, Option<MysqlExchangeEvent>) {
+    pub fn into_parts(mut self) -> (Option<MysqlResponseEvent>, Option<MysqlExchangeEvent>) {
+        if let Some(exchange) = self.exchange.as_mut() {
+            // Only interrupted responses need the exact delivered wire prefix.
+            exchange.response.wire_prefix = self
+                .wire_prefix
+                .into_iter()
+                .map(|prefix| {
+                    let bytes = prefix.packet.to_wire_bytes();
+                    MysqlWirePrefixPacket {
+                        offset_ms: prefix.offset_ms,
+                        packet: capture_body(&bytes, bytes.len()),
+                    }
+                })
+                .collect();
+        }
         (self.response, self.exchange)
     }
 }
@@ -397,6 +415,32 @@ mod tests {
         );
         assert_eq!(exchange.response.status, "client_terminated");
         assert!(exchange.response.affected_rows.is_none());
+    }
+
+    #[test]
+    fn delivered_prefix_keeps_complete_packets_when_the_client_terminates() {
+        let mut tracker = MysqlQueryTracker::new(1, false, MysqlExchangeContext::default());
+        let query = query_packet("SELECT image FROM contexts");
+        tracker
+            .start_query(
+                uuid::Uuid::nil(),
+                1,
+                &parse_client_command(&query).unwrap(),
+                &query,
+                None,
+            )
+            .unwrap();
+        let packet = server_packet(1, &[1]);
+        let bytes = packet.to_wire_bytes();
+        assert!(tracker.observe_server_packet(&packet).unwrap().is_empty());
+        tracker.observe_delivery(packet);
+        let (_, exchange) = tracker
+            .finish_active("client_terminated")
+            .unwrap()
+            .into_parts();
+        let prefix = exchange.unwrap().response.wire_prefix;
+        assert_eq!(prefix.len(), 1);
+        assert_eq!(prefix[0].packet, capture_body(&bytes, bytes.len()));
     }
 
     #[test]

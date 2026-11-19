@@ -23,92 +23,7 @@ impl SequenceCatalog {
     pub fn try_prepare(
         events: impl IntoIterator<Item = Result<RecordedEvent<CaptureEvent>>>,
     ) -> Result<Arc<Self>> {
-        let mut source = Vec::new();
-        let mut sequences = HashSet::new();
-        let mut wire_terminals = HashSet::new();
-        let mut capture_terminals = Vec::new();
-        for record in events {
-            let record = record?;
-            let started = matches!(&record.event, CaptureEvent::OutputStarted { .. });
-            ensure!(
-                record.sequence != 0 && sequences.insert(record.sequence),
-                "invalid or duplicate recording event sequence"
-            );
-            let (dependency_sequence, kind) = match record.event {
-                CaptureEvent::Output {
-                    dependency_sequence,
-                    output,
-                    ..
-                }
-                | CaptureEvent::OutputStarted {
-                    dependency_sequence,
-                    output,
-                    ..
-                } => {
-                    let kind = match output {
-                        OutputKind::Headers => EventKind::ResponseHeaders,
-                        OutputKind::Part => EventKind::ResponsePart,
-                        OutputKind::End => EventKind::ResponseEnd,
-                        OutputKind::NoResponse => EventKind::NoResponse,
-                        OutputKind::TargetStop => EventKind::TargetStop,
-                        OutputKind::Terminated { termination } => match termination.side {
-                            traffic_model::TerminationSide::Client => EventKind::ClientTermination,
-                            _ => EventKind::ServerTermination,
-                        },
-                    };
-                    if kind.is_terminal() && !started {
-                        wire_terminals.insert(dependency_sequence);
-                    }
-                    (
-                        dependency_sequence,
-                        if started { kind.started() } else { kind },
-                    )
-                }
-                CaptureEvent::MessageStarted {
-                    dependency_sequence,
-                    ..
-                } => (dependency_sequence, EventKind::Message),
-                CaptureEvent::Started {
-                    dependency_sequence,
-                    ..
-                } => (dependency_sequence, EventKind::Request),
-                CaptureEvent::Terminal {
-                    dependency_sequence,
-                    outcome,
-                    ..
-                } => {
-                    let kind = match outcome.as_str() {
-                        "client_terminated" => EventKind::ClientTermination,
-                        "server_terminated" => EventKind::ServerTermination,
-                        "no_response" => EventKind::NoResponse,
-                        _ => EventKind::ResponseEnd,
-                    };
-                    capture_terminals.push(SourceEvent {
-                        sequence: record.sequence,
-                        dependency_sequence,
-                        offset_micros: record.offset_micros,
-                        kind,
-                    });
-                    continue;
-                }
-                CaptureEvent::Bound { .. }
-                | CaptureEvent::Sealed { .. }
-                | CaptureEvent::PrimaryBoundary { .. }
-                | CaptureEvent::Input { .. } => continue,
-            };
-            source.push(SourceEvent {
-                sequence: record.sequence,
-                dependency_sequence,
-                offset_micros: record.offset_micros,
-                kind,
-            });
-        }
-        source.extend(
-            capture_terminals
-                .into_iter()
-                .filter(|event| !wire_terminals.contains(&event.dependency_sequence)),
-        );
-        source.sort_unstable_by_key(|event| event.sequence);
+        let source = project_events(events)?;
         SequencePlan::compile(source.iter().copied())?;
         let mut postings = HashMap::<u64, Vec<usize>>::new();
         for (index, event) in source.iter().enumerate() {
@@ -140,4 +55,121 @@ impl SequenceCatalog {
         selected.sort_unstable_by_key(|event| event.sequence);
         SequencePlan::compile(selected)
     }
+}
+
+impl SequencePlan {
+    pub fn compile_recorded(
+        events: impl IntoIterator<Item = Result<RecordedEvent<CaptureEvent>>>,
+    ) -> Result<Arc<Self>> {
+        Self::compile(project_events(events)?)
+    }
+}
+
+fn project_events(
+    events: impl IntoIterator<Item = Result<RecordedEvent<CaptureEvent>>>,
+) -> Result<Vec<SourceEvent>> {
+    let mut source = Vec::new();
+    let mut sequences = HashSet::new();
+    let mut wire_terminals = HashSet::new();
+    let mut capture_terminals = Vec::new();
+    let mut output_starts = std::collections::HashMap::new();
+    let mut cancelled = HashSet::new();
+    for record in events {
+        let record = record?;
+        let started = matches!(&record.event, CaptureEvent::OutputStarted { .. });
+        ensure!(
+            record.sequence != 0 && sequences.insert(record.sequence),
+            "invalid or duplicate recording event sequence"
+        );
+        let (dependency_sequence, kind) = match record.event {
+            CaptureEvent::OutputCancelled {
+                dependency_sequence,
+                started_sequence,
+            } => {
+                ensure!(
+                    output_starts.get(&started_sequence) == Some(&dependency_sequence)
+                        && cancelled.insert(started_sequence),
+                    "Source output cancellation has no matching start"
+                );
+                continue;
+            }
+            CaptureEvent::Output {
+                dependency_sequence,
+                output,
+                ..
+            }
+            | CaptureEvent::OutputStarted {
+                dependency_sequence,
+                output,
+                ..
+            } => {
+                if started {
+                    output_starts.insert(record.sequence, dependency_sequence);
+                }
+                let kind = match output {
+                    OutputKind::Headers => EventKind::ResponseHeaders,
+                    OutputKind::Part => EventKind::ResponsePart,
+                    OutputKind::End => EventKind::ResponseEnd,
+                    OutputKind::NoResponse => EventKind::NoResponse,
+                    OutputKind::TargetStop => EventKind::TargetStop,
+                    OutputKind::Terminated { termination } => match termination.side {
+                        traffic_model::TerminationSide::Client => EventKind::ClientTermination,
+                        _ => EventKind::ServerTermination,
+                    },
+                };
+                if kind.is_terminal() && !started {
+                    wire_terminals.insert(dependency_sequence);
+                }
+                (
+                    dependency_sequence,
+                    if started { kind.started() } else { kind },
+                )
+            }
+            CaptureEvent::MessageStarted {
+                dependency_sequence,
+                ..
+            } => (dependency_sequence, EventKind::Message),
+            CaptureEvent::Started {
+                dependency_sequence,
+                ..
+            } => (dependency_sequence, EventKind::Request),
+            CaptureEvent::Terminal {
+                dependency_sequence,
+                outcome,
+                ..
+            } => {
+                let kind = match outcome.as_str() {
+                    "client_terminated" => EventKind::ClientTermination,
+                    "server_terminated" => EventKind::ServerTermination,
+                    "no_response" => EventKind::NoResponse,
+                    _ => EventKind::ResponseEnd,
+                };
+                capture_terminals.push(SourceEvent {
+                    sequence: record.sequence,
+                    dependency_sequence,
+                    offset_micros: record.offset_micros,
+                    kind,
+                });
+                continue;
+            }
+            CaptureEvent::Bound { .. }
+            | CaptureEvent::Sealed
+            | CaptureEvent::PrimaryBoundary { .. }
+            | CaptureEvent::Input { .. } => continue,
+        };
+        source.push(SourceEvent {
+            sequence: record.sequence,
+            dependency_sequence,
+            offset_micros: record.offset_micros,
+            kind,
+        });
+    }
+    source.retain(|event| !cancelled.contains(&event.sequence));
+    source.extend(
+        capture_terminals
+            .into_iter()
+            .filter(|event| !wire_terminals.contains(&event.dependency_sequence)),
+    );
+    source.sort_unstable_by_key(|event| event.sequence);
+    Ok(source)
 }

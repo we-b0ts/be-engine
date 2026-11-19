@@ -25,3 +25,11 @@ pub(crate) fn frozen(
 ) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
     traffic_rewrite_attribution::snapshot::frozen(read_snapshot, target, source, run)
 }
+
+pub(crate) fn frozen_for_replay(
+    target: Option<&Path>,
+    source: &Path,
+    run: &str,
+) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
+    traffic_rewrite_attribution::snapshot::frozen_for_replay(read_snapshot, target, source, run)
+}

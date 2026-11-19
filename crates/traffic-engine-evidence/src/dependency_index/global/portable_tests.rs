@@ -126,6 +126,35 @@ async fn recording_process_index_survives_copy_and_missing_pages_fall_back_local
         .await
         .unwrap();
     recorder.finish_run().await.unwrap();
+    assert!(
+        recorder
+            .run_dir
+            .join("indexes/unattributed-scope.bin")
+            .is_file()
+    );
+    assert!(
+        recorder
+            .run_dir
+            .join("dependencies-unattributed.tsv")
+            .is_file()
+    );
+    assert!(
+        !recorder
+            .run_dir
+            .join("indexes/unattributed-dependencies")
+            .exists()
+    );
+    assert!(
+        !recorder
+            .run_dir
+            .join("indexes/process-dependencies")
+            .exists()
+    );
+    seal_recording_scopes(
+        &recorder.run_dir,
+        crate::protocols::replay::source::validate_index_record,
+    )
+    .unwrap();
 
     let replay = temp.path().join("replay/.traffic-e2e");
     let copied = replay.join("local/artifacts/recordings/copied");
@@ -148,7 +177,7 @@ async fn recording_process_index_survives_copy_and_missing_pages_fall_back_local
     let changed_scope = changed.join("indexes/process-scope.json");
     File::options()
         .append(true)
-        .open(&changed_scope)
+        .open(changed_scope.with_extension("bin"))
         .unwrap()
         .write_all(b"\n")
         .unwrap();

@@ -320,11 +320,15 @@ async fn global_dependency_summary_is_generated_only_when_run_finishes() {
     );
 
     assert!(!recorder.finish_run().await.unwrap());
-    let (global_index, _) = crate::dependency_index::global::load_global_index(
-        &recorder.run_dir.join("global-dependencies.jsonl"),
-        |_| anyhow::bail!("a sealed Recorder index must be reused"),
-    )
-    .unwrap();
+    assert!(
+        !recorder
+            .run_dir
+            .join("indexes/startup-dependencies")
+            .exists()
+    );
+    let global = recorder.run_dir.join("global-dependencies.jsonl");
+    let (global_index, _) =
+        crate::dependency_index::global::load_global_index(&global, |_| Ok(())).unwrap();
     assert_eq!(global_index.records.count, 1);
     let summary_raw = crate::recorder::test_io::read_to_string(
         recorder.run_dir.join("global-dependencies-summary.json"),

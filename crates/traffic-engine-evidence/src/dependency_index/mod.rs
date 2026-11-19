@@ -27,8 +27,9 @@ pub use model::{FRAGMENT, FileIndex, FileStamp, IndexedRecord, RecordLocation};
 pub use pages::{PageManifest, PageWriter, Paged};
 pub use reader::RecordReader;
 pub use reference::{RecordRef, RecordSource};
-pub use store::{load_file, recording_files};
+pub use store::{load_file, load_file_for_replay, recording_files};
 pub use stream::RecordStream;
+pub use traffic_recording_store::source::index::recorded_case_for_replay;
 
 #[cfg(test)]
 pub use build::http_key;

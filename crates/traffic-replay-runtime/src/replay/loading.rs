@@ -66,13 +66,7 @@ async fn load_state<P: ReplayProtocolSet>(
             Some(
                 tokio::task::spawn_blocking(move || -> Result<String> {
                     let path = source.join(crate::dependency::observation::MANIFEST_FILE);
-                    let stamp = crate::dependency_index::FileStamp::read_native(&path)?;
-                    crate::dependency_index::recording::authenticate(&source)?;
                     let bytes = std::fs::read(&path)?;
-                    ensure!(
-                        crate::dependency_index::FileStamp::read_native(&path)? == stamp,
-                        "Source manifest changed while preparing Replay"
-                    );
                     Ok(crate::policy_evidence::digest(&bytes))
                 })
                 .await
@@ -117,17 +111,15 @@ async fn load_state<P: ReplayProtocolSet>(
     let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
     let (_, global_debug_path) = find_run_level_dependencies(&root_dir);
     let global_path = attribution.startup;
-    let global_report_stamp = global_path
-        .as_ref()
-        .map(|path| crate::dependency_index::FileStamp::read(path))
-        .transpose()?;
     loader.install_run_scopes(attribution.run_value_scopes);
     let mut connect_failures = connect_failure::Inventory::default();
     let mut resources = SourceResources {
         native: native::Inventory::new(providers.clone()),
         targets: BTreeMap::new(),
         reader: Arc::new(std::sync::Mutex::new(
-            crate::dependency_index::RecordReader::new(lifecycle.dependency_loading.cache_bytes),
+            crate::dependency_index::RecordReader::for_replay(
+                lifecycle.dependency_loading.cache_bytes,
+            ),
         )),
     };
     let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
@@ -175,14 +167,27 @@ async fn load_state<P: ReplayProtocolSet>(
                 &providers,
             )
             .await?;
-        if lazy {
+        let case_index = if lazy && source_inventory_id.is_some() {
+            let path = case.dependencies_path.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::dependency_index::recorded_case_for_replay(&path)
+            })
+            .await
+            .context("recorded Case fragment read failed")??
+        } else {
+            None
+        };
+        if lazy && (source_inventory_id.is_none() || case_index.is_some()) {
             let path = case.dependencies_path.clone();
             let cache = resources.reader.clone();
             let selector = case_selector.clone();
             let index_providers = providers.clone();
             let (file_index, startup, shared_lines, source_bytes) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
-                    let mut index = crate::dependency_index::load_file(&path)?;
+                    let mut index = match case_index {
+                        Some(index) => index,
+                        None => crate::dependency_index::load_file_for_replay(&path)?,
+                    };
                     let mut cache = cache
                         .lock()
                         .map_err(|_| anyhow!("dependency cache lock poisoned"))?;
@@ -436,23 +441,11 @@ async fn load_state<P: ReplayProtocolSet>(
         .protocols
         .initialize_connections(state.active_case_id.as_deref());
     let state = tokio::task::spawn_blocking(move || -> Result<_> {
-        if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
-            ensure!(
-                crate::dependency_index::FileStamp::read(source)? == *expected,
-                "Global Source changed before report projection preparation"
-            );
-        }
         report::global_evidence::regular::initialize(
             &mut state,
             &regular_report,
             &regular_policy_identity,
         )?;
-        if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
-            ensure!(
-                crate::dependency_index::FileStamp::read(source)? == *expected,
-                "Global Source changed while preparing report projection"
-            );
-        }
         Ok(state)
     })
     .await

@@ -3,7 +3,7 @@ use super::*;
 use tokio::io::AsyncWriteExt;
 use traffic_protocol::connection::{ConnectionIo, NativeFuture, RequestHost, ResponseFramer};
 
-pub(super) struct Server(pub ConnectionInfo);
+pub(super) struct Server;
 struct Framer;
 impl ResponseFramer for Framer {}
 
@@ -26,7 +26,7 @@ impl ServerSession for Server {
             } else {
                 Box::new(io)
             };
-            let mut reader = wire::Reader::new(io, self.0.max_frame_bytes);
+            let mut reader = wire::Reader::new(io);
             if let Some(head) = reader.request_head().await? {
                 let _input = host.begin_input().await?;
                 let request = reader.request_body(head).await?;

@@ -270,7 +270,7 @@ pub fn resolve_published_case_dir(case_source: &Path, case_id: &str) -> Result<P
     reject_duplicate_case_ids(&cases)?;
     cases
         .into_iter()
-        .find(|case| case.id == case_id)
+        .find(|case| case.id == case_id || case.dir.file_name().is_some_and(|name| name == case_id))
         .map(|case| case.dir)
         .with_context(|| {
             format!(

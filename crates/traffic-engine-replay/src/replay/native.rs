@@ -8,6 +8,7 @@ pub mod diagnosis;
 mod global_report;
 mod report;
 pub mod request;
+mod stored;
 pub use report::ProtocolReport;
 
 #[derive(Debug)]
@@ -53,27 +54,75 @@ impl Inventory {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
     ) -> Result<()> {
+        self.register_source(event, source, case, position, targets, secrets, None)?;
+        Ok(())
+    }
+
+    pub fn register_stored_emission(
+        &mut self,
+        event: &Value,
+        source: ReplaySource,
+        targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+        reference: crate::dependency_index::RecordRef,
+        secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+    ) -> Result<bool> {
+        self.register_source(
+            event,
+            source,
+            None,
+            reference.location.line,
+            targets,
+            secrets,
+            Some(reference),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_source(
+        &mut self,
+        event: &Value,
+        source: ReplaySource,
+        case: Option<&str>,
+        position: usize,
+        targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+        secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+        stored: Option<crate::dependency_index::RecordRef>,
+    ) -> Result<bool> {
         let Some(entry) = self.providers.event_provider(event) else {
             ensure!(
                 !self.providers.evidence().supports_replay(event),
                 "native Replay evidence has no registered connection provider"
             );
-            return Ok(());
+            return Ok(false);
         };
         let Some(native) = entry.provider.native_protocol() else {
             ensure!(
                 !self.providers.evidence().supports_replay(event),
                 "native Replay evidence has no registered session capability"
             );
-            return Ok(());
+            return Ok(false);
         };
-        let Some(mut exchange) = native.recorded_exchange_with_secrets(event, secrets)? else {
+        let exchange = if let Some(reference) = stored {
+            let response = Arc::new(stored::Response {
+                reference,
+                providers: self.providers.clone(),
+                protocol: entry.kind,
+                structure: native.recorded_emission_structure(event),
+            });
+            let Some(exchange) = native.recorded_emission(event, response)? else {
+                return Ok(false);
+            };
+            Some(exchange)
+        } else {
+            native.recorded_exchange_with_secrets(event, secrets)?
+        };
+        let Some(mut exchange) = exchange else {
             ensure!(
                 event["capture"]["semantic_required"] != true
                     || !self.providers.evidence().supports_replay(event),
                 "mandatory native Replay evidence has no executable exchange"
             );
-            return Ok(());
+            return Ok(false);
         };
         ensure!(
             self.providers.evidence().supports_replay(event),
@@ -99,7 +148,7 @@ impl Inventory {
                     *previous == crate::policy_evidence::digest(&serde_json::to_vec(event)?),
                     "native Source capture changed between registrations"
                 );
-                return Ok(());
+                return Ok(true);
             }
             if let Some(case) = case {
                 ensure!(
@@ -125,8 +174,13 @@ impl Inventory {
             .map(ReplayProtocol::new)
             .unwrap_or_else(|| ReplayProtocol::registered(protocol));
         register_replay_target(targets, &target, connection_protocol)?;
-        let prepared =
-            self.prepared_messages(&exchange, case, capture.as_ref(), self.contracts.as_ref())?;
+        let prepared = self.prepared_messages(
+            &exchange,
+            case,
+            capture.as_ref(),
+            self.contracts.as_ref(),
+            None,
+        )?;
         let rules = self.providers.bindings().for_protocol(protocol.as_str());
         let index = self.core.register(
             protocol.id(),
@@ -158,7 +212,7 @@ impl Inventory {
                 crate::policy_evidence::digest(&serde_json::to_vec(event)?),
             );
         }
-        Ok(())
+        Ok(true)
     }
 
     fn prepared_messages(
@@ -167,9 +221,10 @@ impl Inventory {
         case: Option<&str>,
         capture: Option<&CaptureMetadata>,
         contracts: &dyn policy::ValueRuleHost,
+        loaded_response: Option<&dyn traffic_protocol::message::MessageEncoder>,
     ) -> Result<(
         Option<traffic_policy_value::PreparedMessage>,
-        traffic_policy_value::PreparedMessage,
+        Option<traffic_policy_value::PreparedMessage>,
     )> {
         let start = capture.map(|capture| capture.started_at);
         let delivered = start.and_then(|start| {
@@ -189,6 +244,13 @@ impl Inventory {
             target: None,
         });
         let response_policy = contracts.document_policy(response_clocks);
+        let response = loaded_response.or_else(|| {
+            exchange
+                .response
+                .stored()
+                .is_none()
+                .then_some(exchange.response.as_ref())
+        });
         let prepared = (
             exchange
                 .request()
@@ -200,11 +262,15 @@ impl Inventory {
                     )
                 })
                 .transpose()?,
-            crate::value_extensions::prepare_message_with_policy(
-                exchange.response.as_ref(),
-                &rules.response,
-                response_policy,
-            )?,
+            response
+                .map(|response| {
+                    crate::value_extensions::prepare_message_with_policy(
+                        response,
+                        &rules.response,
+                        response_policy,
+                    )
+                })
+                .transpose()?,
         );
         let mut source_clocks = clocks;
         source_clocks.case.target = source_clocks.case.source;
@@ -220,21 +286,27 @@ impl Inventory {
             .transpose()?;
         let mut response_clocks = source_clocks;
         response_clocks.observation = Some(source_clocks.delivery);
-        let response = prepared.1.compare(
-            exchange.response.as_ref(),
-            response_clocks,
-            contracts.metadata(),
-        )?;
+        let response = prepared
+            .1
+            .as_ref()
+            .zip(response)
+            .map(|(prepared, response)| {
+                prepared.compare(response, response_clocks, contracts.metadata())
+            })
+            .transpose()?;
         ensure!(
-            request.as_ref().is_none_or(|request| request.passed()) && response.passed(),
+            request.as_ref().is_none_or(|request| request.passed())
+                && response.as_ref().is_none_or(|response| response.passed()),
             "Source projected value contract failed: request={:?}, response={:?}",
             request.as_ref().map(|request| &request.differences),
-            response.differences
+            response.as_ref().map(|response| &response.differences)
         );
         if let Some(request) = &request {
             contracts.observe_source_comparison(request);
         }
-        contracts.observe_source_comparison(&response);
+        if let Some(response) = &response {
+            contracts.observe_source_comparison(response);
+        }
         Ok(prepared)
     }
 
@@ -249,6 +321,7 @@ impl Inventory {
                     exchange.source.case_id.as_deref(),
                     exchange.source.capture.as_ref(),
                     contracts.as_ref(),
+                    None,
                 )
             })
             .collect::<Result<Vec<_>>>()?;

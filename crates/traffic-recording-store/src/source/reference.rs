@@ -14,6 +14,7 @@ pub struct RecordSource {
     reader: Arc<Mutex<RecordReader>>,
     view: Option<(PathBuf, FileStamp)>,
     resolution_error: Option<String>,
+    verify: bool,
 }
 
 impl RecordSource {
@@ -26,6 +27,9 @@ impl RecordSource {
             "cannot resolve dependency view: {:?}",
             self.resolution_error
         );
+        if !self.verify {
+            return Ok(());
+        }
         if let Some((path, stamp)) = &self.view {
             anyhow::ensure!(
                 FileStamp::read_native(path)? == *stamp,
@@ -40,6 +44,7 @@ impl RecordSource {
         Ok(())
     }
     pub fn new(path: &Path, stamp: FileStamp, reader: Arc<Mutex<RecordReader>>) -> Arc<Self> {
+        let verify = reader.lock().map_or(true, |reader| reader.verifies());
         let source = super::scoped::resolve(path);
         let (path, view, resolution_error) = match source {
             Ok(source) => (source.path, source.view, None),
@@ -51,6 +56,7 @@ impl RecordSource {
             reader,
             view,
             resolution_error,
+            verify,
         })
     }
 
@@ -69,6 +75,16 @@ pub struct RecordRef {
 }
 
 impl RecordRef {
+    /// Load the envelope and protocol extension without restoring payload cells.
+    pub fn load_metadata(&self) -> Result<serde_json::Value> {
+        self.source.validate()?;
+        self.source
+            .reader
+            .lock()
+            .map_err(|_| anyhow::anyhow!("dependency cache lock poisoned"))?
+            .read_metadata(&self.source.path, &self.source.stamp, &self.location)
+    }
+
     pub fn load<T: DeserializeOwned>(&self) -> Result<T> {
         self.source.validate()?;
         let raw = self

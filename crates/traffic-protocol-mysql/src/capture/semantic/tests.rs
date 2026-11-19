@@ -8,7 +8,7 @@ mod transaction_status;
 
 #[test]
 fn semantic_exchange_retains_the_observed_request_clock_not_completion_minus_duration() {
-    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let mut tracker = MysqlSemanticTracker::new(test_context());
     let query = MysqlPacket {
         sequence_id: 0,
         payload: [vec![0x03], b"SELECT 1".to_vec()].concat(),
@@ -49,7 +49,7 @@ fn rollback_ok_preserves_server_transaction_status_without_guessing_truncated_fl
         (vec![0, 0, 0, 1, 0, 0, 0], Some(1)),
         (vec![0, 0, 0, 1], None),
     ] {
-        let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+        let mut tracker = MysqlSemanticTracker::new(test_context());
         let query = MysqlPacket {
             sequence_id: 0,
             payload: [vec![0x03], b"ROLLBACK".to_vec()].concat(),
@@ -72,7 +72,7 @@ fn rollback_ok_preserves_server_transaction_status_without_guessing_truncated_fl
 
 #[test]
 fn parses_text_resultset_exchange() {
-    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let mut tracker = MysqlSemanticTracker::new(test_context());
     let query = MysqlPacket {
         sequence_id: 0,
         payload: [vec![0x03], b"select id, name".to_vec()].concat(),
@@ -126,7 +126,7 @@ fn parses_text_resultset_exchange() {
 fn changes_database_only_after_successful_init_db_response() {
     let mut context = test_context();
     context.database = Some("original".to_string());
-    let mut tracker = MysqlSemanticTracker::new(1024, context);
+    let mut tracker = MysqlSemanticTracker::new(context);
     let init_db = MysqlPacket {
         sequence_id: 0,
         payload: [vec![0x02], b"pluto".to_vec()].concat(),
@@ -266,7 +266,7 @@ fn records_binary_flag_string_values_as_bytes() {
 
 #[test]
 fn parses_prepare_and_execute_binary_resultset() {
-    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let mut tracker = MysqlSemanticTracker::new(test_context());
     let prepare = MysqlPacket {
         sequence_id: 0,
         payload: [vec![0x16], b"select name from user where id=?".to_vec()].concat(),
@@ -344,7 +344,7 @@ fn parses_prepare_and_execute_binary_resultset() {
 
 #[test]
 fn stmt_close_clears_prepared_statement_without_creating_exchange() {
-    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let mut tracker = MysqlSemanticTracker::new(test_context());
     let prepare = MysqlPacket {
         sequence_id: 0,
         payload: [vec![0x16], b"select name from user".to_vec()].concat(),

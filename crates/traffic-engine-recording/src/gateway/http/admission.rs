@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use hyper::Uri;
 use serde::Serialize;
 use tracing::{info, warn};
-use uuid::Uuid;
 
 use crate::recorder::{CaseContext, PrimaryCaseDescriptor};
 use crate::{ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRejection, AppState};
@@ -60,7 +59,7 @@ pub(super) async fn try_admit_case(
             }
             let admission = CaseAdmissionRecord {
                 timestamp: Utc::now(),
-                case_id: case.id,
+                case_id: state.recorder().case_label(case.id),
                 rule_name: case.rule_name.clone(),
                 uri_group: case.uri_group.clone(),
                 case_pattern: case_pattern.to_string(),
@@ -150,7 +149,7 @@ async fn discard_unadmitted_case(state: &AppState, case: &CaseContext) {
 #[derive(Serialize)]
 struct CaseAdmissionRecord {
     timestamp: DateTime<Utc>,
-    case_id: Uuid,
+    case_id: String,
     rule_name: String,
     uri_group: Option<String>,
     case_pattern: String,
@@ -178,6 +177,7 @@ mod tests {
     use std::time::Duration;
 
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     use super::*;
     use crate::config::AppConfig;

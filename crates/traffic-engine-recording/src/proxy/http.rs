@@ -27,7 +27,6 @@ use crate::protocols::recording::events::{
     HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, redact_headers,
 };
 use crate::protocols::recording::http::dependency::PendingHttpCapture;
-use crate::recorder::capture_body;
 use crate::recorder::connections::DependencyIo;
 use crate::recording_control::RecordingListener;
 
@@ -246,7 +245,6 @@ async fn forward_and_record(
     fallback_authority: Option<String>,
     termination: ClientTermination,
 ) -> Response<ProxyBody> {
-    let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
     let method = req.method().clone();
@@ -293,6 +291,10 @@ async fn forward_and_record(
         });
     let targets =
         state.capture_http_dependency_request(&method, &original_uri, authority.as_deref());
+    let id = targets
+        .capture
+        .as_ref()
+        .map_or_else(Uuid::new_v4, |capture| capture.exchange_id());
 
     let request_body = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -384,18 +386,19 @@ async fn forward_and_record(
         .await;
     }
 
-    let capture_event = HttpExchangeEvent {
+    let mut capture_event = HttpExchangeEvent {
         outcome: crate::DependencyExchangeOutcome::Response,
         id,
         timestamp: Utc::now(),
         request_started_at,
         client_addr: client_addr.clone(),
+        upstream_addr: None,
         scheme: scheme.to_string(),
         method: method.to_string(),
         uri: original_uri.to_string(),
         authority: authority.clone(),
         request_headers: request_headers_for_record.clone(),
-        request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+        request_body: request_body.clone().into(),
         response_status: None,
         response_headers: None,
         response_body: None,
@@ -416,6 +419,8 @@ async fn forward_and_record(
         .run(async {
             match crate::http::client::send_observed(state.client(), outbound, started).await {
                 Ok(upstream_response) => {
+                    capture_event.upstream_addr =
+                        crate::http::client::upstream_addr(&upstream_response);
                     if stream::is_stream(upstream_response.headers()) {
                         return stream::response(
                             upstream_response,
@@ -507,21 +512,16 @@ async fn forward_and_record(
                         timestamp: Utc::now(),
                         request_started_at,
                         client_addr,
+                        upstream_addr: capture_event.upstream_addr,
                         scheme: scheme.to_string(),
                         method: method.to_string(),
                         uri: original_uri.to_string(),
                         authority,
                         request_headers: request_headers_for_record,
-                        request_body: capture_body(
-                            &request_body,
-                            state.config().recording.max_body_bytes,
-                        ),
+                        request_body: capture_event.request_body,
                         response_status: Some(status.as_u16()),
                         response_headers: Some(response_headers_for_record),
-                        response_body: Some(capture_body(
-                            &body_bytes,
-                            state.config().recording.max_body_bytes,
-                        )),
+                        response_body: Some(body_bytes.clone().into()),
                         response_stream: None,
                         discovered_tcp_targets,
                         duration_ms: started.elapsed().as_millis(),
@@ -586,15 +586,13 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         timestamp: Utc::now(),
         request_started_at: ctx.request_started_at,
         client_addr: ctx.client_addr.clone(),
+        upstream_addr: None,
         scheme: ctx.scheme.clone(),
         method: ctx.method.to_string(),
         uri: ctx.original_uri.to_string(),
         authority: ctx.authority.clone(),
         request_headers: ctx.request_headers,
-        request_body: capture_body(
-            &ctx.request_body,
-            ctx.state.config().recording.max_body_bytes,
-        ),
+        request_body: ctx.request_body.into(),
         response_status: None,
         response_headers: None,
         response_body: None,

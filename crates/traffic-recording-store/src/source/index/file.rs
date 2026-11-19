@@ -1,4 +1,4 @@
-use super::{FRAGMENT, FileIndex, VERSION, build_file};
+use super::{FRAGMENT, FileIndex, VERSION, build::build_file_with_verification, build_file};
 use crate::source::store::{
     Lock, check_cancelled, file_cache_directory, private_directory, read_json, write_json,
 };
@@ -14,10 +14,49 @@ pub fn load_file(
     evidence: &EvidenceRegistry,
     select_proof: fn(&Value) -> bool,
 ) -> Result<FileIndex> {
+    load_file_with_verification(path, cancelled, evidence, select_proof, true)
+}
+
+pub fn load_file_for_replay(
+    path: &Path,
+    cancelled: &AtomicBool,
+    evidence: &EvidenceRegistry,
+    select_proof: fn(&Value) -> bool,
+) -> Result<FileIndex> {
+    load_file_with_verification(path, cancelled, evidence, select_proof, false)
+}
+
+/// Reuse a fragment emitted with the Case. A changed selection is streamed
+/// directly by Replay, without constructing another lookup index.
+pub fn recorded_case_for_replay(path: &Path) -> Result<Option<FileIndex>> {
+    let source = scoped::resolve(path)?;
+    let Some((view, _)) = &source.view else {
+        return Ok(None);
+    };
+    let Ok(mut index) = read_json::<FileIndex>(&view.with_file_name(FRAGMENT)) else {
+        return Ok(None);
+    };
+    if index.version != VERSION
+        || index.scope_membership_sha256.is_none()
+        || index.scope_membership_sha256 != source.membership_sha256()?
+    {
+        return Ok(None);
+    }
+    index.stamp = FileStamp::read_native(&source.path)?;
+    Ok(Some(index))
+}
+
+fn load_file_with_verification(
+    path: &Path,
+    cancelled: &AtomicBool,
+    evidence: &EvidenceRegistry,
+    select_proof: fn(&Value) -> bool,
+    verify: bool,
+) -> Result<FileIndex> {
     check_cancelled(cancelled)?;
     let source = scoped::resolve(path)?;
     let stamp = FileStamp::read_native(&source.path)?;
-    if let Some(index) = super::case_recording::load(&source, &stamp) {
+    if let Some(index) = super::case_recording::load(&source, &stamp, verify) {
         check_cancelled(cancelled)?;
         return Ok(index);
     }
@@ -35,12 +74,16 @@ pub fn load_file(
     let cache = file_cache_directory(path, &source)?;
     private_directory(&cache)?;
     let _lock = Lock::acquire(&cache.join("build.lock"), cancelled)?;
-    let output = cache.join("file.json");
+    let output = cache.join(if verify {
+        "file.json"
+    } else {
+        "file-replay.json"
+    });
     if let Ok(index) = read_json::<FileIndex>(&output)
         && index.version == VERSION
         && index.stamp == stamp
     {
-        if source.view.is_some() {
+        if verify && source.view.is_some() {
             source.validate()?;
             ensure!(
                 FileStamp::read_native(&source.path)? == stamp,
@@ -49,8 +92,10 @@ pub fn load_file(
         }
         return Ok(index);
     }
-    let index = build_file(path, cancelled, evidence, select_proof)?;
-    source.validate()?;
+    let index = build_file_with_verification(path, cancelled, evidence, select_proof, verify)?;
+    if verify {
+        source.validate()?;
+    }
     check_cancelled(cancelled)?;
     write_json(&output, &index)?;
     Ok(index)

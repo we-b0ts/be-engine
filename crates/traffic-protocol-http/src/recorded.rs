@@ -78,25 +78,7 @@ impl HttpScheme {
 
 impl RecordedExchange {
     pub fn identity(&self) -> Result<(HttpScheme, traffic_protocol::connection::Endpoint)> {
-        let scheme = HttpScheme::from_recorded(&self.scheme)?;
-        let authority = self
-            .authority
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("http_exchange {} has no authority", self.uri))?
-            .parse::<hyper::http::uri::Authority>()
-            .with_context(|| format!("invalid recorded HTTP authority for {}", self.uri))?;
-        let port = authority.port_u16().unwrap_or(match scheme {
-            HttpScheme::Http => 80,
-            HttpScheme::Https => 443,
-        });
-        Ok((
-            scheme,
-            traffic_protocol::connection::Endpoint {
-                host: traffic_protocol::observation::normalize_host(authority.host()),
-                port,
-            },
-        ))
+        identity(&self.scheme, self.authority.as_deref(), &self.uri)
     }
     pub fn source_started_at(&self) -> Option<DateTime<Utc>> {
         if let Some(started) = self.request_started_at {
@@ -108,6 +90,30 @@ impl RecordedExchange {
             i64::try_from(duration).ok()?,
         )?)
     }
+}
+
+pub(crate) fn identity(
+    scheme: &str,
+    authority: Option<&str>,
+    uri: &str,
+) -> Result<(HttpScheme, traffic_protocol::connection::Endpoint)> {
+    let scheme = HttpScheme::from_recorded(scheme)?;
+    let authority = authority
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("http_exchange {uri} has no authority"))?
+        .parse::<hyper::http::uri::Authority>()
+        .with_context(|| format!("invalid recorded HTTP authority for {uri}"))?;
+    let port = authority.port_u16().unwrap_or(match scheme {
+        HttpScheme::Http => 80,
+        HttpScheme::Https => 443,
+    });
+    Ok((
+        scheme,
+        traffic_protocol::connection::Endpoint {
+            host: traffic_protocol::observation::normalize_host(authority.host()),
+            port,
+        },
+    ))
 }
 
 #[cfg(test)]

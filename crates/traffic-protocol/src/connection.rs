@@ -193,6 +193,9 @@ impl Operation {
 /// An admitted capture retains its original ownership until completion. Dropping
 /// an unfinished exchange leaves an incomplete obligation with the host.
 pub trait CaptureExchange: Send {
+    fn dependency_id(&self) -> Option<u64> {
+        None
+    }
     fn prepare_output(
         &self,
         output: traffic_model::trace::OutputKind,
@@ -212,6 +215,10 @@ pub struct CaptureTransport {
 }
 
 pub trait CaptureHost: Send + Sync {
+    fn connection_id(&self) -> uuid::Uuid {
+        uuid::Uuid::new_v4()
+    }
+
     fn begin_message(
         &self,
         _event: &CaptureSnapshot,
@@ -279,6 +286,19 @@ pub trait NativeProtocol: Send + Sync {
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>>;
+
+    /// Prepare only the routing and timing of a server emission. Metadata has
+    /// no request or response body. Providers may use the ordinary eager path.
+    fn recorded_emission(
+        &self,
+        _metadata: &Value,
+        _response: Arc<dyn MessageEncoder>,
+    ) -> Result<Option<RecordedExchange>> {
+        Ok(None)
+    }
+    fn recorded_emission_structure(&self, _metadata: &Value) -> Option<Value> {
+        None
+    }
     fn recorded_exchange_with_secrets(
         &self,
         event: &Value,

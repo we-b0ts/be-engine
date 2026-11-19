@@ -7,9 +7,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::events::{MysqlExchangeEvent, MysqlResponseEvent};
-use crate::semantic::MysqlWirePrefixPacket;
 use crate::{ClientCommand, MysqlPacket};
 use traffic_model::DependencyExchangeOutcome;
+#[cfg(test)]
 use traffic_model::capture::capture_body;
 
 #[cfg(test)]
@@ -21,13 +21,10 @@ use crate::semantic::{SemanticRequest, SemanticSession};
 #[cfg(test)]
 use crate::types::*;
 
-const MAX_TERMINATION_PREFIX_PACKETS: usize = 4096;
-
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlSemanticTracker {
     session: SemanticSession,
     pending: VecDeque<ActiveExchange>,
-    max_value_bytes: usize,
     context: MysqlExchangeContext,
 }
 
@@ -50,16 +47,13 @@ struct ActiveExchange {
     native: SemanticRequest,
     started: Instant,
     request_started_at: chrono::DateTime<Utc>,
-    wire_prefix: Vec<MysqlWirePrefixPacket>,
-    wire_prefix_bytes: usize,
 }
 
 impl MysqlSemanticTracker {
-    pub(crate) fn new(max_value_bytes: usize, context: MysqlExchangeContext) -> Self {
+    pub(crate) fn new(context: MysqlExchangeContext) -> Self {
         Self {
-            session: SemanticSession::new(max_value_bytes),
+            session: SemanticSession::new(usize::MAX),
             pending: VecDeque::new(),
-            max_value_bytes,
             context,
         }
     }
@@ -80,8 +74,6 @@ impl MysqlSemanticTracker {
             native,
             started: Instant::now(),
             request_started_at: Utc::now(),
-            wire_prefix: Vec::new(),
-            wire_prefix_bytes: 0,
         });
     }
 
@@ -100,30 +92,6 @@ impl MysqlSemanticTracker {
     pub(crate) fn observe_packet(&mut self, packet: &MysqlPacket) {
         if let Some(active) = self.pending.front_mut() {
             active.native.packets.push(packet.clone());
-        }
-    }
-
-    pub(crate) fn observe_delivery(&mut self, packet: &MysqlPacket) {
-        if let Some(active) = self.pending.front_mut() {
-            if active
-                .wire_prefix
-                .last()
-                .is_some_and(|prefix| prefix.packet.truncated)
-            {
-                return;
-            }
-            let remaining = if active.wire_prefix.len() < MAX_TERMINATION_PREFIX_PACKETS {
-                self.max_value_bytes
-                    .saturating_sub(active.wire_prefix_bytes)
-            } else {
-                0
-            };
-            let captured = capture_body(&packet.to_wire_bytes(), remaining);
-            active.wire_prefix_bytes = active.wire_prefix_bytes.saturating_add(captured.stored_len);
-            active.wire_prefix.push(MysqlWirePrefixPacket {
-                offset_ms: active.started.elapsed().as_millis(),
-                packet: captured,
-            });
         }
     }
 
@@ -175,10 +143,9 @@ impl MysqlSemanticTracker {
     ) -> Option<MysqlExchangeEvent> {
         let mut active = self.pending.pop_front()?;
         let status = fallback_status.to_string();
-        let mut response =
+        let response =
             self.session
                 .parse_response(&mut active.native, &status, error_code, error_message);
-        response.wire_prefix = std::mem::take(&mut active.wire_prefix);
         let server_status_before = self.session.confirm_status(
             active.connection_id,
             active.query_sequence,

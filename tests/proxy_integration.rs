@@ -594,12 +594,13 @@ async fn http_gateway_rejects_kubeconfig_proxy_address_owned_by_gateway() {
 }
 
 #[tokio::test]
-async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
+async fn http_gateway_publishes_full_response_body_above_capture_limit() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
-    let matched_upstream = spawn_http_response_upstream(r#"{"ok":true,"items":[1,2,3]}"#, 1).await;
+    let body = r#"{"ok":true,"items":[1,2,3]}"#;
+    let matched_upstream = spawn_http_response_upstream(body, 1).await;
     let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
     let gateway_addr = free_addr();
 
@@ -626,52 +627,39 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
     wait_for_port(gateway_addr).await;
 
     let response = raw_http_get(gateway_addr, "/api/users/list").await;
-    assert!(response.contains(r#"{"ok":true"#));
+    assert!(response.contains(body));
 
     wait_for_http_cases(
         &temp.path().join("recordings"),
-        &[("failed/api-users-list", 1)],
-        0,
+        &[("apis/api-users-list", 1)],
         1,
+        0,
     )
     .await;
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     let published_group = run_dir.join("apis/api-users-list");
-    assert!(
-        !published_group.exists()
-            || std::fs::read_dir(&published_group)
-                .unwrap()
-                .next()
-                .is_none()
-    );
-
-    let failed_group = run_dir.join("failed/api-users-list");
-    let failed_cases = std::fs::read_dir(&failed_group)
+    let published_cases = std::fs::read_dir(published_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect::<Vec<_>>();
-    assert_eq!(failed_cases.len(), 1);
-    let failed_case = &failed_cases[0];
-    assert!(failed_case.join("request.json.partial").exists());
-    assert!(
-        failed_case
-            .join("expected-response.json.truncated")
-            .exists()
-    );
-    assert!(!failed_case.join("request.json").exists());
-    assert!(!failed_case.join("expected-response.json").exists());
+    assert_eq!(published_cases.len(), 1);
+    let published_case = &published_cases[0];
+    assert!(published_case.join("request.json").is_file());
+    let recorded_response: Value = serde_json::from_slice(
+        &std::fs::read(published_case.join("expected-response.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(recorded_response["status"], 200);
+    assert_eq!(recorded_response["body"]["data"], body);
+    assert!(!run_dir.join("failed/api-users-list").exists());
 
-    let error_raw = std::fs::read_to_string(failed_case.join("recording-error.json")).unwrap();
-    assert!(error_raw.contains("expected_response_body_truncated"));
     let report_raw = std::fs::read_to_string(run_dir.join("recording-run.json")).unwrap();
     let report: Value = serde_json::from_str(&report_raw).unwrap();
     assert_eq!(report["status"], "running");
-    assert_eq!(report["published_cases"], 0);
-    assert_eq!(report["failed_cases"], 1);
-    let errors_raw = std::fs::read_to_string(run_dir.join("errors.jsonl")).unwrap();
-    assert!(errors_raw.contains("expected_response_body_truncated"));
+    assert_eq!(report["published_cases"], 1);
+    assert_eq!(report["failed_cases"], 0);
 }
 
 #[tokio::test]

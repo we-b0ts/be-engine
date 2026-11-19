@@ -283,8 +283,9 @@ async fn run_prepared(
     source_cleanup?;
     let manifest = state.recorder().run_dir.join("recording-run.json");
     let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)?;
+    let close_limit_case = close_limit_case.map(|id| state.recorder().case_label(id));
     ensure!(
-        usable_recording(&report, close_limit_case),
+        usable_recording(&report, close_limit_case.as_deref()),
         "recording finalized with errors; inspect {}",
         manifest.display()
     );
@@ -299,7 +300,7 @@ async fn run_prepared(
     ))
 }
 
-fn usable_recording(report: &serde_json::Value, close_limit_case: Option<uuid::Uuid>) -> bool {
+fn usable_recording(report: &serde_json::Value, close_limit_case: Option<&str>) -> bool {
     let Some(errors) = report["errors"].as_array() else {
         return false;
     };
@@ -316,7 +317,7 @@ fn usable_recording(report: &serde_json::Value, close_limit_case: Option<uuid::U
             [] => report["failed_cases"] == 0,
             [error] => {
                 report["failed_cases"] == 1
-                    && error["case_id"] == case_id.to_string()
+                    && error["case_id"] == case_id
                     && error["reason"] == crate::active_case::SOCKETIO_CLOSE_TAIL_TIMEOUT
             }
             _ => false,

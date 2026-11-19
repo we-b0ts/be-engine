@@ -29,7 +29,6 @@ use crate::protocols::recording::events::{
 };
 use crate::protocols::recording::http::dependency::PendingHttpCapture;
 use crate::protocols::recording::http::stream;
-use crate::recorder::capture_body;
 use crate::recorder::connections::DependencyIo;
 
 pub mod connection;
@@ -210,7 +209,6 @@ async fn handle_http_request(
     client_addr: Option<String>,
     termination: ClientTermination,
 ) -> Response<GatewayBody> {
-    let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
     let method = req.method().clone();
@@ -248,6 +246,10 @@ async fn handle_http_request(
         .or_else(|| Some(format!("{}:{}", entry.domain, fake_addr.port())));
     let targets =
         state.capture_http_dependency_request(&method, &original_uri, authority.as_deref());
+    let id = targets
+        .capture
+        .as_ref()
+        .map_or_else(Uuid::new_v4, |capture| capture.exchange_id());
 
     let request_body = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -338,6 +340,7 @@ async fn handle_http_request(
         timestamp: Utc::now(),
         request_started_at,
         client_addr: client_addr.clone(),
+        upstream_addr: Some(upstream_addr),
         scheme: "fake_ip_http".to_string(),
         method: method.to_string(),
         uri: original_uri.to_string(),
@@ -348,7 +351,7 @@ async fn handle_http_request(
             fake_addr,
             Some(upstream_addr),
         ),
-        request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+        request_body: request_body.clone().into(),
         response_status: None,
         response_headers: None,
         response_body: None,
@@ -474,6 +477,7 @@ async fn handle_http_request(
                         timestamp: Utc::now(),
                         request_started_at,
                         client_addr,
+                        upstream_addr: Some(upstream_addr),
                         scheme: "fake_ip_http".to_string(),
                         method: method.to_string(),
                         uri: original_uri.to_string(),
@@ -484,16 +488,10 @@ async fn handle_http_request(
                             fake_addr,
                             Some(upstream_addr),
                         ),
-                        request_body: capture_body(
-                            &request_body,
-                            state.config().recording.max_body_bytes,
-                        ),
+                        request_body: capture_event.request_body,
                         response_status: Some(status.as_u16()),
                         response_headers: Some(response_headers_for_record),
-                        response_body: Some(capture_body(
-                            &body_bytes,
-                            state.config().recording.max_body_bytes,
-                        )),
+                        response_body: Some(body_bytes.clone().into()),
                         response_stream: None,
                         discovered_tcp_targets,
                         duration_ms: started.elapsed().as_millis(),
@@ -556,7 +554,6 @@ async fn handle_https_request(
         fallback_authority,
         termination,
     } = client;
-    let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
     let method = req.method().clone();
@@ -594,6 +591,10 @@ async fn handle_https_request(
         request_authority(&original_uri, &request_headers).or(Some(fallback_authority.clone()));
     let targets =
         state.capture_http_dependency_request(&method, &original_uri, authority.as_deref());
+    let id = targets
+        .capture
+        .as_ref()
+        .map_or_else(Uuid::new_v4, |capture| capture.exchange_id());
 
     let request_body = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -689,6 +690,7 @@ async fn handle_https_request(
         timestamp: Utc::now(),
         request_started_at,
         client_addr: client_addr.clone(),
+        upstream_addr: Some(upstream_addr),
         scheme: "fake_ip_https".to_string(),
         method: method.to_string(),
         uri: original_uri.to_string(),
@@ -699,7 +701,7 @@ async fn handle_https_request(
             fake_addr,
             Some(upstream_addr),
         ),
-        request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+        request_body: request_body.clone().into(),
         response_status: None,
         response_headers: None,
         response_body: None,
@@ -836,6 +838,7 @@ async fn handle_https_request(
                         timestamp: Utc::now(),
                         request_started_at,
                         client_addr,
+                        upstream_addr: Some(upstream_addr),
                         scheme: "fake_ip_https".to_string(),
                         method: method.to_string(),
                         uri: original_uri.to_string(),
@@ -846,16 +849,10 @@ async fn handle_https_request(
                             fake_addr,
                             Some(upstream_addr),
                         ),
-                        request_body: capture_body(
-                            &request_body,
-                            state.config().recording.max_body_bytes,
-                        ),
+                        request_body: capture_event.request_body,
                         response_status: Some(status.as_u16()),
                         response_headers: Some(response_headers_for_record),
-                        response_body: Some(capture_body(
-                            &body_bytes,
-                            state.config().recording.max_body_bytes,
-                        )),
+                        response_body: Some(body_bytes.clone().into()),
                         response_stream: None,
                         discovered_tcp_targets,
                         duration_ms: started.elapsed().as_millis(),

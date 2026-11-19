@@ -40,6 +40,7 @@ struct Current {
     manifest: FileStamp,
     ledger: FileStamp,
     catalog: FileStamp,
+    verified: bool,
     contents: Arc<Catalog>,
 }
 
@@ -124,7 +125,7 @@ fn scope_digests(manifest: &RecordingManifest) -> BTreeMap<&str, &str> {
         .collect()
 }
 
-fn current(root: &Path, ledger: &FileStamp) -> Result<Arc<Catalog>> {
+fn current(root: &Path, ledger: &FileStamp, verify: bool) -> Result<Arc<Catalog>> {
     static CACHE: OnceLock<Mutex<Option<Current>>> = OnceLock::new();
     let catalog_path = root.join(CATALOG);
     let catalog = FileStamp::read_native(&catalog_path)?;
@@ -139,6 +140,7 @@ fn current(root: &Path, ledger: &FileStamp) -> Result<Arc<Catalog>> {
             && entry.manifest == manifest
             && entry.ledger == *ledger
             && entry.catalog == catalog
+            && (!verify || entry.verified)
     }) {
         return Ok(cached.contents.clone());
     }
@@ -162,12 +164,20 @@ fn current(root: &Path, ledger: &FileStamp) -> Result<Arc<Catalog>> {
     // Recording transfer and metadata-only ownership assignment can change
     // filesystem stamps. Authenticate the ledger once before rebinding.
     if contents.ledger != *ledger {
-        recording::authenticate(root)?;
+        if verify {
+            recording::authenticate(root)?;
+        } else {
+            ensure!(
+                contents.ledger.size == ledger.size,
+                "Case index row directory size differs"
+            );
+        }
     }
     ensure!(
-        FileStamp::read_native(&manifest_path)? == manifest
-            && FileStamp::read_native(&catalog_path)? == catalog
-            && FileStamp::read_native(&recording::dependency_path(root))? == *ledger,
+        !verify
+            || FileStamp::read_native(&manifest_path)? == manifest
+                && FileStamp::read_native(&catalog_path)? == catalog
+                && FileStamp::read_native(&recording::dependency_path(root))? == *ledger,
         "recording changed while loading its Case index catalog"
     );
     let contents = Arc::new(contents);
@@ -176,18 +186,19 @@ fn current(root: &Path, ledger: &FileStamp) -> Result<Arc<Catalog>> {
         manifest,
         ledger: ledger.clone(),
         catalog,
+        verified: verify,
         contents: contents.clone(),
     });
     Ok(contents)
 }
 
-pub(super) fn load(source: &scoped::Source, ledger: &FileStamp) -> Option<FileIndex> {
+pub(super) fn load(source: &scoped::Source, ledger: &FileStamp, verify: bool) -> Option<FileIndex> {
     let (view, _) = source.view.as_ref()?;
     if view.file_name()? != scoped::CASE_SCOPE {
         return None;
     }
     let root = source.path.parent()?;
-    load_original(root, view, source, ledger).ok()
+    load_original(root, view, source, ledger, verify).ok()
 }
 
 fn load_original(
@@ -195,33 +206,38 @@ fn load_original(
     view: &Path,
     source: &scoped::Source,
     ledger: &FileStamp,
+    verify: bool,
 ) -> Result<FileIndex> {
-    let catalog = current(root, ledger)?;
+    let catalog = current(root, ledger, verify)?;
     let canonical = fs::canonicalize(view)?;
     let seal = catalog
         .cases
         .get(canonical.strip_prefix(root)?)
         .context("recording Case index is not packaged for this scope")?;
-    let sha256 = source.scope_sha256()?;
-    ensure!(
-        sha256.as_deref() == Some(seal.scope_sha256.as_str()),
-        "packaged Case scope differs"
-    );
     let fragment = view.with_file_name(FRAGMENT);
     FileStamp::read_native(&fragment)?;
     let bytes = fs::read(fragment)?;
     let (mut index, index_sha256) = store::decode_json::<FileIndex>(&bytes)?;
-    ensure!(
-        index_sha256 == seal.index_sha256,
-        "packaged Case index content changed"
-    );
+    if verify {
+        let sha256 = source.scope_sha256()?;
+        ensure!(
+            sha256.as_deref() == Some(seal.scope_sha256.as_str()),
+            "packaged Case scope differs"
+        );
+        ensure!(
+            index_sha256 == seal.index_sha256,
+            "packaged Case index content changed"
+        );
+    }
     ensure!(
         index.version == VERSION
             && index.scope_membership_sha256.is_some()
-            && FileStamp::read_native(&source.path)? == *ledger,
+            && (!verify || FileStamp::read_native(&source.path)? == *ledger),
         "packaged Case index no longer matches its recording"
     );
-    source.validate()?;
+    if verify {
+        source.validate()?;
+    }
     index.stamp = ledger.clone();
     Ok(index)
 }

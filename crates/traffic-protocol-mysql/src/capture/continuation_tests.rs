@@ -46,8 +46,7 @@ fn start(tracker: &mut MysqlQueryTracker, command: u8, sql: &[u8], sequence: u64
 #[tokio::test]
 async fn captures_complete_text_and_binary_large_rows_with_physical_debug_packets() {
     for binary in [false, true] {
-        let mut tracker =
-            MysqlQueryTracker::new(64 * 1024 * 1024, true, MysqlExchangeContext::default());
+        let mut tracker = MysqlQueryTracker::new(1024, true, MysqlExchangeContext::default());
         if binary {
             start(&mut tracker, 0x16, b"SELECT id,image FROM contexts", 1);
             let mut prepared = vec![0];
@@ -132,6 +131,8 @@ async fn captures_complete_text_and_binary_large_rows_with_physical_debug_packet
             MAX_PACKET_PAYLOAD_LEN
         );
         assert_eq!(debug.packets.as_ref().unwrap()[5].sequence_id, 6);
+        assert!(debug.payload.truncated);
+        assert!(debug.packets.as_ref().unwrap()[4].payload.truncated);
         assert_eq!(debug.payload_bytes + 8 * 4, wire.len());
         let exchange = exchange.unwrap();
         assert!(

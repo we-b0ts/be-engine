@@ -224,7 +224,7 @@ pub(super) fn seal(root: &Path) {
         let path = root.join(format!("indexes/{name}-scope.json"));
         write(
             &path,
-            &ScopeIndex {
+            &ScopeIndex::<Uuid> {
                 schema: SCOPE_SCHEMA.into(),
                 run_relpath: "..".into(),
                 scope,

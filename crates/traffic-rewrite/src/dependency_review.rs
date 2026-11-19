@@ -381,6 +381,14 @@ pub(crate) fn freeze_dependency_attribution(
     snapshot::frozen(target, source, recording_run)
 }
 
+pub(crate) fn freeze_dependency_attribution_for_replay(
+    target: Option<&Path>,
+    source: &Path,
+    recording_run: &str,
+) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
+    snapshot::frozen_for_replay(target, source, recording_run)
+}
+
 pub(super) fn batch_pending(state: &RewriteState) -> bool {
     state.case_source.is_some() && state.dependency_review.batch_receipt.is_none()
         || (state.case_source.is_some()

@@ -57,7 +57,7 @@ impl Inventory {
             &crate::dependency_index::scoped::case_directory(path)?,
         )
         .await?;
-        let bytes = crate::dependency_index::scoped::read_bytes(path)?;
+        let bytes = crate::dependency_index::scoped::read_bytes_for_replay(path)?;
         let mut lines = tokio::io::BufReader::new(bytes.as_slice()).lines();
         while let Some(line) = lines.next_line().await? {
             if !line.contains("dependency_connect_failure") {

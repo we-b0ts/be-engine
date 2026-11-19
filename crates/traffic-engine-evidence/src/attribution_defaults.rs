@@ -13,6 +13,21 @@ use std::{collections::BTreeMap, fs, path::Path};
 use uuid::Uuid;
 
 pub fn load(source: &Path, target: Option<&Path>) -> Result<BTreeMap<Uuid, DependencyOwner>> {
+    load_with_verification(source, target, true)
+}
+
+pub fn load_for_replay(
+    source: &Path,
+    target: Option<&Path>,
+) -> Result<BTreeMap<Uuid, DependencyOwner>> {
+    load_with_verification(source, target, false)
+}
+
+fn load_with_verification(
+    source: &Path,
+    target: Option<&Path>,
+    verify: bool,
+) -> Result<BTreeMap<Uuid, DependencyOwner>> {
     let (root, manifest) = recording::manifest(source)?;
     if manifest.semantic_inventory.unattributed_dependencies == 0 {
         return Ok(BTreeMap::new());
@@ -33,18 +48,32 @@ pub fn load(source: &Path, target: Option<&Path>) -> Result<BTreeMap<Uuid, Depen
         &process,
     ))?);
     let directory = store::cache_directory(&root);
-    let cache = directory.join(format!(
-        "case-window-ownership-{}.json",
-        key.trim_start_matches("sha256:")
-    ));
+    let key = key.trim_start_matches("sha256:");
+    let cache = directory.join(format!("case-window-ownership-{key}.json"));
     if let Ok(defaults) = store::read_json(&cache) {
-        recording::authenticate(&root)?;
+        if verify {
+            recording::authenticate(&root)?;
+        }
         return Ok(defaults);
     }
+    let cache = if verify {
+        cache
+    } else {
+        let replay_cache = directory.join(format!("case-window-ownership-replay-{key}.json"));
+        if let Ok(defaults) = store::read_json(&replay_cache) {
+            return Ok(defaults);
+        }
+        replay_cache
+    };
     // Only the small unowned view is read. A status query must not reconstruct
     // the complete central Source index just to admit ordinary Case traffic.
     let path = root.join("indexes/unattributed-scope.json");
-    let mut input = crate::dependency_index::RecordStream::open(&path)?;
+    let open = if verify {
+        crate::dependency_index::RecordStream::open
+    } else {
+        crate::dependency_index::RecordStream::open_for_replay
+    };
+    let mut input = open(&path)?;
     let mut candidates = Vec::new();
     let mut mysql_events = Vec::new();
     while let Some((_, line)) = input.next()? {
@@ -68,7 +97,9 @@ pub fn load(source: &Path, target: Option<&Path>) -> Result<BTreeMap<Uuid, Depen
     if candidates.is_empty() && !mysql_events.iter().any(mysql::Frame::candidate) {
         return Ok(BTreeMap::new());
     }
-    recording::authenticate(&root)?;
+    if verify {
+        recording::authenticate(&root)?;
+    }
     store::private_directory(&directory)?;
     let mut windows = BTreeMap::new();
     for input in &manifest.inputs {
@@ -120,7 +151,14 @@ pub fn load(source: &Path, target: Option<&Path>) -> Result<BTreeMap<Uuid, Depen
             }
         }
     }
-    mysql::extend(&root, &manifest, &windows, mysql_events, &mut defaults)?;
+    mysql::extend(
+        &root,
+        &manifest,
+        &windows,
+        mysql_events,
+        &mut defaults,
+        open,
+    )?;
     store::write_json(&cache, &defaults)?;
     Ok(defaults)
 }

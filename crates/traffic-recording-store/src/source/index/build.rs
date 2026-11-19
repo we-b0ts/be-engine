@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -130,24 +130,32 @@ pub fn build_file(
     evidence: &traffic_protocol::evidence::EvidenceRegistry,
     select_proof: fn(&Value) -> bool,
 ) -> Result<FileIndex> {
+    build_file_with_verification(path, cancelled, evidence, select_proof, true)
+}
+
+pub(super) fn build_file_with_verification(
+    path: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+    select_proof: fn(&Value) -> bool,
+    verify: bool,
+) -> Result<FileIndex> {
     let stamp = FileStamp::read(path)?;
     let mut builder = Builder::with_evidence(stamp.clone(), evidence.clone(), select_proof);
-    let mut input = RecordStream::open(path)?;
-    if scoped::view_path(path).is_some() {
+    let mut input = if verify {
+        RecordStream::open(path)?
+    } else {
+        RecordStream::open_for_replay(path)?
+    };
+    if input.uses_locations() {
         builder.set_scoped();
     }
-    while let Some((location, raw)) = input.next()? {
+    while let Some((location, raw, value)) = input.next_value()? {
         store::check_cancelled(cancelled)?;
-        let line = location.line;
-        let value = if raw.iter().all(u8::is_ascii_whitespace) {
-            None
-        } else {
-            Some(serde_json::from_slice::<Value>(raw).with_context(|| {
-                format!("invalid dependency evidence {} line {line}", path.display())
-            })?)
-        };
         builder.observe_at(&location, raw, value.as_ref())?;
     }
-    scoped::validate_stamp(path, &stamp)?;
+    if verify {
+        scoped::validate_stamp(path, &stamp)?;
+    }
     builder.finish()
 }

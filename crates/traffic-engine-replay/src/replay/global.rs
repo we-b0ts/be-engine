@@ -108,7 +108,7 @@ pub async fn load<R: GlobalRegistrar>(
         .evidence()
         .unwrap_or_else(|| crate::protocols::default_providers().evidence().clone());
     let (index, root) = tokio::task::spawn_blocking(move || {
-        crate::dependency_index::global::load_global_index_with_evidence(
+        crate::dependency_index::global::load_global_index_for_replay(
             &source_path,
             R::Projection::validate,
             &std::sync::atomic::AtomicBool::new(false),

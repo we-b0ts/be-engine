@@ -209,12 +209,11 @@ async fn an_omitted_or_repeated_scope_location_cannot_hide_a_mandatory_fact() {
     let (_temp, recorder) = recording().await;
     let root = recorder.run_dir().as_ref();
     let (_, manifest) = recording::manifest(root).unwrap();
-    let path = root.join("indexes/process-scope.json");
-    let mut scope: ScopeIndex = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let original = scope.locations.clone();
-    for locations in [vec![], vec![original[0].clone(), original[0].clone()]] {
-        scope.locations = locations;
-        std::fs::write(&path, serde_json::to_vec(&scope).unwrap()).unwrap();
+    let path = root.join("indexes/process-scope.bin");
+    assert_eq!(scoped::read_index(&path).unwrap().locations.len(), 1);
+    let original = std::fs::read(&path).unwrap();
+    for bytes in [vec![], original.repeat(2)] {
+        std::fs::write(&path, bytes).unwrap();
         assert!(effective(root, &manifest, &BTreeMap::new()).is_err());
     }
 }
@@ -270,6 +269,7 @@ async fn associated_shutdown_has_authenticated_scope_without_entering_primary_in
             timestamp: chrono::Utc::now(),
             request_started_at: chrono::Utc::now(),
             client_addr: None,
+            upstream_addr: None,
             scheme: "http".into(),
             method: "GET".into(),
             uri: "/cleanup".into(),
@@ -303,10 +303,9 @@ async fn associated_shutdown_has_authenticated_scope_without_entering_primary_in
     )
     .unwrap();
     assert!(primary.locations.is_empty());
-    assert!(
-        manifest
-            .files
-            .iter()
-            .any(|file| file.path == "indexes/shutdown-scope.json")
-    );
+    for kind in ["startup", "shutdown"] {
+        let binary = format!("indexes/{kind}-scope.bin");
+        assert!(manifest.files.iter().any(|file| file.path == binary));
+        assert!(!root.join(format!("indexes/{kind}-scope.json")).exists());
+    }
 }

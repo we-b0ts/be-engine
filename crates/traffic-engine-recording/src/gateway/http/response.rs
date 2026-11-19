@@ -16,6 +16,7 @@ pub(super) struct AcquiredResponse {
     pub(super) status: StatusCode,
     pub(super) headers: HeaderMap,
     pub(super) body: Incoming,
+    pub(super) upstream_addr: Option<std::net::SocketAddr>,
     pub(super) deadline: Instant,
 }
 
@@ -76,11 +77,13 @@ pub(super) async fn acquire(
             return Err(elapsed.into());
         }
     };
+    let upstream_addr = crate::http::client::upstream_addr(&response);
     let (parts, body) = response.into_parts();
     Ok(AcquiredResponse {
         status: parts.status,
         headers: parts.headers,
         body,
+        upstream_addr,
         deadline,
     })
 }

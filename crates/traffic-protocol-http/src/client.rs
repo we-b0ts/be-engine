@@ -11,6 +11,13 @@ pub use observation::{
     ObservedConnector, ObservedUpstream, UpstreamTermination, send_https_observed, send_observed,
 };
 
+pub fn upstream_addr<B>(response: &hyper::Response<B>) -> Option<std::net::SocketAddr> {
+    response
+        .extensions()
+        .get::<hyper_util::client::legacy::connect::HttpInfo>()
+        .map(hyper_util::client::legacy::connect::HttpInfo::remote_addr)
+}
+
 pub fn new_proxy_client() -> ProxyClient {
     build_proxy_client(true)
 }

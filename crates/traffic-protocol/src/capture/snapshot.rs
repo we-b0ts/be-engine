@@ -40,6 +40,43 @@ impl CaptureSnapshot {
         &self.facts
     }
 
+    pub fn with_source_predecessor(mut self, dependency: Option<u64>) -> Self {
+        if let Some(dependency) = dependency {
+            self.payload["source_after_id"] = Value::from(dependency);
+        }
+        self
+    }
+
+    pub fn with_recording_identity(mut self, dependency_id: uuid::Uuid) -> Result<Self> {
+        if !self
+            .facts
+            .recording_layout
+            .is_some_and(|layout| layout.use_dependency_id)
+        {
+            return Ok(self);
+        }
+        let Some(previous) = self.payload.get("id").filter(|value| value.is_string()) else {
+            return Ok(self);
+        };
+        let reference = &self.facts.reference;
+        let identity = Value::String(dependency_id.to_string());
+        if let Some(exchange) = reference.fields().get("exchange_id") {
+            if exchange != previous {
+                return Ok(self);
+            }
+            let mut fields = reference.fields().clone();
+            fields.insert("exchange_id".into(), identity.clone());
+            self.facts.reference =
+                traffic_model::recording::ProtocolRef::new(reference.protocol(), &fields)?;
+        } else if reference.fields().get("connection_id") != self.payload.get("connection_id")
+            || !reference.fields().contains_key("sequence")
+        {
+            return Ok(self);
+        }
+        self.payload["id"] = identity;
+        Ok(self)
+    }
+
     pub fn into_parts(self) -> (Value, CaptureFacts) {
         (self.payload, self.facts)
     }

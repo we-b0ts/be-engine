@@ -36,7 +36,7 @@ fn write_fixture(root: &Path) -> (PathBuf, Vec<ScopeRecordLocation>) {
     let directory = root.join("apis/group").join(Uuid::new_v4().to_string());
     fs::create_dir_all(&directory).unwrap();
     let scope = directory.join(CASE_SCOPE);
-    let index = ScopeIndex {
+    let index: ScopeIndex = ScopeIndex {
         schema: SCOPE_SCHEMA.into(),
         run_relpath: "../../..".into(),
         scope: ScopeKind::Case {

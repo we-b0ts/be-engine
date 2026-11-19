@@ -13,9 +13,17 @@ pub fn information(state: &RewriteState, id: Uuid) -> Result<SourceInformation> 
     crate::dependency_index::recording::authenticate(&root)?;
     let central = crate::dependency_index::recording::dependency_path(&root);
     let stamp = crate::dependency_index::FileStamp::read_native(&central)?;
+    let logical_bound = crate::dependency_index::scoped::selected_bytes(&central)?;
     let mut locations = Vec::new();
     let mut count = 0_u64;
     for file in &manifest.files {
+        if let Some((records, matches)) =
+            crate::dependency_index::scoped::select_original_scope(&root, file, id)?
+        {
+            count += records;
+            locations.extend(matches);
+            continue;
+        }
         let path = Path::new(&file.path);
         if !path.file_name().is_some_and(|name| {
             name == crate::dependency_index::scoped::CASE_SCOPE
@@ -23,7 +31,7 @@ pub fn information(state: &RewriteState, id: Uuid) -> Result<SourceInformation> 
         }) {
             continue;
         }
-        let selected = scope::read(&root, file, id, stamp.size)?;
+        let selected = scope::read(&root, file, id, logical_bound)?;
         count += selected.count;
         locations.extend(selected.locations);
     }

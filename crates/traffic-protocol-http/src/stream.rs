@@ -1,4 +1,4 @@
-//! Byte-range timing evidence for a bounded HTTP dependency response stream.
+//! Byte-range timing evidence for an HTTP dependency response stream.
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -36,10 +36,6 @@ impl ResponseStream {
         ensure!(
             matches!(self.version, 1 | 2),
             "unsupported HTTP stream evidence version"
-        );
-        ensure!(
-            self.chunks.len() <= 10_000,
-            "HTTP stream exceeds chunk evidence limit"
         );
         let mut offset = 0;
         let mut at_ms = self.headers_ms;

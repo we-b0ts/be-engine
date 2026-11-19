@@ -1,4 +1,4 @@
-//! Bounded finite HTTP/1 framing and transfer decoding.
+//! Finite HTTP/1 framing and transfer decoding.
 use super::*;
 use crate::headers::HeaderSnapshot;
 use bytes::BytesMut;
@@ -8,7 +8,6 @@ use traffic_protocol::connection::ConnectionIo;
 pub(super) struct Reader {
     pub io: Box<dyn ConnectionIo>,
     buffer: BytesMut,
-    limit: usize,
 }
 
 pub(super) struct RequestHead {
@@ -18,24 +17,16 @@ pub(super) struct RequestHead {
 }
 
 impl Reader {
-    pub fn new(io: Box<dyn ConnectionIo>, limit: usize) -> Self {
+    pub fn new(io: Box<dyn ConnectionIo>) -> Self {
         Self {
             io,
             buffer: BytesMut::new(),
-            limit,
         }
     }
 
     async fn read_more(&mut self) -> Result<bool> {
         let mut bytes = [0; 8192];
         let length = self.io.read(&mut bytes).await?;
-        ensure!(
-            self.buffer
-                .len()
-                .checked_add(length)
-                .is_some_and(|size| size <= self.limit.saturating_add(65536)),
-            "HTTP frame exceeds the byte limit"
-        );
         self.buffer.extend_from_slice(&bytes[..length]);
         Ok(length > 0)
     }
@@ -65,7 +56,6 @@ impl Reader {
     }
 
     async fn take(&mut self, length: usize) -> Result<Bytes> {
-        ensure!(length <= self.limit, "HTTP body exceeds the byte limit");
         while self.buffer.len() < length {
             ensure!(self.read_more().await?, "HTTP body ended before completion");
         }
@@ -93,11 +83,8 @@ impl Reader {
             let _ = self.buffer.split_to(offset);
             let size = usize::try_from(size)?;
             ensure!(
-                output
-                    .len()
-                    .checked_add(size)
-                    .is_some_and(|length| length <= self.limit),
-                "HTTP chunked body exceeds the byte limit"
+                output.len().checked_add(size).is_some(),
+                "HTTP chunked body length overflow"
             );
             output.extend_from_slice(&self.take(size).await?);
             ensure!(
@@ -222,10 +209,6 @@ impl Reader {
                 self.body(&headers).await?
             } else {
                 while self.read_more().await? {}
-                ensure!(
-                    self.buffer.len() <= self.limit,
-                    "HTTP body exceeds the byte limit"
-                );
                 self.buffer.split().freeze()
             };
             return Ok(ResponseMessage {

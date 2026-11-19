@@ -543,6 +543,14 @@ impl traffic_engine::coordination::Coordinator for WorkflowCoordinator {
     ) -> anyhow::Result<traffic_engine::coordination::FrozenAttribution> {
         freeze_dependency_attribution(target, source, run)
     }
+    fn freeze_for_replay(
+        &self,
+        target: Option<&std::path::Path>,
+        source: &std::path::Path,
+        run: &str,
+    ) -> anyhow::Result<traffic_engine::coordination::FrozenAttribution> {
+        dependency_review::freeze_dependency_attribution_for_replay(target, source, run)
+    }
     fn identity(
         &self,
         target: &std::path::Path,

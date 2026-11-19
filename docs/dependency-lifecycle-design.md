@@ -422,7 +422,7 @@ API 实现者可以在待归属调查期间继续其他工作，不等待全批�
 - 多个 attempt 不能拼成整批通过；进程触发边界不同比较明确不成立，不用模糊规则配平。
 - 成功、失败、超时和中断的 API 信息均包含全部可查询候选，事实与猜测分离，位置、类型、单位、状态和下一步动作一致。
 
-产品实现完成后执行仓库要求的 cargo fmt --check、cargo test、cargo clippy --all-targets -- -D warnings 与 CODE_ORG_BASE=origin/master 代码组织检查。设计阶段先检查契约一致性、证据闭合、模块唯一职责和新格式切换边界。
+产品实现完成后执行仓库要求的 cargo fmt --check、cargo test、cargo clippy --all-targets -- -D warnings 与 CODE_ORG_BASE=origin/main 代码组织检查。设计阶段先检查契约一致性、证据闭合、模块唯一职责和新格式切换边界。
 
 ## Replay 性能设计与验收
 

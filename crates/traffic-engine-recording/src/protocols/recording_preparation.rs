@@ -1,65 +1,21 @@
-//! Application composition of native indexes and portable Source report projections.
-use super::replay::source::preparation::ReportPreparation;
+//! Application composition of capture policy and provider validation.
 use crate::recorder::{Recorder, preparation::SourcePreparation};
 use anyhow::Result;
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use traffic_protocol::connection::NativeFuture;
+use std::sync::Arc;
 
 struct Preparation {
-    rules: Vec<crate::BackgroundDependencyRuleConfig>,
-    report: Option<Arc<ReportPreparation>>,
     evidence: Arc<traffic_protocol::evidence::EvidenceRegistry>,
 }
 
 pub fn strict(
     evidence: Arc<traffic_protocol::evidence::EvidenceRegistry>,
 ) -> Arc<dyn SourcePreparation> {
-    Arc::new(Preparation {
-        rules: Vec::new(),
-        report: None,
-        evidence,
-    })
+    Arc::new(Preparation { evidence })
 }
 
 impl SourcePreparation for Preparation {
-    fn evidence(&self) -> &traffic_protocol::evidence::EvidenceRegistry {
-        &self.evidence
-    }
     fn safety_issue(&self, value: &serde_json::Value) -> Option<String> {
         self.evidence.recording_safety_issue(value)
-    }
-    fn validate_record(&self, value: &serde_json::Value) -> Result<()> {
-        super::replay::source::validate_index_record(value)
-    }
-    fn indexes<'a>(&'a self, run: &'a Path) -> NativeFuture<'a, Vec<PathBuf>> {
-        let run = run.to_owned();
-        let rules = self.rules.clone();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                crate::api_trigger::seal(&run, &rules)?;
-                Ok([
-                    crate::api_trigger::MYSQL_TRANSACTION_FRAGMENT,
-                    ".mysql-ownership.json",
-                ]
-                .into_iter()
-                .map(|name| run.join(name))
-                .filter(|path| path.is_file())
-                .collect())
-            })
-            .await?
-        })
-    }
-    fn global_report<'a>(&'a self, run: &'a Path) -> NativeFuture<'a, ()> {
-        Box::pin(async move {
-            if let Some(report) = &self.report {
-                crate::replay::report::global_evidence::preparation::prewarm(run, report.clone())
-                    .await?;
-            }
-            Ok(())
-        })
     }
 }
 
@@ -87,16 +43,7 @@ impl Recorder {
             config.process_dependency_tasks.clone(),
         )
         .await?;
-        let rules = config.process_owned_dependencies.clone();
-        self.source_preparation = Arc::new(Preparation {
-            evidence: Arc::new(providers.evidence().clone()),
-            report: Some(Arc::new(ReportPreparation::new(
-                rules.clone(),
-                config.global_projection_policy.as_deref(),
-                providers,
-            )?)),
-            rules,
-        });
+        self.source_preparation = strict(Arc::new(providers.evidence().clone()));
         Ok(self)
     }
 }

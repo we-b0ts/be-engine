@@ -151,11 +151,17 @@ pub(crate) async fn prepare_case<P: ReplayProtocolSet>(
         )
     };
     let path = recording.dependencies_path.clone();
-    let inventory = deferred
-        .files
-        .get(case_id)
-        .context("case dependency index missing")?
-        .clone();
+    let Some(inventory) = deferred.files.get(case_id).cloned() else {
+        ensure!(
+            state
+                .lock()
+                .await
+                .case_execution_plans
+                .contains_key(case_id),
+            "Case has no recorded dependency stream or execution plan"
+        );
+        return Ok(());
+    };
     let reader = deferred.reader.clone();
     let read_path = path.clone();
     let started = std::time::Instant::now();

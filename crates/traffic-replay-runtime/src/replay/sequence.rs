@@ -2,9 +2,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::dependency_index::recording::SourceEventIndex;
 use anyhow::Result;
 use traffic_replay::SequenceCatalog;
-use traffic_replay::SequenceRuntime;
+use traffic_replay::{SequencePlan, SequenceRuntime};
 
 pub(super) use traffic_replay::request_wait::MissingDependency;
 
@@ -112,10 +113,31 @@ impl<P: super::ReplayProtocolSet> super::RuntimeState<P> {
 mod run;
 pub(super) use run::RunBindings;
 
-pub(super) fn load(source: &Path) -> Result<Option<Arc<SequenceCatalog>>> {
+#[derive(Debug)]
+pub(super) enum Source {
+    Indexed(SourceEventIndex),
+    Inline(Arc<SequenceCatalog>),
+}
+
+impl Source {
+    pub(super) fn scope(
+        &self,
+        dependencies: impl IntoIterator<Item = u64>,
+    ) -> Result<Arc<SequencePlan>> {
+        match self {
+            Self::Indexed(index) => SequencePlan::compile_recorded(index.selected(dependencies)?),
+            Self::Inline(catalog) => catalog.scope(dependencies),
+        }
+    }
+}
+
+pub(super) fn load(source: &Path) -> Result<Option<Source>> {
     if crate::dependency_index::recording::root(source).is_none() {
         return Ok(None);
     }
+    if let Some(index) = crate::dependency_index::recording::event_index_for_replay(source)? {
+        return Ok(Some(Source::Indexed(index)));
+    }
     let records = crate::dependency_index::recording::events(source)?;
-    SequenceCatalog::try_prepare(records).map(Some)
+    SequenceCatalog::try_prepare(records).map(|catalog| Some(Source::Inline(catalog)))
 }

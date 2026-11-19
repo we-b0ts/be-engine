@@ -128,6 +128,7 @@ pub(super) fn extend(
     windows: &Windows,
     unowned: Vec<Frame>,
     defaults: &mut BTreeMap<Uuid, DependencyOwner>,
+    open: fn(&Path) -> Result<crate::dependency_index::RecordStream>,
 ) -> Result<()> {
     let connections: BTreeSet<_> = unowned
         .iter()
@@ -151,7 +152,7 @@ pub(super) fn extend(
         if !path.is_file() {
             continue;
         }
-        let mut stream = crate::dependency_index::RecordStream::open(&path)?;
+        let mut stream = open(&path)?;
         while let Some((_, bytes)) = stream.next()? {
             if bytes.iter().all(u8::is_ascii_whitespace) {
                 continue;

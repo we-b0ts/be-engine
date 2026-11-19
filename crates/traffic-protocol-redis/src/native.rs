@@ -41,12 +41,36 @@ impl NativeProtocol for Native {
 
     fn report_summary(&self, exchange: &RecordedExchange) -> Result<Value> {
         let Some(request) = exchange.request() else {
+            if let Some(structure) = exchange
+                .response
+                .stored()
+                .and_then(|source| source.source_structure())
+            {
+                return Ok(json!({"notification":structure}));
+            }
             return Ok(json!({"notification":exchange.response.project()?.structure}));
         };
         let request = request.project()?;
         Ok(
             json!({"command":request.structure["command"],"database":request.structure["database"],"arguments":request.structure["arguments"]}),
         )
+    }
+
+    fn recorded_emission(
+        &self,
+        metadata: &Value,
+        response: Arc<dyn traffic_protocol::message::MessageEncoder>,
+    ) -> Result<Option<RecordedExchange>> {
+        if metadata["event_type"] == "redis_pub_sub_push" {
+            return notification::describe(metadata, response).map(Some);
+        }
+        Ok(None)
+    }
+
+    fn recorded_emission_structure(&self, metadata: &Value) -> Option<Value> {
+        metadata["notification_kind"]
+            .as_str()
+            .map(|kind| json!({"kind":kind}))
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>> {

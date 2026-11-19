@@ -38,12 +38,9 @@ async fn active_case_and_associated_shutdown_scope_keep_distinct_frozen_ownershi
     assert_eq!(rows[1]["capture"]["phase"], "shutdown");
     assert_eq!(rows[2]["capture"]["phase"], "runtime");
     let root = &state.recorder().run_dir;
-    let scope: ScopeIndex = serde_json::from_slice(
-        &tokio::fs::read(root.join("indexes/shutdown-scope.json"))
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let scope =
+        crate::dependency_index::scoped::read_index(&root.join("indexes/shutdown-scope.json"))
+            .unwrap();
     assert_eq!(scope.locations.len(), 1);
     let manifest: RecordingManifest = serde_json::from_slice(
         &tokio::fs::read(root.join("dependency-manifest.json"))
