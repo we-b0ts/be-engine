@@ -40,7 +40,7 @@ pub(in crate::replay) async fn run<P: ReplayProtocolSet>(
         .await
         .context("dependency prefetch worker failed")?;
         if let Err(error) = result {
-            warn!(%error, "dependency prefetch failed; begin will validate again");
+            warn!(%error, "dependency prefetch failed; Case preparation will retry");
         }
     }
     Ok(())

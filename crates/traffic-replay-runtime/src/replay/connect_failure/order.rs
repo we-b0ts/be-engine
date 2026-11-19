@@ -64,7 +64,7 @@ pub(super) async fn prepare(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let bytes = crate::dependency_index::scoped::read_bytes(path)?;
+    let bytes = crate::dependency_index::scoped::read_bytes_for_replay(path)?;
     let mut lines = tokio::io::BufReader::new(bytes.as_slice()).lines();
     let mut normal_count = 0usize;
     while let Some(line) = lines.next_line().await? {

@@ -33,7 +33,7 @@ mod sse;
 #[test]
 fn socketio_close_limit_keeps_only_successfully_sealed_prior_cases_usable() {
     use crate::active_case::SOCKETIO_CLOSE_TAIL_TIMEOUT;
-    let case = uuid::Uuid::new_v4();
+    let case = "case-1";
     let mut report = serde_json::json!({
         "status": "completed",
         "published_cases": 2,
@@ -42,10 +42,7 @@ fn socketio_close_limit_keeps_only_successfully_sealed_prior_cases_usable() {
     });
     assert!(super::usable_recording(&report, Some(case)));
     assert!(!super::usable_recording(&report, None));
-    assert!(!super::usable_recording(
-        &report,
-        Some(uuid::Uuid::new_v4())
-    ));
+    assert!(!super::usable_recording(&report, Some("case-2")));
     report["published_cases"] = 0.into();
     assert!(!super::usable_recording(&report, Some(case)));
     report["published_cases"] = 2.into();

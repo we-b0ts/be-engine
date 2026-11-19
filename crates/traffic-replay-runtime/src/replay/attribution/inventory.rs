@@ -18,6 +18,7 @@ pub(super) fn effective(
         manifest,
         decisions,
         crate::protocols::default_providers().evidence(),
+        true,
     )
 }
 
@@ -26,6 +27,7 @@ pub(super) fn effective_with_evidence(
     manifest: &RecordingManifest,
     decisions: &BTreeMap<Uuid, DependencyOwner>,
     evidence: &traffic_protocol::evidence::EvidenceRegistry,
+    verify: bool,
 ) -> Result<SemanticInventory> {
     let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
         "mandatory-scope-coverage/v5",
@@ -35,10 +37,12 @@ pub(super) fn effective_with_evidence(
     ))?);
     let directory = crate::dependency_index::store::cache_directory(root);
     crate::dependency_index::store::private_directory(&directory)?;
-    let cache = directory.join(format!(
-        "semantic-inventory-v5-{}.json",
-        key.trim_start_matches("sha256:")
-    ));
+    let key = key.trim_start_matches("sha256:");
+    let cache = directory.join(if verify {
+        format!("semantic-inventory-v5-{key}.json")
+    } else {
+        format!("semantic-inventory-replay-v5-{key}.json")
+    });
     if let Ok(inventory) = crate::dependency_index::store::read_json::<SemanticInventory>(&cache)
         && inventory.total_mandatory == manifest.semantic_inventory.total_mandatory
         && inventory.by_owner_kind.values().sum::<u64>() == inventory.total_mandatory
@@ -49,7 +53,12 @@ pub(super) fn effective_with_evidence(
     let locations = original_locations(root, manifest)?;
     // Closure needs one fact at a time, not a second full-ledger FileIndex
     // alongside the protocol-owned paged Global inventories.
-    let mut input = crate::dependency_index::RecordStream::open(&root.join("dependencies.jsonl"))?;
+    let path = root.join("dependencies.jsonl");
+    let mut input = if verify {
+        crate::dependency_index::RecordStream::open(&path)?
+    } else {
+        crate::dependency_index::RecordStream::open_for_replay(&path)?
+    };
     let mut inventory = SemanticInventory::default();
     let mut captured = SemanticInventory::default();
     let mut identities = BTreeSet::new();
@@ -111,7 +120,7 @@ pub(super) fn effective_with_evidence(
             scope_matches(scope, &capture.attribution)
                 && location.exchange_id == capture.exchange_id
                 && location.effect_index == capture.effect_index
-                && same_location(location, &record),
+                && same_location(location, &record, verify),
             "Source scope does not identify its original physical effect"
         );
         captured.observe_mandatory(
@@ -223,7 +232,7 @@ fn original_locations(
             sealed.contains(relative.as_ref()),
             "original scope is absent from the recording seal"
         );
-        let scope: ScopeIndex = serde_json::from_slice(&std::fs::read(&path)?)?;
+        let scope = scoped::read_index_with_epoch(&path, manifest.run_epoch)?;
         ensure!(
             scope.schema == SCOPE_SCHEMA && scope_key(&scope.scope) == scope_key(&expected),
             "Source scope identity disagrees with its manifest"
@@ -248,11 +257,11 @@ fn original_locations(
     Ok(locations)
 }
 
-fn same_location(scope: &ScopeRecordLocation, record: &RecordLocation) -> bool {
+fn same_location(scope: &ScopeRecordLocation, record: &RecordLocation, verify: bool) -> bool {
     scope.line == record.line
         && scope.offset == record.offset
         && scope.length == record.length
-        && scope.sha256 == record.sha256
+        && (!verify || scope.sha256 == record.sha256)
 }
 fn scope_key(scope: &ScopeKind) -> String {
     match scope {

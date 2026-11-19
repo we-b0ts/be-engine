@@ -2,7 +2,6 @@
 use super::*;
 use traffic_model::capture::capture_body;
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn record_exchange(
     connection_id: Uuid,
     context: &ConnectionContext,
@@ -10,7 +9,6 @@ pub(super) async fn record_exchange(
     response_kind: RedisFrameKind,
     response: &[u8],
     outcome: DependencyExchangeOutcome,
-    max_frame_bytes: usize,
 ) -> Result<()> {
     let subscription_replay_safe = if outcome.is_client_terminated()
         || outcome.is_server_terminated()
@@ -49,14 +47,12 @@ pub(super) async fn record_exchange(
     let args = pending
         .recorded_args
         .iter()
-        .map(|value| capture_body(value, max_frame_bytes))
+        .map(|value| capture_body(value, value.len()))
         .collect::<Vec<_>>();
-    let response = capture_body(response, max_frame_bytes);
+    let response = capture_body(response, response.len());
     let terminal_quit = is_terminal_quit(&pending.command);
     let replay_safe = pending.replay_safe
         && subscription_replay_safe
-        && !response.truncated
-        && args.iter().all(|argument| !argument.truncated)
         && (response_kind != RedisFrameKind::Other
             || outcome.is_client_terminated()
             || outcome.is_server_terminated()
@@ -142,7 +138,6 @@ pub(super) async fn record_connection(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn record_termination(
     connection_id: Uuid,
     context: &ConnectionContext,
@@ -150,7 +145,6 @@ pub(super) async fn record_termination(
     response: &[u8],
     termination: &ConnectionTermination,
     healthy: bool,
-    max_frame_bytes: usize,
 ) -> Result<bool> {
     exchange.capture.abort_response().await?;
     let terminal = termination.outcome_since(exchange.started);
@@ -181,7 +175,6 @@ pub(super) async fn record_termination(
         RedisFrameKind::Other,
         response,
         outcome,
-        max_frame_bytes,
     )
     .await?;
     Ok(complete)

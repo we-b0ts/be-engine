@@ -1,8 +1,12 @@
 //! One recording identity and observation-ordered dependency/event allocation.
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
+use traffic_model::recording::identity::IdentityKind;
 use traffic_model::trace::RecordedEvent;
 use uuid::Uuid;
 
@@ -13,11 +17,12 @@ struct Clock {
     recording_id: Uuid,
     started: Instant,
     sequences: Mutex<Sequences>,
+    cases: AtomicU64,
+    connections: AtomicU64,
 }
 
 #[derive(Default)]
 struct Sequences {
-    dependency: u64,
     event: u64,
 }
 
@@ -27,6 +32,8 @@ impl Default for RecordingClock {
             recording_id: Uuid::new_v4(),
             started: Instant::now(),
             sequences: Mutex::new(Sequences::default()),
+            cases: AtomicU64::new(0),
+            connections: AtomicU64::new(0),
         }))
     }
 }
@@ -36,14 +43,26 @@ impl RecordingClock {
         self.0.recording_id
     }
 
-    /// Every owner uses the same allocator, including calls still lacking an owner.
+    pub fn next_case_id(&self) -> Uuid {
+        self.next_local(IdentityKind::Case, &self.0.cases)
+    }
+
+    pub fn next_connection_id(&self) -> Uuid {
+        self.next_local(IdentityKind::Connection, &self.0.connections)
+    }
+
+    fn next_local(&self, kind: IdentityKind, counter: &AtomicU64) -> Uuid {
+        let current = counter
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .expect("recording-local identity exhausted");
+        kind.bridge(self.recording_id(), current + 1)
+    }
+
+    /// Reserve an identity for an observation written only to the debug ledger.
     pub fn next_dependency(&self) -> Result<u64> {
-        let mut sequences = self.0.sequences.lock().expect("recording clock poisoned");
-        sequences.dependency = sequences
-            .dependency
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("recording dependency sequence exhausted"))?;
-        Ok(sequences.dependency)
+        Ok(self.event(())?.sequence)
     }
 
     /// Reserve the request identity and its first event in one observation order.
@@ -52,23 +71,18 @@ impl RecordingClock {
         build: impl FnOnce(u64) -> Event,
     ) -> Result<(u64, RecordedEvent<Event>)> {
         let mut sequences = self.0.sequences.lock().expect("recording clock poisoned");
-        let dependency = sequences
-            .dependency
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("recording dependency sequence exhausted"))?;
         let sequence = sequences
             .event
             .checked_add(1)
             .ok_or_else(|| anyhow!("recording event sequence exhausted"))?;
         let offset_micros = self.0.started.elapsed().as_micros().try_into()?;
-        sequences.dependency = dependency;
         sequences.event = sequence;
         Ok((
-            dependency,
+            sequence,
             RecordedEvent {
                 sequence,
                 offset_micros,
-                event: build(dependency),
+                event: build(sequence),
             },
         ))
     }

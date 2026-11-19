@@ -3,7 +3,9 @@ pub mod response;
 use crate::events::{RedisConnectionEvent, RedisExchangeEvent, RedisPubSubPushEvent};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use traffic_model::{DependencyExchangeOutcome, recording::ProtocolRef};
-use traffic_protocol::capture::{CaptureEvidence, CaptureFacts, SemanticRequirement};
+use traffic_protocol::capture::{
+    CaptureEvidence, CaptureFacts, RecordingLayout, RecordingScalar, SemanticRequirement,
+};
 
 impl CaptureEvidence for RedisConnectionEvent {
     fn event_type(&self) -> &'static str {
@@ -32,7 +34,21 @@ impl CaptureEvidence for RedisExchangeEvent {
             ProtocolRef::connection("redis", self.connection_id, self.sequence),
             self.outcome.label(),
             complete,
-        );
+        )
+        .with_recording_layout(RecordingLayout {
+            protocol: "redis",
+            variant: "",
+            event_type: self.event_type(),
+            fields: &[
+                ("sequence", RecordingScalar::Integer),
+                ("database", RecordingScalar::Integer),
+                ("resp_version", RecordingScalar::Integer),
+                ("username", RecordingScalar::Text),
+            ],
+            request_fields: &["command", "args"],
+            response_fields: &["response"],
+            use_dependency_id: true,
+        });
         facts.outcome = self.outcome;
         let successful_control = self.outcome == DependencyExchangeOutcome::Response
             && self.response_kind != "error"

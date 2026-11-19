@@ -165,6 +165,8 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
         let request = |command| {
             rows.iter().find(|row| row["command"].as_str() == Some(command)).unwrap()["capture"]["sequence"].as_u64().unwrap()
         };
+        let push = rows.iter().find(|row| row["event_type"] == "redis_pub_sub_push").unwrap();
+        assert_eq!(push["source_after_id"], request("SUBSCRIBE"));
         let start = |id| events.iter().find(|event| {
             matches!(event.event, traffic_model::trace::CaptureEvent::Started { dependency_sequence, .. } if dependency_sequence == id)
         }).unwrap().sequence;
@@ -173,6 +175,8 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
         }).unwrap().sequence;
         let blocked = request("BLPOP");
         let get = request("GET");
+        assert_eq!(start(blocked), blocked);
+        assert_eq!(start(get), get);
         assert!(start(blocked) < start(get) && start(get) < end(get) && end(get) < end(blocked));
         let primary = events.iter().filter_map(|event| {
             if let traffic_model::trace::CaptureEvent::PrimaryBoundary { case_id, boundary } = event.event

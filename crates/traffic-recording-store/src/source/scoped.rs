@@ -9,7 +9,8 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
-use traffic_model::recording::{SCOPE_SCHEMA, ScopeIndex};
+use traffic_model::recording::{SCOPE_SCHEMA, ScopeIndex, ScopeKind, identity::IdentityKind};
+use uuid::Uuid;
 
 pub const CASE_SCOPE: &str = "dependency-scope.json";
 
@@ -96,11 +97,7 @@ pub fn resolve(path: &Path) -> Result<Source> {
             }
         }
     }
-    let scope: ScopeIndex = serde_json::from_slice(&fs::read(&view)?)?;
-    ensure!(
-        scope.schema == SCOPE_SCHEMA,
-        "unsupported dependency scope schema; record with the current engine"
-    );
+    let scope = read_wire_index(&view)?;
     let parent = view.parent().context("dependency scope has no directory")?;
     let root = fs::canonicalize(parent.join(&scope.run_relpath))?;
     ensure!(
@@ -110,6 +107,9 @@ pub fn resolve(path: &Path) -> Result<Source> {
     );
     let path = super::recording::dependency_path(&root);
     let ledger = FileStamp::read_native(&path)?;
+    let partition_records = crate::partitions::is_directory(&path)
+        .then(|| crate::partitions::record_count(ledger.size))
+        .transpose()?;
     let mut end = 0;
     let mut line = 0;
     let mut locations = Vec::with_capacity(scope.locations.len());
@@ -119,8 +119,8 @@ pub fn resolve(path: &Path) -> Result<Source> {
                 && item.offset >= end
                 && item.line > line
                 && item.offset.checked_add(item.length).is_some_and(|n| {
-                    if crate::partitions::is_directory(&path) {
-                        item.line as u64 <= ledger.size / crate::partitions::ENTRY_BYTES
+                    if let Some(records) = partition_records {
+                        item.line as u64 <= records
                     } else {
                         n <= ledger.size
                     }
@@ -240,13 +240,13 @@ pub fn case_directory(path: &Path) -> Result<PathBuf> {
     let Some(view) = view_path(path) else {
         return Ok(parent.into());
     };
-    let index: ScopeIndex = serde_json::from_slice(&fs::read(&view)?)?;
-    let traffic_model::recording::ScopeKind::Case { case_id } = index.scope else {
+    let index = read_wire_index(&view)?;
+    let ScopeKind::Case { case_id } = index.scope else {
         anyhow::bail!("dependency scope is not Case owned");
     };
     if parent
         .file_name()
-        .is_some_and(|name| name.to_string_lossy() == case_id.to_string())
+        .is_some_and(|name| name == case_id.as_str())
     {
         return Ok(parent.into());
     }
@@ -256,6 +256,9 @@ pub fn case_directory(path: &Path) -> Result<PathBuf> {
             .join(index.run_relpath),
     )?;
     let (_, manifest) = super::recording::manifest(&root)?;
+    let case_id = IdentityKind::Case
+        .parse(manifest.run_epoch, &case_id)
+        .context("invalid Case scope identity")?;
     let input = manifest
         .inputs
         .into_iter()
@@ -264,10 +267,57 @@ pub fn case_directory(path: &Path) -> Result<PathBuf> {
     Ok(root.join(input.path))
 }
 
+/// Project an on-disk Case ID into the UUID used by attribution and Replay.
+pub fn read_index(path: &Path) -> Result<ScopeIndex> {
+    let index = read_wire_index(path)?;
+    let root = path
+        .parent()
+        .context("scope has no directory")?
+        .join(&index.run_relpath);
+    index.try_map_case_id(|id| {
+        if let Ok(id) = id.parse::<Uuid>() {
+            return Ok(id);
+        }
+        let epoch = crate::partitions::recording_id(&super::recording::dependency_path(&root))?;
+        IdentityKind::Case
+            .parse(epoch, &id)
+            .context("invalid Case scope identity")
+    })
+}
+
+pub fn read_index_with_epoch(path: &Path, epoch: Uuid) -> Result<ScopeIndex> {
+    read_wire_index(path)?.try_map_case_id(|id| {
+        IdentityKind::Case
+            .parse(epoch, &id)
+            .context("invalid Case scope identity")
+    })
+}
+
+fn read_wire_index(path: &Path) -> Result<ScopeIndex<String>> {
+    let index: ScopeIndex<String> = serde_json::from_slice(&fs::read(path)?)?;
+    ensure!(
+        index.schema == SCOPE_SCHEMA,
+        "unsupported dependency scope schema; record with the current engine"
+    );
+    Ok(index)
+}
+
 pub fn read_bytes(path: &Path) -> Result<Vec<u8>> {
+    read_bytes_with_verification(path, true)
+}
+
+pub fn read_bytes_for_replay(path: &Path) -> Result<Vec<u8>> {
+    read_bytes_with_verification(path, false)
+}
+
+fn read_bytes_with_verification(path: &Path, verify: bool) -> Result<Vec<u8>> {
     let source = resolve(path)?;
     if super::compact::is_compact(&source.path) {
-        let mut stream = super::RecordStream::open(path)?;
+        let mut stream = if verify {
+            super::RecordStream::open(path)?
+        } else {
+            super::RecordStream::open_for_replay(path)?
+        };
         let mut bytes = Vec::new();
         while let Some((_, record)) = stream.next()? {
             bytes.extend_from_slice(record);
@@ -291,11 +341,13 @@ pub fn read_bytes(path: &Path) -> Result<Vec<u8>> {
         bytes.resize(start + usize::try_from(location.length)?, 0);
         file.read_exact(&mut bytes[start..])?;
         ensure!(
-            super::digest(&bytes[start..]) == location.sha256,
+            !verify || super::digest(&bytes[start..]) == location.sha256,
             "central dependency record checksum mismatch"
         );
     }
-    source.validate()?;
+    if verify {
+        source.validate()?;
+    }
     Ok(bytes)
 }
 

@@ -231,7 +231,7 @@ pub(super) async fn load_effective(
         let evidence = evidence.clone();
         let references =
             tokio::task::spawn_blocking(move || -> Result<BTreeSet<RecordedReference>> {
-                let mut input = crate::dependency_index::RecordStream::open(&path)?;
+                let mut input = crate::dependency_index::RecordStream::open_for_replay(&path)?;
                 let mut references = BTreeSet::new();
                 while let Some((_, raw)) = input.next()? {
                     if raw.iter().all(u8::is_ascii_whitespace) {

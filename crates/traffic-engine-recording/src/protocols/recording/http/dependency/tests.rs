@@ -88,6 +88,7 @@ fn event() -> HttpExchangeEvent {
         request_started_at: Utc::now(),
         outcome: DependencyExchangeOutcome::Response,
         client_addr: None,
+        upstream_addr: None,
         scheme: "http".into(),
         method: "GET".into(),
         uri: "/json".into(),

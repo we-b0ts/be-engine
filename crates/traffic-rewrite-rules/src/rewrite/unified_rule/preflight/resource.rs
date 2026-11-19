@@ -244,7 +244,23 @@ pub fn prepare(
         .case_source
         .as_ref()
         .context("resource rule has no Source scope")?;
-    let (recording, files) = crate::dependency_index::recording_files(case_source)?;
+    let (recording, files) =
+        if let Some(root) = crate::dependency_index::recording::root(case_source) {
+            let (recording, inputs) = crate::dependency_index::recording::case_inputs(&root)?;
+            (
+                recording,
+                inputs
+                    .into_iter()
+                    .map(|(id, path)| (Some(id), path))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            let (recording, files) = crate::dependency_index::recording_files(case_source)?;
+            (
+                recording,
+                files.into_iter().map(|path| (None, path)).collect(),
+            )
+        };
     ensure!(
         files.len() <= 100_000,
         "resource Source case inventory exceeds bounds"
@@ -262,7 +278,7 @@ pub fn prepare(
         unavailable_executions: BTreeMap::new(),
     };
     let mut foreign: BTreeMap<String, BTreeMap<String, PathBuf>> = BTreeMap::new();
-    for file in files {
+    for (id, file) in files {
         let mut hit = ids.contains(crate::policy::GLOBAL_JSON_ID)
             || ids.contains(crate::value_contract::time::automatic::RULE_ID)
             || ids.contains("global.mysql")
@@ -281,9 +297,10 @@ pub fn prepare(
             continue;
         }
         let directory = file.parent().context("resource case has no directory")?;
-        let case = directory
-            .file_name()
-            .and_then(|n| n.to_str())
+        let id = id.map(|id| id.to_string());
+        let case = id
+            .as_deref()
+            .or_else(|| directory.file_name().and_then(|name| name.to_str()))
             .context("invalid resource Case id")?;
         let request = bundle.request(&directory.join("request.json"))?;
         let method = request["method"]

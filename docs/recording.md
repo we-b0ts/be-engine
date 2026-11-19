@@ -705,22 +705,49 @@ user. The reserved Source UID cannot own recording artifacts.
 
 ## Rewrite handoff
 
-Finalization seals the input inventory, `events.tsv`, `events-push.tsv`, and the
-dependency and payload partitions in `dependency-manifest.json`. Both event
-journals use a shared recording-local sequence and monotonic microsecond offsets.
-The dependency partitions store Case traffic in `dependencies.tsv`, with process,
-push and unattributed traffic in separate files. The sealed row and event
-directories map logical dependency rows and event traces to their physical files.
-The dependency ledger stores each semantic exchange once. Large
-fields use a segment reference with byte offset, length and checksum. A field
-above 4 KiB is stored out of line. Segments roll over before the next value once
-they have reached 32 MiB, so a value that crosses the threshold stays together.
+Finalization seals the input inventory, the two event journals, and the
+dependency and payload partitions in `dependency-manifest.json`. Both
+`events.tsv` and `events-push.tsv` use a single recording-local sequence and
+monotonic microsecond offsets. Event rows start with `seq`, `offset_us` and
+the event type. Further columns depend on the event type. The first event's
+sequence identifies the dependency. Later events refer to that sequence.
 
-Case, startup, process and unattributed scopes reference the same logical ledger.
-Replay authenticates the sealed inventory and compiles each event plan using the
-traces for its selected dependency sequences.
-Scoped recordings publish portable startup, process and unattributed indexes
-under `indexes/`.
+The dependency partitions store Case traffic in `dependencies.tsv` and use
+separate files for process traffic, push traffic and unattributed traffic.
+Nonmatching observations, such as successful connection setup, use
+`observations.tsv`. They are available to route discovery and evidence readers.
+The row and event directories provide byte locations independent of partition
+order.
+
+Every dependency row has eleven tab-separated columns.
+
+```text
+seq  protocol  case_id  target_addr  client_addr  upstream_addr  conn_id  duration_ms  ext  request  response
+```
+
+Endpoints use `host:port`, with brackets for IPv6. Recording-local Case and
+connection IDs use independent counters. Case directories use
+`apis/<api>/case-<seq>/`. A Case ID shared by observation, admission and
+ownership is written once. The protocol declares its positional extension
+fields and the fields belonging to the request and response. The term table
+stores the declarations once. It also stores shared metadata and a UTC anchor
+for relative nanosecond clocks used by evidence. Portable readers can reconstruct
+the existing semantic evidence model from these fields.
+
+Request and response cells can contain encoded text, Base64, JSON, or a
+segment reference. Complete body values carry their encoding and data. A
+payload over 4 KiB is stored out of line and referenced by segment number, byte
+offset, and byte length. Segments roll over before the next value once they have
+reached 32 MiB. A value that crosses the threshold stays together. The dependency writer rejects truncated bodies.
+
+Replay prepares event plans from the selected dependency sequences. The
+ordinary Replay read path uses the persisted locations and validates their
+bounds. Explicit artifact verification and protected evidence readers use the
+seal and content identities.
+
+Scoped recordings publish startup, process and unattributed scope views under
+`indexes/`. Recordings with a separate notification stream defer Global
+index and report preparation. The unattributed lookup is built on demand.
 
 Fast Replay caps the recorded gaps before sequenced response headers, parts and
 completion. Requests and actual wire receipts still advance the Source cursor.

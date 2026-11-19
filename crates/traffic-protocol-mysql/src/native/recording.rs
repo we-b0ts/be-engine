@@ -77,6 +77,10 @@ impl CaptureOutput for RejectedOutput {
 }
 
 impl connection::CaptureHost for Host {
+    fn connection_id(&self) -> uuid::Uuid {
+        self.shared.connection_id()
+    }
+
     fn accept_tls(
         &self,
         io: Box<dyn ConnectionIo>,

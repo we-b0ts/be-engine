@@ -126,6 +126,24 @@ async fn recording_process_index_survives_copy_and_missing_pages_fall_back_local
         .await
         .unwrap();
     recorder.finish_run().await.unwrap();
+    assert!(
+        recorder
+            .run_dir
+            .join("indexes/unattributed-scope.json")
+            .is_file()
+    );
+    assert!(
+        recorder
+            .run_dir
+            .join("dependencies-unattributed.tsv")
+            .is_file()
+    );
+    assert!(
+        !recorder
+            .run_dir
+            .join("indexes/unattributed-dependencies")
+            .exists()
+    );
 
     let replay = temp.path().join("replay/.traffic-e2e");
     let copied = replay.join("local/artifacts/recordings/copied");

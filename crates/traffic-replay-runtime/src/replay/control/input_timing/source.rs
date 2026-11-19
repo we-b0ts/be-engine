@@ -58,7 +58,8 @@ pub(super) fn load(
             observe(raw)?;
         }
     } else {
-        let mut records = crate::dependency_index::RecordStream::open(&case.dependencies_path)?;
+        let mut records =
+            crate::dependency_index::RecordStream::open_for_replay(&case.dependencies_path)?;
         while let Some((_, raw)) = records.next()? {
             observe(raw)?;
         }

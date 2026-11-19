@@ -11,10 +11,12 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
+use traffic_model::recording::identity::IdentityKind;
 use traffic_model::recording::{
     COMPACT_RECORDING_SCHEMA, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest,
 };
 use traffic_model::trace::{CaptureEvent, RecordedEvent};
+use uuid::Uuid;
 
 pub fn supported_recording_schema(schema: &str) -> bool {
     schema == COMPACT_RECORDING_SCHEMA
@@ -45,12 +47,27 @@ pub fn manifest(path: &Path) -> Result<(PathBuf, RecordingManifest)> {
     );
     ensure!(manifest.sealed, "recording evidence is not sealed");
     ensure!(!manifest.run_id.is_empty(), "recording has no run identity");
+    let dependencies = dependency_path(&root);
     ensure!(
-        (manifest.schema == COMPACT_RECORDING_SCHEMA)
-            == partitions::is_directory(&dependency_path(&root)),
+        (manifest.schema == COMPACT_RECORDING_SCHEMA) == partitions::is_directory(&dependencies),
         "recording manifest and dependency storage format disagree"
     );
+    if manifest.schema == COMPACT_RECORDING_SCHEMA {
+        ensure!(
+            partitions::recording_id(&dependencies)? == manifest.run_epoch,
+            "dependency partition directory belongs to a different recording"
+        );
+    }
     Ok((root, manifest))
+}
+
+pub fn has_separated_messages(path: &Path) -> Result<bool> {
+    let (_, manifest) = manifest(path)?;
+    Ok(manifest.schema == COMPACT_RECORDING_SCHEMA
+        && manifest
+            .files
+            .iter()
+            .any(|file| file.path == partitions::PUSH_DEPENDENCIES && file.length > 0))
 }
 
 /// Merge the journals of a sealed recording in original Source order.
@@ -68,7 +85,7 @@ pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<C
     let decode = move |line: std::io::Result<String>| {
         let line = line?;
         if compact {
-            crate::format::decode_event(&line)
+            crate::event_format::decode_event(&line, manifest.run_epoch)
         } else {
             Ok(serde_json::from_str(&line)?)
         }
@@ -81,14 +98,33 @@ pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<C
 }
 
 pub fn event_index(path: &Path) -> Result<Option<SourceEventIndex>> {
+    open_event_index(path, true)
+}
+
+pub fn event_index_for_replay(path: &Path) -> Result<Option<SourceEventIndex>> {
+    open_event_index(path, false)
+}
+
+fn open_event_index(path: &Path, verify: bool) -> Result<Option<SourceEventIndex>> {
     let (root, manifest) = manifest(path)?;
     if manifest.schema == COMPACT_RECORDING_SCHEMA {
-        return SourceEventIndex::open(root).map(Some);
+        let index = if verify {
+            SourceEventIndex::open(root, manifest.run_epoch)?
+        } else {
+            SourceEventIndex::open_for_replay(root, manifest.run_epoch)?
+        };
+        return Ok(Some(index));
     }
     Ok(None)
 }
 
 pub fn cases(path: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
+    let (root, inputs) = case_inputs(path)?;
+    Ok((root, inputs.into_iter().map(|(_, scope)| scope).collect()))
+}
+
+/// Original input identities with their validated physical Case scopes.
+pub fn case_inputs(path: &Path) -> Result<(PathBuf, Vec<(Uuid, PathBuf)>)> {
     let path = fs::canonicalize(path)?;
     let (root, manifest) = manifest(&path)?;
     let root = fs::canonicalize(root)?;
@@ -119,10 +155,9 @@ pub fn cases(path: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
             );
             continue;
         }
+        let label = IdentityKind::Case.display(manifest.run_epoch, input.case_id);
         ensure!(
-            directory
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy() == input.case_id.to_string()),
+            directory.file_name().is_some_and(|n| n == label.as_str()),
             "recording Case directory does not match its identity"
         );
         let scope = super::scoped::case_path(&directory);
@@ -130,9 +165,9 @@ pub fn cases(path: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
             scope.is_file(),
             "recording Case lacks its declared dependency scope"
         );
-        paths.push(scope);
+        paths.push((input.case_id, scope));
     }
-    paths.sort();
+    paths.sort_unstable_by(|left, right| left.1.cmp(&right.1));
     Ok((root, paths))
 }
 
@@ -210,7 +245,11 @@ pub fn authenticate(path: &Path) -> Result<()> {
     let required = if manifest.schema == COMPACT_RECORDING_SCHEMA {
         partitions::FILES
             .into_iter()
-            .chain([partitions::DIRECTORY, INDEX])
+            .chain([
+                partitions::DIRECTORY,
+                INDEX,
+                crate::dependency_columns::FILE,
+            ])
             .chain(JOURNALS)
             .collect::<Vec<_>>()
     } else {

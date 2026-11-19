@@ -185,12 +185,7 @@ async fn selected_and_unselected_byte_tampering_cannot_refresh_any_fragment() {
         fixture.recorder.finish_run().await.unwrap();
         owner().assign_to(&fixture.recorder.run_dir).await.unwrap();
         let before = fixture.index_snapshots();
-        let physical = if label == b"first-case" {
-            "dependencies.tsv"
-        } else {
-            "dependencies-unattributed.tsv"
-        };
-        let central = fixture.recorder.run_dir.join(physical);
+        let central = fixture.recorder.run_dir.join("observations.tsv");
         let mut changed = fs::read(&central).unwrap();
         let position = changed
             .windows(label.len())

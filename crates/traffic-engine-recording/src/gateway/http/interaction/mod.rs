@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::Result;
 use bytes::Bytes;
 use chrono::Utc;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response, StatusCode, Uri, body::Incoming};
 use tokio::sync::{Notify, watch};
 use uuid::Uuid;
@@ -231,7 +231,7 @@ pub async fn handle(
         |pattern| resolve_case_group(&uri, &[pattern.to_owned()]),
     );
     let case = CaseContext {
-        id: Uuid::new_v4(),
+        id: state.recorder().capture.next_case_id(),
         rule_name: rule.name,
         uri_group: Some(group.directory),
     };
@@ -278,7 +278,7 @@ pub async fn handle(
                     .saturating_sub(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)),
             ),
         ),
-        Limited::new(body, state.config().recording.max_body_bytes).collect(),
+        body.collect(),
     )
     .await
     {
@@ -473,11 +473,7 @@ async fn dispatch(
         None
     };
     let (parts, body) = req.into_parts();
-    let bytes = Limited::new(body, session.state.config().recording.max_body_bytes)
-        .collect()
-        .await
-        .map_err(anyhow::Error::from_boxed)?
-        .to_bytes();
+    let bytes = body.collect().await?.to_bytes();
     let mut req = Request::from_parts(parts, Full::new(bytes));
     if let Some(upgrade) = upgrade {
         req.extensions_mut()
@@ -514,11 +510,7 @@ async fn passthrough(
     let downstream = upgraded.then(|| hyper::upgrade::on(&mut req));
     let (parts, body) = req.into_parts();
     let result = async {
-        let body = Limited::new(body, state.config().recording.max_body_bytes)
-            .collect()
-            .await
-            .map_err(anyhow::Error::from_boxed)?
-            .to_bytes();
+        let body = body.collect().await?.to_bytes();
         let body_is_empty = body.is_empty();
         let uri = transport::build_upstream_uri(&config.fallback_upstream, &parts.uri)?;
         let mut request = transport::build_upstream_request(

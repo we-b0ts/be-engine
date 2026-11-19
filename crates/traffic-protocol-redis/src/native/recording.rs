@@ -32,16 +32,16 @@ impl CaptureSession for Capture {
         host: Arc<dyn CaptureHost>,
     ) -> NativeFuture<'static, ()> {
         Box::pin(async move {
-            let connection_id = Uuid::new_v4();
-            let mut client = crate::BufferedReader::new(client, self.0.max_frame_bytes);
-            let mut upstream = crate::BufferedReader::new(upstream, self.0.max_frame_bytes);
+            let connection_id = host.connection_id();
+            let mut client = crate::BufferedReader::new(client, usize::MAX);
+            let mut upstream = crate::BufferedReader::new(upstream, usize::MAX);
             let mut session = CaptureSessionState {
                 resp_version: 2,
                 database: 0,
                 username: None,
                 subscriptions: Default::default(),
             };
-            let mut subscriptions = Subscriptions::<(u64, Instant)>::default();
+            let mut subscriptions = Subscriptions::<(u64, Option<u64>, Instant)>::default();
             let mut sequence = 0_u64;
             let mut pending = None;
             loop {
@@ -111,9 +111,9 @@ impl CaptureSession for Capture {
                             database: session.database,
                             username: session.username.clone(),
                             command: request.command.name.clone(),
-                            args: arguments.iter().map(|value| capture_body(value, self.0.max_frame_bytes)).collect(),
+                            args: arguments.iter().map(|value| capture_body(value, value.len())).collect(),
                             response_kind: frame.kind.as_str().into(),
-                            response: capture_body(&frame.raw, self.0.max_frame_bytes),
+                            response: capture_body(&frame.raw, frame.raw.len()),
                             rpc_callback_capture: None,
                             cache_snapshot_rule: None,
                             cache_snapshot_hit: false,
@@ -123,6 +123,7 @@ impl CaptureSession for Capture {
                             replay_safe,
                             parse_warnings: warnings,
                         };
+                        let dependency_id = request.permit.dependency_id();
                         request.permit.complete(CaptureSnapshot::capture(&event)?).await?;
                         if !supported || (crate::is_pubsub_command(&request.command.name) && !replay_safe) {
                             upstream.inner.write_all(&client.buffer.split()).await?;
@@ -131,7 +132,7 @@ impl CaptureSession for Capture {
                             break;
                         }
                         if let Some(confirmation) = confirmation {
-                            subscriptions.apply(confirmation, Some((request.sequence, delivered)))?;
+                            subscriptions.apply(confirmation, Some((request.sequence, dependency_id, delivered)))?;
                         } else if frame.kind != RedisFrameKind::Error {
                             if request.command.name == "RESET" {
                                 subscriptions.clear();
@@ -161,7 +162,7 @@ impl Capture {
         frame: &RedisFrame,
         session: &CaptureSessionState,
         connection_id: Uuid,
-        (subscription_sequence, confirmed): (u64, Instant),
+        (subscription_sequence, after_id, confirmed): (u64, Option<u64>, Instant),
     ) -> Result<()> {
         let mut push = CapturedPush {
             id: Uuid::new_v4(),
@@ -174,7 +175,7 @@ impl Capture {
                 connection_id,
                 subscription_sequence,
                 rpc_request: None,
-                response: capture_body(&frame.raw, self.0.max_frame_bytes),
+                response: capture_body(&frame.raw, frame.raw.len()),
                 duration_ms: 0,
                 replay_safe: session.resp_version == 2,
             },
@@ -189,6 +190,8 @@ impl Capture {
         push.event.timestamp = Utc::now();
         push.event.duration_ms = u64::try_from(confirmed.elapsed().as_millis())?;
         receipt.commit();
-        permit.complete(CaptureSnapshot::capture(&push)?).await
+        permit
+            .complete(CaptureSnapshot::capture(&push)?.with_source_predecessor(after_id))
+            .await
     }
 }

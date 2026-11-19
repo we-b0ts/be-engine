@@ -55,8 +55,8 @@ fn info() -> ConnectionInfo {
             port: 80,
         },
         client_addr: None,
-        upstream_addr: None,
-        max_frame_bytes: 1024,
+        upstream_addr: Some("192.0.2.1:80".into()),
+        max_frame_bytes: 1,
     }
 }
 
@@ -84,7 +84,7 @@ async fn ambiguous_http_framing_is_rejected() {
         .write_all(b"POST / HTTP/1.1\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n")
         .await
         .unwrap();
-    let mut reader = wire::Reader::new(Box::new(io), 1024);
+    let mut reader = wire::Reader::new(Box::new(io));
     assert!(reader.request().await.is_err());
 }
 
@@ -142,7 +142,7 @@ async fn native_capture_persists_protocol_owned_data_that_can_project_for_replay
         sink.clone(),
     ));
     let source = tokio::spawn(async move {
-        let mut reader = wire::Reader::new(Box::new(upstream), 1024);
+        let mut reader = wire::Reader::new(Box::new(upstream));
         let request = reader.request().await.unwrap().unwrap();
         assert_eq!(request.body.as_ref(), br#"{"id":42}"#);
         reader.io.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n9\r\n{\"id\":42}\r\n0\r\n\r\n").await.unwrap();
@@ -161,6 +161,14 @@ async fn native_capture_persists_protocol_owned_data_that_can_project_for_replay
     assert!(bytes.ends_with(br#"{"id":42}"#));
     let events = sink.0.lock().unwrap();
     assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].facts().recording_target.as_deref(),
+        Some("api.test:80")
+    );
+    assert_eq!(
+        events[0].facts().recording_upstream.as_deref(),
+        Some("192.0.2.1:80")
+    );
     let exchange = Native
         .recorded_exchange(events[0].payload())
         .unwrap()

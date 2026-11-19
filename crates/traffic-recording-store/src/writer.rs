@@ -13,9 +13,12 @@ use traffic_model::{
     trace::{CaptureEvent, RecordedEvent},
 };
 
+use crate::dependency_columns::{self, WriteTerms};
 use crate::event_index::{self, JOURNALS};
-use crate::format::{self, DependencyRow};
+use crate::format::PendingDependency;
+pub use crate::format::RowLayout;
 use crate::partitions;
+pub use crate::partitions::RecordKind;
 use crate::source::RecordLocation;
 
 mod buffer;
@@ -28,8 +31,11 @@ pub use buffer::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
 
 pub struct LedgerFiles {
     root: PathBuf,
+    recording_id: uuid::Uuid,
     dependencies: [FileDigest; partitions::FILES.len()],
     directory: FileDigest,
+    terms: WriteTerms,
+    terms_digest: FileDigest,
     dependency_bytes: u64,
     events: [EventFile; 2],
     messages: HashSet<u64>,
@@ -66,28 +72,32 @@ impl FileDigest {
 }
 
 impl LedgerFiles {
-    pub fn new(root: &Path) -> Self {
-        Self {
+    pub async fn initialize(root: &Path, recording_id: uuid::Uuid) -> Result<Self> {
+        for name in partitions::FILES.into_iter().chain(JOURNALS) {
+            crate::storage::write(&root.join(name), b"").await?;
+        }
+        let header = recording_id.as_bytes();
+        crate::storage::write(&root.join(partitions::DIRECTORY), header).await?;
+        let mut directory = FileDigest::default();
+        directory.observe(header);
+        let mut terms = WriteTerms::new(chrono::Utc::now(), recording_id);
+        let term_header = terms.take_pending();
+        crate::storage::write(&root.join(dependency_columns::FILE), &term_header).await?;
+        let mut terms_digest = FileDigest::default();
+        terms_digest.observe(&term_header);
+        Ok(Self {
             root: root.into(),
+            recording_id,
             dependencies: Default::default(),
-            directory: Default::default(),
+            directory,
+            terms,
+            terms_digest,
             dependency_bytes: 0,
             events: Default::default(),
             messages: HashSet::new(),
             records: 0,
             payloads: Default::default(),
-        }
-    }
-
-    pub async fn initialize(root: &Path) -> Result<()> {
-        for name in partitions::FILES
-            .into_iter()
-            .chain([partitions::DIRECTORY])
-            .chain(JOURNALS)
-        {
-            crate::storage::write(&root.join(name), b"").await?;
-        }
-        Ok(())
+        })
     }
 
     pub fn records(&self) -> usize {
@@ -116,10 +126,6 @@ impl LedgerFiles {
                 dependency_sequence,
                 ..
             }
-            | Bound {
-                dependency_sequence,
-                ..
-            }
             | OutputStarted {
                 dependency_sequence,
                 ..
@@ -128,10 +134,11 @@ impl LedgerFiles {
                 dependency_sequence,
                 ..
             } => self.messages.contains(dependency_sequence),
-            PrimaryBoundary { .. } | Input { .. } | Sealed { .. } => false,
+            Bound { .. } => anyhow::bail!("protocol bindings belong to dependency rows"),
+            PrimaryBoundary { .. } | Input { .. } | Sealed => false,
         };
         let partition = usize::from(message);
-        let row = format::encode_event(event)?;
+        let row = crate::event_format::encode_event(event, self.recording_id)?;
         files
             .append(&self.root.join(JOURNALS[partition]), &row)
             .await?;
@@ -147,12 +154,13 @@ impl LedgerFiles {
         files: &mut JsonlWriterPool,
         record: Value,
         owner: &DependencyOwner,
-        message: bool,
+        kind: RecordKind,
+        layout: &RowLayout,
     ) -> Result<RecordLocation> {
         let Value::Object(record) = record else {
             anyhow::bail!("recorded dependency is not an object");
         };
-        let (mut row, payloads) = DependencyRow::split(record)?;
+        let (mut row, payloads) = PendingDependency::split(record, self.recording_id, layout)?;
         for payload in payloads {
             let reference = self
                 .payloads
@@ -160,8 +168,15 @@ impl LedgerFiles {
                 .await?;
             row.link(payload, reference);
         }
-        let bytes = row.encode()?;
-        let partition = partitions::partition(owner, message);
+        let bytes = row.encode(&mut self.terms, layout)?;
+        let additions = self.terms.take_pending();
+        if !additions.is_empty() {
+            files
+                .append(&self.root.join(dependency_columns::FILE), &additions)
+                .await?;
+            self.terms_digest.observe(&additions);
+        }
+        let partition = partitions::partition(owner, kind);
         let dependency = &mut self.dependencies[partition];
         let span = partitions::Span {
             logical: self.dependency_bytes,
@@ -190,18 +205,10 @@ impl LedgerFiles {
     }
 
     pub async fn seal(&self, files: &mut JsonlWriterPool) -> Result<Vec<LedgerFileIdentity>> {
-        for name in partitions::FILES
-            .into_iter()
-            .chain([partitions::DIRECTORY])
-            .chain(JOURNALS)
-        {
-            if !self.root.join(name).exists() {
-                files.append(&self.root.join(name), b"").await?;
-            }
-        }
         files.flush_all().await?;
         let mut identities = Vec::new();
         identities.push(self.directory.identity(partitions::DIRECTORY));
+        identities.push(self.terms_digest.identity(dependency_columns::FILE));
         for (name, dependency) in partitions::FILES.into_iter().zip(&self.dependencies) {
             identities.push(dependency.identity(name));
         }
@@ -217,8 +224,9 @@ impl LedgerFiles {
             identities.push(identity);
         }
         let root = self.root.clone();
+        let recording_id = self.recording_id;
         identities.push(
-            tokio::task::spawn_blocking(move || event_index::seal(&root))
+            tokio::task::spawn_blocking(move || event_index::seal(&root, recording_id))
                 .await
                 .context("dependency event index task failed")??,
         );

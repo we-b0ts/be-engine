@@ -1,6 +1,8 @@
 //! MySQL capture completeness and native semantic obligations.
 use traffic_model::recording::ProtocolRef;
-use traffic_protocol::capture::{CaptureEvidence, CaptureFacts, SemanticRequirement};
+use traffic_protocol::capture::{
+    CaptureEvidence, CaptureFacts, RecordingLayout, RecordingScalar, SemanticRequirement,
+};
 
 use crate::events::*;
 pub mod connection;
@@ -41,7 +43,22 @@ impl CaptureEvidence for MysqlExchangeEvent {
             ProtocolRef::connection("mysql", self.connection_id, self.query_sequence),
             self.outcome.label(),
             complete,
-        );
+        )
+        .with_recording_layout(RecordingLayout {
+            protocol: "mysql",
+            variant: "",
+            event_type: self.event_type(),
+            fields: &[
+                ("query_sequence", RecordingScalar::Integer),
+                ("database", RecordingScalar::Text),
+                ("username", RecordingScalar::Text),
+                ("server_status_before", RecordingScalar::Integer),
+                ("statement_id", RecordingScalar::Integer),
+            ],
+            request_fields: &["command", "sql", "params"],
+            response_fields: &["response"],
+            use_dependency_id: true,
+        });
         facts.outcome = self.outcome;
         facts.case_dependency = self.command == "COM_PING" || !is_debug_only_mysql_exchange(self);
         if !facts.case_dependency || self.command == "COM_PING" {

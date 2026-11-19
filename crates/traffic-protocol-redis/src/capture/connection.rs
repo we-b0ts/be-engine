@@ -141,7 +141,6 @@ pub async fn run(
         context.clone(),
         connection_id,
         termination.clone(),
-        max_frame_bytes,
         client_control,
     ));
 
@@ -524,7 +523,6 @@ pub async fn run(
             b"",
             &termination,
             transfer_error.is_none(),
-            max_frame_bytes,
         )
         .await?;
     }

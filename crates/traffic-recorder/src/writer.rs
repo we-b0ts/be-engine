@@ -138,9 +138,9 @@ impl RecorderWriter {
                 capture.policy_identity,
                 clock.clone(),
                 capture.evidence,
-            ),
+            )
+            .await?,
         };
-        traffic_recording_store::writer::LedgerFiles::initialize(&run_dir).await?;
         #[cfg(any(test, feature = "test-support"))]
         let completion = Arc::new(tokio::sync::Notify::new());
         #[cfg(any(test, feature = "test-support"))]

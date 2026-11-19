@@ -1,7 +1,7 @@
 //! Finite HTTP capture retains protocol framing behind shared ownership receipts.
 use super::*;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use traffic_model::{capture::capture_body, trace::OutputKind};
+use traffic_model::trace::OutputKind;
 use traffic_protocol::{
     capture::CaptureSnapshot,
     connection::{CaptureHost, ConnectionIo, NativeFuture, Operation},
@@ -33,8 +33,8 @@ impl CaptureSession for Capture {
             } else {
                 (Box::new(client), upstream)
             };
-            let mut client = wire::Reader::new(client, self.0.max_frame_bytes);
-            let mut upstream = wire::Reader::new(upstream, self.0.max_frame_bytes);
+            let mut client = wire::Reader::new(client);
+            let mut upstream = wire::Reader::new(upstream);
             let Some(request) = client.request().await? else {
                 return Ok(());
             };
@@ -92,15 +92,20 @@ impl CaptureSession for Capture {
                 timestamp: chrono::Utc::now(),
                 request_started_at: started_at,
                 client_addr: self.0.client_addr.clone(),
+                upstream_addr: self
+                    .0
+                    .upstream_addr
+                    .as_deref()
+                    .and_then(|value| value.parse().ok()),
                 scheme: if tls { "https" } else { "http" }.into(),
                 method: request.method,
                 uri: request.uri,
                 authority: Some(authority),
                 request_headers: request.headers,
-                request_body: capture_body(&request.body, self.0.max_frame_bytes),
+                request_body: request.body.into(),
                 response_status: Some(response.status),
                 response_headers: Some(response.headers),
-                response_body: Some(capture_body(&response.body, self.0.max_frame_bytes)),
+                response_body: Some(response.body.into()),
                 response_stream: None,
                 discovered_tcp_targets: Vec::new(),
                 duration_ms: started.elapsed().as_millis(),

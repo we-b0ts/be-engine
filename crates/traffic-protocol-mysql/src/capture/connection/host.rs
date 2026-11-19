@@ -32,6 +32,10 @@ pub enum CaptureObservation {
 /// Native transport submits facts. The host owns authorization, capture
 /// lifetimes, attribution, persistence and output receipts.
 pub trait CaptureHost: Send + Sync {
+    fn connection_id(&self) -> uuid::Uuid {
+        uuid::Uuid::new_v4()
+    }
+
     fn server_tls_config(&self, _host: &str) -> Result<Arc<rustls::ServerConfig>> {
         anyhow::bail!("MySQL recording TLS is unavailable")
     }

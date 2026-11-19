@@ -60,7 +60,6 @@ impl OutputReservation {
             .writer
             .clock
             .event(LifecycleRecord::Output {
-                exchange_id: self.capture.0.exchange_id,
                 dependency_sequence: self.capture.0.sequence,
                 output: *output,
             });
@@ -183,7 +182,6 @@ impl CaptureRegistry {
         admitted_case: Option<Uuid>,
         message: bool,
     ) -> Option<CaptureReservation> {
-        let exchange_id = Uuid::new_v4();
         let started_at = Utc::now();
         let mut state = self.0.state.lock().expect("capture registry poisoned");
         if state.closed {
@@ -193,18 +191,14 @@ impl CaptureRegistry {
         let started = self.0.writer.clock.begin_dependency(|sequence| {
             if message {
                 LifecycleRecord::MessageStarted {
-                    exchange_id,
                     dependency_sequence: sequence,
                 }
             } else {
                 LifecycleRecord::Started {
-                    exchange_id,
                     dependency_sequence: sequence,
-                    process_epoch: self.0.process_epoch,
                     phase,
                     observed_case,
                     admitted_case,
-                    started_at,
                 }
             }
         });
@@ -215,6 +209,8 @@ impl CaptureRegistry {
                 return None;
             }
         };
+        let exchange_id = traffic_model::recording::identity::IdentityKind::Dependency
+            .bridge(self.0.writer.clock.recording_id(), sequence);
         state.admitted += 1;
         state.pending.insert(exchange_id, sequence);
         if self.0.writer.try_record_sequenced_lifecycle(event).is_err() {
@@ -280,6 +276,18 @@ impl CaptureRegistry {
         self.0.process_epoch
     }
 
+    pub fn next_case_id(&self) -> Uuid {
+        self.0.writer.clock.next_case_id()
+    }
+
+    pub fn recording_id(&self) -> Uuid {
+        self.0.writer.clock.recording_id()
+    }
+
+    pub fn next_connection_id(&self) -> Uuid {
+        self.0.writer.clock.next_connection_id()
+    }
+
     pub fn finish_incomplete(&self) {
         let mut state = self.0.state.lock().expect("capture registry poisoned");
         let pending = state.pending.keys().copied().collect::<Vec<_>>();
@@ -288,7 +296,6 @@ impl CaptureRegistry {
                 .0
                 .writer
                 .try_record_lifecycle(LifecycleRecord::Terminal {
-                    exchange_id: *exchange_id,
                     dependency_sequence: state.pending[exchange_id],
                     outcome: "incomplete_at_stop".into(),
                     capture_complete: false,
@@ -322,6 +329,10 @@ impl CaptureRegistry {
 }
 
 impl CaptureReservation {
+    pub fn dependency_id(&self) -> u64 {
+        self.0.sequence
+    }
+
     pub(crate) fn is_message(&self) -> bool {
         self.0.message
     }
@@ -366,7 +377,6 @@ impl CaptureReservation {
             .writer
             .clock
             .event(LifecycleRecord::OutputStarted {
-                exchange_id: self.0.exchange_id,
                 dependency_sequence: self.0.sequence,
                 output,
             }) {
@@ -393,31 +403,11 @@ impl CaptureReservation {
         }
     }
     pub fn bind_protocol(&self, protocol_ref: ProtocolRef) {
-        let mut facts = self.0.facts.lock().expect("capture facts poisoned");
-        if facts.protocol_ref == protocol_ref {
-            return;
-        }
-        facts.protocol_ref = protocol_ref.clone();
-        if self
-            .0
-            .registry
-            .0
-            .writer
-            .try_record_lifecycle(LifecycleRecord::Bound {
-                exchange_id: self.0.exchange_id,
-                dependency_sequence: self.0.sequence,
-                protocol_ref,
-            })
-            .is_err()
-        {
-            self.0
-                .registry
-                .0
-                .state
-                .lock()
-                .expect("capture registry poisoned")
-                .inventory_gaps = true;
-        }
+        self.0
+            .facts
+            .lock()
+            .expect("capture facts poisoned")
+            .protocol_ref = protocol_ref;
     }
 
     pub fn finish_metadata(&self, outcome: &str) {
@@ -482,7 +472,6 @@ impl Drop for Admission {
             .0
             .writer
             .try_record_lifecycle(LifecycleRecord::Terminal {
-                exchange_id: self.exchange_id,
                 dependency_sequence: self.sequence,
                 outcome: terminal.0,
                 capture_complete: terminal.1,

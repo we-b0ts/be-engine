@@ -368,6 +368,7 @@ async fn actual_overlapping_http_selectors_require_a_unique_source_task() {
                 timestamp: Utc::now(),
                 request_started_at: Utc::now(),
                 client_addr: None,
+                upstream_addr: None,
                 scheme: "http".into(),
                 method: "GET".into(),
                 uri: "/task/step".into(),

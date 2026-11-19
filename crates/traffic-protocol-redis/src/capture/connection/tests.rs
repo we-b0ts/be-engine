@@ -102,28 +102,31 @@ fn pending(observations: &Arc<Observations>, command: &str) -> PendingRedisExcha
 }
 
 #[tokio::test]
-async fn truncated_confirmation_is_never_published_as_subscription_proof() {
+async fn subscription_proof_preserves_the_complete_confirmation() {
     use traffic_protocol::capture::CaptureEvidence;
     let observations = Arc::new(Observations::default());
+    let response = b"*3\r\n$9\r\nsubscribe\r\n$6\r\nevents\r\n:1\r\n";
     record_exchange(
         Uuid::new_v4(),
         &context(),
         pending(&observations, "SUBSCRIBE"),
         RedisFrameKind::Array,
-        b"*3\r\n$9\r\nsubscribe\r\n$6\r\nevents\r\n:1\r\n",
+        response,
         DependencyExchangeOutcome::Response,
-        8,
     )
     .await
     .unwrap();
     let exchanges = observations.exchanges.lock().unwrap();
     assert_eq!(exchanges.len(), 1);
     let (event, confirmed) = &exchanges[0];
-    assert!(!confirmed);
-    assert!(!event.replay_safe);
-    assert!(event.response.truncated);
+    assert!(*confirmed);
+    assert!(event.replay_safe);
+    assert_eq!(
+        event.response,
+        traffic_model::capture::capture_body(response, response.len())
+    );
     assert!(event.capture_facts().case_dependency);
-    assert!(!event.capture_facts().complete);
+    assert!(event.capture_facts().complete);
 }
 
 #[tokio::test]
@@ -171,7 +174,6 @@ async fn disconnected_client_close_does_not_invent_peer_completion() {
             context(),
             Uuid::new_v4(),
             termination.clone(),
-            4096,
             control,
         )
         .await;

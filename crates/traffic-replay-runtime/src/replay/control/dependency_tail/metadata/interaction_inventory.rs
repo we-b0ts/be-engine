@@ -168,8 +168,10 @@ fn load(
         // cleanup behavior; they cannot prove an unstarted business tail.
         return Ok(None);
     }
-    let bytes = crate::dependency_index::scoped::read_bytes(&case_dir.join("dependencies.jsonl"))
-        .context("interaction completion requires its original dependency inventory")?;
+    let bytes = crate::dependency_index::scoped::read_bytes_for_replay(
+        &case_dir.join("dependencies.jsonl"),
+    )
+    .context("interaction completion requires its original dependency inventory")?;
     let Some(references) = inventory(bytes.as_slice(), evidence)? else {
         return Ok(None);
     };

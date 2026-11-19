@@ -81,6 +81,10 @@ impl Host {
 }
 
 impl CaptureHost for Host {
+    fn connection_id(&self) -> uuid::Uuid {
+        self.state.recorder().capture.next_connection_id()
+    }
+
     fn begin_message(
         &self,
         event: &CaptureSnapshot,
@@ -203,6 +207,13 @@ impl CaptureOutput for Output {
 }
 
 impl CaptureExchange for Exchange {
+    fn dependency_id(&self) -> Option<u64> {
+        self.targets
+            .capture
+            .as_ref()
+            .map(|capture| capture.dependency_id())
+    }
+
     fn prepare_output(
         &self,
         output: traffic_model::trace::OutputKind,
@@ -227,6 +238,11 @@ impl CaptureExchange for Exchange {
                     .is_some_and(|entry| entry.kind == self.protocol),
                 "native capture event has a different registered owner"
             );
+            let event = if let Some(capture) = self.targets.capture.as_ref() {
+                event.with_recording_identity(capture.exchange_id())?
+            } else {
+                event
+            };
             self.state
                 .inner
                 .active_cases

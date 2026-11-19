@@ -157,7 +157,9 @@ async fn incremental(chunked: bool) {
     timeout(Duration::from_secs(5), async {
         let temp = tempfile::tempdir().unwrap();
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let state = AppState::new(config(temp.path(), upstream.local_addr().unwrap())).await.unwrap();
+        let mut settings = config(temp.path(), upstream.local_addr().unwrap());
+        settings.recording.max_body_bytes = 1;
+        let state = AppState::new(settings).await.unwrap();
         let (release, released) = oneshot::channel();
         let source = tokio::spawn(async move {
             let (mut socket, _) = upstream.accept().await.unwrap();
@@ -198,8 +200,17 @@ async fn incremental(chunked: bool) {
         dependency.finish().await;
         assert!(state.inner.active_cases.wait_for_no_active_case(Duration::from_secs(2)).await);
         source.await.unwrap();
-        let expected: Value = serde_json::from_slice(&std::fs::read(case(&state.recorder().run_dir, "apis").join("expected-response.json")).unwrap()).unwrap();
+        let saved_case = case(&state.recorder().run_dir, "apis");
+        let expected: Value = serde_json::from_slice(&std::fs::read(saved_case.join("expected-response.json")).unwrap()).unwrap();
         assert_eq!(expected["body"]["data"], "firstsecond");
+        let dependencies = crate::recorder::test_io::read_to_string_sync(saved_case.join("dependencies.jsonl")).unwrap();
+        let dependency = dependencies
+            .lines()
+            .map(|row| serde_json::from_str::<Value>(row).unwrap())
+            .find(|row| row["uri"].as_str().is_some_and(|uri| uri.ends_with("/dependency")))
+            .expect("recorded HTTP dependency");
+        assert_eq!(dependency["response_body"]["data"], "eHk=");
+        assert_eq!(dependency["capture_complete"], true);
         assert!(expected["headers"].get("x-traffic-e2e-case-id").is_none());
         assert!(expected["headers"].get("x-traffic-e2e-finite-response").is_none());
         assert!(expected["duration_ms"].as_u64().unwrap() < 250, "primary response duration must exclude tail wait");

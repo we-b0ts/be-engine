@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::DependencyExchangeOutcome;
-use crate::recording::{CaptureCoverage, CapturePhase, ProtocolRef};
-use chrono::{DateTime, Utc};
+use crate::recording::{CapturePhase, ProtocolRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -44,13 +43,9 @@ pub enum CaptureEvent {
         boundary: PrimaryBoundary,
     },
     #[serde(rename = "message_started")]
-    MessageStarted {
-        exchange_id: Uuid,
-        dependency_sequence: u64,
-    },
+    MessageStarted { dependency_sequence: u64 },
     #[serde(rename = "wire_output_started")]
     OutputStarted {
-        exchange_id: Uuid,
         dependency_sequence: u64,
         output: OutputKind,
     },
@@ -62,19 +57,15 @@ pub enum CaptureEvent {
     },
     #[serde(rename = "wire_output")]
     Output {
-        exchange_id: Uuid,
         dependency_sequence: u64,
         output: OutputKind,
     },
     #[serde(rename = "capture_started")]
     Started {
-        exchange_id: Uuid,
         dependency_sequence: u64,
-        process_epoch: Uuid,
         phase: CapturePhase,
         observed_case: Option<Uuid>,
         admitted_case: Option<Uuid>,
-        started_at: DateTime<Utc>,
     },
     #[serde(rename = "capture_bound")]
     Bound {
@@ -84,16 +75,12 @@ pub enum CaptureEvent {
     },
     #[serde(rename = "capture_terminated")]
     Terminal {
-        exchange_id: Uuid,
         dependency_sequence: u64,
         outcome: String,
         capture_complete: bool,
     },
     #[serde(rename = "capture_sealed")]
-    Sealed {
-        process_epoch: Uuid,
-        coverage: CaptureCoverage,
-    },
+    Sealed,
 }
 
 impl CaptureEvent {
@@ -123,7 +110,7 @@ impl CaptureEvent {
                 dependency_sequence,
                 ..
             } => Some(*dependency_sequence),
-            Self::PrimaryBoundary { .. } | Self::Input { .. } | Self::Sealed { .. } => None,
+            Self::PrimaryBoundary { .. } | Self::Input { .. } | Self::Sealed => None,
         }
     }
 }

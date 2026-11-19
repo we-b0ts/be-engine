@@ -1,6 +1,7 @@
 //! Seekable event trace locations. The journals remain the Source of event order.
 use crate::{
-    format::{EVENTS, PUSH_EVENTS, decode_event},
+    event_format::decode_event,
+    format::{EVENTS, PUSH_EVENTS},
     source::FileStamp,
 };
 use anyhow::{Context, Result, ensure};
@@ -34,7 +35,7 @@ struct Trace {
     journal: usize,
 }
 
-pub(crate) fn seal(root: &Path) -> Result<LedgerFileIdentity> {
+pub(crate) fn seal(root: &Path, recording_id: uuid::Uuid) -> Result<LedgerFileIdentity> {
     let mut traces = HashMap::<u64, (usize, Vec<Span>)>::new();
     for (journal, filename) in JOURNALS.into_iter().enumerate() {
         let mut reader = BufReader::new(File::open(root.join(filename))?);
@@ -46,7 +47,10 @@ pub(crate) fn seal(root: &Path) -> Result<LedgerFileIdentity> {
             if length == 0 {
                 break;
             }
-            if let Some(dependency) = decode_event(&row)?.event.dependency_sequence() {
+            if let Some(dependency) = decode_event(&row, recording_id)?
+                .event
+                .dependency_sequence()
+            {
                 let (owner, spans) = traces
                     .entry(dependency)
                     .or_insert_with(|| (journal, Vec::new()));
@@ -91,14 +95,16 @@ pub(crate) fn seal(root: &Path) -> Result<LedgerFileIdentity> {
     Ok(digest.identity(INDEX))
 }
 
-/// A compact directory shared by the Replay plans of one authenticated run.
+/// A compact directory shared by the Replay plans of one sealed run.
 #[derive(Debug)]
 pub struct SourceEventIndex {
     root: PathBuf,
+    recording_id: uuid::Uuid,
     stamp: FileStamp,
     traces: Vec<Trace>,
     postings_offset: u64,
     journals: [FileStamp; JOURNALS.len()],
+    verify: bool,
 }
 
 fn bytes<const N: usize>(input: &mut impl Read) -> Result<[u8; N]> {
@@ -108,7 +114,19 @@ fn bytes<const N: usize>(input: &mut impl Read) -> Result<[u8; N]> {
 }
 
 impl SourceEventIndex {
-    pub(crate) fn open(root: PathBuf) -> Result<Self> {
+    pub(crate) fn open(root: PathBuf, recording_id: uuid::Uuid) -> Result<Self> {
+        Self::open_with_verification(root, recording_id, true)
+    }
+
+    pub(crate) fn open_for_replay(root: PathBuf, recording_id: uuid::Uuid) -> Result<Self> {
+        Self::open_with_verification(root, recording_id, false)
+    }
+
+    fn open_with_verification(
+        root: PathBuf,
+        recording_id: uuid::Uuid,
+        verify: bool,
+    ) -> Result<Self> {
         let path = root.join(INDEX);
         let stamp = FileStamp::read_native(&path)?;
         let mut file = BufReader::new(File::open(&path)?);
@@ -144,11 +162,17 @@ impl SourceEventIndex {
             expected_span
                 .checked_mul(SPAN_BYTES)
                 .and_then(|len| postings_offset.checked_add(len))
-                == Some(stamp.size)
-                && FileStamp::read_native(&path)? == stamp,
+                == Some(stamp.size),
             "event trace locations changed or are incomplete"
         );
+        if verify {
+            ensure!(
+                FileStamp::read_native(&path)? == stamp,
+                "event trace locations changed"
+            );
+        }
         Ok(Self {
+            recording_id,
             journals: [
                 FileStamp::read_native(&root.join(EVENTS))?,
                 FileStamp::read_native(&root.join(PUSH_EVENTS))?,
@@ -157,6 +181,7 @@ impl SourceEventIndex {
             stamp,
             traces,
             postings_offset,
+            verify,
         })
     }
 
@@ -166,10 +191,12 @@ impl SourceEventIndex {
     ) -> Result<impl Iterator<Item = Result<RecordedEvent<CaptureEvent>>>> {
         let selected: BTreeSet<u64> = dependencies.into_iter().collect();
         let path = self.root.join(INDEX);
-        ensure!(
-            FileStamp::read_native(&path)? == self.stamp,
-            "Source event directory changed"
-        );
+        if self.verify {
+            ensure!(
+                FileStamp::read_native(&path)? == self.stamp,
+                "Source event directory changed"
+            );
+        }
         let mut postings = BufReader::new(File::open(&path)?);
         let mut locations = [Vec::new(), Vec::new()];
         let mut cursor = 0;
@@ -192,13 +219,27 @@ impl SourceEventIndex {
             }
             cursor = position + u64::from(trace.count) * SPAN_BYTES;
         }
-        ensure!(
-            FileStamp::read_native(&path)? == self.stamp,
-            "Source event directory changed"
-        );
+        if self.verify {
+            ensure!(
+                FileStamp::read_native(&path)? == self.stamp,
+                "Source event directory changed"
+            );
+        }
         let [ordinary, pushes] = locations;
-        let ordinary = Journal::open(self.root.join(EVENTS), &self.journals[0], ordinary)?;
-        let pushes = Journal::open(self.root.join(PUSH_EVENTS), &self.journals[1], pushes)?;
+        let ordinary = Journal::open(
+            self.root.join(EVENTS),
+            &self.journals[0],
+            ordinary,
+            self.recording_id,
+            self.verify,
+        )?;
+        let pushes = Journal::open(
+            self.root.join(PUSH_EVENTS),
+            &self.journals[1],
+            pushes,
+            self.recording_id,
+            self.verify,
+        )?;
         Ok(merge(
             ordinary.into_iter().flatten(),
             pushes.into_iter().flatten(),
@@ -208,6 +249,7 @@ impl SourceEventIndex {
 }
 
 struct Journal {
+    recording_id: uuid::Uuid,
     path: PathBuf,
     stamp: FileStamp,
     reader: BufReader<File>,
@@ -215,6 +257,7 @@ struct Journal {
     row: Vec<u8>,
     position: u64,
     finished: bool,
+    verify: bool,
 }
 
 impl Journal {
@@ -222,17 +265,22 @@ impl Journal {
         path: PathBuf,
         stamp: &FileStamp,
         mut locations: Vec<(Span, u64)>,
+        recording_id: uuid::Uuid,
+        verify: bool,
     ) -> Result<Option<Self>> {
         if locations.is_empty() {
             return Ok(None);
         }
         locations.sort_unstable_by_key(|(span, _)| span.offset);
-        ensure!(
-            FileStamp::read_native(&path)? == *stamp,
-            "Source event journal changed"
-        );
+        if verify {
+            ensure!(
+                FileStamp::read_native(&path)? == *stamp,
+                "Source event journal changed"
+            );
+        }
         let reader = BufReader::with_capacity(64 * 1024, File::open(&path)?);
         Ok(Some(Self {
+            recording_id,
             path,
             stamp: stamp.clone(),
             reader,
@@ -240,15 +288,18 @@ impl Journal {
             row: Vec::new(),
             position: 0,
             finished: false,
+            verify,
         }))
     }
 
     fn read(&mut self) -> Result<Option<RecordedEvent<CaptureEvent>>> {
         let Some((span, expected)) = self.location.next() else {
-            ensure!(
-                FileStamp::read_native(&self.path)? == self.stamp,
-                "Source event journal changed"
-            );
+            if self.verify {
+                ensure!(
+                    FileStamp::read_native(&self.path)? == self.stamp,
+                    "Source event journal changed"
+                );
+            }
             return Ok(None);
         };
         let end = span
@@ -265,7 +316,7 @@ impl Journal {
         self.row.resize(span.length as usize, 0);
         self.reader.read_exact(&mut self.row)?;
         self.position = end;
-        let event = decode_event(std::str::from_utf8(&self.row)?)?;
+        let event = decode_event(std::str::from_utf8(&self.row)?, self.recording_id)?;
         ensure!(
             event.event.dependency_sequence() == Some(expected),
             "selected Source event has a foreign dependency"

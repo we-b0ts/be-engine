@@ -27,7 +27,7 @@ pub use model::{FRAGMENT, FileIndex, FileStamp, IndexedRecord, RecordLocation};
 pub use pages::{PageManifest, PageWriter, Paged};
 pub use reader::RecordReader;
 pub use reference::{RecordRef, RecordSource};
-pub use store::{load_file, recording_files};
+pub use store::{load_file, load_file_for_replay, recording_files};
 pub use stream::RecordStream;
 
 #[cfg(test)]

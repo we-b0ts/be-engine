@@ -216,6 +216,7 @@ async fn append_http(recorder: &crate::recorder::Recorder, value: &Value, proces
             timestamp: now,
             request_started_at: now,
             client_addr: None,
+            upstream_addr: None,
             scheme: "http".into(),
             method: value["method"].as_str().unwrap().into(),
             uri: value["uri"].as_str().unwrap().into(),

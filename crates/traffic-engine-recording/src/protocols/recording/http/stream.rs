@@ -65,7 +65,6 @@ fn native_context(context: CaptureContext) -> stream_capture::CaptureContext {
         event: context.event.clone(),
         started: context.started,
         termination: context.termination.clone(),
-        max_body_bytes: context.state.config().recording.max_body_bytes,
         redact_headers: context.state.config().recording.redact_headers.clone(),
         drain_timeout: std::time::Duration::from_millis(
             context

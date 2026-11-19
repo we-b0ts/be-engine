@@ -137,7 +137,7 @@ fn project_events(
                 continue;
             }
             CaptureEvent::Bound { .. }
-            | CaptureEvent::Sealed { .. }
+            | CaptureEvent::Sealed
             | CaptureEvent::PrimaryBoundary { .. }
             | CaptureEvent::Input { .. } => continue,
         };

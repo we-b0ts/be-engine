@@ -205,6 +205,25 @@ pub fn load_global_index_with_evidence(
     cancelled: &AtomicBool,
     evidence: &traffic_protocol::evidence::EvidenceRegistry,
 ) -> Result<(GlobalIndex, PathBuf)> {
+    load_global_index_with_verification(path, validate, cancelled, evidence, true)
+}
+
+pub fn load_global_index_for_replay(
+    path: &Path,
+    validate: impl Fn(&Value) -> Result<()>,
+    cancelled: &AtomicBool,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+) -> Result<(GlobalIndex, PathBuf)> {
+    load_global_index_with_verification(path, validate, cancelled, evidence, false)
+}
+
+fn load_global_index_with_verification(
+    path: &Path,
+    validate: impl Fn(&Value) -> Result<()>,
+    cancelled: &AtomicBool,
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+    verify: bool,
+) -> Result<(GlobalIndex, PathBuf)> {
     let revisions: BTreeMap<String, String> = evidence
         .revisions()
         .into_iter()
@@ -216,7 +235,7 @@ pub fn load_global_index_with_evidence(
     let parent = path
         .parent()
         .context("Global dependency file has no parent")?;
-    if let Some(sealed) = recording::load(path, &stamp)
+    if let Some(sealed) = recording::load(path, &stamp, verify)
         && sealed.0.providers == revisions
     {
         store::check_cancelled(cancelled)?;
@@ -228,7 +247,11 @@ pub fn load_global_index_with_evidence(
     {
         return Ok((index, parent.to_owned()));
     }
-    let root = store::file_cache_directory(path, &source)?.join("global-v3");
+    let root = store::file_cache_directory(path, &source)?.join(if verify {
+        "global-v3"
+    } else {
+        "global-replay-v3"
+    });
     store::private_directory(&root)?;
     let _lock = store::Lock::acquire(&root.join("build.lock"), cancelled)?;
     let fragment = root.join("index.json");
@@ -237,15 +260,20 @@ pub fn load_global_index_with_evidence(
         && index.stamp == stamp
         && index.providers == revisions
     {
-        source.validate()?;
-        ensure!(
-            FileStamp::read_native(&source.path)? == stamp,
-            "Global evidence changed while loading its scope index"
-        );
+        if verify {
+            source.validate()?;
+            ensure!(
+                FileStamp::read_native(&source.path)? == stamp,
+                "Global evidence changed while loading its scope index"
+            );
+        }
         return Ok((index, root));
     }
-    let index = build_index_with_evidence(path, &root, &stamp, &validate, cancelled, evidence)?;
-    source.validate()?;
+    let index =
+        build_index_with_evidence(path, &root, &stamp, &validate, cancelled, evidence, verify)?;
+    if verify {
+        source.validate()?;
+    }
     store::write_json(&fragment, &index)?;
     Ok((index, root))
 }
@@ -257,8 +285,13 @@ fn build_index_with_evidence(
     validate: &dyn Fn(&Value) -> Result<()>,
     cancelled: &AtomicBool,
     evidence: &traffic_protocol::evidence::EvidenceRegistry,
+    verify: bool,
 ) -> Result<GlobalIndex> {
-    let mut input = RecordStream::open(path)?;
+    let mut input = if verify {
+        RecordStream::open(path)?
+    } else {
+        RecordStream::open_for_replay(path)?
+    };
     let mut builder = GlobalBuilder::with_evidence(root, stamp.clone(), evidence.clone())?;
     if input.uses_locations() {
         builder.set_scoped();
@@ -267,21 +300,17 @@ fn build_index_with_evidence(
     let mut next_progress = 64 * 1024 * 1024;
     let source_bytes = scoped::selected_bytes(path)?;
     tracing::info!(source_bytes, "preparing Global dependency index");
-    while let Some((location, raw)) = input.next()? {
+    while let Some((location, raw, record)) = input.next_value()? {
         store::check_cancelled(cancelled)?;
-        let record = if raw.iter().all(u8::is_ascii_whitespace) {
-            None
-        } else {
-            let value = serde_json::from_slice(raw)?;
-            validate(&value).with_context(|| {
+        if let Some(value) = &record {
+            validate(value).with_context(|| {
                 format!(
                     "invalid Global dependency {} line {}",
                     path.display(),
                     location.line
                 )
             })?;
-            Some(value)
-        };
+        }
         builder.observe(location, raw, record)?;
         if builder.offset >= next_progress {
             tracing::info!(
@@ -293,7 +322,9 @@ fn build_index_with_evidence(
             next_progress = builder.offset + 64 * 1024 * 1024;
         }
     }
-    scoped::validate_stamp(path, stamp)?;
+    if verify {
+        scoped::validate_stamp(path, stamp)?;
+    }
     store::check_cancelled(cancelled)?;
     builder.finish()
 }

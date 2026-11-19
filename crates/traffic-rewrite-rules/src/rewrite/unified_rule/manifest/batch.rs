@@ -4,7 +4,7 @@ use super::*;
 impl Bundle {
     pub fn load_attribution(source: &Path) -> Result<Self> {
         crate::dependency_index::recording::authenticate(source)?;
-        let (recording, scopes) = crate::dependency_index::recording::cases(source)?;
+        let (recording, scopes) = crate::dependency_index::recording::case_inputs(source)?;
         let mut output = Self {
             inventory_path: None,
             replay_path: PathBuf::new(),
@@ -14,19 +14,14 @@ impl Bundle {
             artifacts: BTreeMap::new(),
         };
         output.freeze(&recording.join(crate::dependency::observation::MANIFEST_FILE))?;
-        for scope in scopes {
+        for (case, scope) in scopes {
             let directory = scope
                 .parent()
                 .context("Source Case has no directory")?
                 .to_owned();
             output.freeze(&directory.join("request.json"))?;
             output.freeze(&directory.join("expected-response.json"))?;
-            let case = directory
-                .file_name()
-                .and_then(|name| name.to_str())
-                .context("Source Case identity absent")?
-                .to_owned();
-            output.cases.insert(case, directory);
+            output.cases.insert(case.to_string(), directory);
         }
         Ok(output)
     }

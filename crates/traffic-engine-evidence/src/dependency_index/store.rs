@@ -86,6 +86,15 @@ pub fn load_file(path: &Path) -> Result<FileIndex> {
     load_file_cancellable(path, &std::sync::atomic::AtomicBool::new(false))
 }
 
+pub fn load_file_for_replay(path: &Path) -> Result<FileIndex> {
+    traffic_recording_store::source::index::load_file_for_replay(
+        path,
+        &std::sync::atomic::AtomicBool::new(false),
+        crate::protocols::default_providers().evidence(),
+        super::proof::is_evidence,
+    )
+}
+
 fn load_file_cancellable(
     path: &Path,
     cancelled: &std::sync::atomic::AtomicBool,

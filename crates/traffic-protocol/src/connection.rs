@@ -193,6 +193,9 @@ impl Operation {
 /// An admitted capture retains its original ownership until completion. Dropping
 /// an unfinished exchange leaves an incomplete obligation with the host.
 pub trait CaptureExchange: Send {
+    fn dependency_id(&self) -> Option<u64> {
+        None
+    }
     fn prepare_output(
         &self,
         output: traffic_model::trace::OutputKind,
@@ -212,6 +215,10 @@ pub struct CaptureTransport {
 }
 
 pub trait CaptureHost: Send + Sync {
+    fn connection_id(&self) -> uuid::Uuid {
+        uuid::Uuid::new_v4()
+    }
+
     fn begin_message(
         &self,
         _event: &CaptureSnapshot,

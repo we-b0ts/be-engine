@@ -63,8 +63,8 @@ impl NativeProtocol for Native {
         let record: recorded::RecordedExchange = serde_json::from_value(event.clone())?;
         Ok(Some(record.identity()?.1))
     }
-    fn server_session(&self, info: ConnectionInfo) -> Result<Box<dyn ServerSession>> {
-        Ok(Box::new(server::Server(info)))
+    fn server_session(&self, _info: ConnectionInfo) -> Result<Box<dyn ServerSession>> {
+        Ok(Box::new(server::Server))
     }
     fn capture_session(&self, info: ConnectionInfo) -> Result<Box<dyn CaptureSession>> {
         Ok(Box::new(recording::Capture(info)))

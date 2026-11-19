@@ -38,7 +38,6 @@ impl PayloadSegments {
             segment,
             offset,
             length,
-            sha256: format!("{:x}", Sha256::digest(bytes)),
         })
     }
 

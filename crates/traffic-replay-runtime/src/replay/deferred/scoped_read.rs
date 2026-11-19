@@ -9,10 +9,6 @@ pub(super) fn read(
     reader: &Arc<std::sync::Mutex<RecordReader>>,
 ) -> Result<SelectedRead> {
     let source = crate::dependency_index::scoped::resolve(path)?;
-    ensure!(
-        crate::dependency_index::FileStamp::read_native(&source.path)? == index.stamp,
-        "selected Source ledger changed after admission"
-    );
     let Some(locations) = &source.locations else {
         let location = RecordLocation {
             line: 1,
@@ -42,15 +38,6 @@ pub(super) fn read(
         raw.extend_from_slice(&bytes);
         lines.push(location.line);
     }
-    source.validate()?;
-    ensure!(
-        crate::dependency_index::FileStamp::read_native(&source.path)? == index.stamp,
-        "selected Source ledger changed during traversal"
-    );
-    ensure!(
-        crate::policy_evidence::digest(&raw).trim_start_matches("sha256:") == index.sha256,
-        "selected Case dependency checksum changed after indexing"
-    );
     Ok((Arc::new(raw), Some(lines)))
 }
 

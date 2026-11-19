@@ -27,6 +27,8 @@ pub struct HttpExchangeEvent {
     pub timestamp: DateTime<Utc>,
     pub request_started_at: DateTime<Utc>,
     pub client_addr: Option<String>,
+    #[serde(skip)]
+    pub upstream_addr: Option<std::net::SocketAddr>,
     pub scheme: String,
     pub method: String,
     pub uri: String,

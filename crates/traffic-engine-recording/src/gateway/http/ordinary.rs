@@ -1,5 +1,5 @@
-//! Ordinary HTTP delivery, bounded capture and case-owned asynchronous publication.
-use bytes::Bytes;
+//! Ordinary HTTP delivery, complete capture and case-owned asynchronous publication.
+use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use http_body::Body;
 use http_body_util::BodyExt;
@@ -27,7 +27,7 @@ use crate::protocols::recording::events::{
 use crate::protocols::recording::http::case::{
     CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case,
 };
-use crate::recorder::{CaseContext, capture_body, capture_body_with_original_len};
+use crate::recorder::CaseContext;
 use crate::{ActiveCaseGuard, AppState, DiscoveredTcpTarget};
 
 mod body;
@@ -49,6 +49,7 @@ pub(super) struct CaptureContext {
     pub case: Option<CaseContext>,
     pub request_record: Option<CaseRequestRecord>,
     pub upstream: String,
+    pub upstream_addr: Option<std::net::SocketAddr>,
     pub guard: Option<Arc<ActiveCaseGuard>>,
 }
 
@@ -96,7 +97,7 @@ pub(super) async fn forward(
     }
     mark_case(&context, &mut response);
     tokio::spawn(async move {
-        let mut payload = CapturedPayload::new(&context.state);
+        let mut payload = BytesMut::new();
         let mut error = None;
         let mut timed_out = false;
         loop {
@@ -119,8 +120,10 @@ pub(super) async fn forward(
                     break;
                 }
             };
-            if let Some(data) = frame.data_ref() {
-                payload.append(data);
+            if context.case.is_some()
+                && let Some(data) = frame.data_ref()
+            {
+                payload.extend_from_slice(data);
             }
             if !sender.is_closed() {
                 match tokio::time::timeout_at(deadline, sender.send(Ok(frame))).await {
@@ -142,7 +145,14 @@ pub(super) async fn forward(
                 .await;
         }
         context
-            .finish(status, headers, payload, Vec::new(), error, recovery)
+            .finish(
+                status,
+                headers,
+                payload.freeze(),
+                Vec::new(),
+                error,
+                recovery,
+            )
             .await;
     });
     response
@@ -188,21 +198,12 @@ async fn rewritten(
         Ok((bytes, targets)) => {
             let mut response = build_downstream_response(status, &headers, bytes.clone());
             mark_case(&context, &mut response);
-            let payload = CapturedPayload {
-                received: bytes.len(),
-                bytes: bytes[..bytes
-                    .len()
-                    .min(context.state.config().recording.max_body_bytes)]
-                    .to_vec(),
-                limit: context.state.config().recording.max_body_bytes,
-            };
-            tokio::spawn(context.finish(status, headers, payload, targets, None, recovery));
+            tokio::spawn(context.finish(status, headers, bytes, targets, None, recovery));
             response
         }
         Err(error) => {
             let timed_out = error.is::<tokio::time::error::Elapsed>();
             let message = format!("{error:#}");
-            let payload = CapturedPayload::new(&context.state);
             let mut response = simple_response(
                 if timed_out {
                     StatusCode::GATEWAY_TIMEOUT
@@ -215,7 +216,7 @@ async fn rewritten(
             tokio::spawn(context.finish(
                 status,
                 headers,
-                payload,
+                Bytes::new(),
                 Vec::new(),
                 Some(message),
                 recovery,
@@ -249,32 +250,12 @@ pub(super) fn mark_admitted_case(case_id: Uuid, response: &mut Response<GatewayB
     );
 }
 
-struct CapturedPayload {
-    bytes: Vec<u8>,
-    received: usize,
-    limit: usize,
-}
-impl CapturedPayload {
-    fn new(state: &AppState) -> Self {
-        Self {
-            bytes: Vec::new(),
-            received: 0,
-            limit: state.config().recording.max_body_bytes,
-        }
-    }
-    fn append(&mut self, bytes: &[u8]) {
-        self.received = self.received.saturating_add(bytes.len());
-        let stored = bytes.len().min(self.limit.saturating_sub(self.bytes.len()));
-        self.bytes.extend_from_slice(&bytes[..stored]);
-    }
-}
-
 impl CaptureContext {
     async fn finish(
         self,
         status: StatusCode,
         headers: HeaderMap,
-        payload: CapturedPayload,
+        payload: Bytes,
         targets: Vec<DiscoveredTcpTarget>,
         error: Option<String>,
         recovery: Option<TimeoutRecovery>,
@@ -296,6 +277,7 @@ impl CaptureContext {
             timestamp,
             request_started_at: self.request_started_at,
             client_addr: self.client_addr,
+            upstream_addr: self.upstream_addr,
             scheme: "http_gateway".into(),
             method: self.method.to_string(),
             uri: self.original_uri.to_string(),
@@ -305,13 +287,10 @@ impl CaptureContext {
                 self.matched_rule.as_deref(),
                 &self.upstream,
             ),
-            request_body: capture_body(&self.request_body, recording.max_body_bytes),
+            request_body: self.request_body.into(),
             response_status: Some(status.as_u16()),
             response_headers: Some(captured_headers.clone()),
-            response_body: Some(capture_body_with_original_len(
-                &payload.bytes,
-                payload.received,
-            )),
+            response_body: Some(payload.clone().into()),
             response_stream: None,
             discovered_tcp_targets: targets,
             duration_ms,
@@ -325,14 +304,7 @@ impl CaptureContext {
         {
             warn!(%error, case_id = %case.id, "failed to record HTTP gateway exchange");
         }
-        let mut body = capture_case_body(
-            &payload.bytes,
-            recording.max_body_bytes,
-            recording.decoded_body_limit(),
-            Some(&headers),
-        );
-        body.original_len = payload.received;
-        body.truncated |= payload.received > payload.bytes.len();
+        let body = capture_case_body(&payload, payload.len(), usize::MAX, Some(&headers));
         let response = CaseResponseRecord {
             timestamp,
             matched_rule: self.matched_rule,

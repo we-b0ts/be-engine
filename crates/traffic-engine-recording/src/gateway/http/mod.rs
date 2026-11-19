@@ -23,7 +23,7 @@ use crate::protocols::recording::events::{
 use crate::protocols::recording::http::case::{
     CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case,
 };
-use crate::recorder::{CaseContext, PrimaryCaseDescriptor, capture_body};
+use crate::recorder::{CaseContext, PrimaryCaseDescriptor};
 use crate::recording_control::RecordingListener;
 
 mod admission;
@@ -147,7 +147,7 @@ async fn handle_gateway_request(
     config: HttpGatewayConfig,
     client_addr: Option<String>,
 ) -> Response<GatewayBody> {
-    let id = Uuid::new_v4();
+    let id = state.recorder().capture.next_case_id();
     let started = Instant::now();
     let request_started_at = Utc::now();
     let method = req.method().clone();
@@ -341,8 +341,8 @@ async fn handle_gateway_request(
             headers: request_headers_for_record.clone(),
             body: capture_case_body(
                 &request_body,
-                state.config().recording.max_body_bytes,
-                state.config().recording.decoded_body_limit(),
+                request_body.len(),
+                usize::MAX,
                 Some(&request_headers),
             ),
             sse_observation: None,
@@ -419,6 +419,7 @@ async fn handle_gateway_request(
             status,
             headers: response_headers,
             body: response_body,
+            upstream_addr,
             deadline,
         } = match upstream_response {
             Ok(response) => response,
@@ -506,6 +507,7 @@ async fn handle_gateway_request(
                 case,
                 request_record: case_request_record,
                 upstream: upstream_base,
+                upstream_addr,
                 guard: stream_guard,
             },
             status,
@@ -594,8 +596,8 @@ async fn record_gateway_error_with_status(
                 headers: ctx.request_headers.clone(),
                 body: capture_case_body(
                     &ctx.request_body,
-                    ctx.state.config().recording.max_body_bytes,
-                    ctx.state.config().recording.decoded_body_limit(),
+                    ctx.request_body.len(),
+                    usize::MAX,
                     None,
                 ),
                 sse_observation: None,
@@ -629,6 +631,7 @@ async fn record_gateway_error_with_status(
             timestamp: Utc::now(),
             request_started_at: ctx.request_started_at,
             client_addr: ctx.client_addr.clone(),
+            upstream_addr: None,
             scheme: "http_gateway".to_string(),
             method: ctx.method.to_string(),
             uri: ctx.original_uri.to_string(),
@@ -638,10 +641,7 @@ async fn record_gateway_error_with_status(
                 ctx.matched_rule.as_deref(),
                 ctx.target.as_deref().unwrap_or(""),
             ),
-            request_body: capture_body(
-                &ctx.request_body,
-                ctx.state.config().recording.max_body_bytes,
-            ),
+            request_body: ctx.request_body.into(),
             response_status: None,
             response_headers: None,
             response_body: None,

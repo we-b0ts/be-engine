@@ -135,7 +135,7 @@ pub(super) fn load(source: &Path) -> Result<Option<Source>> {
     if crate::dependency_index::recording::root(source).is_none() {
         return Ok(None);
     }
-    if let Some(index) = crate::dependency_index::recording::event_index(source)? {
+    if let Some(index) = crate::dependency_index::recording::event_index_for_replay(source)? {
         return Ok(Some(Source::Indexed(index)));
     }
     let records = crate::dependency_index::recording::events(source)?;

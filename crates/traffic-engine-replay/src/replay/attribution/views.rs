@@ -56,7 +56,7 @@ pub fn freeze_scopes<'a>(
         if !path.is_file() {
             continue;
         }
-        let index: ScopeIndex = serde_json::from_slice(&std::fs::read(&path)?)?;
+        let index = scoped::read_index_with_epoch(&path, manifest.run_epoch)?;
         ensure!(
             index.schema == SCOPE_SCHEMA,
             "unsupported attribution scope schema"

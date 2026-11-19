@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use traffic_model::recording::ProtocolRef;
 use traffic_protocol::{
-    capture::{CaptureEvidence, CaptureFacts},
+    capture::{CaptureEvidence, CaptureFacts, RecordingLayout, RecordingScalar},
     connection::{Endpoint, RecordedExchange, RecordedInput},
     message::{MessageEncoder, ProjectedMessage, ProjectedValue, ProtocolMessage},
 };
@@ -39,6 +39,20 @@ impl CaptureEvidence for CapturedPush {
             "delivery",
             self.event.replay_safe && !self.event.response.truncated,
         )
+        .with_recording_layout(RecordingLayout {
+            protocol: "redis",
+            variant: "push",
+            event_type: self.event_type(),
+            fields: &[
+                ("subscription_sequence", RecordingScalar::Integer),
+                ("source_after_id", RecordingScalar::Integer),
+                ("database", RecordingScalar::Integer),
+                ("username", RecordingScalar::Text),
+            ],
+            request_fields: &[],
+            response_fields: &["response"],
+            use_dependency_id: true,
+        })
     }
 }
 

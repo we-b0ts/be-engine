@@ -25,6 +25,7 @@ fn event() -> HttpExchangeEvent {
         timestamp: chrono::Utc::now(),
         request_started_at: chrono::Utc::now(),
         client_addr: None,
+        upstream_addr: None,
         scheme: "http".into(),
         method: "POST".into(),
         uri: "/submit?trace=1".into(),

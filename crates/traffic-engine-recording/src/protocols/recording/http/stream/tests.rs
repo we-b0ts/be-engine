@@ -57,6 +57,7 @@ fn context(state: &AppState, termination: ClientTermination) -> stream_capture::
         request_started_at: Utc::now(),
         outcome: crate::DependencyExchangeOutcome::Response,
         client_addr: None,
+        upstream_addr: None,
         scheme: "http".into(),
         method: "GET".into(),
         uri: "/stream".into(),
@@ -106,6 +107,7 @@ async fn close_delimited_eof(engine_cleanup: bool) {
     let mut config = crate::AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
     config.recording.case_dependency_post_response_window_ms = 0;
+    config.recording.max_body_bytes = 1;
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     let state = AppState::new(config).await.unwrap();

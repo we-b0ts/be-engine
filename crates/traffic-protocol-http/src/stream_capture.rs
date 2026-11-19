@@ -1,4 +1,4 @@
-//! Bounded, incremental HTTP dependency capture with body-lifetime ownership.
+//! Incremental HTTP dependency capture with body-lifetime ownership.
 
 use crate::body_capture::redact_headers;
 use crate::forward::{HostHeaderPolicy, append_end_to_end_headers};
@@ -36,7 +36,6 @@ pub struct CaptureContext {
     pub event: crate::events::HttpExchangeEvent,
     pub started: std::time::Instant,
     pub termination: crate::termination::ClientTermination,
-    pub max_body_bytes: usize,
     pub redact_headers: Vec<String>,
     pub drain_timeout: std::time::Duration,
     pub requires_complete_body_rewrite: bool,
@@ -109,7 +108,6 @@ pub fn response(upstream: Response<Incoming>, mut context: CaptureContext) -> Re
 pub struct Capture {
     context: CaptureContext,
     payload: Vec<u8>,
-    received: usize,
     stream: ResponseStream,
     error: Option<String>,
     finished: bool,
@@ -125,7 +123,6 @@ impl Capture {
         Self {
             context,
             payload: Vec::new(),
-            received: 0,
             stream: ResponseStream {
                 version: 2,
                 headers_ms,
@@ -146,17 +143,6 @@ impl Capture {
             return;
         }
         self.context.host.activity();
-        self.received = self.received.saturating_add(bytes.len());
-        let limit = self.context.max_body_bytes;
-        if self.error.is_some() {
-            return;
-        }
-        if self.received > limit || self.stream.chunks.len() >= 10_000 {
-            self.error =
-                Some("HTTP dependency stream exceeded its byte or chunk capture limit".into());
-            self.invalidate(self.error.as_deref().unwrap());
-            return;
-        }
         let start = self.payload.len();
         self.payload.extend_from_slice(bytes);
         self.prefix.queued();
@@ -178,7 +164,7 @@ impl Capture {
             "client":self.context.termination.diagnosis(self.context.started),
             "server":crate::termination::observed_since(self.upstream.as_ref().and_then(|upstream| upstream.observed_since(self.context.started)), self.context.started),
             "body_complete":self.stream.complete,"prefix_flushed":self.prefix.is_complete(),
-            "received_bytes":self.received,"captured_bytes":self.payload.len(),"chunks":self.stream.chunks.len()
+            "received_bytes":self.payload.len(),"captured_bytes":self.payload.len(),"chunks":self.stream.chunks.len()
         });
         let client = &self.context.termination;
         let transport_ended = client
@@ -281,11 +267,6 @@ impl Capture {
                 .host
                 .output(traffic_model::trace::OutputKind::TargetStop);
         }
-        event.response_body = Some(traffic_model::capture::capture_body_with_original_len(
-            &self.payload,
-            self.received,
-        ));
-        event.response_stream = Some(self.stream.clone());
         event.error = self.error.clone();
         if !self.stream.complete && !source_stop {
             let reason = event.error.as_deref().unwrap_or(
@@ -293,6 +274,8 @@ impl Capture {
             );
             self.invalidate(reason);
         }
+        event.response_body = Some(Bytes::from(std::mem::take(&mut self.payload)).into());
+        event.response_stream = Some(self.stream.clone());
         self.context.host.finish(event);
     }
 }

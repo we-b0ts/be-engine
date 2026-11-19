@@ -215,17 +215,13 @@ fn immutable_catalog_scopes_keep_original_order_and_visit_only_selected_dependen
         |(sequence, dependency_sequence, begin)| {
             let event = if begin {
                 CaptureEvent::Started {
-                    exchange_id: Default::default(),
                     dependency_sequence,
-                    process_epoch: Default::default(),
                     phase: CapturePhase::Runtime,
                     observed_case: None,
                     admitted_case: None,
-                    started_at: "2026-11-12T00:00:00Z".parse().unwrap(),
                 }
             } else {
                 CaptureEvent::Terminal {
-                    exchange_id: Default::default(),
                     dependency_sequence,
                     outcome: "response".into(),
                     capture_complete: true,

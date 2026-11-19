@@ -12,6 +12,33 @@ pub trait SourcePreparation: Send + Sync {
 }
 
 impl Recorder {
+    pub(super) async fn prewarm_global_dependencies(&self, completed: bool) {
+        let run = self.run_dir.clone();
+        let separated_messages = tokio::task::spawn_blocking(move || {
+            crate::dependency_index::recording::has_separated_messages(&run)
+        })
+        .await
+        .context("recording manifest task failed")
+        .and_then(|result| result);
+        match separated_messages {
+            Ok(false) => {}
+            Ok(true) => {
+                tracing::info!(
+                    "recording contains a separate push stream; defer Global dependency preparation to Replay"
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Global dependency prewarm could not read the recording manifest");
+                return;
+            }
+        }
+        if completed {
+            self.seal_global_dependency_indexes().await;
+        }
+        self.prepare_global_report().await;
+    }
+
     pub(super) async fn seal_case_dependency_indexes(&self) {
         let run = self.run_dir.clone();
         let owner = self.artifact_owner;
@@ -31,7 +58,7 @@ impl Recorder {
         }
     }
 
-    pub(super) async fn seal_global_dependency_indexes(&self) {
+    async fn seal_global_dependency_indexes(&self) {
         let run = self.run_dir.clone();
         let preparation = self.source_preparation.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -66,7 +93,7 @@ impl Recorder {
         }
     }
 
-    pub(super) async fn prepare_global_report(&self) {
+    async fn prepare_global_report(&self) {
         if let Err(error) = self.source_preparation.global_report(&self.run_dir).await {
             tracing::warn!(run_dir=%self.run_dir.display(), error=%error,
                 "optional Global report preparation status could not be published; original recording is preserved");

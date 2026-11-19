@@ -6,9 +6,11 @@ use uuid::Uuid;
 use super::attribution::DependencyOwner;
 
 pub const RECORDING_SCHEMA: &str = "traffic-recording/v4";
-pub const COMPACT_RECORDING_SCHEMA: &str = "traffic-recording/v6";
-pub const SCOPE_SCHEMA: &str = "traffic-dependency-scope/v3";
+pub const COMPACT_RECORDING_SCHEMA: &str = "traffic-recording/v11";
+pub const SCOPE_SCHEMA: &str = "traffic-dependency-scope/v4";
 pub const MANIFEST_FILE: &str = "dependency-manifest.json";
+
+pub mod identity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -86,8 +88,8 @@ pub fn raw_tcp_has_payload(event: &serde_json::Value) -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ScopeKind {
-    Case { case_id: Uuid },
+pub enum ScopeKind<CaseId = Uuid> {
+    Case { case_id: CaseId },
     Startup,
     Process,
     Shutdown,
@@ -105,11 +107,34 @@ pub struct ScopeRecordLocation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScopeIndex {
+pub struct ScopeIndex<CaseId = Uuid> {
     pub schema: String,
     pub run_relpath: String,
-    pub scope: ScopeKind,
+    pub scope: ScopeKind<CaseId>,
     pub locations: Vec<ScopeRecordLocation>,
+}
+
+impl<CaseId> ScopeIndex<CaseId> {
+    pub fn try_map_case_id<NewCaseId, E>(
+        self,
+        map: impl FnOnce(CaseId) -> Result<NewCaseId, E>,
+    ) -> Result<ScopeIndex<NewCaseId>, E> {
+        let scope = match self.scope {
+            ScopeKind::Case { case_id } => ScopeKind::Case {
+                case_id: map(case_id)?,
+            },
+            ScopeKind::Startup => ScopeKind::Startup,
+            ScopeKind::Process => ScopeKind::Process,
+            ScopeKind::Shutdown => ScopeKind::Shutdown,
+            ScopeKind::Unattributed => ScopeKind::Unattributed,
+        };
+        Ok(ScopeIndex {
+            schema: self.schema,
+            run_relpath: self.run_relpath,
+            scope,
+            locations: self.locations,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -129,8 +154,8 @@ pub struct LedgerFileIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecordedCase {
-    pub case_id: Uuid,
+pub struct RecordedCase<CaseId = Uuid> {
+    pub case_id: CaseId,
     pub path: String,
     pub complete: bool,
 }
@@ -203,7 +228,8 @@ pub enum SourceArtifactIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecordingManifest {
+#[serde(remote = "RecordingManifest")]
+pub struct RecordingManifest<CaseId = Uuid> {
     pub schema: String,
     pub run_id: String,
     pub run_epoch: Uuid,
@@ -216,6 +242,74 @@ pub struct RecordingManifest {
     pub records: u64,
     pub unattributed_records: u64,
     pub semantic_inventory: SemanticInventory,
-    pub inputs: Vec<RecordedCase>,
+    pub inputs: Vec<RecordedCase<CaseId>>,
     pub files: Vec<LedgerFileIdentity>,
+}
+
+impl Serialize for RecordingManifest {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RecordingManifest::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RecordingManifest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        RecordingManifest::<String>::deserialize(deserializer)?.map_case_ids(|epoch, case| {
+            identity::IdentityKind::Case
+                .parse(epoch, &case)
+                .ok_or_else(|| serde::de::Error::custom("invalid manifest Case identity"))
+        })
+    }
+}
+
+impl RecordingManifest {
+    /// Encode physical input IDs with the run epoch already carried by the manifest.
+    pub fn archive(self) -> impl Serialize {
+        #[derive(Serialize)]
+        #[serde(transparent)]
+        struct ArchivedManifest(#[serde(with = "RecordingManifest")] RecordingManifest<String>);
+
+        let archive = self
+            .map_case_ids(|epoch, id| {
+                Ok::<_, std::convert::Infallible>(identity::IdentityKind::Case.display(epoch, id))
+            })
+            .unwrap_or_else(|never| match never {});
+        ArchivedManifest(archive)
+    }
+}
+
+impl<CaseId> RecordingManifest<CaseId> {
+    fn map_case_ids<NewCaseId, E>(
+        self,
+        mut map: impl FnMut(Uuid, CaseId) -> Result<NewCaseId, E>,
+    ) -> Result<RecordingManifest<NewCaseId>, E> {
+        let inputs = self
+            .inputs
+            .into_iter()
+            .map(|input| {
+                Ok(RecordedCase {
+                    case_id: map(self.run_epoch, input.case_id)?,
+                    path: input.path,
+                    complete: input.complete,
+                })
+            })
+            .collect::<Result<_, E>>()?;
+
+        Ok(RecordingManifest {
+            schema: self.schema,
+            run_id: self.run_id,
+            run_epoch: self.run_epoch,
+            process_epochs: self.process_epochs,
+            capture_policy_identity: self.capture_policy_identity,
+            source_artifact: self.source_artifact,
+            sealed: self.sealed,
+            capture_complete: self.capture_complete,
+            coverage: self.coverage,
+            records: self.records,
+            unattributed_records: self.unattributed_records,
+            semantic_inventory: self.semantic_inventory,
+            inputs,
+            files: self.files,
+        })
+    }
 }

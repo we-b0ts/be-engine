@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tracing::info;
+use traffic_model::recording::identity::IdentityKind;
 use uuid::Uuid;
 
 use super::dependencies::ensure_case_dependency_file;
@@ -55,7 +56,7 @@ pub struct RecordingErrorSummary {
     pub rule_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri_group: Option<String>,
-    pub case_id: Uuid,
+    pub case_id: String,
     pub reason: String,
     pub detail_path: String,
 }
@@ -65,7 +66,7 @@ struct RecordingErrorDetail {
     timestamp: DateTime<Utc>,
     rule_name: String,
     uri_group: Option<String>,
-    case_id: Uuid,
+    case_id: String,
     reason: String,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -219,11 +220,12 @@ impl Recorder {
         failed_dir: PathBuf,
     ) -> Result<()> {
         let timestamp = Utc::now();
+        let case_id = self.case_label(case.id);
         let detail = RecordingErrorDetail {
             timestamp,
             rule_name: case.rule_name.clone(),
             uri_group: case.uri_group.clone(),
-            case_id: case.id,
+            case_id: case_id.clone(),
             reason: reason.clone(),
             message,
             context,
@@ -235,7 +237,7 @@ impl Recorder {
             timestamp,
             rule_name: case.rule_name.clone(),
             uri_group: case.uri_group.clone(),
-            case_id: case.id,
+            case_id,
             reason,
             detail_path: path_relative_to(&detail_path, &self.run_dir),
         };
@@ -320,10 +322,8 @@ impl Recorder {
         };
         self.write_network_manifest().await?;
         self.writer.seal(self.capture.coverage()).await?;
-        if status == "completed" {
-            self.seal_global_dependency_indexes().await;
-        }
-        self.prepare_global_report().await;
+        self.prewarm_global_dependencies(status == "completed")
+            .await;
         self.write_run_report(status).await?;
         self.flush_traffic().await?;
         if let Some(owner) = self.artifact_owner {
@@ -439,7 +439,8 @@ impl Recorder {
                     continue;
                 }
                 let child_name = child.file_name().to_string_lossy().into_owned();
-                if let Ok(id) = Uuid::parse_str(&child_name) {
+                if let Some(id) = IdentityKind::Case.parse(self.capture.recording_id(), &child_name)
+                {
                     cases.push(CaseContext {
                         id,
                         rule_name: rule_name.clone(),
@@ -453,7 +454,9 @@ impl Recorder {
                         continue;
                     }
                     let case_id = grouped_case.file_name().to_string_lossy().into_owned();
-                    if let Ok(id) = Uuid::parse_str(&case_id) {
+                    if let Some(id) =
+                        IdentityKind::Case.parse(self.capture.recording_id(), &case_id)
+                    {
                         cases.push(CaseContext {
                             id,
                             rule_name: rule_name.clone(),
@@ -472,11 +475,12 @@ impl Recorder {
         self.flush_global_dependency_files().await
     }
 
+    pub fn case_label(&self, case_id: Uuid) -> String {
+        IdentityKind::Case.display(self.capture.recording_id(), case_id)
+    }
+
     pub fn case_dir(&self, case: &CaseContext) -> PathBuf {
-        self.run_dir
-            .join("apis")
-            .join(case_archive_directory(case))
-            .join(case.id.to_string())
+        self.run_case_dir("apis", case)
     }
 
     pub fn case_staging_dir(&self, case: &CaseContext) -> PathBuf {
@@ -491,7 +495,7 @@ impl Recorder {
         self.run_dir
             .join(bucket)
             .join(case_archive_directory(case))
-            .join(case.id.to_string())
+            .join(self.case_label(case.id))
     }
 
     async fn append_run_error(&self, summary: &RecordingErrorSummary) -> Result<()> {
@@ -684,6 +688,50 @@ mod tests {
         assert_eq!(report["published_cases"], 3);
         assert_eq!(report["failed_cases"], 1);
         assert_eq!(report["observed_api_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn local_case_labels_are_shared_by_paths_and_scope_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let mut first = case("api-users");
+        first.id = recorder.capture.next_case_id();
+        let mut second = case("api-projects");
+        second.id = recorder.capture.next_case_id();
+
+        recorder.publish_case(&first).await.unwrap();
+        recorder.publish_case(&second).await.unwrap();
+        recorder.finish_run().await.unwrap();
+
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &tokio::fs::read(recorder.run_dir.join("dependency-manifest.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let (_, inputs) =
+            crate::dependency_index::recording::case_inputs(&recorder.run_dir).unwrap();
+        let inputs = inputs.into_iter().collect::<BTreeMap<_, _>>();
+        for (case, relative, label) in [
+            (first, "apis/api-users/case-1", "case-1"),
+            (second, "apis/api-projects/case-2", "case-2"),
+        ] {
+            let scope = &inputs[&case.id];
+            assert_eq!(scope.parent().unwrap(), recorder.run_dir.join(relative));
+            assert!(
+                manifest["inputs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|input| { input["case_id"] == label && input["path"] == relative })
+            );
+            let document: serde_json::Value =
+                serde_json::from_slice(&tokio::fs::read(scope).await.unwrap()).unwrap();
+            assert_eq!(document["scope"]["case_id"], label);
+            let round_trip = crate::dependency_index::scoped::read_index(scope).unwrap();
+            assert!(matches!(round_trip.scope,
+                traffic_model::recording::ScopeKind::Case { case_id } if case_id == case.id));
+        }
     }
 
     #[tokio::test]

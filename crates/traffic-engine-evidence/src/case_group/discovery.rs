@@ -50,12 +50,13 @@ pub(super) fn discover_published_cases(case_source: &Path) -> Result<Vec<Publish
     );
     let mut raw = Vec::new();
     if crate::dependency_index::recording::root(case_source).is_some() {
-        let (_, files) = crate::dependency_index::recording::cases(case_source)?;
-        for file in files {
+        let (_, files) = crate::dependency_index::recording::case_inputs(case_source)?;
+        for (id, file) in files {
             walk_case_directories(
                 case_source,
                 file.parent().context("Case scope has no directory")?,
                 &mut raw,
+                Some(id.to_string()),
             )?;
         }
     } else {
@@ -64,7 +65,7 @@ pub(super) fn discover_published_cases(case_source: &Path) -> Result<Vec<Publish
             "case discovery requires a sealed central recording manifest; legacy recordings are unsupported"
         );
         #[cfg(any(test, feature = "test-support"))]
-        walk_case_directories(case_source, case_source, &mut raw)?;
+        walk_case_directories(case_source, case_source, &mut raw, None)?;
     }
     raw.sort_by(|left, right| left.dir.cmp(&right.dir));
     let direct_collection = raw.iter().any(|case| {
@@ -110,7 +111,12 @@ pub(super) fn discover_published_cases(case_source: &Path) -> Result<Vec<Publish
         .collect()
 }
 
-fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>) -> Result<()> {
+fn walk_case_directories(
+    root: &Path,
+    directory: &Path,
+    cases: &mut Vec<RawCase>,
+    manifest_case_id: Option<String>,
+) -> Result<()> {
     if directory != root && ignored_directory(directory) {
         return Ok(());
     }
@@ -119,7 +125,7 @@ fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>
     let expected_underscore = directory.join("expected_response.json");
     let has_request = request.is_file();
     let has_expected = expected_hyphen.is_file() || expected_underscore.is_file();
-    if has_request || has_expected {
+    if manifest_case_id.is_some() || has_request || has_expected {
         ensure!(
             has_request && has_expected,
             "incomplete published case directory {}",
@@ -134,11 +140,14 @@ fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>
             validate_single_line("recorded API pattern", pattern)?;
         }
         let path = request_path(&recorded.uri)?;
-        let id = directory
-            .file_name()
-            .and_then(|name| name.to_str())
-            .context("case id is not valid UTF-8")?
-            .to_string();
+        let id = match manifest_case_id {
+            Some(id) => id,
+            None => directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("case id is not valid UTF-8")?
+                .to_string(),
+        };
         cases.push(RawCase {
             id,
             dir: directory.to_path_buf(),
@@ -155,7 +164,7 @@ fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>
     children.sort_by_key(|entry| entry.file_name());
     for child in children {
         if child.file_type()?.is_dir() {
-            walk_case_directories(root, &child.path(), cases)?;
+            walk_case_directories(root, &child.path(), cases, None)?;
         }
     }
     Ok(())

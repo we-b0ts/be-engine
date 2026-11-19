@@ -100,7 +100,21 @@ async fn native_process_notification_does_not_hold_an_active_case_open() -> Resu
     pending.complete(event).await?;
     drop(guard);
     state.recorder().finish_run().await?;
-    let path = state.recorder().run_dir.join("indexes/process-scope.json");
+    let run = &state.recorder().run_dir;
+    assert!(crate::dependency_index::recording::has_separated_messages(
+        run
+    )?);
+    let report: Value = serde_json::from_slice(&std::fs::read(run.join("recording-run.json"))?)?;
+    assert_eq!(report["status"], "completed");
+    for path in [
+        "indexes/startup-dependencies",
+        "indexes/process-dependencies",
+        "indexes/unattributed-dependencies",
+        ".global-report-preparation.json",
+    ] {
+        assert!(!run.join(path).exists(), "unexpected preparation: {path}");
+    }
+    let path = run.join("indexes/process-scope.json");
     let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
     let record: Value = serde_json::from_slice(&bytes)?;
     let capture = &record["capture"];

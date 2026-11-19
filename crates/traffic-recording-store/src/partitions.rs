@@ -6,21 +6,57 @@ use std::{
     path::{Path, PathBuf},
 };
 use traffic_model::attribution::DependencyOwner;
+use uuid::Uuid;
 
 pub(crate) const DIRECTORY: &str = "dependency-locations.bin";
-pub(crate) const FILES: [&str; 4] = [
+pub(crate) const PUSH_DEPENDENCIES: &str = "dependencies-push.tsv";
+pub(crate) const FILES: [&str; 5] = [
     crate::format::DEPENDENCIES,
     "dependencies-process.tsv",
-    "dependencies-push.tsv",
+    PUSH_DEPENDENCIES,
     "dependencies-unattributed.tsv",
+    "observations.tsv",
 ];
-pub(crate) const ENTRY_BYTES: u64 = 25;
+const HEADER_BYTES: usize = 16;
+const ENTRY_BYTES: u64 = 25;
 
-pub(crate) fn partition(owner: &DependencyOwner, message: bool) -> usize {
-    match owner {
-        DependencyOwner::Unattributed { .. } => 3,
-        _ if message => 2,
-        DependencyOwner::Case { .. } => 0,
+pub(crate) fn record_count(size: u64) -> Result<u64> {
+    let entries_bytes = size
+        .checked_sub(HEADER_BYTES as u64)
+        .context("missing dependency partition directory header")?;
+    ensure!(
+        entries_bytes.is_multiple_of(ENTRY_BYTES),
+        "truncated dependency partition directory"
+    );
+    Ok(entries_bytes / ENTRY_BYTES)
+}
+
+fn read_recording_id(input: &mut impl Read) -> Result<Uuid> {
+    let mut bytes = [0; HEADER_BYTES];
+    input
+        .read_exact(&mut bytes)
+        .context("missing dependency partition recording identity")?;
+    Ok(Uuid::from_bytes(bytes))
+}
+
+pub(crate) fn recording_id(path: &Path) -> Result<Uuid> {
+    crate::source::FileStamp::read_native(path)?;
+    read_recording_id(&mut File::open(path)?)
+}
+
+#[derive(Clone, Copy)]
+pub enum RecordKind {
+    Exchange,
+    Message,
+    Observation,
+}
+
+pub(crate) fn partition(owner: &DependencyOwner, kind: RecordKind) -> usize {
+    match (owner, kind) {
+        (_, RecordKind::Observation) => 4,
+        (DependencyOwner::Unattributed { .. }, _) => 3,
+        (_, RecordKind::Message) => 2,
+        (DependencyOwner::Case { .. }, _) => 0,
         _ => 1,
     }
 }
@@ -66,6 +102,7 @@ impl Span {
 pub(crate) struct Reader {
     root: PathBuf,
     directory: BufReader<File>,
+    pub(crate) recording_id: Uuid,
     partitions: [Option<PartitionInput>; FILES.len()],
     next_line: usize,
 }
@@ -83,9 +120,12 @@ impl Reader {
             .parent()
             .context("missing dependency directory root")?
             .into();
+        let mut directory = BufReader::new(File::open(path)?);
+        let recording_id = read_recording_id(&mut directory)?;
         Ok(Self {
             root,
-            directory: BufReader::new(File::open(path)?),
+            directory,
+            recording_id,
             partitions: Default::default(),
             next_line: 1,
         })
@@ -100,6 +140,7 @@ impl Reader {
         if line != self.next_line {
             let position = u64::try_from(line.checked_sub(1).context("invalid dependency line")?)?
                 .checked_mul(ENTRY_BYTES)
+                .and_then(|offset| offset.checked_add(HEADER_BYTES as u64))
                 .context("dependency directory position overflow")?;
             self.directory.seek(SeekFrom::Start(position))?;
         }

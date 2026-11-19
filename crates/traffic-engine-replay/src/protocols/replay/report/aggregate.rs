@@ -367,37 +367,52 @@ struct PublishedCase {
 }
 
 fn discover_published_cases(case_source: &Path) -> Result<BTreeMap<String, PublishedCase>> {
+    let mut pending = if crate::dependency_index::recording::root(case_source).is_some() {
+        let (_, inputs) = crate::dependency_index::recording::case_inputs(case_source)?;
+        inputs
+            .into_iter()
+            .map(|(id, scope)| {
+                let directory = scope.parent().context("Case scope has no directory")?;
+                Ok((directory.to_path_buf(), Some(id)))
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        vec![(case_source.to_path_buf(), None)]
+    };
     let mut cases = BTreeMap::new();
-    let mut pending = vec![case_source.to_path_buf()];
-    while let Some(directory) = pending.pop() {
+    while let Some((directory, id)) = pending.pop() {
         let request = directory.join("request.json");
         let expected = directory.join("expected-response.json");
         let alternate_expected = directory.join("expected_response.json");
         let has_request = request.is_file();
         let has_expected = expected.is_file() || alternate_expected.is_file();
-        if has_request || has_expected {
+        if id.is_some() || has_request || has_expected {
             if !has_request || !has_expected {
                 bail!(
                     "incomplete published replay case {}; request.json and expected-response.json are both required",
                     directory.display()
                 );
             }
-            let case_id = directory
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    anyhow!(
-                        "replay case path has no UTF-8 case id: {}",
-                        directory.display()
-                    )
-                })?
-                .to_owned();
+            let case_id = match id {
+                Some(id) => id.to_string(),
+                None => directory
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .with_context(|| {
+                        format!(
+                            "replay case path has no UTF-8 case id: {}",
+                            directory.display()
+                        )
+                    })?
+                    .to_owned(),
+            };
             if cases
                 .insert(
                     case_id.clone(),
                     PublishedCase {
                         case_dir: directory.clone(),
-                        dependencies_present: directory.join("dependencies.jsonl").is_file(),
+                        dependencies_present: id.is_some()
+                            || directory.join("dependencies.jsonl").is_file(),
                     },
                 )
                 .is_some()
@@ -410,7 +425,7 @@ fn discover_published_cases(case_source: &Path) -> Result<BTreeMap<String, Publi
             if child.file_name().is_none_or(|name| name != ".replay")
                 && !should_skip_scan_dir(&child)
             {
-                pending.push(child);
+                pending.push((child, None));
             }
         }
     }

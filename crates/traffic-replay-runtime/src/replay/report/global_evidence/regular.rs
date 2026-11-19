@@ -35,8 +35,12 @@ pub(crate) fn initialize<P: ReplayProtocolSet>(
     let Some(source) = state.global_path.clone() else {
         return Ok(());
     };
-    let (index, _) =
-        crate::dependency_index::global::load_global_index(&source, P::validate_source_record)?;
+    let (index, _) = crate::dependency_index::global::load_global_index_for_replay(
+        &source,
+        P::validate_source_record,
+        &std::sync::atomic::AtomicBool::new(false),
+        crate::protocols::default_providers().evidence(),
+    )?;
     for protocol in state.global_report_protocols() {
         let protocol = protocol.as_str();
         let layout = state.global_report_layout(protocol)?;

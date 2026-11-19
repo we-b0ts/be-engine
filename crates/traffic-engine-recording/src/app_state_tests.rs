@@ -107,6 +107,7 @@ fn http_dependency(authority: &str, uri: &str) -> RecorderEvent {
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         client_addr: None,
+        upstream_addr: None,
         scheme: "fake_ip_http".to_string(),
         method: "GET".to_string(),
         uri: uri.to_string(),

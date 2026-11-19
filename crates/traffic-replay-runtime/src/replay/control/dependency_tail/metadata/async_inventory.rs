@@ -44,10 +44,11 @@ pub(super) async fn from_scope(
         return Ok(None);
     };
     let path = dependency_path.to_owned();
-    let raw =
-        tokio::task::spawn_blocking(move || crate::dependency_index::scoped::read_bytes(&path))
-            .await
-            .context("async dependency scope read task failed")??;
+    let raw = tokio::task::spawn_blocking(move || {
+        crate::dependency_index::scoped::read_bytes_for_replay(&path)
+    })
+    .await
+    .context("async dependency scope read task failed")??;
     let evidence = evidence.clone();
     let (references, source_stop_required) =
         tokio::task::spawn_blocking(move || complete_inventory(&scope, &raw, &evidence))

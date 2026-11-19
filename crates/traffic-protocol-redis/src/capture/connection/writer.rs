@@ -2,7 +2,6 @@
 use super::*;
 use std::collections::BTreeMap;
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_ordered_writer(
     client_write: Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
     mut output_rx: mpsc::Receiver<RedisOutput>,
@@ -10,7 +9,6 @@ pub(super) async fn run_ordered_writer(
     context: ConnectionContext,
     connection_id: Uuid,
     termination: ConnectionTermination,
-    max_frame_bytes: usize,
     client_control: ConnectionControl,
 ) -> Result<(u64, bool)> {
     let mut next_sequence = 1_u64;
@@ -51,7 +49,6 @@ pub(super) async fn run_ordered_writer(
                                         response_kind,
                                         &payload,
                                         DependencyExchangeOutcome::Response,
-                                        max_frame_bytes,
                                     )
                                     .await?;
                                 }
@@ -69,7 +66,6 @@ pub(super) async fn run_ordered_writer(
                                         &payload[..written],
                                         &termination,
                                         !host.is_degraded() && written == 0,
-                                        max_frame_bytes,
                                     )
                                     .await?;
                                 }
@@ -85,7 +81,6 @@ pub(super) async fn run_ordered_writer(
                             b"",
                             &termination,
                             !host.is_degraded(),
-                            max_frame_bytes,
                         )
                         .await?;
                     }
@@ -204,7 +199,6 @@ pub(super) async fn run_ordered_writer(
                         },
                         &termination,
                         !host.is_degraded() && timed_delivery,
-                        max_frame_bytes,
                     )
                     .await?;
                     next_sequence += 1;
@@ -220,7 +214,6 @@ pub(super) async fn run_ordered_writer(
                             b"",
                             &termination,
                             !host.is_degraded(),
-                            max_frame_bytes,
                         )
                         .await?;
                     }

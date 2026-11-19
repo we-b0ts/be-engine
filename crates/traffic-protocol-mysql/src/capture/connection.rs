@@ -102,7 +102,7 @@ pub(crate) async fn run_io(
     let upstream_control = transport.upstream;
     let mut client = ObservedIo::new(client, termination.clone(), TerminationSide::Client);
     let mut upstream = ObservedIo::new(upstream, termination.clone(), TerminationSide::Server);
-    let connection_id = Uuid::new_v4();
+    let connection_id = host.connection_id();
     let started = Instant::now();
     let route_name = context.route_name.clone();
     let listen_addr = context.listen_addr.clone();
@@ -436,7 +436,7 @@ pub(crate) async fn run_io(
                             completion.mark_delivered();
                             s2c_host.complete(completion).await?;
                         } else {
-                            s2c_query_tracker.lock().await.observe_delivery(&packet);
+                            s2c_query_tracker.lock().await.observe_delivery(packet);
                         }
                     }
                     Err(error) if s2c_termination.observe_client_io_error(&error) => {

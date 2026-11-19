@@ -45,7 +45,7 @@ fn resultset(final_eof: Option<Vec<u8>>) -> Vec<Vec<u8>> {
 
 #[test]
 fn pipelined_ping_read_and_rollback_capture_actual_status_transitions() {
-    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let mut tracker = MysqlSemanticTracker::new(test_context());
     // The ping is omitted from semantic dependencies, but its observed status
     // must still establish the first SELECT's transaction boundary.
     enqueue(&mut tracker, 115, 0x0e, "");
@@ -76,7 +76,7 @@ fn only_complete_final_eof_provides_resultset_status() {
         (Some(vec![0xfe, 0, 0, 2]), None),
         (None, None),
     ] {
-        let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+        let mut tracker = MysqlSemanticTracker::new(test_context());
         enqueue(&mut tracker, 1, 0x03, "SELECT id FROM users");
         let read = finish(&mut tracker, "resultset", resultset(eof));
         assert_eq!(read.response.server_status, expected);
@@ -91,7 +91,7 @@ fn only_complete_final_eof_provides_resultset_status() {
 #[test]
 fn errors_gaps_and_no_response_commands_invalidate_previous_status() {
     for status in ["error", "incomplete", "client_terminated"] {
-        let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+        let mut tracker = MysqlSemanticTracker::new(test_context());
         enqueue(&mut tracker, 1, 0x0e, "");
         finish(&mut tracker, "ok", ok(0));
         enqueue(&mut tracker, 2, 0x03, "SELECT id FROM users");
@@ -99,7 +99,7 @@ fn errors_gaps_and_no_response_commands_invalidate_previous_status() {
         enqueue(&mut tracker, 3, 0x03, "ROLLBACK");
         assert_eq!(finish(&mut tracker, "ok", ok(0)).server_status_before, None);
     }
-    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let mut tracker = MysqlSemanticTracker::new(test_context());
     enqueue(&mut tracker, 1, 0x0e, "");
     finish(&mut tracker, "ok", ok(0));
     enqueue(&mut tracker, 3, 0x03, "ROLLBACK");
@@ -115,7 +115,7 @@ fn errors_gaps_and_no_response_commands_invalidate_previous_status() {
 
 #[test]
 fn prepare_preserves_known_status_but_pending_results_do_not() {
-    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let mut tracker = MysqlSemanticTracker::new(test_context());
     enqueue(&mut tracker, 1, 0x0e, "");
     finish(&mut tracker, "ok", ok(0));
     enqueue(&mut tracker, 2, 0x16, "SELECT id FROM users");
