@@ -91,7 +91,7 @@ pub fn verify(
                     )
                     .context("async investigation scope absent")?;
                     potential.select_response(response_body.as_ref());
-                    let central = recording.join("dependencies.jsonl");
+                    let central = crate::dependency_index::recording::dependency_path(&recording);
                     bundle.freeze(&central)?;
                     let mut elsewhere = false;
                     crate::dependency_index::proof::visit(

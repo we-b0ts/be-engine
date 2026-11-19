@@ -1,6 +1,7 @@
-use super::*;
+use super::super::{FRAGMENT, FileIndex, FileStamp, scoped, store};
 use crate::protocols::recording::events::{DependencyConnectFailureEvent, RecorderEvent};
 use crate::recorder::{CaseContext, Recorder};
+use std::{fs, path::Path};
 use uuid::Uuid;
 
 fn copy(source: &Path, destination: &Path) {
@@ -54,7 +55,7 @@ async fn published_case_index_survives_later_appends_and_copy_without_a_rebuild(
     let published: FileIndex = store::read_json(&first.join(FRAGMENT)).unwrap();
     recorder.finish_run().await.unwrap();
     let original = recorder.run_dir.as_ref();
-    let ledger = FileStamp::read_native(&original.join("dependencies.jsonl")).unwrap();
+    let ledger = FileStamp::read_native(&original.join("dependencies.tsv")).unwrap();
     assert!(published.stamp.size < ledger.size);
     let copied = temporary
         .path()

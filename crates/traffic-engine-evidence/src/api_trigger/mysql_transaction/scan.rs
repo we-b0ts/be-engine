@@ -1,6 +1,6 @@
 //! Select proven Source intervals from the shared rule-independent transaction index.
 use super::*;
-use crate::dependency_index::mysql_transactions::Facts;
+use crate::api_trigger::mysql_transaction::facts::Facts;
 
 type Sequences = BTreeSet<(String, u64)>;
 

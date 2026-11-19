@@ -93,10 +93,10 @@ async fn queued_scope_retains_the_hosts_guard_until_its_record_is_written() {
 
     assert!(dropped.load(Ordering::SeqCst));
     assert!(registry.drain(Duration::from_secs(1)).await);
-    let records = tokio::fs::read_to_string(directory.path().join("dependencies.jsonl"))
-        .await
-        .unwrap();
-    assert_eq!(records.lines().count(), 1);
-    let value: serde_json::Value = serde_json::from_str(records.trim()).unwrap();
+    let path = traffic_recording_store::source::recording::dependency_path(directory.path());
+    let mut records = traffic_recording_store::source::RecordStream::open(&path).unwrap();
+    let (_, raw) = records.next().unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_slice(raw).unwrap();
     assert_eq!(value["event_type"], "dependency_connect_failure");
+    assert!(records.next().unwrap().is_none());
 }

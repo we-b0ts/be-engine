@@ -11,7 +11,7 @@ pub struct SourceInformation {
 pub fn information(state: &RewriteState, id: Uuid) -> Result<SourceInformation> {
     let (root, bytes, manifest) = sealed_manifest(state)?;
     crate::dependency_index::recording::authenticate(&root)?;
-    let central = root.join("dependencies.jsonl");
+    let central = crate::dependency_index::recording::dependency_path(&root);
     let stamp = crate::dependency_index::FileStamp::read_native(&central)?;
     let mut locations = Vec::new();
     let mut count = 0_u64;

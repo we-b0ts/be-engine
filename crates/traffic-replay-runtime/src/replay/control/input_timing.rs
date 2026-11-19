@@ -253,7 +253,8 @@ pub(super) async fn accept<P: ReplayProtocolSet>(
                 .plan
                 .context(SourcePlanUnavailable)?;
             let epoch = state
-                .protocols.native_events()
+                .protocols
+                .native_events()
                 .request_epoch(case)
                 .unwrap_or_else(Utc::now);
             let fast = plan
@@ -263,14 +264,22 @@ pub(super) async fn accept<P: ReplayProtocolSet>(
                 .and_then(|source| source.resolve(&mut state, case, &plan.input).ok());
             let fast_tail = fast.as_ref().and_then(fast::Plan::tail);
             let ordered_fast = fast.is_some();
-            let native_push_times = plan.source_start.filter(|_| ordered_fast).and_then(|start| {
-                let (pushes, covered) = state.protocols.input_timing().notifications(case, start);
-                covered.then(|| {
-                    let mut times: Vec<_> = pushes.into_iter().map(|push| push.completed_at).collect();
-                    times.sort_unstable();
-                    times
-                })
-            });
+            let fast_interval_cap_ms = (mode == SocketIoTiming::Auto)
+                .then(|| source_fast_cap(&state))
+                .flatten();
+            let native_push_times = plan
+                .source_start
+                .filter(|_| ordered_fast)
+                .and_then(|start| {
+                    let (pushes, covered) =
+                        state.protocols.input_timing().notifications(case, start);
+                    covered.then(|| {
+                        let mut times: Vec<_> =
+                            pushes.into_iter().map(|push| push.completed_at).collect();
+                        times.sort_unstable();
+                        times
+                    })
+                });
             let (mut evidence, covered) = match (fast.is_some(), plan.source_start) {
                 (true, _) => (Vec::new(), false),
                 (false, Some(start)) => state.protocols.input_timing_mut().evidence(case, start)?,
@@ -293,7 +302,9 @@ pub(super) async fn accept<P: ReplayProtocolSet>(
                 candidates,
                 dependency_timing_covered = plan.covered,
                 ordered_fast,
-                heartbeat_tail_eligible = fast_tail.as_ref().is_some_and(|tail| tail.heartbeat_timeout),
+                heartbeat_tail_eligible = fast_tail
+                    .as_ref()
+                    .is_some_and(|tail| tail.heartbeat_timeout),
                 "prepared Socket.IO input timeline"
             );
             state.input_timing = Some(Live {
@@ -310,7 +321,10 @@ pub(super) async fn accept<P: ReplayProtocolSet>(
                 native_dispatch: None,
                 native_push_times,
             });
-            return Ok(serde_json::json!({"ok":true,"epoch":epoch,"ordered_fast":ordered_fast,"fast_tail":fast_tail}));
+            return Ok(serde_json::json!({
+                "ok": true, "epoch": epoch, "ordered_fast": ordered_fast,
+                "fast_tail": fast_tail, "fast_interval_cap_ms": fast_interval_cap_ms
+            }));
         }
         let query = request
             .input_timing
@@ -339,11 +353,11 @@ pub(super) async fn accept<P: ReplayProtocolSet>(
             "input timing request epoch changed"
         );
         if request.command == "input_timing_native_prefix" {
-            let active = state.protocols.input_timing().prefix_active(
-                case,
-                live.epoch,
-                MonoInstant::now(),
-            );
+            let active =
+                state
+                    .protocols
+                    .input_timing()
+                    .prefix_active(case, live.epoch, MonoInstant::now());
             return Ok(serde_json::json!({"ok":true,"active":active}));
         }
         if live.fast.is_some() {
@@ -369,7 +383,8 @@ pub(super) async fn accept<P: ReplayProtocolSet>(
         });
         let delivered = |e: &Evidence| {
             state
-                .protocols.input_timing()
+                .protocols
+                .input_timing()
                 .delivered(case, live.admission_epoch, &e.reference)
                 || match &e.reference {
                     DeliveryReference::Exchange(reference) => {
@@ -379,18 +394,18 @@ pub(super) async fn accept<P: ReplayProtocolSet>(
                 }
         };
         let prefix_end = cutoff.map_or(0, |cutoff| {
-            live.evidence
-                .partition_point(|e| e.completed_at < cutoff)
+            live.evidence.partition_point(|e| e.completed_at < cutoff)
         });
         let prefix = &live.evidence[..prefix_end];
         // Input offsets are floor milliseconds. A completion in that same
         // millisecond cannot prove whether it precedes or follows this input.
         let boundary_clear = cutoff.is_some_and(|cutoff| {
-            live.evidence.get(prefix_end).is_none_or(|e| {
-                e.completed_at >= cutoff + chrono::TimeDelta::milliseconds(1)
-            })
+            live.evidence
+                .get(prefix_end)
+                .is_none_or(|e| e.completed_at >= cutoff + chrono::TimeDelta::milliseconds(1))
         });
-        let auto = live.mode == SocketIoTiming::Auto && !live.plan.input.policy.preserve_input_timing;
+        let auto =
+            live.mode == SocketIoTiming::Auto && !live.plan.input.policy.preserve_input_timing;
         let eligible = auto
             && live.plan.covered
             && boundary_clear

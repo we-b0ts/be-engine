@@ -140,8 +140,7 @@ impl RecorderWriter {
                 capture.evidence,
             ),
         };
-        super::storage::write(&run_dir.join("dependencies.jsonl"), b"").await?;
-        super::storage::write(&run_dir.join("dependency-lifecycle.jsonl"), b"").await?;
+        traffic_recording_store::writer::LedgerFiles::initialize(&run_dir).await?;
         #[cfg(any(test, feature = "test-support"))]
         let completion = Arc::new(tokio::sync::Notify::new());
         #[cfg(any(test, feature = "test-support"))]

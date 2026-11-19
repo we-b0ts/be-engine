@@ -1,5 +1,7 @@
 //! Recording host for registered native connection drivers.
 pub mod listener;
+#[cfg(test)]
+mod tests;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
@@ -81,18 +83,32 @@ impl Host {
 impl CaptureHost for Host {
     fn begin_message(
         &self,
-        reference: ProtocolRef,
+        event: &CaptureSnapshot,
     ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>> {
+        let ownership = self.validate(event).map(|()| {
+            self.state
+                .config()
+                .process_owned_dependencies
+                .iter()
+                .filter(|rule| rule.matches_notification(event.payload()))
+                .map(|rule| rule.name().to_owned())
+                .collect::<Vec<_>>()
+        });
+        let reference = event.facts().reference.clone();
         Box::pin(async move {
+            let ownership = ownership?;
             ensure!(
                 reference.protocol() == self.protocol.as_str(),
                 "native message reference changed protocol"
             );
+            let tasks = &self.state.config().process_dependency_tasks;
+            let definite = super::process_classification::definite_process(&ownership, tasks);
             let targets = self
                 .state
                 .inner
                 .active_cases
-                .current_targets_for_message(reference.clone());
+                .current_targets_for_message(reference.clone(), definite);
+            let targets = super::process_classification::classify(targets, ownership, tasks);
             ensure!(
                 targets.capture.is_some(),
                 "recording capture admission is closed"

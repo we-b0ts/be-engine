@@ -1,5 +1,6 @@
 //! Loader integration for ordinary copies of trusted, sealed recording artifacts.
 use super::*;
+use crate::dependency_index::{FileStamp, Paged, store};
 use crate::dependency_index::{RecordReader, RecordSource};
 use serde_json::json;
 use std::fs::{self, File, FileTimes};
@@ -172,7 +173,9 @@ async fn recording_process_index_survives_copy_and_missing_pages_fall_back_local
         &recorder.run_dir.join("indexes/startup-dependencies"),
         &packaged,
     );
-    assert!(recording::load(&scope, &FileStamp::read(&scope).unwrap()).is_none());
+    let (verified, cache) = load_global_index(&scope, reject_rescan).unwrap();
+    assert_eq!(verified.sha256, rebuilt.sha256);
+    assert_eq!(cache, root);
 }
 
 #[test]

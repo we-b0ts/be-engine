@@ -77,7 +77,7 @@ fn read_published(
 ) -> Result<Option<DiagnosticOccurrences>> {
     let (root, bytes, manifest) = sealed_manifest(state)?;
     let manifest_path = root.join(MANIFEST_FILE);
-    let ledger = root.join("dependencies.jsonl");
+    let ledger = crate::dependency_index::recording::dependency_path(&root);
     let manifest_stamp = crate::dependency_index::FileStamp::read_native(&manifest_path)?;
     ensure!(
         fs::read(&manifest_path)? == bytes,
@@ -144,7 +144,9 @@ fn load_selected(state: &RewriteState, requested: Option<(&str, &Value)>) -> Res
         "Source manifest changed before occurrence lookup"
     );
     crate::dependency_index::recording::authenticate(&root)?;
-    let stamp = crate::dependency_index::FileStamp::read_native(&root.join("dependencies.jsonl"))?;
+    let stamp = crate::dependency_index::FileStamp::read_native(
+        &crate::dependency_index::recording::dependency_path(&root),
+    )?;
     let identity = digest(&bytes);
     let selected = requested
         .map(|(api, report)| {
@@ -176,8 +178,9 @@ fn load_selected(state: &RewriteState, requested: Option<(&str, &Value)>) -> Res
     ensure!(
         crate::dependency_index::FileStamp::read_native(&root.join(MANIFEST_FILE))?
             == manifest_stamp
-            && crate::dependency_index::FileStamp::read_native(&root.join("dependencies.jsonl"))?
-                == stamp,
+            && crate::dependency_index::FileStamp::read_native(
+                &crate::dependency_index::recording::dependency_path(&root)
+            )? == stamp,
         "Source recording changed during occurrence lookup"
     );
     Ok(result)
@@ -212,7 +215,9 @@ fn collect(
     }
     #[cfg(any(test, feature = "test-support"))]
     ORIGINAL_TRAVERSALS.set(ORIGINAL_TRAVERSALS.get() + 1);
-    let mut input = crate::dependency_index::RecordStream::open(&root.join("dependencies.jsonl"))?;
+    let mut input = crate::dependency_index::RecordStream::open(
+        &crate::dependency_index::recording::dependency_path(root),
+    )?;
     while let Some((location, raw)) = input.next()? {
         if raw.iter().all(u8::is_ascii_whitespace) {
             continue;

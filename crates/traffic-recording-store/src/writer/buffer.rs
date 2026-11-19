@@ -64,7 +64,7 @@ impl BufferedJsonlWriter {
             .await
             .context("failed to flush JSONL records")?;
         self.evicted_until =
-            super::storage::flush_and_evict(self.writer.get_mut(), self.evicted_until).await?;
+            crate::storage::flush_and_evict(self.writer.get_mut(), self.evicted_until).await?;
         self.dirty = false;
         self.last_flush = Instant::now();
         Ok(())

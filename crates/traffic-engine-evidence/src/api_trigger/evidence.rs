@@ -111,7 +111,7 @@ struct Origin {
 pub(super) fn build(
     files: &[EvidenceFile],
     rules: &[BackgroundDependencyRuleConfig],
-    transactions: Option<&crate::dependency_index::mysql_transactions::Facts>,
+    transactions: Option<&crate::api_trigger::mysql_transaction::facts::Facts>,
 ) -> Result<OriginIndex> {
     let mut index = OriginIndex::default();
     let mut reader = RecordReader::new(8 * 1024 * 1024);

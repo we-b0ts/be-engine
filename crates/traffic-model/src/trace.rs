@@ -29,9 +29,20 @@ pub enum InputKind {
     TransportEnd,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimaryBoundary {
+    Start,
+    ResponseEnd,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum CaptureEvent {
+    PrimaryBoundary {
+        case_id: Uuid,
+        boundary: PrimaryBoundary,
+    },
     #[serde(rename = "message_started")]
     MessageStarted {
         exchange_id: Uuid,

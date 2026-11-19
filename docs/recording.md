@@ -691,8 +691,8 @@ fails startup. To reuse host project state, mount its `local/data`,
 Temporary Source trust and control files live in the container's `runtime/`
 directory and are removed on normal shutdown.
 
-Replay reads `dependencies.jsonl` and the finalized `recording-network.json`
-manifest, creates its own DNS mapping and uses a Replay-session CA. It does not
+Replay reads the sealed dependency inventory and `recording-network.json`,
+creates its own DNS mapping and uses a Replay-session CA. It does not
 read the recording fake DNS registry or require the recording CA private key.
 Sharing Recorder state keeps subsequent recordings consistent; it is not a
 prerequisite for Replay.
@@ -705,11 +705,23 @@ user. The reserved Source UID cannot own recording artifacts.
 
 ## Rewrite handoff
 
-Finalization seals `dependency-manifest.json`, the central `dependencies.jsonl`
-and lifecycle ledger, the complete input inventory and reference-only Case,
-startup, process and unattributed scopes. Replay authenticates the sealed inventory
-and prepares bounded native indexes and reusable read caches. There are no separate
-Case or Global payload files in current recordings.
+Finalization seals `dependency-manifest.json`, `events.tsv`, `dependencies.tsv`,
+the files written under `payload/`, and the complete input inventory. The event
+ledger is ordered by recording-local sequence and carries monotonic offsets in
+microseconds. The dependency ledger stores each semantic exchange once. Large
+fields use a segment reference with byte offset, length and checksum. A field
+above 4 KiB is stored out of line. Segments roll over before the next value once
+they have reached 32 MiB, so a value that crosses the threshold stays together.
+
+Case, startup, process and unattributed scopes reference the central ledger.
+Replay authenticates the sealed inventory and prepares bounded native indexes.
+Scoped recordings publish portable startup, process and unattributed indexes
+under `indexes/`.
+
+Fast Replay caps the recorded gaps before sequenced response headers, parts and
+completion. Requests and actual wire receipts still advance the Source cursor.
+Engine.IO replies use the live Target ping payload, with capped delays for
+recorded pong bindings. Missing pongs retain their recorded behavior.
 
 Source proof retains original central byte positions and content hashes. Derived
 indexes and independent attribution overlays do not modify the sealed recording.

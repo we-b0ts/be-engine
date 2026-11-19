@@ -92,8 +92,14 @@ pub(super) async fn execute_with_feedback(
     let mut tail_compressed = false;
     let mut output_count = 0;
     let mut last_output = started;
-    let mut heartbeats =
-        heartbeat::Heartbeats::new(transcript, heartbeat_timeout && transport.is_websocket());
+    let heartbeat_gap_cap = input_timing
+        .as_ref()
+        .and_then(|timing| timing.heartbeat_gap_cap());
+    let mut heartbeats = heartbeat::Heartbeats::new(
+        transcript,
+        heartbeat_timeout && transport.is_websocket(),
+        heartbeat_gap_cap,
+    );
     let mut namespaces = namespace::Admission::default();
     let has_transport_end = transcript
         .actions

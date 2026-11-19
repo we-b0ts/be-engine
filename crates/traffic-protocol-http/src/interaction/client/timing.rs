@@ -39,6 +39,9 @@ pub trait InputTiming: Send + Sync {
     fn ordered_fast(&self) -> bool {
         false
     }
+    fn heartbeat_gap_cap(&self) -> Option<Duration> {
+        None
+    }
     fn fast_tail(&self) -> Option<FastTail> {
         None
     }

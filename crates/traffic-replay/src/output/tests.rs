@@ -70,6 +70,54 @@ fn ordinary_runtime() -> Arc<SequenceRuntime> {
     ])
 }
 
+#[tokio::test]
+async fn fast_stream_caps_gaps_without_advancing_past_an_interleaved_request() {
+    let plan = SequencePlan::compile(
+        [
+            (1, EventKind::Request),
+            (1, EventKind::ResponseHeaders),
+            (1, EventKind::ResponsePart),
+            (2, EventKind::Request),
+            (1, EventKind::ResponsePart),
+            (1, EventKind::ResponseEnd),
+            (2, EventKind::ResponseEnd),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (dependency_sequence, kind))| SourceEvent {
+            sequence: index as u64 + 1,
+            dependency_sequence,
+            offset_micros: index as u64 * 2_000_000,
+            kind,
+        }),
+    )
+    .unwrap();
+    let cap = Duration::from_millis(5);
+    let runtime = SequenceRuntime::with_fast_gap_cap(plan, Some(cap));
+    let first = runtime.admit(1).unwrap();
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(1);
+    first.wait_delivery(deadline).await.unwrap();
+    assert_eq!(first.reserved_kind(), Some(EventKind::ResponseHeaders));
+    assert!(started.elapsed() >= cap);
+    first.publish().unwrap();
+    first.wait_body_delivery(deadline).await.unwrap();
+    assert_eq!(first.consecutive_parts(8), 1);
+    first.publish().unwrap();
+    assert_eq!(runtime.expected().unwrap().dependency_sequence, 2);
+    assert!(first.reserved_kind().is_none());
+    let second = runtime.admit(2).unwrap();
+    first.wait_body_delivery(deadline).await.unwrap();
+    assert_eq!(first.reserved_kind(), Some(EventKind::ResponsePart));
+    first.publish().unwrap();
+    first.wait_body_delivery(deadline).await.unwrap();
+    assert_eq!(first.reserved_kind(), Some(EventKind::ResponseEnd));
+    first.publish().unwrap();
+    second.wait_delivery(deadline).await.unwrap();
+    second.publish().unwrap();
+    assert!(runtime.complete());
+}
+
 #[derive(Default)]
 struct Writer {
     bytes: Vec<u8>,

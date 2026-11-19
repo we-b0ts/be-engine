@@ -205,7 +205,7 @@ async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_s
             installed
         );
         let row: Value = serde_json::from_str(
-            std::fs::read_to_string(temp.path().join("dependencies.jsonl"))
+            crate::recorder::test_io::read_to_string_sync(temp.path().join("dependencies.jsonl"))
                 .unwrap()
                 .trim(),
         )

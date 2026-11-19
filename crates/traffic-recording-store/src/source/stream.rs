@@ -1,4 +1,4 @@
-//! Bounded working-set traversal of immutable JSONL evidence.
+//! Bounded working-set traversal of immutable dependency records.
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ impl RecordStream {
                 "central dependency record checksum mismatch"
             );
             self.position += 1;
-            return Ok(Some((location, &self.buffer)));
+            return self.decoded(location).map(Some);
         }
         let length = self
             .reader
@@ -80,6 +80,13 @@ impl RecordStream {
             sha256: digest(&self.buffer),
         };
         self.offset += length as u64;
-        Ok(Some((location, &self.buffer)))
+        self.decoded(location).map(Some)
+    }
+
+    fn decoded(&mut self, location: RecordLocation) -> Result<(RecordLocation, &[u8])> {
+        if super::compact::is_compact(&self.source.path) {
+            self.buffer = super::compact::decode(&self.source.path, &self.buffer)?;
+        }
+        Ok((location, &self.buffer))
     }
 }

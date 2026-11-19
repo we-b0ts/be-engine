@@ -10,6 +10,7 @@ struct Observer {
     case: String,
     epoch: DateTime<Utc>,
     ordered_fast: bool,
+    heartbeat_gap_cap: Option<Duration>,
     fast_tail: Option<FastTail>,
 }
 
@@ -34,6 +35,9 @@ pub async fn connect(
         case: case.into(),
         epoch: serde_json::from_value(response["epoch"].clone())?,
         ordered_fast: response["ordered_fast"] == true,
+        heartbeat_gap_cap: response["fast_interval_cap_ms"]
+            .as_u64()
+            .map(Duration::from_millis),
         fast_tail: serde_json::from_value(response["fast_tail"].clone())?,
     }))
 }
@@ -60,6 +64,10 @@ impl InputTiming for Observer {
 
     fn ordered_fast(&self) -> bool {
         self.ordered_fast
+    }
+
+    fn heartbeat_gap_cap(&self) -> Option<Duration> {
+        self.heartbeat_gap_cap
     }
 
     fn fast_tail(&self) -> Option<FastTail> {

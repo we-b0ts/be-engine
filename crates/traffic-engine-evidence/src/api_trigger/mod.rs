@@ -14,6 +14,7 @@ mod tests;
 pub use cache::load;
 pub use cache::seal;
 pub use evidence::OriginIndex;
+pub use mysql_transaction::facts::FRAGMENT as MYSQL_TRANSACTION_FRAGMENT;
 
 /// Shared Source preparation for managed Replay's index phase and standalone loading.
 pub fn prepare(
@@ -27,7 +28,7 @@ pub fn prepare(
         load(source, rules)
     } else {
         let (root, files) = crate::dependency_index::recording_files(source)?;
-        crate::dependency_index::mysql_transactions::load(&root, &files)?;
+        crate::api_trigger::mysql_transaction::facts::load(&root, &files)?;
         if rules.iter().any(|rule| rule.trigger_source().is_some()) {
             load(&root, rules)
         } else {

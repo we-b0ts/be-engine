@@ -4,6 +4,7 @@ use super::super::source;
 use super::super::source::SourceSnapshot;
 use super::*;
 use crate::dependency::attribution::DependencyOwner;
+use crate::dependency_index::recording::dependency_path;
 use crate::policy::CompiledPolicy;
 use crate::protocols::recording::events::{
     RecorderEvent, RedisExchangeEvent, RedisPubSubPushEvent,
@@ -122,14 +123,7 @@ async fn context_without_ownership_returns_does_not_read_unrelated_notification_
     let (target, state) = source("socketio").await;
     let original = source::load(&state).unwrap();
     let policy = load(target.path()).unwrap();
-    fs::remove_file(
-        state
-            .case_source
-            .as_ref()
-            .unwrap()
-            .join("dependencies.jsonl"),
-    )
-    .unwrap();
+    fs::remove_file(dependency_path(state.case_source.as_ref().unwrap())).unwrap();
 
     assert_eq!(
         claim_groups(&policy, &original, &[]).unwrap(),
@@ -144,14 +138,7 @@ async fn original_pubsub_inputs_bind_the_complete_receive_task_without_claiming_
  {
     let (target, state) = source("socketio").await;
     let original = source::load(&state).unwrap();
-    let before = fs::read(
-        state
-            .case_source
-            .as_ref()
-            .unwrap()
-            .join("dependencies.jsonl"),
-    )
-    .unwrap();
+    let before = fs::read(dependency_path(state.case_source.as_ref().unwrap())).unwrap();
     let policy = load(target.path()).unwrap();
     let mut selected = proposal(&original, &policy);
     bind(target.path(), &state, &original, &mut selected).unwrap();
@@ -167,14 +154,7 @@ async fn original_pubsub_inputs_bind_the_complete_receive_task_without_claiming_
         DependencyOwner::Unattributed { .. }
     )));
     assert_eq!(
-        fs::read(
-            state
-                .case_source
-                .as_ref()
-                .unwrap()
-                .join("dependencies.jsonl")
-        )
-        .unwrap(),
+        fs::read(dependency_path(state.case_source.as_ref().unwrap())).unwrap(),
         before
     );
     let mut partial = proposal(&original, &policy);

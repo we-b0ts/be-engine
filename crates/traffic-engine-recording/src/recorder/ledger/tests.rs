@@ -80,13 +80,9 @@ async fn admission_sequences_survive_reverse_completion_in_the_real_writer() {
     let rows = records(&state).await;
     assert_eq!(rows[0]["capture"]["sequence"], 2);
     assert_eq!(rows[1]["capture"]["sequence"], 1);
-    let raw =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("dependency-lifecycle.jsonl"))
-            .await
-            .unwrap();
-    let events = raw
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+    let events = crate::dependency_index::recording::events(&state.recorder().run_dir)
+        .unwrap()
+        .map(|event| serde_json::to_value(event.unwrap()).unwrap())
         .collect::<Vec<_>>();
     let mut sequences = events
         .iter()
@@ -274,31 +270,25 @@ async fn sealing_twice_and_late_facts_cannot_mutate_the_authenticated_ledger() {
     state.record_event_for_targets(failure(), start(&state));
     state.recorder().finish_run().await.unwrap();
     let root = &state.recorder().run_dir;
-    let payload = tokio::fs::read(root.join("dependencies.jsonl"))
+    let payload = tokio::fs::read(root.join("dependencies.tsv"))
         .await
         .unwrap();
-    let lifecycle = tokio::fs::read(root.join("dependency-lifecycle.jsonl"))
-        .await
-        .unwrap();
+    let lifecycle = tokio::fs::read(root.join("events.tsv")).await.unwrap();
     state.recorder().finish_run().await.unwrap();
     assert_eq!(
-        tokio::fs::read(root.join("dependency-lifecycle.jsonl"))
-            .await
-            .unwrap(),
+        tokio::fs::read(root.join("events.tsv")).await.unwrap(),
         lifecycle
     );
     state.record_event_for_targets(failure(), start(&state));
     assert!(state.recorder().flush_traffic().await.is_err());
     assert_eq!(
-        tokio::fs::read(root.join("dependencies.jsonl"))
+        tokio::fs::read(root.join("dependencies.tsv"))
             .await
             .unwrap(),
         payload
     );
     assert_eq!(
-        tokio::fs::read(root.join("dependency-lifecycle.jsonl"))
-            .await
-            .unwrap(),
+        tokio::fs::read(root.join("events.tsv")).await.unwrap(),
         lifecycle
     );
 }
@@ -424,7 +414,7 @@ async fn runtime_initialization_labels_do_not_invent_a_restart_phase() {
         .await
         .unwrap();
     recorder.finish_run().await.unwrap();
-    let raw = tokio::fs::read_to_string(recorder.run_dir.join("dependencies.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(recorder.run_dir.join("dependencies.jsonl"))
         .await
         .unwrap();
     let row: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();

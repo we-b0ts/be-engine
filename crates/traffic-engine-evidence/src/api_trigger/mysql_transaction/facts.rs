@@ -1,14 +1,24 @@
 //! Rule-independent, source-bound MySQL transaction intervals. No SQL or row payloads.
-use super::{FileIndex, FileStamp, model::IndexedMysqlRecord, store};
+use crate::dependency_index::{
+    FileIndex, FileStamp, IndexedRecord, RecordLocation, global, scoped, store,
+};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
+use traffic_protocol_mysql::source_intervals::Transaction;
+use traffic_recording_store::source::index::VERSION as FILE_INDEX_VERSION;
 
 const VERSION: u32 = 1;
 pub const FRAGMENT: &str = ".mysql-transactions.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexedMysqlRecord {
+    pub location: RecordLocation,
+    pub summary: serde_json::Value,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceFile {
@@ -21,7 +31,7 @@ pub struct SourceFile {
 impl SourceFile {
     pub fn index(&self) -> FileIndex {
         let mut index = FileIndex {
-            version: super::model::VERSION,
+            version: FILE_INDEX_VERSION,
             stamp: self.stamp.clone(),
             sha256: self.sha256.clone(),
             scope_membership_sha256: None,
@@ -31,12 +41,25 @@ impl SourceFile {
             indexes: Default::default(),
             proof_records: None,
         };
-        index.set_mysql_records(self.records.clone());
+        self.project_into(&mut index);
         index
     }
-}
 
-pub use traffic_protocol_mysql::source_intervals::{Member, Transaction};
+    pub fn project_into(&self, index: &mut FileIndex) {
+        index.indexes.insert(
+            "mysql".into(),
+            self.records
+                .iter()
+                .map(|record| IndexedRecord {
+                    location: record.location.clone(),
+                    summary: record.summary.clone(),
+                    key: String::new(),
+                    connection_id: None,
+                })
+                .collect(),
+        );
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Facts {
@@ -51,7 +74,7 @@ pub struct Facts {
 pub fn load(root: &Path, cases: &[PathBuf]) -> Result<Facts> {
     let mut paths = cases.to_vec();
     let global = root.join("global-dependencies.jsonl");
-    if crate::dependency_index::scoped::exists(&global) {
+    if scoped::exists(&global) {
         paths.push(global);
     }
     let mut stamps = BTreeMap::new();
@@ -94,20 +117,38 @@ pub fn load(root: &Path, cases: &[PathBuf]) -> Result<Facts> {
         let (sha256, records) = if relative == Path::new("global-dependencies.jsonl") {
             // The paged Global index excludes large notification bodies and keeps
             // original offsets. Never rescan the multi-gigabyte JSONL here.
-            let (index, base) = super::global::load_global_index(&path, |_| Ok(()))?;
+            let (index, base) = global::load_global_index(&path, |_| Ok(()))?;
             let mut records = Vec::new();
-            let pages = super::global::global_records(&index, &base)?;
+            let pages = global::global_records(&index, &base)?;
             for page in 0..pages.pages() {
                 for entry in pages.read_page(page)? {
-                    if let Some(record) = super::mysql::record(entry.location, &entry.record) {
-                        records.push(record);
-                    }
+                    let projection = crate::protocols::default_providers()
+                        .evidence()
+                        .lookup_projection(&entry.record)?;
+                    records.extend(
+                        projection
+                            .lookups
+                            .into_iter()
+                            .filter(|lookup| lookup.index == "mysql")
+                            .map(|lookup| IndexedMysqlRecord {
+                                location: entry.location.clone(),
+                                summary: lookup.summary,
+                            }),
+                    );
                 }
             }
             (index.sha256, records)
         } else {
-            let index = store::load_mysql_file(&path)?;
-            (index.sha256.clone(), index.mysql_records())
+            let index = store::load_file(&path)?;
+            let records = index
+                .records("mysql")
+                .iter()
+                .map(|record| IndexedMysqlRecord {
+                    location: record.location.clone(),
+                    summary: record.summary.clone(),
+                })
+                .collect();
+            (index.sha256, records)
         };
         files.push(SourceFile {
             path: relative.clone(),

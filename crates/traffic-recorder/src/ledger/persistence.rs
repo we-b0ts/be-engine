@@ -15,23 +15,20 @@ use crate::GlobalDependencyAttribution;
 use traffic_model::attribution::DependencyOwner;
 use traffic_model::recording::*;
 use traffic_protocol::capture::{CaptureEvidence, CaptureSnapshot};
+use traffic_recording_store::writer::LedgerFiles;
 
 use super::LifecycleRecord;
 
 pub struct LedgerWriter {
     root: PathBuf,
+    storage: LedgerFiles,
     process_epoch: Uuid,
     run_epoch: Uuid,
     clock: RecordingClock,
-    offset: u64,
-    records: usize,
     unattributed: u64,
     synthetic: u64,
     synthetic_failures: u64,
     lifecycle: BTreeMap<Uuid, bool>,
-    ledger_hash: Sha256,
-    lifecycle_hash: Sha256,
-    lifecycle_length: u64,
     cases: BTreeMap<Uuid, Vec<ScopeRecordLocation>>,
     startup: Vec<ScopeRecordLocation>,
     process: Vec<ScopeRecordLocation>,
@@ -57,18 +54,14 @@ impl LedgerWriter {
         Self {
             evidence,
             root: root.into(),
+            storage: LedgerFiles::new(root),
             process_epoch,
             run_epoch: clock.recording_id(),
             clock,
-            offset: 0,
-            records: 0,
             unattributed: 0,
             synthetic: 0,
             synthetic_failures: 0,
             lifecycle: BTreeMap::new(),
-            ledger_hash: Sha256::new(),
-            lifecycle_hash: Sha256::new(),
-            lifecycle_length: 0,
             cases: BTreeMap::new(),
             startup: vec![],
             process: vec![],
@@ -127,15 +120,11 @@ impl LedgerWriter {
                 self.lifecycle.get(exchange_id) == Some(&false),
                 "dependency pairing changed after termination or without admission"
             ),
-            LifecycleRecord::Sealed { .. } | LifecycleRecord::Input { .. } => {}
+            LifecycleRecord::Sealed { .. }
+            | LifecycleRecord::Input { .. }
+            | LifecycleRecord::PrimaryBoundary { .. } => {}
         }
-        let line = json_line(record)?;
-        files
-            .append(&self.root.join("dependency-lifecycle.jsonl"), &line)
-            .await?;
-        self.lifecycle_hash.update(&line);
-        self.lifecycle_length += line.len() as u64;
-        Ok(())
+        self.storage.append_event(files, record).await
     }
 
     pub async fn append(
@@ -278,21 +267,6 @@ impl LedgerWriter {
             capture_complete: complete,
             payload: value,
         })?;
-        let line = json_line(&value)?;
-        let location = ScopeRecordLocation {
-            line: self.records + 1,
-            offset: self.offset,
-            length: line.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&line)),
-            exchange_id: metadata.exchange_id,
-            effect_index: metadata.effect_index,
-        };
-        files
-            .append(&self.root.join("dependencies.jsonl"), &line)
-            .await?;
-        self.ledger_hash.update(&line);
-        self.offset += line.len() as u64;
-        self.records += 1;
         if metadata.semantic_required {
             self.semantic_inventory.observe_mandatory(
                 &value,
@@ -300,6 +274,15 @@ impl LedgerWriter {
                 crate::supports_replay(&value, &metadata.attribution, &self.evidence),
             );
         }
+        let position = self.storage.append_dependency(files, value).await?;
+        let location = ScopeRecordLocation {
+            line: position.line,
+            offset: position.offset,
+            length: position.length,
+            sha256: position.sha256,
+            exchange_id: metadata.exchange_id,
+            effect_index: metadata.effect_index,
+        };
         // Every raw observation is retained centrally. Maintenance and snapshot
         // reuse remain observations without creating business consumption slots.
         match metadata.attribution {
@@ -474,11 +457,7 @@ impl LedgerWriter {
             })?,
         )
         .await?;
-        // Empty runs still have explicit ledger identities and discoverable views.
-        files
-            .append(&self.root.join("dependencies.jsonl"), b"")
-            .await?;
-        files.flush_all().await?;
+        let mut identities = self.storage.seal(files).await?;
         self.global_scopes().await?;
         let inputs = self
             .inputs
@@ -488,18 +467,6 @@ impl LedgerWriter {
         for directory in inputs {
             self.case_scope(&directory).await?;
         }
-        let mut identities = vec![
-            LedgerFileIdentity {
-                path: "dependencies.jsonl".into(),
-                length: self.offset,
-                sha256: format!("{:x}", self.ledger_hash.clone().finalize()),
-            },
-            LedgerFileIdentity {
-                path: "dependency-lifecycle.jsonl".into(),
-                length: self.lifecycle_length,
-                sha256: format!("{:x}", self.lifecycle_hash.clone().finalize()),
-            },
-        ];
         for name in [
             "indexes/startup-scope.json",
             "indexes/process-scope.json",
@@ -528,7 +495,7 @@ impl LedgerWriter {
             }
         }
         let manifest = RecordingManifest {
-            schema: RECORDING_SCHEMA.into(),
+            schema: COMPACT_RECORDING_SCHEMA.into(),
             run_id: self
                 .root
                 .file_name()
@@ -547,7 +514,7 @@ impl LedgerWriter {
                 && coverage.admitted == coverage.terminal
                 && self.inputs.values().all(|input| input.complete),
             coverage,
-            records: self.records as u64,
+            records: self.storage.records() as u64,
             unattributed_records: self.unattributed,
             semantic_inventory: self.semantic_inventory.clone(),
             inputs: self.inputs.values().cloned().collect(),

@@ -3585,7 +3585,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "libc",
  "serde",
  "serde_json",
  "sha2",
@@ -3594,6 +3593,7 @@ dependencies = [
  "tracing",
  "traffic-model",
  "traffic-protocol",
+ "traffic-recording-store",
  "uuid",
 ]
 
@@ -3618,10 +3618,15 @@ name = "traffic-recording-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
+ "chrono",
  "libc",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
  "traffic-model",
  "traffic-protocol",
  "uuid",

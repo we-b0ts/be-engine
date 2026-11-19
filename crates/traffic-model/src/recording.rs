@@ -6,6 +6,7 @@ use uuid::Uuid;
 use super::attribution::DependencyOwner;
 
 pub const RECORDING_SCHEMA: &str = "traffic-recording/v4";
+pub const COMPACT_RECORDING_SCHEMA: &str = "traffic-recording/v5";
 pub const SCOPE_SCHEMA: &str = "traffic-dependency-scope/v3";
 pub const MANIFEST_FILE: &str = "dependency-manifest.json";
 

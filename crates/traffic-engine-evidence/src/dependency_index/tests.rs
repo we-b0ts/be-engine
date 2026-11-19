@@ -190,7 +190,7 @@ fn typed_index_envelopes_hash_exact_payloads_and_read_prior_canonical_envelopes(
     assert!(super::store::read_json::<Fields>(&path).is_err());
     let payload = serde_json::to_value(&expected).unwrap();
     let previous = serde_json::json!({
-        "sha256": super::build::digest(&serde_json::to_vec(&payload).unwrap()),
+        "sha256": traffic_recording_store::source::digest(&serde_json::to_vec(&payload).unwrap()),
         "payload": payload,
     });
     fs::write(&path, serde_json::to_vec(&previous).unwrap()).unwrap();

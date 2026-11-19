@@ -1,5 +1,5 @@
 //! Complete metadata selection followed by authenticated reads of original records.
-use super::{FileIndex, FileStamp, Paged, RecordReader, store};
+use super::{FileStamp, Paged, RecordReader};
 use anyhow::{Result, ensure};
 use serde_json::Value;
 use std::path::Path;
@@ -59,27 +59,11 @@ pub fn visit(
             }
         }
     } else {
-        let mut index = super::load_file(path)?;
-        if index.proof_records.is_none() {
-            let root = store::cache_directory(path);
-            store::private_directory(&root)?;
-            let cache = root.join("file-proof-v1.json");
-            index = match store::read_json::<FileIndex>(&cache) {
-                Ok(cached)
-                    if cached.stamp == index.stamp
-                        && cached.version == index.version
-                        && cached.proof_records.is_some() =>
-                {
-                    cached
-                }
-                _ => {
-                    let built =
-                        super::build::build_file(path, &std::sync::atomic::AtomicBool::new(false))?;
-                    store::write_json(&cache, &built)?;
-                    built
-                }
-            };
-        }
+        let index = traffic_recording_store::source::index::load_file_with_proofs(
+            path,
+            crate::protocols::default_providers().evidence(),
+            is_evidence,
+        )?;
         for record in index.proof_records.as_ref().expect("proof index") {
             if selected(&record.selector)? {
                 read(

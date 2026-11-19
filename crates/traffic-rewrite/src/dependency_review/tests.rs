@@ -1,5 +1,6 @@
 //! Current recorder facts enter the real attribution transaction and query paths.
 use super::*;
+use crate::dependency_index::recording::dependency_path;
 use crate::{
     dependency::attribution::AttributionProof,
     protocols::recording::events::{HttpExchangeEvent, RecorderEvent, RedisExchangeEvent},
@@ -136,11 +137,7 @@ async fn ownerless_context_matches_full_source_before_and_after_admission_invent
         3
     );
     // Even a warmed admission projection cannot hide a changed sealed artifact.
-    let central = state
-        .case_source
-        .as_ref()
-        .unwrap()
-        .join("dependencies.jsonl");
+    let central = dependency_path(state.case_source.as_ref().unwrap());
     let mut bytes = fs::read(&central).unwrap();
     bytes.push(b'\n');
     fs::write(central, bytes).unwrap();
@@ -214,11 +211,7 @@ async fn unused_occurrence_projection_matches_full_source_and_retains_seal_check
     let unknown = json!({"unused_case_exchanges":[{
         "case_id":"selected","source_exchange_id":Uuid::new_v4()}]});
     assert!(projected.unused(&unknown, &selected).is_err());
-    let central = state
-        .case_source
-        .as_ref()
-        .unwrap()
-        .join("dependencies.jsonl");
+    let central = dependency_path(state.case_source.as_ref().unwrap());
     let mut bytes = fs::read(&central).unwrap();
     let modified = fs::metadata(&central).unwrap().modified().unwrap();
     let position = bytes
@@ -329,11 +322,7 @@ async fn single_source_information_preserves_sealed_physical_identity_and_shape(
     );
 
     // A warmed index cannot authenticate bytes modified after the recording seal.
-    let path = state
-        .case_source
-        .as_ref()
-        .unwrap()
-        .join("dependencies.jsonl");
+    let path = dependency_path(state.case_source.as_ref().unwrap());
     let mut bytes = fs::read(&path).unwrap();
     let position = bytes
         .windows(b"refresh".len())
@@ -397,14 +386,7 @@ fn proposal(
 async fn task_proof_binds_complete_cross_protocol_scope_and_keeps_original_inventory() {
     let (target, state) = fixture(1).await;
     let original = source::load(&state).unwrap();
-    let bytes = fs::read(
-        state
-            .case_source
-            .as_ref()
-            .unwrap()
-            .join("dependencies.jsonl"),
-    )
-    .unwrap();
+    let bytes = fs::read(dependency_path(state.case_source.as_ref().unwrap())).unwrap();
     let policy = rules::load(target.path()).unwrap();
     let projected = crate::config::native_policy::project_source_policy(&policy.native).unwrap();
     assert_eq!(projected.process_dependency_tasks.len(), 2);
@@ -455,14 +437,7 @@ async fn task_proof_binds_complete_cross_protocol_scope_and_keeps_original_inven
         2
     );
     assert_eq!(
-        fs::read(
-            state
-                .case_source
-                .as_ref()
-                .unwrap()
-                .join("dependencies.jsonl")
-        )
-        .unwrap(),
+        fs::read(dependency_path(state.case_source.as_ref().unwrap())).unwrap(),
         bytes
     );
     let mut stored = RewriteStore::new(target.path())

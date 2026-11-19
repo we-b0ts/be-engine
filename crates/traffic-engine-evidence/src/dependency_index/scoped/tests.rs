@@ -26,7 +26,7 @@ fn write_fixture(root: &Path) -> (PathBuf, Vec<ScopeRecordLocation>) {
             line: number + 1,
             offset: bytes.len() as u64,
             length: raw.len() as u64,
-            sha256: super::super::build::digest(&raw),
+            sha256: traffic_recording_store::source::digest(&raw),
             exchange_id: Uuid::new_v4(),
             effect_index: 0,
         });

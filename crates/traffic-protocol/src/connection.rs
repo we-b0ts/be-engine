@@ -214,7 +214,7 @@ pub struct CaptureTransport {
 pub trait CaptureHost: Send + Sync {
     fn begin_message(
         &self,
-        _reference: ProtocolRef,
+        _event: &CaptureSnapshot,
     ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>> {
         Box::pin(async { anyhow::bail!("server message capture is unavailable") })
     }

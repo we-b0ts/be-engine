@@ -219,35 +219,8 @@ fn only_recording_run_dir(recordings_dir: &Path) -> PathBuf {
 }
 
 fn read_json_lines(path: &Path) -> Vec<Value> {
-    if path
-        .file_name()
-        .is_some_and(|name| name == "dependencies.jsonl")
-        && !path.is_file()
-    {
-        use std::io::{Read, Seek, SeekFrom};
-        let scope_path = path.with_file_name("dependency-scope.json");
-        let scope: Value = serde_json::from_slice(&std::fs::read(&scope_path).unwrap()).unwrap();
-        let ledger = scope_path
-            .parent()
-            .unwrap()
-            .join(scope["run_relpath"].as_str().unwrap())
-            .join("dependencies.jsonl");
-        let mut input = std::fs::File::open(ledger).unwrap();
-        return scope["locations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|location| {
-                input
-                    .seek(SeekFrom::Start(location["offset"].as_u64().unwrap()))
-                    .unwrap();
-                let mut bytes = vec![0; location["length"].as_u64().unwrap() as usize];
-                input.read_exact(&mut bytes).unwrap();
-                serde_json::from_slice(&bytes).unwrap()
-            })
-            .collect();
-    }
-    std::fs::read_to_string(path)
+    let bytes = traffic_recording_store::source::scoped::read_bytes(path).unwrap();
+    std::str::from_utf8(&bytes)
         .unwrap()
         .lines()
         .filter(|line| !line.trim().is_empty())

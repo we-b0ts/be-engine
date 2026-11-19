@@ -31,8 +31,13 @@ pub(super) async fn write_dependency_summary(
         // Blank lines and the final line terminator participate in byte offsets.
         let mut input = input;
         let stamp = input.stamp.clone();
-        let mut case_index =
-            case_dependencies.then(|| Builder::with_evidence(stamp.clone(), (*evidence).clone()));
+        let mut case_index = case_dependencies.then(|| {
+            Builder::with_evidence(
+                stamp.clone(),
+                (*evidence).clone(),
+                crate::dependency_index::proof::is_evidence,
+            )
+        });
         let scope_membership_sha256 = if case_dependencies {
             input.scope_membership_sha256()?
         } else {
@@ -42,7 +47,9 @@ pub(super) async fn write_dependency_summary(
         if scoped && let Some(index) = &mut case_index {
             index.set_scoped();
         }
-        let mut global_index = if case_dependencies {
+        // Scoped recordings publish their authenticated per-scope Global
+        // indexes at seal. The root-level fragment only serves flat inputs.
+        let mut global_index = if case_dependencies || scoped {
             None
         } else {
             Some(GlobalBuilder::with_evidence(
@@ -52,9 +59,6 @@ pub(super) async fn write_dependency_summary(
             )?)
         };
         let mut summary = DependencySummaryBuilder::new((*evidence).clone());
-        if scoped && let Some(index) = &mut global_index {
-            index.set_scoped();
-        }
         while let Some((location, raw)) = input.next()? {
             let value = if raw.iter().all(u8::is_ascii_whitespace) {
                 None

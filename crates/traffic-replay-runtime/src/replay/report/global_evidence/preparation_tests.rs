@@ -130,7 +130,13 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_native_inventory()
         )
         .unwrap()
     );
-    assert!(recorder.run_dir().join(GLOBAL_FRAGMENT).is_file());
+    assert!(
+        recorder
+            .run_dir()
+            .join("indexes/startup-dependencies/index.json")
+            .is_file()
+    );
+    assert!(!recorder.run_dir().join(GLOBAL_FRAGMENT).exists());
     assert!(!recorder.run_dir().join(".replay/replay-ca.pem").exists());
     assert!(status.extensions.is_empty());
     let report = temp
@@ -371,7 +377,13 @@ async fn unsupported_source_only_prewarm_preserves_recording_status_and_native_i
         serde_json::from_slice(&fs::read(recorder.run_dir().join("recording-run.json")).unwrap())
             .unwrap();
     assert_eq!(report["status"], "completed");
-    assert!(recorder.run_dir().join(GLOBAL_FRAGMENT).is_file());
+    assert!(
+        recorder
+            .run_dir()
+            .join("indexes/startup-dependencies/index.json")
+            .is_file()
+    );
+    assert!(!recorder.run_dir().join(GLOBAL_FRAGMENT).exists());
     let raw = crate::dependency_index::scoped::read_bytes(
         &recorder.run_dir().join("global-dependencies.jsonl"),
     )
@@ -460,7 +472,11 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
     let moved_policy = destination.path().join(".traffic-e2e/policy.yaml");
     fs::write(&moved_policy, config_policy(&config)).unwrap();
     fs::remove_dir_all(origin.path().join(".traffic-e2e")).unwrap();
-    assert!(run.join(GLOBAL_FRAGMENT).is_file());
+    assert!(
+        run.join("indexes/startup-dependencies/index.json")
+            .is_file()
+    );
+    assert!(!run.join(GLOBAL_FRAGMENT).exists());
     assert!(
         case_path(&run)
             .join(crate::dependency_index::FRAGMENT)

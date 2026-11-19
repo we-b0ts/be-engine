@@ -175,6 +175,34 @@ async fn emission_is_a_distinct_source_obligation_with_scope_and_real_delivery_b
 }
 
 #[tokio::test]
+async fn prepared_trace_selects_requests_and_messages_without_postings() {
+    let mut inventory = with_emission();
+    inventory.candidates = Default::default();
+    inventory.emissions.clear();
+
+    assert!(matches!(
+        select(&inventory, ReplaySource::Case, "second"),
+        Selection::NotFound
+    ));
+    assert!(matches!(
+        select(&inventory, ReplaySource::Case, "first"),
+        Selection::Matched(selected) if selected.index == 0
+    ));
+    let first = inventory.claim(0).unwrap();
+    first.wait_sequence_delivery().await.unwrap();
+    assert!(first.publish_wire());
+    assert!(matches!(
+        inventory.finish(0, &first, || Ok(())),
+        Finish::Committed(())
+    ));
+    let anchor = inventory.exchanges[0].native.reference.clone();
+    assert_eq!(
+        inventory.select_message(PROTOCOL, &endpoint(), Some("case"), &[anchor]),
+        Some(2)
+    );
+}
+
+#[tokio::test]
 async fn cancelled_emission_remains_failed_and_cannot_advance_to_the_next_request() {
     let mut inventory = with_emission();
     let first = inventory.claim(0).unwrap();

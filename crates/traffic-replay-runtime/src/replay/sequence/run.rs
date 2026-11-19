@@ -63,7 +63,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
                 .flatten()
                 .chain(&scope.registered)
                 .map(|(_, sequence)| *sequence);
-            let runtime = SequenceRuntime::new(catalog.scope(sequence)?);
+            let runtime = self.sequence_runtime(catalog.scope(sequence)?);
             for (protocol, references) in scope.protocols {
                 bindings
                     .entry(protocol)

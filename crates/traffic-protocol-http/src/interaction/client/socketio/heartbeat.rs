@@ -53,10 +53,15 @@ pub(super) struct Heartbeats {
     responses: BTreeMap<u64, (u64, u64)>,
     pending: BTreeMap<(Instant, u64), (u64, String)>,
     next_ping: u64,
+    gap_cap: Option<Duration>,
 }
 
 impl Heartbeats {
-    pub(super) fn new(input: &InputTranscript, keep_alive: bool) -> Self {
+    pub(super) fn new(
+        input: &InputTranscript,
+        keep_alive: bool,
+        gap_cap: Option<Duration>,
+    ) -> Self {
         let recorded = input.socket_io_heartbeat.as_ref().filter(|_| !keep_alive);
         Self {
             recorded: recorded.is_some(),
@@ -77,6 +82,7 @@ impl Heartbeats {
                 .collect(),
             pending: BTreeMap::new(),
             next_ping: 0,
+            gap_cap,
         }
     }
 
@@ -102,8 +108,9 @@ impl Heartbeats {
     pub(super) fn ping(&mut self, payload: String, now: Instant) -> Result<bool> {
         self.next_ping += 1;
         if let Some((sequence, delay)) = self.responses.remove(&self.next_ping) {
+            let delay = Duration::from_millis(delay);
             let due = now
-                .checked_add(Duration::from_millis(delay))
+                .checked_add(self.gap_cap.map_or(delay, |cap| cap.min(delay)))
                 .context("recorded heartbeat delay exceeds the Target clock range")?;
             self.pending
                 .insert((due, self.next_ping), (sequence, payload));

@@ -11,8 +11,9 @@ use uuid::Uuid;
 
 use super::super::model::RewriteState;
 use crate::dependency::observation::{
-    CaptureMetadata, LedgerFileIdentity, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest,
+    COMPACT_RECORDING_SCHEMA, CaptureMetadata, LedgerFileIdentity, MANIFEST_FILE, RecordingManifest,
 };
+use crate::dependency_index::recording::supported_recording_schema;
 mod lookup;
 pub use lookup::information;
 pub mod occurrences;
@@ -79,7 +80,9 @@ pub fn inventory_at(path: &Path, run_id: &str) -> Result<(String, u64)> {
     let bytes = fs::read(root.join(MANIFEST_FILE))?;
     let manifest: RecordingManifest = serde_json::from_slice(&bytes)?;
     ensure!(
-        manifest.schema == RECORDING_SCHEMA && manifest.sealed && manifest.run_id == run_id,
+        supported_recording_schema(&manifest.schema)
+            && manifest.sealed
+            && manifest.run_id == run_id,
         "Source recording inventory is not the current sealed workflow input"
     );
     Ok((
@@ -98,7 +101,7 @@ fn sealed_manifest(state: &RewriteState) -> Result<(PathBuf, Vec<u8>, RecordingM
     let bytes = fs::read(root.join(MANIFEST_FILE))?;
     let manifest: RecordingManifest = serde_json::from_slice(&bytes)?;
     ensure!(
-        manifest.schema == RECORDING_SCHEMA && manifest.sealed,
+        supported_recording_schema(&manifest.schema) && manifest.sealed,
         "attribution requires a sealed current-format Source recording"
     );
     ensure!(
@@ -117,17 +120,24 @@ fn sealed_index(
     crate::dependency_index::FileIndex,
 )> {
     let (root, bytes, manifest) = sealed_manifest(state)?;
-    let path = root.join("dependencies.jsonl");
+    if manifest.schema == COMPACT_RECORDING_SCHEMA {
+        crate::dependency_index::recording::authenticate(&root)?;
+    }
+    let path = crate::dependency_index::recording::dependency_path(&root);
     let index = crate::dependency_index::load_file(&path)?;
     let identity = manifest
         .files
         .iter()
-        .find(|file| file.path == "dependencies.jsonl")
+        .find(|file| {
+            path.file_name()
+                .is_some_and(|name| name == file.path.as_str())
+        })
         .context("Source manifest omits the central dependency file")?;
     ensure!(
         identity.length == index.stamp.size
-            && identity.sha256.trim_start_matches("sha256:")
-                == index.sha256.trim_start_matches("sha256:"),
+            && (manifest.schema == COMPACT_RECORDING_SCHEMA
+                || identity.sha256.trim_start_matches("sha256:")
+                    == index.sha256.trim_start_matches("sha256:")),
         "Source central dependency content differs from sealed manifest"
     );
     Ok((root, bytes, manifest, index))
@@ -135,7 +145,7 @@ fn sealed_index(
 
 pub fn load(state: &RewriteState) -> Result<SourceSnapshot> {
     let (root, bytes, manifest, index) = sealed_index(state)?;
-    let path = root.join("dependencies.jsonl");
+    let path = crate::dependency_index::recording::dependency_path(&root);
     let target = root
         .ancestors()
         .find(|path| path.join(".traffic-e2e").is_dir());

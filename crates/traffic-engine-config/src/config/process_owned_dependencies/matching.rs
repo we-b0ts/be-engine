@@ -2,6 +2,13 @@
 use super::*;
 
 impl BackgroundDependencyRuleConfig {
+    pub fn matches_notification(&self, event: &serde_json::Value) -> bool {
+        match self {
+            Self::RedisPubsub { selector, .. } => super::pubsub::matches_value(selector, event),
+            _ => false,
+        }
+    }
+
     pub fn matches_http_request(&self, method: &str, uri: &Uri, authority: Option<&str>) -> bool {
         let Self::Http {
             authorities,
