@@ -43,13 +43,13 @@ completed recordings without starting capture. See [docs/recording.md](docs/reco
 ## Essential Commands
 
 Before opening or updating an MR, run at least the following. Replace
-`origin/master` when the MR targets another branch:
+`origin/main` when the MR targets another branch:
 
 ```bash
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-CODE_ORG_BASE=origin/master \
+CODE_ORG_BASE=origin/main \
   plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
 ```
 

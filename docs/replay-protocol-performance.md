@@ -162,6 +162,6 @@ committed traffic captures:
 
 The implementation passed `cargo test` (4,074 passed, 33 existing ignored),
 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`CODE_ORG_BASE=origin/master .../check-code-organization` and `git diff --check`.
+`CODE_ORG_BASE=origin/main .../check-code-organization` and `git diff --check`.
 See [execution contracts](protocol-rule-execution-design.md) for architecture,
 supported carrier boundaries and native-only constraints.

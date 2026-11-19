@@ -705,7 +705,7 @@ Final repository checks passed:
 cargo fmt --check
 cargo test --no-fail-fast
 cargo clippy --all-targets -- -D warnings
-CODE_ORG_BASE=origin/master plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
+CODE_ORG_BASE=origin/main plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
 git diff --check
 ```
 
