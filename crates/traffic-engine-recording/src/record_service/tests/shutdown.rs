@@ -241,14 +241,22 @@ async fn exercise(mode: &'static str) {
                 .iter()
                 .any(|location| { location["exchange_id"] == event["capture"]["exchange_id"] })
         );
-        let post = read_json(&run.join("indexes/shutdown-scope.json"));
-        assert_eq!(post["scope"]["kind"], "shutdown");
+        let post =
+            crate::dependency_index::scoped::read_index(&run.join("indexes/shutdown-scope.json"))
+                .unwrap();
+        assert!(matches!(
+            post.scope,
+            crate::dependency::observation::ScopeKind::Shutdown
+        ));
+        let exchange_id = event["capture"]["exchange_id"]
+            .as_str()
+            .unwrap()
+            .parse::<uuid::Uuid>()
+            .unwrap();
         assert!(
-            post["locations"]
-                .as_array()
-                .unwrap()
+            post.locations
                 .iter()
-                .any(|location| { location["exchange_id"] == event["capture"]["exchange_id"] })
+                .any(|location| location.exchange_id == exchange_id)
         );
         let manifest = read_json(&run.join("dependency-manifest.json"));
         assert_eq!(

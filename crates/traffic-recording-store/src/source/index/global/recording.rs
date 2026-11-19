@@ -41,14 +41,14 @@ pub fn seal_recording_scopes_with_evidence(
         if load(&view, &stamp, true).is_some_and(|(index, _)| index.providers == revisions) {
             continue;
         }
-        let scope_stamp = FileStamp::read_native(&view)?;
+        let scope_stamp = FileStamp::read(&view)?;
         let output = indexes.join(format!("{scope}-dependencies"));
         store::private_directory(&output)?;
         let index = build_index_with_evidence(
             &view, &output, &stamp, &validate, &cancelled, evidence, true,
         )?;
         ensure!(
-            FileStamp::read_native(&view)? == scope_stamp
+            FileStamp::read(&view)? == scope_stamp
                 && FileStamp::read_native(&manifest_path)? == manifest_stamp,
             "recording scope or manifest changed during index publication"
         );
@@ -74,7 +74,10 @@ pub(super) fn load(path: &Path, stamp: &FileStamp, verify: bool) -> Option<(Glob
     if indexes.file_name()?.to_str()? != "indexes" {
         return None;
     }
-    let scope = view.file_name()?.to_str()?.strip_suffix("-scope.json")?;
+    let name = view.file_name()?.to_str()?;
+    let scope = name
+        .strip_suffix("-scope.bin")
+        .or_else(|| name.strip_suffix("-scope.json"))?;
     if !PACKAGED_SCOPES.contains(&scope) {
         return None;
     }

@@ -40,6 +40,7 @@ enum EventType {
     MessageStarted,
     WireOutputStarted,
     WireOutput,
+    WireOutputCancelled,
     CaptureTerminated,
     CaptureSealed,
 }
@@ -51,6 +52,7 @@ tokens!(EventType {
     MessageStarted => "message_started",
     WireOutputStarted => "wire_output_started",
     WireOutput => "wire_output",
+    WireOutputCancelled => "wire_output_cancelled",
     CaptureTerminated => "capture_terminated",
     CaptureSealed => "capture_sealed",
 });
@@ -115,6 +117,7 @@ pub(crate) fn encode_event(
         CaptureEvent::Bound { .. } => bail!("protocol bindings belong to dependency rows"),
         CaptureEvent::OutputStarted { .. } => EventType::WireOutputStarted,
         CaptureEvent::Output { .. } => EventType::WireOutput,
+        CaptureEvent::OutputCancelled { .. } => EventType::WireOutputCancelled,
         CaptureEvent::Terminal { .. } => EventType::CaptureTerminated,
         CaptureEvent::Sealed => EventType::CaptureSealed,
     };
@@ -172,6 +175,12 @@ pub(crate) fn encode_event(
         } => {
             write!(row, "\t{dependency_sequence}")?;
             write_output(&mut row, *output)?;
+        }
+        CaptureEvent::OutputCancelled {
+            dependency_sequence,
+            started_sequence,
+        } => {
+            write!(row, "\t{dependency_sequence}\t{started_sequence}")?;
         }
         CaptureEvent::Terminal {
             dependency_sequence,
@@ -289,6 +298,10 @@ pub(crate) fn decode_event(row: &str, recording_id: Uuid) -> Result<RecordedEven
                 },
             }
         }
+        EventType::WireOutputCancelled => CaptureEvent::OutputCancelled {
+            dependency_sequence: columns.parse("dependency sequence")?,
+            started_sequence: columns.parse("cancelled output sequence")?,
+        },
         EventType::CaptureTerminated => {
             let dependency_sequence = columns.parse("dependency sequence")?;
             let outcome = columns.field("outcome")?;
@@ -316,6 +329,20 @@ pub(crate) fn decode_event(row: &str, recording_id: Uuid) -> Result<RecordedEven
         offset_micros,
         event,
     })
+}
+
+pub(crate) fn decode_stream_event(
+    row: &[u8],
+    recording_id: Uuid,
+) -> Result<Option<RecordedEvent<CaptureEvent>>> {
+    let mut columns = row.split(|byte| *byte == b'\t');
+    let kind = columns
+        .nth(2)
+        .context("missing recording stream row type")?;
+    match kind {
+        b"request" | b"response" | b"message" | b"observation" => Ok(None),
+        _ => decode_event(std::str::from_utf8(row)?, recording_id).map(Some),
+    }
 }
 
 #[cfg(test)]

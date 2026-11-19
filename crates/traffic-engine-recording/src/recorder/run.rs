@@ -322,8 +322,6 @@ impl Recorder {
         };
         self.write_network_manifest().await?;
         self.writer.seal(self.capture.coverage()).await?;
-        self.prewarm_global_dependencies(status == "completed")
-            .await;
         self.write_run_report(status).await?;
         self.flush_traffic().await?;
         if let Some(owner) = self.artifact_owner {
@@ -334,33 +332,12 @@ impl Recorder {
                     owner
                 )
             })?;
-            super::summary::refresh_owned_dependency_indexes(&self.run_dir, owner).await?;
             info!(
                 run_dir = %self.run_dir.display(),
                 uid = owner.uid(),
                 gid = owner.gid(),
                 "assigned finalized recording artifact ownership"
             );
-        }
-        if status == "completed" {
-            self.seal_case_dependency_indexes().await;
-            let root = self.run_dir.clone();
-            let catalog =
-                tokio::task::spawn_blocking(move || crate::dependency_index::evidence::seal(&root))
-                    .await
-                    .context("Source proof index task failed")
-                    .and_then(|result| result);
-            match catalog {
-                Ok(catalog) => {
-                    if let Some(owner) = self.artifact_owner {
-                        owner.assign_to(&catalog).await?;
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(error=%error,"Source proof index prewarm failed; first use will rebuild it")
-                }
-            }
-            self.prepare_source_indexes().await;
         }
         Ok(has_failed_cases)
     }
@@ -956,18 +933,12 @@ mod tests {
 
         let indexed_case = case("api-index");
         recorder.publish_case(&indexed_case).await.unwrap();
-        recorder.finish_run().await.unwrap();
-
-        let dependency = recorder.case_dir(&indexed_case).join("dependencies.jsonl");
         let fragment = recorder
             .case_dir(&indexed_case)
             .join(crate::dependency_index::FRAGMENT);
-        let index: crate::dependency_index::FileIndex =
-            crate::dependency_index::store::read_json(&fragment).unwrap();
-        assert_eq!(
-            index.stamp,
-            crate::dependency_index::FileStamp::read(&dependency).unwrap()
-        );
+        let before = std::fs::read(&fragment).unwrap();
+        recorder.finish_run().await.unwrap();
+        assert_eq!(std::fs::read(&fragment).unwrap(), before);
         assert_eq!(std::fs::metadata(&fragment).unwrap().uid(), owner.uid());
 
         for path in [recorder.run_dir.as_ref(), artifact.as_path()] {

@@ -35,12 +35,24 @@ pub(crate) fn initialize<P: ReplayProtocolSet>(
     let Some(source) = state.global_path.clone() else {
         return Ok(());
     };
-    let (index, _) = crate::dependency_index::global::load_global_index_for_replay(
-        &source,
-        P::validate_source_record,
-        &std::sync::atomic::AtomicBool::new(false),
-        crate::protocols::default_providers().evidence(),
-    )?;
+    let (source_sha256, source_bytes) =
+        if let Some(root) = crate::dependency_index::recording::root(&state.root_dir) {
+            let (_, manifest) = crate::dependency_index::recording::manifest(&root)?;
+            let bytes = manifest.files.iter().map(|file| file.length).sum();
+            let digest = crate::policy_evidence::digest(&serde_json::to_vec(&(
+                manifest.files,
+                state.dependency_attribution_snapshot.as_ref(),
+            ))?);
+            (digest, bytes)
+        } else {
+            let (index, _) = crate::dependency_index::global::load_global_index_for_replay(
+                &source,
+                P::validate_source_record,
+                &std::sync::atomic::AtomicBool::new(false),
+                crate::protocols::default_providers().evidence(),
+            )?;
+            (index.sha256, index.stamp.size)
+        };
     for protocol in state.global_report_protocols() {
         let protocol = protocol.as_str();
         let layout = state.global_report_layout(protocol)?;
@@ -52,18 +64,8 @@ pub(crate) fn initialize<P: ReplayProtocolSet>(
             continue;
         }
         let identity = Identity {
-            source_sha256: if let Some(root) =
-                crate::dependency_index::recording::root(&state.root_dir)
-            {
-                let (_, manifest) = crate::dependency_index::recording::manifest(&root)?;
-                crate::policy_evidence::digest(&serde_json::to_vec(&(
-                    manifest.files,
-                    state.dependency_attribution_snapshot.as_ref(),
-                ))?)
-            } else {
-                index.sha256.clone()
-            },
-            source_bytes: index.stamp.size,
+            source_sha256: source_sha256.clone(),
+            source_bytes,
             policy: policy.into(),
             protocol: protocol.into(),
             layout,

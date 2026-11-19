@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use traffic_model::recording::ProtocolRef;
 use traffic_protocol::{
@@ -13,13 +13,12 @@ use traffic_protocol::{
 };
 use uuid::Uuid;
 
-use crate::{
-    RedisPubSubPush, RedisSubscriptionKind, events::RedisPubSubPushEvent, recorded::RecordedPush,
-};
+use crate::{RedisPubSubPush, RedisSubscriptionKind, events::RedisPubSubPushEvent};
 
 #[derive(Serialize)]
 pub(super) struct CapturedPush {
     pub id: Uuid,
+    pub notification_kind: &'static str,
     #[serde(flatten)]
     pub event: RedisPubSubPushEvent,
 }
@@ -48,6 +47,7 @@ impl CaptureEvidence for CapturedPush {
                 ("source_after_id", RecordingScalar::Integer),
                 ("database", RecordingScalar::Integer),
                 ("username", RecordingScalar::Text),
+                ("notification_kind", RecordingScalar::Text),
             ],
             request_fields: &[],
             response_fields: &["response"],
@@ -57,16 +57,37 @@ impl CaptureEvidence for CapturedPush {
 }
 
 pub(super) fn recorded(event: &Value) -> Result<RecordedExchange> {
+    let capture = crate::recorded::RecordedCapture::deserialize(&event["response"])?;
+    describe(
+        event,
+        Arc::new(NotificationMessage::decode(capture.decode()?.into())?),
+    )
+}
+
+#[derive(Deserialize)]
+struct PushHeader {
+    replay_safe: bool,
+    database: i64,
+    connection_id: Uuid,
+    subscription_sequence: u64,
+    target_host: String,
+    target_port: u16,
+    duration_ms: u64,
+}
+
+pub(super) fn describe(
+    event: &Value,
+    response: Arc<dyn MessageEncoder>,
+) -> Result<RecordedExchange> {
     ensure!(
         event["rpc_request"].is_null(),
         "correlated Redis RPC notifications require an RPC capability"
     );
-    let push: RecordedPush = serde_json::from_value(event.clone())?;
+    let push = PushHeader::deserialize(event)?;
     ensure!(
         push.replay_safe && push.subscription_sequence > 0 && push.database >= 0,
         "Redis notification has unsafe session evidence"
     );
-    let response = NotificationMessage::decode(push.response.decode()?.into())?;
     let after = ProtocolRef::connection("redis", push.connection_id, push.subscription_sequence);
     let reference = reference(event)?;
     ensure!(
@@ -85,7 +106,7 @@ pub(super) fn recorded(event: &Value) -> Result<RecordedExchange> {
             after,
             offset: Duration::from_millis(push.duration_ms),
         },
-        response: Arc::new(response),
+        response,
     })
 }
 
@@ -157,6 +178,14 @@ pub(super) struct NotificationMessage {
     push: RedisPubSubPush,
 }
 
+pub(super) fn kind_name(kind: RedisSubscriptionKind) -> &'static str {
+    match kind {
+        RedisSubscriptionKind::Channel => "message",
+        RedisSubscriptionKind::Pattern => "pmessage",
+        RedisSubscriptionKind::ShardChannel => "smessage",
+    }
+}
+
 impl NotificationMessage {
     pub(super) fn decode(original: Bytes) -> Result<Self> {
         let push =
@@ -167,11 +196,7 @@ impl NotificationMessage {
 
 impl ProtocolMessage for NotificationMessage {
     fn project(&self) -> Result<ProjectedMessage> {
-        let kind = match self.push.subscription_kind {
-            RedisSubscriptionKind::Channel => "message",
-            RedisSubscriptionKind::Pattern => "pmessage",
-            RedisSubscriptionKind::ShardChannel => "smessage",
-        };
+        let kind = kind_name(self.push.subscription_kind);
         Ok(ProjectedMessage {
             structure: json!({"kind":kind}),
             values: BTreeMap::from([(

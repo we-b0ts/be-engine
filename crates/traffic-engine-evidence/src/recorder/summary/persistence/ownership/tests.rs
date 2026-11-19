@@ -129,11 +129,14 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn real_writer_finalizes_multiple_append_prefixes_and_chowns_every_new_fragment() {
+async fn explicit_refresh_authenticates_multiple_append_prefixes_and_chowns_every_new_fragment() {
     let fixture = Fixture::new(true).await;
     assert!(fixture.prefix_sizes[0] < fixture.prefix_sizes[1]);
     assert!(fixture.prefix_sizes[1] < fixture.bytes.len() as u64);
     fixture.recorder.finish_run().await.unwrap();
+    refresh_owned_dependency_indexes(&fixture.recorder.run_dir, owner())
+        .await
+        .unwrap();
     assert_eq!(
         fs::read(crate::dependency_index::recording::dependency_path(
             &fixture.recorder.run_dir

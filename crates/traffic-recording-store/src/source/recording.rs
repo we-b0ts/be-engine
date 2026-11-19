@@ -1,7 +1,6 @@
 //! Manifest-owned discovery. Directory contents cannot invent Case ownership.
 pub use crate::event_index::SourceEventIndex;
-use crate::event_index::{self, INDEX, JOURNALS};
-use crate::format::{EVENTS, PUSH_EVENTS};
+use crate::event_index::{self, JOURNALS};
 use crate::partitions;
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
@@ -75,26 +74,48 @@ pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<C
     let (root, manifest) = manifest(path)?;
     let compact = manifest.schema == COMPACT_RECORDING_SCHEMA;
     let name = if compact {
-        EVENTS
+        JOURNALS[0]
     } else {
         "dependency-lifecycle.jsonl"
     };
-    let open = |name| fs::File::open(root.join(name)).map(|file| BufReader::new(file).lines());
+    let open = |name| fs::File::open(root.join(name)).map(BufReader::new);
     let ordinary = open(name)?;
-    let pushes = compact.then(|| open(PUSH_EVENTS)).transpose()?;
-    let decode = move |line: std::io::Result<String>| {
-        let line = line?;
-        if compact {
-            crate::event_format::decode_event(&line, manifest.run_epoch)
-        } else {
-            Ok(serde_json::from_str(&line)?)
-        }
-    };
+    let pushes = compact.then(|| open(JOURNALS[1])).transpose()?;
+    let epoch = manifest.run_epoch;
     Ok(event_index::merge(
-        ordinary.map(decode),
-        pushes.into_iter().flatten().map(decode),
+        event_stream(ordinary, epoch, compact),
+        pushes
+            .into_iter()
+            .flat_map(move |file| event_stream(file, epoch, compact)),
         compact,
     ))
+}
+
+fn event_stream(
+    mut file: BufReader<fs::File>,
+    epoch: Uuid,
+    compact: bool,
+) -> impl Iterator<Item = Result<RecordedEvent<CaptureEvent>>> {
+    let mut row = Vec::new();
+    std::iter::from_fn(move || {
+        loop {
+            row.clear();
+            match file.read_until(b'\n', &mut row) {
+                Ok(0) => return None,
+                Err(error) => return Some(Err(error.into())),
+                Ok(_) => {}
+            }
+            let event = if compact {
+                crate::event_format::decode_stream_event(&row, epoch)
+            } else {
+                serde_json::from_slice(&row).map_err(Into::into)
+            };
+            match event {
+                Ok(None) => {}
+                event => return event.transpose(),
+            }
+        }
+    })
 }
 
 pub fn event_index(path: &Path) -> Result<Option<SourceEventIndex>> {
@@ -245,12 +266,9 @@ pub fn authenticate(path: &Path) -> Result<()> {
     let required = if manifest.schema == COMPACT_RECORDING_SCHEMA {
         partitions::FILES
             .into_iter()
-            .chain([
-                partitions::DIRECTORY,
-                INDEX,
-                crate::dependency_columns::FILE,
-            ])
-            .chain(JOURNALS)
+            .chain(crate::original_scope::FILES)
+            .chain(event_index::FILES)
+            .chain([partitions::DIRECTORY, crate::dependency_columns::FILE])
             .collect::<Vec<_>>()
     } else {
         vec!["dependencies.jsonl", "dependency-lifecycle.jsonl"]

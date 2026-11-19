@@ -89,6 +89,30 @@ pub async fn load(
     reader: Arc<std::sync::Mutex<RecordReader>>,
     native: &mut native::Inventory,
 ) -> Result<()> {
+    let resolved = crate::dependency_index::scoped::resolve(path)?;
+    if resolved
+        .path
+        .file_name()
+        .is_some_and(|name| name == "dependency-locations.bin")
+    {
+        let path = path.to_owned();
+        let providers = native.providers.clone();
+        let mut inventory = std::mem::replace(native, native::Inventory::new(providers));
+        let mut destinations = std::mem::take(targets);
+        (*native, *targets) = tokio::task::spawn_blocking(move || {
+            direct(
+                &path,
+                resolved,
+                source_kind,
+                reader,
+                &mut inventory,
+                &mut destinations,
+            )?;
+            Ok::<_, anyhow::Error>((inventory, destinations))
+        })
+        .await??;
+        return Ok(());
+    }
     if source_kind == ReplaySource::Unattributed {
         use anyhow::Context;
         let path = path.to_owned();
@@ -114,4 +138,50 @@ pub async fn load(
         },
     )
     .await
+}
+
+fn direct(
+    path: &Path,
+    resolved: crate::dependency_index::scoped::Source,
+    scope: ReplaySource,
+    reader: Arc<std::sync::Mutex<RecordReader>>,
+    native: &mut native::Inventory,
+    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+) -> Result<()> {
+    use anyhow::Context;
+    if scope == ReplaySource::Unattributed {
+        return Ok(());
+    }
+    let locations = resolved
+        .locations
+        .context("compact Global stream has no scope")?;
+    let stamp = crate::dependency_index::FileStamp::read_native(&resolved.path)?;
+    let source = RecordSource::new(&resolved.path, stamp, reader);
+    let secrets = crate::request_headers::SourceSecrets::new(path);
+    for location in locations.iter() {
+        let reference = source.reference(location.clone());
+        let metadata = reference.load_metadata()?;
+        if native.register_stored_emission(
+            &metadata,
+            scope,
+            targets,
+            reference.clone(),
+            &secrets,
+        )? {
+            continue;
+        }
+        let record: DependencyRecord = reference.load()?;
+        register_dependency_records(
+            path,
+            vec![(location.line, record)],
+            &BTreeSet::new(),
+            scope,
+            None,
+            targets,
+            &[],
+            &BTreeSet::new(),
+            native,
+        )?;
+    }
+    Ok(())
 }

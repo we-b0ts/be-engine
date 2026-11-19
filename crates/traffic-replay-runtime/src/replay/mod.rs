@@ -203,16 +203,19 @@ impl<P: ReplayProtocolSet> Runtime<P> {
 
 pub(crate) fn find_run_level_dependencies(root: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     (
-        find_upward(root, "indexes/startup-scope.json").or({
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                find_upward(root, "global-dependencies.jsonl")
-            }
-            #[cfg(not(any(test, feature = "test-support")))]
-            {
-                None
-            }
-        }),
+        root.ancestors()
+            .map(|dir| dir.join("indexes/startup-scope.json"))
+            .find(|path| crate::dependency_index::scoped::exists(path))
+            .or({
+                #[cfg(any(test, feature = "test-support"))]
+                {
+                    find_upward(root, "global-dependencies.jsonl")
+                }
+                #[cfg(not(any(test, feature = "test-support")))]
+                {
+                    None
+                }
+            }),
         find_upward(root, "global-dependencies-debug.jsonl"),
     )
 }

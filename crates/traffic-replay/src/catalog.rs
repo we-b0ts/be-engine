@@ -72,6 +72,8 @@ fn project_events(
     let mut sequences = HashSet::new();
     let mut wire_terminals = HashSet::new();
     let mut capture_terminals = Vec::new();
+    let mut output_starts = std::collections::HashMap::new();
+    let mut cancelled = HashSet::new();
     for record in events {
         let record = record?;
         let started = matches!(&record.event, CaptureEvent::OutputStarted { .. });
@@ -80,6 +82,17 @@ fn project_events(
             "invalid or duplicate recording event sequence"
         );
         let (dependency_sequence, kind) = match record.event {
+            CaptureEvent::OutputCancelled {
+                dependency_sequence,
+                started_sequence,
+            } => {
+                ensure!(
+                    output_starts.get(&started_sequence) == Some(&dependency_sequence)
+                        && cancelled.insert(started_sequence),
+                    "Source output cancellation has no matching start"
+                );
+                continue;
+            }
             CaptureEvent::Output {
                 dependency_sequence,
                 output,
@@ -90,6 +103,9 @@ fn project_events(
                 output,
                 ..
             } => {
+                if started {
+                    output_starts.insert(record.sequence, dependency_sequence);
+                }
                 let kind = match output {
                     OutputKind::Headers => EventKind::ResponseHeaders,
                     OutputKind::Part => EventKind::ResponsePart,
@@ -148,6 +164,7 @@ fn project_events(
             kind,
         });
     }
+    source.retain(|event| !cancelled.contains(&event.sequence));
     source.extend(
         capture_terminals
             .into_iter()

@@ -70,7 +70,7 @@ impl CaptureSession for Capture {
                         if subscriptions.active() && let Some(push) = crate::parse_pubsub_push(&frame.raw)? {
                             let anchor = subscriptions.get(&push)
                                 .context("Redis notification has no confirmed subscription")?.anchor;
-                            self.capture_push(&*host, &mut *client.inner, &frame, &session, connection_id, anchor).await?;
+                            self.capture_push(&*host, &mut *client.inner, (&frame, push.subscription_kind), &session, connection_id, anchor).await?;
                             continue;
                         }
 
@@ -159,13 +159,14 @@ impl Capture {
         &self,
         host: &dyn CaptureHost,
         client: &mut dyn ConnectionIo,
-        frame: &RedisFrame,
+        (frame, kind): (&RedisFrame, crate::RedisSubscriptionKind),
         session: &CaptureSessionState,
         connection_id: Uuid,
         (subscription_sequence, after_id, confirmed): (u64, Option<u64>, Instant),
     ) -> Result<()> {
         let mut push = CapturedPush {
             id: Uuid::new_v4(),
+            notification_kind: super::notification::kind_name(kind),
             event: crate::events::RedisPubSubPushEvent {
                 timestamp: Utc::now(),
                 target_host: self.0.endpoint.host.clone(),

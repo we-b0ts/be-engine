@@ -19,8 +19,6 @@ pub(crate) use row::COLUMN_COUNT;
 use row::{DependencyRow, PayloadCell, ProtocolExtension};
 
 pub const DEPENDENCIES: &str = "dependencies.tsv";
-pub const EVENTS: &str = "events.tsv";
-pub const PUSH_EVENTS: &str = "events-push.tsv";
 pub const INLINE_BYTES: usize = 4 * 1024;
 pub const SEGMENT_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -169,6 +167,27 @@ impl PendingDependency {
                 "duplicate dependency payload field"
             );
         }
+        native.insert("recording_id".into(), Value::from(recording_id.to_string()));
+        native.insert("capture".into(), Value::Object(capture));
+        native.insert("outcome".into(), outcome);
+        native.insert("capture_complete".into(), Value::Bool(complete));
+        Ok(Value::Object(native))
+    }
+
+    pub(crate) fn materialize_header(
+        row: &[u8],
+        recording_id: Uuid,
+        terms: &ReadTerms,
+    ) -> Result<Value> {
+        let DependencyRow {
+            prefix, extension, ..
+        } = DependencyRow::parse(row, recording_id)?;
+        let RecordProjection {
+            capture,
+            outcome,
+            complete,
+            mut native,
+        } = RecordProjection::materialize(prefix, extension, recording_id, terms)?;
         native.insert("recording_id".into(), Value::from(recording_id.to_string()));
         native.insert("capture".into(), Value::Object(capture));
         native.insert("outcome".into(), outcome);

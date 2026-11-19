@@ -177,7 +177,7 @@ impl RecordStream {
                         span.logical == self.offset,
                         "dependency row directory is not contiguous"
                     );
-                    span.length
+                    span.length()?
                 }
             }
         };

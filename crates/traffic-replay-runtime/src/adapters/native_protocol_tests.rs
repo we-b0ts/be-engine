@@ -757,7 +757,7 @@ async fn independent_server_messages_record_and_replay_with_shared_policy_and_fi
         for startup in [false, true] {
         let recording = record_scenario(startup, "original", true).await;
         let trace =
-            std::fs::read_to_string(recording.root.join("events-push.tsv")).unwrap();
+            std::fs::read_to_string(recording.root.join("dependencies-push.tsv")).unwrap();
         assert_eq!(
             trace
                 .lines()

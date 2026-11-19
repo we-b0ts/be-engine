@@ -286,6 +286,19 @@ pub trait NativeProtocol: Send + Sync {
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>>;
+
+    /// Prepare only the routing and timing of a server emission. Metadata has
+    /// no request or response body. Providers may use the ordinary eager path.
+    fn recorded_emission(
+        &self,
+        _metadata: &Value,
+        _response: Arc<dyn MessageEncoder>,
+    ) -> Result<Option<RecordedExchange>> {
+        Ok(None)
+    }
+    fn recorded_emission_structure(&self, _metadata: &Value) -> Option<Value> {
+        None
+    }
     fn recorded_exchange_with_secrets(
         &self,
         event: &Value,

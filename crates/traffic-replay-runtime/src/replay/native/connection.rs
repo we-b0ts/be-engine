@@ -375,6 +375,21 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
             let matched = &self.matched;
             let result = async {
                 self.wait_ready().await?;
+                let response = self.state.lock().await.native.core.exchanges[matched.index]
+                    .native
+                    .response
+                    .clone();
+                let loaded = if response.stored().is_some() {
+                    Some(
+                        tokio::task::spawn_blocking(move || {
+                            response.stored().expect("stored response").load()
+                        })
+                        .await
+                        .context("Source response read failed")??,
+                    )
+                } else {
+                    None
+                };
                 let response = {
                     let state = self.state.lock().await;
                     ensure!(
@@ -389,9 +404,11 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                                         .contains(case))),
                         "native response owner stopped before delivery"
                     );
-                    state
-                        .native
-                        .render_response(matched.index, matched.observed)?
+                    state.native.render_response(
+                        matched.index,
+                        matched.observed,
+                        loaded.as_deref(),
+                    )?
                 };
                 let request::ResponsePlan {
                     output: response,

@@ -5,6 +5,7 @@ mod dependency_columns;
 mod event_format;
 mod event_index;
 mod format;
+mod original_scope;
 mod partitions;
 pub mod source;
 pub mod storage;

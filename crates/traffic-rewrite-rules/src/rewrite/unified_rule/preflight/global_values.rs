@@ -203,10 +203,12 @@ pub fn global_trace(
     let (recording, _) = crate::dependency_index::recording_files(source)?;
     for kind in ["startup", "process", "shutdown", "unattributed"] {
         let path = recording.join(format!("indexes/{kind}-scope.json"));
-        if !crate::dependency_index::scoped::exists(&path) {
+        let Some(view) =
+            crate::dependency_index::scoped::view_path(&path).filter(|view| view.is_file())
+        else {
             continue;
-        }
-        bundle.freeze(&path)?;
+        };
+        bundle.freeze(&view)?;
         visit(&path, |event| {
             let Some(exchange) = recorded(event, &recording)? else {
                 return Ok(());

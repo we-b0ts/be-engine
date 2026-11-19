@@ -8,6 +8,7 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use traffic_model::recording::identity::IdentityKind;
 use traffic_model::trace::RecordedEvent;
+use traffic_recording_store::writer::RowStamp;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -70,36 +71,54 @@ impl RecordingClock {
         &self,
         build: impl FnOnce(u64) -> Event,
     ) -> Result<(u64, RecordedEvent<Event>)> {
-        let mut sequences = self.0.sequences.lock().expect("recording clock poisoned");
-        let sequence = sequences
-            .event
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("recording event sequence exhausted"))?;
-        let offset_micros = self.0.started.elapsed().as_micros().try_into()?;
-        sequences.event = sequence;
-        Ok((
-            sequence,
-            RecordedEvent {
-                sequence,
-                offset_micros,
-                event: build(sequence),
-            },
-        ))
+        self.publish(|batch| {
+            let stamp = batch.next()?;
+            Ok((stamp.sequence, recorded(&stamp, build(stamp.sequence))))
+        })
     }
 
     /// Allocate order at observation time, before queuing asynchronous storage.
     pub fn event<Event>(&self, event: Event) -> Result<RecordedEvent<Event>> {
+        self.publish(|batch| Ok(recorded(&batch.next()?, event)))
+    }
+
+    /// Keep allocation and FIFO submission in the same critical section. The
+    /// caller reserves a queue slot before entering, so submission cannot wait.
+    pub(crate) fn publish<T>(
+        &self,
+        submit: impl FnOnce(&mut SequenceBatch<'_>) -> Result<T>,
+    ) -> Result<T> {
         let mut sequences = self.0.sequences.lock().expect("recording clock poisoned");
-        sequences.event = sequences
-            .event
+        submit(&mut SequenceBatch {
+            sequence: &mut sequences.event,
+            offset_micros: self.0.started.elapsed().as_micros().try_into()?,
+        })
+    }
+}
+
+pub(crate) struct SequenceBatch<'a> {
+    sequence: &'a mut u64,
+    offset_micros: u64,
+}
+
+impl SequenceBatch<'_> {
+    pub(crate) fn next(&mut self) -> Result<RowStamp> {
+        *self.sequence = self
+            .sequence
             .checked_add(1)
             .ok_or_else(|| anyhow!("recording event sequence exhausted"))?;
-        let offset_micros = self.0.started.elapsed().as_micros().try_into()?;
-        Ok(RecordedEvent {
-            sequence: sequences.event,
-            offset_micros,
-            event,
+        Ok(RowStamp {
+            sequence: *self.sequence,
+            offset_micros: self.offset_micros,
         })
+    }
+}
+
+pub(crate) fn recorded<Event>(stamp: &RowStamp, event: Event) -> RecordedEvent<Event> {
+    RecordedEvent {
+        sequence: stamp.sequence,
+        offset_micros: stamp.offset_micros,
+        event,
     }
 }
 

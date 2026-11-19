@@ -11,7 +11,9 @@ pub(in crate::replay) async fn enqueue<P: ReplayProtocolSet>(
     };
     let id = case_id.context("prefetch requires case_id")?;
     let case = state.cases.get(id).context("unknown prefetch case")?;
-    let inventory = deferred.files.get(id).context("prefetch index missing")?;
+    let Some(inventory) = deferred.files.get(id) else {
+        return Ok(false);
+    };
     if case.status != ReplayCaseStatus::Pending
         || inventory.source_bytes > deferred.cache_bytes as u64
         || deferred.cache_bytes == 0

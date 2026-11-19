@@ -1,9 +1,12 @@
 use super::*;
-use crate::format;
-use crate::source::{RecordReader, RecordStream};
+use crate::event_index;
+use crate::source::{RecordReader, RecordSource, RecordStream};
 use anyhow::Result;
 use serde_json::json;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use traffic_model::{
     recording::CapturePhase,
     trace::{OutputKind, RecordedEvent},
@@ -34,60 +37,20 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
     let unknown = DependencyOwner::Unattributed {
         reason: "outside_admission".into(),
     };
-    let row = |label| {
+    let row = |label, sequence| {
         json!({
-            "recording_id": epoch, "capture": {"sequence": 1, "process_epoch": process_epoch}, "outcome": {"kind": "response"},
+            "recording_id": epoch, "capture": {"sequence": sequence, "process_epoch": process_epoch}, "outcome": {"kind": "response"},
             "capture_complete": true, "label": label,
             "target_host": "db.example.test", "target_port": 1234,
             "username": "test-user",
+            "response": {"value":"x".repeat(5000)},
         })
     };
+    let stamp = |sequence| RowStamp {
+        sequence,
+        offset_micros: sequence,
+    };
     let layout = RowLayout::default();
-    let first = ledger
-        .append_dependency(
-            &mut files,
-            row("case"),
-            &owner,
-            RecordKind::Exchange,
-            &layout,
-        )
-        .await?;
-    let second = ledger
-        .append_dependency(
-            &mut files,
-            row("push"),
-            &process,
-            RecordKind::Message,
-            &layout,
-        )
-        .await?;
-    let observation = ledger
-        .append_dependency(
-            &mut files,
-            row("observation"),
-            &owner,
-            RecordKind::Observation,
-            &layout,
-        )
-        .await?;
-    ledger
-        .append_dependency(
-            &mut files,
-            row("process"),
-            &process,
-            RecordKind::Exchange,
-            &layout,
-        )
-        .await?;
-    ledger
-        .append_dependency(
-            &mut files,
-            row("unknown"),
-            &unknown,
-            RecordKind::Exchange,
-            &layout,
-        )
-        .await?;
     for (sequence, event) in [
         (
             3,
@@ -119,7 +82,6 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
                 capture_complete: true,
             },
         ),
-        (8, CaptureEvent::Sealed),
     ] {
         ledger
             .append_event(
@@ -132,12 +94,94 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
             )
             .await?;
     }
+    let mut case_row = row("case", 3);
+    case_row["request"] = json!({"command":"example", "args":["a", "b"]});
+    let first = ledger
+        .append_dependency(
+            &mut files,
+            case_row.clone(),
+            &owner,
+            RecordKind::Exchange,
+            &layout,
+            Some(stamp(8)),
+            stamp(9),
+        )
+        .await?;
+    let second = ledger
+        .append_dependency(
+            &mut files,
+            row("push", 4),
+            &process,
+            RecordKind::Message,
+            &layout,
+            None,
+            stamp(10),
+        )
+        .await?;
+    let observation = ledger
+        .append_dependency(
+            &mut files,
+            row("observation", 11),
+            &owner,
+            RecordKind::Observation,
+            &layout,
+            None,
+            stamp(11),
+        )
+        .await?;
+    ledger
+        .append_dependency(
+            &mut files,
+            row("process", 12),
+            &process,
+            RecordKind::Exchange,
+            &layout,
+            Some(stamp(12)),
+            stamp(13),
+        )
+        .await?;
+    ledger
+        .append_dependency(
+            &mut files,
+            row("unknown", 14),
+            &unknown,
+            RecordKind::Exchange,
+            &layout,
+            Some(stamp(14)),
+            stamp(15),
+        )
+        .await?;
+    ledger
+        .append_event(
+            &mut files,
+            &RecordedEvent {
+                sequence: 16,
+                offset_micros: 16,
+                event: CaptureEvent::Terminal {
+                    dependency_sequence: 3,
+                    outcome: "response".into(),
+                    capture_complete: true,
+                },
+            },
+        )
+        .await?;
+    ledger
+        .append_event(
+            &mut files,
+            &RecordedEvent {
+                sequence: 17,
+                offset_micros: 17,
+                event: CaptureEvent::Sealed,
+            },
+        )
+        .await?;
     let identities = ledger.seal(&mut files).await?;
 
     let dependency_path = crate::source::recording::dependency_path(root);
     assert_eq!(partitions::recording_id(&dependency_path)?, epoch);
-    let ordinary = std::fs::read_to_string(root.join(format::EVENTS))?;
-    assert_eq!(ordinary.lines().last(), Some("8\t8\tcapture_sealed"));
+    let ordinary = std::fs::read_to_string(root.join(event_index::JOURNALS[0]))?;
+    assert_eq!(ordinary.lines().last(), Some("17\t17\tcapture_sealed"));
+    assert!(!ordinary.contains("capture_terminated\t3\t"));
     for (name, label) in
         partitions::FILES
             .into_iter()
@@ -146,12 +190,15 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
         let physical = std::fs::read_to_string(root.join(name))?;
         assert!(!physical.contains(&epoch.to_string()));
         assert!(!physical.contains("process_epoch"));
-        assert_eq!(physical.split('\t').count(), crate::format::COLUMN_COUNT);
-        assert!(physical.starts_with("1\t"));
         assert!(physical.contains("db.example.test"));
         assert!(physical.contains("test-user"));
         assert!(physical.contains(label));
-        assert_eq!(physical.lines().count(), 1);
+        assert!(
+            physical
+                .lines()
+                .map(|row| { row.split_once('\t').unwrap().0.parse::<u64>().unwrap() })
+                .is_sorted()
+        );
         let sealed = identities.iter().find(|file| file.path == name).unwrap();
         assert_eq!(sealed.length, physical.len() as u64);
         assert_eq!(sealed.sha256, crate::source::digest(physical.as_bytes()));
@@ -189,9 +236,25 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
     let decoded = serde_json::from_slice::<Value>(&raw)?;
     assert_eq!(decoded["label"], "case");
     assert_eq!(decoded["recording_id"], epoch.to_string());
+    assert_eq!(decoded["request"], case_row["request"]);
+    assert_eq!(decoded["response"], case_row["response"]);
     let replay_raw = RecordReader::for_replay(0).read(&dependency_path, &stream.stamp, &first)?;
     assert_eq!(serde_json::from_slice::<Value>(&replay_raw)?, decoded);
-    std::fs::write(&terms_file, terms.replacen('2', "3", 1))?;
+    let metadata_source = RecordSource::new(
+        &dependency_path,
+        stream.stamp.clone(),
+        Arc::new(Mutex::new(RecordReader::for_replay(0))),
+    );
+    let metadata = metadata_source.reference(second.clone()).load_metadata()?;
+    assert_eq!(metadata["label"], "push");
+    assert!(metadata.get("response").is_none());
+    std::fs::remove_dir_all(root.join("payload"))?;
+    let push = metadata_source.reference(second.clone());
+    assert_eq!(push.load_metadata()?["label"], "push");
+    assert!(push.load::<Value>().is_err());
+    let mut modified_terms = terms.into_bytes();
+    modified_terms[0] = b'X';
+    std::fs::write(&terms_file, modified_terms)?;
     assert!(
         reader
             .read(&dependency_path, &stream.stamp, &first)
@@ -206,8 +269,129 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
             .collect()
     };
     assert_eq!(selected(&[4, 3])?, [3, 4, 5, 7]);
-    std::fs::remove_file(root.join(format::PUSH_EVENTS))?;
+    std::fs::remove_file(root.join(event_index::JOURNALS[1]))?;
     assert_eq!(selected(&[3])?, [3, 5]);
     assert!(selected(&[4]).is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn push_trace_elides_only_complete_success_after_a_wire_end() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    let epoch = Uuid::new_v4();
+    let mut ledger = LedgerFiles::initialize(root, epoch, Uuid::new_v4()).await?;
+    let mut files = JsonlWriterPool::new(JsonlBufferSettings {
+        capacity: 4096,
+        flush_interval: Duration::from_secs(30),
+    });
+    for (dependency, output, outcome, complete) in [
+        (1, OutputKind::End, "delivery", true),
+        (4, OutputKind::End, "delivery", false),
+        (7, OutputKind::End, "custom_outcome", true),
+        (10, OutputKind::Part, "delivery", true),
+    ] {
+        for (sequence, event) in [
+            (
+                dependency,
+                CaptureEvent::MessageStarted {
+                    dependency_sequence: dependency,
+                },
+            ),
+            (
+                dependency + 1,
+                CaptureEvent::Output {
+                    dependency_sequence: dependency,
+                    output,
+                },
+            ),
+            (
+                dependency + 2,
+                CaptureEvent::Terminal {
+                    dependency_sequence: dependency,
+                    outcome: outcome.into(),
+                    capture_complete: complete,
+                },
+            ),
+        ] {
+            ledger
+                .append_event(
+                    &mut files,
+                    &RecordedEvent {
+                        sequence,
+                        offset_micros: sequence,
+                        event,
+                    },
+                )
+                .await?;
+        }
+        let repeated_sequence = RecordedEvent {
+            sequence: dependency + 2,
+            offset_micros: dependency + 2,
+            event: CaptureEvent::Sealed,
+        };
+        assert!(
+            ledger
+                .append_event(&mut files, &repeated_sequence)
+                .await
+                .is_err()
+        );
+    }
+    ledger.seal(&mut files).await?;
+    let index = event_index::SourceEventIndex::open(root.to_owned(), epoch)?;
+    let events = index.selected([1, 4, 7, 10])?.collect::<Result<Vec<_>>>()?;
+    let terminals: Vec<_> = events
+        .iter()
+        .filter_map(|row| match row.event {
+            CaptureEvent::Terminal {
+                dependency_sequence,
+                ..
+            } => Some(dependency_sequence),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(terminals, [4, 7, 10]);
+    assert_eq!(
+        events.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unified_stream_rejects_sequence_reversal_across_partitions() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    let mut ledger = LedgerFiles::initialize(root, Uuid::new_v4(), Uuid::new_v4()).await?;
+    let mut files = JsonlWriterPool::new(JsonlBufferSettings {
+        capacity: 4096,
+        flush_interval: Duration::from_secs(30),
+    });
+    ledger
+        .append_event(
+            &mut files,
+            &RecordedEvent {
+                sequence: 2,
+                offset_micros: 12,
+                event: CaptureEvent::MessageStarted {
+                    dependency_sequence: 2,
+                },
+            },
+        )
+        .await?;
+    let error = ledger
+        .append_event(
+            &mut files,
+            &RecordedEvent {
+                sequence: 1,
+                offset_micros: 11,
+                event: CaptureEvent::Sealed,
+            },
+        )
+        .await
+        .expect_err("reversed sequences cannot be stored");
+    assert!(error.to_string().contains("unordered sequence 1 after 2"));
+    files.flush_all().await?;
+    assert_eq!(std::fs::read(root.join(event_index::JOURNALS[0]))?, b"");
     Ok(())
 }

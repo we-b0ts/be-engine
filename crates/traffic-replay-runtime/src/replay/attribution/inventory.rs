@@ -210,24 +210,28 @@ fn original_locations(
         .iter()
         .map(|identity| identity.path.as_str())
         .collect();
-    if sealed.contains("indexes/shutdown-scope.json")
-        || manifest
-            .semantic_inventory
-            .by_owner_kind
-            .get("shutdown")
-            .copied()
-            .unwrap_or(0)
-            > 0
+    let shutdown = root.join("indexes/shutdown-scope.json");
+    let shutdown_physical = scoped::view_path(&shutdown).unwrap_or_else(|| shutdown.clone());
+    if sealed.contains(
+        shutdown_physical
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .as_ref(),
+    ) || manifest
+        .semantic_inventory
+        .by_owner_kind
+        .get("shutdown")
+        .copied()
+        .unwrap_or(0)
+        > 0
     {
-        scopes.push((
-            root.join("indexes/shutdown-scope.json"),
-            ScopeKind::Shutdown,
-        ));
+        scopes.push((shutdown, ScopeKind::Shutdown));
     }
     let mut locations = BTreeMap::new();
     let canonical_root = std::fs::canonicalize(root)?;
     for (path, expected) in scopes {
-        let relative = path.strip_prefix(root)?.to_string_lossy();
+        let physical = scoped::view_path(&path).context("missing original dependency scope")?;
+        let relative = physical.strip_prefix(root)?.to_string_lossy();
         ensure!(
             sealed.contains(relative.as_ref()),
             "original scope is absent from the recording seal"

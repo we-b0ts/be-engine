@@ -87,6 +87,10 @@ impl Reader {
         })
     }
 
+    pub(super) fn read_header(&self, row: &[u8]) -> Result<serde_json::Value> {
+        PendingDependency::materialize_header(row, self.recording_id, &self.terms)
+    }
+
     fn read_payload(&self, reference: &PayloadRef) -> Result<Vec<u8>> {
         let mut segment = self.segment.borrow_mut();
         if segment

@@ -53,7 +53,7 @@ pub fn freeze_scopes<'a>(
     let mut originals = BTreeMap::new();
     let mut locations = BTreeMap::new();
     for path in scopes {
-        if !path.is_file() {
+        if !scoped::exists(&path) {
             continue;
         }
         let index = scoped::read_index_with_epoch(&path, manifest.run_epoch)?;

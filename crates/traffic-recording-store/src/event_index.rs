@@ -1,24 +1,26 @@
 //! Seekable event trace locations. The journals remain the Source of event order.
-use crate::{
-    event_format::decode_event,
-    format::{EVENTS, PUSH_EVENTS},
-    source::FileStamp,
-};
+use crate::{event_format::decode_event, partitions, source::FileStamp};
 use anyhow::{Context, Result, ensure};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
-use traffic_model::{
-    recording::LedgerFileIdentity,
-    trace::{CaptureEvent, RecordedEvent},
-};
+use traffic_model::trace::{CaptureEvent, RecordedEvent};
+
+mod writer;
+pub(crate) use writer::EventLocations;
 
 pub(crate) const INDEX: &str = "event-locations.bin";
-pub(crate) const JOURNALS: [&str; 2] = [EVENTS, PUSH_EVENTS];
-const ENTRY_BYTES: u64 = 21;
+const POSTINGS: &str = "event-spans.bin";
+pub(crate) const FILES: [&str; 2] = [INDEX, POSTINGS];
+pub(crate) const JOURNALS: [&str; 2] = [
+    partitions::FILES[partitions::ORDINARY],
+    partitions::FILES[partitions::PUSH],
+];
+const ENTRY_BYTES: u64 = 8;
+const POSTING_HEADER_BYTES: u64 = 5;
 const SPAN_BYTES: u64 = 12;
 
 #[derive(Debug)]
@@ -27,72 +29,11 @@ struct Span {
     length: u32,
 }
 
-#[derive(Debug)]
-struct Trace {
-    dependency: u64,
-    first_span: u64,
-    count: u32,
-    journal: usize,
-}
-
-pub(crate) fn seal(root: &Path, recording_id: uuid::Uuid) -> Result<LedgerFileIdentity> {
-    let mut traces = HashMap::<u64, (usize, Vec<Span>)>::new();
-    for (journal, filename) in JOURNALS.into_iter().enumerate() {
-        let mut reader = BufReader::new(File::open(root.join(filename))?);
-        let mut offset = 0;
-        let mut row = String::new();
-        loop {
-            row.clear();
-            let length = reader.read_line(&mut row)?;
-            if length == 0 {
-                break;
-            }
-            if let Some(dependency) = decode_event(&row, recording_id)?
-                .event
-                .dependency_sequence()
-            {
-                let (owner, spans) = traces
-                    .entry(dependency)
-                    .or_insert_with(|| (journal, Vec::new()));
-                ensure!(
-                    *owner == journal,
-                    "dependency trace spans two event journals"
-                );
-                spans.push(Span {
-                    offset,
-                    length: u32::try_from(length)?,
-                });
-            }
-            offset += length as u64;
-        }
-    }
-    let mut traces = traces.into_iter().collect::<Vec<_>>();
-    traces.sort_unstable_by_key(|(dependency, _)| *dependency);
-    let mut output = BufWriter::new(File::create(root.join(INDEX))?);
-    let mut digest = crate::writer::FileDigest::default();
-    let mut write = |bytes: &[u8]| -> Result<()> {
-        output.write_all(bytes)?;
-        digest.observe(bytes);
-        Ok(())
-    };
-    write(&(traces.len() as u64).to_le_bytes())?;
-    let mut first_span = 0u64;
-    for (dependency, (journal, spans)) in &traces {
-        write(&dependency.to_le_bytes())?;
-        write(&first_span.to_le_bytes())?;
-        write(&u32::try_from(spans.len())?.to_le_bytes())?;
-        write(&[*journal as u8])?;
-        first_span += spans.len() as u64;
-    }
-    for (_, (_, spans)) in traces {
-        for span in spans {
-            write(&span.offset.to_le_bytes())?;
-            write(&span.length.to_le_bytes())?;
-        }
-    }
-    output.flush()?;
-    output.get_ref().sync_all()?;
-    Ok(digest.identity(INDEX))
+fn locator_position(dependency: u64) -> Result<u64> {
+    dependency
+        .checked_sub(1)
+        .and_then(|sequence| sequence.checked_mul(ENTRY_BYTES))
+        .context("invalid dependency event locator sequence")
 }
 
 /// A compact directory shared by the Replay plans of one sealed run.
@@ -100,9 +41,8 @@ pub(crate) fn seal(root: &Path, recording_id: uuid::Uuid) -> Result<LedgerFileId
 pub struct SourceEventIndex {
     root: PathBuf,
     recording_id: uuid::Uuid,
-    stamp: FileStamp,
-    traces: Vec<Trace>,
-    postings_offset: u64,
+    locators: FileStamp,
+    postings: FileStamp,
     journals: [FileStamp; JOURNALS.len()],
     verify: bool,
 }
@@ -127,60 +67,21 @@ impl SourceEventIndex {
         recording_id: uuid::Uuid,
         verify: bool,
     ) -> Result<Self> {
-        let path = root.join(INDEX);
-        let stamp = FileStamp::read_native(&path)?;
-        let mut file = BufReader::new(File::open(&path)?);
-        let count = u64::from_le_bytes(bytes(&mut file)?);
-        let postings_offset = count
-            .checked_mul(ENTRY_BYTES)
-            .and_then(|bytes| bytes.checked_add(8))
-            .context("event directory size overflow")?;
+        let locators = FileStamp::read_native(&root.join(INDEX))?;
+        let postings = FileStamp::read_native(&root.join(POSTINGS))?;
         ensure!(
-            postings_offset <= stamp.size,
-            "event directory escapes its file"
+            locators.size.is_multiple_of(ENTRY_BYTES),
+            "event locator file has an incomplete entry"
         );
-        let mut traces = Vec::<Trace>::with_capacity(usize::try_from(count)?);
-        let mut expected_span = 0u64;
-        for _ in 0..count {
-            let trace = Trace {
-                dependency: u64::from_le_bytes(bytes(&mut file)?),
-                first_span: u64::from_le_bytes(bytes(&mut file)?),
-                count: u32::from_le_bytes(bytes(&mut file)?),
-                journal: usize::from(bytes::<1>(&mut file)?[0]),
-            };
-            ensure!(
-                trace.dependency > traces.last().map_or(0, |prior| prior.dependency)
-                    && trace.first_span == expected_span
-                    && trace.count > 0
-                    && trace.journal < JOURNALS.len(),
-                "invalid event trace directory entry"
-            );
-            expected_span += u64::from(trace.count);
-            traces.push(trace);
-        }
-        ensure!(
-            expected_span
-                .checked_mul(SPAN_BYTES)
-                .and_then(|len| postings_offset.checked_add(len))
-                == Some(stamp.size),
-            "event trace locations changed or are incomplete"
-        );
-        if verify {
-            ensure!(
-                FileStamp::read_native(&path)? == stamp,
-                "event trace locations changed"
-            );
-        }
         Ok(Self {
             recording_id,
             journals: [
-                FileStamp::read_native(&root.join(EVENTS))?,
-                FileStamp::read_native(&root.join(PUSH_EVENTS))?,
+                FileStamp::read_native(&root.join(JOURNALS[0]))?,
+                FileStamp::read_native(&root.join(JOURNALS[1]))?,
             ],
             root,
-            stamp,
-            traces,
-            postings_offset,
+            locators,
+            postings,
             verify,
         })
     }
@@ -190,51 +91,53 @@ impl SourceEventIndex {
         dependencies: impl IntoIterator<Item = u64>,
     ) -> Result<impl Iterator<Item = Result<RecordedEvent<CaptureEvent>>>> {
         let selected: BTreeSet<u64> = dependencies.into_iter().collect();
-        let path = self.root.join(INDEX);
+        let locator_path = self.root.join(INDEX);
+        let posting_path = self.root.join(POSTINGS);
         if self.verify {
-            ensure!(
-                FileStamp::read_native(&path)? == self.stamp,
-                "Source event directory changed"
-            );
+            self.validate(&locator_path, &posting_path)?;
         }
-        let mut postings = BufReader::new(File::open(&path)?);
         let mut locations = [Vec::new(), Vec::new()];
-        let mut cursor = 0;
-        for dependency in selected {
-            let entry = self
-                .traces
-                .binary_search_by_key(&dependency, |entry| entry.dependency)
-                .map_err(|_| {
-                    anyhow::anyhow!("dependency {dependency} has no recorded event trace")
+        if !selected.is_empty() {
+            let mut locators = BufReader::new(File::open(&locator_path)?);
+            let mut postings = BufReader::new(File::open(&posting_path)?);
+            let mut cursor = 0;
+            let mut posting_cursor = 0;
+            for dependency in selected {
+                let position = locator_position(dependency)?;
+                ensure!(
+                    position
+                        .checked_add(ENTRY_BYTES)
+                        .is_some_and(|end| end <= self.locators.size),
+                    "dependency {dependency} has no recorded event trace"
+                );
+                if position != cursor {
+                    seek(&mut locators, cursor, position)?;
+                }
+                cursor = position + ENTRY_BYTES;
+                let pointer = u64::from_le_bytes(bytes(&mut locators)?);
+                let posting = pointer.checked_sub(1).with_context(|| {
+                    format!("dependency {dependency} has no recorded event trace")
                 })?;
-            let trace = &self.traces[entry];
-            let position = self.postings_offset + trace.first_span * SPAN_BYTES;
-            if cursor != position {
-                postings.seek(SeekFrom::Start(position))?;
+                if posting_cursor != posting {
+                    seek(&mut postings, posting_cursor, posting)?;
+                }
+                posting_cursor =
+                    self.read_locations(&mut postings, &mut locations, dependency, posting)?;
             }
-            for _ in 0..trace.count {
-                let offset = u64::from_le_bytes(bytes(&mut postings)?);
-                let length = u32::from_le_bytes(bytes(&mut postings)?);
-                locations[trace.journal].push((Span { offset, length }, dependency));
-            }
-            cursor = position + u64::from(trace.count) * SPAN_BYTES;
         }
         if self.verify {
-            ensure!(
-                FileStamp::read_native(&path)? == self.stamp,
-                "Source event directory changed"
-            );
+            self.validate(&locator_path, &posting_path)?;
         }
         let [ordinary, pushes] = locations;
         let ordinary = Journal::open(
-            self.root.join(EVENTS),
+            self.root.join(JOURNALS[0]),
             &self.journals[0],
             ordinary,
             self.recording_id,
             self.verify,
         )?;
         let pushes = Journal::open(
-            self.root.join(PUSH_EVENTS),
+            self.root.join(JOURNALS[1]),
             &self.journals[1],
             pushes,
             self.recording_id,
@@ -246,6 +149,55 @@ impl SourceEventIndex {
             true,
         ))
     }
+
+    fn validate(&self, locator_path: &Path, posting_path: &Path) -> Result<()> {
+        ensure!(
+            FileStamp::read_native(locator_path)? == self.locators
+                && FileStamp::read_native(posting_path)? == self.postings,
+            "Source event directory changed"
+        );
+        Ok(())
+    }
+
+    fn read_locations(
+        &self,
+        postings: &mut BufReader<File>,
+        locations: &mut [Vec<(Span, u64)>; 2],
+        dependency: u64,
+        position: u64,
+    ) -> Result<u64> {
+        ensure!(
+            position
+                .checked_add(POSTING_HEADER_BYTES)
+                .is_some_and(|end| end <= self.postings.size),
+            "event trace locator escapes its posting file"
+        );
+        let journal = usize::from(bytes::<1>(postings)?[0]);
+        let count = u32::from_le_bytes(bytes(postings)?);
+        ensure!(
+            count > 0
+                && journal < locations.len()
+                && position
+                    .checked_add(POSTING_HEADER_BYTES + u64::from(count) * SPAN_BYTES)
+                    .is_some_and(|end| end <= self.postings.size),
+            "invalid Source event trace posting"
+        );
+        for _ in 0..count {
+            let offset = u64::from_le_bytes(bytes(postings)?);
+            let length = u32::from_le_bytes(bytes(postings)?);
+            locations[journal].push((Span { offset, length }, dependency));
+        }
+        Ok(position + POSTING_HEADER_BYTES + u64::from(count) * SPAN_BYTES)
+    }
+}
+
+fn seek(reader: &mut BufReader<File>, current: u64, next: u64) -> Result<()> {
+    if let Ok(distance) = i64::try_from(i128::from(next) - i128::from(current)) {
+        reader.seek_relative(distance)?;
+    } else {
+        reader.seek(SeekFrom::Start(next))?;
+    }
+    Ok(())
 }
 
 struct Journal {
@@ -311,7 +263,7 @@ impl Journal {
             "invalid event span"
         );
         if span.offset != self.position {
-            self.reader.seek(SeekFrom::Start(span.offset))?;
+            seek(&mut self.reader, self.position, span.offset)?;
         }
         self.row.resize(span.length as usize, 0);
         self.reader.read_exact(&mut self.row)?;

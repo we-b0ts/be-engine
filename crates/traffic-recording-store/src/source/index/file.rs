@@ -26,6 +26,26 @@ pub fn load_file_for_replay(
     load_file_with_verification(path, cancelled, evidence, select_proof, false)
 }
 
+/// Reuse a fragment emitted with the Case. A changed selection is streamed
+/// directly by Replay, without constructing another lookup index.
+pub fn recorded_case_for_replay(path: &Path) -> Result<Option<FileIndex>> {
+    let source = scoped::resolve(path)?;
+    let Some((view, _)) = &source.view else {
+        return Ok(None);
+    };
+    let Ok(mut index) = read_json::<FileIndex>(&view.with_file_name(FRAGMENT)) else {
+        return Ok(None);
+    };
+    if index.version != VERSION
+        || index.scope_membership_sha256.is_none()
+        || index.scope_membership_sha256 != source.membership_sha256()?
+    {
+        return Ok(None);
+    }
+    index.stamp = FileStamp::read_native(&source.path)?;
+    Ok(Some(index))
+}
+
 fn load_file_with_verification(
     path: &Path,
     cancelled: &AtomicBool,

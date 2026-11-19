@@ -705,25 +705,27 @@ user. The reserved Source UID cannot own recording artifacts.
 
 ## Rewrite handoff
 
-Finalization seals the input inventory, the two event journals, and the
-dependency and payload partitions in `dependency-manifest.json`. Both
-`events.tsv` and `events-push.tsv` use a single recording-local sequence and
-monotonic microsecond offsets. Event rows start with `seq`, `offset_us` and
-the event type. Further columns depend on the event type. The first event's
-sequence identifies the dependency. Later events refer to that sequence.
+Finalization seals the input inventory and the dependency and payload
+partitions in `dependency-manifest.json`. The dependency TSVs interleave
+lifecycle and data rows. Every row starts with `seq`, `offset_us`, and the row
+type. The recording assigns `seq` globally and uses monotonic microsecond
+offsets. The admission sequence identifies the dependency. Later rows refer to
+that sequence.
 
-The dependency partitions store Case traffic in `dependencies.tsv` and use
-separate files for process traffic, push traffic and unattributed traffic.
-Nonmatching observations, such as successful connection setup, use
-`observations.tsv`. They are available to route discovery and evidence readers.
-The row and event directories provide byte locations independent of partition
-order.
+`dependencies.tsv` holds ordinary lifecycle events and Case dependency data.
+Process, push, and unattributed data use `dependencies-process.tsv`,
+`dependencies-push.tsv`, and `dependencies-unattributed.tsv`. The push partition
+also holds the push lifecycle events. Nonmatching observations use
+`observations.tsv` and remain available to route discovery and evidence readers.
+The dependency and event locators link rows across partitions by byte position.
 
-Every dependency row has eleven tab-separated columns.
-
-```text
-seq  protocol  case_id  target_addr  client_addr  upstream_addr  conn_id  duration_ms  ext  request  response
-```
+A `request` data row carries the dependency metadata followed by its request
+cell. Its `response` row carries the dependency sequence and response cell
+after the common prefix. Responses without request data, notifications, and
+observations carry their metadata and payload in one data row. Lifecycle rows
+record admission and actual wire output timing. A complete response or delivery
+with a recorded `wire_output end` can omit its redundant `capture_terminated`
+row. The admission, receipt, and manifest coverage still describe the closure.
 
 Endpoints use `host:port`, with brackets for IPv6. Recording-local Case and
 connection IDs use independent counters. Case directories use
@@ -745,9 +747,9 @@ ordinary Replay read path uses the persisted locations and validates their
 bounds. Explicit artifact verification and protected evidence readers use the
 seal and content identities.
 
-Scoped recordings publish startup, process and unattributed scope views under
-`indexes/`. Recordings with a separate notification stream defer Global
-index and report preparation. The unattributed lookup is built on demand.
+The writer appends startup, process, shutdown, and unattributed scope locators
+as binary files under `indexes/` during recording. Finalization seals these
+locators. Derived Global indexes and reports are prepared when requested.
 
 Fast Replay caps the recorded gaps before sequenced response headers, parts and
 completion. Requests and actual wire receipts still advance the Source cursor.

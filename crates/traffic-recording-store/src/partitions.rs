@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 pub(crate) const DIRECTORY: &str = "dependency-locations.bin";
 pub(crate) const PUSH_DEPENDENCIES: &str = "dependencies-push.tsv";
+pub(crate) const ORDINARY: usize = 0;
+pub(crate) const PUSH: usize = 2;
 pub(crate) const FILES: [&str; 5] = [
     crate::format::DEPENDENCIES,
     "dependencies-process.tsv",
@@ -18,7 +20,7 @@ pub(crate) const FILES: [&str; 5] = [
     "observations.tsv",
 ];
 const HEADER_BYTES: usize = 16;
-const ENTRY_BYTES: u64 = 25;
+const ENTRY_BYTES: u64 = 49;
 
 pub(crate) fn record_count(size: u64) -> Result<u64> {
     let entries_bytes = size
@@ -55,8 +57,8 @@ pub(crate) fn partition(owner: &DependencyOwner, kind: RecordKind) -> usize {
     match (owner, kind) {
         (_, RecordKind::Observation) => 4,
         (DependencyOwner::Unattributed { .. }, _) => 3,
-        (_, RecordKind::Message) => 2,
-        (DependencyOwner::Case { .. }, _) => 0,
+        (_, RecordKind::Message) => PUSH,
+        (DependencyOwner::Case { .. }, _) => ORDINARY,
         _ => 1,
     }
 }
@@ -67,32 +69,51 @@ pub(crate) fn is_directory(path: &Path) -> bool {
 
 pub(crate) struct Span {
     pub logical: u64,
-    pub offset: u64,
-    pub length: u64,
+    pub header_offset: u64,
+    pub header_length: u64,
+    pub request_length: u64,
+    pub response_offset: u64,
+    pub response_length: u64,
     pub partition: usize,
 }
 
 impl Span {
+    pub(crate) fn length(&self) -> Result<u64> {
+        self.header_length
+            .checked_add(self.request_length.max(1))
+            .and_then(|length| length.checked_add(self.response_length))
+            .and_then(|length| length.checked_add(3))
+            .context("dependency record length overflow")
+    }
+
     pub(crate) fn encode(&self) -> [u8; ENTRY_BYTES as usize] {
         let mut row = [0; ENTRY_BYTES as usize];
         row[0..8].copy_from_slice(&self.logical.to_le_bytes());
-        row[8..16].copy_from_slice(&self.offset.to_le_bytes());
-        row[16..24].copy_from_slice(&self.length.to_le_bytes());
-        row[24] = self.partition as u8;
+        row[8..16].copy_from_slice(&self.header_offset.to_le_bytes());
+        row[16..24].copy_from_slice(&self.header_length.to_le_bytes());
+        row[24..32].copy_from_slice(&self.request_length.to_le_bytes());
+        row[32..40].copy_from_slice(&self.response_offset.to_le_bytes());
+        row[40..48].copy_from_slice(&self.response_length.to_le_bytes());
+        row[48] = self.partition as u8;
         row
     }
 
     fn decode(row: [u8; ENTRY_BYTES as usize]) -> Result<Self> {
-        let partition = usize::from(row[24]);
+        let partition = usize::from(row[48]);
         ensure!(partition < FILES.len(), "unknown dependency partition");
-        let logical = u64::from_le_bytes(row[0..8].try_into()?);
-        let offset = u64::from_le_bytes(row[8..16].try_into()?);
-        let length = u64::from_le_bytes(row[16..24].try_into()?);
-        ensure!(length > 0, "empty dependency row span");
+        let header_length = u64::from_le_bytes(row[16..24].try_into()?);
+        let response_length = u64::from_le_bytes(row[40..48].try_into()?);
+        ensure!(
+            header_length > 0 && response_length > 0,
+            "empty dependency cell span"
+        );
         Ok(Self {
-            logical,
-            offset,
-            length,
+            logical: u64::from_le_bytes(row[0..8].try_into()?),
+            header_offset: u64::from_le_bytes(row[8..16].try_into()?),
+            header_length,
+            request_length: u64::from_le_bytes(row[24..32].try_into()?),
+            response_offset: u64::from_le_bytes(row[32..40].try_into()?),
+            response_length,
             partition,
         })
     }
@@ -137,6 +158,20 @@ impl Reader {
         expected: Option<(u64, u64)>,
         bytes: &mut Vec<u8>,
     ) -> Result<Span> {
+        self.read_cells(line, expected, bytes, false)
+    }
+
+    pub(crate) fn read_header(
+        &mut self,
+        line: usize,
+        expected: (u64, u64),
+        bytes: &mut Vec<u8>,
+    ) -> Result<()> {
+        self.read_cells(line, Some(expected), bytes, true)?;
+        Ok(())
+    }
+
+    pub(crate) fn span(&mut self, line: usize) -> Result<Span> {
         if line != self.next_line {
             let position = u64::try_from(line.checked_sub(1).context("invalid dependency line")?)?
                 .checked_mul(ENTRY_BYTES)
@@ -147,9 +182,20 @@ impl Reader {
         let mut entry = [0; ENTRY_BYTES as usize];
         self.directory.read_exact(&mut entry)?;
         self.next_line = line.checked_add(1).context("dependency line overflow")?;
-        let span = Span::decode(entry)?;
+        Span::decode(entry)
+    }
+
+    fn read_cells(
+        &mut self,
+        line: usize,
+        expected: Option<(u64, u64)>,
+        bytes: &mut Vec<u8>,
+        header_only: bool,
+    ) -> Result<Span> {
+        let span = self.span(line)?;
+        let length = span.length()?;
         ensure!(
-            expected.is_none_or(|expected| expected == (span.logical, span.length)),
+            expected.is_none_or(|expected| expected == (span.logical, length)),
             "dependency scope does not match its partition directory"
         );
         let file = &mut self.partitions[span.partition];
@@ -163,17 +209,50 @@ impl Reader {
             });
         }
         let file = file.as_mut().context("missing dependency partition")?;
-        let end = span
-            .offset
-            .checked_add(span.length)
-            .context("dependency span overflow")?;
-        ensure!(end <= file.length, "dependency span escapes its partition");
-        if file.position != span.offset {
-            file.file.seek(SeekFrom::Start(span.offset))?;
+        bytes.clear();
+        let header_length = if !header_only && span.request_length > 0 {
+            span.header_length
+                .checked_add(1)
+                .and_then(|length| length.checked_add(span.request_length))
+                .context("dependency request span overflow")?
+        } else {
+            span.header_length
+        };
+        file.read(span.header_offset, header_length, bytes)?;
+        if header_only {
+            bytes.extend_from_slice(b"\t-\t-\n");
+        } else {
+            if span.request_length == 0 {
+                bytes.extend_from_slice(b"\t-");
+            }
+            bytes.push(b'\t');
+            file.read(span.response_offset, span.response_length, bytes)?;
+            bytes.push(b'\n');
         }
-        bytes.resize(usize::try_from(span.length)?, 0);
-        file.file.read_exact(bytes)?;
-        file.position = end;
         Ok(span)
+    }
+}
+
+impl PartitionInput {
+    fn read(&mut self, offset: u64, length: u64, bytes: &mut Vec<u8>) -> Result<()> {
+        let end = offset
+            .checked_add(length)
+            .context("dependency span overflow")?;
+        ensure!(end <= self.length, "dependency span escapes its partition");
+        if self.position != offset {
+            if let Ok(distance) = i64::try_from(i128::from(offset) - i128::from(self.position)) {
+                self.file.seek_relative(distance)?;
+            } else {
+                self.file.seek(SeekFrom::Start(offset))?;
+            }
+        }
+        let start = bytes.len();
+        let size = start
+            .checked_add(usize::try_from(length)?)
+            .context("dependency span exceeds address space")?;
+        bytes.resize(size, 0);
+        self.file.read_exact(&mut bytes[start..])?;
+        self.position = end;
+        Ok(())
     }
 }

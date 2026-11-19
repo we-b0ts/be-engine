@@ -49,6 +49,11 @@ pub enum CaptureEvent {
         dependency_sequence: u64,
         output: OutputKind,
     },
+    #[serde(rename = "wire_output_cancelled")]
+    OutputCancelled {
+        dependency_sequence: u64,
+        started_sequence: u64,
+    },
     #[serde(rename = "primary_input")]
     Input {
         case_id: Uuid,
@@ -95,6 +100,10 @@ impl CaptureEvent {
                 ..
             }
             | Self::OutputStarted {
+                dependency_sequence,
+                ..
+            }
+            | Self::OutputCancelled {
                 dependency_sequence,
                 ..
             }

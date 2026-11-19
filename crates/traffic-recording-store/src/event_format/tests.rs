@@ -53,6 +53,13 @@ fn event_types_have_positional_columns_and_round_trip() -> Result<()> {
             format!("wire_output_started\t{dependency_sequence}\theaders"),
         ),
         (
+            CaptureEvent::OutputCancelled {
+                dependency_sequence,
+                started_sequence: 2,
+            },
+            format!("wire_output_cancelled\t{dependency_sequence}\t2"),
+        ),
+        (
             CaptureEvent::Output {
                 dependency_sequence,
                 output: OutputKind::Terminated {

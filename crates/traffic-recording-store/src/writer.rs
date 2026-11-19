@@ -1,28 +1,25 @@
 //! Write and seal the physical dependency ledger for one recording.
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use traffic_model::{
     attribution::DependencyOwner,
-    recording::LedgerFileIdentity,
-    trace::{CaptureEvent, RecordedEvent},
+    recording::{LedgerFileIdentity, ScopeKind, ScopeRecordLocation},
+    trace::{CaptureEvent, OutputKind, RecordedEvent},
 };
 
 use crate::dependency_columns::{self, WriteTerms};
-use crate::event_index::{self, JOURNALS};
+use crate::event_index::EventLocations;
 use crate::format::PendingDependency;
 pub use crate::format::RowLayout;
+use crate::original_scope::OriginalScopes;
 use crate::partitions;
 pub use crate::partitions::RecordKind;
 use crate::source::RecordLocation;
 
 mod buffer;
-mod event_order;
 mod segments;
 #[cfg(test)]
 mod tests;
@@ -32,22 +29,22 @@ pub use buffer::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
 pub struct LedgerFiles {
     root: PathBuf,
     recording_id: uuid::Uuid,
-    dependencies: [FileDigest; partitions::FILES.len()],
+    streams: [FileDigest; partitions::FILES.len()],
+    last_sequence: u64,
     directory: FileDigest,
     terms: WriteTerms,
     terms_digest: FileDigest,
     dependency_bytes: u64,
-    events: [EventFile; 2],
-    messages: HashSet<u64>,
+    events: EventLocations,
     records: usize,
     payloads: segments::PayloadSegments,
+    scopes: OriginalScopes,
 }
 
-#[derive(Default)]
-struct EventFile {
-    digest: FileDigest,
-    last: u64,
-    unordered: bool,
+#[derive(Debug, Clone, Copy)]
+pub struct RowStamp {
+    pub sequence: u64,
+    pub offset_micros: u64,
 }
 
 #[derive(Default)]
@@ -57,6 +54,10 @@ pub(crate) struct FileDigest {
 }
 
 impl FileDigest {
+    pub(crate) fn length(&self) -> u64 {
+        self.length
+    }
+
     pub(crate) fn observe(&mut self, bytes: &[u8]) {
         self.length += bytes.len() as u64;
         self.hash.update(bytes);
@@ -77,7 +78,7 @@ impl LedgerFiles {
         recording_id: uuid::Uuid,
         process_epoch: uuid::Uuid,
     ) -> Result<Self> {
-        for name in partitions::FILES.into_iter().chain(JOURNALS) {
+        for name in partitions::FILES {
             crate::storage::write(&root.join(name), b"").await?;
         }
         let header = recording_id.as_bytes();
@@ -92,20 +93,30 @@ impl LedgerFiles {
         Ok(Self {
             root: root.into(),
             recording_id,
-            dependencies: Default::default(),
+            streams: Default::default(),
+            last_sequence: 0,
             directory,
             terms,
             terms_digest,
             dependency_bytes: 0,
-            events: Default::default(),
-            messages: HashSet::new(),
+            events: EventLocations::initialize(root).await?,
             records: 0,
             payloads: Default::default(),
+            scopes: OriginalScopes::initialize(root).await?,
         })
     }
 
     pub fn records(&self) -> usize {
         self.records
+    }
+
+    pub async fn append_original_scope(
+        &mut self,
+        files: &mut JsonlWriterPool,
+        kind: ScopeKind,
+        location: &ScopeRecordLocation,
+    ) -> Result<()> {
+        self.scopes.append(&self.root, files, kind, location).await
     }
 
     pub async fn append_event(
@@ -114,45 +125,88 @@ impl LedgerFiles {
         event: &RecordedEvent<CaptureEvent>,
     ) -> Result<()> {
         use CaptureEvent::*;
-        let message = match &event.event {
-            MessageStarted {
-                dependency_sequence,
-                ..
-            } => {
-                self.messages.insert(*dependency_sequence);
-                true
-            }
-            Terminal {
-                dependency_sequence,
-                ..
-            } => self.messages.remove(dependency_sequence),
-            Started {
-                dependency_sequence,
-                ..
-            }
-            | OutputStarted {
-                dependency_sequence,
-                ..
-            }
-            | Output {
-                dependency_sequence,
-                ..
-            } => self.messages.contains(dependency_sequence),
-            Bound { .. } => anyhow::bail!("protocol bindings belong to dependency rows"),
-            PrimaryBoundary { .. } | Input { .. } | Sealed => false,
+        let dependency = event.event.dependency_sequence();
+        let journal = if matches!(event.event, MessageStarted { .. }) {
+            1
+        } else {
+            dependency
+                .and_then(|id| self.events.journal(id))
+                .unwrap_or(0)
         };
-        let partition = usize::from(message);
+        let partition = if journal == 1 {
+            partitions::PUSH
+        } else {
+            partitions::ORDINARY
+        };
+        // The successful wire end already gives Replay its completion boundary.
+        // Close the trace at capture termination so post-output events survive.
+        if let Terminal {
+            dependency_sequence,
+            outcome,
+            capture_complete: true,
+        } = &event.event
+            && matches!(outcome.as_str(), "response" | "delivery")
+            && self.events.has_wire_end(*dependency_sequence)
+        {
+            self.ensure_next_sequence(partition, event.sequence)?;
+            self.events.finish(files, *dependency_sequence).await?;
+            self.last_sequence = event.sequence;
+            return Ok(());
+        }
         let row = crate::event_format::encode_event(event, self.recording_id)?;
-        files
-            .append(&self.root.join(JOURNALS[partition]), &row)
+        let offset = self
+            .append_row(files, partition, event.sequence, &row)
             .await?;
-        let file = &mut self.events[partition];
-        file.digest.observe(&row);
-        file.unordered |= event.sequence <= file.last;
-        file.last = event.sequence;
+        if let Some(dependency) = dependency {
+            self.events.append(
+                journal,
+                dependency,
+                offset,
+                row.len(),
+                matches!(
+                    event.event,
+                    Output {
+                        output: OutputKind::End,
+                        ..
+                    }
+                ),
+            )?;
+            if matches!(event.event, Terminal { .. }) {
+                self.events.finish(files, dependency).await?;
+            }
+        }
         Ok(())
     }
 
+    fn ensure_next_sequence(&self, partition: usize, sequence: u64) -> Result<()> {
+        let name = partitions::FILES[partition];
+        ensure!(
+            sequence > self.last_sequence,
+            "recording stream {name} received unordered sequence {sequence} after {}",
+            self.last_sequence
+        );
+        Ok(())
+    }
+
+    async fn append_row(
+        &mut self,
+        files: &mut JsonlWriterPool,
+        partition: usize,
+        sequence: u64,
+        bytes: &[u8],
+    ) -> Result<u64> {
+        self.ensure_next_sequence(partition, sequence)?;
+        let stream = &mut self.streams[partition];
+        let offset = stream.length;
+        files
+            .append(&self.root.join(partitions::FILES[partition]), bytes)
+            .await?;
+        stream.observe(bytes);
+        self.last_sequence = sequence;
+        Ok(offset)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn append_dependency(
         &mut self,
         files: &mut JsonlWriterPool,
@@ -160,6 +214,8 @@ impl LedgerFiles {
         owner: &DependencyOwner,
         kind: RecordKind,
         layout: &RowLayout,
+        request_stamp: Option<RowStamp>,
+        response_stamp: RowStamp,
     ) -> Result<RecordLocation> {
         let Value::Object(record) = record else {
             anyhow::bail!("recorded dependency is not an object");
@@ -173,6 +229,21 @@ impl LedgerFiles {
             row.link(payload, reference);
         }
         let bytes = row.encode(&mut self.terms, layout)?;
+        let (header, request, response) = compact_cells(&bytes)?;
+        let dependency = header
+            .split(|byte| *byte == b'\t')
+            .next()
+            .expect("nonempty header");
+        let request_stamp =
+            request_stamp.filter(|_| !matches!(kind, RecordKind::Observation) || request != b"-");
+        ensure!(
+            request_stamp.is_some() || request == b"-",
+            "a dependency with request data requires a request stamp"
+        );
+        ensure!(
+            request_stamp.is_none_or(|request| request.sequence < response_stamp.sequence),
+            "dependency response sequence must follow its request data sequence"
+        );
         let additions = self.terms.take_pending();
         if !additions.is_empty() {
             files
@@ -181,60 +252,100 @@ impl LedgerFiles {
             self.terms_digest.observe(&additions);
         }
         let partition = partitions::partition(owner, kind);
-        let dependency = &mut self.dependencies[partition];
+        let header_offset;
+        let response_offset;
+        if let Some(stamp) = request_stamp {
+            let mut row = data_prefix(stamp, "request");
+            let prefix = row.len() as u64;
+            row.extend_from_slice(header);
+            row.push(b'\t');
+            row.extend_from_slice(request);
+            row.push(b'\n');
+            header_offset = self
+                .append_row(files, partition, stamp.sequence, &row)
+                .await?
+                + prefix;
+
+            let mut row = data_prefix(response_stamp, "response");
+            row.extend_from_slice(dependency);
+            row.push(b'\t');
+            let prefix = row.len() as u64;
+            row.extend_from_slice(response);
+            row.push(b'\n');
+            response_offset = self
+                .append_row(files, partition, response_stamp.sequence, &row)
+                .await?
+                + prefix;
+        } else {
+            let kind = match kind {
+                RecordKind::Observation => "observation",
+                RecordKind::Message => "message",
+                RecordKind::Exchange => "response",
+            };
+            let mut row = data_prefix(response_stamp, kind);
+            let prefix = row.len() as u64;
+            row.extend_from_slice(header);
+            row.push(b'\t');
+            row.extend_from_slice(response);
+            row.push(b'\n');
+            header_offset = self
+                .append_row(files, partition, response_stamp.sequence, &row)
+                .await?
+                + prefix;
+            response_offset = header_offset + header.len() as u64 + 1;
+        }
         let span = partitions::Span {
             logical: self.dependency_bytes,
-            offset: dependency.length,
-            length: bytes.len() as u64,
+            header_offset,
+            header_length: header.len() as u64,
+            request_length: request_stamp.map_or(0, |_| request.len() as u64),
+            response_offset,
+            response_length: response.len() as u64,
             partition,
         };
-        files
-            .append(&self.root.join(partitions::FILES[partition]), &bytes)
-            .await?;
-        dependency.observe(&bytes);
+        let length = span.length()?;
         let entry = span.encode();
         files
             .append(&self.root.join(partitions::DIRECTORY), &entry)
             .await?;
         self.directory.observe(&entry);
-        self.dependency_bytes += span.length;
+        self.dependency_bytes += length;
         self.records += 1;
         let location = RecordLocation {
             line: self.records,
             offset: span.logical,
-            length: span.length,
+            length,
             sha256: crate::source::digest(&bytes),
         };
         Ok(location)
     }
 
-    pub async fn seal(&self, files: &mut JsonlWriterPool) -> Result<Vec<LedgerFileIdentity>> {
+    pub async fn seal(&mut self, files: &mut JsonlWriterPool) -> Result<Vec<LedgerFileIdentity>> {
         files.flush_all().await?;
         let mut identities = Vec::new();
         identities.push(self.directory.identity(partitions::DIRECTORY));
         identities.push(self.terms_digest.identity(dependency_columns::FILE));
-        for (name, dependency) in partitions::FILES.into_iter().zip(&self.dependencies) {
-            identities.push(dependency.identity(name));
+        for (name, stream) in partitions::FILES.into_iter().zip(&self.streams) {
+            identities.push(stream.identity(name));
         }
-        for (name, event) in JOURNALS.into_iter().zip(&self.events) {
-            let identity = if event.unordered {
-                let root = self.root.clone();
-                tokio::task::spawn_blocking(move || event_order::seal(&root, name))
-                    .await
-                    .context("dependency event ordering task failed")??
-            } else {
-                event.digest.identity(name)
-            };
-            identities.push(identity);
-        }
-        let root = self.root.clone();
-        let recording_id = self.recording_id;
-        identities.push(
-            tokio::task::spawn_blocking(move || event_index::seal(&root, recording_id))
-                .await
-                .context("dependency event index task failed")??,
-        );
+        identities.extend(self.events.seal().await?);
         identities.extend(self.payloads.identities());
+        identities.extend(self.scopes.identities());
         Ok(identities)
     }
+}
+
+fn data_prefix(stamp: RowStamp, kind: &str) -> Vec<u8> {
+    format!("{}\t{}\t{kind}\t", stamp.sequence, stamp.offset_micros).into_bytes()
+}
+
+fn compact_cells(row: &[u8]) -> Result<(&[u8], &[u8], &[u8])> {
+    let row = row
+        .strip_suffix(b"\n")
+        .context("unterminated dependency row")?;
+    let mut columns = row.rsplitn(3, |byte| *byte == b'\t');
+    let response = columns.next().context("missing dependency response")?;
+    let request = columns.next().context("missing dependency request")?;
+    let header = columns.next().context("missing dependency metadata")?;
+    Ok((header, request, response))
 }

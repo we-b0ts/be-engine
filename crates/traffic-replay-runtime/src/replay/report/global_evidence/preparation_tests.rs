@@ -1,30 +1,15 @@
 use super::*;
-use traffic_engine::protocols::replay::report::PROTOCOLS;
-use traffic_engine::replay::report::global_evidence::preparation::*;
-use traffic_engine::replay::report::global_evidence::{
-    artifact::ArtifactReference,
-    regular_store::{Identity, Inventory},
-};
-const MARKER: &str = ".global-report-preparation.json";
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-struct Preparation {
-    version: u32,
-    status: String,
-    policy: String,
-    source_sha256: Option<String>,
-    inventories: BTreeMap<String, ArtifactReference>,
-    #[serde(flatten)]
-    extensions: BTreeMap<String, Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-}
 use crate::replay::test_support::recording as fixtures;
 use crate::replay::{ReplayConfig, ReplayRuntime};
 use fixtures::case_path;
 use serde_json::{Value, json};
 use std::fs;
-use std::os::unix::fs::MetadataExt;
-use traffic_engine::dependency_index::store;
+use traffic_engine::replay::report::global_evidence::{
+    artifact::ArtifactReference,
+    preparation::policy_identity,
+    regular_store::{Identity, Inventory},
+};
+use traffic_replay::report::GlobalReportProjection;
 
 fn capture(data: &str) -> Value {
     json!({"encoding":"utf8","data":data,"truncated":false})
@@ -37,15 +22,6 @@ fn records() -> Vec<Value> {
             "command":"GET","args":[capture("key")],"response":capture("$5\r\nvalue\r\n"),
             "response_kind":"bulk_string","duration_ms":0,"replay_safe":true}),
     ]
-}
-
-fn noop_commit() -> Value {
-    json!({"event_type":"mysql_exchange","connection_id":uuid::Uuid::from_u128(9),
-        "query_sequence":1,"command":"COM_QUERY","sql":"COMMIT",
-        "target_host":"db.test","target_port":3306,"database":"app","username":"reader",
-        "server_status_before":2,"outcome":"response","parse_warnings":[],
-        "response":{"status":"ok","server_status":2,"affected_rows":0,"last_insert_id":0,
-            "columns":[],"rows":[],"rows_truncated":false}})
 }
 
 async fn recorded(
@@ -115,34 +91,19 @@ async fn load(
 }
 
 #[tokio::test]
-async fn recorder_prewarms_the_exact_replay_policy_layout_and_native_inventory() {
+async fn replay_prepares_the_exact_policy_layout_and_native_inventory() {
     let temp = tempfile::tempdir().unwrap();
     let (recorder, config, policy) = recorded(temp.path(), &records()).await;
     assert!(!recorder.finish_run().await.unwrap());
-    let marker = recorder.run_dir().join(MARKER);
-    let status: Preparation = store::read_json(&marker).unwrap();
-    assert_eq!(status.status, "ready", "{:?}", status.reason);
-    assert_eq!(
-        status.policy,
-        policy_identity(
-            &config.process_owned_dependencies,
-            config.global_projection_policy.as_deref()
-        )
-        .unwrap()
-    );
-    assert!(
-        recorder
-            .run_dir()
-            .join("indexes/startup-dependencies/index.json")
-            .is_file()
-    );
-    assert!(!recorder.run_dir().join(GLOBAL_FRAGMENT).exists());
-    assert!(!recorder.run_dir().join(".replay/replay-ca.pem").exists());
-    assert!(status.extensions.is_empty());
+    let run = recorder.run_dir();
+    assert!(!run.join(".global-report-preparation.json").exists());
+    assert!(!run.join("indexes/startup-dependencies/index.json").exists());
+    assert!(!run.join(".replay/replay-ca.pem").exists());
+    let (_, manifest) = crate::dependency_index::recording::manifest(&run).unwrap();
     let report = temp
         .path()
         .join(".traffic-e2e/local/artifacts/replays/first/report.json");
-    let runtime = load(&recorder.run_dir(), &policy, &config, &report).await;
+    let runtime = load(&run, &policy, &config, &report).await;
     let state = runtime.state.lock().await;
     let fingerprint = state.replay_policy.as_ref().unwrap().report().fingerprint;
     assert_eq!(
@@ -152,63 +113,47 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_native_inventory()
     );
     let runtime_identity =
         policy_identity(&config.process_owned_dependencies, Some(&fingerprint)).unwrap();
-    for protocol in PROTOCOLS {
+    let source_bytes = manifest.files.iter().map(|file| file.length).sum();
+    let source_sha256 = crate::policy_evidence::digest(
+        &serde_json::to_vec(&(
+            manifest.files,
+            state.dependency_attribution_snapshot.as_ref(),
+        ))
+        .unwrap(),
+    );
+    assert!(state.regular_global.contains_key("redis"));
+    for protocol in state.regular_global.keys() {
         let evidence = super::regular::prepare_regular(&report, &state, protocol)
             .unwrap()
             .unwrap();
-        let reference: ArtifactReference =
-            serde_json::from_value(serde_json::to_value(evidence).unwrap()["inventory"].clone())
-                .unwrap();
-        let (inventory, destination) = reference.load::<Inventory>(&report).unwrap();
+        let reference = evidence_reference(&evidence);
+        let (inventory, _) = reference.load::<Inventory>(&report).unwrap();
         let expected = Identity {
-            source_sha256: status.source_sha256.clone().unwrap(),
-            source_bytes: crate::dependency_index::FileStamp::read(
-                &recorder.run_dir().join("global-dependencies.jsonl"),
-            )
-            .unwrap()
-            .size,
+            source_sha256: source_sha256.clone(),
+            source_bytes,
             policy: runtime_identity.clone(),
-            protocol: protocol.into(),
-            layout: state.protocols.global_report_layout(protocol).unwrap(),
-            semantics: crate::protocols::replay::report::semantics(protocol),
+            protocol: protocol.clone(),
+            layout: state.global_report_layout(protocol).unwrap(),
+            semantics: state.global_report_semantics(protocol),
         };
         assert_eq!(inventory.identity, expected);
-        assert_eq!(reference.key(), status.inventories[protocol].key());
-        if !inventory.pages.is_empty() {
-            let (_, original) = status.inventories[protocol]
-                .load::<Inventory>(&marker)
-                .unwrap();
-            assert_eq!(
-                fs::metadata(original.join("0.json")).unwrap().ino(),
-                fs::metadata(destination.join("0.json")).unwrap().ino(),
-                "first Replay imports recorded pages instead of visiting and serializing all rows again"
-            );
-        }
         super::regular::retain_reference(
             &report,
             expected,
             false,
-            Some(&recorder.run_dir().join("global-dependencies.jsonl")),
-            |_| panic!("warm projection must not visit native rows"),
+            Some(&run.join("global-dependencies.jsonl")),
+            |_| panic!("prepared report must not visit native rows again"),
         )
         .unwrap();
     }
-    drop(state);
-    // Local durable inventories no longer depend on the optional portable copy.
-    fs::remove_dir_all(recorder.run_dir().join(".replay/shared-global-inventories")).unwrap();
-    load(
-        &recorder.run_dir(),
-        &policy,
-        &config,
-        &temp
-            .path()
-            .join(".traffic-e2e/local/artifacts/replays/second/report.json"),
-    )
-    .await;
+}
+
+fn evidence_reference(evidence: &regular::RegularEvidence) -> ArtifactReference {
+    serde_json::from_value(serde_json::to_value(evidence).unwrap()["inventory"].clone()).unwrap()
 }
 
 #[tokio::test]
-async fn recording_prewarm_uses_sealed_source_without_reading_a_target_workflow() {
+async fn recording_seals_source_without_reading_a_target_workflow() {
     let temp = tempfile::tempdir().unwrap();
     let (recorder, _, _) = recorded(temp.path(), &records()).await;
     let workflow = temp
@@ -217,8 +162,6 @@ async fn recording_prewarm_uses_sealed_source_without_reading_a_target_workflow(
     fs::create_dir_all(workflow.parent().unwrap()).unwrap();
     fs::write(&workflow, b"unrelated invalid Target workflow").unwrap();
     recorder.finish_run().await.unwrap();
-    let status: Preparation = store::read_json(&recorder.run_dir().join(MARKER)).unwrap();
-    assert_eq!(status.status, "ready", "{:?}", status.reason);
     let (_, manifest) = crate::dependency_index::recording::manifest(&recorder.run_dir()).unwrap();
     assert!(manifest.capture_complete);
     // The frozen identity retains the run and sealed inventory binding even
@@ -231,12 +174,6 @@ async fn recording_prewarm_uses_sealed_source_without_reading_a_target_workflow(
     .unwrap();
     assert!(decisions.is_empty());
     assert_ne!(snapshot, crate::policy_evidence::digest(b"[]"));
-    assert_eq!(
-        status.source_sha256,
-        Some(crate::policy_evidence::digest(
-            &serde_json::to_vec(&(manifest.files, Some(snapshot))).unwrap()
-        ))
-    );
     assert!(
         crate::coordination::freeze_dependency_attribution(
             Some(temp.path()),
@@ -249,100 +186,10 @@ async fn recording_prewarm_uses_sealed_source_without_reading_a_target_workflow(
 }
 
 #[tokio::test]
-async fn mysql_cleanup_prewarm_imports_the_current_hidden_noop_commit_inventory() {
-    let temp = tempfile::tempdir().unwrap();
-    let (recorder, config, policy) = recorded(temp.path(), &[noop_commit()]).await;
-    recorder.finish_run().await.unwrap();
-    let marker = recorder.run_dir().join(MARKER);
-    let status: Preparation = store::read_json(&marker).unwrap();
-    assert_eq!(status.status, "ready", "{:?}", status.reason);
-    let (portable, original) = status.inventories["mysql"]
-        .load::<Inventory>(&marker)
-        .unwrap();
-    assert_eq!(portable.recorded, 1);
-    assert_eq!(portable.visible, 0);
-    assert_eq!(
-        portable.identity.semantics.as_deref(),
-        Some("mysql-transaction-diagnostics-v6-source-read-proof")
-    );
-    let report = temp
-        .path()
-        .join(".traffic-e2e/local/artifacts/replays/mysql/report.json");
-    let runtime = load(&recorder.run_dir(), &policy, &config, &report).await;
-    let state = runtime.state.lock().await;
-    let evidence = super::regular::prepare_regular(&report, &state, "mysql")
-        .unwrap()
-        .unwrap();
-    assert_eq!(evidence.count().unwrap(), 0);
-    let reference: ArtifactReference =
-        serde_json::from_value(serde_json::to_value(evidence).unwrap()["inventory"].clone())
-            .unwrap();
-    assert_eq!(reference.key(), status.inventories["mysql"].key());
-    let (imported, destination) = reference.load::<Inventory>(&report).unwrap();
-    assert_eq!(imported.identity, portable.identity);
-    assert_eq!(
-        fs::metadata(original.join("0.json")).unwrap().ino(),
-        fs::metadata(destination.join("0.json")).unwrap().ino(),
-        "new MySQL semantics use the recording's portable pages"
-    );
-}
-
-#[tokio::test]
-async fn historical_mysql_prewarm_is_skipped_without_invalidating_other_protocols() {
-    for semantics in [
-        None,
-        Some("mysql-transaction-diagnostics-v4".to_owned()),
-        Some("mysql-transaction-diagnostics-v5-first-write-through-end".to_owned()),
-    ] {
-        let temp = tempfile::tempdir().unwrap();
-        let (recorder, _, _) = recorded(temp.path(), &[noop_commit()]).await;
-        recorder.finish_run().await.unwrap();
-        let marker = recorder.run_dir().join(MARKER);
-        let mut status: Preparation = store::read_json(&marker).unwrap();
-        assert_eq!(status.status, "ready");
-        let (current, original) = status.inventories["mysql"]
-            .load::<Inventory>(&marker)
-            .unwrap();
-        let mut historical = current.identity.clone();
-        historical.semantics = semantics;
-        let old = super::regular::retain_reference(&marker, historical, true, None, |visitor| {
-            for page in 0..current.pages.len() {
-                for mut row in current.read_page(&original, page)? {
-                    row.visible = true;
-                    visitor(row)?;
-                }
-            }
-            Ok(())
-        })
-        .unwrap();
-        status.inventories.insert("mysql".into(), old);
-        store::write_json(&marker, &status).unwrap();
-        let source = recorder.run_dir().join("global-dependencies.jsonl");
-        let report = temp
-            .path()
-            .join(".traffic-e2e/local/artifacts/replays/import/report.json");
-        assert!(
-            import(&source, &report, &current.identity)
-                .unwrap()
-                .is_none()
-        );
-        let (redis, _) = status.inventories["redis"]
-            .load::<Inventory>(&marker)
-            .unwrap();
-        assert_eq!(
-            redis.identity.semantics.as_deref(),
-            Some("registered-native-global/v1:redis-native/v1")
-        );
-        assert!(import(&source, &report, &redis.identity).unwrap().is_some());
-    }
-}
-
-#[tokio::test]
-async fn missing_portable_inventory_rebuilds_but_published_pages_remain_strict() {
+async fn published_report_rejects_damaged_page() {
     let temp = tempfile::tempdir().unwrap();
     let (recorder, config, policy) = recorded(temp.path(), &records()).await;
     recorder.finish_run().await.unwrap();
-    fs::remove_dir_all(recorder.run_dir().join(".replay/shared-global-inventories")).unwrap();
     let report = temp
         .path()
         .join(".traffic-e2e/local/artifacts/replays/fallback/report.json");
@@ -351,10 +198,9 @@ async fn missing_portable_inventory_rebuilds_but_published_pages_remain_strict()
     let evidence = super::regular::prepare_regular(&report, &state, "redis")
         .unwrap()
         .unwrap();
-    let reference: ArtifactReference =
-        serde_json::from_value(serde_json::to_value(&evidence).unwrap()["inventory"].clone())
-            .unwrap();
-    let (inventory, root) = reference.load::<Inventory>(&report).unwrap();
+    let (inventory, root) = evidence_reference(&evidence)
+        .load::<Inventory>(&report)
+        .unwrap();
     assert!(!inventory.pages.is_empty());
     fs::write(root.join("0.json"), b"tampered").unwrap();
     assert!(
@@ -364,26 +210,16 @@ async fn missing_portable_inventory_rebuilds_but_published_pages_remain_strict()
 }
 
 #[tokio::test]
-async fn unsupported_source_only_prewarm_preserves_recording_status_and_native_index() {
+async fn unsupported_source_dependency_preserves_recording_status_and_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let mut unsafe_record = records().remove(0);
     unsafe_record["replay_safe"] = false.into();
     let (recorder, _, _) = recorded(temp.path(), &[unsafe_record.clone()]).await;
     assert!(!recorder.finish_run().await.unwrap());
-    let status: Preparation = store::read_json(&recorder.run_dir().join(MARKER)).unwrap();
-    assert_eq!(status.status, "prewarm_failed");
-    assert!(status.reason.is_some());
     let report: Value =
         serde_json::from_slice(&fs::read(recorder.run_dir().join("recording-run.json")).unwrap())
             .unwrap();
     assert_eq!(report["status"], "completed");
-    assert!(
-        recorder
-            .run_dir()
-            .join("indexes/startup-dependencies/index.json")
-            .is_file()
-    );
-    assert!(!recorder.run_dir().join(GLOBAL_FRAGMENT).exists());
     let raw = crate::dependency_index::scoped::read_bytes(
         &recorder.run_dir().join("global-dependencies.jsonl"),
     )
@@ -394,18 +230,25 @@ async fn unsupported_source_only_prewarm_preserves_recording_status_and_native_i
 }
 
 #[tokio::test]
-async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_recording_move() {
+async fn changed_policy_has_distinct_projection_and_moved_recording_replays() {
     let origin = tempfile::tempdir().unwrap();
     let (recorder, config, policy) = recorded(origin.path(), &records()).await;
     recorder.finish_run().await.unwrap();
-    let marker = recorder.run_dir().join(MARKER);
-    let status: Preparation = store::read_json(&marker).unwrap();
-    assert_eq!(status.status, "ready");
-    let (_, original_root) = status.inventories["redis"]
-        .load::<Inventory>(&marker)
-        .unwrap();
-    let original_inode = fs::metadata(original_root.join("0.json")).unwrap().ino();
-    let mut document = crate::policy::parse_policy(&fs::read_to_string(&policy).unwrap()).unwrap();
+    let run = recorder.run_dir();
+    let initial_policy = fs::read_to_string(&policy).unwrap();
+    let initial_report = origin
+        .path()
+        .join(".traffic-e2e/local/artifacts/replays/initial/report.json");
+    let original = load(&run, &policy, &config, &initial_report).await;
+    let initial_key = {
+        let state = original.state.lock().await;
+        let evidence = super::regular::prepare_regular(&initial_report, &state, "redis")
+            .unwrap()
+            .unwrap();
+        evidence_reference(&evidence).key().to_owned()
+    };
+    drop(original);
+    let mut document = crate::policy::parse_policy(&initial_policy).unwrap();
     document.rules.push(
         crate::policy::NativeRule {
             id: "additional-config".into(),
@@ -448,62 +291,32 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
     let evidence = super::regular::prepare_regular(&changed_report, &state, "redis")
         .unwrap()
         .unwrap();
-    let reference: ArtifactReference =
-        serde_json::from_value(serde_json::to_value(evidence).unwrap()["inventory"].clone())
-            .unwrap();
-    assert_ne!(reference.key(), status.inventories["redis"].key());
-    let (_, changed_root) = reference.load::<Inventory>(&changed_report).unwrap();
-    assert_ne!(
-        fs::metadata(changed_root.join("0.json")).unwrap().ino(),
-        original_inode
-    );
+    assert_ne!(evidence_reference(&evidence).key(), initial_key);
     drop(state);
+    drop(changed);
 
-    // Carry a native Case index beside the native Global index and the optional
-    // Source projections; none uses the old project's shared artifact anchor.
-    let case = case_path(&recorder.run_dir());
-    let native = crate::dependency_index::load_file(&case.join("dependencies.jsonl")).unwrap();
-    store::write_json(&case.join(crate::dependency_index::FRAGMENT), &native).unwrap();
     let destination = tempfile::tempdir().unwrap();
-    let run = destination
+    let moved = destination
         .path()
         .join(".traffic-e2e/local/recordings/moved");
-    copy_tree(&recorder.run_dir(), &run);
+    copy_tree(&run, &moved);
     let moved_policy = destination.path().join(".traffic-e2e/policy.yaml");
-    fs::write(&moved_policy, config_policy(&config)).unwrap();
+    fs::write(&moved_policy, initial_policy).unwrap();
     fs::remove_dir_all(origin.path().join(".traffic-e2e")).unwrap();
-    assert!(
-        run.join("indexes/startup-dependencies/index.json")
-            .is_file()
-    );
-    assert!(!run.join(GLOBAL_FRAGMENT).exists());
-    assert!(
-        case_path(&run)
-            .join(crate::dependency_index::FRAGMENT)
-            .is_file()
-    );
     let report = destination
         .path()
         .join(".traffic-e2e/local/artifacts/replays/moved/report.json");
-    let runtime = load(&run, &moved_policy, &config, &report).await;
+    let runtime = load(&moved, &moved_policy, &config, &report).await;
     let state = runtime.state.lock().await;
     let evidence = super::regular::prepare_regular(&report, &state, "redis")
         .unwrap()
         .unwrap();
-    let reference: ArtifactReference =
-        serde_json::from_value(serde_json::to_value(&evidence).unwrap()["inventory"].clone())
-            .unwrap();
-    assert_eq!(reference.key(), status.inventories["redis"].key());
+    assert_eq!(evidence_reference(&evidence).key(), initial_key);
     let mut items = vec![];
     evidence.read(&report, 0, 10, &mut items).unwrap();
     assert_eq!(items.len(), 1);
 }
 
-fn config_policy(_config: &crate::AppConfig) -> String {
-    crate::config::SourceTrafficPolicyConfig::empty()
-        .render()
-        .unwrap()
-}
 fn copy_tree(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).unwrap();
     for entry in fs::read_dir(source).unwrap() {
@@ -516,5 +329,3 @@ fn copy_tree(source: &Path, destination: &Path) {
         }
     }
 }
-
-const GLOBAL_FRAGMENT: &str = ".global-replay-index.json";

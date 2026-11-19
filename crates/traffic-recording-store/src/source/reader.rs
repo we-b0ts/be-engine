@@ -26,39 +26,6 @@ pub struct RecordReader {
     pub hits: usize,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn replay_reads_indexed_ranges_without_rechecking_the_file_or_record_digest() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("dependencies.jsonl");
-        std::fs::write(&path, b"{\"id\":1}\n")?;
-        let stamp = FileStamp::read_native(&path)?;
-        let location = RecordLocation {
-            line: 1,
-            offset: 0,
-            length: stamp.size,
-            sha256: digest(b"{\"id\":1}\n"),
-        };
-        std::fs::write(&path, b"{\"id\":2}\n")?;
-
-        assert!(RecordReader::new(0).read(&path, &stamp, &location).is_err());
-        let mut reader = RecordReader::for_replay(0);
-        assert_eq!(
-            reader.read(&path, &stamp, &location)?.as_slice(),
-            b"{\"id\":2}\n"
-        );
-        let invalid = RecordLocation {
-            length: stamp.size + 1,
-            ..location
-        };
-        assert!(reader.read(&path, &stamp, &invalid).is_err());
-        Ok(())
-    }
-}
-
 type RecordKey = (PathBuf, u64, String);
 type CachedRecord = (Arc<Vec<u8>>, u64);
 
@@ -90,6 +57,87 @@ impl RecordReader {
 
     pub(super) fn verifies(&self) -> bool {
         self.verify
+    }
+
+    pub(super) fn read_metadata(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+    ) -> Result<serde_json::Value> {
+        if !crate::partitions::is_directory(path) {
+            return Ok(serde_json::from_slice(&self.read(path, stamp, location)?)?);
+        }
+        let mut bytes = Vec::new();
+        let verify = self.verify;
+        let reader = self.partition_reader(path, stamp)?;
+        let expected = (location.offset, location.length);
+        if verify {
+            reader.read(location.line, Some(expected), &mut bytes)?;
+            ensure!(
+                digest(&bytes) == location.sha256,
+                "indexed dependency record checksum mismatch"
+            );
+        } else {
+            reader.read_header(location.line, expected, &mut bytes)?;
+        }
+        let recording_id = reader.recording_id;
+        self.source_bytes += bytes.len() as u64;
+        let compact = self.compact_reader(path, stamp, recording_id)?;
+        compact.validate()?;
+        let metadata = compact.read_header(&bytes)?;
+        if verify {
+            compact.validate()?;
+            ensure!(
+                FileStamp::read_native(path)? == *stamp,
+                "indexed dependency file changed during read"
+            );
+        }
+        Ok(metadata)
+    }
+
+    fn partition_reader(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+    ) -> Result<&mut crate::partitions::Reader> {
+        if self
+            .partitions
+            .as_ref()
+            .is_none_or(|(prior, verified, _)| prior != path || verified != stamp)
+        {
+            self.partitions = Some((
+                path.to_owned(),
+                stamp.clone(),
+                crate::partitions::Reader::open(path)?,
+            ));
+        }
+        Ok(&mut self
+            .partitions
+            .as_mut()
+            .expect("opened dependency partitions")
+            .2)
+    }
+
+    fn compact_reader(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        recording_id: uuid::Uuid,
+    ) -> Result<&compact::Reader> {
+        if self
+            .compact
+            .as_ref()
+            .is_none_or(|(prior, verified, _)| prior != path || verified != stamp)
+        {
+            let reader = if self.verify {
+                compact::Reader::open(path, recording_id)?
+            } else {
+                compact::Reader::open_for_replay(path, recording_id)?
+            };
+            self.compact = Some((path.to_owned(), stamp.clone(), reader));
+        }
+        Ok(&self.compact.as_ref().expect("opened compact reader").2)
     }
 
     pub fn read(
@@ -150,21 +198,7 @@ impl RecordReader {
         }
         let mut bytes = Vec::new();
         let recording_id = if crate::partitions::is_directory(path) {
-            if self
-                .partitions
-                .as_ref()
-                .is_none_or(|(prior, verified, _)| prior != path || verified != stamp)
-            {
-                self.partitions = Some((
-                    path.to_owned(),
-                    stamp.clone(),
-                    crate::partitions::Reader::open(path)?,
-                ));
-            }
-            let (_, _, reader) = self
-                .partitions
-                .as_mut()
-                .expect("opened dependency partitions");
+            let reader = self.partition_reader(path, stamp)?;
             reader.read(
                 location.line,
                 Some((location.offset, location.length)),
@@ -198,22 +232,7 @@ impl RecordReader {
         }
         self.source_bytes += location.length;
         if let Some(recording_id) = recording_id {
-            if self
-                .compact
-                .as_ref()
-                .is_none_or(|(prior, verified, _)| prior != path || verified != stamp)
-            {
-                self.compact = Some((
-                    path.to_owned(),
-                    stamp.clone(),
-                    if self.verify {
-                        compact::Reader::open(path, recording_id)?
-                    } else {
-                        compact::Reader::open_for_replay(path, recording_id)?
-                    },
-                ));
-            }
-            let (_, _, compact) = self.compact.as_ref().expect("opened compact reader");
+            let compact = self.compact_reader(path, stamp, recording_id)?;
             compact.validate()?;
             let record = compact.read(&bytes)?;
             compact::encode_materialized(&record, &mut bytes)?;
@@ -242,5 +261,38 @@ impl RecordReader {
             self.records.insert(key, (bytes.clone(), self.generation));
         }
         Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_reads_indexed_ranges_without_rechecking_the_file_or_record_digest() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("dependencies.jsonl");
+        std::fs::write(&path, b"{\"id\":1}\n")?;
+        let stamp = FileStamp::read_native(&path)?;
+        let location = RecordLocation {
+            line: 1,
+            offset: 0,
+            length: stamp.size,
+            sha256: digest(b"{\"id\":1}\n"),
+        };
+        std::fs::write(&path, b"{\"id\":2}\n")?;
+
+        assert!(RecordReader::new(0).read(&path, &stamp, &location).is_err());
+        let mut reader = RecordReader::for_replay(0);
+        assert_eq!(
+            reader.read(&path, &stamp, &location)?.as_slice(),
+            b"{\"id\":2}\n"
+        );
+        let invalid = RecordLocation {
+            length: stamp.size + 1,
+            ..location
+        };
+        assert!(reader.read(&path, &stamp, &invalid).is_err());
+        Ok(())
     }
 }

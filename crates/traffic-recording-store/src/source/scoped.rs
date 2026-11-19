@@ -1,6 +1,7 @@
 //! Resolve immutable scope views to original central-ledger byte locations.
 //! Views select evidence; they never authorize ownership or consumption.
 use super::{FileStamp, RecordLocation};
+use crate::original_scope;
 use anyhow::{Context, Result, ensure};
 use std::{
     collections::VecDeque,
@@ -9,7 +10,9 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
-use traffic_model::recording::{SCOPE_SCHEMA, ScopeIndex, ScopeKind, identity::IdentityKind};
+use traffic_model::recording::{
+    LedgerFileIdentity, SCOPE_SCHEMA, ScopeIndex, ScopeKind, identity::IdentityKind,
+};
 use uuid::Uuid;
 
 pub const CASE_SCOPE: &str = "dependency-scope.json";
@@ -33,6 +36,9 @@ const SCOPE_CACHE_ENTRIES: usize = 64;
 /// The aliases exist only as in-memory addresses for native protocol readers.
 /// Recorder never writes per-case or Global payload copies.
 pub fn view_path(path: &Path) -> Option<PathBuf> {
+    if let Some(binary) = original_scope::binary_view(path) {
+        return Some(binary);
+    }
     if path
         .file_name()
         .is_some_and(|name| name == CASE_SCOPE || name.to_string_lossy().ends_with("-scope.json"))
@@ -53,9 +59,7 @@ pub fn view_path(path: &Path) -> Option<PathBuf> {
         .is_some_and(|name| name == "global-dependencies.jsonl")
     {
         let scope = path.parent()?.join("indexes/startup-scope.json");
-        if scope.is_file() {
-            return Some(scope);
-        }
+        return view_path(&scope).filter(|scope| scope.is_file());
     }
     None
 }
@@ -293,7 +297,21 @@ pub fn read_index_with_epoch(path: &Path, epoch: Uuid) -> Result<ScopeIndex> {
     })
 }
 
+/// Resolve one exchange from an original binary scope, authenticating the
+/// scope's sealed bytes and skipping dependency and payload reads.
+pub fn select_original_scope(
+    root: &Path,
+    file: &LedgerFileIdentity,
+    exchange_id: Uuid,
+) -> Result<Option<(u64, Vec<RecordLocation>)>> {
+    original_scope::select(root, file, exchange_id).transpose()
+}
+
 fn read_wire_index(path: &Path) -> Result<ScopeIndex<String>> {
+    let binary = original_scope::binary_view(path);
+    if let Some(index) = original_scope::read(binary.as_deref().unwrap_or(path)) {
+        return index;
+    }
     let index: ScopeIndex<String> = serde_json::from_slice(&fs::read(path)?)?;
     ensure!(
         index.schema == SCOPE_SCHEMA,

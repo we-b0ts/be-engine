@@ -151,7 +151,8 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
         let partition_length = |name| manifest.files.iter()
             .find(|file| file.path == name).expect("sealed partition").length;
         assert!(partition_length("dependencies-push.tsv") > 0);
-        assert!(partition_length("events-push.tsv") > 0);
+        assert!(!root.join("events.tsv").exists());
+        assert!(!root.join("events-push.tsv").exists());
         let dependency_bytes = manifest.files.iter()
             .filter(|file| file.path.starts_with("dependencies") && file.path.ends_with(".tsv"))
             .map(|file| file.length).sum::<u64>();

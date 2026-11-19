@@ -167,14 +167,27 @@ async fn load_state<P: ReplayProtocolSet>(
                 &providers,
             )
             .await?;
-        if lazy {
+        let case_index = if lazy && source_inventory_id.is_some() {
+            let path = case.dependencies_path.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::dependency_index::recorded_case_for_replay(&path)
+            })
+            .await
+            .context("recorded Case fragment read failed")??
+        } else {
+            None
+        };
+        if lazy && (source_inventory_id.is_none() || case_index.is_some()) {
             let path = case.dependencies_path.clone();
             let cache = resources.reader.clone();
             let selector = case_selector.clone();
             let index_providers = providers.clone();
             let (file_index, startup, shared_lines, source_bytes) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
-                    let mut index = crate::dependency_index::load_file_for_replay(&path)?;
+                    let mut index = match case_index {
+                        Some(index) => index,
+                        None => crate::dependency_index::load_file_for_replay(&path)?,
+                    };
                     let mut cache = cache
                         .lock()
                         .map_err(|_| anyhow!("dependency cache lock poisoned"))?;
