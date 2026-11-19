@@ -260,7 +260,7 @@ fn build_index_with_evidence(
 ) -> Result<GlobalIndex> {
     let mut input = RecordStream::open(path)?;
     let mut builder = GlobalBuilder::with_evidence(root, stamp.clone(), evidence.clone())?;
-    if scoped::view_path(path).is_some() {
+    if input.uses_locations() {
         builder.set_scoped();
     }
     let started = Instant::now();

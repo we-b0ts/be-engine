@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 pub const DEPENDENCIES: &str = "dependencies.tsv";
 pub const EVENTS: &str = "events.tsv";
+pub const PUSH_EVENTS: &str = "events-push.tsv";
 pub const INLINE_BYTES: usize = 4 * 1024;
 pub const SEGMENT_BYTES: u64 = 32 * 1024 * 1024;
 

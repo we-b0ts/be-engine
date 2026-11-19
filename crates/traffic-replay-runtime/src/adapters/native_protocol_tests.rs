@@ -296,8 +296,10 @@ async fn record_scenario(startup: bool, fixed: &'static str, notifications: bool
     assert_eq!(manifest.inputs.len(), 1);
     assert!(manifest.semantic_inventory.unsupported_by_scope.is_empty());
     let source_bytes = std::fs::read(root.join("dependencies.tsv")).unwrap();
-    let semantic_bytes =
-        crate::dependency_index::scoped::read_bytes(&root.join("dependencies.tsv")).unwrap();
+    let semantic_bytes = crate::dependency_index::scoped::read_bytes(
+        &crate::dependency_index::recording::dependency_path(&root),
+    )
+    .unwrap();
     let rows = String::from_utf8_lossy(&semantic_bytes)
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -755,7 +757,7 @@ async fn independent_server_messages_record_and_replay_with_shared_policy_and_fi
         for startup in [false, true] {
         let recording = record_scenario(startup, "original", true).await;
         let trace =
-            std::fs::read_to_string(recording.root.join("events.tsv")).unwrap();
+            std::fs::read_to_string(recording.root.join("events-push.tsv")).unwrap();
         assert_eq!(
             trace
                 .lines()

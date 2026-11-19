@@ -118,10 +118,13 @@ pub fn resolve(path: &Path) -> Result<Source> {
             item.length > 0
                 && item.offset >= end
                 && item.line > line
-                && item
-                    .offset
-                    .checked_add(item.length)
-                    .is_some_and(|n| n <= ledger.size),
+                && item.offset.checked_add(item.length).is_some_and(|n| {
+                    if crate::partitions::is_directory(&path) {
+                        item.line as u64 <= ledger.size / crate::partitions::ENTRY_BYTES
+                    } else {
+                        n <= ledger.size
+                    }
+                }),
             "dependency scope contains overlapping, unordered or invalid locations"
         );
         ensure!(
@@ -179,7 +182,7 @@ pub fn exists(path: &Path) -> bool {
             .is_some_and(|name| name == "dependencies.jsonl")
             && path
                 .parent()
-                .is_some_and(|root| root.join(crate::format::DEPENDENCIES).is_file())
+                .is_some_and(|root| super::recording::dependency_path(root).is_file())
 }
 
 pub fn case_path(directory: &Path) -> PathBuf {
@@ -193,6 +196,18 @@ pub fn selected_bytes(path: &Path) -> Result<u64> {
             n.checked_add(location.length)
                 .context("dependency scope byte count overflow")
         });
+    }
+    if crate::partitions::is_directory(&source.path) {
+        let root = source
+            .path
+            .parent()
+            .context("missing dependency directory root")?;
+        return crate::partitions::FILES
+            .into_iter()
+            .try_fold(0u64, |size, name| {
+                size.checked_add(FileStamp::read_native(&root.join(name))?.size)
+                    .context("dependency ledger byte count overflow")
+            });
     }
     Ok(FileStamp::read_native(&source.path)?.size)
 }

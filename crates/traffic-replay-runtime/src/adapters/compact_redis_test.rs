@@ -148,6 +148,13 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
         let (_, manifest) = crate::dependency_index::recording::manifest(&root)?;
         crate::dependency_index::recording::authenticate(&root)?;
         assert!(manifest.capture_complete);
+        let partition_length = |name| manifest.files.iter()
+            .find(|file| file.path == name).expect("sealed partition").length;
+        assert!(partition_length("dependencies-push.tsv") > 0);
+        assert!(partition_length("events-push.tsv") > 0);
+        let dependency_bytes = manifest.files.iter()
+            .filter(|file| file.path.starts_with("dependencies") && file.path.ends_with(".tsv"))
+            .map(|file| file.length).sum::<u64>();
         assert!(!root.join(".global-replay-index.json").exists());
         assert!(!root.join(".global-replay-pages").exists());
         let events = recording::events(&root)?.collect::<Result<Vec<_>>>()?;
@@ -190,6 +197,7 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
             providers,
             startup_listener: false,
         };
+        let keep_artifacts = std::env::var_os("BE_ENGINE_TEST_KEEP_ARTIFACTS").is_some();
         for (lazy, timing) in [
             (false, crate::replay::ReplayStreamTiming::Recorded),
             (true, crate::replay::ReplayStreamTiming::Recorded),
@@ -203,7 +211,15 @@ async fn real_redis_compact_recording_replays_large_values_concurrency_and_pubsu
             assert_eq!(report["dependency_protocols"]["redis"]["matched_count"], 7, "{report}");
             assert_eq!(report["dependency_protocols"]["redis"]["unused_case"], json!([]), "{report}");
             assert_eq!(report["batch_reconciliation"]["dependency_inventory_verified"], true, "{report}");
-            eprintln!("real Redis inventory matched=7 lazy={lazy} timing={timing:?} exchange_ms={exchange_ms} event_count={} dependency_bytes={} payload_bytes={payload} semantic_jsonl_bytes={}", events.len(), recording.source_bytes.len(), semantic.len());
+            if keep_artifacts {
+                let path = recording._directory.path().join(format!("replay-{timing:?}-lazy-{lazy}.json"));
+                std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
+            }
+            eprintln!("real Redis inventory matched=7 lazy={lazy} timing={timing:?} exchange_ms={exchange_ms} event_count={} dependency_bytes={dependency_bytes} payload_bytes={payload} semantic_jsonl_bytes={}", events.len(), semantic.len());
+        }
+        if keep_artifacts {
+            eprintln!("Fresh sealed recording: {}", recording.root.display());
+            eprintln!("Replay receipts: {}", recording._directory.keep().display());
         }
         Ok(())
     }).await?

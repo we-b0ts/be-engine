@@ -97,6 +97,7 @@ struct Admission {
     registry: CaptureRegistry,
     exchange_id: Uuid,
     sequence: u64,
+    message: bool,
     phase: CapturePhase,
     observed_case: Option<Uuid>,
     admitted_case: Option<Uuid>,
@@ -223,6 +224,7 @@ impl CaptureRegistry {
             registry: self.clone(),
             exchange_id,
             sequence,
+            message,
             phase,
             observed_case,
             admitted_case,
@@ -320,6 +322,10 @@ impl CaptureRegistry {
 }
 
 impl CaptureReservation {
+    pub(crate) fn is_message(&self) -> bool {
+        self.0.message
+    }
+
     pub fn exchange_id(&self) -> Uuid {
         self.0.exchange_id
     }

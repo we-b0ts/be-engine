@@ -18,6 +18,7 @@ pub struct RecordReader {
     order: VecDeque<(RecordKey, u64)>,
     generation: u64,
     source: Option<(PathBuf, super::scoped::Source)>,
+    partitions: Option<(PathBuf, FileStamp, crate::partitions::Reader)>,
     pub source_bytes: u64,
     pub hits: usize,
 }
@@ -34,6 +35,7 @@ impl RecordReader {
             order: VecDeque::new(),
             generation: 0,
             source: None,
+            partitions: None,
             source_bytes: 0,
             hits: 0,
         }
@@ -91,17 +93,41 @@ impl RecordReader {
             source.validate()?;
             return Ok(bytes);
         }
-        ensure!(
-            location
-                .offset
-                .checked_add(location.length)
-                .is_some_and(|end| end <= stamp.size),
-            "dependency index record range escapes source file"
-        );
-        let mut file = File::open(path)?;
-        file.seek(SeekFrom::Start(location.offset))?;
-        let mut bytes = vec![0; usize::try_from(location.length)?];
-        file.read_exact(&mut bytes)?;
+        let mut bytes = Vec::new();
+        if crate::partitions::is_directory(path) {
+            if self
+                .partitions
+                .as_ref()
+                .is_none_or(|(prior, verified, _)| prior != path || verified != stamp)
+            {
+                self.partitions = Some((
+                    path.to_owned(),
+                    stamp.clone(),
+                    crate::partitions::Reader::open(path)?,
+                ));
+            }
+            let (_, _, reader) = self
+                .partitions
+                .as_mut()
+                .expect("opened dependency partitions");
+            reader.read(
+                location.line,
+                Some((location.offset, location.length)),
+                &mut bytes,
+            )?;
+        } else {
+            ensure!(
+                location
+                    .offset
+                    .checked_add(location.length)
+                    .is_some_and(|end| end <= stamp.size),
+                "dependency index record range escapes source file"
+            );
+            let mut file = File::open(path)?;
+            file.seek(SeekFrom::Start(location.offset))?;
+            bytes.resize(usize::try_from(location.length)?, 0);
+            file.read_exact(&mut bytes)?;
+        }
         ensure!(
             digest(&bytes) == location.sha256,
             "indexed dependency record checksum mismatch"

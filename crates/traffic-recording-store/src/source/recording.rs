@@ -1,5 +1,8 @@
 //! Manifest-owned discovery. Directory contents cannot invent Case ownership.
-use crate::format::{DEPENDENCIES, EVENTS};
+pub use crate::event_index::SourceEventIndex;
+use crate::event_index::{self, INDEX, JOURNALS};
+use crate::format::{EVENTS, PUSH_EVENTS};
+use crate::partitions;
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::{
@@ -19,7 +22,7 @@ pub fn supported_recording_schema(schema: &str) -> bool {
 }
 
 pub fn dependency_path(root: &Path) -> PathBuf {
-    let compact = root.join(DEPENDENCIES);
+    let compact = root.join(partitions::DIRECTORY);
     if compact.exists() {
         compact
     } else {
@@ -44,13 +47,13 @@ pub fn manifest(path: &Path) -> Result<(PathBuf, RecordingManifest)> {
     ensure!(!manifest.run_id.is_empty(), "recording has no run identity");
     ensure!(
         (manifest.schema == COMPACT_RECORDING_SCHEMA)
-            == super::compact::is_compact(&dependency_path(&root)),
+            == partitions::is_directory(&dependency_path(&root)),
         "recording manifest and dependency storage format disagree"
     );
     Ok((root, manifest))
 }
 
-/// Stream the events of a sealed recording in the order stored by its writer.
+/// Merge the journals of a sealed recording in original Source order.
 pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<CaptureEvent>>>> {
     let (root, manifest) = manifest(path)?;
     let compact = manifest.schema == COMPACT_RECORDING_SCHEMA;
@@ -59,16 +62,30 @@ pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<C
     } else {
         "dependency-lifecycle.jsonl"
     };
-    let file = fs::File::open(root.join(name))
-        .context("recording has no ordered dependency event journal")?;
-    Ok(BufReader::new(file).lines().map(move |line| {
+    let open = |name| fs::File::open(root.join(name)).map(|file| BufReader::new(file).lines());
+    let ordinary = open(name)?;
+    let pushes = compact.then(|| open(PUSH_EVENTS)).transpose()?;
+    let decode = move |line: std::io::Result<String>| {
         let line = line?;
         if compact {
             crate::format::decode_event(&line)
         } else {
             Ok(serde_json::from_str(&line)?)
         }
-    }))
+    };
+    Ok(event_index::merge(
+        ordinary.map(decode),
+        pushes.into_iter().flatten().map(decode),
+        compact,
+    ))
+}
+
+pub fn event_index(path: &Path) -> Result<Option<SourceEventIndex>> {
+    let (root, manifest) = manifest(path)?;
+    if manifest.schema == COMPACT_RECORDING_SCHEMA {
+        return SourceEventIndex::open(root).map(Some);
+    }
+    Ok(None)
 }
 
 pub fn cases(path: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
@@ -190,13 +207,17 @@ pub fn authenticate(path: &Path) -> Result<()> {
             "recording changed during authentication"
         );
     }
-    let (dependencies, events) = if manifest.schema == COMPACT_RECORDING_SCHEMA {
-        (DEPENDENCIES, EVENTS)
+    let required = if manifest.schema == COMPACT_RECORDING_SCHEMA {
+        partitions::FILES
+            .into_iter()
+            .chain([partitions::DIRECTORY, INDEX])
+            .chain(JOURNALS)
+            .collect::<Vec<_>>()
     } else {
-        ("dependencies.jsonl", "dependency-lifecycle.jsonl")
+        vec!["dependencies.jsonl", "dependency-lifecycle.jsonl"]
     };
     ensure!(
-        seen.contains(dependencies) && seen.contains(events),
+        required.into_iter().all(|name| seen.contains(name)),
         "recording seal omits dependency inventory or lifecycle evidence"
     );
     ensure!(

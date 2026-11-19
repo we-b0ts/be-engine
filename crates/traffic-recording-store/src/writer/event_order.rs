@@ -5,13 +5,12 @@ use std::{
     path::Path,
 };
 
-use crate::format::EVENTS;
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use traffic_model::recording::LedgerFileIdentity;
 
-pub(super) fn seal(root: &Path) -> Result<LedgerFileIdentity> {
-    let path = root.join(EVENTS);
+pub(super) fn seal(root: &Path, name: &str) -> Result<LedgerFileIdentity> {
+    let path = root.join(name);
     let mut input = BufReader::new(File::open(&path)?);
     let mut spans = Vec::new();
     let mut row = Vec::new();
@@ -36,7 +35,7 @@ pub(super) fn seal(root: &Path) -> Result<LedgerFileIdentity> {
         "duplicate recording event sequence"
     );
 
-    let temporary = root.join(".ordered-events.tsv");
+    let temporary = root.join(format!(".ordered-{name}"));
     let mut output = BufWriter::new(File::create(&temporary)?);
     let mut digest = Sha256::new();
     let mut position = offset;
@@ -54,7 +53,7 @@ pub(super) fn seal(root: &Path) -> Result<LedgerFileIdentity> {
     output.get_ref().sync_all()?;
     fs::rename(temporary, path)?;
     Ok(LedgerFileIdentity {
-        path: EVENTS.into(),
+        path: name.into(),
         length: offset,
         sha256: format!("{:x}", digest.finalize()),
     })

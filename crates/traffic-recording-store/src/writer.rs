@@ -1,46 +1,62 @@
 //! Write and seal the physical dependency ledger for one recording.
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use traffic_model::{
+    attribution::DependencyOwner,
     recording::LedgerFileIdentity,
     trace::{CaptureEvent, RecordedEvent},
 };
 
+use crate::event_index::{self, JOURNALS};
 use crate::format::{self, DependencyRow};
+use crate::partitions;
 use crate::source::RecordLocation;
 
 mod buffer;
 mod event_order;
 mod segments;
+#[cfg(test)]
+mod tests;
 
 pub use buffer::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
 
 pub struct LedgerFiles {
     root: PathBuf,
-    dependencies: FileDigest,
-    events: FileDigest,
+    dependencies: [FileDigest; partitions::FILES.len()],
+    directory: FileDigest,
+    dependency_bytes: u64,
+    events: [EventFile; 2],
+    messages: HashSet<u64>,
     records: usize,
-    last_event: u64,
-    unordered_events: bool,
     payloads: segments::PayloadSegments,
 }
 
 #[derive(Default)]
-struct FileDigest {
+struct EventFile {
+    digest: FileDigest,
+    last: u64,
+    unordered: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct FileDigest {
     length: u64,
     hash: Sha256,
 }
 
 impl FileDigest {
-    fn observe(&mut self, bytes: &[u8]) {
+    pub(crate) fn observe(&mut self, bytes: &[u8]) {
         self.length += bytes.len() as u64;
         self.hash.update(bytes);
     }
 
-    fn identity(&self, path: &str) -> LedgerFileIdentity {
+    pub(crate) fn identity(&self, path: &str) -> LedgerFileIdentity {
         LedgerFileIdentity {
             path: path.into(),
             length: self.length,
@@ -53,17 +69,22 @@ impl LedgerFiles {
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.into(),
-            dependencies: FileDigest::default(),
-            events: FileDigest::default(),
+            dependencies: Default::default(),
+            directory: Default::default(),
+            dependency_bytes: 0,
+            events: Default::default(),
+            messages: HashSet::new(),
             records: 0,
-            last_event: 0,
-            unordered_events: false,
             payloads: Default::default(),
         }
     }
 
     pub async fn initialize(root: &Path) -> Result<()> {
-        for name in [format::DEPENDENCIES, format::EVENTS] {
+        for name in partitions::FILES
+            .into_iter()
+            .chain([partitions::DIRECTORY])
+            .chain(JOURNALS)
+        {
             crate::storage::write(&root.join(name), b"").await?;
         }
         Ok(())
@@ -78,11 +99,46 @@ impl LedgerFiles {
         files: &mut JsonlWriterPool,
         event: &RecordedEvent<CaptureEvent>,
     ) -> Result<()> {
+        use CaptureEvent::*;
+        let message = match &event.event {
+            MessageStarted {
+                dependency_sequence,
+                ..
+            } => {
+                self.messages.insert(*dependency_sequence);
+                true
+            }
+            Terminal {
+                dependency_sequence,
+                ..
+            } => self.messages.remove(dependency_sequence),
+            Started {
+                dependency_sequence,
+                ..
+            }
+            | Bound {
+                dependency_sequence,
+                ..
+            }
+            | OutputStarted {
+                dependency_sequence,
+                ..
+            }
+            | Output {
+                dependency_sequence,
+                ..
+            } => self.messages.contains(dependency_sequence),
+            PrimaryBoundary { .. } | Input { .. } | Sealed { .. } => false,
+        };
+        let partition = usize::from(message);
         let row = format::encode_event(event)?;
-        files.append(&self.root.join(format::EVENTS), &row).await?;
-        self.events.observe(&row);
-        self.unordered_events |= event.sequence <= self.last_event;
-        self.last_event = event.sequence;
+        files
+            .append(&self.root.join(JOURNALS[partition]), &row)
+            .await?;
+        let file = &mut self.events[partition];
+        file.digest.observe(&row);
+        file.unordered |= event.sequence <= file.last;
+        file.last = event.sequence;
         Ok(())
     }
 
@@ -90,6 +146,8 @@ impl LedgerFiles {
         &mut self,
         files: &mut JsonlWriterPool,
         record: Value,
+        owner: &DependencyOwner,
+        message: bool,
     ) -> Result<RecordLocation> {
         let Value::Object(record) = record else {
             anyhow::bail!("recorded dependency is not an object");
@@ -103,35 +161,67 @@ impl LedgerFiles {
             row.link(payload, reference);
         }
         let bytes = row.encode()?;
+        let partition = partitions::partition(owner, message);
+        let dependency = &mut self.dependencies[partition];
+        let span = partitions::Span {
+            logical: self.dependency_bytes,
+            offset: dependency.length,
+            length: bytes.len() as u64,
+            partition,
+        };
         files
-            .append(&self.root.join(format::DEPENDENCIES), &bytes)
+            .append(&self.root.join(partitions::FILES[partition]), &bytes)
             .await?;
+        dependency.observe(&bytes);
+        let entry = span.encode();
+        files
+            .append(&self.root.join(partitions::DIRECTORY), &entry)
+            .await?;
+        self.directory.observe(&entry);
+        self.dependency_bytes += span.length;
         self.records += 1;
         let location = RecordLocation {
             line: self.records,
-            offset: self.dependencies.length,
-            length: bytes.len() as u64,
+            offset: span.logical,
+            length: span.length,
             sha256: crate::source::digest(&bytes),
         };
-        self.dependencies.observe(&bytes);
         Ok(location)
     }
 
     pub async fn seal(&self, files: &mut JsonlWriterPool) -> Result<Vec<LedgerFileIdentity>> {
-        // Empty runs also have an explicit dependency ledger identity.
-        files
-            .append(&self.root.join(format::DEPENDENCIES), b"")
-            .await?;
+        for name in partitions::FILES
+            .into_iter()
+            .chain([partitions::DIRECTORY])
+            .chain(JOURNALS)
+        {
+            if !self.root.join(name).exists() {
+                files.append(&self.root.join(name), b"").await?;
+            }
+        }
         files.flush_all().await?;
-        let events = if self.unordered_events {
-            let root = self.root.clone();
-            tokio::task::spawn_blocking(move || event_order::seal(&root))
+        let mut identities = Vec::new();
+        identities.push(self.directory.identity(partitions::DIRECTORY));
+        for (name, dependency) in partitions::FILES.into_iter().zip(&self.dependencies) {
+            identities.push(dependency.identity(name));
+        }
+        for (name, event) in JOURNALS.into_iter().zip(&self.events) {
+            let identity = if event.unordered {
+                let root = self.root.clone();
+                tokio::task::spawn_blocking(move || event_order::seal(&root, name))
+                    .await
+                    .context("dependency event ordering task failed")??
+            } else {
+                event.digest.identity(name)
+            };
+            identities.push(identity);
+        }
+        let root = self.root.clone();
+        identities.push(
+            tokio::task::spawn_blocking(move || event_index::seal(&root))
                 .await
-                .context("dependency event ordering task failed")??
-        } else {
-            self.events.identity(format::EVENTS)
-        };
-        let mut identities = vec![self.dependencies.identity(format::DEPENDENCIES), events];
+                .context("dependency event index task failed")??,
+        );
         identities.extend(self.payloads.identities());
         Ok(identities)
     }

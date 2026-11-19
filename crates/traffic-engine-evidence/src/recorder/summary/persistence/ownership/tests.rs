@@ -95,7 +95,10 @@ impl Fixture {
             .await
             .unwrap();
         recorder.flush_all_dependency_files().await.unwrap();
-        let bytes = fs::read(recorder.run_dir.join("dependencies.tsv")).unwrap();
+        let bytes = fs::read(crate::dependency_index::recording::dependency_path(
+            &recorder.run_dir,
+        ))
+        .unwrap();
         Self {
             _temp: temp,
             recorder,
@@ -132,11 +135,16 @@ async fn real_writer_finalizes_multiple_append_prefixes_and_chowns_every_new_fra
     assert!(fixture.prefix_sizes[1] < fixture.bytes.len() as u64);
     fixture.recorder.finish_run().await.unwrap();
     assert_eq!(
-        fs::read(fixture.recorder.run_dir.join("dependencies.tsv")).unwrap(),
+        fs::read(crate::dependency_index::recording::dependency_path(
+            &fixture.recorder.run_dir
+        ))
+        .unwrap(),
         fixture.bytes
     );
-    let final_stamp =
-        FileStamp::read_native(&fixture.recorder.run_dir.join("dependencies.tsv")).unwrap();
+    let final_stamp = FileStamp::read_native(&crate::dependency_index::recording::dependency_path(
+        &fixture.recorder.run_dir,
+    ))
+    .unwrap();
     for (case, bytes) in fixture.cases.iter().zip(&fixture.scopes) {
         let directory = fixture.recorder.case_dir(case);
         let index: FileIndex = store::read_json(&directory.join(FRAGMENT)).unwrap();
@@ -177,7 +185,12 @@ async fn selected_and_unselected_byte_tampering_cannot_refresh_any_fragment() {
         fixture.recorder.finish_run().await.unwrap();
         owner().assign_to(&fixture.recorder.run_dir).await.unwrap();
         let before = fixture.index_snapshots();
-        let central = fixture.recorder.run_dir.join("dependencies.tsv");
+        let physical = if label == b"first-case" {
+            "dependencies.tsv"
+        } else {
+            "dependencies-unattributed.tsv"
+        };
+        let central = fixture.recorder.run_dir.join(physical);
         let mut changed = fs::read(&central).unwrap();
         let position = changed
             .windows(label.len())

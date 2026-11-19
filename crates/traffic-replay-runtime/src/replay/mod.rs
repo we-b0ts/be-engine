@@ -243,7 +243,7 @@ pub(crate) struct RuntimeState<P: ReplayProtocolSet> {
     pub(crate) native: native::Inventory,
     admission_epoch: u64,
     pub(crate) case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
-    sequence_catalog: Option<Arc<traffic_replay::SequenceCatalog>>,
+    sequence_catalog: Option<sequence::Source>,
     pub(crate) active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,
     pub(crate) run_sequence: Option<sequence::RunBindings>,
     sequence_missing: Vec<sequence::MissingDependency>,

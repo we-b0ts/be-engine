@@ -8,7 +8,8 @@ use std::{
 };
 
 pub(super) fn is_compact(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| name == DEPENDENCIES)
+    crate::partitions::is_directory(path)
+        || path.file_name().is_some_and(|name| name == DEPENDENCIES)
 }
 
 pub(super) fn decode(path: &Path, row: &[u8]) -> Result<Vec<u8>> {

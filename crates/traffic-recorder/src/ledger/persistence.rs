@@ -274,7 +274,15 @@ impl LedgerWriter {
                 crate::supports_replay(&value, &metadata.attribution, &self.evidence),
             );
         }
-        let position = self.storage.append_dependency(files, value).await?;
+        let position = self
+            .storage
+            .append_dependency(
+                files,
+                value,
+                &metadata.attribution,
+                capture.is_some_and(|capture| capture.is_message()),
+            )
+            .await?;
         let location = ScopeRecordLocation {
             line: position.line,
             offset: position.offset,

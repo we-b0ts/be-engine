@@ -96,6 +96,38 @@ pub enum CaptureEvent {
     },
 }
 
+impl CaptureEvent {
+    pub fn dependency_sequence(&self) -> Option<u64> {
+        match self {
+            Self::Started {
+                dependency_sequence,
+                ..
+            }
+            | Self::MessageStarted {
+                dependency_sequence,
+                ..
+            }
+            | Self::OutputStarted {
+                dependency_sequence,
+                ..
+            }
+            | Self::Output {
+                dependency_sequence,
+                ..
+            }
+            | Self::Bound {
+                dependency_sequence,
+                ..
+            }
+            | Self::Terminal {
+                dependency_sequence,
+                ..
+            } => Some(*dependency_sequence),
+            Self::PrimaryBoundary { .. } | Self::Input { .. } | Self::Sealed { .. } => None,
+        }
+    }
+}
+
 /// One native dependency call. Its typed payload owns request, response and
 /// protocol state. The framework owns identity, attribution and capture integrity.
 #[derive(Debug, Serialize, Deserialize)]

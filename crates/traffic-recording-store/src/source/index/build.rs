@@ -133,7 +133,7 @@ pub fn build_file(
     let stamp = FileStamp::read(path)?;
     let mut builder = Builder::with_evidence(stamp.clone(), evidence.clone(), select_proof);
     let mut input = RecordStream::open(path)?;
-    if scoped::view_path(path).is_some() {
+    if input.uses_locations() {
         builder.set_scoped();
     }
     while let Some((location, raw)) = input.next()? {

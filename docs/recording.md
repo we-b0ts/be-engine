@@ -705,16 +705,20 @@ user. The reserved Source UID cannot own recording artifacts.
 
 ## Rewrite handoff
 
-Finalization seals `dependency-manifest.json`, `events.tsv`, `dependencies.tsv`,
-the files written under `payload/`, and the complete input inventory. The event
-ledger is ordered by recording-local sequence and carries monotonic offsets in
-microseconds. The dependency ledger stores each semantic exchange once. Large
+Finalization seals the input inventory, `events.tsv`, `events-push.tsv`, and the
+dependency and payload partitions in `dependency-manifest.json`. Both event
+journals use a shared recording-local sequence and monotonic microsecond offsets.
+The dependency partitions store Case traffic in `dependencies.tsv`, with process,
+push and unattributed traffic in separate files. The sealed row and event
+directories map logical dependency rows and event traces to their physical files.
+The dependency ledger stores each semantic exchange once. Large
 fields use a segment reference with byte offset, length and checksum. A field
 above 4 KiB is stored out of line. Segments roll over before the next value once
 they have reached 32 MiB, so a value that crosses the threshold stays together.
 
-Case, startup, process and unattributed scopes reference the central ledger.
-Replay authenticates the sealed inventory and prepares bounded native indexes.
+Case, startup, process and unattributed scopes reference the same logical ledger.
+Replay authenticates the sealed inventory and compiles each event plan using the
+traces for its selected dependency sequences.
 Scoped recordings publish portable startup, process and unattributed indexes
 under `indexes/`.
 

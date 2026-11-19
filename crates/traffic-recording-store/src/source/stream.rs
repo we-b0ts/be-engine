@@ -10,7 +10,7 @@ use super::{FileStamp, RecordLocation, digest};
 pub struct RecordStream {
     path: PathBuf,
     pub stamp: FileStamp,
-    reader: BufReader<File>,
+    reader: Input,
     buffer: Vec<u8>,
     offset: u64,
     line: usize,
@@ -18,14 +18,28 @@ pub struct RecordStream {
     position: usize,
 }
 
+enum Input {
+    Flat(BufReader<File>),
+    Partitioned(Box<crate::partitions::Reader>),
+}
+
 impl RecordStream {
     pub fn open(path: &Path) -> Result<Self> {
         let stamp = FileStamp::read(path)?;
         let source = super::scoped::resolve(path)?;
+        let reader = if crate::partitions::is_directory(&source.path) {
+            ensure!(
+                stamp.size.is_multiple_of(crate::partitions::ENTRY_BYTES),
+                "truncated dependency partition directory"
+            );
+            Input::Partitioned(Box::new(crate::partitions::Reader::open(&source.path)?))
+        } else {
+            Input::Flat(BufReader::new(File::open(&source.path)?))
+        };
         Ok(Self {
             path: path.to_owned(),
             stamp,
-            reader: BufReader::new(File::open(&source.path)?),
+            reader,
             buffer: Vec::new(),
             offset: 0,
             line: 0,
@@ -38,6 +52,10 @@ impl RecordStream {
         self.source.membership_sha256()
     }
 
+    pub(super) fn uses_locations(&self) -> bool {
+        self.source.locations.is_some() || matches!(&self.reader, Input::Partitioned(_))
+    }
+
     // Each result borrows the cursor's reusable read buffer.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<(RecordLocation, &[u8])>> {
@@ -48,9 +66,20 @@ impl RecordStream {
                 super::scoped::validate_stamp(&self.path, &self.stamp)?;
                 return Ok(None);
             };
-            self.reader.seek(SeekFrom::Start(location.offset))?;
-            self.buffer.resize(usize::try_from(location.length)?, 0);
-            self.reader.read_exact(&mut self.buffer)?;
+            match &mut self.reader {
+                Input::Flat(reader) => {
+                    reader.seek(SeekFrom::Start(location.offset))?;
+                    self.buffer.resize(usize::try_from(location.length)?, 0);
+                    reader.read_exact(&mut self.buffer)?;
+                }
+                Input::Partitioned(reader) => {
+                    reader.read(
+                        location.line,
+                        Some((location.offset, location.length)),
+                        &mut self.buffer,
+                    )?;
+                }
+            }
             ensure!(
                 digest(&self.buffer) == location.sha256,
                 "central dependency record checksum mismatch"
@@ -58,28 +87,49 @@ impl RecordStream {
             self.position += 1;
             return self.decoded(location).map(Some);
         }
-        let length = self
-            .reader
-            .read_until(b'\n', &mut self.buffer)
-            .with_context(|| {
-                format!("failed to read dependency evidence {}", self.path.display())
-            })?;
+        let length = match &mut self.reader {
+            Input::Flat(reader) => {
+                let length = reader
+                    .read_until(b'\n', &mut self.buffer)
+                    .with_context(|| {
+                        format!("failed to read dependency evidence {}", self.path.display())
+                    })? as u64;
+                if length == 0 {
+                    ensure!(
+                        self.offset == self.stamp.size,
+                        "dependency file changed during traversal"
+                    );
+                }
+                length
+            }
+            Input::Partitioned(reader) => {
+                if self.line as u64 == self.stamp.size / crate::partitions::ENTRY_BYTES {
+                    0
+                } else {
+                    let span = reader.read(self.line + 1, None, &mut self.buffer)?;
+                    ensure!(
+                        span.logical == self.offset,
+                        "dependency row directory is not contiguous"
+                    );
+                    span.length
+                }
+            }
+        };
         if length == 0 {
-            ensure!(
-                self.offset == self.stamp.size && FileStamp::read(&self.path)? == self.stamp,
-                "dependency file changed during traversal: {}",
-                self.path.display()
-            );
+            super::scoped::validate_stamp(&self.path, &self.stamp)?;
             return Ok(None);
         }
         self.line += 1;
         let location = RecordLocation {
             line: self.line,
             offset: self.offset,
-            length: length as u64,
+            length,
             sha256: digest(&self.buffer),
         };
-        self.offset += length as u64;
+        self.offset = self
+            .offset
+            .checked_add(length)
+            .context("dependency row offset overflow")?;
         self.decoded(location).map(Some)
     }
 
