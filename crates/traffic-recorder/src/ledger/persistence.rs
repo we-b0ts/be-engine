@@ -55,7 +55,7 @@ impl LedgerWriter {
         Ok(Self {
             evidence,
             root: root.into(),
-            storage: LedgerFiles::initialize(root, run_epoch).await?,
+            storage: LedgerFiles::initialize(root, run_epoch, process_epoch).await?,
             process_epoch,
             run_epoch,
             clock,

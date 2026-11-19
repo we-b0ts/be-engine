@@ -72,7 +72,11 @@ impl FileDigest {
 }
 
 impl LedgerFiles {
-    pub async fn initialize(root: &Path, recording_id: uuid::Uuid) -> Result<Self> {
+    pub async fn initialize(
+        root: &Path,
+        recording_id: uuid::Uuid,
+        process_epoch: uuid::Uuid,
+    ) -> Result<Self> {
         for name in partitions::FILES.into_iter().chain(JOURNALS) {
             crate::storage::write(&root.join(name), b"").await?;
         }
@@ -80,7 +84,7 @@ impl LedgerFiles {
         crate::storage::write(&root.join(partitions::DIRECTORY), header).await?;
         let mut directory = FileDigest::default();
         directory.observe(header);
-        let mut terms = WriteTerms::new(chrono::Utc::now(), recording_id);
+        let mut terms = WriteTerms::new(chrono::Utc::now(), recording_id, process_epoch);
         let term_header = terms.take_pending();
         crate::storage::write(&root.join(dependency_columns::FILE), &term_header).await?;
         let mut terms_digest = FileDigest::default();

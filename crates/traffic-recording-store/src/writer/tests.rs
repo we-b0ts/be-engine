@@ -15,7 +15,8 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
     let directory = tempfile::tempdir()?;
     let root = directory.path();
     let epoch = Uuid::new_v4();
-    let mut ledger = LedgerFiles::initialize(root, epoch).await?;
+    let process_epoch = Uuid::new_v4();
+    let mut ledger = LedgerFiles::initialize(root, epoch, process_epoch).await?;
     let mut files = JsonlWriterPool::new(JsonlBufferSettings {
         capacity: 4096,
         flush_interval: Duration::from_secs(30),
@@ -26,7 +27,7 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
         task_instance: None,
     };
     let process = DependencyOwner::Process {
-        process_epoch: epoch,
+        process_epoch,
         source_task: "timer".into(),
         invocation: None,
     };
@@ -35,7 +36,7 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
     };
     let row = |label| {
         json!({
-            "recording_id": epoch, "capture": {"sequence": 1}, "outcome": {"kind": "response"},
+            "recording_id": epoch, "capture": {"sequence": 1, "process_epoch": process_epoch}, "outcome": {"kind": "response"},
             "capture_complete": true, "label": label,
             "target_host": "db.example.test", "target_port": 1234,
             "username": "test-user",
@@ -144,6 +145,7 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
     {
         let physical = std::fs::read_to_string(root.join(name))?;
         assert!(!physical.contains(&epoch.to_string()));
+        assert!(!physical.contains("process_epoch"));
         assert_eq!(physical.split('\t').count(), crate::format::COLUMN_COUNT);
         assert!(physical.starts_with("1\t"));
         assert!(physical.contains("db.example.test"));
@@ -157,12 +159,20 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
     let terms_file = root.join(crate::dependency_columns::FILE);
     let terms = std::fs::read_to_string(&terms_file)?;
     assert!(!terms.contains("test-user"));
+    assert_eq!(
+        terms.lines().next().unwrap().split_once('\t').unwrap().1,
+        process_epoch.to_string(),
+    );
     let mut stream = RecordStream::open(&dependency_path)?;
     for label in ["case", "push", "observation", "process", "unknown"] {
         let (_, raw) = stream.next()?.context("missing logical row")?;
         let decoded = serde_json::from_slice::<Value>(raw)?;
         assert_eq!(decoded["label"], label);
         assert_eq!(decoded["recording_id"], epoch.to_string());
+        assert_eq!(
+            decoded["capture"]["process_epoch"],
+            process_epoch.to_string()
+        );
         assert_eq!(decoded["target_host"], "db.example.test");
         assert_eq!(decoded["target_port"], 1234);
     }
@@ -179,6 +189,8 @@ async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> R
     let decoded = serde_json::from_slice::<Value>(&raw)?;
     assert_eq!(decoded["label"], "case");
     assert_eq!(decoded["recording_id"], epoch.to_string());
+    let replay_raw = RecordReader::for_replay(0).read(&dependency_path, &stream.stamp, &first)?;
+    assert_eq!(serde_json::from_slice::<Value>(&replay_raw)?, decoded);
     std::fs::write(&terms_file, terms.replacen('2', "3", 1))?;
     assert!(
         reader

@@ -187,6 +187,7 @@ mod tests {
         use traffic_protocol::capture::{RecordingLayout, RecordingScalar};
 
         let epoch = Uuid::from_u128(43);
+        let process_epoch = Uuid::from_u128(44);
         let case = IdentityKind::Case.bridge(epoch, 7);
         let dependency = IdentityKind::Dependency.bridge(epoch, 9);
         let original = dependency;
@@ -195,6 +196,7 @@ mod tests {
             "recording_id": epoch,
             "capture": {
                 "sequence":9, "exchange_id":dependency,
+                "process_epoch":process_epoch,
                 "observed_case":case, "admitted_case":case,
                 "attribution":{"kind":"case","origin_case_id":case},
                 "protocol_ref":{"protocol":"http","exchange_id":original},
@@ -232,7 +234,11 @@ mod tests {
                 length: body.len() as u64,
             },
         );
-        let mut terms = WriteTerms::new("2026-11-19T06:43:37Z".parse().unwrap(), epoch);
+        let mut terms = WriteTerms::new(
+            "2026-11-19T06:43:37Z".parse().unwrap(),
+            epoch,
+            process_epoch,
+        );
         let encoded = pending.encode(&mut terms, &layout).unwrap();
         let row = std::str::from_utf8(&encoded).unwrap();
         assert!(
@@ -247,6 +253,7 @@ mod tests {
             "sha256",
             "http_exchange",
             "exchange_id",
+            "process_epoch",
         ] {
             assert!(!row.contains(redundant), "{redundant} appears in {row}");
         }
@@ -290,7 +297,7 @@ mod tests {
         let recording_id = Uuid::new_v4();
         let event = serde_json::json!({
             "recording_id": recording_id,
-            "capture": {"sequence":3, "exchange_id":IdentityKind::Dependency.bridge(recording_id,3), "started_at":"2026-11-19T06:43:36.999999999Z"},
+            "capture": {"sequence":3, "exchange_id":IdentityKind::Dependency.bridge(recording_id,3), "process_epoch":recording_id, "started_at":"2026-11-19T06:43:36.999999999Z"},
             "outcome": {"kind":"response"},
             "capture_complete": true,
             "target_host": "example.test",
@@ -321,7 +328,11 @@ mod tests {
             row.link(field, reference);
             parts.push(bytes);
         }
-        let mut terms = WriteTerms::new("2026-11-19T06:43:37Z".parse().unwrap(), recording_id);
+        let mut terms = WriteTerms::new(
+            "2026-11-19T06:43:37Z".parse().unwrap(),
+            recording_id,
+            recording_id,
+        );
         let encoded = row.encode(&mut terms, &RowLayout::default()).unwrap();
         assert_eq!(encoded.split(|byte| *byte == b'\n').count(), 2);
         assert_eq!(encoded.split(|byte| *byte == b'\t').count(), COLUMN_COUNT);

@@ -37,6 +37,11 @@ impl RecordProjection {
         layout: &RowLayout,
     ) -> Result<(DependencyPrefix<'static>, Vec<u8>)> {
         let epoch = terms.recording_id();
+        let process_epoch = self.capture.remove("process_epoch");
+        ensure!(
+            process_epoch.as_ref().and_then(Value::as_str) == Some(terms.process_epoch()),
+            "dependency belongs to a different process epoch"
+        );
         let sequence = self
             .capture
             .remove("sequence")
@@ -159,6 +164,7 @@ impl RecordProjection {
         let sequence = sequence.get();
         let mut capture = Map::new();
         capture.insert("sequence".into(), sequence.into());
+        capture.insert("process_epoch".into(), Value::from(terms.process_epoch()));
         let mut native = Map::new();
         let protocol = as_option(protocol);
         let case = as_option(case);

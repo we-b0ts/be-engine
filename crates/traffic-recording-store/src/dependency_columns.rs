@@ -48,6 +48,7 @@ impl From<RecordingLayout> for Layout {
 pub(crate) struct WriteTerms {
     anchor: DateTime<Utc>,
     recording_id: Uuid,
+    process_epoch: String,
     values: HashMap<Vec<u8>, usize>,
     layouts: BTreeMap<String, BTreeMap<String, Layout>>,
     bytes: usize,
@@ -55,11 +56,13 @@ pub(crate) struct WriteTerms {
 }
 
 impl WriteTerms {
-    pub(crate) fn new(anchor: DateTime<Utc>, recording_id: Uuid) -> Self {
-        let pending = format!("{}\n", timestamp(anchor)).into_bytes();
+    pub(crate) fn new(anchor: DateTime<Utc>, recording_id: Uuid, process_epoch: Uuid) -> Self {
+        let process_epoch = process_epoch.to_string();
+        let pending = format!("{}\t{process_epoch}\n", timestamp(anchor)).into_bytes();
         Self {
             anchor,
             recording_id,
+            process_epoch,
             values: HashMap::new(),
             layouts: BTreeMap::new(),
             bytes: pending.len(),
@@ -73,6 +76,10 @@ impl WriteTerms {
 
     pub(crate) fn recording_id(&self) -> Uuid {
         self.recording_id
+    }
+
+    pub(crate) fn process_epoch(&self) -> &str {
+        &self.process_epoch
     }
 
     pub(crate) fn declare(&mut self, declared: RecordingLayout) -> Result<()> {
@@ -138,6 +145,7 @@ impl WriteTerms {
 #[derive(Debug)]
 pub(crate) struct ReadTerms {
     anchor: DateTime<Utc>,
+    process_epoch: String,
     values: Vec<Value>,
     layouts: BTreeMap<String, BTreeMap<String, Layout>>,
 }
@@ -225,8 +233,10 @@ impl ReadTerms {
             .strip_suffix(b"\n")
             .context("incomplete dependency term table")?
             .split(|byte| *byte == b'\n');
-        let anchor = std::str::from_utf8(rows.next().context("missing dependency clock anchor")?)?
-            .parse()?;
+        let (anchor, process_epoch) =
+            std::str::from_utf8(rows.next().context("missing dependency terms header")?)?
+                .split_once('\t')
+                .context("missing dependency process epoch")?;
         let mut values = Vec::new();
         let mut layouts = BTreeMap::<String, BTreeMap<String, Layout>>::new();
         for row in rows {
@@ -250,10 +260,15 @@ impl ReadTerms {
             }
         }
         Ok(Self {
-            anchor,
+            anchor: anchor.parse()?,
+            process_epoch: process_epoch.parse::<Uuid>()?.to_string(),
             values,
             layouts,
         })
+    }
+
+    pub(crate) fn process_epoch(&self) -> &str {
+        &self.process_epoch
     }
 
     pub(crate) fn layout(&self, protocol: &str, variant: &str) -> Result<&Layout> {

@@ -118,7 +118,7 @@ pub(super) fn named(
                 );
                 text(out, &value);
             }
-            Value::String(value) if key != "process_epoch" => {
+            Value::String(value) => {
                 out.push(b's');
                 text(out, value);
             }
