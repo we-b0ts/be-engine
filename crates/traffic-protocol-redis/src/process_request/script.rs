@@ -13,18 +13,23 @@ use super::{EVENT_TYPES, capture_bytes, is_finite_response, recorded_args, recor
 pub enum ScriptOperation {
     #[serde(rename = "EVAL")]
     Eval,
+    #[serde(rename = "EVAL_RO")]
+    EvalRo,
 }
 
 impl ScriptOperation {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Eval => "EVAL",
+            Self::EvalRo => "EVAL_RO",
         }
     }
 }
 
 pub fn supports_script(operation: &str) -> bool {
-    operation.eq_ignore_ascii_case(ScriptOperation::Eval.as_str())
+    [ScriptOperation::Eval, ScriptOperation::EvalRo]
+        .iter()
+        .any(|allowed| operation.eq_ignore_ascii_case(allowed.as_str()))
 }
 
 pub trait ScriptResource {
@@ -135,5 +140,55 @@ impl<R: ScriptResource + Send + Sync> FiniteProcessRequest for ScriptSelector<R>
             .context("Source Redis script response is unavailable")?;
         crate::frame_kind(&Bytes::from(response.into_owned()))?;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+
+    #[derive(Deserialize)]
+    struct TestResource(String);
+
+    impl ScriptResource for TestResource {
+        fn matches_endpoint(&self, host: &str, port: u16, db: i64) -> bool {
+            host == self.0 && port == 6379 && db == 0
+        }
+    }
+
+    #[test]
+    fn read_only_script_is_an_exact_finite_process_rule() {
+        let body = "return redis.call('GET', KEYS[1])";
+        let selector: ScriptSelector<TestResource> = serde_json::from_value(json!({
+            "operation": "EVAL_RO",
+            "resource": "cache.test",
+            "script": {"sha256": format!("{:x}", Sha256::digest(body))},
+            "keys": ["task:pending"]
+        }))
+        .unwrap();
+        selector.validate().unwrap();
+        assert!(supports_script("eval_ro"));
+        assert!(!supports_script("EVALSHA_RO"));
+
+        let capture = |data: &str| json!({"encoding": "utf8", "data": data});
+        let event = json!({
+            "event_type": "redis_exchange", "replay_safe": true,
+            "target_host": "cache.test", "target_port": 6379, "database": 0,
+            "command": "EVAL_RO", "args": [capture(body), capture("1"), capture("task:pending")],
+            "outcome": "response", "response": capture("$1\r\nx\r\n")
+        });
+        assert!(selector.matches_evidence(&event).unwrap());
+
+        let mut wrong_operation = event.clone();
+        wrong_operation["command"] = "EVAL".into();
+        assert!(!selector.matches_request(&wrong_operation));
+        let mut wrong_keys = event.clone();
+        wrong_keys["args"][2] = capture("task:claimed");
+        assert!(!selector.matches_request(&wrong_keys));
+        let mut incomplete = event;
+        incomplete["response"] = capture("$1\r\n");
+        assert!(selector.matches_evidence(&incomplete).is_err());
     }
 }
