@@ -38,6 +38,16 @@ pub trait RecordSource {
     }
 }
 
+/// A validated ownership selector for an outgoing, single-use exchange.
+/// The engine supplies sealed evidence and owns task and scope membership.
+pub trait FiniteProcessRequest: Send + Sync {
+    fn event_types(&self) -> &'static [&'static str];
+    /// Prefilter using the bounded request projection.
+    fn matches_request(&self, event: &Value) -> bool;
+    /// Confirm the selector and finite response on the complete original.
+    fn matches_evidence(&self, event: &Value) -> Result<bool>;
+}
+
 pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
     fn proof_selector(&self, event: &Value) -> Value {

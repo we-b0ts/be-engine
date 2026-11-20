@@ -347,7 +347,9 @@ impl Walker<'_> {
             Shape::Origin => self.field_map(map, "capture", Shape::Leaf, parent, depth)?,
             Shape::ProcessSelector => {
                 self.list(map, "transaction_members", Shape::Leaf, true, parent, depth)?;
-                self.one(map, "script", Shape::Leaf, true, parent, depth)?;
+                if map.get("protocol").and_then(Value::as_str) == Some("redis") {
+                    self.one(map, "script", Shape::Leaf, true, parent, depth)?;
+                }
             }
             Shape::RedisReadBack => (),
             Shape::CaptureResponse => {

@@ -156,6 +156,18 @@ fn process_owned(rule: &n::NativeRule, effect: &n::ProcessOwnedEffect) -> Result
         .map(|origin| origin_source(&origin.contract))
         .transpose()?;
     Ok(match &effect.selector {
+        n::ProcessSelector::RedisScript(selector) => {
+            ensure!(
+                effect.origin.is_none(),
+                "finite Redis script ownership cannot have an API origin"
+            );
+            B::RedisScript {
+                name,
+                source_revision,
+                source_evidence,
+                selector: selector.clone(),
+            }
+        }
         n::ProcessSelector::RedisPubsub(selector) => B::RedisPubsub {
             name,
             source_revision,
@@ -246,7 +258,7 @@ fn process_owned(rule: &n::NativeRule, effect: &n::ProcessOwnedEffect) -> Result
                     name,
                     source_revision,
                     source_evidence,
-                    selector: crate::config::process_owned_dependencies::publish::Selector {
+                    selector: traffic_protocol_redis::process_request::PublishSelector {
                         ports: ports.clone(),
                         channels,
                         when_message: when_message.clone(),

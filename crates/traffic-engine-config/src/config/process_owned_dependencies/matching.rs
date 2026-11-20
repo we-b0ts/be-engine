@@ -100,14 +100,14 @@ pub(super) fn matches(rule: &BackgroundDependencyRuleConfig, event: &RecorderEve
                 && path_prefixes.iter().any(|prefix| path.starts_with(prefix))
         }
         (
-            BackgroundDependencyRuleConfig::RedisPublish { .. },
+            BackgroundDependencyRuleConfig::RedisScript { selector, .. },
             RecorderEvent::RedisExchange(exchange),
-        ) if !super::publish::successful_exchange(exchange) => false,
+        ) => selector.matches_exchange(exchange),
         (
-            BackgroundDependencyRuleConfig::Redis { .. }
-            | BackgroundDependencyRuleConfig::RedisPublish { .. },
+            BackgroundDependencyRuleConfig::RedisPublish { selector, .. },
             RecorderEvent::RedisExchange(exchange),
-        ) => {
+        ) => selector.matches_exchange(exchange),
+        (BackgroundDependencyRuleConfig::Redis { .. }, RecorderEvent::RedisExchange(exchange)) => {
             let args = exchange
                 .args
                 .iter()

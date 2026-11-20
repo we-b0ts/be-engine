@@ -1,10 +1,13 @@
 //! Acquisition, origin classification and finite sharing have separate effects.
 use std::{collections::BTreeMap, net::SocketAddr};
 
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+use traffic_protocol_redis::process_request::ScriptResource;
+pub use traffic_protocol_redis::process_request::{RedisPublishPredicate, supports_script};
 
 use super::{Literal, NativeKeySelector, Proven};
-use crate::{Resource, SourceScalar};
+use crate::{Database, Protocol, Resource, SourceScalar};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,6 +66,7 @@ pub struct ProcessOwnedEffect {
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProcessSelector {
     RedisPubsub(RedisPubsubSelector),
+    RedisScript(RedisScriptSelector),
     Mysql {
         selector: MysqlProcessSelector,
         #[serde(default)]
@@ -117,12 +121,31 @@ pub enum ProcessSelector {
     },
 }
 
-/// A condition on one concrete JSON pointer in the outgoing PUBLISH payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged, deny_unknown_fields)]
-pub enum RedisPublishPredicate {
-    Equals { equals: serde_json::Value },
-    Prefix { prefix: String },
+/// A Redis script rule bound to the resolved policy resource.
+pub type RedisScriptSelector = traffic_protocol_redis::process_request::ScriptSelector<Resource>;
+
+pub fn validate_redis_script(selector: &RedisScriptSelector) -> Result<()> {
+    let resource = &selector.resource;
+    resource.endpoint.validate()?;
+    ensure!(
+        resource.protocol == Protocol::Redis
+            && matches!(resource.database, None | Some(Database::Index(0..)))
+            && resource.username.is_none(),
+        "process Redis script requires a Redis endpoint and optional nonnegative database, without a username selector"
+    );
+    selector.validate()
+}
+
+impl ScriptResource for Resource {
+    fn matches_endpoint(&self, host: &str, port: u16, database: i64) -> bool {
+        self.protocol == Protocol::Redis
+            && self.endpoint.host.eq_ignore_ascii_case(host)
+            && self.endpoint.port == port
+            && self
+                .database
+                .as_ref()
+                .is_none_or(|db| db.index() == Some(database))
+    }
 }
 
 /// Ownership of received native inputs, independent of their external publisher.

@@ -72,3 +72,38 @@ scope and subscription evidence.
 For an existing sealed recording, publish the ownership rule through Source
 attribution planning, then bind the exact occurrences with the independent
 Source proof. This preserves the recording and requires no acquisition refresh.
+
+## Finite EVAL
+
+An independent Source task can declare a Redis Lua invocation in
+`process_dependencies.tasks`. Use the recorded Redis endpoint, the full SHA-256
+of the script bytes, and the exact, ordered `KEYS` list:
+
+```yaml
+process_dependencies:
+  tasks:
+    recover_pending:
+      requests:
+        - redis:
+            operation: EVAL
+            resource: {protocol: redis, endpoint: "redis.example:6379", database: 0}
+            script: {sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+            keys: ["queue:pending"]
+```
+
+Use a named Redis resource or an inline resource. Include `database` to bind a
+specific database. The script digest and `KEYS` select Source occurrences across
+all scopes. The independent Source proof must cover the full set selected by
+the task in that process epoch, including occurrences originally recorded under
+a Case. When a task and an API can issue the same invocation, resolve the
+ambiguity before applying the rule.
+
+For a sealed recording, use Source attribution planning and bind the exact
+occurrences. Replay retains the original request and response for finite
+consumption. `ARGV` comparison follows the ordinary Replay request contract.
+
+Finite Redis request selectors implement the same evidence interface. The
+Redis adapter owns the command fields and finite reply checks. Source rule
+validation and attribution use a bounded request projection to select immutable
+original exchanges for confirmation. The engine owns task membership, conflict
+checks and the frozen Process scope.

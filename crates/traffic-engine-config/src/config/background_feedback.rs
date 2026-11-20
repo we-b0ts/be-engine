@@ -165,6 +165,11 @@ pub fn plan_rule_config(
             source_evidence,
             ..
         }
+        | BackgroundDependencyRuleConfig::RedisScript {
+            source_revision,
+            source_evidence,
+            ..
+        }
         | BackgroundDependencyRuleConfig::Mysql {
             source_revision,
             source_evidence,
