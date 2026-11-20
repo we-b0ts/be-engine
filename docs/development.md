@@ -199,8 +199,8 @@ dependency issues also expose bounded target runtime logs for attribution.
 See [standalone recording](recording.md) for its container contract, direct
 standby, generated run IDs and handoff to rewrite.
 
-All binaries report the package version, build revision, and exact pinned
-target-runtime image from `--version`. Git checkouts derive the revision
+All binaries report the package version, build revision, and Target scaffold
+runtime image from `--version`. Git checkouts derive the revision
 automatically and append `-dirty` for uncommitted content. Builds without Git
 metadata should set `TRAFFIC_E2E_BUILD_REVISION` to a 1-64 character release
 revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
@@ -308,8 +308,9 @@ distribution images contain no kubeconfig.
 
 ### Runtime images
 
-Build and load the Linux/amd64 runtime images on the Docker host before
-managed recording, preflight, or Target builds:
+Build and load the Linux/amd64 support images on the Docker host before
+managed recording, diagnostic preflight, or Replay. The same script builds the
+runtime used by the generated Target Dockerfile:
 
 ```bash
 ./scripts/build-runtime-images.sh
@@ -334,9 +335,9 @@ user.
 
 Generated Target Dockerfiles use the pinned official Rust builder and the
 local Target runtime. Set `TRAFFIC_E2E_TARGET_BUILDER_IMAGE` or
-`TRAFFIC_E2E_TARGET_RUNTIME_IMAGE` when compiling the engine to accept another
-base image. Existing Target Dockerfiles must use the same references as their
-engine binary. Use image digests for shared registry builds.
+`TRAFFIC_E2E_TARGET_RUNTIME_IMAGE` when compiling the engine to customize those
+scaffold defaults. Each project's Target Dockerfile selects its own base images.
+Use image digests for reproducible shared registry builds.
 
 Build the optional Rust image with the musl target from the repository root:
 
@@ -2548,16 +2549,17 @@ checks, or adds a missing source-compatible absolute path while preserving
 existing captured content. Replacing or refreshing content remains
 administrator-owned.
 
-The initialized target repository contains `.traffic-e2e/Dockerfile.target`. It
-is a BuildKit multi-stage build whose final image has a non-empty OCI entrypoint
-and defaults to `USER 998:998`. Every target build requires a BuildKit SSH
-mount. traffic-e2e manages its agent at
+The initialized target repository contains `.traffic-e2e/Dockerfile.target`.
+The project defines its base images, build tools, stages, and caches in this
+file. traffic-e2e validates that the final image is Linux/amd64, declares a
+non-empty OCI entrypoint, and defaults to `USER 998:998`. When the Dockerfile
+uses a BuildKit SSH mount, traffic-e2e manages its agent at
 `.traffic-e2e/local/socks/ssh-agent.sock`, recreates a stale socket, loads the
 calling account's default OpenSSH identities with `ssh-add`, and passes that
 exact socket to `docker build --ssh`. The agent exposes signing only; keys
 remain build-time inputs and are not copied into the image. Build output
 continues to stream to the caller, while a bounded actionable tail is returned
-through preflight and E2E API errors when Docker or Cargo fails. traffic-e2e
+through preflight and E2E API errors when the build fails. traffic-e2e
 builds the image from the repository root, tags the cache as
 `traffic-e2e/<project>-target:cache`, validates the resulting immutable image
 ID, and runs that ID directly. A target start receives each declared startup
@@ -2621,11 +2623,9 @@ cleanly on `SIGTERM`. Application logs belong in a configured writable runtime
 output such as `/data1/weibo/logs`; stdout/stderr output is not required.
 traffic-e2e owns network namespaces, readiness, signals, and cleanup.
 
-Use the pinned shared Rust builder/runtime images and stable BuildKit cache
-mount IDs described by the backend-rewrite initialization contract. A source
-change reruns the relevant Cargo build layer, but cached registry, git, and
-target artifacts prevent downloading the dependency graph again when the
-builder identity and cache IDs are unchanged.
+The generated Rust scaffold uses BuildKit cache mounts for the Cargo registry
+and build artifacts so builds can reuse them across source changes. Projects
+configure caches for their chosen build tools in their Target Dockerfiles.
 
 For diagnostic preflight, the runtime keeps a target-scoped
 source-adaptor cache image. `.traffic-e2e/local/source/` is authoritative for
