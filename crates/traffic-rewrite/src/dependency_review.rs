@@ -7,12 +7,12 @@ mod case_defaults;
 use traffic_rewrite_rules::rewrite::dependency_review::client_abort;
 mod grouped;
 mod investigations;
+pub(super) mod legacy_sequence_claims;
 mod model;
 mod ownership_impact;
 mod projection;
 mod queries;
 mod rules;
-pub(crate) mod sequence;
 mod snapshot;
 #[cfg(test)]
 use traffic_rewrite_rules::rewrite::dependency_review::socketio_tail;

@@ -66,6 +66,7 @@ impl RewriteStore {
             "unsupported rewrite state version {}",
             state.version
         );
+        super::dependency_review::legacy_sequence_claims::retire_pending(&mut state)?;
         // Snapshot-based capture plans no longer have an apply path.
         for slice in
             std::iter::once(&mut state.active_slice).chain(state.parked_slices.values_mut())

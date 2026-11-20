@@ -22,7 +22,6 @@ pub struct MissingDependency {
     pub case_id: Option<String>,
     pub expected: crate::SourceEvent,
     pub ownership_revision: u64,
-    pub attribution_review: &'static str,
 }
 
 impl RequestWait {
@@ -110,7 +109,6 @@ impl RequestWait {
                     case_id: scope.case.then_some(case).flatten().map(str::to_owned),
                     expected: scope.runtime.missing_request(revision)?,
                     ownership_revision: revision,
-                    attribution_review: "required",
                 })
             })
             .collect()
