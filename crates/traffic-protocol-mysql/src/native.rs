@@ -14,12 +14,26 @@ mod evidence;
 mod recording;
 mod response;
 mod server;
+mod source_scope;
 #[cfg(test)]
 mod tests;
 
 pub struct Native;
 
 impl NativeProtocol for Native {
+    fn has_replay_scope(&self) -> bool {
+        true
+    }
+
+    fn prepare_replay_scope(
+        &self,
+        scope: traffic_model::attribution::DependencyScope,
+        records: &[(usize, &Value)],
+    ) -> Result<std::collections::BTreeMap<usize, traffic_protocol::connection::ReplaySessionStep>>
+    {
+        source_scope::prepare(scope, records)
+    }
+
     fn decode_evidence(
         &self,
         event: &Value,
@@ -46,6 +60,10 @@ impl NativeProtocol for Native {
             return Ok(None);
         }
         let record: RecordedMysqlExchange = serde_json::from_value(event.clone())?;
+        ensure!(
+            record.response.status != "resultset" || event["response"]["rows"].is_array(),
+            "MySQL resultset has no recorded row evidence"
+        );
         ensure!(
             record.outcome == DependencyExchangeOutcome::Response,
             "MySQL finite serving requires a complete response"

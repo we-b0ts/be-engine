@@ -174,6 +174,23 @@ pub struct AttributionRuleBinding {
 pub const SCHEMA: &str = "dependency-attribution/v3";
 
 #[derive(Debug, Clone, Serialize)]
+pub struct UnattributedGroup {
+    pub id: String,
+    pub shape: traffic_engine::attribution_review::GroupShape,
+    pub count: usize,
+    pub sample_exchange_ids: Vec<Uuid>,
+    pub members_command: crate::rewrite::RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UnattributedGroups {
+    pub total_exchanges: usize,
+    pub total_groups: usize,
+    pub groups: Vec<UnattributedGroup>,
+    pub next_command: Option<crate::rewrite::RewriteCommandSpec>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AttributionReviewContext {
     pub schema: &'static str,
     pub work_type: &'static str,
@@ -191,7 +208,9 @@ pub struct AttributionReviewContext {
     pub effective_policy_fingerprint: String,
     pub rule_groups: Vec<serde_json::Value>,
     pub rule_planning: serde_json::Value,
+    #[serde(skip)]
     pub unattributed_exchange_ids: BTreeSet<Uuid>,
+    pub unattributed: UnattributedGroups,
     pub obligations: Vec<ScopeObligation>,
     pub next_step: &'static str,
 }

@@ -19,7 +19,7 @@ pub struct RewriteRegressionBeginOptions {
     pub target_root: PathBuf,
     /// Attests explicit user authorization for this new round, never inferred from a session.
     pub caller_approved: bool,
-    /// Capture new live traffic before Replay instead of reusing existing cases.
+    /// Require a newly published recording for this round.
     pub record_new_traffic: bool,
     /// Actual active child agent/session count in the caller's current runtime session.
     pub active_agent_count: usize,
@@ -95,7 +95,7 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
         }
         ensure!(
             !state.recording_run_id.is_empty(),
-            "select a completed standard recording or choose --purpose record"
+            "select a completed standard recording or publish one with traffic-e2e record"
         );
         artifacts::validate_standard_recording(&target_root, &state)?;
         inventory::reset_for_recording(&mut state);

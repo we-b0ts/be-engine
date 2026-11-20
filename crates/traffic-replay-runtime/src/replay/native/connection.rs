@@ -3,7 +3,8 @@ use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use traffic_protocol::{
     connection::{
-        ConnectionInfo, ConnectionIo, NativeFuture, RequestHost, ResponseDelivery, ResponseFramer,
+        ConnectionInfo, ConnectionIo, NativeFuture, ReplaySessionStep, RequestHost, RequestSession,
+        ResponseDelivery, ResponseFramer,
     },
     message::ProtocolMessage,
 };
@@ -69,6 +70,7 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
 struct DeliveredAnchor {
     started: tokio::time::Instant,
     lane: Option<String>,
+    owner: request::SessionOwner,
 }
 
 pub(super) struct Host<P: ReplayProtocolSet> {
@@ -102,7 +104,21 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
         message: Arc<dyn ProtocolMessage>,
         after: Option<traffic_model::recording::ProtocolRef>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
-        self.execute_request(message, Some(after))
+        self.execute_required(message, Some(after), None)
+    }
+    fn execute_in_session(
+        &self,
+        message: Arc<dyn ProtocolMessage>,
+        session: RequestSession,
+    ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
+        self.execute_required(message, None, Some(session))
+    }
+    fn try_execute_session_control(
+        &self,
+        message: Arc<dyn ProtocolMessage>,
+        session: RequestSession,
+    ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
+        Box::pin(self.execute_request(message, None, Some(session), true))
     }
     fn forget_anchor(&self, reference: &traffic_model::recording::ProtocolRef) {
         self.delivered
@@ -168,6 +184,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                         };
                         return Ok(Box::new(Delivery {
                             retain_anchor: false,
+                            session_step: None,
                             reference: state.native.core.exchanges[index].native.reference.clone(),
                             matched,
                             started,
@@ -228,80 +245,132 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
         &self,
         message: Arc<dyn ProtocolMessage>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
-        self.execute_request(message, None)
+        self.execute_required(message, None, None)
     }
 }
 
 impl<P: ReplayProtocolSet> Host<P> {
-    fn execute_request(
+    fn execute_required(
         &self,
         message: Arc<dyn ProtocolMessage>,
         binding: Option<Option<traffic_model::recording::ProtocolRef>>,
+        request_session: Option<RequestSession>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
         Box::pin(async move {
-            let started = tokio::time::Instant::now();
-            let observed = Utc::now();
-            let bytes = message
-                .project()?
-                .values
-                .values()
-                .try_fold(0_usize, |size, value| {
-                    size.checked_add(value.bytes.len())
-                        .context("native request size overflow")
-                })?;
-            ensure!(
-                bytes <= traffic_contract::MAX_VALUE_BYTES,
-                "native request exceeds the value byte bound"
-            );
-            let lane = binding.as_ref().and_then(|binding| binding.as_ref()).map(|reference| {
-                self.delivered.lock().expect("native delivery anchors").get(reference).and_then(|anchor| anchor.lane.clone()).context("native session continuation has no successful delivery on this connection")
-            }).transpose()?;
-            let mut request = request::Request {
-                protocol: self.protocol,
-                endpoint: self.endpoint.clone(),
-                message,
-                session: binding.is_some().then_some(self.session),
-                lane,
-                observed,
-                bytes,
-                diagnostics: Default::default(),
-            };
-            let matched = admission::request::execute(
-                &self.state,
-                &mut request,
-                tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-            )
-            .await;
-            let matched = match matched {
-                Ok(matched) => matched,
-                Err(error) => {
-                    self.reported.store(true, Ordering::Release);
-                    return Err(error.into());
-                }
-            };
-            let guard = matched.ticket.guard();
-            let reference = self.state.lock().await.native.core.exchanges[matched.index]
-                .native
-                .reference
-                .clone();
-            Ok(Box::new(Delivery {
-                retain_anchor: false,
-                reference,
-                matched,
-                started,
-                state: self.state.clone(),
-                protocol: self.protocol,
-                endpoint: self.endpoint.clone(),
-                reported: self.reported.clone(),
-                _guard: guard,
-                delivered: self.delivered.clone(),
-            }) as Box<dyn ResponseDelivery>)
+            self.execute_request(message, binding, request_session, false)
+                .await?
+                .context("required native delivery missing")
         })
+    }
+
+    async fn execute_request(
+        &self,
+        message: Arc<dyn ProtocolMessage>,
+        binding: Option<Option<traffic_model::recording::ProtocolRef>>,
+        request_session: Option<RequestSession>,
+        optional_control: bool,
+    ) -> Result<Option<Box<dyn ResponseDelivery>>> {
+        let started = tokio::time::Instant::now();
+        let observed = Utc::now();
+        let bytes = message
+            .project()?
+            .values
+            .values()
+            .try_fold(0_usize, |size, value| {
+                size.checked_add(value.bytes.len())
+                    .context("native request size overflow")
+            })?;
+        ensure!(
+            bytes <= traffic_contract::MAX_VALUE_BYTES,
+            "native request exceeds the value byte bound"
+        );
+        let lane = binding
+            .as_ref()
+            .and_then(|binding| binding.as_ref())
+            .map(|reference| {
+                self.delivered
+                    .lock()
+                    .expect("native delivery anchors")
+                    .get(reference)
+                    .and_then(|anchor| anchor.lane.clone())
+                    .context(
+                        "native session continuation has no successful delivery on this connection",
+                    )
+            })
+            .transpose()?;
+        let session_owner = if let Some(after) = request_session
+            .as_ref()
+            .and_then(|session| session.after.as_ref())
+        {
+            Some(
+                self.delivered
+                    .lock()
+                    .expect("native delivery anchors")
+                    .get(after)
+                    .context("native transaction predecessor was not delivered on this connection")?
+                    .owner
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        let mut request = request::Request {
+            protocol: self.protocol,
+            endpoint: self.endpoint.clone(),
+            message,
+            session: binding.is_some().then_some(self.session),
+            lane,
+            request_session,
+            session_owner,
+            optional_control,
+            observed,
+            bytes,
+            diagnostics: Default::default(),
+        };
+        let matched = admission::request::execute(
+            &self.state,
+            &mut request,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        )
+        .await;
+        let matched = match matched {
+            Ok(matched) => matched,
+            Err(error) if optional_control && error.kind == request::RejectionKind::NoMatch => {
+                return Ok(None);
+            }
+            Err(error) => {
+                self.reported.store(true, Ordering::Release);
+                return Err(error.into());
+            }
+        };
+        let guard = matched.ticket.guard();
+        let (reference, session_step) = {
+            let state = self.state.lock().await;
+            let exchange = &state.native.core.exchanges[matched.index];
+            (
+                exchange.native.reference.clone(),
+                exchange.session_step.clone(),
+            )
+        };
+        Ok(Some(Box::new(Delivery {
+            retain_anchor: false,
+            session_step,
+            reference,
+            matched,
+            started,
+            state: self.state.clone(),
+            protocol: self.protocol,
+            endpoint: self.endpoint.clone(),
+            reported: self.reported.clone(),
+            _guard: guard,
+            delivered: self.delivered.clone(),
+        }) as Box<dyn ResponseDelivery>))
     }
 }
 
 struct Delivery<P: ReplayProtocolSet> {
     retain_anchor: bool,
+    session_step: Option<ReplaySessionStep>,
     reference: traffic_model::recording::ProtocolRef,
     matched: request::Matched,
     started: tokio::time::Instant,
@@ -364,6 +433,9 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
     }
     fn reference(&self) -> Option<traffic_model::recording::ProtocolRef> {
         Some(self.reference.clone())
+    }
+    fn session_step(&self) -> Option<&ReplaySessionStep> {
+        self.session_step.as_ref()
     }
 
     fn write<'a>(
@@ -447,6 +519,16 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                                             .native
                                             .lane
                                             .clone(),
+                                        owner: request::SessionOwner {
+                                            scope: state.native.core.exchanges[matched.index]
+                                                .source
+                                                .source,
+                                            case: state.native.core.exchanges[matched.index]
+                                                .source
+                                                .case_id
+                                                .clone(),
+                                            epoch: (!matched.run_owned).then_some(matched.epoch),
+                                        },
                                     },
                                 );
                         }

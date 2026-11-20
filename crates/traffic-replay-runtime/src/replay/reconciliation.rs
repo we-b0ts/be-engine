@@ -43,6 +43,24 @@ impl BatchScope {
         })
     }
 
+    pub(super) fn exclude_optional_unattributed(&mut self, count: u64) -> Result<()> {
+        let by_owner = self
+            .inventory
+            .by_owner_kind
+            .entry("unattributed".into())
+            .or_default();
+        ensure!(
+            count <= *by_owner
+                && count <= self.inventory.unattributed_dependencies
+                && count <= self.inventory.total_mandatory,
+            "proven optional controls exceed the sealed unattributed inventory"
+        );
+        *by_owner -= count;
+        self.inventory.unattributed_dependencies -= count;
+        self.inventory.total_mandatory -= count;
+        Ok(())
+    }
+
     pub(super) fn report<S: traffic_replay::report::SessionSnapshot>(
         &self,
         report: &ReplayReport<S>,

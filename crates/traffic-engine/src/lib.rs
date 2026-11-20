@@ -34,6 +34,7 @@ pub use traffic_engine_e2erun::execution_identity;
 pub use traffic_engine_environment::engine_binary;
 pub use traffic_engine_environment::internal_runtime;
 pub use traffic_engine_evidence::attribution_defaults;
+pub use traffic_engine_evidence::attribution_review;
 pub use traffic_engine_recording::dns_mock;
 pub use traffic_engine_recording::gateway;
 pub use traffic_engine_recording::http;

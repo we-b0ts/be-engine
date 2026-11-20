@@ -71,6 +71,7 @@ fn select(inventory: &ExchangeInventory, source: ReplaySource, value: &'static s
             MatchContext {
                 session: None,
                 lane: None,
+                request_session: None,
                 protocol: PROTOCOL,
                 endpoint: &endpoint(),
                 active_case: (source == ReplaySource::Case).then_some("case"),
@@ -190,6 +191,7 @@ fn comparison_observers_receive_failed_candidates_without_consuming_their_invent
             MatchContext {
                 session: None,
                 lane: None,
+                request_session: None,
                 protocol: PROTOCOL,
                 endpoint: &endpoint(),
                 active_case: Some("case"),
@@ -218,6 +220,7 @@ fn comparison_observers_receive_failed_candidates_without_consuming_their_invent
         MatchContext {
             session: None,
             lane: None,
+            request_session: None,
             protocol: PROTOCOL,
             endpoint: &endpoint(),
             active_case: Some("case"),

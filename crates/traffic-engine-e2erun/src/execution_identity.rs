@@ -279,7 +279,12 @@ pub fn traffic_e2e_revision() -> Result<String> {
 }
 
 pub fn project_config_revision(target_root: &Path) -> Result<String> {
-    config_file_revision(target_root, ".traffic-e2e/project.yaml", "project config")
+    let project = config_file_revision(target_root, ".traffic-e2e/project.yaml", "project config")?;
+    let apis = target_root.join(crate::config::api_catalog::PATH);
+    match crate::config::api_catalog::ApiCatalog::read(&apis)? {
+        Some(apis) => Ok(id(&[&project, "api-catalog", &apis])),
+        None => Ok(project),
+    }
 }
 
 pub fn source_traffic_policy_revision(target_root: &Path) -> Result<String> {

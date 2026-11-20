@@ -12,6 +12,7 @@ use uuid::Uuid;
 use super::{MysqlReplayConfig, ReplayRuntime};
 use crate::BackgroundDependencyRuleConfig;
 
+mod mysql_transaction;
 mod unmatched_connection_tests;
 
 async fn spawn_replay(

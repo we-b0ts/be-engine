@@ -76,6 +76,9 @@ fn incomplete_capture_and_unimplemented_prepared_commands_fail_at_projection() {
     record["response"]["rows_truncated"] = json!(true);
     assert!(Native.recorded_exchange(&record).is_err());
     record = event();
+    record["response"].as_object_mut().unwrap().remove("rows");
+    assert!(Native.recorded_exchange(&record).is_err());
+    record = event();
     record["command"] = json!("COM_STMT_EXECUTE");
     assert!(Native.recorded_exchange(&record).is_err());
 }
@@ -112,4 +115,38 @@ fn string_carriers_expose_content_bytes_for_codec_recognition() {
         serde_json::from_slice(&exchange.response.encode(&updates).unwrap()).unwrap();
     assert_eq!(envelope.response.rows[0][0].kind, "string");
     assert_eq!(envelope.response.rows[0][0].value, Some(json!(delivered)));
+}
+
+#[test]
+fn ownership_projection_preserves_ordinary_reads_and_blocks_unproven_ends() {
+    use traffic_model::attribution::DependencyScope;
+    use traffic_protocol::connection::ReplaySessionStep;
+
+    let mut read = event();
+    read["server_status_before"] = json!(0);
+    read["response"]["server_status"] = json!(1);
+    assert!(
+        Native
+            .prepare_replay_scope(DependencyScope::Process, &[(0, &read)])
+            .unwrap()
+            .is_empty()
+    );
+
+    read["server_status_before"] = json!(1);
+    let mut end = read.clone();
+    end["query_sequence"] = json!(2);
+    end["sql"] = json!("ROLLBACK");
+    end["response"] = json!({
+        "status":"ok", "server_status":0, "affected_rows":0, "last_insert_id":0
+    });
+    assert_eq!(
+        Native
+            .prepare_replay_scope(DependencyScope::Case, &[(0, &read), (1, &end)])
+            .unwrap(),
+        [
+            (0, ReplaySessionStep::InTransaction),
+            (1, ReplaySessionStep::Unverified)
+        ]
+        .into()
+    );
 }

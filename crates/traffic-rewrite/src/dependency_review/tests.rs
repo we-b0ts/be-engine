@@ -146,6 +146,51 @@ async fn ownerless_context_matches_full_source_before_and_after_admission_invent
 }
 
 #[tokio::test]
+async fn ownerless_context_groups_requests_and_pages_exact_members() {
+    let (target, _) = fixture(103).await;
+    let options = super::super::RewriteContext {
+        target_root: target.path().into(),
+    };
+    let context = dependency_attribution_context(options.clone()).unwrap();
+    assert_eq!(context.unattributed.total_exchanges, 104);
+    assert_eq!(context.unattributed.total_groups, 2);
+    let http = &context.unattributed.groups[0];
+    assert_eq!(http.shape.protocol, "http");
+    assert_eq!(http.count, 103);
+    assert_eq!(http.sample_exchange_ids.len(), 3);
+    let output = serde_json::to_value(&context).unwrap();
+    assert!(output.get("unattributed_exchange_ids").is_none());
+    assert_eq!(
+        output["unattributed"]["groups"][1]["shape"]["selectors"],
+        json!(["key=refresh"])
+    );
+
+    let page = |offset, revision| {
+        dependency_attribution_group(
+            options.clone(),
+            &http.id,
+            &context.source_inventory_id,
+            revision,
+            offset,
+        )
+    };
+    let first = page(0, context.revision).unwrap();
+    let second = page(100, context.revision).unwrap();
+    let first_ids = first["source_exchange_ids"].as_array().unwrap();
+    let second_ids = second["source_exchange_ids"].as_array().unwrap();
+    assert_eq!((first_ids.len(), second_ids.len()), (100, 3));
+    assert_eq!(
+        &first_ids[..3],
+        serde_json::to_value(&http.sample_exchange_ids)
+            .unwrap()
+            .as_array()
+            .unwrap()
+    );
+    assert!(!first["next_command"].is_null() && second["next_command"].is_null());
+    assert!(page(100, context.revision + 1).is_err());
+}
+
+#[tokio::test]
 async fn unused_occurrence_projection_matches_full_source_and_retains_seal_checks() {
     let (_target, state) = fixture(2).await;
     let full = source::load(&state).unwrap();

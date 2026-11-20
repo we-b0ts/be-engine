@@ -141,7 +141,7 @@ startup dirt, unused dependencies or unmatched Target requests alone do not
 request attribution analysis. Known-owned new inventories are admitted
 mechanically without a repository scan.
 
-All ownerless Source occurrences must acquire supported effective process-task
+All ownerless business occurrences must acquire supported effective process-task
 or async-origin API rules and independent positive attribution proof before
 formal Replay. Empty or partial review cannot admit the remaining ownerless
 inventory. A mistaken ownership return can instead be rejected with Source
@@ -151,9 +151,18 @@ the same gate. Capture and final-batch verification obligations remain separate.
 The coordinator obtains `dependency-attribution context` and dispatches its exact
 assignment to the read-only repository analyst. The context includes Source and
 proof revisions, ownership returns, actual declared task groups,
-unattributed business occurrences and origin obligations. Protocol control facts
-remain in the inventory and follow their native contracts; they are not silently
-counted as unattributed business requests.
+unattributed business groups and origin obligations. Review the group counts
+and sample exchange IDs first. MySQL groups use SQL templates or complete
+transaction shapes, Redis groups use command and keys or channels, and HTTP
+groups use method and URI path. The returned `members_command` pages exact
+exchange IDs for an ownership submission. The engine still checks every
+submitted ID against the sealed recording and the bound Source proof.
+
+MySQL controls proved optional by the protocol's Source transaction classifier
+remain in the recording and leave the manual review counts. This includes a
+plain end on a proven inactive connection and the end of a complete ordinary
+read-only transaction. Locking reads and writes that affect zero rows still
+require their transaction end.
 
 `dependency-attribution source --exchange-id UUID` inspects an authenticated
 original occurrence without exposing payloads. API-owned missing-traffic

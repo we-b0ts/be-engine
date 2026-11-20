@@ -93,7 +93,7 @@ impl GlobalReportProjection for Inventory {
             .iter()
             .find(|entry| entry.kind.as_str() == protocol)?;
         Some(format!(
-            "registered-native-global/v1:{}",
+            "registered-native-global/v2:{}",
             provider.provider.native_protocol()?.report_semantics()
         ))
     }

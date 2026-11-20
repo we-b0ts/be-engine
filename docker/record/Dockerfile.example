@@ -12,6 +12,9 @@ FROM ${SOURCE_IMAGE}
 COPY --from=engine /usr/local/bin/traffic-e2e /usr/local/bin/traffic-e2e
 # kubectl has its own versioned distribution image, independent of the engine.
 COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
+# Build from the project root so these versioned inputs travel together.
+COPY .traffic-e2e/project.yaml .traffic-e2e/policy.yaml .traffic-e2e/apis.yaml /etc/traffic-e2e/.traffic-e2e/
+ENV TRAFFIC_E2E_PROJECT_CONFIG=/etc/traffic-e2e/.traffic-e2e/project.yaml
 
 # Controller owns interception and private evidence; it launches Source as 998:998.
 USER 0:0

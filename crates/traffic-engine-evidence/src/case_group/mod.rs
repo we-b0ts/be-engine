@@ -48,6 +48,7 @@ pub enum PatternOutcomeStatus {
     Applied,
     ConfirmedExisting,
     NotApplicableMissingManagedConfig,
+    NeedsApiCatalogUpdate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -716,6 +717,21 @@ fn apply_pattern_feedback(
             patterns_after: Vec::new(),
         });
     };
+    let apis = config.with_file_name(crate::config::api_catalog::FILE_NAME);
+    if let Some(catalog) = crate::config::api_catalog::ApiCatalog::load(&apis)? {
+        let patterns_after = catalog.case_paths();
+        let status = if catalog.routes().contains_key(pattern) {
+            PatternOutcomeStatus::ConfirmedExisting
+        } else {
+            PatternOutcomeStatus::NeedsApiCatalogUpdate
+        };
+        return Ok(PatternOutcome {
+            status,
+            config: Some(apis),
+            added: Vec::new(),
+            patterns_after,
+        });
+    }
     let rules_path = crate::config::resolve_unified_policy_path(config)?;
     let plan = plan_case_path_pattern_feedback(CasePathPatternFeedback {
         project_config_path: config.to_path_buf(),

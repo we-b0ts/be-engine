@@ -1410,9 +1410,10 @@ retain the same responsibility and 1000-line requirements as `src/`.
 
 - `rewrite/repository_analysis` owns incremental Source-backed route and module
   analysis, batch validation and workflow snapshots. Its `case_pattern_batch`
-  child projects the proposed canonical inventory and fences resumable publication
-  across policy and group catalog writes. Its `catalog` child owns group storage.
-  Recording and case-pattern owners supply route identity and pattern validation.
+  child projects the proposed canonical inventory and fences atomic catalog
+  publication. `traffic-engine-config::config::api_catalog` owns the shared
+  route and group document and its recording projection. The analyst catalog
+  adapter owns revision checks and workflow snapshots.
   `rewrite/implementer` owns fixed slot identity, stable round-robin group
   assignment, queued API leases and explicit runtime feedback. Its `delivery`
   child freezes accepted commits/reports separately from reusable checkouts;

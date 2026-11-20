@@ -466,7 +466,6 @@ pub enum RewriteAction {
         summary: String,
         pr_base: String,
         replay: RewriteCommandSpec,
-        record: RewriteCommandSpec,
     },
     InputRequired {
         reason: RewriteInputRequiredReason,

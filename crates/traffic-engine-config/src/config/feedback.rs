@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::HttpGatewayRuleConfig;
 use super::edit::write_atomic;
 use super::rule_document::whole_file_diff;
-use super::{AppConfig, SourceTrafficPolicyConfig};
+use super::{AppConfig, SourceTrafficPolicyConfig, api_catalog};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,14 +117,18 @@ pub fn plan_case_path_pattern_feedback(
         .with_context(|| format!("failed to read {}", feedback.rules_path.display()))?;
     let mut rules = SourceTrafficPolicyConfig::parse(&original_rules, &feedback.rules_path)?;
     let static_config = AppConfig::load_with_source_policy(&feedback.project_config_path, &rules)?;
+    let catalog_path = feedback
+        .project_config_path
+        .with_file_name(api_catalog::FILE_NAME);
+    let managed_catalog = catalog_path.try_exists()?;
 
     let requested = feedback
         .patterns
         .iter()
         .map(|pattern| validate_case_path_pattern(pattern, &static_config.http_gateway.rules))
         .collect::<Result<BTreeSet<_>>>()?;
-    let before = rules
-        .http
+    let before = static_config
+        .http_gateway
         .case_path_patterns
         .iter()
         .cloned()
@@ -180,19 +184,28 @@ pub fn plan_case_path_pattern_feedback(
         after.remove(pattern);
     }
 
-    rules.http.case_path_patterns = after.iter().cloned().collect();
-    rules.http.source_revision = feedback.source_revision.clone();
-    AppConfig::load_with_source_policy(&feedback.project_config_path, &rules)?;
-    let updated_rules = super::native_policy::render_updated(
-        &original_rules,
-        &rules,
-        &crate::policy::Proof {
-            source: format!("{} at {}", feedback.case_source, feedback.source_revision),
-            fact: feedback.correction_evidence.clone().unwrap_or_else(|| {
-                "Observed Source inventory authorizes these capture paths; comparison permissions remain unchanged.".into()
-            }),
-        },
-    )?;
+    let updated_rules = if managed_catalog {
+        ensure!(
+            after == before,
+            "update the API group in {} and commit that file to change its case paths",
+            catalog_path.display()
+        );
+        original_rules.clone()
+    } else {
+        rules.http.case_path_patterns = after.iter().cloned().collect();
+        rules.http.source_revision = feedback.source_revision.clone();
+        AppConfig::load_with_source_policy(&feedback.project_config_path, &rules)?;
+        super::native_policy::render_updated(
+            &original_rules,
+            &rules,
+            &crate::policy::Proof {
+                source: format!("{} at {}", feedback.case_source, feedback.source_revision),
+                fact: feedback.correction_evidence.clone().unwrap_or_else(|| {
+                    "Observed Source inventory authorizes these capture paths; comparison permissions remain unchanged.".into()
+                }),
+            },
+        )?
+    };
 
     let added = after.difference(&before).cloned().collect::<Vec<_>>();
     let removed = before.difference(&after).cloned().collect::<Vec<_>>();

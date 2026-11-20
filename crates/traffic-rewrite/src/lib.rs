@@ -69,10 +69,11 @@ pub use dependency_review::{
     TargetInvestigationResolutionSubmission, TargetInvestigationSubmission,
     apply_dependency_attribution, claim_foreign_unused, dependency_attribution_api_information,
     dependency_attribution_batch_information, dependency_attribution_candidates,
-    dependency_attribution_context, dependency_attribution_hypotheses,
-    dependency_attribution_rules, dependency_attribution_source_information,
-    dependency_attribution_target, investigate_unmatched_dependency, resolve_target_investigation,
-    retry_dependency_batch, verify_dependency_obligation,
+    dependency_attribution_context, dependency_attribution_context_page,
+    dependency_attribution_group, dependency_attribution_hypotheses, dependency_attribution_rules,
+    dependency_attribution_source_information, dependency_attribution_target,
+    investigate_unmatched_dependency, resolve_target_investigation, retry_dependency_batch,
+    verify_dependency_obligation,
 };
 pub use verification_obligations::{
     VerificationImpact, VerificationRequirement, VerificationScope,

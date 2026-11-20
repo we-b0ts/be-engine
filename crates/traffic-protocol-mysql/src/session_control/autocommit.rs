@@ -53,13 +53,7 @@ pub fn classify<'a, E>(
             }
             setups.push(index);
             read_span = false;
-        } else if complete_read(current)
-            && current.sql.as_deref().is_some_and(|sql| {
-                // The parent cache borrows the same dependency file.
-                *read_sql.entry(sql).or_insert_with(|| read::classify(sql))
-                    == read::Effect::ReadOnly
-            })
-        {
+        } else if ordinary_read(current, read_sql) {
             if !read_span && before & 0x2009 != 0 {
                 return;
             }

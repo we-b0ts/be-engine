@@ -15,7 +15,11 @@ use super::{
     model::{AnalysisSubmission, CasePatternContext, RepositoryAnalysisContext, SCHEMA_VERSION},
 };
 use crate::config::regression::RegressionScope;
-use crate::{RecordingApi, config::AppConfig, e2e_run::ResolvedProjectConfig};
+use crate::{
+    RecordingApi,
+    config::{AppConfig, SourceTrafficPolicyConfig},
+    e2e_run::ResolvedProjectConfig,
+};
 
 pub use traffic_rewrite_model::rewrite::repository_analysis::case_pattern_batch::CasePatternAnalysisCommit;
 
@@ -33,9 +37,11 @@ pub(super) fn context(
     let (_, project) = crate::e2e_run::resolve_project(root)?;
     let scope = RegressionScope::load(root)?;
     let config = AppConfig::load(&project.recorder_config)?;
-    let (candidates, canonical) = case_patterns::pending_routes(root, state, pending, &config)?;
+    let (candidates, canonical) =
+        case_patterns::pending_routes(root, state, pending, &config, groups.apis.is_some())?;
     let unresolved = candidates.iter().collect::<BTreeSet<_>>();
-    let pending_apis = if state.implementers.is_some() {
+    let grouping_enabled = groups.apis.is_some() || state.implementers.is_some();
+    let pending_apis = if grouping_enabled {
         missing_groups(
             &scope,
             canonical.iter().filter(|api| !unresolved.contains(api)),
@@ -53,14 +59,14 @@ pub(super) fn context(
         pending_apis,
         case_patterns: Some(CasePatternContext {
             candidates,
-            grouping_enabled: state.implementers.is_some(),
+            grouping_enabled,
             only_apis: scope.only_apis().to_vec(),
             skipped_apis: scope.skipped_apis().to_vec(),
             policy_revision: catalog::digest(&fs::read(&project.source_traffic_policy)?),
             project_revision: project_revision(root, &project)?,
         }),
         batch_id: String::new(),
-        catalog_path: catalog::path(root),
+        catalog_path: groups.path.clone(),
         catalog_revision: groups.revision.clone(),
     };
     let revision = catalog::digest(&serde_json::to_vec(&(&pending.id, &result))?);
@@ -134,39 +140,55 @@ pub(super) fn apply(
         "API group catalog changed during case pattern analysis"
     );
 
-    let config;
-    let updated_policy;
-    if policy_done {
-        config = AppConfig::load(&project.recorder_config)?;
-        updated_policy = None;
-    } else {
-        (config, updated_policy) = plan_patterns(
-            root,
-            state,
-            &project,
-            &pattern_context.candidates,
-            &original,
-            proposed,
-        )?;
-    }
-    let mut updated_catalog = None;
-    if !catalog_done {
-        let apis = artifacts::recording_apis_with_config(
-            root,
-            &state.recording_run_id,
-            inventory::recording_scope(state),
-            &config,
-        )?;
-        let pending_groups = if pattern_context.grouping_enabled {
-            missing_groups(&RegressionScope::load(root)?, apis.iter(), &groups)
+    let (config, updated_policy, updated_catalog) = if groups.apis.is_some() {
+        if catalog_done {
+            (AppConfig::load(&project.recorder_config)?, None, None)
         } else {
-            Vec::new()
-        };
-        apply_submission(&mut groups.document, &pending_groups, submission)?;
-        if !pending_groups.is_empty() {
-            updated_catalog = Some(catalog::encode(&groups.document)?);
+            let (config, updated) = plan_managed_catalog(
+                root,
+                state,
+                &project,
+                pattern_context,
+                &original,
+                submission,
+                &mut groups,
+            )?;
+            (config, None, updated)
         }
-    }
+    } else {
+        let (config, updated_policy) = if policy_done {
+            (AppConfig::load(&project.recorder_config)?, None)
+        } else {
+            plan_patterns(
+                root,
+                state,
+                &project,
+                &pattern_context.candidates,
+                &original,
+                proposed,
+            )?
+        };
+        let updated_catalog = if catalog_done {
+            None
+        } else {
+            let apis = artifacts::recording_apis_with_config(
+                root,
+                &state.recording_run_id,
+                inventory::recording_scope(state),
+                &config,
+            )?;
+            let pending_groups = if pattern_context.grouping_enabled {
+                missing_groups(&RegressionScope::load(root)?, apis.iter(), &groups)
+            } else {
+                Vec::new()
+            };
+            apply_submission(&mut groups.document, &pending_groups, submission)?;
+            (!pending_groups.is_empty())
+                .then(|| groups.encode())
+                .transpose()?
+        };
+        (config, updated_policy, updated_catalog)
+    };
 
     let policy_after = updated_policy.as_ref().map_or(original_revision, |policy| {
         catalog::digest(policy.as_bytes())
@@ -245,10 +267,7 @@ fn plan_patterns(
     original: &str,
     proposed: &BTreeMap<String, Option<String>>,
 ) -> Result<(AppConfig, Option<String>)> {
-    ensure!(
-        proposed.keys().eq(candidates.iter()),
-        "case_patterns must cover exactly the pending recording candidates"
-    );
+    validate_candidates(candidates, proposed)?;
     let static_config = AppConfig::load_static(&project.recorder_config)?;
     let patterns = proposed.values().flatten().collect::<BTreeSet<_>>();
     let patterns = patterns
@@ -265,6 +284,26 @@ fn plan_patterns(
         &fingerprint::source_image_revision(root)?,
         &artifacts::recording_run(root, &state.recording_run_id),
     )?;
+    validate_resolution(&config, proposed)?;
+    Ok((config, updated))
+}
+
+fn validate_candidates(
+    candidates: &[String],
+    proposed: &BTreeMap<String, Option<String>>,
+) -> Result<()> {
+    ensure!(
+        proposed.keys().eq(candidates.iter()),
+        "case_patterns must cover exactly the pending recording candidates"
+    );
+    Ok(())
+}
+
+fn validate_resolution(
+    config: &AppConfig,
+    proposed: &BTreeMap<String, Option<String>>,
+) -> Result<BTreeSet<String>> {
+    let mut confirmed = BTreeSet::new();
     for (candidate, pattern) in proposed {
         let api = candidate.parse::<RecordingApi>()?;
         let resolved = case_patterns::canonical_api(&api, &config.http_gateway.case_path_patterns);
@@ -273,7 +312,66 @@ fn plan_patterns(
             api_selector::public_api(&resolved) == expected,
             "case pattern result for {candidate} disagrees with the effective recorder configuration"
         );
+        confirmed.insert(expected.to_owned());
     }
+    Ok(confirmed)
+}
+
+fn plan_managed_catalog(
+    root: &Path,
+    state: &RewriteState,
+    project: &ResolvedProjectConfig,
+    context: &CasePatternContext,
+    original_policy: &str,
+    submission: &AnalysisSubmission,
+    groups: &mut catalog::LoadedCatalog,
+) -> Result<(AppConfig, Option<Vec<u8>>)> {
+    let apis = groups.apis.as_ref().expect("managed API catalog");
+    let proposed = submission
+        .case_patterns
+        .as_ref()
+        .context("missing case_patterns")?;
+    validate_candidates(&context.candidates, proposed)?;
+    let rules = SourceTrafficPolicyConfig::parse(original_policy, &project.source_traffic_policy)?;
+    let current_config = AppConfig::load_with_api_catalog(&project.recorder_config, &rules, apis)?;
+    for pattern in proposed.values().flatten().collect::<BTreeSet<_>>() {
+        crate::config::validate_case_path_pattern(pattern, &current_config.http_gateway.rules)?;
+    }
+    let mut draft = groups.document.api_groups.clone();
+    draft.extend(submission.assignments.clone());
+    let draft = apis.clone().with_routes(draft)?;
+    let config = AppConfig::load_with_api_catalog(&project.recorder_config, &rules, &draft)?;
+    let confirmed = validate_resolution(&config, proposed)?;
+    for route in submission
+        .assignments
+        .keys()
+        .filter(|route| route.starts_with('/') && route.contains('*'))
+    {
+        ensure!(
+            confirmed.contains(route),
+            "new API wildcard {route} requires a confirmed case pattern"
+        );
+    }
+    let canonical = artifacts::recording_apis_with_config(
+        root,
+        &state.recording_run_id,
+        inventory::recording_scope(state),
+        &config,
+    )?;
+    let pending_groups = missing_groups(&RegressionScope::load(root)?, canonical.iter(), groups)
+        .into_iter()
+        .chain(
+            confirmed
+                .into_iter()
+                .filter(|api| !groups.document.api_groups.contains_key(api)),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    apply_submission(&mut groups.document, &pending_groups, submission)?;
+    let updated = (!pending_groups.is_empty())
+        .then(|| groups.encode())
+        .transpose()?;
     Ok((config, updated))
 }
 

@@ -10,10 +10,14 @@ mod autocommit;
 mod connection_default;
 mod control;
 mod facts;
+mod replay_controls;
 mod setup;
 pub use crate::read_effect as read;
 pub use control::{successful_begin, successful_control, successful_end};
 pub use facts::*;
+pub use replay_controls::{
+    SourceControl, changes_snapshot_contract, classify_source_controls, prepare_source_transactions,
+};
 pub use setup::is_nonsemantic_session_setup;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,37 +50,16 @@ pub fn classify<'a, E: 'a>(
     if source.is_run_owned() {
         global_prefixes.0.clear();
     }
-    let mut connections =
-        BTreeMap::<Uuid, BTreeMap<u64, (usize, &RecordedMysqlExchange<E>)>>::new();
-    let mut ambiguous = BTreeSet::new();
-    for (index, exchange) in records.clone() {
-        if is_nonsemantic_session_setup(exchange) {
-            continue;
-        }
-        let Some(connection) = exchange.connection_id else {
-            continue;
-        };
-        let Some(sequence) = exchange.query_sequence else {
-            ambiguous.insert(connection);
-            continue;
-        };
-        if connections
-            .entry(connection)
-            .or_default()
-            .insert(sequence, (index, exchange))
-            .is_some()
-        {
-            ambiguous.insert(connection);
-        }
-    }
+    let connections = ordered_connections(
+        records
+            .clone()
+            .filter(|(_, record)| !is_nonsemantic_session_setup(record)),
+    );
     let mut optional = connection_default::classify(records);
     // Classification happens once per loaded file. Borrow SQL already owned
     // by the records and drop this parse-result cache with the classification.
     let mut read_sql = HashMap::<&str, read::Effect>::new();
     for (connection, exchanges) in connections {
-        if ambiguous.contains(&connection) {
-            continue;
-        }
         let mut read_only = false;
         for (&sequence, &(index, current)) in &exchanges {
             let first = exchanges
@@ -149,11 +132,7 @@ pub fn classify<'a, E: 'a>(
                         .server_status_before
                         .is_some_and(|flags| flags & 0x2009 == 0)
                         && (!consecutive || status_continuous))
-                    && complete_read(current)
-                    && current.sql.as_deref().is_some_and(|sql| {
-                        *read_sql.entry(sql).or_insert_with(|| read::classify(sql))
-                            == read::Effect::ReadOnly
-                    });
+                    && ordinary_read(current, &mut read_sql);
             if source.is_run_owned()
                 && read_only
                 && let Some(next) = sequence.checked_add(1)
@@ -169,6 +148,44 @@ pub fn classify<'a, E: 'a>(
         autocommit::classify(&exchanges, source, &mut read_sql, &mut optional);
     }
     optional
+}
+
+type OrderedConnection<'a, E> = BTreeMap<u64, (usize, &'a RecordedMysqlExchange<E>)>;
+
+fn ordered_connections<'a, E: 'a>(
+    records: impl IntoIterator<Item = (usize, &'a RecordedMysqlExchange<E>)>,
+) -> BTreeMap<Uuid, OrderedConnection<'a, E>> {
+    let mut connections = BTreeMap::<Uuid, OrderedConnection<'a, E>>::new();
+    let mut ambiguous = BTreeSet::new();
+    for (index, record) in records {
+        let Some(connection) = record.connection_id else {
+            continue;
+        };
+        let Some(sequence) = record.query_sequence else {
+            ambiguous.insert(connection);
+            continue;
+        };
+        if connections
+            .entry(connection)
+            .or_default()
+            .insert(sequence, (index, record))
+            .is_some()
+        {
+            ambiguous.insert(connection);
+        }
+    }
+    connections.retain(|connection, _| !ambiguous.contains(connection));
+    connections
+}
+
+fn ordinary_read<'a, E>(
+    record: &'a RecordedMysqlExchange<E>,
+    read_sql: &mut HashMap<&'a str, read::Effect>,
+) -> bool {
+    complete_read(record)
+        && record.sql.as_deref().is_some_and(|sql| {
+            *read_sql.entry(sql).or_insert_with(|| read::classify(sql)) == read::Effect::ReadOnly
+        })
 }
 
 pub fn successful_prepare<E>(exchange: &RecordedMysqlExchange<E>) -> bool {

@@ -172,6 +172,13 @@ impl Source {
             .map(|request| request.reference.clone())
             .collect::<Vec<_>>();
         let handles = resolve_case(state, case, &refs, |_, handle| handle)?;
+        let (requests, handles): (Vec<_>, Vec<_>) = self
+            .requests
+            .into_iter()
+            .zip(handles)
+            .filter(|(_, handle)| !handle.is_optional_source())
+            .unzip();
+        self.requests = requests;
         if let Some(tail) = &mut self.tail
             && !tail.policy.heartbeat_timeout
         {

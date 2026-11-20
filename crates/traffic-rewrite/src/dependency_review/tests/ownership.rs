@@ -48,6 +48,94 @@ fn mysql_tail_event(
 }
 
 #[tokio::test]
+async fn ownerless_mysql_review_exempts_proven_controls_and_groups_strict_transaction() {
+    let target = crate::worker::tests::configured_target();
+    fs::write(target.path().join(".traffic-e2e/policy.yaml"), POLICY).unwrap();
+    let recorder = Recorder::new(target.path().join(".traffic-e2e/local/recordings"))
+        .await
+        .unwrap();
+    let connection = Uuid::new_v4();
+    for (sequence, sql, before, after) in [
+        (1, "SELECT id FROM jobs WHERE id = 3", 0, 1),
+        (2, "ROLLBACK", 1, 0),
+        (3, "ROLLBACK", 0, 0),
+        (4, "UPDATE jobs SET done = 1 WHERE id = 4", 0, 1),
+        (5, "ROLLBACK", 1, 0),
+    ] {
+        let mut event = mysql_tail_event(connection, sequence, sql, before);
+        let RecorderEvent::MysqlExchange(mysql) = &mut event else {
+            unreachable!()
+        };
+        mysql.response.server_status = Some(after);
+        if sequence == 1 {
+            mysql.response.status = "resultset".into();
+            mysql.response.columns = vec![crate::MysqlColumn {
+                name: "id".into(),
+                database: Some("db".into()),
+                table: Some("jobs".into()),
+                column: Some("id".into()),
+                family: "integer".into(),
+                sql_type: "long".into(),
+                unsigned: None,
+                bits: None,
+                nullable: None,
+                scale: None,
+                column_type_code: 3,
+                flags: None,
+            }];
+        }
+        recorder
+            .append_global_dependency(&event, "between_cases", "runtime", "unattributed")
+            .await
+            .unwrap();
+    }
+    recorder.finish_run().await.unwrap();
+    let mut state = crate::workflow_test_support::test_state();
+    state.case_source = Some(recorder.run_dir().as_ref().clone());
+    state.recording_run_id = recorder
+        .run_dir()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .into();
+    state.source_revision =
+        Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+    let source = source::load(&state).unwrap();
+    let expected: BTreeSet<_> = source
+        .exchanges
+        .iter()
+        .filter(|(_, event)| matches!(event.selector["query_sequence"].as_u64(), Some(1 | 4 | 5)))
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(expected.len(), 3);
+    assert_eq!(
+        analysis::review_inventory(target.path(), &state)
+            .unwrap()
+            .1
+            .as_ref(),
+        &expected
+    );
+    analysis::refresh_inventory(target.path(), &mut state).unwrap();
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let context = dependency_attribution_context(crate::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(context.unattributed_exchange_ids, expected);
+    assert_eq!(context.unattributed.total_groups, 2);
+    assert_eq!(context.unattributed.groups[0].count, 2);
+    assert_eq!(
+        serde_json::to_value(&context.unattributed.groups[0]).unwrap()["shape"]["operation"],
+        "transaction"
+    );
+    assert_eq!(source.exchanges.len(), 5);
+}
+
+#[tokio::test]
 async fn sealed_socketio_close_tail_reassigns_exact_occurrences_without_an_async_rule() {
     let target = crate::worker::tests::configured_target();
     fs::write(target.path().join(".traffic-e2e/policy.yaml"), POLICY).unwrap();

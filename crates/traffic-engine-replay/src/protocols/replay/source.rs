@@ -7,6 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
+use traffic_protocol::connection::ReplaySessionStep;
 use traffic_replay::ReplaySource;
 pub mod preparation;
 mod record;
@@ -61,6 +62,7 @@ pub fn register_dependency_records(
         cleanup.is_empty(),
         "incomplete cleanup exchanges require an installed native lifecycle capability"
     );
+    let plans = prepare_replay_scopes(&records, skip, source, &native.providers)?;
     for (line, record) in records {
         if skip.contains(&line) {
             continue;
@@ -68,13 +70,15 @@ pub fn register_dependency_records(
         match record {
             DependencyRecord::Native(event) => {
                 validate_installed_provider(&event, &native.providers)?;
-                native.register(
+                let step = plans.get(&line).cloned();
+                native.register_scoped(
                     &event,
                     source,
                     case,
                     line,
                     targets,
                     &crate::request_headers::SourceSecrets::new(path),
+                    step,
                 )?;
             }
             DependencyRecord::ProxyError(error) => anyhow::bail!(
@@ -86,6 +90,55 @@ pub fn register_dependency_records(
         }
     }
     Ok(())
+}
+
+fn needs_replay_scope(
+    record: &DependencyRecord,
+    providers: &crate::protocols::DependencyProviders,
+) -> bool {
+    let DependencyRecord::Native(event) = record else {
+        return false;
+    };
+    providers
+        .event_provider(event)
+        .and_then(|entry| entry.provider.native_protocol())
+        .is_some_and(|provider| provider.has_replay_scope())
+}
+
+fn prepare_replay_scopes(
+    records: &[(usize, DependencyRecord)],
+    skip: &BTreeSet<usize>,
+    source: ReplaySource,
+    providers: &crate::protocols::DependencyProviders,
+) -> Result<BTreeMap<usize, ReplaySessionStep>> {
+    let mut scopes = BTreeMap::new();
+    for (line, record) in records {
+        let DependencyRecord::Native(event) = record else {
+            continue;
+        };
+        if skip.contains(line) {
+            continue;
+        }
+        let Some(entry) = providers.event_provider(event) else {
+            continue;
+        };
+        let Some(provider) = entry
+            .provider
+            .native_protocol()
+            .filter(|p| p.has_replay_scope())
+        else {
+            continue;
+        };
+        let (_, scope) = scopes
+            .entry(entry.kind.as_str())
+            .or_insert_with(|| (provider, Vec::new()));
+        scope.push((*line, event.as_ref()));
+    }
+    let mut plans = BTreeMap::new();
+    for (provider, scope) in scopes.into_values() {
+        plans.extend(provider.prepare_replay_scope(source, &scope)?);
+    }
+    Ok(plans)
 }
 
 pub fn startup_records(

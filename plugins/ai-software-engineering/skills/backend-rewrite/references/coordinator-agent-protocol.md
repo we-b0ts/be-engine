@@ -185,11 +185,10 @@ On `pr_base`, `status` returns `purpose_required`. Handle it before querying,
 resuming or reconciling old workers/experts. This applies on every return to base,
 regardless of code changes, earlier purpose approval or unfinished old work.
 
-Execute the returned purpose confirmation command matching the user's explicit
-request. If the user has not specified a purpose, ask them to choose. Branch
-presence or previous approval does not authorize either command. First actually
-query your runtime API/command (for example `ListAgents` or `/list-agents`) for
-active child agents/sessions of your current coordinator session. Count only
+An explicit request to start this regression supplies approval. Otherwise, ask
+`Start a new regression run?`. Before running `commands.replay`, query your runtime
+API or command (for example `ListAgents` or `/list-agents`) for active child
+agents or sessions of your current coordinator session. Count only
 those actual active child sessions: exclude yourself, unrelated independent
 sessions, engine binding records and historical sessions. The result must be
 zero. A new session or empty engine inventory is not evidence of zero. If the
@@ -203,19 +202,20 @@ the returned command's required environment names:
 Equivalent flags are `--active-agent-count`, `--runtime-query-command` and
 `--runtime-query-at`. No JSON evidence file is needed. These are your declaration
 of an actual query; the engine cannot inspect your runtime itself. With these
-values supplied, execute the matching command:
+values supplied, execute `commands.replay`.
 
 ```bash
-backend-rewrite purpose confirm --purpose replay --user-approved
-backend-rewrite purpose confirm --purpose record --user-approved
+backend-rewrite purpose confirm --user-approved
 ```
 
-Do not supply a branch name or create the branch yourself. The engine creates and
-switches to `replay/yyyyMMdd-<seq>` or `record/yyyyMMdd-<seq>` (local date,
-sequence starting at 1), returns its name, and initializes an isolated
-workflow. No separate regression-start command is needed. This transition consumes
-the purpose permission; ordinary `status` / `next` then proceed on the work branch.
-Returning to `pr_base` always requires a new purpose confirmation.
+The engine creates and switches to `replay/yyyyMMdd-<seq>` using the local date
+and a sequence starting at 1. It returns the branch name and initializes an
+isolated workflow. Continue with `status` and `next` on the work branch. Each
+return to `pr_base` requires a new confirmation.
+
+The regression consumes a completed recording. When new Source evidence is
+needed, the recording owner runs `traffic-e2e record` independently. Select the
+completed batch before confirming the regression.
 
 Do not query, stop, wait for, transfer or restore old workers as a prerequisite to
 this entry. Old bindings, failures, review receipts and expert clocks are archived;
@@ -236,11 +236,9 @@ progress without creating an integrator solely for a review receipt. New changes
 require delegated integration review before verification; pending worker handoff
 and finding admission keep their existing contract.
 
-For `replay`, follow `next` into fresh verification of the selected recording.
-For `record`, the engine requests new external live traffic, then proceeds through
-publication/case preparation to Replay. It supersedes the old recording pin for
-this workflow. Preserve local API selection. Do not
-request an API implementer or expert before fresh verification needs one.
+Follow `next` into fresh verification of the selected recording. Preserve local
+API selection and request implementer or expert assistance when new verification
+failures require it.
 Actual live/stale engine operations retain their finish/recovery contract; they
 are not task-runtime worker cleanup requirements.
 

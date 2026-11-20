@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
-use traffic_engine::dependency::{attribution::DependencyOwner, observation::CaptureMetadata};
+use traffic_engine::{attribution_review, dependency::attribution::DependencyOwner};
 use traffic_rewrite_model::rewrite::model::RewriteState;
 use uuid::Uuid;
 
@@ -38,7 +38,7 @@ pub fn refresh_inventory(root: &Path, state: &mut RewriteState) -> Result<()> {
 
 fn defaults_identity(defaults: &CaseDefaults) -> Result<String> {
     Ok(traffic_engine::policy_evidence::digest(
-        &serde_json::to_vec(&("case-default-admission/v1", defaults))?,
+        &serde_json::to_vec(&("dependency-attribution-admission/v2", defaults))?,
     ))
 }
 
@@ -73,11 +73,6 @@ fn unresolved(
         .case_source
         .as_ref()
         .expect("Source inventory present");
-    let (recording, manifest) = traffic_engine::dependency_index::recording::manifest(source_path)?;
-    if manifest.semantic_inventory.unattributed_dependencies == 0 {
-        return Ok(BTreeSet::new());
-    }
-    traffic_engine::dependency_index::recording::authenticate(&recording)?;
     let mut proved = BTreeSet::new();
     if state.dependency_review.source_inventory_id.as_deref() == Some(inventory)
         && !state.dependency_review.decisions.is_empty()
@@ -96,25 +91,16 @@ fn unresolved(
                 .map(|(id, _)| *id),
         );
     }
-    let mut input = traffic_engine::dependency_index::RecordStream::open(
-        &recording.join("indexes/unattributed-scope.json"),
-    )?;
-    let mut unresolved = BTreeSet::new();
-    while let Some((_, bytes)) = input.next()? {
-        if bytes.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let event: serde_json::Value = serde_json::from_slice(bytes)?;
-        let capture: CaptureMetadata = serde_json::from_value(event["capture"].clone())?;
-        if capture.semantic_required
-            && matches!(capture.attribution, DependencyOwner::Unattributed { .. })
-            && !defaults.contains_key(&capture.exchange_id)
-            && !proved.contains(&capture.exchange_id)
-        {
-            unresolved.insert(capture.exchange_id);
-        }
-    }
-    Ok(unresolved)
+    let admission = attribution_review::admission(source_path)?;
+    Ok(admission
+        .captured
+        .into_iter()
+        .filter(|id| {
+            !defaults.contains_key(id)
+                && !proved.contains(id)
+                && !admission.optional_controls.contains(id)
+        })
+        .collect())
 }
 
 /// The same sealed admission inventory serves status and read-only context.

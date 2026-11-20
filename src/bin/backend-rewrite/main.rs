@@ -117,7 +117,7 @@ enum RewriteCommand {
     /// Start a user-authorized regression round from the configured pr_base branch.
     #[command(hide = true)]
     Regression(regression::RegressionArgs),
-    /// Confirm the user purpose when entering from pr_base.
+    /// Confirm starting a regression from pr_base.
     Purpose(purpose::PurposeArgs),
     /// Inspect bounded dependency evidence from one published case.
     Case(CaseArgs),

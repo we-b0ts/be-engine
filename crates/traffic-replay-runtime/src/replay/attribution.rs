@@ -54,12 +54,28 @@ pub(super) fn freeze(
             &root, &manifest, cases,
         )?),
     };
-    if (!decisions.is_empty()
-        || manifest.schema != crate::dependency::observation::COMPACT_RECORDING_SCHEMA)
-        && let Some(scope) = &mut frozen.batch_scope
-    {
-        scope.inventory =
-            inventory::effective_with_evidence(&root, &manifest, &decisions, evidence, false)?;
+    if let Some(scope) = &mut frozen.batch_scope {
+        if !decisions.is_empty()
+            || manifest.schema != crate::dependency::observation::COMPACT_RECORDING_SCHEMA
+        {
+            scope.inventory =
+                inventory::effective_with_evidence(&root, &manifest, &decisions, evidence, false)?;
+        }
+        if scope.inventory.unattributed_dependencies > 0 {
+            // Evaluate the original scope: reassigning a business read does not
+            // invalidate the proof for its optional closing control.
+            let optional =
+                crate::attribution_review::optional_controls_for_replay(&root, evidence)?;
+            let unassigned = optional
+                .iter()
+                .filter(|id| {
+                    decisions
+                        .get(id)
+                        .is_none_or(|owner| matches!(owner, DependencyOwner::Unattributed { .. }))
+                })
+                .count();
+            scope.exclude_optional_unattributed(unassigned.try_into()?)?;
+        }
     }
     if decisions.is_empty() {
         return Ok(frozen);

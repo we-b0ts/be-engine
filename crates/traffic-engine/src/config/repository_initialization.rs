@@ -126,8 +126,12 @@ fn initialize_repository_config_with(
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    let configuration_targets =
-        [PROJECT_CONFIG_PATH, POLICY_PATH].map(|relative| target_root.join(relative));
+    let configuration_targets = [
+        PROJECT_CONFIG_PATH,
+        POLICY_PATH,
+        crate::config::api_catalog::PATH,
+    ]
+    .map(|relative| target_root.join(relative));
     require_configuration_targets_absent(&configuration_targets)?;
     ensure_pr_base_branch(&target_root)?;
 
@@ -167,6 +171,10 @@ fn initialize_repository_config_with(
     let mut files = vec![
         (configuration_targets[0].clone(), project),
         (configuration_targets[1].clone(), policy.into_bytes()),
+        (
+            configuration_targets[2].clone(),
+            crate::config::api_catalog::TEMPLATE.as_bytes().to_vec(),
+        ),
     ];
     let regression = target_root.join(crate::config::regression::PATH);
     if !regression.exists() {
@@ -670,7 +678,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.generated.len(), 11);
+        assert_eq!(result.generated.len(), 12);
+        assert!(
+            result
+                .generated
+                .contains(&target.path().join(crate::config::api_catalog::PATH))
+        );
         assert!(
             result
                 .generated
