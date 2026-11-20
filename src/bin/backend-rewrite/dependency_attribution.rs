@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use traffic_e2e::dependency_attribution_api_information;
 use traffic_e2e::{
     AttributionCommandOptions, RewriteContext, apply_dependency_attribution, claim_foreign_unused,
-    dependency_attribution_context,
+    dependency_attribution_context_page, dependency_attribution_group,
 };
 use traffic_e2e::{
     dependency_attribution_batch_information, dependency_attribution_candidates,
@@ -24,7 +24,21 @@ pub(super) struct DependencyAttributionArgs {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Show Source attribution work for the read-only repository analyst.
-    Context,
+    Context {
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+    },
+    /// Page exact Source exchange identities for one unattributed group.
+    Group {
+        #[arg(long)]
+        group: String,
+        #[arg(long)]
+        inventory: String,
+        #[arg(long)]
+        revision: u64,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+    },
     /// Inspect the complete effective task/lifecycle rule groups for proof binding.
     Rules,
     /// Inspect whole-run verification separately from focused API acceptance.
@@ -169,8 +183,23 @@ pub(super) fn run(
             )?,
             pretty,
         ),
-        Command::Context => super::print_json(
-            &dependency_attribution_context(RewriteContext { target_root })?,
+        Command::Context { offset } => super::print_json(
+            &dependency_attribution_context_page(RewriteContext { target_root }, offset)?,
+            pretty,
+        ),
+        Command::Group {
+            group,
+            inventory,
+            revision,
+            offset,
+        } => super::print_json(
+            &dependency_attribution_group(
+                RewriteContext { target_root },
+                &group,
+                &inventory,
+                revision,
+                offset,
+            )?,
             pretty,
         ),
         Command::Show { api, offset } => super::print_json(

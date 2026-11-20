@@ -8,7 +8,10 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
     type Matched = Matched;
     type Error = Rejected;
     fn sequence_request_bytes(&self) -> Option<usize> {
-        Some(self.bytes)
+        (!self.optional_control).then_some(self.bytes)
+    }
+    fn sequence_wait_allowed(&self, _: &RuntimeState<P>, error: &Rejected) -> bool {
+        error.kind != RejectionKind::UnverifiedSession
     }
 
     fn observe_once(&mut self, state: &mut RuntimeState<P>) -> admission::RequestAdmission {
@@ -48,6 +51,19 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
             return Err(Rejected {
                 reason: reason.into(),
                 blocker: None,
+                kind: RejectionKind::Other,
+            });
+        }
+        if self
+            .session_owner
+            .as_ref()
+            .and_then(|owner| owner.epoch)
+            .is_some_and(|epoch| epoch != state.admission_epoch)
+        {
+            return Err(Rejected {
+                reason: "native transaction crossed a Replay ownership boundary".into(),
+                blocker: None,
+                kind: RejectionKind::Other,
             });
         }
         let native = &state.native;
@@ -60,10 +76,18 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
                 request: self.message.as_ref(),
                 session: self.session,
                 lane: self.lane.as_deref(),
+                request_session: self.request_session.as_ref(),
                 metadata: native.contracts.metadata(),
             },
             |exchange| native.clocks(exchange.index, self.observed, false),
             |exchange, comparison| {
+                anyhow::ensure!(
+                    self.session_owner.as_ref().is_none_or(|owner| {
+                        owner.scope == exchange.source.source
+                            && owner.case == exchange.source.case_id
+                    }),
+                    "native transaction continuation has a different Source owner"
+                );
                 identity(
                     native.contracts.as_ref(),
                     native,
@@ -88,12 +112,22 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
                     reason: "recorded native connection predecessor has not reached its required barrier"
                         .into(),
                     blocker: Some(blocker),
+                    kind: RejectionKind::Other,
                 });
             }
             Selection::NotFound => {
                 return Err(Rejected {
                     reason: "no recorded native request matched the active Source scope".into(),
                     blocker: None,
+                    kind: RejectionKind::NoMatch,
+                });
+            }
+            Selection::SessionUnverified => {
+                return Err(Rejected {
+                    reason: "recorded native transaction has incomplete Source continuity proof"
+                        .into(),
+                    blocker: None,
+                    kind: RejectionKind::UnverifiedSession,
                 });
             }
         };
@@ -152,6 +186,7 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         Rejected {
             reason: reason.into(),
             blocker: None,
+            kind: RejectionKind::Other,
         }
     }
 
@@ -161,6 +196,9 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         observation: &admission::RequestAdmission,
         error: &Rejected,
     ) {
+        if self.optional_control && error.kind == RejectionKind::NoMatch {
+            return;
+        }
         state.native.record_failure(
             self.protocol,
             &self.endpoint,

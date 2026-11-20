@@ -44,6 +44,7 @@ pub fn from_inventory(
         rule_groups: vec![],
         rule_planning: serde_json::Value::Null,
         unattributed_exchange_ids,
+        unattributed: Default::default(),
         obligations: state
             .dependency_review
             .obligations

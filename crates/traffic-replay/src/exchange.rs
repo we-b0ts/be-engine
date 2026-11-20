@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use traffic_model::recording::{CaptureMetadata, ProtocolRef};
 use traffic_protocol::{
     ProtocolId,
-    connection::{Endpoint, RecordedExchange},
+    connection::{Endpoint, RecordedExchange, ReplaySessionStep, RequestSession},
     message::ProtocolMessage,
 };
 use uuid::Uuid;
@@ -50,6 +50,7 @@ pub struct PreparedExchange<R: RuleRuntime = ExactRules> {
     pub response: Option<R::Prepared>,
     pub delivery: R::Delivery,
     pub status: ReplayExchangeStatus,
+    pub session_step: Option<ReplaySessionStep>,
     lane_id: Uuid,
 }
 
@@ -154,6 +155,7 @@ pub struct SelectedExchange<C = bool> {
 pub enum Selection<C = bool> {
     Matched(Box<SelectedExchange<C>>),
     LaneBlocked { candidate: usize, blocker: usize },
+    SessionUnverified,
     NotFound,
 }
 
@@ -164,6 +166,7 @@ pub struct MatchContext<'a, R: RuleRuntime = ExactRules> {
     pub request: &'a dyn ProtocolMessage,
     pub session: Option<Uuid>,
     pub lane: Option<&'a str>,
+    pub request_session: Option<&'a RequestSession>,
     pub metadata: &'a R::Metadata,
 }
 
@@ -261,6 +264,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             response,
             delivery: rules.delivery,
             status: ReplayExchangeStatus::Available,
+            session_step: None,
             lane_id,
         });
         Ok(index)
@@ -331,6 +335,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         let previews = RefCell::new(HashMap::new());
         let failed = RefCell::new(None);
         let inspected = std::cell::Cell::new(0_usize);
+        let unverified = std::cell::Cell::new(false);
         let selected = preferred_match_indexed_with_priority(
             &self.exchanges,
             context.active_case,
@@ -359,6 +364,13 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                 {
                     return false;
                 }
+                let session_matches =
+                    accepts_session(exchange.session_step.as_ref(), context.request_session);
+                let session_unverified =
+                    exchange.session_step == Some(ReplaySessionStep::Unverified);
+                if !session_matches && !session_unverified {
+                    return false;
+                }
                 inspected.set(inspected.get() + 1);
                 if inspected.get() > 16_384 {
                     *failed.borrow_mut() = Some(anyhow::anyhow!(
@@ -378,6 +390,10 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                             return false;
                         }
                         if R::passed(&comparison) && validate(exchange, &comparison).is_ok() {
+                            if session_unverified {
+                                unverified.set(true);
+                                return false;
+                            }
                             previews.borrow_mut().insert(exchange.index, comparison);
                             true
                         } else {
@@ -416,6 +432,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             PreferredMatch::LaneBlocked { candidate, blocker } => {
                 Selection::LaneBlocked { candidate, blocker }
             }
+            PreferredMatch::NotFound if unverified.get() => Selection::SessionUnverified,
             PreferredMatch::NotFound => Selection::NotFound,
         })
     }
@@ -503,6 +520,20 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
     pub fn fail(&mut self, index: usize, ticket: &ClaimTicket) {
         self.lifecycle
             .fail(ticket, &mut self.exchanges[index].status);
+    }
+}
+
+fn accepts_session(step: Option<&ReplaySessionStep>, session: Option<&RequestSession>) -> bool {
+    let after = session.and_then(|session| session.after.as_ref());
+    match step {
+        None => after.is_none(),
+        Some(ReplaySessionStep::Optional | ReplaySessionStep::Unverified) => false,
+        Some(ReplaySessionStep::Start | ReplaySessionStep::InTransaction) => {
+            after.is_none() && session.is_some_and(|session| session.can_start)
+        }
+        Some(ReplaySessionStep::Continue {
+            after: expected, ..
+        }) => after == Some(expected),
     }
 }
 

@@ -2,7 +2,7 @@
 use super::*;
 
 #[tokio::test]
-async fn actual_replay_receipt_uses_the_streamed_frozen_ownership_identity() {
+async fn actual_replay_receipt_preserves_ownership_identity_with_optional_cleanup() {
     let target = tempfile::tempdir().unwrap();
     let recorder = crate::Recorder::new(
         target
@@ -11,10 +11,24 @@ async fn actual_replay_receipt_uses_the_streamed_frozen_ownership_identity() {
     )
     .await
     .unwrap();
-    crate::replay::test_support::recording::publish_case(&recorder).await;
+    use crate::replay::test_support::recording as fixtures;
+    let rollback = fixtures::native_event(&serde_json::json!({
+        "event_type": "mysql_exchange",
+        "connection_id": Uuid::new_v4(),
+        "query_sequence": 1,
+        "target_host": "mysql.test",
+        "target_port": 3306,
+        "sql": "ROLLBACK",
+    }));
+    recorder
+        .append_global_dependency(&rollback, "unattributed", "runtime", "fixture")
+        .await
+        .unwrap();
+    fixtures::publish_case(&recorder).await;
     recorder.finish_run().await.unwrap();
     let root = recorder.run_dir().as_ref();
     let (_, manifest) = recording::manifest(root).unwrap();
+    assert_eq!(manifest.semantic_inventory.unattributed_dependencies, 1);
     let expected = crate::coordination::dependency_attribution_identity_for_source(
         target.path(),
         root,
@@ -59,6 +73,7 @@ async fn actual_replay_receipt_uses_the_streamed_frozen_ownership_identity() {
     }
     let actual: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
     let receipt = crate::adapters::report::validation::validate_completed_receipt(&actual).unwrap();
+    assert_eq!(receipt.source_inventory.unattributed_dependencies, 0);
     assert_eq!(actual["dependency_attribution_snapshot"], expected);
     assert_eq!(
         receipt.dependency_attribution_snapshot.as_deref(),

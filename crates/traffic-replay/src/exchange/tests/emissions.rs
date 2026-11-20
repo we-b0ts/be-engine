@@ -66,6 +66,7 @@ fn exclusive_native_sessions_keep_one_source_lane_until_the_physical_owner_relea
                     request: &Message("second"),
                     session: owner,
                     lane: None,
+                    request_session: None,
                     metadata: &(),
                 },
                 |_| (),

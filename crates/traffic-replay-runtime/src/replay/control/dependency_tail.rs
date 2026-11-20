@@ -129,7 +129,9 @@ pub(crate) fn references_consumed<P: ReplayProtocolSet>(
     references: &[RecordedReference],
 ) -> Result<bool> {
     Ok(resolve(state, case, references)?.iter().all(|selected| {
-        exchange_status(state, selected.exchange).is_some_and(ReplayExchangeStatus::is_consumed)
+        selected.exchange.is_optional_source()
+            || exchange_status(state, selected.exchange)
+                .is_some_and(ReplayExchangeStatus::is_consumed)
     }))
 }
 
@@ -245,6 +247,10 @@ pub(crate) async fn prepare<P: ReplayProtocolSet>(
                     .exchange
                     .shared_initialization(&state, &completion_requirements);
                 selected.lifecycle_cleanup = metadata.cleanup_refs.contains(reference);
+                ensure!(
+                    !selected.lifecycle_cleanup || !selected.exchange.is_optional_source(),
+                    "optional Source control cannot carry a lifecycle cleanup obligation"
+                );
                 selected.lifecycle_gate = selected
                     .lifecycle_cleanup
                     .then(|| Arc::new(AtomicBool::new(false)));
@@ -391,7 +397,9 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
         }
         let mut pending = false;
         for selected in &tail.selected {
-            if selected.shared_initialization && permits_unstarted_omission(self, selected) {
+            if selected.exchange.is_optional_source()
+                || selected.shared_initialization && permits_unstarted_omission(self, selected)
+            {
                 continue;
             }
             match exchange_status(self, selected.exchange)? {
@@ -550,6 +558,9 @@ async fn drain_selected<P: ReplayProtocolSet>(
         let mut missing = false;
         let mut remaining = 0;
         tail.selected.retain(|selected| {
+            if selected.exchange.is_optional_source() {
+                return false;
+            }
             let status = exchange_status(&state, selected.exchange);
             missing |= status.is_none();
             failed |= status == Some(ReplayExchangeStatus::Failed);

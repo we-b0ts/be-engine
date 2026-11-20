@@ -7,6 +7,7 @@ pub use traffic_engine::replay::adapters::*;
 #[derive(Debug, Clone, Copy)]
 pub(in crate::replay) enum ExchangeHandle {
     Registered(usize),
+    OptionalSource,
     Native(ProtocolExchange),
     Connect(usize),
 }
@@ -17,14 +18,24 @@ pub(in crate::replay) fn resolve_case<P: ReplayProtocolSet, T>(
     references: &[RecordedReference],
     project: impl Fn(RecordedReference, ExchangeHandle) -> T,
 ) -> Result<Vec<T>> {
-    let mut native_indices = Vec::with_capacity(references.len());
+    let mut native_handles = Vec::with_capacity(references.len());
     let mut protocol_refs = Vec::new();
     for reference in references {
-        let native = state.native.core.resolve_reference(case, reference)?;
+        let native = state
+            .native
+            .core
+            .resolve_reference(case, reference)?
+            .map(ExchangeHandle::Registered)
+            .or_else(|| {
+                state
+                    .native
+                    .is_optional_reference(case, reference)
+                    .then_some(ExchangeHandle::OptionalSource)
+            });
         if native.is_none() && !matches!(reference.protocol(), "capture" | "connect") {
             protocol_refs.push(reference.clone());
         }
-        native_indices.push(native);
+        native_handles.push(native);
     }
     let resolved = P::resolve_references(state, case, &protocol_refs)?;
     ensure!(
@@ -35,10 +46,10 @@ pub(in crate::replay) fn resolve_case<P: ReplayProtocolSet, T>(
 
     references
         .iter()
-        .zip(native_indices)
+        .zip(native_handles)
         .map(|(reference, native)| {
-            let handle = if let Some(index) = native {
-                ExchangeHandle::Registered(index)
+            let handle = if let Some(handle) = native {
+                handle
             } else {
                 match reference.protocol() {
                     "capture" => {
@@ -48,9 +59,11 @@ pub(in crate::replay) fn resolve_case<P: ReplayProtocolSet, T>(
                             exchange_id: uuid::Uuid,
                         }
                         let identity: Identity = reference.identity()?;
-                        ExchangeHandle::Registered(
-                            state.native.resolve(case, identity.exchange_id)?,
-                        )
+                        state
+                            .native
+                            .resolve(case, identity.exchange_id)?
+                            .map(ExchangeHandle::Registered)
+                            .unwrap_or(ExchangeHandle::OptionalSource)
                     }
                     "connect" => {
                         #[derive(serde::Deserialize)]
@@ -74,13 +87,17 @@ pub(in crate::replay) fn resolve_case<P: ReplayProtocolSet, T>(
 }
 
 impl ExchangeHandle {
+    pub(in crate::replay) fn is_optional_source(self) -> bool {
+        matches!(self, Self::OptionalSource)
+    }
+
     pub(in crate::replay) fn permits_cancelled_omission<P: ReplayProtocolSet>(
         self,
         state: &RuntimeState<P>,
     ) -> bool {
         match self {
             Self::Native(exchange) => P::permits_cancelled_omission(state, exchange),
-            Self::Connect(_) | Self::Registered(_) => false,
+            Self::Connect(_) | Self::Registered(_) | Self::OptionalSource => false,
         }
     }
 
@@ -102,6 +119,7 @@ impl ExchangeHandle {
         match self {
             Self::Native(exchange) => P::exchange_status(state, exchange),
             Self::Connect(index) => state.connect_failures.status(index),
+            Self::OptionalSource => None,
             Self::Registered(index) => state.native.core.exchanges.get(index).map(|exchange| {
                 state
                     .native
@@ -126,6 +144,7 @@ impl ExchangeHandle {
                 strict_reference,
             ),
             Self::Connect(_) | Self::Registered(_) => false,
+            Self::OptionalSource => true,
         }
     }
 }

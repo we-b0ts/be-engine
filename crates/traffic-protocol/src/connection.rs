@@ -97,6 +97,28 @@ pub trait ServerSession: Send {
 
 pub trait RequestHost: Send + Sync {
     fn release_session(&self) {}
+    /// Execute within a provider-owned lifetime using a receipt from this connection.
+    fn execute_in_session(
+        &self,
+        request: Arc<dyn ProtocolMessage>,
+        session: RequestSession,
+    ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
+        Box::pin(async move {
+            anyhow::ensure!(
+                session.after.is_none(),
+                "native request session is unavailable"
+            );
+            self.execute(request).await
+        })
+    }
+    /// Try an expected Source control before a protocol emits a safe local reply.
+    fn try_execute_session_control(
+        &self,
+        _request: Arc<dyn ProtocolMessage>,
+        _session: RequestSession,
+    ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
+        Box::pin(async { Ok(None) })
+    }
     /// Bind a stateful native session to one Source lane. A continuation must
     /// name a successful delivery retained on this physical connection.
     fn execute_bound(
@@ -162,12 +184,33 @@ pub trait ResponseDelivery: Send {
     fn reference(&self) -> Option<ProtocolRef> {
         None
     }
+    /// Whether the selected Source exchange continues or closes a native lifetime.
+    fn session_step(&self) -> Option<&ReplaySessionStep> {
+        None
+    }
 
     fn write<'a>(
         self: Box<Self>,
         io: &'a mut dyn OutputIo,
         framer: &'a mut dyn ResponseFramer,
     ) -> NativeFuture<'a, ()>;
+}
+
+/// Source slot roles supplied by a protocol after inspecting a complete scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplaySessionStep {
+    Optional,
+    Unverified,
+    InTransaction,
+    Start,
+    Continue { after: ProtocolRef, end: bool },
+}
+
+/// A Target request's admissible start and actual preceding delivery.
+#[derive(Debug, Default)]
+pub struct RequestSession {
+    pub can_start: bool,
+    pub after: Option<ProtocolRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -268,6 +311,18 @@ pub trait CaptureSession: Send {
 /// Installed with the native codec at application startup. A new protocol
 /// supplies this capability without extending host enums or state layouts.
 pub trait NativeProtocol: Send + Sync {
+    /// Only providers with cross-exchange semantics opt in. Ordinary messages
+    /// continue to load independently, including large streams of server emissions.
+    fn prepare_replay_scope(
+        &self,
+        _scope: traffic_model::attribution::DependencyScope,
+        _records: &[(usize, &Value)],
+    ) -> Result<std::collections::BTreeMap<usize, ReplaySessionStep>> {
+        Ok(Default::default())
+    }
+    fn has_replay_scope(&self) -> bool {
+        false
+    }
     fn decode_evidence(
         &self,
         _event: &Value,

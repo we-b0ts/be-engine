@@ -10,7 +10,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
-use traffic_engine::dependency::attribution::DependencyOwner;
 use traffic_rewrite_model::rewrite::verification_obligations::ScopeObligation;
 use uuid::Uuid;
 
@@ -158,19 +157,11 @@ pub fn apply(
     state.dependency_review.revision = next_revision;
     state.dependency_review.recording_run_id = Some(state.recording_run_id.clone());
     state.dependency_review.source_inventory_id = Some(original.identity.clone());
-    state.dependency_review.unresolved_source_exchange_ids = original
-        .exchanges
+    state.dependency_review.unresolved_source_exchange_ids = context
+        .unattributed_exchange_ids
         .iter()
-        .filter(|(id, event)| {
-            event.capture.semantic_required
-                && matches!(
-                    event.capture.attribution,
-                    DependencyOwner::Unattributed { .. }
-                )
-                && !state.dependency_review.decisions.contains_key(id)
-                && !original.case_defaults.contains_key(id)
-        })
-        .map(|(id, _)| *id)
+        .filter(|id| !state.dependency_review.decisions.contains_key(id))
+        .copied()
         .collect();
     Ok(AppliedAttribution {
         revision: next_revision,

@@ -213,6 +213,28 @@ Source-only prewarming cannot grant a Target delivery or transaction witness.
 
 ## Optional transaction cleanup
 
+### Native Replay and attribution
+
+Native Replay and Source attribution review use the same MySQL classification
+of optional transaction controls. Plain COMMIT or ROLLBACK can be optional
+when a successful response proves that the connection was already inactive,
+or when complete consecutive Source evidence proves an ordinary read-only
+transaction. Every business SELECT remains a required exchange. The original
+capture and its global sequence are preserved, so an omitted control contributes
+no Target delivery.
+
+A proven SET autocommit=0 describes connection mode. A Target can use an
+implicit transaction with autocommit disabled or an explicit BEGIN. From the
+first write through the recorded COMMIT or ROLLBACK, all required members must
+finish in order on the same physical Target connection and transaction.
+This applies to a single UPDATE affecting zero rows. Ordinary reads preceding
+the first write still match individually. Locking reads, savepoints and observed
+snapshot requirements preserve the strict transaction boundary. Incomplete
+Source proof grants no control exemption. A local inactive-session cleanup
+response does not satisfy a required Source transaction end.
+
+### Historical transaction reports
+
 ROLLBACK remains semantic evidence, including failed rollbacks. Replay permits
 omitting a redundant successful bare ROLLBACK immediately following a
 successful bare COMMIT or ROLLBACK on the same recorded connection and identity.

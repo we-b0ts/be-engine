@@ -37,6 +37,7 @@ struct Registration<'a> {
     source_kind: ReplaySource,
     targets: &'a mut BTreeMap<TargetKey, ReplayTarget>,
     native: &'a mut native::Inventory,
+    scoped: Vec<(usize, DependencyRecord)>,
 }
 impl GlobalRegistrar for Registration<'_> {
     type Projection = Records;
@@ -65,9 +66,14 @@ impl GlobalRegistrar for Registration<'_> {
     }
     fn register(&mut self, _: Phase, item: <Records as GlobalProjection>::Item) -> Result<()> {
         let (record, reference) = item;
+        let line = reference.location.line;
+        if needs_replay_scope(&record, &self.native.providers) {
+            self.scoped.push((line, record));
+            return Ok(());
+        }
         register_dependency_records(
             self.path,
-            vec![(reference.location.line, record)],
+            vec![(line, record)],
             &BTreeSet::new(),
             self.source_kind,
             None,
@@ -77,7 +83,20 @@ impl GlobalRegistrar for Registration<'_> {
             self.native,
         )
     }
-    fn complete(&mut self, _: Phase) -> Result<()> {
+    fn complete(&mut self, phase: Phase) -> Result<()> {
+        if matches!(phase, Phase::Exchanges) {
+            register_dependency_records(
+                self.path,
+                std::mem::take(&mut self.scoped),
+                &BTreeSet::new(),
+                self.source_kind,
+                None,
+                self.targets,
+                &[],
+                &BTreeSet::new(),
+                self.native,
+            )?;
+        }
         Ok(())
     }
 }
@@ -135,6 +154,7 @@ pub async fn load(
             source_kind,
             targets,
             native,
+            scoped: Vec::new(),
         },
     )
     .await
@@ -158,6 +178,7 @@ fn direct(
     let stamp = crate::dependency_index::FileStamp::read_native(&resolved.path)?;
     let source = RecordSource::new(&resolved.path, stamp, reader);
     let secrets = crate::request_headers::SourceSecrets::new(path);
+    let mut scoped = Vec::new();
     for location in locations.iter() {
         let reference = source.reference(location.clone());
         let metadata = reference.load_metadata()?;
@@ -171,6 +192,10 @@ fn direct(
             continue;
         }
         let record: DependencyRecord = reference.load()?;
+        if needs_replay_scope(&record, &native.providers) {
+            scoped.push((location.line, record));
+            continue;
+        }
         register_dependency_records(
             path,
             vec![(location.line, record)],
@@ -183,5 +208,16 @@ fn direct(
             native,
         )?;
     }
+    register_dependency_records(
+        path,
+        scoped,
+        &BTreeSet::new(),
+        scope,
+        None,
+        targets,
+        &[],
+        &BTreeSet::new(),
+        native,
+    )?;
     Ok(())
 }

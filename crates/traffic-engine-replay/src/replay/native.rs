@@ -1,7 +1,10 @@
 //! Registered protocol facts use the shared inventory, rules and delivery host.
 use super::*;
-use traffic_model::recording::CaptureMetadata;
-use traffic_protocol::{ProtocolId, connection::Endpoint};
+use traffic_model::recording::{CaptureMetadata, ProtocolRef};
+use traffic_protocol::{
+    ProtocolId,
+    connection::{Endpoint, ReplaySessionStep},
+};
 use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
 pub mod diagnosis;
@@ -24,7 +27,8 @@ pub struct Inventory {
     failure_counts: BTreeMap<(String, Option<String>), usize>,
     matched: BTreeMap<String, usize>,
     recorded: BTreeMap<(ReplaySource, Option<String>, Uuid, u32), String>,
-    captures: BTreeMap<(String, Uuid), usize>,
+    captures: BTreeMap<(String, Uuid), Option<usize>>,
+    optional_references: BTreeMap<String, BTreeSet<ProtocolRef>>,
 }
 
 impl Inventory {
@@ -42,6 +46,7 @@ impl Inventory {
             recorded: Default::default(),
             failure_counts: Default::default(),
             captures: Default::default(),
+            optional_references: Default::default(),
         }
     }
 
@@ -54,7 +59,31 @@ impl Inventory {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
     ) -> Result<()> {
-        self.register_source(event, source, case, position, targets, secrets, None)?;
+        self.register_scoped(event, source, case, position, targets, secrets, None)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_scoped(
+        &mut self,
+        event: &Value,
+        source: ReplaySource,
+        case: Option<&str>,
+        position: usize,
+        targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+        secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+        session_step: Option<ReplaySessionStep>,
+    ) -> Result<()> {
+        self.register_source(
+            event,
+            source,
+            case,
+            position,
+            targets,
+            secrets,
+            None,
+            session_step,
+        )?;
         Ok(())
     }
 
@@ -74,6 +103,7 @@ impl Inventory {
             targets,
             secrets,
             Some(reference),
+            None,
         )
     }
 
@@ -87,6 +117,7 @@ impl Inventory {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
         stored: Option<crate::dependency_index::RecordRef>,
+        session_step: Option<ReplaySessionStep>,
     ) -> Result<bool> {
         let Some(entry) = self.providers.event_provider(event) else {
             ensure!(
@@ -174,6 +205,32 @@ impl Inventory {
             .map(ReplayProtocol::new)
             .unwrap_or_else(|| ReplayProtocol::registered(protocol));
         register_replay_target(targets, &target, connection_protocol)?;
+        if let Some(case) = case {
+            ensure!(
+                !self.is_optional_reference(case, &exchange.reference),
+                "native Source reference is ambiguous in its Case inventory"
+            );
+        }
+        if session_step == Some(ReplaySessionStep::Optional) {
+            ensure!(
+                self.providers.evidence().capture_complete(event),
+                "optional native Source capture has incomplete evidence"
+            );
+            if let Some(case) = case.filter(|_| source == ReplaySource::Case) {
+                ensure!(
+                    self.core
+                        .resolve_reference(case, &exchange.reference)?
+                        .is_none(),
+                    "native Source reference is ambiguous in its Case inventory"
+                );
+                self.optional_references
+                    .entry(case.into())
+                    .or_default()
+                    .insert(exchange.reference);
+            }
+            self.remember_capture(source, case, capture, event, None)?;
+            return Ok(false);
+        }
         let prepared = self.prepared_messages(
             &exchange,
             case,
@@ -195,6 +252,19 @@ impl Inventory {
         )?;
         self.core.exchanges[index].request = prepared.0;
         self.core.exchanges[index].response = prepared.1;
+        self.core.exchanges[index].session_step = session_step;
+        self.remember_capture(source, case, capture, event, Some(index))?;
+        Ok(true)
+    }
+
+    fn remember_capture(
+        &mut self,
+        source: ReplaySource,
+        case: Option<&str>,
+        capture: Option<CaptureMetadata>,
+        event: &Value,
+        index: Option<usize>,
+    ) -> Result<()> {
         if let Some(case) = case
             && let Some(capture) = &capture
         {
@@ -212,7 +282,7 @@ impl Inventory {
                 crate::policy_evidence::digest(&serde_json::to_vec(event)?),
             );
         }
-        Ok(true)
+        Ok(())
     }
 
     fn prepared_messages(
@@ -369,11 +439,18 @@ impl Inventory {
             })
     }
 
-    pub fn resolve(&self, case: &str, exchange_id: Uuid) -> Result<usize> {
+    /// A known optional capture has no Target-delivery slot.
+    pub fn resolve(&self, case: &str, exchange_id: Uuid) -> Result<Option<usize>> {
         self.captures
             .get(&(case.into(), exchange_id))
             .copied()
             .context("native capture reference is absent from its Case inventory")
+    }
+
+    pub fn is_optional_reference(&self, case: &str, reference: &ProtocolRef) -> bool {
+        self.optional_references
+            .get(case)
+            .is_some_and(|references| references.contains(reference))
     }
 
     pub fn in_flight_diagnostic(&self) -> Value {

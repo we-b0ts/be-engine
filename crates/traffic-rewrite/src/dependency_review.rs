@@ -5,6 +5,7 @@ mod batch_verification;
 #[cfg(test)]
 mod case_defaults;
 use traffic_rewrite_rules::rewrite::dependency_review::client_abort;
+mod grouped;
 mod investigations;
 mod model;
 mod ownership_impact;
@@ -40,6 +41,7 @@ pub(super) use analysis::required_action;
 pub use batch::{dependency_attribution_batch_information, retry_dependency_batch};
 pub(super) use batch::{required_action as batch_action, run as run_batch};
 pub(super) use batch_verification::current as batch_current;
+pub use grouped::dependency_attribution_group;
 pub use investigations::{
     InvestigationOutcome, InvestigationResolution, TargetInvestigation,
     TargetInvestigationResolutionSubmission, TargetInvestigationSubmission,
@@ -125,6 +127,13 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
 pub fn dependency_attribution_context(
     context: super::RewriteContext,
 ) -> Result<AttributionReviewContext> {
+    dependency_attribution_context_page(context, 0)
+}
+
+pub fn dependency_attribution_context_page(
+    context: super::RewriteContext,
+    offset: usize,
+) -> Result<AttributionReviewContext> {
     let (root, store) = open(&context.target_root)?;
     let state = store
         .load()?
@@ -147,6 +156,7 @@ pub fn dependency_attribution_context(
     };
     context.effective_policy_fingerprint = policy.fingerprints.full.clone();
     context.rule_groups = rules::groups(&policy)?;
+    grouped::populate(&root, &state, &mut context, offset)?;
     let apis = context
         .claims
         .iter()
@@ -180,28 +190,12 @@ fn context_for(
     state: &RewriteState,
     source: &source::SourceSnapshot,
 ) -> Result<AttributionReviewContext> {
-    let active_rules = rules::fingerprints(&rules::load(root)?)?;
-    let decisions = state
-        .dependency_review
-        .decisions
-        .iter()
-        .filter(|(_, decision)| rules::current(decision, &active_rules))
-        .collect::<BTreeMap<_, _>>();
-    let unattributed_exchange_ids = source
-        .exchanges
-        .iter()
-        .filter(|(id, event)| {
-            event.capture.semantic_required
-                && matches!(
-                    event.capture.attribution,
-                    DependencyOwner::Unattributed { .. }
-                )
-                && !decisions.contains_key(id)
-                && !source.case_defaults.contains_key(id)
-        })
-        .map(|(id, _)| *id)
-        .collect();
-    context_from_inventory(root, state, &source.identity, unattributed_exchange_ids)
+    let (identity, ids) = analysis::review_inventory(root, state)?;
+    ensure!(
+        identity == source.identity,
+        "attribution Source inventory changed"
+    );
+    context_from_inventory(root, state, &identity, ids.into_owned())
 }
 
 fn context_from_inventory(

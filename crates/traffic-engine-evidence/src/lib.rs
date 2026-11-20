@@ -20,6 +20,7 @@ pub mod recorder;
 pub mod request_headers;
 pub use artifact_owner::ArtifactOwner;
 pub mod attribution_defaults;
+pub mod attribution_review;
 pub mod coordination;
 pub use traffic_engine_environment::internal_runtime;
 pub mod case_group;

@@ -9,9 +9,19 @@ pub struct Request {
     pub message: Arc<dyn ProtocolMessage>,
     pub session: Option<Uuid>,
     pub lane: Option<String>,
+    pub request_session: Option<traffic_protocol::connection::RequestSession>,
+    pub session_owner: Option<SessionOwner>,
+    pub optional_control: bool,
     pub observed: DateTime<Utc>,
     pub bytes: usize,
     pub diagnostics: diagnosis::CandidateDiagnostics,
+}
+
+#[derive(Clone)]
+pub struct SessionOwner {
+    pub scope: ReplaySource,
+    pub case: Option<String>,
+    pub epoch: Option<u64>,
 }
 
 pub struct Matched {
@@ -27,6 +37,14 @@ pub struct Matched {
 pub struct Rejected {
     pub reason: String,
     pub blocker: Option<usize>,
+    pub kind: RejectionKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RejectionKind {
+    NoMatch,
+    UnverifiedSession,
+    Other,
 }
 
 impl std::fmt::Display for Rejected {
@@ -45,6 +63,7 @@ impl From<anyhow::Error> for Rejected {
         Self {
             reason: error.to_string(),
             blocker: None,
+            kind: RejectionKind::Other,
         }
     }
 }
