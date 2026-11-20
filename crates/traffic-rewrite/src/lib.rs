@@ -80,8 +80,9 @@ pub use verification_obligations::{
 };
 mod evidence;
 pub use evidence::{
-    query_rewrite_evidence, query_rewrite_evidence_for_scope,
-    query_rewrite_redis_argument_for_scope, query_rewrite_witness_for_scope,
+    ImplementerEvidence, query_implementer_evidence, query_rewrite_evidence,
+    query_rewrite_evidence_for_scope, query_rewrite_redis_argument_for_scope,
+    query_rewrite_witness_for_scope,
 };
 use traffic_rewrite_evidence::evidence_model;
 mod fingerprint;

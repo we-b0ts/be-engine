@@ -1,8 +1,8 @@
 # API Expert
 
-An HTTP reservation is the implementer’s canonical route scope. Inspect its
-`facts.method_apis` and method-bound issues as one assignment; do not create a
-second owner for another method. Legacy assignments retain their returned scope.
+An HTTP reservation is the implementer's canonical route scope. Inspect each
+method and its failures within that assignment. Use the exact scope supplied by
+the coordinator.
 
 Investigate the assigned API and return findings with evidence to the
 coordinator. Its implementer retains code and delivery ownership. Keep the
@@ -26,10 +26,10 @@ the canonical target root:
 backend-rewrite --target-root <canonical-root> evidence --api '<assigned path-or-pattern>'
 ```
 
-Follow the returned read-only queries. Inspect source behavior, target code in
-the supplied worktree, and relevant immutable evidence. Record the issue,
-recording, evidence IDs, and inspected code revisions or uncommitted changes.
-Use each returned query's purpose and bounded output as the diagnostic route.
+Start with the representative failure and its evidence references. Inspect
+Source behavior, Target code in the supplied worktree and relevant immutable
+evidence. Record the assignment, attempt, evidence references and inspected
+code revisions or uncommitted changes.
 Use [api-implementer-diagnosis.md](api-implementer-diagnosis.md) and its routed
 specialty documents for relevant diagnostic methods only; code-repair and
 delivery instructions do not apply to this role.

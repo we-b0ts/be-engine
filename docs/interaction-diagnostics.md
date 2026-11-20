@@ -1,11 +1,13 @@
 # SSE response diagnostics
 
-Use `backend-rewrite --target-root <target> evidence --api '<route>'`, then
-execute its returned `case_response_differences` query. Each SSE frame
-difference includes `interaction_diagnosis` with the expected and actual event
-names, JSON `type`, payload and raw JSON field differences. Values returned by
-the API are shown directly without redaction. A length difference also includes
-the ordered event inventory, making missing or extra event types visible.
+Start with the representative response failure in
+`backend-rewrite --target-root <target> evidence --api '<route>'`. When the
+comparison needs more frames, use the coordinator's bound
+`case_response_differences` detail command. Its SSE frame differences include
+`interaction_diagnosis` with the expected and actual event names, JSON `type`,
+payload and raw JSON field differences. The detail shows observed values
+directly. Length differences include the ordered event inventory for locating
+missing or extra event types.
 
 Both diagnostic event indices and event counts exclude heartbeat frames, just
 like response assertion. The original `sequence` remains available as an

@@ -23,6 +23,7 @@ mod execution_failure;
 mod failure_limit;
 mod final_evidence;
 mod focused_batch;
+mod implementer_execution;
 mod interrupted_evidence;
 pub mod jwt_evidence;
 mod model;
@@ -79,6 +80,7 @@ pub use evidence::{
 pub use evidence::{query_execution_context, query_execution_failure_page};
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 pub use execute::{recover_focused_e2e_api, run_e2e_apis};
+pub use implementer_execution::query_implementer_execution;
 pub use model::DEFAULT_MAX_FAILED_CASES_PER_API;
 use model::{CaseStatus, RunStatus};
 pub use model::{ResolvedProjectConfig, TargetBuildContext};

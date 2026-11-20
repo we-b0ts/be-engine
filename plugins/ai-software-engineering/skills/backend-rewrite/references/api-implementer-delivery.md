@@ -10,13 +10,12 @@ calls, asynchronous task lifecycle, cancellation and cleanup. Build/debug and
 run focused tests for changed modules and format when needed. Clippy and other
 lint operations are prohibited here; later stages handle them centrally.
 
-Use `context.delivery.assignment` for the registered worktree and frozen dispatch
-base. Missing or mismatched assignment data is an input error; do not register
-yourself or initialize another workflow. Keep target and configured
-`delivery.managed_paths` changes in that same Git worktree. Commit all delivery
-code and return the exact full commit ID as `delivery_commit`. An unchanged
-handoff retains its existing commit; do not create an empty commit. The engine
-checks the worktree, committed code, dispatch and ancestry during handoff.
+Use `assignment` from the API evidence for the registered worktree and frozen
+dispatch base. Report missing or mismatched assignment data to the coordinator.
+Keep Target and configured managed-path changes in that Git worktree. Commit
+all delivery code and return the exact full commit ID as `delivery_commit`.
+An unchanged handoff retains its existing commit. The engine checks the
+worktree, committed code, dispatch and ancestry during handoff.
 
 A later code change is a new delivery version. Pooled admission freezes the
 accepted commit and keeps it reachable independently of subsequent checkout

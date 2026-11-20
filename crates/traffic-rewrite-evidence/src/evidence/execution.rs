@@ -67,7 +67,7 @@ pub fn parse(state: &RewriteState, issue: &RewriteIssue, query: &str) -> Option<
 pub fn command(root: &Path, state: &RewriteState, issue: &RewriteIssue, offset: usize) -> Value {
     json!(super::super::action::command(
         root,
-        vec!["evidence".into(), id(state, issue, offset)],
+        vec!["evidence-detail".into(), id(state, issue, offset)],
         vec![]
     ))
 }

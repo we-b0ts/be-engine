@@ -4,11 +4,11 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use tokio::io::AsyncBufReadExt;
 use traffic_protocol::connection::{
-    ConnectionInfo, ConnectionIo, NativeFuture, ReplaySessionStep, RequestHost, RequestSession,
-    ResponseFramer, ServerSession,
+    ConnectionInfo, ConnectionIo, NativeFuture, RejectedCommand, ReplaySessionStep, RequestHost,
+    RequestSession, ResponseFramer, ServerSession,
 };
 use traffic_protocol::output::OutputStream;
 
@@ -94,13 +94,6 @@ impl ServerSession for Server {
                 if command.command_name == "COM_QUIT" {
                     break;
                 }
-                let mut framer = Framer {
-                    status,
-                    sql: command.query.clone().unwrap_or_default(),
-                    successful: false,
-                    transaction: None,
-                    requires_active: false,
-                };
                 if command.command_name == "COM_PING" {
                     crate::write_packet(
                         &mut io,
@@ -112,11 +105,51 @@ impl ServerSession for Server {
                     .await?;
                     continue;
                 }
-                ensure!(
-                    matches!(command.command_name.as_str(), "COM_QUERY" | "COM_INIT_DB"),
-                    "unsupported MySQL command {}",
-                    command.command_name
-                );
+                let finite = matches!(command.command_name.as_str(), "COM_QUERY" | "COM_INIT_DB");
+                let sql = command.query.as_deref().unwrap_or_default();
+                let target_session = RequestSession {
+                    can_start: if finite && starts_transaction(sql) {
+                        status & TRANSACTION_STATUS == 0
+                    } else {
+                        status & IN_READ_ONLY_TRANSACTION == 0
+                            && (status & SERVER_STATUS_AUTOCOMMIT == 0
+                                || status & IN_TRANSACTION != 0)
+                    },
+                    after: predecessor.clone(),
+                };
+                if !finite {
+                    let reason = host
+                        .reject_command(
+                            RejectedCommand {
+                                protocol_name: "MySQL",
+                                received: &command.command_name,
+                                observation: serde_json::to_vec(&serde_json::json!({
+                                    "command": command.command_name,
+                                    "sql": command.query,
+                                }))?,
+                            },
+                            target_session,
+                        )
+                        .await?;
+                    if command.expects_server_response() {
+                        // MySQL numbers the error immediately after the last
+                        // frame of the incoming command, including continuations.
+                        let continuation_frames =
+                            packet.payload.len() / crate::continuation::MAX_PACKET_PAYLOAD_LEN;
+                        crate::write_packet(
+                            &mut io,
+                            &MysqlPacket {
+                                sequence_id: packet
+                                    .sequence_id
+                                    .wrapping_add(continuation_frames as u8)
+                                    .wrapping_add(1),
+                                payload: crate::response::err_payload(1105, &reason),
+                            },
+                        )
+                        .await?;
+                    }
+                    bail!("{reason}");
+                }
                 if let Some(response) = session_response(
                     &command.command_name,
                     command.query.as_deref(),
@@ -134,7 +167,13 @@ impl ServerSession for Server {
                     database: identity.database.clone(),
                     username: identity.username.clone(),
                 });
-                let sql = command.query.as_deref().unwrap_or_default();
+                let mut framer = Framer {
+                    status,
+                    sql: sql.to_owned(),
+                    successful: false,
+                    transaction: None,
+                    requires_active: false,
+                };
                 let control = (command.command_name == "COM_QUERY")
                     .then(|| {
                         safe_control(
@@ -145,16 +184,6 @@ impl ServerSession for Server {
                         )
                     })
                     .flatten();
-                let target_session = RequestSession {
-                    can_start: if starts_transaction(sql) {
-                        status & TRANSACTION_STATUS == 0
-                    } else {
-                        status & IN_READ_ONLY_TRANSACTION == 0
-                            && (status & SERVER_STATUS_AUTOCOMMIT == 0
-                                || status & IN_TRANSACTION != 0)
-                    },
-                    after: predecessor.clone(),
-                };
                 let mut delivery = if let Some(next_status) = control {
                     match host
                         .try_execute_session_control(request, target_session)

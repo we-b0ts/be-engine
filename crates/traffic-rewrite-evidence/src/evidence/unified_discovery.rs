@@ -44,7 +44,7 @@ pub fn facts(
         let query = identifier(state, issue, cursor);
         facts["pagination"][public] = json!({
             "query_id":query,
-            "command":super::super::action::command(root, vec!["evidence".into(), query], vec![])
+            "command":super::super::action::command(root, vec!["evidence-detail".into(), query], vec![])
         });
     }
     Ok(facts)

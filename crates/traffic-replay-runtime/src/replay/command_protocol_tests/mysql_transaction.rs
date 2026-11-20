@@ -234,6 +234,45 @@ async fn select_status(client: &mut TcpStream, sql: &str) -> u16 {
 }
 
 #[tokio::test]
+async fn mysql_replay_rejection_names_expected_and_received_commands() {
+    let fixture = Fixture::new(&[(READ, 2, 2)], true).await;
+    let (mut client, task) = fixture.connect().await;
+    let mut payload = vec![0x16];
+    payload.extend_from_slice(b"SELECT id FROM notes WHERE id = ?");
+    write_packet(
+        &mut client,
+        &MysqlPacket {
+            sequence_id: 0,
+            payload,
+        },
+    )
+    .await
+    .unwrap();
+    let error = packet(&mut client).await.unwrap();
+    let error = traffic_protocol_mysql::parse_server_packet(&error);
+    let reason = "MySQL command mismatch: expected COM_QUERY, received COM_STMT_PREPARE";
+    assert_eq!(error.error_message.as_deref(), Some(reason));
+    assert_eq!(task.await.unwrap().unwrap_err().to_string(), reason);
+    let snapshot = fixture.runtime.state.lock().await.native.snapshot();
+    let mysql = &snapshot["mysql"];
+    assert_eq!(mysql.unmatched.len(), 1);
+    assert_eq!(mysql.matched_count, 0);
+    assert_eq!(mysql.unused_case.len(), 1);
+    let mismatch = mysql.unmatched[0]
+        .diagnostics
+        .command_mismatch
+        .as_ref()
+        .unwrap();
+    assert_eq!(mismatch.expected.as_deref(), Some("COM_QUERY"));
+    assert_eq!(mismatch.received, "COM_STMT_PREPARE");
+    assert!(mismatch.source_dependency_sequence.is_some());
+    assert_eq!(
+        mismatch.source_reference.as_ref(),
+        Some(&mysql.unused_case[0].protocol_ref),
+    );
+}
+
+#[tokio::test]
 async fn mysql_native_replay_skips_proven_read_only_and_pool_cleanup_ends() {
     for lazy in [false, true] {
         let fixture = Fixture::new(

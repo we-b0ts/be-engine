@@ -507,7 +507,9 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from(["test", "recording", "execute", "recording-0123456789abcdef",])
             .is_err()
     );
-    assert!(Cli::try_parse_from(["test", "evidence", "evq-r1-issue-representatives"]).is_ok());
+    assert!(
+        Cli::try_parse_from(["test", "evidence-detail", "evq-r1-issue-representatives"]).is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",
@@ -524,7 +526,7 @@ fn parses_the_bounded_rewrite_surface() {
             "test",
             "--target-root",
             "/canonical/target",
-            "evidence",
+            "evidence-detail",
             "evq-r1-issue-representatives",
         ])
         .is_ok()

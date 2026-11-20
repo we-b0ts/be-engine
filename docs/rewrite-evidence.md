@@ -1,55 +1,49 @@
-# Implementer evidence queries
+# Implementer evidence
 
-`backend-rewrite evidence --api /route` reads the assigned API's current issue
-without running Replay or advancing the workflow. Overview schema 5 prioritizes
-what differs, where the observation came from and which query can distinguish
-the next hypothesis. The complete ownership inventory is loaded on demand.
+`backend-rewrite evidence --api /route` reads the assigned API's current
+failure evidence. Run it against the canonical Target root. It reads the saved
+Replay attempt and leaves the workflow at its current step.
 
-## Read the overview
+## Read the failure evidence
 
-- `context` binds the canonical Target, workflow, recording and worker dispatch.
-- `facts.issue` retains the current issue and representative expected/actual
-  observations with explicit presence. A present JSON null is not missing.
-- `facts.method_apis` and `facts.method_issues` retain every included method.
-  Method `query_ids` refer to the single top-level `queries` command catalog.
-- `facts.diagnosis.focus` prioritizes actual dependency rejection, unconsumed
-  required calls, runtime interruption, response differences or code findings.
-  A dependency rejection can explain downstream missing response events in that
-  same Case; another Case retains its own cause.
-- `facts.diagnosis.mismatches` groups at most six operation/kind/reason patterns
-  from displayed execution failures. Each representative has a Case, original
-  Target event index and JSON pointer into the original failure. Group counts
-  cover only the overview rows. `execution_failures_summary` and its returned
-  query retain complete Case pagination.
-- `facts.diagnosis.next_queries` orders the relevant query IDs. Execute the
-  matching `queries[].command` without reconstructing opaque IDs.
-- `facts.diagnosis.strategies` separates Target code repairs, investigations and
-  conditional policy candidates. Each candidate states a condition and the
-  Source proof needed. A supported capability or observed difference never
-  authorizes a rule. The detail evidence, coordinator plan/apply and fresh Replay
-  retain their ordinary contracts.
+Start with `attempts` for the Replay attempt and Case counts, then read
+`failures` for the grouped causes. Each group provides a representative with
+the source of its observations. Read `expected` as the Source observation
+and `received` as the Target observation when both can be identified.
 
-For example, an observed Redis lane blocker points to its original Case and
-`diagnostic.blocked_by`, then the dirty-cluster query. Investigate the required
-predecessor, native session and Source construction before choosing a repair or
-a supported native contract. A generated-value format alone cannot remove a
-predecessor. An unrelated SQL rejection remains a separate mismatch group.
+Response clusters group the same difference type and path pattern. The default
+shows a bounded selection of clusters with counts and one representative each.
+Compound JSON values show their type and length. The representative Case and
+assertion report contain the full difference.
 
-## Request complete details when relevant
+- Response differences point to the status, header or body location. Use the
+  presence state to distinguish a present JSON null, a missing field and an
+  unavailable response.
+- Dependency mismatches describe an observed Target call. Unconsumed Source
+  dependencies describe expected calls still pending when the Case ended.
+  A dependency failure can explain a later response difference in the same
+  Case. Response differences in independently affected Cases remain visible.
+- Runtime or Replay failures point to the failing phase and relevant diagnostic
+  evidence.
 
-`facts.api_information` contains `deferred: true`, a retained attempt summary
-and the query ID for the complete dependency attribution projection. The retained
-gates are historical observations; they do not establish current acceptance or
-policy freshness. Execute that exact query when unused Source occurrences,
-ownership claims, hypothesis attempts or verification obligations are relevant.
-It returns the existing `target-api-information/v3` facts and their pagination.
-`dependency-attribution show --api /route` remains available independently.
+Use an included original request or dependency to reproduce the representative
+failure. `representative.case_dir` points to the recorded Case. Follow the
+more specific artifact reference when the original payload is stored
+separately. For a grouped route, keep each representative tied to its recorded
+HTTP method. A failure can include `hints` with a comparison location and a
+registered `rule_candidate`. An isolated value difference may carry an
+`investigate_rule` hint. Confirm applicability from Source behavior before
+proposing a rule to the coordinator.
 
-The overview does not read the entire central `dependencies.jsonl` to construct
-that inventory. It also does not duplicate method command specifications. Missing
-execution evidence is explicit rather than being treated as zero failures.
-Detail reports retain their own schema and evidence identities. Overview IDs
-remain diagnostic identities and cannot authorize policy planning.
+## Deliver the fix
+
+Use the assigned worktree and frozen base in `assignment`. Return the exact
+committed fix and original assignment identities to the coordinator. Handoff
+admission reads the API, dispatch, lease, handoff ID and commit.
+
+Use `dependency-attribution show --api /route` for complete ownership and
+hypothesis records when the investigation requires them. Rule planning uses
+its own evidence and Source proof.
 
 ## Occurrence metadata reuse
 
@@ -96,12 +90,12 @@ issue and attempt; all runs used optimized binaries.
 | Query | Wall time | Public output |
 | --- | --- | --- |
 | Previous API overview | 52.74 s; earlier CPU sample covered 30.59 s | 41,990 bytes |
-| Lightweight API overview, three runs | 0.0797–0.0812 s | 21,934 bytes |
+| Previous lightweight API overview, three runs | 0.0797–0.0812 s | 21,934 bytes |
 | Full detail, first lookup of its unused-reference set | 43.72 s | 19,803 bytes |
 | Full detail, repeated lookup of that set | 0.2905–0.2945 s | 19,803 bytes |
 
 The detail measurement used the then-current 92 unused physical occurrences.
 Its derived metadata was 94,068 bytes. Recording authentication and original
 first-use traversal remain real work; a changed unused-reference set can require
-a new cold lookup. The ordinary overview performs neither operation. These
-measurements describe query latency, not Replay execution or verification speed.
+a new cold lookup. The compact API result uses saved attempt evidence. These
+historical measurements cover evidence queries.

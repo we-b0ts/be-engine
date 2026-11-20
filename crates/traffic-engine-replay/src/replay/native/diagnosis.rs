@@ -7,6 +7,20 @@ use traffic_policy_value::diagnosis::message::MessageFinding;
 pub struct CandidateDiagnostics {
     pub candidate_comparisons: Vec<CandidateDifference>,
     pub candidate_comparisons_omitted: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_mismatch: Option<CommandMismatch>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandMismatch {
+    pub expected: Option<String>,
+    pub received: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_dependency_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_reference: Option<traffic_model::recording::ProtocolRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_exchange_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]
