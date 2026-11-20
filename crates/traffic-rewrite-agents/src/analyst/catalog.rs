@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
+use traffic_engine::config::api_catalog::{self, ApiCatalog};
 
 use super::model::{CatalogDocument, RepositoryAnalysisSnapshot};
 
@@ -13,6 +14,8 @@ const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 pub struct LoadedCatalog {
     pub document: CatalogDocument,
     pub revision: String,
+    pub path: PathBuf,
+    pub apis: Option<ApiCatalog>,
 }
 
 impl LoadedCatalog {
@@ -22,62 +25,93 @@ impl LoadedCatalog {
             api_groups: self.document.api_groups.clone(),
         }
     }
-}
 
-pub fn path(root: &Path) -> PathBuf {
-    root.join(CATALOG_PATH)
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        if let Some(apis) = &self.apis {
+            let bytes = apis
+                .clone()
+                .with_routes(self.document.api_groups.clone())?
+                .encode()?
+                .into_bytes();
+            check_size(bytes.len() as u64)?;
+            return Ok(bytes);
+        }
+        encode(&self.document)
+    }
 }
 
 pub fn load(root: &Path) -> Result<LoadedCatalog> {
-    if let Ok(metadata) = fs::metadata(path(root)) {
-        ensure!(
-            metadata.len() <= MAX_DOCUMENT_BYTES as u64,
-            "repository analysis catalog is too large"
-        );
+    let path = root.join(api_catalog::PATH);
+    if let Some(yaml) = ApiCatalog::read(&path)? {
+        let apis = ApiCatalog::parse(&yaml).with_context(|| format!("load {}", path.display()))?;
+        return Ok(LoadedCatalog {
+            document: CatalogDocument {
+                api_groups: apis.routes().clone(),
+            },
+            revision: digest(yaml.as_bytes()),
+            path,
+            apis: Some(apis),
+        });
     }
-    let bytes = match fs::read(path(root)) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(LoadedCatalog {
-                document: CatalogDocument::default(),
-                revision: "absent".into(),
-            });
-        }
-        Err(error) => return Err(error).context("read repository analysis catalog"),
+    let path = root.join(CATALOG_PATH);
+    let Some(bytes) = read(&path)? else {
+        return Ok(LoadedCatalog {
+            document: CatalogDocument::default(),
+            revision: "absent".into(),
+            path,
+            apis: None,
+        });
     };
     let document: CatalogDocument = decode(&bytes, "repository analysis catalog")?;
     validate(&document)?;
     Ok(LoadedCatalog {
         document,
         revision: digest(&bytes),
+        path,
+        apis: None,
     })
 }
 
-pub fn publish(root: &Path, expected: &str, document: &CatalogDocument) -> Result<()> {
-    let bytes = encode(document)?;
-    publish_encoded(root, expected, &bytes)
+fn read(path: &Path) -> Result<Option<Vec<u8>>> {
+    if let Ok(metadata) = fs::metadata(path) {
+        check_size(metadata.len())?;
+    }
+    match fs::read(path) {
+        Ok(bytes) => {
+            check_size(bytes.len() as u64)?;
+            Ok(Some(bytes))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+fn check_size(len: u64) -> Result<()> {
+    ensure!(
+        len <= MAX_DOCUMENT_BYTES as u64,
+        "repository analysis catalog is too large"
+    );
+    Ok(())
 }
 
 pub fn encode(document: &CatalogDocument) -> Result<Vec<u8>> {
     validate(document)?;
     let mut bytes = serde_json::to_vec_pretty(document)?;
     bytes.push(b'\n');
-    ensure!(
-        bytes.len() <= MAX_DOCUMENT_BYTES,
-        "repository analysis catalog is too large"
-    );
+    check_size(bytes.len() as u64)?;
     Ok(bytes)
 }
 
 pub fn publish_encoded(root: &Path, expected: &str, bytes: &[u8]) -> Result<()> {
+    let current = load(root)?;
     ensure!(
-        load(root)?.revision == expected,
+        current.revision == expected,
         "repository analysis catalog changed during application; request fresh context"
     );
     if expected == "absent" {
-        crate::config::edit::create_atomic(&path(root), bytes)
+        crate::config::edit::create_atomic(&current.path, bytes)
     } else {
-        crate::config::edit::write_atomic(&path(root), bytes)
+        crate::config::edit::write_atomic(&current.path, bytes)
     }
 }
 
@@ -103,32 +137,10 @@ pub fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-pub fn group_id(id: &str) -> Result<()> {
-    ensure!(
-        !id.is_empty()
-            && id.len() <= 128
-            && id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)),
-        "group id must contain 1..=128 ASCII letters, digits, '.', '_' or '-'"
-    );
-    Ok(())
-}
-
-pub fn route(route: &str) -> Result<()> {
-    let parsed = route.parse::<crate::recording_api::RecordingApiScope>()?;
-    ensure!(
-        parsed.to_string() == route,
-        "use canonical route identity {:?}",
-        parsed.to_string()
-    );
-    Ok(())
-}
-
 fn validate(document: &CatalogDocument) -> Result<()> {
     for (api, id) in &document.api_groups {
-        route(api)?;
-        group_id(id)?;
+        api_catalog::validate_route(api)?;
+        api_catalog::validate_group(id)?;
     }
     Ok(())
 }

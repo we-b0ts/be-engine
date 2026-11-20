@@ -1,0 +1,6 @@
+# Group canonical API paths for recording and regression. For example
+# sessions:
+#   - /api/sessions/*
+# health:
+#   - /api/ready
+{}

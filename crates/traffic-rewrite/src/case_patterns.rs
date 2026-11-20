@@ -19,7 +19,8 @@ pub(super) fn identify_after_finalized_recording(
     let (_, project) = crate::e2e_run::resolve_project(target_root)?;
     let config = crate::config::AppConfig::load(&project.recorder_config)?;
     let patterns = &config.http_gateway.case_path_patterns;
-    if !state.api_catalog_initialized {
+    let managed = managed_catalog(&project.recorder_config)?;
+    if !managed && !state.api_catalog_initialized {
         let historical = artifacts::historical_standard_recording_observed_apis(
             target_root,
             &state.recording_run_id,
@@ -36,7 +37,9 @@ pub(super) fn identify_after_finalized_recording(
         return Ok(false);
     }
 
-    let candidates = candidates(&observed_apis, &state.api_catalog, patterns)?;
+    let empty = BTreeSet::new();
+    let known = if managed { &empty } else { &state.api_catalog };
+    let candidates = candidates(&observed_apis, known, patterns)?;
 
     if candidates.is_empty() {
         extend_catalog(&mut state.api_catalog, &observed_apis, patterns)?;
@@ -83,13 +86,17 @@ pub(super) fn pending_routes(
     state: &RewriteState,
     pending: &RewriteCasePatternIdentification,
     config: &crate::config::AppConfig,
+    managed: bool,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let patterns = &config.http_gateway.case_path_patterns;
     if !pending.canonical_apis.is_empty() && &pending.effective_patterns == patterns {
         return Ok((pending.candidates.clone(), pending.canonical_apis.clone()));
     }
-    let mut catalog = state.api_catalog.clone();
-    recanonicalize_catalog(&mut catalog, patterns)?;
+    let mut catalog = BTreeSet::new();
+    if !managed {
+        catalog.clone_from(&state.api_catalog);
+        recanonicalize_catalog(&mut catalog, patterns)?;
+    }
     let candidates = candidates(&pending.observed_apis, &catalog, patterns)?;
     let apis = artifacts::recording_apis_with_config(
         root,
@@ -98,6 +105,13 @@ pub(super) fn pending_routes(
         config,
     )?;
     Ok((candidates, apis))
+}
+
+fn managed_catalog(project: &Path) -> Result<bool> {
+    project
+        .with_file_name(crate::config::api_catalog::FILE_NAME)
+        .try_exists()
+        .map_err(Into::into)
 }
 
 fn candidates(

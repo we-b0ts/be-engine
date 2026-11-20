@@ -6,6 +6,7 @@ use super::{
 use crate::api_selector;
 use anyhow::{Result, ensure};
 use std::{collections::BTreeSet, path::Path};
+use traffic_engine::config::api_catalog;
 use traffic_engine::source_snapshot;
 use traffic_rewrite_model::rewrite::{RewriteApiStatus, RewritePhase, RewriteState};
 /// Reconcile only the in-memory project snapshot; the caller owns state persistence.
@@ -60,7 +61,7 @@ pub fn context(
         pending_apis,
         case_patterns: None,
         batch_id: String::new(),
-        catalog_path: catalog::path(root),
+        catalog_path: loaded.path.clone(),
         catalog_revision: loaded.revision.clone(),
     };
     context.batch_id = batch_id(&context, &context.pending_apis, &loaded.revision)?;
@@ -113,12 +114,12 @@ pub fn apply_submission(
         "repository analysis assignments must cover exactly the pending canonical API routes"
     );
     for (api, id) in &submission.assignments {
-        catalog::route(api)?;
+        api_catalog::validate_route(api)?;
         ensure!(
             !document.api_groups.contains_key(api),
             "existing API group assignment is read-only: {api}"
         );
-        catalog::group_id(id)?;
+        api_catalog::validate_group(id)?;
     }
     document.api_groups.extend(submission.assignments.clone());
     Ok(())

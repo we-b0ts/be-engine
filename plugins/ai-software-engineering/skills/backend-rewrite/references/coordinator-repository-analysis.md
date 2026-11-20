@@ -6,20 +6,20 @@ complete returned context, an assignment ID and the Source repository location.
 Keep the exact workflow, recording, Source revision and batch in the assignment
 and result.
 
-The project catalog at `catalog_path` maps canonical routes to group names in
-`api_groups`. The analyst reads it directly. A revision of `absent` means there
-is no existing catalog. Existing assignments carry forward across workflows and
-recordings.
+Read the project catalog at `catalog_path`. In `apis.yaml`, each group name maps
+to its canonical route list. A legacy JSON catalog uses `api_groups` with route
+keys. A revision of `absent` means there is no existing catalog. Existing
+assignments carry forward across workflows and recordings.
 
 For `context.case_patterns.candidates`, return one entry per concrete API.
 Use the Source-proven wildcard path for a dynamic route and JSON `null` for a
 confirmed static route. Include Source file or symbol references in the analyst
 handoff. Omit `case_patterns` if the context has no such field.
 
-Return `assignments` for `pending_apis` and the newly resolved in-scope routes
-that need a group. Apply the context’s optional `case_patterns.only_apis` and
-`case_patterns.skipped_apis` to the resolved routes, with skips taking
-precedence. Use canonical path keys for HTTP APIs. Multiple concrete
+Return `assignments` for `pending_apis` and each newly confirmed route that
+needs a group in `apis.yaml`. For a legacy catalog, apply
+`case_patterns.only_apis` and `case_patterns.skipped_apis` to the resolved
+routes, with skips taking precedence. Use canonical path keys for HTTP APIs. Multiple concrete
 paths and methods of the same canonical HTTP route share one assignment. Reuse
 existing group assignments. For a context with `grouping_enabled: false`,
 submit empty `assignments`.
@@ -47,5 +47,7 @@ backend-rewrite --target-root <canonical-root> repository-analysis apply <batch-
 ```
 
 The engine checks complete coverage, effective route identity and batch
-revisions before publication. Retry interrupted publication with the same batch
-and submission. For stale analysis, use fresh context.
+revisions before publication. Commit changes to `apis.yaml` when the
+configuration commit action is returned before Replay. Retry interrupted
+publication with the same batch and submission. For stale analysis, use fresh
+context.

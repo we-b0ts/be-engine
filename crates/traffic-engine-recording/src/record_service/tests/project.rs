@@ -85,6 +85,31 @@ pub(super) fn options(path: &std::path::Path) -> RecordOptions {
 }
 
 #[test]
+fn standalone_recording_uses_catalog_paths_for_case_grouping() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = fixture(&temp);
+    let catalog = project.with_file_name("apis.yaml");
+    std::fs::write(
+        catalog,
+        "teams: [/api/teams/*/skills, /api/teams/current/skills]\nreports: [/api/reports/*]\n",
+    )
+    .unwrap();
+    let config = options(&project).config().unwrap();
+    for (request, expected) in [
+        ("/api/teams/current/skills", "/api/teams/current/skills"),
+        ("/api/teams/team-1/skills", "/api/teams/*/skills"),
+        ("/api/reports/42", "/api/reports/*"),
+    ] {
+        let group = crate::gateway::http::rules::resolve_case_group(
+            &request.parse().unwrap(),
+            &config.http_gateway.case_path_patterns,
+        );
+        assert_eq!(group.pattern, expected);
+    }
+    assert_eq!(config.http_response_rewrite.rules.len(), 1);
+}
+
+#[test]
 fn project_recording_settings_and_policy_survive_online_routing() {
     let temp = tempfile::tempdir().unwrap();
     let path = fixture(&temp);

@@ -540,6 +540,10 @@ unchanged:
 ```
 
 The mounted project contains `project.policy: .traffic-e2e/policy.yaml`.
+Package the Git-tracked `.traffic-e2e/apis.yaml` in the recording image beside
+`project.yaml`. Recorder reads its canonical paths at startup. Rebuild the
+image after committing catalog changes. For an image built without project
+configuration, mount the committed catalog beside the supplied policy.
 For a deployment without project YAML, mount that same policy and supply
 `--policy /etc/traffic-e2e/.traffic-e2e/policy.yaml` instead.
 
@@ -600,6 +604,8 @@ to the controller. Persist the entire data root, including private keys.
 Use a published engine image as a build stage and copy
 `/usr/local/bin/traffic-e2e` into the Source image. For Kubernetes recording,
 copy `/usr/local/bin/kubectl` from its separate versioned distribution image.
+Use the committed project checkout as the build input so the recording image
+includes the same `apis.yaml` that the Replay coordinator uses.
 See the
 [engine image build and publication](development.md#engine-binary-image)
 instructions; project recording builds do not compile the engine or need SSH.

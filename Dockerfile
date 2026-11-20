@@ -23,6 +23,7 @@ RUN mkdir -p /data/.traffic-e2e /data/recordings /data/replay /data/tls
 COPY --from=builder /tmp/traffic-e2e /usr/local/bin/traffic-e2e
 COPY config/project.example.yaml /data/.traffic-e2e/project.yaml
 COPY config/policy.example.yaml /data/.traffic-e2e/policy.yaml
+COPY config/apis.example.yaml /data/.traffic-e2e/apis.yaml
 
 WORKDIR /data
 

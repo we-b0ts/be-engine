@@ -11,7 +11,10 @@ use super::store::{RewriteLockState, RewriteStore};
 use super::{action, traffic_operation};
 
 fn configuration_paths(target_root: &Path) -> Result<Vec<String>> {
-    let mut paths = vec![".traffic-e2e/project.yaml".to_string()];
+    let mut paths = vec![
+        ".traffic-e2e/project.yaml".to_string(),
+        crate::config::api_catalog::PATH.to_string(),
+    ];
     // A malformed or deleted project still needs the configuration commit gate.
     // Validation reports the parse failure after that review boundary.
     let policy = super::fingerprint::policy_file(target_root)

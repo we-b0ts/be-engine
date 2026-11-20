@@ -42,16 +42,14 @@ backend-rewrite status
 ```
 
 If `status` returns `purpose_required`, handle it before all old dispatch,
-expert and old-worker runtime-query actions. Read the
-[purpose confirmation protocol](coordinator-agent-protocol.md#authorized-regression-start).
-Actually query current-session active child agents (excluding self, unrelated
-peers, engine bindings and historical sessions); require zero and supply count,
-query command and time. Confirm the user's purpose through the returned command; the engine generates and
-enters a fresh work branch. No branch creation or separate regression command is
-required from the coordinator. Old workers are not queried, resumed or waited for.
-The base branch always requires confirmation, even when code is unchanged or an
-old workflow is unfinished. An explicit user request supplies purpose authorization;
-otherwise ask the user to choose. On a work branch, continue the normal workflow.
+expert and old-worker runtime-query actions. An explicit request to start a new
+regression supplies approval. Otherwise, ask `Start a new regression run?`.
+Query active child agents in the current session, excluding yourself, unrelated
+peers, engine bindings and historical sessions. When the observed count is zero,
+supply the count, query command and time to `commands.replay`. The engine creates
+and enters the work branch. Each return to base requires a new confirmation.
+On a work branch, continue the normal workflow.
+[Regression confirmation protocol](coordinator-agent-protocol.md#authorized-regression-start)
 
 Follow the returned action to start an absent rewrite workflow.
 Before the engine adopts external standard recordings, omit `--api`. Missing
@@ -102,7 +100,7 @@ listed protocol before handling that action.
 
 | Action | Coordinator responsibility | Agent or external owner | Protocol |
 | --- | --- | --- | --- |
-| `purpose_required` | Confirm the user-authorized purpose after the required live runtime query | None | [authorized regression start](coordinator-agent-protocol.md#authorized-regression-start) |
+| `purpose_required` | Start the user-approved regression after the required live runtime query | None | [authorized regression start](coordinator-agent-protocol.md#authorized-regression-start) |
 | `recording_in_progress`, `recording_refresh_pending` | Observe external publication and wait for the selected evidence | External recording owner | [recording actions](coordinator-recording.md) |
 | `repository_analysis_required` | Complete one batch of case pattern identification and API grouping before Replay | Repository analyst | [repository analysis](coordinator-repository-analysis.md) |
 | `dependency_attribution_required` | Obtain the exact context, reconcile rule assessment and proposals, then apply independent ownership proof | Repository analyst in read-only `dependency_attribution` mode | [independent dependency attribution](coordinator-rule-actions.md#independent-dependency-attribution) |
@@ -139,8 +137,9 @@ The following describes coordinator decisions; do not implement it as a script.
 state = status()
 while true:
     if state.action.kind == "purpose_required":
+        establish user approval to start a new regression
         actually query active child sessions of this coordinator; require zero
-        supply count, query command and time to the returned user-approved purpose command
+        supply count, query command and time to commands.replay
         refresh status and continue
     reconcile implementation-worker results through the worker protocol
     reconcile integrator and route-analysis results with retained assignments

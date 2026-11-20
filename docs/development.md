@@ -1129,9 +1129,10 @@ and do not create or move a group directory. The output path must remain outside
 the canonical case source. Mixed directories, duplicate case ids, overlapping
 groups, a changed source revision, or a changed case inventory fail the command.
 
-Replay-time route discovery can produce safe `case_path_patterns` feedback for
-a target repository. Apply focused, add-only feedback through the managed
-configuration interface:
+For projects with `.traffic-e2e/apis.yaml`, a newly discovered dynamic route
+reports `needs_api_catalog_update`. Confirm its canonical path and group through
+repository analysis, or edit and commit the catalog. Projects using policy-based
+case paths can apply focused, add-only feedback through the configuration interface:
 
 ```bash
 traffic-e2e config recorder apply case-path-patterns \
@@ -1443,14 +1444,32 @@ omit the field for a grouping-only batch. `pending_apis` lists already-resolved
 routes with missing groups. `assignments` covers exactly the canonical routes
 that still need a group after applying the proposed patterns and selecting the
 workflow's scope. Multiple recorded paths and HTTP methods sharing a canonical
-route need one assignment. Existing groups are available in the project catalog
-at `catalog_path`, and existing assignments are reused. Unpooled workflows
-submit empty `assignments` for their route analysis.
+route need one assignment. Existing groups are available at `catalog_path`.
+With `apis.yaml`, every newly confirmed route needs a group, including a
+candidate outside the current regression selection. For policy-based projects
+without a pool, submit empty `assignments`.
 
-The engine validates both results before publishing changes to the managed
-traffic policy and the ignored project catalog. It checks batch, Source,
-recording, configuration and catalog revisions. Retry an interrupted publication
-with the same batch and submission. Recording files remain immutable.
+Keep API groups and their exact paths or wildcard templates in the target
+repository's `.traffic-e2e/apis.yaml`:
+
+```yaml
+sessions:
+  - /api/sessions/*
+  - /api/sessions/current
+health:
+  - /api/health
+```
+
+Each canonical route belongs to one group. HTTP entries are path-only and apply
+to all methods. Exact paths take precedence over wildcards. Wildcards retain
+lexical matching order. Recorders read this file next to `project.yaml`. On
+migration, move capture case paths and known assignments from `policy.yaml` and
+`.traffic-e2e/local/repository-analysis/catalog.json` into `apis.yaml`.
+
+The engine validates batch, Source, recording, configuration and catalog
+revisions before atomically publishing the updated catalog. Review and commit
+`apis.yaml` before continuing Replay. Retry interrupted publication with the
+same batch and submission. Recording artifacts stay immutable.
 
 Group count is unlimited. New group IDs are mapped in stable order round-robin
 to the workflow’s slots; persisted mappings remain stable. Same-group APIs default
@@ -1819,9 +1838,10 @@ On `pr_base`, `backend-rewrite status` always returns `purpose_required` before
 old worker, expert, completion or verification actions. Scoped status, `next`
 and `wait` preserve that boundary too. This does not depend on code changes,
 session identity, previous approval or whether the old workflow finished.
-The action contains two commands. Use the one matching the user's explicit
-request; otherwise ask the user to choose. Before confirming, actually query the
-coordinator's runtime for active child agents/sessions of the current session.
+The action asks `Start a new regression run?` and returns `commands.replay`. An explicit
+request to start a regression supplies approval. Otherwise, ask for confirmation.
+Before running the returned command, query the coordinator's runtime for active
+child agents or sessions of the current session.
 Exclude the coordinator itself, unrelated independent sessions, engine bindings
 and historical sessions. The observed count must be zero; do not infer it from
 being on `pr_base` or automatically stop active agents. Supply the result through
@@ -1834,23 +1854,19 @@ The engine validates and records the coordinator's declaration; it cannot inspec
 the coordinator runtime itself. With those query values supplied:
 
 ```bash
-backend-rewrite purpose confirm --purpose replay --user-approved
-backend-rewrite purpose confirm --purpose record --user-approved
+backend-rewrite purpose confirm --user-approved
 ```
 
-`replay` reuses the selected completed recording. `record` requests new external
-live traffic and continues to Replay after publication and normal case preparation.
-The latter can initialize a workflow without prior recordings. It supersedes the
-old local recording pin for this workflow; a later explicit pin change is still
-honored. `only`/`skip` continue to apply.
+The regression uses a completed recording. When new Source evidence is needed,
+the recording owner runs `traffic-e2e record` independently and publishes the
+completed batch for selection. `only` and `skip` continue to apply.
+See [standalone recording and handoff](recording.md).
 
-The coordinator only confirms purpose. The engine generates a unique
-`replay/yyyyMMdd-<seq>` or `record/yyyyMMdd-<seq>` branch, creates and switches to it,
-using the machine-local date and one above the largest local/remote sequence for
-that purpose and day (starting at 1). It returns `work_branch` and `next`. No
-branch name is required. Confirmation consumes the entry permission by entering the work branch;
-subsequent `status` / `next` calls continue there. Returning to `pr_base` always
-requires a new confirmation, even with unchanged code and an unfinished workflow.
+The engine creates and switches to `replay/yyyyMMdd-<seq>` using the machine-local
+date and the next sequence across local and remote branches for that day. The
+sequence starts at 1. It returns `work_branch` and `next`. Continue with `status`
+and `next` on the work branch. Returning to `pr_base` requires a new confirmation,
+even with unchanged code and an unfinished workflow.
 
 Existing worker bindings, failures, review receipts and expert assignments are
 archived under ignored runtime history and replaced with a new workflow identity.
@@ -1871,7 +1887,7 @@ Subsequent replacement requires explicit user authorization or an actual runtime
 query confirming that worker is missing.
 
 The committed `pr_base` revision captured by purpose confirmation is the trusted
-review baseline. An unchanged baseline proceeds directly through recording/Replay
+review baseline. An unchanged baseline proceeds directly through Replay
 without an ordinary source-review receipt, including when an old or broken
 `source-review.json` remains on disk. This Source-review exemption does not
 replace the final pre-revalidation gate. Committing engine progress files or changing

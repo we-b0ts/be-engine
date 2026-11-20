@@ -12,11 +12,11 @@ pub(super) struct PurposeArgs {
 
 #[derive(Debug, Subcommand)]
 enum PurposeCommand {
-    /// Confirm the user's purpose and let the engine enter a new work branch.
+    /// Start a user-approved regression using a completed recording.
     Confirm {
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, default_value = "replay", hide = true)]
         purpose: Purpose,
-        /// Attest that the user explicitly requested or approved this purpose.
+        /// Attest that the user explicitly requested or approved this regression.
         #[arg(long, required = true)]
         user_approved: bool,
         #[command(flatten)]
@@ -74,31 +74,44 @@ impl SessionRuntimeArgs {
 
 #[cfg(test)]
 mod tests {
-    use crate::Cli;
+    use super::*;
+    use crate::{Cli, RewriteCommand};
     use clap::Parser;
     #[test]
-    fn confirmation_requires_purpose_authorization_and_real_session_query_fields() {
+    fn confirmation_defaults_to_replay_and_requires_authorization_and_session_query() {
+        let mut argv = vec!["backend-rewrite", "purpose", "confirm"];
+        let approval_and_query = [
+            "--user-approved",
+            "--active-agent-count",
+            "0",
+            "--runtime-query-command",
+            "ListAgents",
+            "--runtime-query-at",
+            "2026-09-12T09:00:00Z",
+        ];
+        argv.extend(approval_and_query);
+        assert!(matches!(
+            Cli::try_parse_from(&argv).unwrap().command,
+            RewriteCommand::Purpose(PurposeArgs {
+                command: PurposeCommand::Confirm {
+                    purpose: Purpose::Replay,
+                    ..
+                }
+            })
+        ));
+        assert!(Cli::try_parse_from(&argv[..4]).is_err());
+        argv.remove(3);
+        assert!(Cli::try_parse_from(&argv).is_err());
         for purpose in ["replay", "record"] {
-            let argv = [
+            let mut argv = vec![
                 "backend-rewrite",
                 "purpose",
                 "confirm",
                 "--purpose",
                 purpose,
-                "--user-approved",
-                "--active-agent-count",
-                "0",
-                "--runtime-query-command",
-                "ListAgents",
-                "--runtime-query-at",
-                "2026-09-12T09:00:00Z",
             ];
-            assert!(Cli::try_parse_from(argv).is_ok());
-            assert!(Cli::try_parse_from(&argv[..6]).is_err());
+            argv.extend(approval_and_query);
+            assert!(Cli::try_parse_from(&argv).is_ok());
         }
-        assert!(
-            Cli::try_parse_from(["backend-rewrite", "purpose", "confirm", "--user-approved"])
-                .is_err()
-        );
     }
 }

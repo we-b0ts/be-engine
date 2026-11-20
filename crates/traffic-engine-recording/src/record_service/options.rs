@@ -16,7 +16,7 @@ pub enum CoordinationBackend {
 
 #[derive(Args)]
 pub struct RecordOptions {
-    /// Reuse Recorder settings and the single project.policy reference.
+    /// Load Recorder settings, project.policy, and the sibling apis.yaml catalog.
     #[arg(
         long = "config",
         env = "TRAFFIC_E2E_PROJECT_CONFIG",
@@ -236,6 +236,10 @@ impl RecordOptions {
                 let (rules, fingerprints) =
                     SourceTrafficPolicyConfig::load_with_fingerprints(path)?;
                 rules.apply_to(&mut config)?;
+                use crate::config::api_catalog::{ApiCatalog, FILE_NAME};
+                if let Some(catalog) = ApiCatalog::load(&path.with_file_name(FILE_NAME))? {
+                    config.http_gateway.case_path_patterns = catalog.case_paths();
+                }
                 config.global_projection_policy = Some(fingerprints.full);
             }
             config

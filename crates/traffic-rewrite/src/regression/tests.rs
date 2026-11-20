@@ -295,6 +295,15 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
 
 #[tokio::test]
 async fn replay_purpose_analyzes_case_patterns_and_groups_in_one_batch() {
+    replay_purpose_analyzes_catalog(false).await;
+}
+
+#[tokio::test]
+async fn replay_purpose_publishes_and_requires_commit_of_apis_yaml() {
+    replay_purpose_analyzes_catalog(true).await;
+}
+
+async fn replay_purpose_analyzes_catalog(managed: bool) {
     let target = fixture();
     let store = RewriteStore::new(target.path()).unwrap();
     let mut previous = store.load().unwrap().unwrap();
@@ -306,14 +315,23 @@ async fn replay_purpose_analyzes_case_patterns_and_groups_in_one_batch() {
         .collect();
     store.save(&previous).unwrap();
 
-    let catalog_path = target
-        .path()
-        .join(".traffic-e2e/local/repository-analysis/catalog.json");
-    fs::write(
-        &catalog_path,
-        br#"{"api_groups":{"/api":"api","/api/known/*":"known"}}"#,
-    )
-    .unwrap();
+    let catalog_path = if managed {
+        let path = target.path().join(crate::config::api_catalog::PATH);
+        fs::write(&path, "api: [/api]\nknown: [/api/known/*]\nnext: []\n").unwrap();
+        git(target.path(), &["add", crate::config::api_catalog::PATH]);
+        git(target.path(), &["commit", "-qm", "initial API catalog"]);
+        path
+    } else {
+        let path = target
+            .path()
+            .join(".traffic-e2e/local/repository-analysis/catalog.json");
+        fs::write(
+            &path,
+            br#"{"api_groups":{"/api":"api","/api/known/*":"known"}}"#,
+        )
+        .unwrap();
+        path
+    };
     let run = artifacts::recording_run(target.path(), &previous.recording_run_id);
     for (index, path) in [
         "/api/knowledge-bases/304487/artifacts",
@@ -349,15 +367,22 @@ async fn replay_purpose_analyzes_case_patterns_and_groups_in_one_batch() {
     else {
         panic!("expected one combined analysis action");
     };
-    assert_eq!(analysis.pending_apis, ["/other"]);
+    assert_eq!(analysis.catalog_path, catalog_path);
+    let mut expected_candidates = vec![
+        "GET /api/knowledge-bases/304487/artifacts",
+        "GET /api/knowledge-bases/304541/artifacts",
+        "GET /new-static",
+    ];
+    if managed {
+        assert!(analysis.pending_apis.is_empty());
+        expected_candidates.push("GET /other");
+    } else {
+        assert_eq!(analysis.pending_apis, ["/other"]);
+        expected_candidates.insert(2, "GET /api/known/1");
+    }
     assert_eq!(
         analysis.case_patterns.unwrap().candidates,
-        [
-            "GET /api/knowledge-bases/304487/artifacts",
-            "GET /api/knowledge-bases/304541/artifacts",
-            "GET /api/known/1",
-            "GET /new-static",
-        ]
+        expected_candidates
     );
     assert!(store.load().unwrap().unwrap().api_inventory.is_empty());
 
@@ -372,7 +397,7 @@ async fn replay_purpose_analyzes_case_patterns_and_groups_in_one_batch() {
     let policy = target.path().join(".traffic-e2e/policy.yaml");
     let before_policy = fs::read(&policy).unwrap();
     let before_catalog = fs::read(&catalog_path).unwrap();
-    let valid = serde_json::json!({
+    let mut valid = serde_json::json!({
         "schema_version": 1,
         "catalog_revision": analysis.catalog_revision,
         "case_patterns": {
@@ -387,6 +412,11 @@ async fn replay_purpose_analyzes_case_patterns_and_groups_in_one_batch() {
             "/other": "other",
         }
     });
+    if managed {
+        let patterns = valid["case_patterns"].as_object_mut().unwrap();
+        patterns.remove("GET /api/known/1");
+        patterns.insert("GET /other".into(), serde_json::Value::Null);
+    }
 
     for field in ["case_patterns", "assignments"] {
         let mut invalid = valid.clone();
@@ -412,7 +442,45 @@ async fn replay_purpose_analyzes_case_patterns_and_groups_in_one_batch() {
     crate::apply_repository_analysis(request).unwrap();
     assert_eq!(store.load().unwrap().unwrap().revision, revision);
 
-    git(target.path(), &["add", ".traffic-e2e/policy.yaml"]);
+    if managed {
+        assert_eq!(fs::read(&policy).unwrap(), before_policy);
+        let yaml = fs::read_to_string(&catalog_path).unwrap();
+        assert!(yaml.contains("next: []"));
+        assert!(yaml.contains("- /api/knowledge-bases/*/artifacts"));
+        let config =
+            crate::config::AppConfig::load(target.path().join(".traffic-e2e/project.yaml"))
+                .unwrap();
+        assert!(
+            config
+                .http_gateway
+                .case_path_patterns
+                .contains(&"/api/knowledge-bases/*/artifacts".to_owned())
+        );
+        let next = rewrite::next_rewrite(rewrite::RewriteNextOptions {
+            target_root: target.path().into(),
+            api: None,
+            source_route: None,
+        })
+        .await
+        .unwrap();
+        let rewrite::RewriteAction::InputRequired {
+            reason, required, ..
+        } = next.action
+        else {
+            panic!("expected uncommitted API catalog to block Replay");
+        };
+        assert_eq!(
+            reason,
+            rewrite::RewriteInputRequiredReason::ConfigurationCommitRequired
+        );
+        assert_eq!(required, [crate::config::api_catalog::PATH]);
+    }
+    let updated = if managed {
+        crate::config::api_catalog::PATH
+    } else {
+        ".traffic-e2e/policy.yaml"
+    };
+    git(target.path(), &["add", updated]);
     git(target.path(), &["commit", "-qm", "apply case paths"]);
     let next = rewrite::advance::advance_rewrite(rewrite::RewriteNextOptions {
         target_root: target.path().into(),
@@ -566,20 +634,34 @@ fn completed_failure_marker_is_retired_but_unfinished_operation_blocks_begin() {
 async fn every_base_status_requires_purpose_and_next_wait_cannot_resume_old_work() {
     let target = fixture();
     let original = snapshot(target.path());
+    let root = target.path().canonicalize().unwrap();
+    let expected_action = serde_json::json!({
+        "kind": "purpose_required",
+        "summary": "Start a new regression run?",
+        "details": {
+            "pr_base": "master",
+            "user_approval_required": true,
+            "runtime_query_scope": "current_coordinator_session",
+            "required_active_agent_count": 0
+        },
+        "commands": {"replay": {
+            "argv": ["backend-rewrite", "--target-root", root, "purpose", "confirm", "--user-approved"],
+            "cwd": root,
+            "required_env_names": [
+                "BACKEND_REWRITE_SESSION_ACTIVE_AGENT_COUNT",
+                "BACKEND_REWRITE_SESSION_QUERY_COMMAND",
+                "BACKEND_REWRITE_SESSION_QUERY_AT"
+            ]
+        }}
+    });
     for _ in 0..2 {
         let report = rewrite::status_rewrite(rewrite::RewriteContext {
             target_root: target.path().into(),
         })
         .unwrap();
         let json = serde_json::to_value(report).unwrap();
-        assert_eq!(json["action"]["kind"], "purpose_required");
+        assert_eq!(json["action"], expected_action);
         assert_eq!(json["terminal_allowed"], false);
-        assert!(
-            json["action"]["commands"]["record"]["argv"]
-                .as_array()
-                .unwrap()
-                .contains(&serde_json::json!("record"))
-        );
     }
     let report = rewrite::next_rewrite(rewrite::RewriteNextOptions {
         target_root: target.path().into(),
@@ -588,20 +670,20 @@ async fn every_base_status_requires_purpose_and_next_wait_cannot_resume_old_work
     })
     .await
     .unwrap();
-    assert!(matches!(
-        report.action,
-        crate::RewriteAction::PurposeRequired { .. }
-    ));
+    assert_eq!(
+        serde_json::to_value(report.action).unwrap(),
+        expected_action
+    );
     let report = rewrite::wait_rewrite(rewrite::RewriteWaitOptions {
         target_root: target.path().into(),
         seconds: 1,
     })
     .await
     .unwrap();
-    assert!(matches!(
-        report.action,
-        crate::RewriteAction::PurposeRequired { .. }
-    ));
+    assert_eq!(
+        serde_json::to_value(report.action).unwrap(),
+        expected_action
+    );
     assert_eq!(snapshot(target.path()), original);
 }
 

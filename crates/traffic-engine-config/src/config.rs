@@ -11,6 +11,7 @@ pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
 pub const DEFAULT_BODY_LIMIT_BYTES: usize = crate::dependency::http_limits::MAX_BODY_BYTES;
 
 mod allowed_unused_http;
+pub mod api_catalog;
 pub mod api_trigger;
 mod artifacts;
 pub mod background_feedback;
@@ -254,7 +255,8 @@ impl AppConfig {
         let config = Self::read_static(path)?;
         let rules_path = resolve_unified_policy_path(path)?;
         let (rules, fingerprints) = SourceTrafficPolicyConfig::load_with_fingerprints(&rules_path)?;
-        let mut config = config.with_source_policy(path, &rules)?;
+        let catalog = api_catalog::ApiCatalog::load(&path.with_file_name(api_catalog::FILE_NAME))?;
+        let mut config = config.with_source_policy(path, &rules, catalog.as_ref())?;
         config.global_projection_policy = Some(fingerprints.full);
         Ok(config)
     }
@@ -266,15 +268,29 @@ impl AppConfig {
         rules: &SourceTrafficPolicyConfig,
     ) -> Result<Self> {
         let path = path.as_ref();
-        Self::read_static(path)?.with_source_policy(path, rules)
+        let catalog = api_catalog::ApiCatalog::load(&path.with_file_name(api_catalog::FILE_NAME))?;
+        Self::read_static(path)?.with_source_policy(path, rules, catalog.as_ref())
+    }
+
+    /// Validate the complete recorder configuration with an unpublished API catalog.
+    pub fn load_with_api_catalog(
+        path: &Path,
+        rules: &SourceTrafficPolicyConfig,
+        catalog: &api_catalog::ApiCatalog,
+    ) -> Result<Self> {
+        Self::read_static(path)?.with_source_policy(path, rules, Some(catalog))
     }
 
     fn with_source_policy(
         mut self,
         path: &Path,
         rules: &SourceTrafficPolicyConfig,
+        catalog: Option<&api_catalog::ApiCatalog>,
     ) -> Result<Self> {
         rules.apply_to(&mut self)?;
+        if let Some(catalog) = catalog {
+            self.http_gateway.case_path_patterns = catalog.case_paths();
+        }
         self.validate()
             .with_context(|| format!("invalid config {}", path.display()))?;
         Ok(self)

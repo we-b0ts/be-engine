@@ -136,7 +136,7 @@ pub fn apply_repository_analysis(
             "repository analysis catalog revision is stale; request fresh context"
         );
         apply_submission(&mut loaded.document, &context.pending_apis, &submission)?;
-        catalog::publish(&root, &loaded.revision, &loaded.document)?;
+        catalog::publish_encoded(&root, &loaded.revision, &loaded.encode()?)?;
     }
     if refresh(&root, &mut state)? {
         state.bump();
