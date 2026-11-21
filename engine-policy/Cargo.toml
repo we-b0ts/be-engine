@@ -1,0 +1,36 @@
+[package]
+name = "traffic-engine-policy"
+version.workspace = true
+edition.workspace = true
+description = "Installed policy declarations and compilation"
+
+[features]
+test-support = []
+
+[dependencies]
+traffic-policy-execution = { workspace = true }
+traffic-policy-document = { workspace = true }
+traffic-policy-compiler = { workspace = true }
+traffic-jwt = { workspace = true }
+traffic-policy-schema = { workspace = true, features = ["cli"] }
+traffic-contract = { workspace = true }
+traffic-policy-value = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-codec-protobuf = { workspace = true }
+traffic-extensions = { workspace = true, default-features = true }
+traffic-protocol-http = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+sha2 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_yaml = { workspace = true }
+url = { workspace = true }
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+traffic-engine-config = { workspace = true }
+traffic-engine-evidence = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+tempfile = { workspace = true }

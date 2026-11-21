@@ -1,0 +1,22 @@
+[package]
+name = "traffic-policy-value"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-jwt = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-value = { workspace = true }
+traffic-protocol = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+traffic-extensions = { workspace = true, default-features = true, features = ["codec-json", "codec-protobuf", "policy-unordered"] }

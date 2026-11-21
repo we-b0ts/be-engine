@@ -1,0 +1,21 @@
+[package]
+name = "traffic-policy-content"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-jwt = { workspace = true }
+traffic-protocol-http = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+zip = { workspace = true, features = ["deflate"] }
+traffic-contract = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-policy-schema = { workspace = true }
+traffic-value = { workspace = true }
+
+[dev-dependencies.traffic-extensions]
+workspace = true
+features = ["policy-identity", "policy-response-rewrite", "policy-time", "policy-unordered"]

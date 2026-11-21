@@ -24,6 +24,10 @@ ownership.
 Use a Rust workspace with the root `traffic-e2e` application composing the
 `traffic-e2e`, `backend-rewrite`, and `backend-rewrite-admin` binaries.
 The root `src/` owns the three CLI entrypoints and the public API facade.
+Workspace members use short directory names beside `src/`. For example,
+`engine-replay/` contains the `traffic-engine-replay` package. Version
+requirements and shared paths live in `[workspace.dependencies]`. Each member
+declares the features it uses.
 `traffic-e2e-app` owns default composition and compatibility wrappers. Its
 entrypoints bind the rewrite coordinator before calling independent services.
 `traffic-rewrite` owns the complete rewrite workflow, assignment and attempt
@@ -35,7 +39,8 @@ serializable records. `model` binds those records to the core and
 `store` applies coordinator overlays around core storage.
 
 `traffic-rewrite-model` owns persisted coordinator records, compact ownership
-proof groups and archived decision history. `traffic-rewrite-rules` owns immutable
+proof groups and archived decision history. It reads managed E2E result types
+from `traffic-engine-e2e-contract`. `traffic-rewrite-rules` owns immutable
 rule proposals, proposal construction and revalidation, Source membership and
 rule-bound proof bindings, preflight, artifact witnesses and bounded rule
 discovery. Its planners cover unified rules, response verification, JWTs,
@@ -85,8 +90,10 @@ and policy bindings use the shared service packages.
 
 `traffic-engine-e2erun` owns managed E2E execution, selected Case lifecycles,
 assertion and session publication, Target OCI build/start/stop, runtime preflight
-assets and execution input identities. Its project contracts come from
-`traffic-engine-config`. The `execution` module owns lifecycle ordering and
+assets and execution input identities. `traffic-engine-e2e-contract` supplies
+run inputs and published result types to execution and their consumers.
+Project configuration comes from `traffic-engine-config`. The `execution`
+module owns lifecycle ordering and
 interruption dispatch through `ExecutionDriver`. The E2E application driver binds
 that port to the shared runtime services.
 
@@ -133,8 +140,11 @@ including build and target-specific dependencies.
 Extract libraries incrementally when their responsibility and dependency
 direction are explicit. `traffic-model` owns protocol-independent recording
 identities, ownership and outcomes. `traffic-protocol-mysql` and
-`traffic-protocol-redis` own their native framing and messages. Lower libraries
-must not depend on the root application, its configuration, `AppState`, or
+`traffic-protocol-redis` own their native framing and messages.
+`traffic-protocol-mysql-sql` owns bounded SQL analysis, selectors, templates,
+field projections and parameter binding. Policy libraries use those contracts
+directly. The MySQL provider uses the same contracts for capture and Replay.
+Lower libraries must not depend on the root application, its configuration, `AppState`, or
 `ReplayState`. Protocol extensions publish typed facts through the framework's
 event contract; the application owns capture and Replay execution.
 
@@ -256,10 +266,11 @@ through this port, and retains report aggregation and encrypted artifact access.
 Socket.IO's `delivery_windows` owns original namespace scope, native input ACK
 checkpoints and finite Source delivery intervals. Its host supplies authenticated
 metadata and lazily loads original output events when a checkpoint requires them.
-Native MySQL table selectors, SQL value templates, placeholder
-validation and savepoint correspondence live in its protocol library. Pure policy
-compilation returns prepared declarations. Application composition then validates
-the installed runtime adapters before publishing a compiled policy. Policy
+Native MySQL table selectors, SQL value templates and placeholder validation
+belong to `traffic-protocol-mysql-sql`. Savepoint correspondence stays with
+the native provider. Pure policy compilation returns prepared declarations.
+Application composition validates the installed runtime adapters before
+publishing a compiled policy. Policy
 comparison normalization is an optional provider
 capability. `traffic-policy-value::diagnosis` supplies bounded traversal and delegates
 canonical values to that installed provider.
@@ -632,8 +643,8 @@ native protocols supply their own summaries and participate in the same
 Source-only preparation and live Global publication path.
 
 Run tests and Clippy across the workspace so extracted library tests remain
-part of the ordinary verification path. Product source files in `crates/`
-retain the same responsibility and 1000-line requirements as `src/`.
+part of the ordinary verification path. Workspace member source files follow
+the same responsibility and 1000-line requirements as the root `src/`.
 
 ## Current Boundaries
 
@@ -815,8 +826,9 @@ retain the same responsibility and 1000-line requirements as `src/`.
   execution budgets; `lifecycle`, `socketio`, `stream` and `observation` own pure
   framing, completion correlation and monotonic case decisions. They do not read
   expected evidence, persist recordings or own dependency cleanup.
-  `interaction/artifact` prepares plaintext output artifacts without duplicating
-  the raw stream body. `interaction/private` reads historical encrypted input
+  `traffic-engine-evidence::interaction::artifact` prepares plaintext output
+  artifacts without duplicating the raw stream body.
+  `traffic-engine-evidence::interaction::private` reads historical encrypted input
   and output envelopes; its old writers exist only as compatibility test fixtures.
   New initial and upgrade request headers reuse Recorder's configured header capture.
   `traffic-protocol-http::interaction::client/timing` owns the replay timing choice, monotonic Source-offset
@@ -1751,6 +1763,9 @@ retain the same responsibility and 1000-line requirements as `src/`.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and
   diagnostics; CLI entry points delegate to it. `command_output` owns shared
   broken-pipe-safe diagnostic output for those library and CLI callers.
+  `traffic-engine-environment::tcp_listener` owns local listener binding and
+  bounded process diagnostics. `traffic-recording-model::network_probe` defines
+  managed preflight probe identities and recognizes their native recording events.
 - The root `lib.rs` reexports the application API.
   `traffic-e2e-app/src/lib.rs` owns default composition and compatibility wrappers.
   `traffic-engine/src/lib.rs` owns shared recording and execution state.

@@ -1,0 +1,57 @@
+[package]
+name = "traffic-replay-runtime"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-support = [
+    "dep:base64",
+    "dep:hyper",
+    "dep:traffic-engine-recording",
+    "traffic-engine-recording/test-support",
+    "traffic-engine-replay/test-support",
+    "traffic-engine-verification/test-support",
+]
+
+[dependencies]
+traffic-engine-config = { workspace = true }
+traffic-engine-evidence = { workspace = true }
+traffic-engine-recording = { workspace = true, optional = true }
+traffic-engine-replay = { workspace = true }
+traffic-engine-verification = { workspace = true }
+traffic-recording-model = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-value = { workspace = true }
+traffic-model = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-replay = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true, optional = true }
+chrono = { workspace = true, features = ["serde"] }
+futures-util = { workspace = true, features = ["sink"] }
+hyper = { workspace = true, features = ["client", "http1", "server"], optional = true }
+libc = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+
+[dev-dependencies]
+traffic-contract = { workspace = true, features = ["test-support"] }
+traffic-engine-recording = { workspace = true, features = ["test-support"] }
+traffic-engine-replay = { workspace = true, features = ["test-support"] }
+traffic-engine-verification = { workspace = true, features = ["test-support"] }
+traffic-policy-value = { workspace = true }
+traffic-protocol-fixture = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-protocol-mysql = { workspace = true, features = ["test-support"] }
+traffic-protocol-redis = { workspace = true }
+rustls = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tokio-rustls = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+base64 = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }

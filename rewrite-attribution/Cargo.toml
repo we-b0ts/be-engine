@@ -1,0 +1,19 @@
+[package]
+name = "traffic-rewrite-attribution"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+traffic-rewrite-runtime = { workspace = true }
+hyper = { workspace = true }
+traffic-rewrite-evidence = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+traffic-engine = { workspace = true }
+traffic-rewrite-model = { workspace = true }
+traffic-rewrite-rules = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }

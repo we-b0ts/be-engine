@@ -1,0 +1,21 @@
+[package]
+name = "traffic-policy-compiler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+hyper = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-policy-value = { workspace = true }
+traffic-value = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-policy-schema = { workspace = true }
+traffic-protocol-mysql-sql = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-codec-protobuf = { workspace = true }
+
+[dev-dependencies]
+traffic-codec-string = { workspace = true }

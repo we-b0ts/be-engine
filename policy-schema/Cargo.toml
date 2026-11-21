@@ -1,0 +1,36 @@
+[package]
+name = "traffic-policy-schema"
+version.workspace = true
+edition.workspace = true
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"], optional = true }
+base64 = { workspace = true }
+hyper = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
+traffic-jwt = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-value = { workspace = true }
+traffic-time = { workspace = true }
+traffic-codec-json = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-protocol-mysql-sql = { workspace = true }
+traffic-protocol-redis = { workspace = true }
+traffic-codec-protobuf = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-response-rewrite = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+serde_yaml = { workspace = true }
+
+[dev-dependencies.traffic-extensions]
+workspace = true
+features = ["policy-identity", "policy-response-rewrite", "policy-time", "policy-unordered"]

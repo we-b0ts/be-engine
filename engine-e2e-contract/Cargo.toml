@@ -1,0 +1,12 @@
+[package]
+name = "traffic-engine-e2e-contract"
+version.workspace = true
+edition.workspace = true
+description = "Managed E2E run inputs and published result contracts"
+
+[dependencies]
+traffic-engine-environment = { workspace = true }
+traffic-policy-content = { workspace = true }
+traffic-policy-schema = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

@@ -1,0 +1,8 @@
+[package]
+name = "traffic-codec-string"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-value = { workspace = true }
+anyhow = { workspace = true }

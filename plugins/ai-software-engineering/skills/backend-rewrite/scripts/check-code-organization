@@ -20,6 +20,14 @@ product_paths=(
   'apps/**/src/**/*.rs'
   'apps/**/src/*.rs'
 )
+member_roots=()
+for manifest in */Cargo.toml; do
+  member_src="${manifest%/Cargo.toml}/src"
+  if [ -f "$manifest" ] && [ -d "$member_src" ]; then
+    member_roots+=("$member_src")
+    product_paths+=("$member_src/**/*.rs" "$member_src/*.rs")
+  fi
+done
 
 usage() {
   cat <<'EOF'
@@ -27,8 +35,8 @@ Usage: check-code-organization [--all]
 
 Run from the target backend repository or one of its subdirectories.
 
-  no arguments  Check changed and untracked Rust product files under the
-                conventional src/, crates/**/src/, and apps/**/src/ roots.
+  no arguments  Check changed and untracked Rust product files under src/,
+                first-level Cargo packages, crates/**/src/, and apps/**/src/.
   --all         Check every tracked and untracked Rust product file in those
                 roots.
 EOF
@@ -77,7 +85,7 @@ all_files() {
 }
 
 find_product_files() {
-  local roots=()
+  local roots=("${member_roots[@]}")
   local candidate
   for candidate in src crates apps; do
     if [ -d "$candidate" ]; then

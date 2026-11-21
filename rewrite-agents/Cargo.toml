@@ -1,0 +1,15 @@
+[package]
+name = "traffic-rewrite-agents"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-engine = { workspace = true }
+traffic-rewrite-model = { workspace = true }
+traffic-rewrite-review = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }

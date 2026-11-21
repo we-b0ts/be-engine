@@ -2946,6 +2946,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "traffic-engine-e2e-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "traffic-engine-environment",
+ "traffic-policy-content",
+ "traffic-policy-schema",
+]
+
+[[package]]
 name = "traffic-engine-e2erun"
 version = "0.1.0"
 dependencies = [
@@ -2969,6 +2980,7 @@ dependencies = [
  "tracing",
  "traffic-contract",
  "traffic-engine-config",
+ "traffic-engine-e2e-contract",
  "traffic-engine-environment",
  "traffic-engine-evidence",
  "traffic-engine-policy",
@@ -2980,6 +2992,7 @@ dependencies = [
  "traffic-protocol",
  "traffic-protocol-mysql",
  "traffic-recorder",
+ "traffic-recording-model",
  "traffic-recording-store",
  "url",
  "uuid",
@@ -3299,7 +3312,7 @@ dependencies = [
  "traffic-policy-schema",
  "traffic-policy-value",
  "traffic-protocol-http",
- "traffic-protocol-mysql",
+ "traffic-protocol-mysql-sql",
  "traffic-value",
 ]
 
@@ -3337,7 +3350,7 @@ dependencies = [
  "traffic-policy-schema",
  "traffic-policy-value",
  "traffic-protocol-http",
- "traffic-protocol-mysql",
+ "traffic-protocol-mysql-sql",
  "traffic-response-rewrite",
 ]
 
@@ -3414,7 +3427,7 @@ dependencies = [
  "traffic-policy",
  "traffic-protocol",
  "traffic-protocol-http",
- "traffic-protocol-mysql",
+ "traffic-protocol-mysql-sql",
  "traffic-protocol-redis",
  "traffic-response-rewrite",
  "traffic-time",
@@ -3554,9 +3567,22 @@ dependencies = [
  "traffic-policy-execution",
  "traffic-policy-value",
  "traffic-protocol",
+ "traffic-protocol-mysql-sql",
  "traffic-replay",
  "traffic-value",
  "uuid",
+]
+
+[[package]]
+name = "traffic-protocol-mysql-sql"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "traffic-protocol",
 ]
 
 [[package]]
@@ -3602,9 +3628,12 @@ dependencies = [
 name = "traffic-recording-model"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
+ "clap",
  "serde",
  "serde_json",
+ "tempfile",
  "traffic-model",
  "traffic-protocol",
  "traffic-protocol-http",
@@ -3668,7 +3697,11 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "traffic-contract",
- "traffic-engine",
+ "traffic-engine-config",
+ "traffic-engine-evidence",
+ "traffic-engine-recording",
+ "traffic-engine-replay",
+ "traffic-engine-verification",
  "traffic-model",
  "traffic-policy-value",
  "traffic-protocol",
@@ -3676,6 +3709,7 @@ dependencies = [
  "traffic-protocol-http",
  "traffic-protocol-mysql",
  "traffic-protocol-redis",
+ "traffic-recording-model",
  "traffic-replay",
  "traffic-value",
  "uuid",
@@ -3841,7 +3875,10 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tempfile",
- "traffic-engine",
+ "traffic-engine-config",
+ "traffic-engine-e2e-contract",
+ "traffic-engine-evidence",
+ "traffic-engine-verification",
  "traffic-recording-store",
  "traffic-rewrite-core",
  "uuid",
@@ -3875,9 +3912,15 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tempfile",
- "traffic-engine",
+ "traffic-engine-config",
+ "traffic-engine-e2erun",
+ "traffic-engine-environment",
+ "traffic-engine-evidence",
+ "traffic-engine-replay",
+ "traffic-engine-verification",
  "traffic-policy",
  "traffic-protocol",
+ "traffic-recording-model",
  "traffic-rewrite-model",
  "traffic-rewrite-runtime",
  "traffic-value",
@@ -3893,7 +3936,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "traffic-engine",
+ "traffic-engine-environment",
  "traffic-rewrite-model",
  "uuid",
 ]

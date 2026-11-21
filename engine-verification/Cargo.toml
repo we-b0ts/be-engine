@@ -1,0 +1,61 @@
+[package]
+name = "traffic-engine-verification"
+version.workspace = true
+edition.workspace = true
+description = "Primary input and response policy verification"
+
+[features]
+test-support = ["dep:tempfile", "traffic-engine-replay/test-support", "traffic-engine-policy/test-support"]
+
+[dependencies]
+traffic-engine-replay = { workspace = true }
+traffic-engine-evidence = { workspace = true }
+traffic-engine-config = { workspace = true }
+traffic-recording-model = { workspace = true }
+traffic-engine-policy = { workspace = true }
+traffic-engine-environment = { workspace = true }
+traffic-policy-content = { workspace = true }
+traffic-policy-generated = { workspace = true }
+traffic-policy-execution = { workspace = true }
+traffic-policy-compiler = { workspace = true }
+traffic-jwt = { workspace = true }
+traffic-policy-schema = { workspace = true, features = ["cli"] }
+traffic-contract = { workspace = true }
+traffic-policy-value = { workspace = true }
+traffic-value = { workspace = true }
+traffic-codec-protobuf = { workspace = true }
+traffic-extensions = { workspace = true, default-features = true }
+traffic-model = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-protocol-mysql = { workspace = true }
+traffic-protocol-redis = { workspace = true }
+aes-gcm = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive", "env"] }
+dotenvy = { workspace = true }
+futures-util = { workspace = true, features = ["sink"] }
+hmac = { workspace = true }
+jsonwebtoken = { workspace = true }
+md-5 = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "server", "tokio"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+zip = { workspace = true, features = ["deflate"] }
+tempfile = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+tempfile = { workspace = true }

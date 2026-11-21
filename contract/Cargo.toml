@@ -1,0 +1,22 @@
+[package]
+name = "traffic-contract"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+traffic-value = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-time = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+traffic-extensions = { workspace = true, features = ["policy-unordered", "policy-time", "policy-identity"] }

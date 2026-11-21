@@ -1,0 +1,10 @@
+[package]
+name = "traffic-e2e-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-engine = { workspace = true }
+traffic-rewrite = { workspace = true }
+traffic-replay-runtime = { workspace = true }
+anyhow = { workspace = true }

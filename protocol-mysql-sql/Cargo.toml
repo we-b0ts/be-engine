@@ -1,0 +1,13 @@
+[package]
+name = "traffic-protocol-mysql-sql"
+version.workspace = true
+edition.workspace = true
+description = "MySQL SQL grammar, selectors, and value binding"
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sqlparser = { workspace = true, features = ["std", "visitor"] }
+traffic-protocol = { workspace = true }

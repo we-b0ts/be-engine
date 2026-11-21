@@ -1,0 +1,22 @@
+[package]
+name = "traffic-policy-execution"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-policy-value = { workspace = true }
+traffic-value = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+serde_yaml = { workspace = true }
+traffic-extensions = { workspace = true, default-features = true }
+traffic-codec-string = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-jwt = { workspace = true }

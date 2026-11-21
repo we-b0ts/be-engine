@@ -1,0 +1,18 @@
+[package]
+name = "traffic-jwt"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+jsonwebtoken = { workspace = true }
+rustls-pemfile = { workspace = true }
+x509-parser = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+hmac = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+traffic-codec-json = { workspace = true }
+traffic-time = { workspace = true }
+uuid = { workspace = true }

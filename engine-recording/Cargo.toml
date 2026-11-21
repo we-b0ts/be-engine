@@ -1,0 +1,59 @@
+[package]
+name = "traffic-engine-recording"
+version.workspace = true
+edition.workspace = true
+description = "Standalone recording and Source runtime"
+
+[features]
+test-support = ["dep:tempfile", "traffic-engine-config/test-support", "traffic-recorder/test-support"]
+
+[dependencies]
+traffic-engine-replay = { workspace = true }
+traffic-engine-evidence = { workspace = true }
+traffic-engine-config = { workspace = true }
+traffic-recording-model = { workspace = true }
+traffic-engine-environment = { workspace = true }
+traffic-recorder = { workspace = true }
+traffic-model = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-replay = { workspace = true }
+traffic-protocol-mysql = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+brz-http-gateway = { workspace = true, features = ["redis-recording"] }
+brz-redis = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive", "env"] }
+futures-util = { workspace = true, features = ["sink"] }
+sha2 = { workspace = true }
+http-body-util = { workspace = true }
+http-body = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+hyper-rustls = { workspace = true, features = ["http1", "webpki-roots"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "server", "tokio"] }
+tower-service = { workspace = true }
+libc = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+webpki-roots = { workspace = true }
+zip = { workspace = true, features = ["deflate"] }
+tempfile = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+traffic-engine-config = { workspace = true, features = ["test-support"] }
+traffic-engine-verification = { workspace = true, features = ["test-support"] }
+traffic-recorder = { workspace = true, features = ["test-support"] }
+tempfile = { workspace = true }

@@ -1,0 +1,71 @@
+[package]
+name = "traffic-engine"
+version.workspace = true
+edition.workspace = true
+build = "../build.rs"
+
+[features]
+test-support = ["traffic-engine-e2erun/test-support", "traffic-engine-recording/test-support", "traffic-engine-verification/test-support", "traffic-engine-replay/test-support", "traffic-engine-evidence/test-support", "traffic-engine-config/test-support", "traffic-engine-policy/test-support", "traffic-engine-environment/test-support", "dep:tempfile", "traffic-recorder/test-support", "traffic-recording-store/test-support", "traffic-contract/test-support", "traffic-policy-execution/test-support", "traffic-protocol-mysql/test-support"]
+
+[dependencies]
+traffic-engine-e2erun = { workspace = true }
+traffic-engine-recording = { workspace = true }
+traffic-engine-verification = { workspace = true }
+traffic-engine-replay = { workspace = true }
+traffic-engine-evidence = { workspace = true }
+traffic-engine-config = { workspace = true }
+traffic-engine-policy = { workspace = true }
+traffic-engine-environment = { workspace = true }
+traffic-recorder = { workspace = true }
+traffic-policy-execution = { workspace = true }
+traffic-policy-compiler = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-policy-value = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-extensions = { workspace = true, default-features = true }
+traffic-protocol = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-recording-store = { workspace = true }
+traffic-protocol-mysql = { workspace = true }
+traffic-protocol-redis = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+futures-util = { workspace = true, features = ["sink"] }
+jsonwebtoken = { workspace = true }
+sha2 = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "server", "tokio"] }
+libc = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+zip = { workspace = true, features = ["deflate"] }
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+traffic-engine-e2erun = { workspace = true, features = ["test-support"] }
+traffic-engine-recording = { workspace = true, features = ["test-support"] }
+traffic-engine-verification = { workspace = true, features = ["test-support"] }
+traffic-engine-replay = { workspace = true, features = ["test-support"] }
+traffic-engine-evidence = { workspace = true, features = ["test-support"] }
+traffic-engine-config = { workspace = true, features = ["test-support"] }
+traffic-engine-policy = { workspace = true, features = ["test-support"] }
+traffic-engine-environment = { workspace = true, features = ["test-support"] }
+traffic-recorder = { workspace = true, features = ["test-support"] }
+traffic-policy-execution = { workspace = true, features = ["test-support"] }
+traffic-recording-store = { workspace = true, features = ["test-support"] }
+traffic-protocol-fixture = { workspace = true }
+traffic-contract = { workspace = true, features = ["test-support"] }
+traffic-protocol-mysql = { workspace = true, features = ["test-support"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "mysql", "chrono", "bigdecimal"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

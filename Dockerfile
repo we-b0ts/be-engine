@@ -4,15 +4,11 @@ ARG RUNTIME_IMAGE=be-engine-recorder-runtime:local
 FROM ${RUST_IMAGE} AS builder
 
 WORKDIR /build
-COPY Cargo.toml Cargo.lock build.rs ./
-COPY .cargo ./.cargo
-COPY crates ./crates
-COPY src ./src
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/build/target,sharing=locked \
-    cargo build --locked --release --bin traffic-e2e \
-    && install -m 0755 /build/target/release/traffic-e2e /tmp/traffic-e2e
+RUN --mount=type=bind,target=/build \
+    --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    cargo build --locked --release --bin traffic-e2e --target-dir /cargo-target \
+    && install -m 0755 /cargo-target/release/traffic-e2e /tmp/traffic-e2e
 
 FROM ${RUNTIME_IMAGE}
 

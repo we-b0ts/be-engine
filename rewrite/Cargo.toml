@@ -1,0 +1,55 @@
+[package]
+name = "traffic-rewrite"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-support = ["traffic-rewrite-attribution/test-support", "traffic-engine/test-support", "traffic-rewrite-review/test-support", "dep:tempfile"]
+
+[dependencies]
+traffic-rewrite-agents = { workspace = true }
+traffic-rewrite-attribution = { workspace = true }
+tempfile = { workspace = true, optional = true }
+traffic-rewrite-evidence = { workspace = true }
+traffic-rewrite-review = { workspace = true }
+traffic-rewrite-rules = { workspace = true }
+traffic-rewrite-runtime = { workspace = true }
+traffic-rewrite-model = { workspace = true }
+traffic-engine = { workspace = true }
+traffic-rewrite-core = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-value = { workspace = true }
+traffic-protocol = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+jsonwebtoken = { workspace = true }
+sha2 = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+libc = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_yaml = { workspace = true }
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+syn = { workspace = true, features = ["full", "visit"] }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+
+[dev-dependencies]
+traffic-rewrite-attribution = { workspace = true, features = ["test-support"] }
+traffic-rewrite-evidence = { workspace = true, features = ["test-support"] }
+traffic-rewrite-review = { workspace = true, features = ["test-support"] }
+traffic-rewrite-rules = { workspace = true, features = ["test-support"] }
+traffic-rewrite-model = { workspace = true, features = ["test-support"] }
+traffic-contract = { workspace = true, features = ["test-support"] }
+traffic-engine = { workspace = true, features = ["test-support"] }
+traffic-protocol-mysql = { workspace = true, features = ["test-support"] }
+traffic-protocol-redis = { workspace = true }
+traffic-replay-runtime = { workspace = true, features = ["test-support"] }
+aes-gcm = { workspace = true }
+http-body-util = { workspace = true }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "server", "tokio"] }
+md-5 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

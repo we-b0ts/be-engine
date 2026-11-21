@@ -1,0 +1,14 @@
+[package]
+name = "traffic-rewrite-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-engine-environment = { workspace = true }
+traffic-rewrite-model = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+libc = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
