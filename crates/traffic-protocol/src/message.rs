@@ -43,6 +43,10 @@ impl ProjectedValue {
 /// A protocol supplies locations, intrinsic structure and native encoding. The
 /// framework applies codecs and field rules to the projected byte values.
 pub trait ProtocolMessage: Send + Sync {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
     fn command_name(&self) -> Option<&str> {
         None
     }

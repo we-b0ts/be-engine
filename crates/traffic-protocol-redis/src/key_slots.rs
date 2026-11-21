@@ -14,7 +14,7 @@ pub(crate) fn script_key_slots(count: &[u8], argument_count: usize) -> Result<Ra
     Ok(2..end)
 }
 
-pub fn key_indices(command: &str, args: &[Vec<u8>]) -> Result<Vec<usize>> {
+pub fn key_indices(command: &str, args: &[impl AsRef<[u8]>]) -> Result<Vec<usize>> {
     let indices = match command {
         "MGET" | "DEL" | "UNLINK" | "EXISTS" | "TOUCH" | "SDIFF" | "SINTER" | "SUNION"
         | "PFCOUNT" => (0..args.len()).collect(),
@@ -32,7 +32,7 @@ pub fn key_indices(command: &str, args: &[Vec<u8>]) -> Result<Vec<usize>> {
         }
         "EVAL" | "EVALSHA" => {
             ensure!(args.len() >= 2, "Redis script key count is absent");
-            script_key_slots(&args[1], args.len())?.collect()
+            script_key_slots(args[1].as_ref(), args.len())?.collect()
         }
         "DELEX" | "GET" | "SET" | "SETNX" | "SETEX" | "PSETEX" | "GETSET" | "GETDEL" | "GETEX"
         | "APPEND" | "STRLEN" | "GETRANGE" | "SETRANGE" | "INCR" | "INCRBY" | "INCRBYFLOAT"

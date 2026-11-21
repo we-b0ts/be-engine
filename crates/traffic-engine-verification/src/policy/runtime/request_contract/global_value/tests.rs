@@ -53,6 +53,19 @@ json:
 }
 
 #[test]
+fn empty_json_policy_does_not_enable_native_storage_preparation() {
+    use crate::replay::policy::ValueRuleHost;
+
+    let mut contracts = RequestContracts::default();
+    let compiled = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\n").unwrap();
+    contracts
+        .configure_compiled(Some(Arc::new(compiled)))
+        .unwrap();
+    assert!(!contracts.may_bind_native_documents());
+    assert!(owner().may_bind_native_documents());
+}
+
+#[test]
 fn url_query_delivery_shares_one_uncommitted_identity_with_root_and_other_urls() {
     let owner = url_owner();
     let original = serde_json::json!({"session_id":A,

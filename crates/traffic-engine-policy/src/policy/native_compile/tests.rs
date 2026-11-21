@@ -42,7 +42,6 @@ fn path_rule() -> NativeRule {
             ..Default::default()
         },
         effect: NativeEffect::Identity(IdentityEffect {
-            read_back: vec![],
             value_type: IdentityType::String,
             format: None,
             references: vec![proven(IdentityTarget { resource })],
@@ -275,7 +274,6 @@ fn grouped_clock_names_are_semantic_and_sequence_claims_keep_command_slots() {
             ..Default::default()
         },
         effect: NativeEffect::RedisSequence(RedisSequenceEffect {
-            read_back: vec![],
             key: None,
             commands: vec![SequenceCommand {
                 operation: "ZADD".into(),

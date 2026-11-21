@@ -1,3 +1,7 @@
+use crate::policy::{
+    TrafficPolicy,
+    compiler::{compile_definition, decode_policy},
+};
 use crate::policy::{compile_policy, parse_policy, render_policy};
 use serde_json::{Value, json};
 
@@ -7,6 +11,12 @@ fn policy(keys: Value) -> Value {
         "rules":[]})
 }
 
+fn render_key_policy(policy: &TrafficPolicy) -> String {
+    use crate::policy::authoring::{context, view};
+
+    traffic_policy_document::authoring::render_policy(&view(policy), &context()).unwrap()
+}
+
 #[test]
 fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_bindings() {
     let raw = policy(json!({
@@ -14,17 +24,17 @@ fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_binding
         "chat:cancel:*":{"read_commutation":true},
         "task:cancel:*":{"state":{"get":{"transient":["nil"]}}},
         "chat:streaming:text_block:*":{"kind":"identity",
-            "formats":[{"prefix":"text-","format":"decimal"}],"read_back":true}
+            "formats":[{"prefix":"text-","format":"decimal"}]}
     }));
-    let document = parse_policy(&raw.to_string()).unwrap();
-    let compiled = compile_policy(&document).unwrap();
-    assert_eq!(compiled.native.len(), 5);
+    let document = decode_policy(&raw.to_string()).unwrap();
+    let compiled = compile_definition(&document).unwrap();
+    assert_eq!(compiled.native.len(), 4);
     assert_eq!(compiled.redis.as_ref().unwrap().keys.len(), 1);
     for rule in &compiled.native {
         assert!(rule.rule.selector.api.is_none());
         assert!(rule.rule.selector.resource.is_none());
     }
-    let rendered = render_policy(&document).unwrap();
+    let rendered = render_key_policy(&document);
     let authored: Value = serde_yaml::from_str(&rendered).unwrap();
     assert!(authored["redis"].get("rules").is_none());
     assert_eq!(
@@ -40,14 +50,13 @@ fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_binding
         "refresh"
     );
     assert_eq!(
-        authored["redis"]["keys"]["chat:streaming:text_block:*"]["read_back"],
-        true
+        authored["redis"]["keys"]["chat:streaming:text_block:*"]["kind"],
+        "identity"
     );
     for hidden in [
         "binding:",
         "capture:",
         "references:",
-        "state_epochs:",
         "redis.key.",
         "api:",
         "proof:",
@@ -55,7 +64,7 @@ fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_binding
         assert!(!rendered.contains(hidden), "{rendered}");
     }
     assert_eq!(
-        compile_policy(&parse_policy(&rendered).unwrap())
+        compile_definition(&decode_policy(&rendered).unwrap())
             .unwrap()
             .fingerprints,
         compiled.fingerprints
@@ -75,30 +84,6 @@ fn global_key_permissions_do_not_depend_on_resource_aliases() {
 }
 
 #[test]
-fn nil_commutation_addition_preserves_the_existing_read_back_rule() {
-    let base = policy(json!({"thinking:*":{"kind":"identity",
-        "formats":[{"prefix":"thinking-","hex":12}],"read_back":true}}));
-    let original = compile_policy(&parse_policy(&base.to_string()).unwrap()).unwrap();
-    let mut added = base;
-    added["redis"]["keys"]["thinking:*"]["read_commutation"] = json!(true);
-    let document = parse_policy(&added.to_string()).unwrap();
-    let compiled = compile_policy(&document).unwrap();
-    assert_eq!(compiled.native.len(), 2);
-    let unchanged = compiled
-        .native
-        .iter()
-        .find(|r| r.rule.id == original.native[0].rule.id)
-        .unwrap();
-    assert_eq!(unchanged.fingerprint, original.native[0].fingerprint);
-    let rendered: Value = serde_yaml::from_str(&render_policy(&document).unwrap()).unwrap();
-    assert_eq!(rendered["redis"]["keys"]["thinking:*"]["read_back"], true);
-    assert_eq!(
-        rendered["redis"]["keys"]["thinking:*"]["read_commutation"],
-        true
-    );
-}
-
-#[test]
 fn malformed_and_duplicate_key_permissions_are_rejected() {
     for keys in [
         json!({"content:*":{"resource":"missing","state":{"append":"concatenate"}}}),
@@ -110,7 +95,7 @@ fn malformed_and_duplicate_key_permissions_are_rejected() {
         json!({"*":{"state":{"append":"concatenate"}}}),
         json!({"a*b*c":{"state":{"append":"concatenate"}}}),
         json!({"content:*":{"read_back":true}}),
-        json!({"content:*":{"kind":"time","formats":["unix_seconds"],"read_back":true}}),
+        json!({"content:*":{"kind":"identity","formats":["uuid"],"read_back":true}}),
         json!({"content:*":{"finite_sharing":{"operation":"HGET"}}}),
         json!({"content:*":{"state":{"append":"concatenate"}},
             "content:part:*":{"state":{"append":"concatenate"}}}),

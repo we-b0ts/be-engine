@@ -1,30 +1,29 @@
 use super::*;
 
 #[test]
-fn state_contract_roundtrips_all_effects_and_separate_read_back() {
+fn state_contract_roundtrips_all_effects() {
     let raw = policy(json!({
         "stream:*":{"state":{"append":"concatenate","expire":"refresh"}},
-        "current:*":{"kind":"identity","formats":["uuid"],"read_back":true,
+        "current:*":{"kind":"identity","formats":["uuid"],
             "state":{"get":{"transient":["nil"]},"set":"transition"}},
         "activity:*":{"state":{"get":"observe","set":{"reduce":"last","fields":["/last_activity_at"]}}},
         "poll:*":{"state":{"get":"observe"}}
     }));
-    let document = parse_policy(&raw.to_string()).unwrap();
-    let compiled = compile_policy(&document).unwrap();
-    assert_eq!(compiled.native.len(), 6);
-    let rendered = render_policy(&document).unwrap();
+    let document = decode_policy(&raw.to_string()).unwrap();
+    let compiled = compile_definition(&document).unwrap();
+    assert_eq!(compiled.native.len(), 5);
+    let rendered = render_key_policy(&document);
     let authored: Value = serde_yaml::from_str(&rendered).unwrap();
     assert_eq!(
         authored["redis"]["keys"]["current:*"]["state"]["get"],
         json!({"transient":["nil"]})
     );
-    assert_eq!(authored["redis"]["keys"]["current:*"]["read_back"], true);
     assert_eq!(
         authored["redis"]["keys"]["activity:*"]["state"]["set"],
         json!({"reduce":"last","fields":["/last_activity_at"]})
     );
     assert_eq!(
-        compile_policy(&parse_policy(&rendered).unwrap())
+        compile_definition(&decode_policy(&rendered).unwrap())
             .unwrap()
             .fingerprints,
         compiled.fingerprints

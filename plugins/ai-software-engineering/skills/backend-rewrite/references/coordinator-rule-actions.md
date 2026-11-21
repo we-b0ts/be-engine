@@ -123,15 +123,13 @@ write the same unified policy atomically. They are not value relaxations.
 
 ## Redis Key Behavior And Dependency Lifetimes
 
-Declare `state.append: concatenate`, `read_commutation: true`, `state.expire: refresh`
-or scalar identity `read_back: true` on a bounded `redis.keys` pattern. No API,
-resource alias or database selector is needed. The engine retains actual
-endpoint/database/authentication partitions and complete causal Source proof.
-APPEND preserves all ordered bytes and read/reset fences; finite nil polling
-retains its call counts; explicit state.get permits variable observations and
-transient nil permits 0..N nil reads; positive TTL refresh retains exact TTLs; current-ID
-read-back cannot borrow a future/deleted identity. Historical reads before an
-owned successful SET stay finite. Inspect the earliest Target admission error.
+Declare `state.append: concatenate`, `read_commutation: true` or
+`state.expire: refresh` on a bounded `redis.keys` pattern. The engine retains
+actual endpoint, database and authentication partitions and complete causal
+Source proof. APPEND preserves ordered bytes and read/reset fences. Finite nil
+polling retains its call counts. Explicit `state.get` permits variable
+observations, and transient nil permits 0..N nil reads. Positive TTL refresh
+retains exact TTLs. Inspect the earliest Target admission error.
 
 `commands` lists ordered Redis operations. Selected scalar time arguments use
 one format; script operations retain exact script digests. Optional `key_format`
@@ -139,7 +137,7 @@ describes a generated wildcard key segment. Complete JSON values always use
 root `json.fields`. Do not author bindings, shared clock groups or relations.
 See [key declarations](../../../../../docs/redis-key-contracts.md),
 [APPEND](../../../../../docs/redis-append-stream.md),
-[read-back](../../../../../docs/redis-read-back.md) and
+[write-to-read delivery](../../../../../docs/redis-read-back.md) and
 [state contracts](../../../../../docs/redis-state-contracts.md).
 
 A redis_loop_state hint identifies a possible Source loop, polling/retry body or

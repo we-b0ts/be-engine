@@ -48,11 +48,11 @@ See [global field formats](../../../../../docs/resource-field-contracts.md).
 | Expired recorded Redis/MySQL input | Global time formats or safe native SQL temporal metadata inference; historical copied values retain read provenance | Raw Source bytes, sentinel values, protocol outcomes, finite inventory and signature dependencies |
 | An ordinary generated ID is reused across resource fields | Declare JSON pointer formats globally and scalar MySQL fields under `mysql.tables`; SQL templates, value ordinals and generator-first capture are unnecessary | Bijection, case scope, explicit format, guarded eligibility and atomic candidate decisions |
 | Redis/MySQL reads a declared identity before later use | Keep the global field/key format: established mappings deliver Target IDs; unknown inputs anchor themselves | Selected locations, successful delivery, original Source data flow, finite reads and fresh Replay |
-| A native captured identity gains an additional consumer or special read-back behavior | Extend the existing native `effect.references` / `read_back` with separate proof; [details](../../../../../docs/dynamic-value-rules.md) | Existing capture/scope/proofs; native causality and templates. This is additional behavior, not the default authoring model for ordinary fields |
+| A native captured identity gains an additional consumer | Extend the existing native `effect.references` with separate proof. See [details](../../../../../docs/dynamic-value-rules.md) | Existing capture, scope, proofs and native causality |
 | SQL JSON combines identities and generated times in variable-length arrays | Declare root-relative JSON paths such as `/blocks/*/id` and `/blocks/*/timestamp`; retain native proof only for additional causal relations | Automatic identity correspondence, array shape/order, business members and independent time clocks |
 | LSET updates a stored JSON list element | Use the global `json.fields` paths for complete JSON list values; native contracts remain only for additional relationships | Exact key/list index, strict remainder, command framing and finite writes |
 | Source buffers ordered text into APPEND batches whose boundaries vary with scheduling | `redis.keys.<bounded-pattern>.state.append: concatenate`; see [schema](../../../../../docs/redis-append-stream.md) | Literal byte order, read/reset boundaries, correct returned lengths, exact finite expiry/other calls, successful delivery and Case ownership |
-| APPEND bytes match, but a changed batch count adds current-identity GETs or fixed-TTL EXPIREs | `redis.keys` `state.get: observe` (plus identity `read_back: true` for value mapping) or `state.expire: refresh`; see [state observations](../../../../../docs/redis-state-observations.md) | Follow the earliest Target admission index; preserve SET/DEL lifetimes, complete-value identity correspondence and exact TTL. Do not infer missing key translation from a later MGET mismatch caused by an earlier rejected batch |
+| APPEND bytes match, but a changed batch count adds current-identity GETs or fixed-TTL EXPIREs | Use `redis.keys` `state.get: observe` or `state.expire: refresh`. See [state observations](../../../../../docs/redis-state-observations.md) | Follow the earliest Target admission index. Preserve SET/DEL lifetimes, complete-value identity correspondence and exact TTL. A rejected batch can explain a later MGET mismatch |
 | A Source loop polls nil 0..N times or a debounce flush changes body counts | Inspect the `redis_loop_state` candidate; prove each key's effects, then use `state.get: {transient: [nil]}`, `state.append: concatenate`, `state.expire: refresh` or metadata `state.set: {reduce: last, fields: [...]}`; see [state contracts](../../../../../docs/redis-state-contracts.md) | Non-nil observations, real SET/DEL, complete bytes and unrelated business side effects remain required; omitted nil reads are audited separately from physical consumption |
 | Generated scalar Redis token and later script ARGV | `redis.keys` identity format; known complete values propagate automatically | Existing case identity, exact script/numkeys/KEYS, TTL/options, lanes and finite consumption |
 | Script ARGV/time-key or INCRBY/EXPIRE chain | `redis.keys.<pattern>.commands` with ordered operations, optional `key_format` and scalar argument time formats | Script identity, numkeys, KEYS, stable ARGV, sequence closure and derived key relationships |
@@ -79,10 +79,9 @@ equal Target IDs internally; prefixes and scalar types are preserved. Unknown
 delivered IDs remain input anchors. Missing events, changed text and event order
 require Target diagnosis. See [SSE value contracts](../../../../../docs/sse-value-contracts.md).
 
-When Source uses dependency reads, preserve that data flow. Ordinary declared
-identity fields use mapped read delivery; native read-back updates are for extra
-protocol/stateful behavior. Do not replace the read with a Target-local cache
-solely to compensate for Replay delivery.
+When Source uses dependency reads, preserve that data flow. Redis Replay
+delivers the exact Target bytes for a proven earlier string or hash write.
+See [write-to-read delivery](../../../../../docs/redis-read-back.md).
 For SQL scalar fields, return the actual table/column and Source-proven table-family
 bounds. Complete JSON needs only its global pointer; a new SQL statement needs
 no new strategy. Only a contextual native relationship needs exact statement and

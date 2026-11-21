@@ -57,8 +57,6 @@ mod native_transaction;
 mod ownership_transaction;
 #[path = "transaction_partial_redis.rs"]
 mod partial_redis_transaction;
-#[path = "transaction_read_back.rs"]
-mod read_back_transaction;
 #[path = "transaction_read_commutation.rs"]
 mod read_commutation_transaction;
 #[path = "transaction_read_observation.rs"]

@@ -32,6 +32,7 @@ pub struct Matched {
     pub case: Option<String>,
     pub epoch: u64,
     pub run_owned: bool,
+    pub storage: super::StorageDelivery,
 }
 
 pub struct Rejected {
@@ -94,6 +95,7 @@ impl Inventory {
         index: usize,
         observed: DateTime<Utc>,
         loaded: Option<&dyn traffic_protocol::message::MessageEncoder>,
+        storage: &super::StorageDelivery,
     ) -> Result<ResponsePlan> {
         let exchange = &self.core.exchanges[index];
         let prepared;
@@ -120,10 +122,12 @@ impl Inventory {
         };
         let scope = self.scope(index);
         let clocks = self.clocks(index, observed, true);
-        let rendered = response.render_delivery_with_documents(
+        let storage_values = self.storage_values(index, storage, response)?;
+        let rendered = response.render_delivery_with_storage(
             clocks,
             self.contracts.metadata(),
             &exchange.delivery,
+            &storage_values,
             |selected| {
                 self.contracts
                     .identity_deliveries(&scope, selected)

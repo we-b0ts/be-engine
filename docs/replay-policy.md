@@ -84,7 +84,7 @@ available. Continuation commands are bound to the active issue and reject stale
 queries. Empty candidates do not establish a missing engine capability.
 
 Bounded dependency operations also expose supported APPEND, finite nil-read
-commutation, expiry-refresh and Redis state/read-back mechanisms with their
+commutation, expiry-refresh and Redis state mechanisms with their
 Source proof requirements. These hints identify capabilities to investigate;
 they never authorize changed values, ordering or call counts.
 

@@ -2,18 +2,7 @@
 use anyhow::{Context, Result};
 
 use super::*;
-use crate::{
-    Codec, CompiledNativeRule, CompiledRule, FieldContract, KeySelector, MatchSpec, Slot, Surface,
-};
-
-fn implicit_identity_delivery(rule: &CompiledRule) -> bool {
-    rule.rule.surface == Surface::DependencyResponse
-        && rule
-            .rule
-            .contract
-            .values()
-            .any(|field| matches!(field.unconditional(), FieldContract::Identity { .. }))
-}
+use crate::{Codec, CompiledNativeRule, CompiledRule, KeySelector, MatchSpec, Slot, Surface};
 
 pub fn validate_field_claims(
     value: &[CompiledRule],
@@ -21,36 +10,6 @@ pub fn validate_field_claims(
     context: &crate::CompilationContext<'_>,
 ) -> Result<()> {
     validate_body_codecs(value, native, context)?;
-    let redis_read_back = native
-        .iter()
-        .filter(|rule| !rule.rule.effect.redis_read_back().is_empty())
-        .map(|rule| rule.rule.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let identity_read_back = native
-        .iter()
-        .filter(|rule| !rule.rule.effect.redis_read_back().is_empty())
-        .map(|rule| rule.rule.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let delivery = value
-        .iter()
-        .filter(|rule| rule.rule.delivery.is_some())
-        .map(|rule| rule.rule.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let identity_delivery = value
-        .iter()
-        .filter(|rule| implicit_identity_delivery(rule))
-        .map(|rule| rule.rule.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let observations = value
-        .iter()
-        .filter(|rule| {
-            rule.rule.surface == Surface::DependencyResponse
-                && matches!(rule.rule.slot, Slot::SqlField(_) | Slot::RedisValue(_))
-                && rule.delivery_time.is_empty()
-                && !implicit_identity_delivery(rule)
-        })
-        .map(|rule| rule.rule.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
     let mut claims = vec![];
     for compiled in value {
         claims.extend(value_claims(compiled, context)?);
@@ -78,30 +37,6 @@ pub fn validate_field_claims(
             {
                 continue;
             }
-            if super::read_commutation::compatible_read_back(native, claim, other) {
-                continue;
-            }
-            if observations.contains(claim.rule_id.as_str())
-                && redis_read_back.contains(other.rule_id.as_str())
-                || observations.contains(other.rule_id.as_str())
-                    && redis_read_back.contains(claim.rule_id.as_str())
-            {
-                continue;
-            }
-            anyhow::ensure!(
-                claim.surface != ClaimSurface::DependencyResponse
-                    || !(redis_read_back.contains(claim.rule_id.as_str())
-                        && delivery.contains(other.rule_id.as_str())
-                        || redis_read_back.contains(other.rule_id.as_str())
-                            && delivery.contains(claim.rule_id.as_str())
-                        || identity_read_back.contains(claim.rule_id.as_str())
-                            && identity_delivery.contains(other.rule_id.as_str())
-                        || identity_read_back.contains(other.rule_id.as_str())
-                            && identity_delivery.contains(claim.rule_id.as_str())),
-                "native read_back cannot share a response with another delivery owner: {:?} / {:?}",
-                claim.rule_id,
-                other.rule_id
-            );
             let overlap = locations_overlap(&claim.location, &other.location);
             if overlap && equivalent_context(value, native, claim, other) {
                 continue;

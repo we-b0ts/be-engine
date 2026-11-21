@@ -41,6 +41,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
             plan.sequence = Some(catalog.scope(protocols.chain(registered))?);
         }
         plan.rules = rules;
+        self.native.finish_storage_preparation(case);
         self.case_execution_plans
             .insert(case.to_owned(), Arc::new(plan));
         Ok(())

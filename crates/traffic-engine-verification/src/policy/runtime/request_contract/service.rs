@@ -106,6 +106,10 @@ impl ValueRuleHost for RequestContracts {
             }) as Arc<dyn traffic_policy_value::DocumentPolicy>
         })
     }
+    fn may_bind_native_documents(&self) -> bool {
+        self.global_json()
+            .is_some_and(|policy| !policy.fields.is_empty())
+    }
     fn begin_case(&self, case: &str) {
         Self::begin_case(self, case);
     }

@@ -32,6 +32,10 @@ pub enum RequestLocation {
 }
 
 impl ProtocolMessage for RequestMessage {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn project(&self) -> Result<ProjectedMessage> {
         Ok(ProjectedMessage {
             structure: json!({"command":self.command.to_ascii_uppercase(), "arguments":self.args.len(),

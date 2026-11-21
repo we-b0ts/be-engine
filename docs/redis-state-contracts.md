@@ -13,13 +13,11 @@ redis:
     'chat:streaming:thinking_block:*':
       kind: identity
       formats: [{prefix: thinking-, hex: 12}]
-      read_back: true
       state:
         get: {transient: [nil]}
     'chat:streaming:text_block:*':
       kind: identity
       formats: [{prefix: text-, format: decimal}]
-      read_back: true
       state:
         get: {transient: [nil]}
         set: transition
@@ -38,8 +36,10 @@ redis:
 | `set: transition` | Explicit ordinary finite SET transitions. Every write is required; omitting this declaration has the same meaning. |
 | `set: {reduce: last, fields: [...]}` | Metadata refresh with declared timestamp leaves. Stable fields and TTL remain exact. Creation/deletion and a delivered current-value GET before each refresh remain required. |
 
-`read_back` separately renders a current raw identity from an authenticated real
-SET. It does not grant variable read counts. Use `state.get` for those counts.
+Finite Redis exchanges use the exact Target bytes from supported prior writes.
+See [write-to-read delivery](redis-read-back.md).
+
+Use `state.get` for variable read counts.
 The metadata SET refresh owner validates its GET/SET pairs together; `get: observe`
 is implicit for that reduction. It cannot combine with transient nil.
 Timestamp refresh fields must also have a recognized `json.fields` time format.

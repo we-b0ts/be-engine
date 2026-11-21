@@ -31,7 +31,7 @@ rules: []
 # redis:
 #   keys:
 #     task-run-monitor:v2:as-of: {kind: time, formats: [unix_seconds]}
-#     'task:current:*': {kind: identity, formats: [uuid], read_back: true}
+#     'task:current:*': {kind: identity, formats: [uuid]}
 #     'task:content:*': {state: {append: concatenate, expire: refresh}}
 #     'task:cancel:*': {read_commutation: true}
 #     'task:counter:*': {commands: [INCRBY, EXPIRE]}

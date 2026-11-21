@@ -3,12 +3,15 @@ use traffic_protocol::connection::Operation as OperationClass;
 use super::RedisCommand;
 
 pub fn classify_command(command: &RedisCommand) -> OperationClass {
-    let name = command.name.as_str();
+    classify(&command.name, &command.args)
+}
+
+pub(crate) fn classify(name: &str, args: &[impl AsRef<[u8]>]) -> OperationClass {
     match name {
         "AUTH" | "HELLO" | "SELECT" | "PING" | "QUIT" | "RESET" => OperationClass::Session,
         _ if crate::is_pubsub_command(name) => OperationClass::Session,
         "CLIENT" => classify_subcommand(
-            command,
+            args,
             &["GETNAME", "ID", "INFO", "LIST"],
             &[
                 "CACHING", "NO-EVICT", "NO-TOUCH", "REPLY", "SETNAME", "SETINFO", "TRACKING",
@@ -16,13 +19,13 @@ pub fn classify_command(command: &RedisCommand) -> OperationClass {
             &["KILL", "PAUSE", "UNBLOCK", "UNPAUSE"],
         ),
         "CONFIG" => classify_subcommand(
-            command,
+            args,
             &["GET", "HELP"],
             &[],
             &["SET", "RESETSTAT", "REWRITE"],
         ),
         "ACL" => classify_subcommand(
-            command,
+            args,
             &[
                 "CAT", "DRYRUN", "GENPASS", "GETUSER", "HELP", "LIST", "LOG", "USERS", "WHOAMI",
             ],
@@ -30,19 +33,19 @@ pub fn classify_command(command: &RedisCommand) -> OperationClass {
             &["DELUSER", "LOAD", "SAVE", "SETUSER"],
         ),
         "SCRIPT" => classify_subcommand(
-            command,
+            args,
             &["EXISTS", "HELP"],
             &[],
             &["DEBUG", "FLUSH", "KILL", "LOAD"],
         ),
         "FUNCTION" => classify_subcommand(
-            command,
+            args,
             &["DUMP", "HELP", "LIST", "STATS"],
             &[],
             &["DELETE", "FLUSH", "KILL", "LOAD", "RESTORE"],
         ),
         "CLUSTER" => classify_subcommand(
-            command,
+            args,
             &[
                 "COUNT-FAILURE-REPORTS",
                 "COUNTKEYSINSLOT",
@@ -76,13 +79,13 @@ pub fn classify_command(command: &RedisCommand) -> OperationClass {
             ],
         ),
         "MEMORY" => classify_subcommand(
-            command,
+            args,
             &["DOCTOR", "HELP", "MALLOC-STATS", "STATS", "USAGE"],
             &[],
             &["PURGE"],
         ),
         "LATENCY" => classify_subcommand(
-            command,
+            args,
             &["DOCTOR", "GRAPH", "HELP", "HISTORY", "LATEST"],
             &[],
             &["RESET"],
@@ -193,10 +196,9 @@ pub fn classify_command(command: &RedisCommand) -> OperationClass {
             OperationClass::Write
         }
         "SORT" => {
-            if command
-                .args
+            if args
                 .iter()
-                .any(|arg| arg.eq_ignore_ascii_case(b"STORE"))
+                .any(|arg| arg.as_ref().eq_ignore_ascii_case(b"STORE"))
             {
                 OperationClass::Write
             } else {
@@ -208,12 +210,12 @@ pub fn classify_command(command: &RedisCommand) -> OperationClass {
 }
 
 fn classify_subcommand(
-    command: &RedisCommand,
+    args: &[impl AsRef<[u8]>],
     reads: &[&str],
     sessions: &[&str],
     writes: &[&str],
 ) -> OperationClass {
-    let Some(subcommand) = command.args.first() else {
+    let Some(subcommand) = args.first().map(AsRef::as_ref) else {
         return OperationClass::Unknown;
     };
     if reads

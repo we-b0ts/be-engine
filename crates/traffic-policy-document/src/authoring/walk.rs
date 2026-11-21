@@ -21,7 +21,6 @@ pub enum Shape {
     PathField,
     Origin,
     ProcessSelector,
-    RedisReadBack,
     CaptureResponse,
 }
 
@@ -117,7 +116,7 @@ impl Walker<'_> {
         ensure!(depth < 128, "authoring contract nesting exceeds 128 levels");
         let mut raw = std::mem::replace(value, Value::Null);
         let local = raw.as_mapping_mut().and_then(|map| map.remove("proof"));
-        let own = proof::expand(local.clone(), Some(parent), self.revision)?;
+        let own = proof::expand(local, Some(parent), self.revision)?;
         let mut contract = if let Some(map) = raw.as_mapping_mut()
             && let Some(contract) = map.remove("contract")
         {
@@ -133,16 +132,6 @@ impl Walker<'_> {
             !self.require_proof || !own.is_null(),
             "rule plan requires Source proof for every declared permission"
         );
-        if self.require_proof
-            && shape == Shape::RedisReadBack
-            && contract.get("state_epochs").and_then(Value::as_bool) == Some(true)
-        {
-            let epoch_proof = proof::expand(local, None, self.revision)?;
-            ensure!(
-                !epoch_proof.is_null(),
-                "state_epochs plan permission requires its own Source proof on the read_back declaration"
-            );
-        }
         self.node(&mut contract, shape, &own, depth + 1)?;
         if self.compact {
             *value = contract;
@@ -238,12 +227,10 @@ impl Walker<'_> {
             "identity" => {
                 self.one(map, "capture", Shape::IdentityCapture, false, parent, 0)?;
                 self.list(map, "references", Shape::Leaf, true, parent, 0)?;
-                self.list(map, "read_back", Shape::RedisReadBack, true, parent, 0)?;
             }
             "redis_sequence" => {
                 self.one(map, "key", Shape::Leaf, true, parent, 0)?;
                 self.list(map, "commands", Shape::SequenceCommand, false, parent, 0)?;
-                self.list(map, "read_back", Shape::RedisReadBack, true, parent, 0)?;
             }
             "response_jwt" => self.list(map, "nonces", Shape::Leaf, true, parent, 0)?,
             "response_header_date" => {
@@ -351,7 +338,6 @@ impl Walker<'_> {
                     self.one(map, "script", Shape::Leaf, true, parent, depth)?;
                 }
             }
-            Shape::RedisReadBack => (),
             Shape::CaptureResponse => {
                 self.list(map, "pointers", Shape::Leaf, true, parent, depth)?
             }

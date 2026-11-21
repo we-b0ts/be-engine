@@ -4,7 +4,10 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use traffic_policy_document as document;
 
-pub use document::authoring::{legacy_authoring_error, require_source_proof, retired_authoring};
+pub use document::authoring::{
+    legacy_authoring_error, redis_keys::require_source_proofs as require_redis_key_source_proofs,
+    require_source_proof, retired_authoring,
+};
 
 pub fn context() -> document::AuthoringContext<'static> {
     document::AuthoringContext {

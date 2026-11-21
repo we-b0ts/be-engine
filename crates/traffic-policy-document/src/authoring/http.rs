@@ -143,7 +143,6 @@ pub fn identity(
                 },
             },
             references,
-            read_back: vec![],
         }),
         proof,
     ))

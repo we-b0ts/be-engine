@@ -499,11 +499,7 @@ fn sequence(value: &request::RedisRequestSelector, fact: &str) -> Result<n::Redi
             })
         })
         .collect::<Result<_>>()?;
-    Ok(n::RedisSequenceEffect {
-        key,
-        commands,
-        read_back: vec![],
-    })
+    Ok(n::RedisSequenceEffect { key, commands })
 }
 #[allow(dead_code)]
 fn transform_kind(value: identity::Transform) -> n::IdentityTransform {

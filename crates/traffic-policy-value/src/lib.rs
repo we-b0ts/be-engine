@@ -5,7 +5,7 @@ pub mod inference;
 mod message;
 pub use message::{
     BindingRegistry, DocumentPolicy, MessageSide, PreparedMessage, RenderedMessage, RuleBinding,
-    ValueRule,
+    StoredValue, ValueRule,
 };
 
 #[derive(Default)]

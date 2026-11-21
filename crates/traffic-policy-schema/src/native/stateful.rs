@@ -15,8 +15,6 @@ pub struct IdentityEffect {
     pub format: Option<IdentityFormat>,
     pub capture: IdentityCapture,
     pub references: Vec<Proven<IdentityTarget>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub read_back: Vec<Proven<RedisReadBack>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,8 +129,6 @@ pub struct RedisSequenceEffect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<Proven<NativeKeyContract>>,
     pub commands: Vec<SequenceCommand>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub read_back: Vec<Proven<RedisReadBack>>,
 }
 
 /// No optional/reusable modes: every selected read stays finite.
@@ -162,22 +158,6 @@ pub struct RedisExpiryRefreshEffect {}
 #[serde(deny_unknown_fields)]
 pub struct RedisActivityRefreshEffect {
     pub fields: Vec<String>,
-}
-
-/// An explicit same-key read may return selected values from a matched write.
-/// Empty pointers select a raw bulk value; nonempty pointers select JSON scalars.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RedisReadBack {
-    pub operation: String,
-    pub write_operation: String,
-    pub argument_index: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub json_pointers: Vec<String>,
-    /// Source proof that GET observes the current SET/DEL state, rather than a
-    /// required invocation count. Absent declarations retain finite reads.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub state_epochs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

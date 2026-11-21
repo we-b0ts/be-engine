@@ -9,7 +9,7 @@ content bytes.
 
 ## Current generated identity
 
-Declare the scalar identity format, `read_back: true` and `state.get` on one key pattern:
+Declare the scalar identity format and `state.get` on one key pattern:
 
 ```yaml
 redis:
@@ -17,15 +17,13 @@ redis:
     'task:current:*':
       kind: identity
       formats: [uuid]
-      read_back: true
       state: {get: observe}
 ```
 
 The engine retains actual Case, endpoint, database, authentication and protocol
-partitions internally. No authored API/resource/database, binding or
-`state_epochs` field is needed. Only current raw SET identity to GET is covered
-by this key-local state permission; additional native list/compound contracts
-retain their own finite behavior.
+partitions internally. The key-local state permission covers current raw SET
+identities observed by GET. For ordinary finite Redis exchanges, see
+[write-to-read delivery](redis-read-back.md).
 
 An annotated plan requires Source proof for complete owned SET/DEL lifetimes,
 causal clocks and variable read counts, including a positive write-to-read
@@ -153,7 +151,5 @@ evidence and cannot select a native state owner. In particular, an uncreated key
 with a similar generated suffix cannot reject another key's established lifetime
 or lend its future refresh witness to the current request.
 
-Use the normal native rule planner and Source preflight. Existing finite
-read-back and read-commutation rules retain their semantics unless explicitly
-updated. New or updated policy requires fresh genuine Replay; Source self
-validation does not certify the Target.
+Use the normal native rule planner and Source preflight. New or updated policy
+requires fresh genuine Replay and independent Target evidence.

@@ -145,7 +145,6 @@ fn path_templates_preserve_api_scope_physical_references_and_clock_modes() {
             named()["task_mysql"].resource
         );
         assert_eq!(effect.value_type, IdentityType::String);
-        assert!(effect.read_back.is_empty());
     }
     let output = rendered(&rules, headers);
     let restored: HttpDocument = serde_yaml::from_value(output["http"].clone()).unwrap();

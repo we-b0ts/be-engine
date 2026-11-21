@@ -235,17 +235,11 @@ replace independent Target evidence; successful planning can still require
 fresh Replay. Startup signing inputs are frozen by actual resolved file hash,
 without copying secret values into a plan.
 
-Ordinary resource identity fields already translate established mappings on
-reads and anchor unknown inputs. For additional native read-back behavior when
-Source reads a generated ID or preserved timestamp from Redis before reusing it,
-an existing `identity` or `redis_sequence` write rule can declare
-`effect.read_back`. This explicitly binds GET/LRANGE response fields to values
-from successful matched Target writes to the same key. Update the original
-rule and its write/read Source proof through normal plan/apply; each declaration
-needs a positive Source trace witness and fresh genuine Replay. Do not introduce
-a Target-local cache solely to compensate for recorded Source IDs returned by
-Replay. Undeclared fields remain strict. See
-[Redis read-back](../../../../../docs/redis-read-back.md) for schema and limits.
+Ordinary resource identity fields translate established mappings on reads and
+anchor unknown inputs. For supported Redis string and hash operations, finite
+Replay also delivers the original bytes of a proven successful Target write.
+Each read keeps its recorded slot and nil responses keep their original
+shape. See [Redis write-to-read delivery](../../../../../docs/redis-read-back.md).
 
 Process ownership does not prove target initialization or cache behavior.
 Finite sharing does not authorize unused work, reusable snapshots, unrelated

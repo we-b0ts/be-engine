@@ -13,6 +13,7 @@ pub mod native;
 pub mod process_request;
 pub mod request_identity;
 mod script;
+pub mod storage_replay;
 pub mod subject;
 pub mod value_rules;
 pub mod values;

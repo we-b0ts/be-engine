@@ -279,7 +279,7 @@ database, authentication and protocol identities still have to match.
 ```yaml
 redis:
   keys:
-    'task:current:*': {kind: identity, formats: [uuid], read_back: true}
+    'task:current:*': {kind: identity, formats: [uuid]}
     'task:content:*': {state: {append: concatenate, expire: refresh}}
     'task:cancel:*': {read_commutation: true}
     'task:counter:*': {commands: [INCRBY, EXPIRE]}
