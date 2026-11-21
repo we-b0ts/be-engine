@@ -1,32 +1,10 @@
 //! Partial-attempt eligibility preserves owners and requires ordinary complete preflight.
 use crate::policy::CompiledPolicy;
 
-pub fn removes_only_read_back(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
-    let removed = before
-        .native
-        .iter()
-        .filter(|old| !after.native.contains(old))
-        .collect::<Vec<_>>();
-    if removed.is_empty()
-        || !removed
-            .iter()
-            .all(|old| crate::policy::native::is_key_only_read_back(&old.rule))
-    {
-        return false;
-    }
-    let mut expected = before.clone();
-    expected.native.retain(|old| after.native.contains(old));
-    // Digests identify the resulting policy; compare every compiled permission,
-    // owner, format and signature independently of these derived digests.
-    expected.fingerprints = after.fingerprints.clone();
-    expected == *after
-}
-
 /// Narrow identity format changes retain Source-wide validation and independent
 /// Target preflight. They never certify the unfinished Replay.
 pub fn allows_partial(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
-    removes_only_read_back(before, after)
-        || adds_only_json_identities(before, after)
+    adds_only_json_identities(before, after)
         || changes_only_redis_identities(before, after)
         || json_identity_change(before, after, false)
         || adds_only_json_times(before, after)
@@ -231,7 +209,6 @@ mod tests {
             "rename",
             "prefix",
             "time",
-            "read-back",
             "new-json",
             "new-http",
             "all-keys",
@@ -250,7 +227,6 @@ mod tests {
                 }
                 "prefix" => keys["old:*"]["formats"] = json!([{"prefix":"app-","format":"string"}]),
                 "time" => keys["new:*"] = json!({"kind":"time","formats":["unix_seconds"]}),
-                "read-back" => keys["old:*"]["read_back"] = json!(true),
                 "all-keys" => {
                     keys.as_object_mut().unwrap().remove("kept");
                     keys["*"] = keys["old:*"].clone();

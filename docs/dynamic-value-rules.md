@@ -39,8 +39,7 @@ Configured SQL templates retain their separate 64 KiB bound.
 With native `identity` rules, add a newly proven reference resource to the
 existing rule's `effect.references`; keep the same rule ID, capture, API/resource
 scope, root proof and all prior relationships. The unified planner permits
-append-only references and `read_back` declarations, including both in one
-proposal. Put the new Source proof on the appended reference:
+append-only references. Put the new Source proof on the appended reference:
 
 ```yaml
 references:

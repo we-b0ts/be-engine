@@ -266,6 +266,42 @@ fn binding(rule: Arc<ValueRule>, location: &str, pointer: &str) -> RuleBinding {
     }
 }
 
+#[test]
+fn stored_values_keep_wire_bytes_and_explicit_response_validation() {
+    let message = Document(BTreeMap::from([
+        ("stored".into(), json!({"id": 1})),
+        ("checked".into(), json!({"id": 1})),
+    ]));
+    let exact = Arc::new(ValueRule {
+        id: "read-id".into(),
+        contract: FieldContract::Exact,
+    });
+    let prepared = prepare(&message, &[binding(exact, "checked", "/id")]).unwrap();
+    let render = |checked: &'static [u8]| {
+        prepared.render_delivery_with_storage(
+            AnchorClocks::default(),
+            &ExplicitRules,
+            &Default::default(),
+            &BTreeMap::from([
+                (
+                    "stored".into(),
+                    StoredValue::from_write(1, bytes::Bytes::from_static(b"{ \"id\": 2 }")),
+                ),
+                (
+                    "checked".into(),
+                    StoredValue::from_write(2, bytes::Bytes::from_static(checked)),
+                ),
+            ]),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        )
+    };
+    let accepted = render(b"{ \"id\": 1 }").unwrap();
+    assert_eq!(accepted.values["stored"], b"{ \"id\": 2 }".as_slice());
+    assert_eq!(accepted.values["checked"], b"{ \"id\": 1 }".as_slice());
+    assert!(render(b"{ \"id\": 2 }").is_err());
+}
+
 fn source() -> (Document, PreparedMessage) {
     let source = Document(BTreeMap::from([
         (

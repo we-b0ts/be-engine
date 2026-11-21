@@ -108,13 +108,33 @@ async fn load_state<P: ReplayProtocolSet>(
     .await
     .context("dependency attribution snapshot preparation failed")??;
     let mut cases = prepared_cases;
+    if let Some(case_id) = &active_case_id
+        && let Some(case) = cases.get_mut(case_id)
+    {
+        case.status = ReplayCaseStatus::Active;
+    }
+    let policy_path = config.policy_path;
+    let (mut replay_policy, cases) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let policy = policy_path
+            .as_deref()
+            .map(|path| P::Policy::load(path, &cases, !lazy))
+            .transpose()?;
+        Ok((policy, cases))
+    })
+    .await
+    .context("Replay policy preparation task failed")??;
     let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
     let (_, global_debug_path) = find_run_level_dependencies(&root_dir);
     let global_path = attribution.startup;
     loader.install_run_scopes(attribution.run_value_scopes);
     let mut connect_failures = connect_failure::Inventory::default();
+    let mut native = native::Inventory::new(providers.clone());
+    let native_policy = replay_policy
+        .as_ref()
+        .map(|policy| policy.contracts().native_rules());
+    native.configure_storage_preparation(native_policy.as_deref());
     let mut resources = SourceResources {
-        native: native::Inventory::new(providers.clone()),
+        native,
         targets: BTreeMap::new(),
         reader: Arc::new(std::sync::Mutex::new(
             crate::dependency_index::RecordReader::for_replay(
@@ -285,23 +305,7 @@ async fn load_state<P: ReplayProtocolSet>(
         network_access::apply_recorded_network_contract(&root_dir, &mut targets)?;
     let targets = assign_fake_ips(targets, fake_cidr)?;
     let occupied_fake_ips = targets.iter().map(|target| target.fake_ip).collect();
-    if let Some(case_id) = &active_case_id
-        && let Some(case) = cases.get_mut(case_id)
-    {
-        case.status = ReplayCaseStatus::Active;
-    }
-
     let session_id = Uuid::new_v4();
-    let policy_path = config.policy_path;
-    let (mut replay_policy, cases) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let policy = policy_path
-            .as_deref()
-            .map(|path| P::Policy::load(path, &cases, !lazy))
-            .transpose()?;
-        Ok((policy, cases))
-    })
-    .await
-    .context("Replay policy preparation task failed")??;
     let witness_policy = replay_policy
         .as_ref()
         .map(|policy| policy.fingerprint().to_owned())

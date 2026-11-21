@@ -191,7 +191,7 @@ fn a_failed_case_late_in_inventory_is_examined_before_passing_cases() {
 }
 
 #[test]
-fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back_guidance() {
+fn mysql_resultset_binding_survives_an_earlier_ok_response() {
     let fixture = fixture();
     let case = options(&fixture).request.parent().unwrap().to_owned();
     let mut report: Value =

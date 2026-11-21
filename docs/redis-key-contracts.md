@@ -11,7 +11,6 @@ redis:
     'chat:streaming:text_block:*':
       kind: identity
       formats: [{prefix: text-, format: decimal}]
-      read_back: true
     'task:counter:*': {commands: [INCRBY, EXPIRE]}
     'task:events:*':
       commands:
@@ -39,11 +38,13 @@ infers equal Source instants internally without authored clock groups. EVALSHA
 requires its exact `script: {sha1: ...}`; EVAL requires `script: {sha256: ...}`.
 Scripts, numkeys, KEYS and unselected ARGV remain strict.
 
-`read_back: true` supports current raw SET identity/GET states, with `state.get` declaring variable counts. APPEND preserves the complete byte stream across chunks;
-read commutation retains finite read counts; expiry refresh preserves key
-lifetimes and fixed TTL. Actual endpoint, database, authentication, protocol,
-causal ordering and finite inventory are still checked independently. A format
-declaration cannot merge state between physical resources.
+Finite Replay delivers the actual Target write bytes for supported string and
+hash operations. See [Redis write-to-read delivery](redis-read-back.md).
+
+`state.get` declares variable counts. APPEND preserves the complete byte stream
+across chunks. Read commutation retains finite read counts. Expiry refresh
+preserves key lifetimes and fixed TTL. Actual endpoint, database, authentication,
+protocol, causal ordering and finite inventory are checked independently.
 
 `localcache.requests` separately identifies finite process initialization reads.
 It does not declare value formats or arbitrary reusable cache responses.

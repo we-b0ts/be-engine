@@ -11,7 +11,6 @@ mod activity_refresh;
 pub mod codec_binding;
 mod http_request;
 pub mod ownership;
-mod read_back;
 mod response;
 mod source;
 pub mod time;
@@ -50,7 +49,6 @@ pub fn compile_definition(
         validate_condition(when)?;
     }
     validate_effect(rule, context).with_context(|| format!("invalid native rule {:?}", rule.id))?;
-    read_back::validate(rule)?;
     let compiled = CompiledNativeRule {
         rule: rule.clone(),
         domain: rule.effect.domain(),
@@ -470,9 +468,6 @@ fn validate_discovered_redis_key(selector: &NativeMatch) -> Result<()> {
 }
 
 fn validate_identity(rule: &NativeRule, effect: &IdentityEffect) -> Result<()> {
-    if traffic_policy_schema::native::is_key_only_read_back(rule) {
-        return Ok(());
-    }
     let resource = rule
         .selector
         .resource

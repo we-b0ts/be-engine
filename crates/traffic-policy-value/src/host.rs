@@ -29,6 +29,10 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     fn document_policy(&self, _clocks: AnchorClocks) -> Option<Arc<dyn crate::DocumentPolicy>> {
         None
     }
+    /// Conservative capability check before any Source messages are prepared.
+    fn may_bind_native_documents(&self) -> bool {
+        true
+    }
     fn observe_source_comparison(&self, _comparison: &Comparison) {}
     fn begin_case(&self, case: &str);
     fn clear_case_values(&self, case: &str);

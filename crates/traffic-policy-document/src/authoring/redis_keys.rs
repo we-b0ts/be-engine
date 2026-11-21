@@ -12,7 +12,6 @@ use crate::{GlobalField, NativeEffect, NativeMatch, NativeRule, PolicyRule, Proo
 pub mod commands;
 pub mod key_format;
 pub mod state;
-pub mod stateful;
 
 pub const ID_PREFIX: &str = "redis.key.";
 
@@ -21,13 +20,13 @@ pub struct Entry {
     pub scalar: Option<GlobalField>,
     pub behaviors: Vec<Behavior>,
     pub proof: Option<Proof>,
+    declared_state: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum Behavior {
     State(state::Operation),
     ReadCommutation,
-    ReadBack,
     Commands {
         key_format: Option<key_format::KeyFormat>,
         declarations: commands::Commands,
@@ -39,7 +38,6 @@ impl Behavior {
         match self {
             Self::State(operation) => operation.name(),
             Self::ReadCommutation => "read_commutation",
-            Self::ReadBack => "read_back",
             Self::Commands { .. } => "commands",
         }
     }
@@ -47,14 +45,12 @@ impl Behavior {
         match self {
             Self::State(operation) => operation.operation(),
             Self::ReadCommutation => Some("GET"),
-            Self::ReadBack => Some("SET"),
             Self::Commands { .. } => None,
         }
     }
     fn effect(
         &self,
         pattern: &str,
-        resource: Option<&Resource>,
         proof: Option<&Proof>,
         context: &crate::AuthoringContext<'_>,
     ) -> Result<NativeEffect> {
@@ -63,7 +59,6 @@ impl Behavior {
             Self::ReadCommutation => {
                 NativeEffect::RedisReadCommutation(RedisReadCommutationEffect {})
             }
-            Self::ReadBack => stateful::lower_read_back(resource, proof),
             Self::Commands {
                 key_format,
                 declarations,
@@ -80,7 +75,6 @@ impl Behavior {
                         })
                         .transpose()?,
                     commands: declarations.compile(proof, context)?,
-                    read_back: vec![],
                 })
             }
         })
@@ -104,15 +98,12 @@ impl<'de> Deserialize<'de> for Entry {
             if let Some(state) = state {
                 behaviors.extend(state.operations()?);
             }
-            for behavior in [Behavior::ReadCommutation, Behavior::ReadBack] {
-                if let Some(value) = fields.remove(behavior.name()) {
-                    ensure!(
-                        value == Value::Bool(true),
-                        "Redis key {} must be true when declared",
-                        behavior.name()
-                    );
-                    behaviors.push(behavior);
-                }
+            if let Some(value) = fields.remove("read_commutation") {
+                ensure!(
+                    value == Value::Bool(true),
+                    "Redis key read_commutation must be true when declared"
+                );
+                behaviors.push(Behavior::ReadCommutation);
             }
             let key_format = fields
                 .remove("key_format")
@@ -140,13 +131,6 @@ impl<'de> Deserialize<'de> for Entry {
                 )?)
             };
             ensure!(
-                !behaviors
-                    .iter()
-                    .any(|behavior| matches!(behavior, Behavior::ReadBack))
-                    || scalar.as_ref().is_some_and(GlobalField::is_identity),
-                "Redis read_back requires the key's identity scalar format"
-            );
-            ensure!(
                 scalar.is_some() || !behaviors.is_empty() || declared_state,
                 "Redis key declaration is empty"
             );
@@ -158,10 +142,41 @@ impl<'de> Deserialize<'de> for Entry {
                 scalar,
                 behaviors,
                 proof,
+                declared_state,
             })
         })();
         result.map_err(serde::de::Error::custom)
     }
+}
+
+/// Validate proof at the authored key boundary before lowering splits the
+/// declaration into native rules or drops an explicit finite SET transition.
+pub fn require_source_proofs(policy: &Value, revision: Option<&str>) -> Result<()> {
+    let Some(keys) = policy
+        .get("redis")
+        .and_then(|redis| redis.get("keys"))
+        .and_then(Value::as_mapping)
+    else {
+        return Ok(());
+    };
+    for (pattern, raw) in keys {
+        let mut declaration = raw.clone();
+        let proof = declaration
+            .as_mapping_mut()
+            .and_then(|entry| entry.remove("proof"));
+        let entry: Entry = serde_yaml::from_value(declaration)
+            .with_context(|| format!("invalid Redis key {pattern:?} declaration"))?;
+        if entry.declared_state || !entry.behaviors.is_empty() {
+            let mut local = Mapping::new();
+            if let Some(proof) = proof {
+                local.insert("proof".into(), proof);
+            }
+            super::require_source_proof(&mut local.into(), revision).with_context(|| {
+                format!("Redis key {pattern:?} behavior requires local Source proof")
+            })?;
+        }
+    }
+    Ok(())
 }
 
 pub fn selector(pattern: &str) -> Result<NativeKeySelector> {
@@ -196,14 +211,14 @@ pub fn lower(
     proof: Option<Proof>,
     context: &crate::AuthoringContext<'_>,
 ) -> Result<NativeRule> {
-    let semantic_effect = behavior.effect(pattern, resource.as_ref(), None, context)?;
+    let semantic_effect = behavior.effect(pattern, None, context)?;
     let digest = Sha256::digest(serde_json::to_vec(&(
         &resource,
         pattern,
         behavior.name(),
         semantic_effect,
     ))?);
-    let effect = behavior.effect(pattern, resource.as_ref(), proof.as_ref(), context)?;
+    let effect = behavior.effect(pattern, proof.as_ref(), context)?;
     Ok(NativeRule {
         id: format!("{ID_PREFIX}{}.{digest:x}", behavior.name()),
         selector: NativeMatch {
@@ -261,7 +276,6 @@ pub fn compact(
     if native.selector.resource.is_some() {
         return Ok(false);
     }
-    let resource = None;
     let pattern = match &native.selector.key {
         Some(NativeKeySelector::Exact { value }) => value.clone(),
         Some(NativeKeySelector::Affix { prefix, suffix }) => format!("{prefix}*{suffix}"),
@@ -275,8 +289,7 @@ pub fn compact(
     } else {
         match &native.effect {
             NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
-            effect if stateful::is_read_back(effect, None) => Behavior::ReadBack,
-            NativeEffect::RedisSequence(effect) if effect.read_back.is_empty() => {
+            NativeEffect::RedisSequence(effect) => {
                 let key_format = if let Some(key) = &effect.key {
                     let Some(format) = key_format::reverse(&pattern, &key.contract)? else {
                         return Ok(false);
@@ -298,8 +311,8 @@ pub fn compact(
     };
     let mut semantic = native.clone();
     semantic.proof = None;
-    semantic.effect = behavior.effect(&pattern, resource, None, context)?;
-    if semantic != lower(&pattern, resource.cloned(), &behavior, None, context)? {
+    semantic.effect = behavior.effect(&pattern, None, context)?;
+    if semantic != lower(&pattern, None, &behavior, None, context)? {
         return Ok(false);
     }
     let redis = root

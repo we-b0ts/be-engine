@@ -15,7 +15,7 @@ use traffic_protocol::message::{
 use traffic_value::codec::CodecRegistry;
 
 mod delivery;
-pub use delivery::RenderedMessage;
+pub use delivery::{RenderedMessage, StoredValue};
 mod registry;
 pub use registry::{BindingRegistry, MessageSide};
 
@@ -81,6 +81,18 @@ impl std::fmt::Debug for PreparedMessage {
 impl PreparedMessage {
     pub fn structure(&self) -> &Value {
         &self.projection.structure
+    }
+
+    pub fn projection(&self) -> &ProjectedMessage {
+        &self.projection
+    }
+
+    pub fn has_value_rules(&self, location: &str) -> bool {
+        self.values.contains_key(location)
+    }
+
+    pub fn has_bound_values(&self) -> bool {
+        !self.values.is_empty()
     }
 
     pub fn compile(
@@ -188,7 +200,7 @@ impl PreparedMessage {
         metadata: &dyn RuleMetadata,
     ) -> Result<Comparison> {
         let actual = actual.project()?;
-        Ok(self.compare_projection(&actual, clocks, metadata))
+        Ok(self.compare_projection(&actual, clocks, metadata, &BTreeMap::new()))
     }
 
     fn compare_projection(
@@ -196,6 +208,7 @@ impl PreparedMessage {
         actual: &ProjectedMessage,
         clocks: AnchorClocks,
         metadata: &dyn RuleMetadata,
+        delivered_by_protocol: &BTreeMap<String, StoredValue>,
     ) -> Comparison {
         let mut result = Comparison::default();
         if self.projection.structure != actual.structure {
@@ -212,6 +225,11 @@ impl PreparedMessage {
             return result;
         }
         for (location, source) in &self.projection.values {
+            let stored = delivered_by_protocol.contains_key(location);
+            let bound = self.values.get(location);
+            if stored && bound.is_none_or(|value| value.fields.is_empty()) {
+                continue;
+            }
             let target = &actual.values[location];
             if source.scalar_encoding != target.scalar_encoding {
                 result
@@ -219,7 +237,7 @@ impl PreparedMessage {
                     .push(difference(location, "native scalar representation changed"));
                 continue;
             }
-            let Some(bound) = self.values.get(location) else {
+            let Some(bound) = bound else {
                 if source.bytes != target.bytes {
                     result
                         .differences
@@ -249,16 +267,18 @@ impl PreparedMessage {
                 })
                 .collect::<Vec<_>>();
             let mut comparison = match &self.policy {
-                Some(policy) => match policy.compare(&source, &target, &fields, clocks) {
-                    Ok(comparison) => comparison,
-                    Err(error) => {
-                        result
-                            .differences
-                            .push(difference(location, &error.to_string()));
-                        continue;
+                Some(policy) if !stored => {
+                    match policy.compare(&source, &target, &fields, clocks) {
+                        Ok(comparison) => comparison,
+                        Err(error) => {
+                            result
+                                .differences
+                                .push(difference(location, &error.to_string()));
+                            continue;
+                        }
                     }
-                },
-                None => compare::compare_logical_all(
+                }
+                _ => compare::compare_logical_all(
                     &source,
                     &target,
                     &fields,
@@ -286,7 +306,7 @@ impl PreparedMessage {
         clocks: AnchorClocks,
         metadata: &dyn RuleMetadata,
     ) -> Result<BTreeMap<String, bytes::Bytes>> {
-        let (rendered, _) = self.render_projection(updates, clocks, metadata)?;
+        let (rendered, _) = self.render_projection(updates, clocks, metadata, &BTreeMap::new())?;
         Ok(rendered
             .values
             .into_iter()
@@ -299,8 +319,20 @@ impl PreparedMessage {
         updates: &BTreeMap<String, Value>,
         clocks: AnchorClocks,
         metadata: &dyn RuleMetadata,
+        delivered_by_protocol: &BTreeMap<String, StoredValue>,
     ) -> Result<(ProjectedMessage, Comparison)> {
         let mut values = self.projection.values.clone();
+        for (location, value) in delivered_by_protocol {
+            values
+                .get_mut(location)
+                .with_context(|| {
+                    format!(
+                        "native write {} has no Source response value slot",
+                        value.write_index
+                    )
+                })?
+                .bytes = value.bytes.clone();
+        }
         for (location, logical) in updates {
             let bound = self
                 .values
@@ -325,7 +357,8 @@ impl PreparedMessage {
             structure: self.projection.structure.clone(),
             values,
         };
-        let comparison = self.compare_projection(&rendered, clocks, metadata);
+        let comparison =
+            self.compare_projection(&rendered, clocks, metadata, delivered_by_protocol);
         ensure!(
             comparison.passed(),
             "derived native values violate their field contracts"

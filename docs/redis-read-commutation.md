@@ -37,12 +37,8 @@ Only proven GET exchanges leave the ordinary connection-order barrier. Their
 endpoint, database, user, Case, key/arguments, recorded response, connection
 eligibility, single claim and successful delivery remain checked. Other
 commands keep their original lane order, APPEND byte fences and TTL checks.
-Rules own the unchanged read response. They can compose with an existing GET
-`read_back` declaration: read-back transforms bulk payloads and leaves RESP nil
-unchanged, while commutation Source proof still rejects writers and non-nil
-observations for the selected Case/key. The existing read-back identity, scope
-and fingerprint remain unchanged when adding commutation. Duplicate commutation
-or read-back owners and other response delivery owners remain conflicts.
+These reads keep their recorded nil responses. Commutation Source proof
+rejects writers and non-nil observations for each selected Case/key.
 
 This effect does not make polling optional or reusable. Extra Target reads
 still fail; missing reads remain unused Source dependencies; failed delivery

@@ -140,6 +140,7 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         )?;
         let delay = native.core.exchanges[index].native.response_delay;
         let run_owned = native.core.exchanges[index].source.source.is_run_owned();
+        let storage = native.prepare_storage_delivery(index, self.message.as_ref());
         let ticket = match self.session {
             Some(owner) => state.native.core.claim_bound(index, owner)?,
             None => state.native.core.claim(index)?,
@@ -160,6 +161,7 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
             case: observation.case.clone(),
             epoch: state.admission_epoch,
             run_owned,
+            storage,
         })
     }
 

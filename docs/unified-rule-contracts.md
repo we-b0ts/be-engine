@@ -263,14 +263,11 @@ Within a submitted plan proposal, native proofs inherit within their own rule.
 Root `source_revision` supplies a common frozen Source identity; nested proposal
 proof may override its local source/fact. Rendering the runtime policy removes
 these schema-owned evidence records and preserves business fields with names
-such as `proof`, `source` or `fact`. The explicit runtime permission
-`state_epochs: true` retains its state semantics; its separate Source explanation
-belongs on the proposed read-back declaration.
+such as `proof`, `source` or `fact`.
 Proof facts are nonempty logical single lines of at most 200 UTF-8 bytes, and
 source lists contain at most three references. Native compact `relative_time`
-and `request_time` contracts remain for additional causal relationships such as
-read-back and signed-token companions. They do not restore ordinary per-API
-field configuration.
+and `request_time` contracts support additional causal relationships such as
+signed-token companions.
 
 ## Native effects stay local to the rule
 
@@ -595,18 +592,7 @@ the ordinary additive behavior. The logical `async_api` section is authored at
 may omit `replace_rules`. The plan exposes additions and removals before apply;
 neither mode bypasses Source proof, complete preflight or genuine verification.
 
-A finalized attempt with unexecuted Cases may revoke existing bounded key-local
-Redis `read_back` permissions through explicit `replace_rules`. The compiled
-result must remove only those permissions and preserve every other rule, field,
-format, owner and signature. It cannot add a format or broaden a selector. The
-planner still freezes the full Source inventory, validates the current policy
-and executes ordinary preflight; apply requires fresh genuine Replay. Other
-changes continue to require a complete finalized attempt, except the identity
-format changes below. Use the native rule ID from the failure
-diagnostic; do not replace the entire Redis section merely to remove one key's
-read-back permission.
-
-A finalized partial attempt can also revise the formats of existing global JSON
+A finalized partial attempt can revise the formats of existing global JSON
 identity fields through explicit `replace_sections: [json]`. The complete field
 set, identity kind and literal prefixes must remain unchanged, as must all other
 compiled permissions, signatures and owners. This explicitly permits another

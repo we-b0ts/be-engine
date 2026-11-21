@@ -12,8 +12,6 @@ pub struct ReplayPolicyReport {
     pub global_formats: Vec<GlobalFormatReport>,
     pub request_contract_candidates: Vec<super::request_contract::Candidate>,
     pub dynamic_bindings: Vec<serde_json::Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub redis_read_backs: Vec<serde_json::Value>,
     pub key_bindings: Vec<super::request_contract::KeyBindingReport>,
     pub dynamic_capture_candidates: Vec<serde_json::Value>,
     pub unused_applicable_dependency_rule_ids: Vec<String>,

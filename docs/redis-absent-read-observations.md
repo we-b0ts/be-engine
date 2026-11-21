@@ -6,6 +6,6 @@ mutations and non-nil terminal observations retain their obligations.
 
 See [Redis state contracts](redis-state-contracts.md) for configuration,
 conditional loop bodies, Source proof, separate omission audits and the normal
-plan/apply/fresh fast Replay workflow. Value correspondence remains separate in
-[read-back](redis-read-back.md); [read commutation](redis-read-commutation.md)
-keeps finite counts while permitting independent read ordering.
+plan/apply/fresh fast Replay workflow. See
+[write-to-read delivery](redis-read-back.md) for finite value delivery and
+[read commutation](redis-read-commutation.md) for independent read ordering.

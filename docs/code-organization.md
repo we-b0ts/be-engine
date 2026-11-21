@@ -208,7 +208,9 @@ Source-proof inheritance, canonical rendering and completion declarations.
 `AuthoringContext` supplies registries and the application's native admission
 port. Runtime key snapshots and complete compilation round-trip verification
 retain their application owner. The application adapts its prepared global
-formats at this document boundary.
+formats at this document boundary. Compact Redis key declarations determine
+their proof requirements from the parsed entry. The coordinator invokes that
+validation during proposal admission.
 `traffic-policy-execution` owns codec-group preparation, field composition,
 strict document comparison and derived value materialization over prepared rules.
 `ExecutionContext` supplies codec installations and comparison metadata, while
@@ -331,6 +333,12 @@ authenticated response access. The protocol library owns complete read-commutati
 absent-state, state-epoch and closed-TTL Source proofs over that port. The host
 supplies preparation clocks, installs complete proofs atomically and retains live
 delivery receipts, failure state and audit publication.
+Redis `storage_replay` owns write and read positions, type and mutation
+boundaries, Source history lookup and invalidation of retained Target values.
+The native Replay adapter supplies Case scope, the finite exchange inventory
+and successful Target delivery receipts. Prepared value rendering accepts an
+explicit stored slot from a proven write and still validates explicit response
+bindings without recomputing that stored value.
 Its `storage::append` owns original byte offsets, cumulative RESP lengths and
 read/reset fences. `storage::activity` proves complete SET/GET/DEL lifetimes and
 accepts value decoding, selected metadata and stable-field equivalence through
@@ -424,8 +432,8 @@ Session output adapters prepare native headers, parts and termination boundaries
 before shared delivery publishes their actual flush receipts. Aggregate reports
 count installed protocols through the open `dependency_protocols` map. Historical
 named report sections retain their existing read contract.
-Historical Redis read-back execution, native identity capture execution and
-dedicated dependency Source-session policy validators are retired. Input preflight validates immutable requests and
+Native identity capture execution and dedicated dependency Source-session
+policy validators are retired. Input preflight validates immutable requests and
 freezes actual signing inputs through its focused input owner. Registered value
 comparison and identity delivery retain the shared value-service port. Rewrite
 policy guidance omits the retired native state adapters.
@@ -1564,12 +1572,8 @@ retain the same responsibility and 1000-line requirements as `src/`.
   HTTP matching call it only for case-owned exchanges. `protocols/replay/http/multipart`
   owns bounded multipart parsing; `protocols/replay/http/matching` owns HTTP selection.
   Generated-value feedback and coordinator adapters keep the existing
-  evidence/plan/apply/fresh-Replay transaction. Its `read_back` child owns
-  explicit same-key Redis write-to-read scalar bindings and derived delivery
-  witnesses. Its `state` child keeps bounded Case-local observations with
-  immutable Source causality; its `wire` child owns bounded RESP copies and
-  selected JSON scalar decoding. It does not simulate Redis or change Target
-  cache behavior. Redis adapters retain matching, delivery and consumption.
+  evidence/plan/apply/fresh-Replay transaction. Redis adapters retain matching,
+  delivery and consumption.
   Replay control supplies an
   independent inbound request anchor; protocol arguments cannot choose it.
   Its `script` child validates explicit Lua digests and bounded KEYS/ARGV
@@ -2281,8 +2285,7 @@ explicit repository-wide audit.
   keep notification clocks in metadata, independently of private payload bytes.
 
 - `rewrite/unified_rule/manifest/eligibility` permits a finalized partial attempt
-  to revoke existing bounded key-local Redis read-back permissions or revise
-  formats on existing JSON identity fields, or add missing JSON time fields.
+  to revise formats on existing JSON identity fields or add missing JSON time fields.
   Time additions preserve every existing field, clock and other owner.
   Identity revisions preserve the exact field set, kind and literal prefixes;
   every other compiled owner and
@@ -2474,8 +2477,6 @@ explicit repository-wide audit.
   `redis_fields/time_writes` publishes temporal write provenance after successful
   wire delivery; JSON reads reuse those values only at the same physical origin
   with independent Source and Target ordering evidence.
-  `request_contract/unified_response/contextual` reconciles complete global JSON
-  delivery with native read-back values while retaining the native stored bytes;
   `redis_fields/response` owns bulk boundaries and exact surrounding RESP bytes.
 
 - `e2e_run/execution_failure` owns bounded per-Case rejection summaries and pages;
@@ -2566,9 +2567,6 @@ explicit repository-wide audit.
 - `policy/{schema,native,native_compile,strict_map,capability}` owns closed typed
   contracts, Source scope and pure validation. Unknown combinations reject before
   replay; adapter admission and runtime construction share typed projections.
-  `native_compile/ownership/read_commutation` composes finite nil GET ordering
-  with existing read-back owners whose wire transformation preserves nil;
-  Source absence validation and all other response ownership remain separate.
 - `policy/authoring` owns document revision context, rule-local proof inheritance,
   named contract abbreviations and readable YAML rendering. Its closed traversal
   expands only typed contract locations, preserving business literals. Optional
@@ -2611,11 +2609,9 @@ explicit repository-wide audit.
   rules and API ownership. Replacements reuse complete preflight, whole-policy
   compare-and-swap, durable publication intent and recovery; they are not an
   alternate policy writer or a persisted policy format.
-  Its `proposal` child merges new rules, additive identity references/read-back
-  declarations and independently proven one-way finite raw identity read-back
-  upgrades to state observations. Existing scope, contracts and prior proofs
-  remain immutable. Preflight and publication retain all ordinary stale checks
-  and fresh-Replay obligations for that extension.
+  Its `proposal` child merges new rules and additive identity references.
+  Existing scope, contracts and prior proofs remain immutable. Preflight and
+  publication retain stale checks and fresh-Replay obligations for that extension.
   `manifest/primary` freezes each selected Case's original primary-response oracle
   and published assertion/Target artifacts, including inline binary bodies, even
   for dependency-only rules. It freezes managed decryption keys and supplies

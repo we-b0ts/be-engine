@@ -54,24 +54,6 @@ fn compile(rules: Vec<Value>) -> anyhow::Result<crate::policy::CompiledPolicy> {
 }
 
 #[test]
-fn nil_commutation_composes_only_with_one_get_read_back_owner() {
-    let mut read_back = json!({"id":"identity","match":rule()["match"].clone(),
-        "effect":{"kind":"identity","value_type":"string",
-            "references":[{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0}}],
-            "capture":{"kind":"redis_argument","index":1},
-            "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1,"state_epochs":true}]},
-        "proof":{"source":"cache.py:1","fact":"Source reads back stored identities; nil responses have no payload to rewrite"}});
-    read_back["match"]["operation"] = json!("SET");
-    compile(vec![rule(), read_back.clone()]).unwrap();
-    let mut second = read_back.clone();
-    second["id"] = json!("second-identity");
-    assert!(compile(vec![rule(), read_back.clone(), second]).is_err());
-    let mut duplicate = rule();
-    duplicate["id"] = json!("second-poll");
-    assert!(compile(vec![rule(), read_back, duplicate]).is_err());
-}
-
-#[test]
 fn absent_read_observation_has_an_exclusive_bounded_get_owner() {
     let mut observation = rule();
     observation["id"] = json!("absent-poll");

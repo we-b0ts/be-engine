@@ -78,9 +78,7 @@ pub fn entry(rule: &NativeRule, named: &BTreeMap<String, ResourceDeclaration>) -
             })
         }
         NativeEffect::Identity(effect)
-            if effect.value_type == IdentityType::String
-                && effect.format.is_none()
-                && effect.read_back.is_empty() =>
+            if effect.value_type == IdentityType::String && effect.format.is_none() =>
         {
             let IdentityCapture::HttpPath { segment } = &effect.capture else {
                 return None;

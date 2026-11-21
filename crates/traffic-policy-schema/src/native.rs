@@ -1,12 +1,10 @@
 //! Typed persisted effects for existing traffic-policy declarations.
 mod input;
-mod read_back;
 mod response;
 mod source;
 mod stateful;
 use crate::{Proof, Resource, SourceCondition};
 pub use input::*;
-pub use read_back::is_key_only_read_back;
 pub use response::*;
 use serde::{Deserialize, Serialize};
 pub use source::*;
@@ -101,16 +99,6 @@ pub enum NativeEffect {
     CaptureHttpResponse(CaptureResponseEffect),
     ProcessOwned(ProcessOwnedEffect),
     FiniteSharing(FiniteSharingEffect),
-}
-
-impl NativeEffect {
-    pub fn redis_read_back(&self) -> &[Proven<RedisReadBack>] {
-        match self {
-            Self::Identity(effect) => &effect.read_back,
-            Self::RedisSequence(effect) => &effect.read_back,
-            _ => &[],
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

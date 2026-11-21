@@ -564,6 +564,7 @@ pub(crate) async fn end_case<P: ReplayProtocolSet>(
             .remove(case_id)
             .zip(state.egress_counter_reader.clone());
         state.set_active_case(None);
+        state.native.clear_storage_deliveries(case_id);
         state.target_stop_prepared.remove(case_id);
         dependency_tail::end(&mut state, case_id);
         if state.case_cleanup.client_abort_at(case_id).is_some() {

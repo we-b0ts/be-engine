@@ -9,9 +9,11 @@ use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
 pub mod diagnosis;
 mod global_report;
+mod redis_storage;
 mod report;
 pub mod request;
 mod stored;
+pub use redis_storage::StorageDelivery;
 pub use report::ProtocolReport;
 
 #[derive(Debug)]
@@ -29,6 +31,8 @@ pub struct Inventory {
     recorded: BTreeMap<(ReplaySource, Option<String>, Uuid, u32), String>,
     captures: BTreeMap<(String, Uuid), Option<usize>>,
     optional_references: BTreeMap<String, BTreeSet<ProtocolRef>>,
+    redis_storage: redis_storage::Storage,
+    prepare_redis_storage: bool,
 }
 
 impl Inventory {
@@ -47,7 +51,17 @@ impl Inventory {
             failure_counts: Default::default(),
             captures: Default::default(),
             optional_references: Default::default(),
+            redis_storage: Default::default(),
+            prepare_redis_storage: true,
         }
+    }
+
+    /// Select the storage path once, before loading Source dependencies.
+    pub fn configure_storage_preparation(&mut self, policy: Option<&dyn policy::ValueRuleHost>) {
+        let redis = self.providers.bindings().for_protocol("redis");
+        self.prepare_redis_storage = !redis.request.is_empty()
+            || !redis.response.is_empty()
+            || policy.is_some_and(policy::ValueRuleHost::may_bind_native_documents);
     }
 
     pub fn register(
@@ -253,6 +267,10 @@ impl Inventory {
         self.core.exchanges[index].request = prepared.0;
         self.core.exchanges[index].response = prepared.1;
         self.core.exchanges[index].session_step = session_step;
+        if self.prepare_redis_storage {
+            self.redis_storage
+                .register(&self.core.exchanges[index], event);
+        }
         self.remember_capture(source, case, capture, event, Some(index))?;
         Ok(true)
     }
@@ -398,6 +416,9 @@ impl Inventory {
         for (exchange, (request, response)) in self.core.exchanges.iter_mut().zip(prepared) {
             exchange.request = request;
             exchange.response = response;
+            if self.prepare_redis_storage {
+                self.redis_storage.observe_value_policy(exchange);
+            }
         }
         self.contracts = contracts;
         Ok(())

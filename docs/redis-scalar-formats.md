@@ -21,12 +21,11 @@ inventory retain their protocol checks. Relative TTLs remain exact. Protocol
 absolute expiry parameters preserve remaining lifetime against independent
 Source and Target request clocks without a user-authored time field.
 
-Successful JSON writes also retain bounded temporal counterparts at their exact
-physical key/container/hash field. A later read can reuse one only when the
-Source value agrees, both request timelines follow the completed write, and the
-Target counterpart is unambiguous. Immutable recordings remain unchanged.
+For supported string and hash operations, Replay delivers the actual Target
+bytes after a proven successful write, including timestamps stored inside JSON.
+See [write-to-read delivery](redis-read-back.md).
 
-Key-local APPEND, read-back, polling order, expiry-refresh and ordered command
+Key-local APPEND, polling order, expiry-refresh and ordered command
 permissions can share the same `redis.keys` entry. Initialization sharing is a
 dependency lifetime under `localcache.requests`; JSON value fields stay global.
 Actual endpoint/database/authentication partitions remain exact. See

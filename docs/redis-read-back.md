@@ -1,64 +1,40 @@
 # Redis write-to-read delivery
 
-Global JSON and scalar identity formats preserve complete Source-to-Target
-correspondence across writes and reads. An established Source ID delivers its
-Target counterpart; an unknown historical input anchors itself. Structured JSON
-needs no per-key field declaration. Accepted JSON writes can also supply bounded
-same-key temporal counterparts when both Source and Target causality are proven.
-This does not authorize additional reads.
+Redis Replay delivers the actual Target bytes from a successful write when the
+recording establishes that a later read observed that write. This is built into
+finite Case replay. Value rules still validate differences in the write request,
+and each write and read still consumes its recorded exchange.
 
-For Source-proven variable GET observations of the latest raw SET identity,
-add the key-local read-back permission:
+| Successful write | Reads that can deliver its stored values |
+| --- | --- |
+| Plain SET and MSET | GET and MGET |
+| HSET and HMSET | HGET, HMGET and HGETALL |
 
-```yaml
-redis:
-  keys:
-    'chat:streaming:text_block:*':
-      kind: identity
-      formats: [{prefix: text-, format: decimal}]
-      read_back: true
-```
+HSET can write one or several fields. A response of zero can indicate a
+successful overwrite. Each field keeps its own latest write. In MGET and
+HMGET, delivery resolves each original response element separately. HGETALL
+keeps the recorded field names and order.
 
-The engine lowers this to its existing SET/DEL/GET state owner. There is no
-business lock rule, authored binding, resource/database selector or capture-first
-plan sequence. Source proof on the proposed key declaration must establish all
-writers, complete causal SET/DEL states and a positive write-to-read witness.
-The published runtime policy omits that proof. Use the ordinary coordinator
-`rule plan --file … --evidence …` and returned `rule apply --plan …` transaction.
+The engine associates a Source bulk value with its preceding successful write
+in the same Case, endpoint, database and key or hash field. Across
+connections, the recording must establish the causal order. The Target write
+must also deliver successfully before its value is used. Replacement and
+deletion end the previous value's lifetime and release its retained bytes.
+A later write can establish a new known value after earlier concurrent accesses
+if it is proven to follow them. Commands with TTL or conditional
+options, other unsupported mutations, and ambiguous order limit what can be
+proven. Values with an unknown origin use ordinary finite replay.
 
-If Source SET writes `old` and Target SET writes `new`, a later Source GET of
-`old` delivers `new` only after that matched Target SET succeeds. A future write,
-a different physical endpoint/database, another authentication identity or an
-ambiguous write cannot supply the value. GETs before the first owned successful
-SET retain their ordinary finite inventory and fence that first mutation.
-Profiles with no supported successful SET remain ordinary finite traffic.
-Ordinary single-key GETs in other Cases retain their own finite responses and
-neither block this Case's owned state nor borrow its Target writes. Cross-Case
-mutations and Global/shared/reusable inventory remain proof conflicts.
+A recorded nil stays nil, including individual MGET and HMGET elements. A
+recorded empty HGETALL stays empty. A zero-byte bulk string is a present value.
+Replay sends the complete bytes that Target supplied for a proven value,
+including serialization choices such as JSON whitespace. An explicit response
+binding still validates those bytes. Stored values use the write's implicit
+value policy, including its clock, when the write is matched.
 
-Current-state observations can reuse a proven response within one SET/DEL
-lifetime, but every Source-observed state must still be observed by Target.
-Creation, deletion and all other mutations remain finite. TTL, lane, response
-outcome and successful delivery checks remain with the Redis adapter. See
-[state observations](redis-state-observations.md) for state boundaries and limits.
-
-When global JSON delivery and native read-back both apply, their complete
-logical JSON values must agree, including all stable fields, established
-identities and exact timestamps copied from the successful write. JSON object
-order, whitespace and equivalent escapes do not create a value conflict.
-After validation, Redis delivers the native write's original bytes. Scalar
-values, unselected carriers and every surrounding RESP byte remain exact.
-
-Additional list or compound write/read relationships not expressed by the
-compact key declaration retain their typed native `identity`/`redis_sequence`
-read-back contracts. Such a contract owns selected GET or LRANGE values from
-an earlier successful SET, RPUSH or LSET; every selected JSON pointer must
-already belong to that native capture or contract. It does not replace ordinary
-global field formats or authorize extra reads by itself.
-
-Response and write values remain bounded to 64 MiB; native LRANGE is limited to
-1024 elements, RPUSH to 128 elements, declarations to 16 per rule and selected
-JSON pointers to 32. Runtime correspondence is bounded to 4096 entries / 128 MiB.
-Public audits contain fingerprints and original write/read identities rather
-than values. Immutable recording files are never modified. Complete Source
-self-validation grants a fresh genuine Replay obligation, not a Target pass.
+When the installed policy can affect Redis values, Replay collects causal
+metadata during ordinary registration and keeps Target payloads only for
+writes whose matched value bytes differ. The existing
+recording supplies the command arguments, reply and order evidence. Ordinary
+write-to-read delivery keeps finite request counts. See
+[Redis state contracts](redis-state-contracts.md) for variable-count observations.

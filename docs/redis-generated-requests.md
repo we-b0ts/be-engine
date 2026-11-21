@@ -95,14 +95,14 @@ Multipart, DOCX, WSS path derivation and AES envelopes retain their typed owners
 Relative Redis TTLs compare exactly. Absolute expiration timestamps use their
 native protocol units and independent request clocks. No TTL rule is required.
 
-JSON reads can reuse times from an accepted earlier write at the same physical
-key/container/hash field. This requires successful delivery and ordering proof
-on both Source and Target. An unpublished, ambiguous or future write cannot
-supply a cached time. This mechanism does not grant extra reads or mutations.
+For supported string and hash operations, Replay delivers the actual Target
+bytes from a proven earlier write, including its exact stored times. Each read
+and mutation still consumes a finite Source exchange. See
+[write-to-read delivery](redis-read-back.md).
 
-Key-local APPEND, read commutation, expiry refresh and current-identity
-read-back behavior belong under `redis.keys`. Finite process initialization
-reads belong under `localcache.requests`; actual process tasks use
+Key-local APPEND, read commutation and expiry refresh belong under
+`redis.keys`. Finite process initialization reads belong under
+`localcache.requests`. Actual process tasks use
 `process_dependencies.tasks.<Source-task-name>.requests`. HTTP lifetime entries
 require an explicit host. These lifetimes do not duplicate value formats.
 There is no authored `redis_lock` effect or separate lock-token state machine.

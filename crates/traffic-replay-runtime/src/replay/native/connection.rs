@@ -249,6 +249,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                             case,
                             epoch: state.admission_epoch,
                             run_owned,
+                            storage: Default::default(),
                         };
                         return Ok(Box::new(Delivery {
                             retain_anchor: false,
@@ -532,7 +533,8 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                 } else {
                     None
                 };
-                let response = {
+                let mut deadline = None;
+                let response = loop {
                     let state = self.state.lock().await;
                     ensure!(
                         state.finalized_at.is_none()
@@ -546,11 +548,23 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                                         .contains(case))),
                         "native response owner stopped before delivery"
                     );
-                    state.native.render_response(
+                    if let Some(wait) = state.native.wait_for_storage_delivery(&matched.storage)? {
+                        drop(state);
+                        let deadline = *deadline.get_or_insert_with(|| {
+                            tokio::time::Instant::now() + std::time::Duration::from_secs(30)
+                        });
+                        ensure!(
+                            wait.wait(deadline).await != traffic_replay::WaitOutcome::Deadline,
+                            "Redis read timed out waiting for write delivery"
+                        );
+                        continue;
+                    }
+                    break state.native.render_response(
                         matched.index,
                         matched.observed,
                         loaded.as_deref(),
-                    )?
+                        &matched.storage,
+                    )?;
                 };
                 let request::ResponsePlan {
                     output: response,
@@ -574,6 +588,11 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                         contracts.commit_comparison(comparison, identity)
                     }) {
                     admission::Finish::Committed(()) => {
+                        state.native.publish_storage_delivery(
+                            matched.index,
+                            &matched.storage,
+                            completed_at,
+                        );
                         state.native.publish_delivery(matched.index, self.protocol);
                         let reference =
                             &state.native.core.exchanges[matched.index].native.reference;

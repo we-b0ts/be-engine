@@ -13,6 +13,7 @@ use super::{MysqlReplayConfig, ReplayRuntime};
 use crate::BackgroundDependencyRuleConfig;
 
 mod mysql_transaction;
+mod redis_value_delivery;
 mod unmatched_connection_tests;
 
 async fn spawn_replay(

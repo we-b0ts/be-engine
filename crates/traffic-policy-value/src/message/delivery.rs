@@ -14,6 +14,18 @@ pub struct RenderedMessage {
     pub comparison: Comparison,
 }
 
+/// Original bytes of a write that the native owner verified and delivered.
+pub struct StoredValue {
+    pub(super) write_index: usize,
+    pub(super) bytes: bytes::Bytes,
+}
+
+impl StoredValue {
+    pub fn from_write(write_index: usize, bytes: bytes::Bytes) -> Self {
+        Self { write_index, bytes }
+    }
+}
+
 impl PreparedMessage {
     pub fn render_delivery(
         &self,
@@ -39,10 +51,35 @@ impl PreparedMessage {
         resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
         translate_document: impl Fn(&Value, &mut Value) -> Result<()>,
     ) -> Result<RenderedMessage> {
+        self.render_delivery_with_storage(
+            clocks,
+            metadata,
+            rebase_time,
+            &BTreeMap::new(),
+            resolve_identities,
+            translate_document,
+        )
+    }
+
+    /// Stored slots use the original Target bytes. The write's value policy
+    /// already validated them at write time. Explicit response contracts still
+    /// compare the delivered value, without deriving a new value for that slot.
+    pub fn render_delivery_with_storage(
+        &self,
+        clocks: AnchorClocks,
+        metadata: &dyn RuleMetadata,
+        rebase_time: &BTreeSet<String>,
+        delivered_by_protocol: &BTreeMap<String, StoredValue>,
+        resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
+        translate_document: impl Fn(&Value, &mut Value) -> Result<()>,
+    ) -> Result<RenderedMessage> {
         let mut updates = BTreeMap::new();
         let mut identity_fields = Vec::new();
         let mut identities = Vec::new();
         for (location, bound) in &self.values {
+            if delivered_by_protocol.contains_key(location) {
+                continue;
+            }
             let original = bound.source.view().logical();
             let mut time_fields = Vec::new();
             for field in &bound.fields {
@@ -108,7 +145,8 @@ impl PreparedMessage {
         for (location, update) in &mut updates {
             translate_document(self.values[location].source.view().logical(), update)?;
         }
-        let (projection, comparison) = self.render_projection(&updates, clocks, metadata)?;
+        let (projection, comparison) =
+            self.render_projection(&updates, clocks, metadata, delivered_by_protocol)?;
         Ok(RenderedMessage {
             values: projection
                 .values

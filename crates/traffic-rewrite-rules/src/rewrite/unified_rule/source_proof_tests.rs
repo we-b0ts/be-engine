@@ -81,57 +81,27 @@ fn editing_evidence_alone_does_not_change_runtime_or_capture_fingerprints() {
 }
 
 #[test]
-fn state_epoch_permissions_require_separate_local_source_evidence_in_the_submitted_plan() {
-    let mut value = json!({"id":"current-id","match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"SET","key":{"kind":"exact","value":"current"}},
-        "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1},"references":[{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0}}],
-            "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1,"state_epochs":true}]},
-        "proof":{"source":"session.py:10","fact":"Source writes and reads the current generated identity"}});
-    assert!(validate_proposal(&value.to_string()).is_err());
-    value["effect"]["read_back"][0]["proof"] = json!({"source":"session.py:20","fact":"Every variable-count read observes the Case-owned current SET/DEL epoch"});
-    validate_proposal(&value.to_string()).unwrap();
-    let runtime = value.as_object_mut().unwrap();
-    runtime.remove("proof");
-    runtime.get_mut("effect").unwrap()["read_back"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("proof");
-    // Absence of Source explanations does not disable the explicit runtime
-    // permission. Source evidence is required by plan admission separately.
-    let document = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v3","rules":[value]}).to_string(),
-    )
-    .unwrap();
-    let rendered = crate::policy::render_policy(&document).unwrap();
-    assert!(rendered.contains("state_epochs: true"));
-    assert!(!rendered.contains("proof:"));
-}
-
-#[test]
 fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
-    for behavior in [
-        "state",
-        "read_commutation",
-        "read_back",
-        "commands",
-        "key_format",
+    for (behavior, entry) in [
+        ("state.get", json!({"state":{"get":{"transient":["nil"]}}})),
+        ("state.set", json!({"state":{"set":"transition"}})),
+        ("read_commutation", json!({"read_commutation":true})),
+        ("commands", json!({"commands":["SET"]})),
+        (
+            "key_format",
+            json!({"key_format":{"kind":"identity","formats":["uuid_v4"]}, "commands":["SET"]}),
+        ),
     ] {
-        let mut entry = json!({});
-        entry[behavior] = match behavior {
-            "state" => json!({"get":{"transient":["nil"]}}),
-            "commands" => json!(["SET"]),
-            "key_format" => json!({"kind":"identity","formats":["uuid"]}),
-            _ => json!(true),
-        };
         let mut proposal =
-            json!({"format":"traffic-policy/v3", "redis":{"keys":{"current":entry}}});
+            json!({"format":"traffic-policy/v3", "redis":{"keys":{"current:*":entry}}});
         assert!(
             validate_proposal(&proposal.to_string()).is_err(),
             "{behavior}"
         );
-        proposal["redis"]["keys"]["current"]["proof"] = json!({
+        proposal["redis"]["keys"]["current:*"]["proof"] = json!({
             "source":"session.py:42","fact":"Source owns this key behavior within its recorded lifetime"});
         validate_proposal(&proposal.to_string()).unwrap();
-        proposal["redis"]["keys"]["current"]["proof"]["source"] = json!("");
+        proposal["redis"]["keys"]["current:*"]["proof"]["source"] = json!("");
         assert!(
             validate_proposal(&proposal.to_string()).is_err(),
             "{behavior}"

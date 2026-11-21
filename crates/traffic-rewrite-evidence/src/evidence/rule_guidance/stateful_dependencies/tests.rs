@@ -13,14 +13,13 @@ fn redis_mechanisms_follow_observed_operations_without_assuming_source_proof() {
     for (command, expected) in [
         ("APPEND", vec!["redis_append_stream", "redis_loop_state"]),
         ("EXPIRE", vec!["redis_expiry_refresh", "redis_loop_state"]),
-        ("LRANGE", vec!["redis_read_back"]),
+        ("LRANGE", vec![]),
         (
             "GET",
             vec![
                 "redis_activity_refresh",
                 "redis_finite_process_get",
                 "redis_loop_state",
-                "redis_read_back",
                 "redis_read_commutation",
                 "redis_state_observations",
             ],
@@ -66,30 +65,6 @@ fn typed_failures_and_lane_blockers_supply_scoped_capability_discovery() {
 }
 
 #[test]
-fn read_back_guidance_explains_key_local_state_and_finite_historical_reads() {
-    let facts = json!({"clusters":[{"protocol":"redis","operations":{"GET":1}}]});
-    let hints = hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts);
-    let finite = hints
-        .iter()
-        .find(|h| h.capability == "redis_read_back")
-        .unwrap();
-    assert!(finite.hint.contains("redis.keys"));
-    assert!(finite.hint.contains("read_back: true"));
-    assert!(finite.hint.contains("finite counts"));
-    let state = hints
-        .iter()
-        .find(|h| h.capability == "redis_state_observations")
-        .unwrap();
-    assert!(state.hint.contains("independent Source proof"));
-    assert!(
-        state
-            .hint
-            .contains("historical unknown values before the first owned SET stay finite")
-    );
-    assert!(state.hint.contains("positive write-to-read witness"));
-}
-
-#[test]
 fn ordinary_mysql_reads_need_no_native_delivery_rule_or_select_template() {
     let facts = json!({"clusters":[{"protocol":"mysql","operations":{"COM_QUERY":1},"representative":{"difference":{
         "expected":{"presence":"present","signature":{"sql_summary":"SELECT payload FROM records WHERE id=?"}}}}}]});
@@ -113,7 +88,6 @@ fn unified_source_bindings_expose_supported_delivery_without_inventing_target_ev
             "redis_append_stream",
             "redis_finite_process_get",
             "redis_loop_state",
-            "redis_read_back",
             "redis_read_commutation",
             "redis_state_observations"
         ]
