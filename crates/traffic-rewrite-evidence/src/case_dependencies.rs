@@ -550,7 +550,7 @@ fn memcached_response_classification(event: &Value) -> &'static str {
     }
 }
 
-fn resolve_case_dir(target_root: &Path, case_dir: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_case_dir(target_root: &Path, case_dir: &Path) -> Result<PathBuf> {
     let artifacts =
         std::fs::canonicalize(target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT))
             .with_context(|| {

@@ -35,6 +35,10 @@ registered `rule_candidate`. An isolated value difference may carry an
 `investigate_rule` hint. Confirm applicability from Source behavior before
 proposing a rule to the coordinator.
 
+For dependency failures, `representative.dependency_scope_path` identifies the
+recorded Case scope. When present, `case_dependency_query` reads that scope
+and resolves its recorded positions to the underlying dependency files.
+
 ## Deliver the fix
 
 Use the assigned worktree and frozen base in `assignment`. Return the exact

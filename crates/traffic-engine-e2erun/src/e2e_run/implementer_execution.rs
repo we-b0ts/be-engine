@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde_json::{Value, json};
-use traffic_recording_store::source::recording;
+use traffic_recording_store::source::scoped;
 
 use super::E2eRunContext;
 use super::model::{ActiveRunState, CaseExecution};
@@ -313,10 +313,7 @@ fn case_artifacts(case: &CaseExecution) -> Value {
     let mut artifacts = json!({"case_id":label,"case_dir":case.case_dir});
     for (key, path) in [
         ("request_path", case.case_dir.join("request.json")),
-        (
-            "dependency_scope_path",
-            case.case_dir.join("dependency-scope.json"),
-        ),
+        ("dependency_scope_path", scoped::case_path(&case.case_dir)),
     ] {
         if path.is_file() {
             artifacts[key] = json!(path);
@@ -333,8 +330,7 @@ fn case_artifacts(case: &CaseExecution) -> Value {
 fn reports(state: &ActiveRunState, latest_dir: &Path) -> BTreeMap<&'static str, PathBuf> {
     let latest_reports = latest_dir.join("reports");
     let reports_dir = state.replay_report.parent().unwrap_or(&latest_reports);
-    let mut paths: BTreeMap<_, _> = [
-        ("replay", state.replay_report.clone()),
+    [
         (
             "dependency_evidence",
             crate::replay::report::dependency_evidence_path(&state.replay_report),
@@ -346,14 +342,7 @@ fn reports(state: &ActiveRunState, latest_dir: &Path) -> BTreeMap<&'static str, 
     ]
     .into_iter()
     .filter(|(_, path)| path.is_file())
-    .collect();
-    if let Some(root) = recording::root(&state.case_source) {
-        let ledger = root.join("dependencies.tsv");
-        if ledger.is_file() {
-            paths.insert("source_case_dependencies", ledger);
-        }
-    }
-    paths
+    .collect()
 }
 
 #[cfg(test)]

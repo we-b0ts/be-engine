@@ -28,7 +28,7 @@ pub fn method(root: &Path, state: &RewriteState, issue: &RewriteIssue) -> Method
             let artifacts = &execution["case_artifacts"];
             failures.extend(
                 rows(&execution["dependency_failures"])
-                    .map(|group| dependency(api, group, artifacts)),
+                    .map(|group| dependency(root, api, group, artifacts)),
             );
             failures.extend(
                 rows(&execution["response_failures"]).map(|group| response(api, group, artifacts)),
@@ -71,7 +71,7 @@ fn relevant_reports(failures: &[Value], reports: &Value) -> BTreeMap<String, Val
             .as_str()
             .is_some_and(|kind| kind.starts_with("dependency_"))
     }) {
-        include(&["dependency_evidence", "source_case_dependencies", "replay"]);
+        include(&["dependency_evidence"]);
     }
     if failures.iter().any(|failure| {
         matches!(
@@ -194,7 +194,7 @@ fn response_value(observation: &Value) -> Value {
     summary
 }
 
-fn dependency(api: &str, group: &Value, artifacts: &Value) -> Value {
+fn dependency(root: &Path, api: &str, group: &Value, artifacts: &Value) -> Value {
     let item = &group["representative"];
     let event = item.get("event").unwrap_or(item);
     let mismatch = &event["command_mismatch"];
@@ -232,6 +232,13 @@ fn dependency(api: &str, group: &Value, artifacts: &Value) -> Value {
         &artifacts[group["case_id"].as_str().unwrap_or_default()],
         "dependency_scope_path",
     );
+    if sample["dependency_scope_path"].is_string()
+        && let Some(case_dir) = sample["case_dir"].as_str()
+        && let Ok(case_dir) = crate::case_dependencies::resolve_case_dir(root, Path::new(case_dir))
+    {
+        sample["case_dependency_query"] =
+            json!(crate::case_dependencies::summary_command(root, &case_dir));
+    }
     copy_field(
         &mut sample,
         "observed_http_status",
@@ -389,22 +396,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dependency_evidence_omits_unscoped_files() {
+        let failures = [json!({"kind":"dependency_mismatch"})];
+        let reports = json!({
+            "dependency_evidence":"/reports/replay-report-dependency-evidence.json",
+            "replay":"/reports/replay-report.json",
+            "source_case_dependencies":"/recording/dependencies.tsv"
+        });
+        let paths = relevant_reports(&failures, &reports);
+        assert!(!paths.contains_key("replay"));
+        assert_eq!(paths["dependency_evidence"], reports["dependency_evidence"]);
+        assert!(!paths.contains_key("source_case_dependencies"));
+    }
+
+    #[test]
     fn dependency_evidence_projects_precise_commands_and_case_path() {
-        let artifacts = json!({"internal-case":{"case_id":"case-7","case_dir":"/recording/apis/pet/case-7",
-            "request_path":"/recording/apis/pet/case-7/request.json"}});
+        let root = tempfile::tempdir().unwrap();
+        let case_dir = root
+            .path()
+            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+            .join("recordings/example/apis/pet/case-7");
+        std::fs::create_dir_all(&case_dir).unwrap();
+        let scope = case_dir.join("dependency-scope.json");
+        let artifacts = json!({"internal-case":{"case_id":"case-7","case_dir":case_dir,
+            "request_path":case_dir.join("request.json"),"dependency_scope_path":scope}});
         let group = json!({"kind":"native_request_or_delivery_failed","case_id":"internal-case",
         "affected_cases":1,"occurrences":1,"cases":["internal-case"],"protocol":"mysql",
         "reason":"MySQL command mismatch: expected COM_QUERY, received COM_STMT_PREPARE",
         "representative":{"event":{"target_observation_id":"seen-prepare","command_mismatch":{
             "expected":"COM_QUERY","received":"COM_STMT_PREPARE","source_dependency_sequence":42
         }}}});
-        let failure = dependency("GET /api/pet", &group, &artifacts);
+        let failure = dependency(root.path(), "GET /api/pet", &group, &artifacts);
         assert_eq!(failure["expected"], "COM_QUERY");
         assert_eq!(failure["received"], "COM_STMT_PREPARE");
         assert_eq!(failure["cases"], json!(["case-7"]));
+        assert_eq!(failure["representative"]["case_dir"], json!(case_dir));
         assert_eq!(
-            failure["representative"]["case_dir"],
-            "/recording/apis/pet/case-7"
+            failure["representative"]["dependency_scope_path"],
+            json!(scope)
+        );
+        assert_eq!(
+            failure["representative"]["case_dependency_query"],
+            json!(crate::case_dependencies::summary_command(
+                root.path(),
+                &case_dir
+            ))
         );
         assert_eq!(
             failure["representative"]["source"]["dependency_sequence"],
@@ -425,7 +461,7 @@ mod tests {
                     "differences_omitted":0,"policy_findings":[{"policy":"time","native_location":"/inputs/0",
                         "source_path":"","hint":"Check Source clock","requirements":["source clock"],
                         "proposal":{"private_draft":true}}]}]}}});
-        let failure = dependency("MOTAN example", &group, &json!({}));
+        let failure = dependency(Path::new("/target"), "MOTAN example", &group, &json!({}));
         assert_eq!(failure["protocol"], "custom-rpc");
         assert_eq!(
             failure["representative"]["difference"]["pointer"],
