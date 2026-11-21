@@ -1,0 +1,10 @@
+[package]
+name = "traffic-policy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-value = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

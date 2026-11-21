@@ -1,0 +1,29 @@
+[package]
+name = "traffic-rewrite-evidence"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+chrono = { workspace = true }
+traffic-value = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-engine = { workspace = true }
+traffic-rewrite-model = { workspace = true }
+traffic-rewrite-rules = { workspace = true }
+traffic-rewrite-review = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+hyper = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+traffic-protocol-mysql = { workspace = true, features = ["test-support"] }
+sha2 = { workspace = true }
+traffic-policy = { workspace = true }
+tempfile = { workspace = true }
+traffic-engine = { workspace = true, features = ["test-support"] }

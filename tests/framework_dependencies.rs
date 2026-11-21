@@ -2,6 +2,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
+const MYSQL_SQL_CONTRACT: &str = "traffic-protocol-mysql-sql";
+
 #[test]
 fn framework_production_dependencies_remain_implementation_independent() {
     let output = Command::new(env!("CARGO"))
@@ -32,11 +34,14 @@ fn framework_production_dependencies_remain_implementation_independent() {
         "traffic-policy",
         "traffic-time",
     ]);
-    for framework in [
-        "traffic-replay",
-        "traffic-rewrite-core",
-        "traffic-recorder",
-        "traffic-recording-store",
+    let mysql_sql_contracts =
+        BTreeSet::from([MYSQL_SQL_CONTRACT, "traffic-protocol", "traffic-model"]);
+    for (framework, contracts) in [
+        ("traffic-replay", &contracts),
+        ("traffic-rewrite-core", &contracts),
+        ("traffic-recorder", &contracts),
+        ("traffic-recording-store", &contracts),
+        (MYSQL_SQL_CONTRACT, &mysql_sql_contracts),
     ] {
         let mut pending = vec![(framework, vec![framework])];
         let mut visited = BTreeSet::new();
@@ -92,6 +97,10 @@ fn service_libraries_keep_application_composition_above_them() {
                         .contains(&dependency),
                     "native provider {name} depends on host-owned service {dependency}"
                 );
+                if name == MYSQL_SQL_CONTRACT {
+                    // The shared protocol contracts supply the SQL operation type and use Tokio.
+                    assert!(dependency != "tokio", "{name} must not use Tokio directly");
+                }
             }
         }
         if ![
@@ -132,6 +141,87 @@ fn service_libraries_keep_application_composition_above_them() {
                     "engine services depend on an upper workflow/runtime owner {dependency}"
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn standalone_services_skip_unrelated_runtime_dependencies() {
+    for (package, excluded) in [
+        (
+            "traffic-engine-recording",
+            &["traffic-engine-verification"][..],
+        ),
+        ("traffic-engine-e2erun", &["traffic-engine-recording"]),
+        (
+            "traffic-replay-runtime",
+            &[
+                "traffic-engine",
+                "traffic-engine-e2erun",
+                "traffic-engine-recording",
+            ],
+        ),
+        (
+            "traffic-rewrite-model",
+            &[
+                "traffic-engine",
+                "traffic-engine-e2erun",
+                "traffic-engine-recording",
+            ],
+        ),
+        (
+            "traffic-rewrite-runtime",
+            &[
+                "traffic-engine",
+                "traffic-engine-e2erun",
+                "traffic-engine-recording",
+            ],
+        ),
+        ("traffic-rewrite-rules", &["traffic-engine"]),
+        ("traffic-policy-schema", &["traffic-protocol-mysql"]),
+        ("traffic-policy-compiler", &["traffic-protocol-mysql"]),
+        ("traffic-policy-document", &["traffic-protocol-mysql"]),
+        ("traffic-policy-content", &["traffic-protocol-mysql"]),
+        (
+            MYSQL_SQL_CONTRACT,
+            &[
+                "hyper",
+                "rustls",
+                "sqlx",
+                "tokio-rustls",
+                "tokio-tungstenite",
+            ],
+        ),
+    ] {
+        let output = Command::new(env!("CARGO"))
+            .args([
+                "tree",
+                "--locked",
+                "--package",
+                package,
+                "--edges",
+                "normal,build",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}",
+            ])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for dependency in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+        {
+            assert!(
+                !excluded.contains(&dependency),
+                "{package} pulls {dependency} into its production dependency tree"
+            );
         }
     }
 }

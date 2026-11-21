@@ -1,0 +1,25 @@
+[package]
+name = "traffic-rewrite-model"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+traffic-engine-config = { workspace = true }
+traffic-engine-e2e-contract = { workspace = true }
+traffic-engine-evidence = { workspace = true }
+traffic-engine-verification = { workspace = true }
+traffic-rewrite-core = { workspace = true }
+traffic-recording-store = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

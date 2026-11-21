@@ -1,0 +1,14 @@
+[package]
+name = "traffic-policy-time"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-value = { workspace = true }
+traffic-time = { workspace = true }

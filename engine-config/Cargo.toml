@@ -1,0 +1,53 @@
+[package]
+name = "traffic-engine-config"
+version.workspace = true
+edition.workspace = true
+description = "Recorder configuration and Source policy projection"
+
+[features]
+test-support = ["dep:tempfile", "traffic-engine-environment/test-support"]
+
+[dependencies]
+traffic-recording-model = { workspace = true }
+traffic-engine-policy = { workspace = true }
+traffic-engine-environment = { workspace = true }
+traffic-recorder = { workspace = true }
+traffic-codec-json = { workspace = true }
+traffic-policy-compiler = { workspace = true }
+traffic-policy-schema = { workspace = true, features = ["cli"] }
+traffic-contract = { workspace = true }
+traffic-policy-value = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-value = { workspace = true }
+traffic-extensions = { workspace = true, default-features = true }
+traffic-response-rewrite = { workspace = true }
+traffic-model = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-protocol-mysql = { workspace = true }
+traffic-protocol-redis = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive", "env"] }
+flate2 = { workspace = true }
+md-5 = { workspace = true }
+sha2 = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+redis-protocol = { workspace = true, features = ["bytes"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+zip = { workspace = true, features = ["deflate"] }
+tempfile = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+traffic-engine-replay = { workspace = true, features = ["test-support"] }
+tempfile = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "traffic-replay"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util"] }
+anyhow = { workspace = true }
+traffic-model = { workspace = true }
+traffic-protocol = { workspace = true }
+bytes = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+uuid = { workspace = true, features = ["v4"] }
+futures-util = { workspace = true }

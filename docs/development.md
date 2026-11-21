@@ -206,6 +206,10 @@ revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
 The build script resolves the invoking checkout from Cargo's runtime
 `CARGO_MANIFEST_DIR`, so reusing a build-script executable across worktrees does
 not retain another checkout's revision or Git watch paths.
+The application crate owns the CLI version and watches workspace source
+changes for the dirty suffix. The shared engine libraries report the committed
+revision in their library version unless an explicit build revision is supplied.
+Verification evidence keeps its committed engine fingerprint.
 
 ## Coordinator decision history
 

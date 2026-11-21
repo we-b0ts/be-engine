@@ -1,0 +1,14 @@
+[package]
+name = "traffic-response-rewrite"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+traffic-policy = { workspace = true }
+traffic-value = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+url = { workspace = true }

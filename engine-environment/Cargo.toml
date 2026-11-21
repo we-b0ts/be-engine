@@ -1,0 +1,25 @@
+[package]
+name = "traffic-engine-environment"
+version.workspace = true
+edition.workspace = true
+description = "Managed Source snapshots and startup environment contracts"
+
+[features]
+test-support = ["dep:tempfile"]
+
+[dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["net", "process", "time"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
+
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+traffic-engine = { workspace = true }
+tempfile = { workspace = true }

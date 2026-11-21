@@ -1,0 +1,23 @@
+[package]
+name = "traffic-policy-generated"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aes-gcm = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-policy-compiler = { workspace = true }
+traffic-policy-execution = { workspace = true }
+traffic-policy-schema = { workspace = true }
+traffic-policy-value = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+traffic-policy = { workspace = true }
+traffic-extensions = { workspace = true, default-features = true }

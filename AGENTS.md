@@ -8,6 +8,8 @@ traffic to JSONL files, then groups, replays, and
 verifies recorded contracts.
 
 The root `src/` owns three CLI entrypoints and a public API facade.
+Workspace crate directories sit at the root with short names, for example
+`engine-replay/` for the Cargo package `traffic-engine-replay`.
 `traffic-e2e-app` composes the independent `traffic-rewrite` coordinator and
 `traffic-replay-runtime` session service over shared `traffic-engine` services.
 `traffic-engine` provides repository initialization and the shared service facade.
@@ -57,6 +59,7 @@ Useful focused tests:
 
 ```bash
 cargo test -p traffic-protocol-mysql
+cargo test -p traffic-protocol-mysql-sql
 cargo test -p traffic-protocol-mysql capture::semantic
 cargo test proxy_integration
 ```

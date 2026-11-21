@@ -1,0 +1,23 @@
+[package]
+name = "traffic-recording-model"
+version.workspace = true
+edition.workspace = true
+description = "Native recording event schemas"
+
+[dependencies]
+anyhow = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-model = { workspace = true }
+traffic-recorder = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-protocol-mysql = { workspace = true }
+traffic-protocol-redis = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
+
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

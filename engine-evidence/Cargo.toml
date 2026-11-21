@@ -1,0 +1,50 @@
+[package]
+name = "traffic-engine-evidence"
+version.workspace = true
+edition.workspace = true
+description = "Authenticated Source evidence and provider catalog"
+
+[features]
+test-support = ["traffic-engine-config/test-support", "traffic-recording-store/test-support"]
+
+[dependencies]
+traffic-engine-config = { workspace = true }
+traffic-recording-model = { workspace = true }
+traffic-engine-policy = { workspace = true }
+traffic-engine-environment = { workspace = true }
+traffic-recorder = { workspace = true }
+traffic-contract = { workspace = true }
+traffic-policy-value = { workspace = true }
+traffic-extensions = { workspace = true, default-features = true }
+traffic-model = { workspace = true }
+traffic-protocol = { workspace = true }
+traffic-protocol-http = { workspace = true }
+traffic-recording-store = { workspace = true }
+traffic-protocol-mysql = { workspace = true }
+traffic-protocol-redis = { workspace = true }
+aes-gcm = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+getrandom = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+libc = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+zip = { workspace = true, features = ["deflate"] }
+tempfile = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+traffic-engine-recording = { workspace = true, features = ["test-support"] }
+traffic-engine-replay = { workspace = true, features = ["test-support"] }
+traffic-engine-verification = { workspace = true, features = ["test-support"] }
+tempfile = { workspace = true }
