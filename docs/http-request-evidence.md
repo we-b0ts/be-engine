@@ -1,15 +1,16 @@
 # HTTP dependency request evidence
 
-When an outbound HTTP or HTTPS request fails matching, inspect its original
-Source and independently observed Target bodies through the coordinator:
+When an outbound HTTP or HTTPS request fails matching, begin with the grouped
+failure and representative evidence:
 
 ```bash
 backend-rewrite evidence --api /api/v1/responses
 ```
 
-Execute the returned `http-request-differences` query. A dirty HTTP cluster also
-returns `http_request_differences_command`. These commands inspect finalized
-evidence without advancing the workflow or modifying the target or recordings.
+For complete Source and independently observed Target bodies, use the
+coordinator's bound `http-request-differences` detail command. A specialist
+dirty-cluster report supplies it as `http_request_differences_command`. The
+command reads finalized evidence.
 
 ## Query sequence
 

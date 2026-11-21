@@ -8,6 +8,7 @@ use super::{
 use crate::{
     dependency::attribution::DependencyOwner,
     policy::{CompiledPolicy, NativeEffect},
+    process_ownership,
 };
 use anyhow::{Context, Result, ensure};
 use base64::Engine as _;
@@ -440,24 +441,8 @@ pub fn process_matches(
     epoch: Option<Uuid>,
 ) -> Result<BTreeSet<Uuid>> {
     let policy = crate::config::native_policy::project_source_policy(rules)?;
-    let matcher = crate::protocols::recording::background::BackgroundDependencyMatcher::from_rules(
-        &policy.process_owned_dependencies,
-    )?;
-    let ports = matcher.resolved_memcached_rule_ports();
-    let publish_selectors = policy
-        .process_owned_dependencies
-        .iter()
-        .filter_map(|rule| {
-            if let crate::config::BackgroundDependencyRuleConfig::RedisPublish {
-                selector, ..
-            } = rule
-            {
-                Some(selector)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
+    let ownership_rules = &policy.process_owned_dependencies;
+    let ports = process_ownership::resolved_memcached_ports(ownership_rules)?;
     let origins = crate::api_trigger::OriginIndex::default();
     let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
     let mut covered = BTreeSet::new();
@@ -468,20 +453,18 @@ pub fn process_matches(
         {
             continue;
         }
-        let original;
-        let selector = if event.selector["_source_proof_requires_original"] == true
-            || publish_selectors.iter().any(|selector| selector.matches_recorded_request(&event.selector))
-            || event.selector["event_type"] == "redis_pub_sub_push"
-                && policy.process_owned_dependencies.iter().any(|rule| matches!(rule,
-                    crate::config::process_owned_dependencies::BackgroundDependencyRuleConfig::RedisPubsub { .. })) {
-            original = source.original_selector(id, &mut reader)?;
-            &original
-        } else {
-            &event.selector
-        };
+        let original = ownership_rules
+            .iter()
+            .any(|rule| process_ownership::needs_original(rule, &event.selector))
+            .then(|| source.original_selector(id, &mut reader))
+            .transpose()?;
+        let selector = original.as_ref().unwrap_or(&event.selector);
         let case = event.capture.observed_case.map(|case| case.to_string());
-        for rule in &policy.process_owned_dependencies {
-            if crate::protocols::replay::report::ownership::source_owned_match(
+        for rule in ownership_rules {
+            if original.is_none() && rule.finite_request().is_some() {
+                continue;
+            }
+            if process_ownership::source_owned_match(
                 selector,
                 case.as_deref(),
                 rule,

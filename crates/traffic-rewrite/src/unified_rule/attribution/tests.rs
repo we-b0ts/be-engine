@@ -51,7 +51,7 @@ async fn fixture_with_global(
         .await
         .unwrap();
     let case = CaseContext {
-        id: uuid::Uuid::new_v4(),
+        id: recorder.capture.next_case_id(),
         rule_name: "api".into(),
         uri_group: None,
     };
@@ -70,6 +70,10 @@ async fn fixture_with_global(
     }
     recorder.publish_case(&case).await.unwrap();
     recorder.finish_run().await.unwrap();
+    let (_, inputs) = crate::dependency_index::recording::case_inputs(recorder.run_dir()).unwrap();
+    let scope = crate::dependency_index::scoped::case_path(&recorder.case_dir(&case));
+    assert_eq!(inputs, vec![(case.id, scope)]);
+    assert_eq!(recorder.case_label(case.id), "case-1");
     let mut state = crate::workflow_test_support::test_state();
     state.case_source = Some(recorder.run_dir().as_ref().clone());
     state.recording_run_id = recorder

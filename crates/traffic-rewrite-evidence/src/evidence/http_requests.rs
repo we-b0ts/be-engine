@@ -59,7 +59,7 @@ pub fn attach_commands(
                         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&query)?)
                     );
                     *value = json!({"query_id":id,"command":super::super::action::command(root,
-                    vec!["evidence".into(),id],vec![])});
+                    vec!["evidence-detail".into(),id],vec![])});
                 } else {
                     attach_commands(root, state, issue, binding, value)?;
                 }

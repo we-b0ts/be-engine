@@ -100,7 +100,7 @@ pub(super) fn report(
         facts["dependency_witness_query"] = json!(super::super::action::command(
             target_root,
             vec![
-                "evidence".into(),
+                "evidence-detail".into(),
                 "--api".into(),
                 super::super::api_selector::public_api(&state.api).to_owned(),
                 "--witness".into(),
@@ -119,7 +119,7 @@ pub(super) fn report(
         facts["redis_target_argument_query"] = json!(super::super::action::command(
             target_root,
             vec![
-                "evidence".into(),
+                "evidence-detail".into(),
                 "--api".into(),
                 super::super::api_selector::public_api(&state.api).to_owned(),
                 "--redis-target-event".into(),

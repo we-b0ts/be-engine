@@ -127,8 +127,10 @@ enum RewriteCommand {
     DependencyAttribution(dependency_attribution::DependencyAttributionArgs),
     /// Dispatch fixed implementers and report explicit batch activity or deliveries.
     Implementer(implementer::ImplementerArgs),
-    /// Inspect an issue overview or execute one returned bounded evidence query.
+    /// Show current Replay failure evidence for one API.
     Evidence(evidence::EvidenceArgs),
+    #[command(hide = true)]
+    EvidenceDetail(evidence::EvidenceDetailArgs),
     /// Plan/apply/recover self-contained rules using current Source-backed evidence.
     Rule(RuleArgs),
     /// Plan or apply a source-proven HTTP response capture rule.
@@ -513,6 +515,9 @@ async fn run(cli: Cli) -> Result<()> {
         }
         RewriteCommand::Implementer(args) => implementer::run(target_root, args, pretty),
         RewriteCommand::Evidence(args) => {
+            print_json(&args.query(RewriteContext { target_root })?, pretty)
+        }
+        RewriteCommand::EvidenceDetail(args) => {
             print_json(&args.query(RewriteContext { target_root })?, pretty)
         }
         RewriteCommand::Rule(args) => rule::run(target_root, args, pretty),

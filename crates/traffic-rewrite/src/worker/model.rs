@@ -8,6 +8,7 @@ pub use traffic_rewrite_model::rewrite::worker::model::RewriteWorkerMissingQuery
 
 pub use traffic_rewrite_model::rewrite::worker::model::RewriteWorkerActivity;
 
+#[cfg(any(test, feature = "test-support"))]
 pub use traffic_rewrite_model::rewrite::worker::model::RewriteWorkerObservation;
 
 pub use traffic_rewrite_model::rewrite::worker::model::RewriteWorkerCoverageState;

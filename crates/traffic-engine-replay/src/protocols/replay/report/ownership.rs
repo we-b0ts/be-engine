@@ -1,25 +1,24 @@
-//! Source selector verification and read-only dependency evidence refresh.
+//! Read-only dependency evidence refresh.
 //! Ownership changes are independently proved in dependency_review; actual
 //! Replay reports never move unused observations into another owner's pool.
 #[cfg(any(test, feature = "test-support"))]
 use super::evidence::build_dependency_evidence;
-use crate::config::BackgroundDependencyRuleConfig;
 #[cfg(any(test, feature = "test-support"))]
 use crate::config::SourceTrafficPolicyConfig;
-use crate::config::process_owned_dependencies::redis_rule_matches;
 #[cfg(any(test, feature = "test-support"))]
 use crate::replay::report::dependency_evidence_path;
-use anyhow::Result;
 #[cfg(any(test, feature = "test-support"))]
-use anyhow::ensure;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use anyhow::{Result, ensure};
 #[cfg(any(test, feature = "test-support"))]
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+#[cfg(any(test, feature = "test-support"))]
 use serde_json::Value;
+#[cfg(any(test, feature = "test-support"))]
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(any(test, feature = "test-support"))]
 use std::fs;
+#[cfg(any(test, feature = "test-support"))]
 #[cfg(any(test, feature = "test-support"))]
 use std::path::{Path, PathBuf};
 
@@ -73,159 +72,6 @@ pub fn reclassify_background_report(
         remaining_dirty_case_ids: dirty_case_ids(report),
         ..Default::default()
     })
-}
-
-pub fn source_owned_match(
-    event: &Value,
-    case: Option<&str>,
-    rule: &BackgroundDependencyRuleConfig,
-    memcached_ports: &BTreeMap<String, BTreeSet<u16>>,
-    origins: &crate::api_trigger::OriginIndex,
-) -> Result<bool> {
-    if rule.trigger_source().is_some() {
-        return Ok(case
-            .and_then(|case| origins.witness(case, event))
-            .is_some_and(|witness| witness.rule == rule.name()));
-    }
-    if let BackgroundDependencyRuleConfig::Mysql { selector, .. } = rule {
-        return Ok(event["event_type"] == "mysql_exchange"
-            && selector.matches_query(
-                event["target_host"].as_str(),
-                event["target_port"]
-                    .as_u64()
-                    .and_then(|p| u16::try_from(p).ok()),
-                event["database"].as_str(),
-                event["username"].as_str(),
-                event["command"].as_str().unwrap_or_default(),
-                event["sql"].as_str(),
-            ));
-    }
-    if matches!(rule, BackgroundDependencyRuleConfig::Http { .. }) {
-        let matched = event["event_type"] == "http_exchange"
-            && event["method"]
-                .as_str()
-                .zip(event["uri"].as_str())
-                .is_some_and(|(method, uri)| {
-                    uri.parse::<hyper::Uri>().is_ok_and(|uri| {
-                        rule.matches_http_request(method, &uri, event["authority"].as_str())
-                    })
-                });
-        return Ok(matched);
-    }
-    Ok(matching_rule(event, std::slice::from_ref(rule), memcached_ports).is_some())
-}
-
-fn matching_rule<'a>(
-    event: &Value,
-    rules: &'a [BackgroundDependencyRuleConfig],
-    memcached_ports: &BTreeMap<String, BTreeSet<u16>>,
-) -> Option<&'a str> {
-    rules.iter().find_map(|rule| {
-        let matches = match rule {
-            BackgroundDependencyRuleConfig::RedisPubsub { selector, .. } => {
-                crate::config::process_owned_dependencies::pubsub::matches_value(selector, event)
-            }
-            BackgroundDependencyRuleConfig::RedisPublish { selector, .. } => {
-                selector.matches_recorded_request(event)
-                    && crate::config::process_owned_dependencies::publish::successful_record(event)
-            }
-            BackgroundDependencyRuleConfig::Redis { .. } => redis_event_matches_rule(event, rule),
-            BackgroundDependencyRuleConfig::Memcached {
-                name,
-                command,
-                key_start,
-                key_end,
-                key_separator,
-                key_suffix,
-                ..
-            } => {
-                event.get("event_type").and_then(Value::as_str) == Some("memcached_exchange")
-                    && event.get("replay_safe").and_then(Value::as_bool) == Some(true)
-                    && event
-                        .get("target_port")
-                        .and_then(Value::as_u64)
-                        .and_then(|port| u16::try_from(port).ok())
-                        .is_some_and(|port| {
-                            memcached_ports
-                                .get(name)
-                                .is_some_and(|ports| ports.contains(&port))
-                        })
-                    && event
-                        .get("command")
-                        .and_then(Value::as_str)
-                        .is_some_and(|actual| actual.eq_ignore_ascii_case(command))
-                    && event
-                        .get("key")
-                        .and_then(decode_capture)
-                        .is_some_and(|key| {
-                            crate::config::process_owned_dependencies::matches_memcached_key_series(
-                                &key,
-                                *key_start,
-                                *key_end,
-                                key_separator.as_bytes()[0],
-                                key_suffix.as_bytes(),
-                            )
-                        })
-            }
-            BackgroundDependencyRuleConfig::Motan {
-                group,
-                interface_name,
-                method_name,
-                ..
-            } => {
-                event.get("event_type").and_then(Value::as_str) == Some("motan_exchange")
-                    && event.get("heartbeat").and_then(Value::as_bool) != Some(true)
-                    && event.get("group").and_then(Value::as_str) == Some(group)
-                    && event.get("interface_name").and_then(Value::as_str) == Some(interface_name)
-                    && event.get("method_name").and_then(Value::as_str) == Some(method_name)
-            }
-            BackgroundDependencyRuleConfig::Http { .. }
-            | BackgroundDependencyRuleConfig::Mysql { .. } => false,
-        };
-        matches.then(|| rule.name())
-    })
-}
-
-fn redis_event_matches_rule(event: &Value, rule: &BackgroundDependencyRuleConfig) -> bool {
-    if event.get("event_type").and_then(Value::as_str) != Some("redis_exchange")
-        || event
-            .get("session_setup")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        || event.get("replay_safe").and_then(Value::as_bool) != Some(true)
-    {
-        return false;
-    }
-    let Some(target_port) = event
-        .get("target_port")
-        .and_then(Value::as_u64)
-        .and_then(|port| u16::try_from(port).ok())
-    else {
-        return false;
-    };
-    let Some(command) = event.get("command").and_then(Value::as_str) else {
-        return false;
-    };
-    let Some(args) = event
-        .get("args")
-        .and_then(Value::as_array)
-        .and_then(|args| args.iter().map(decode_capture).collect::<Option<Vec<_>>>())
-    else {
-        return false;
-    };
-    redis_rule_matches(rule, target_port, command, &args)
-}
-
-fn decode_capture(value: &Value) -> Option<Vec<u8>> {
-    if value.get("truncated").and_then(Value::as_bool) == Some(true) {
-        return None;
-    }
-    let data = value.get("data").and_then(Value::as_str)?;
-    match value.get("encoding").and_then(Value::as_str)? {
-        "utf8" => Some(data.as_bytes().to_vec()),
-        "base64" => STANDARD.decode(data.as_bytes()).ok(),
-        _ => None,
-    }
 }
 
 #[cfg(any(test, feature = "test-support"))]

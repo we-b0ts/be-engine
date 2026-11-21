@@ -93,7 +93,10 @@ pub trait DiagnosticSchema: Send + Sync {
             .filter_map(|field| event[field].as_str())
             .collect::<Vec<_>>();
         if parts.is_empty() {
-            "unknown".into()
+            event["command_mismatch"]["received"]
+                .as_str()
+                .unwrap_or("unknown")
+                .into()
         } else {
             parts.join(" ")
         }
@@ -112,6 +115,7 @@ pub trait DiagnosticSchema: Send + Sync {
             "status",
             "reason",
             "diagnostic",
+            "command_mismatch",
             "target_event_index",
             "target_observation_id",
             "failure_kind",

@@ -125,9 +125,7 @@ pub async fn execute<S: ExecutionState, A: RequestAdapter<S>>(
             }
             if !changed {
                 state.record_missing(&observation, waiter);
-                result = Err(adapter.interrupted(
-                    "next recorded dependency missing; dependency attribution review required",
-                ));
+                result = Err(adapter.interrupted("next recorded dependency request timed out"));
                 break;
             }
             result = adapter.try_select(&mut state, &observation);

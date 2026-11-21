@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::{fs, io::Read};
 
 pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInventory, Vec<PathBuf>)> {
-    let (root, files) = crate::dependency_index::recording_files(scope.case_source)?;
+    let (root, files) = case_files(scope)?;
     let manifest_path = root.join(crate::dependency::observation::MANIFEST_FILE);
     #[cfg(test)]
     let manifest_path = if manifest_path.is_file() {
@@ -37,14 +37,6 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
             );
         }
     }
-    for (case, directory) in scope.prepared_cases {
-        let expected = fs::canonicalize(prepared_path(directory))?;
-        ensure!(
-            files.contains(&expected)
-                && directory.file_name().and_then(|v| v.to_str()) == Some(case),
-            "prepared Case is outside the complete Source recording inventory"
-        );
-    }
     let mut all = files;
     if let Some(recording) = crate::dependency_index::recording::root(scope.case_source) {
         all.push(recording.join("indexes/startup-scope.json"));
@@ -68,15 +60,51 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
     ))
 }
 
-fn prepared_path(directory: &Path) -> PathBuf {
-    #[cfg(test)]
-    if !directory
-        .join(crate::dependency_index::scoped::CASE_SCOPE)
-        .is_file()
-    {
-        return directory.join("dependencies.jsonl");
+fn case_files(scope: &NativeSourceScope<'_>) -> Result<(PathBuf, Vec<PathBuf>)> {
+    use crate::dependency_index::{recording, scoped};
+
+    if let Some(root) = recording::root(scope.case_source) {
+        // Enumerate the full sealed run even when the proof started from one Case.
+        let (root, inputs) = recording::case_inputs(&root)?;
+        if !scope.prepared_cases.is_empty() {
+            let case_ids: BTreeMap<_, _> = inputs
+                .iter()
+                .map(|(id, path)| (path.as_path(), *id))
+                .collect();
+            for (case, directory) in scope.prepared_cases {
+                let path = fs::canonicalize(scoped::case_path(directory))?;
+                let label = path.parent().and_then(Path::file_name);
+                ensure!(
+                    case_ids.get(path.as_path()).is_some_and(|id| {
+                        label.is_some_and(|label| label == case.as_str())
+                            || case.parse::<uuid::Uuid>().ok() == Some(*id)
+                    }),
+                    "prepared Case {case:?} is outside the complete Source recording inventory"
+                );
+            }
+        }
+        return Ok((root, inputs.into_iter().map(|(_, path)| path).collect()));
     }
-    crate::dependency_index::scoped::case_path(directory)
+
+    #[cfg(test)]
+    {
+        let (root, files) = crate::dependency_index::recording_files(scope.case_source)?;
+        for (case, directory) in scope.prepared_cases {
+            let path = fs::canonicalize(directory.join("dependencies.jsonl"))?;
+            ensure!(
+                files.contains(&path)
+                    && directory
+                        .file_name()
+                        .is_some_and(|label| label == case.as_str()),
+                "prepared Case {case:?} is outside the complete Source recording inventory"
+            );
+        }
+        Ok((root, files))
+    }
+    #[cfg(not(test))]
+    anyhow::bail!(
+        "recording requires the current central dependency manifest; old recording semantics are unsupported"
+    )
 }
 
 pub(super) fn digest(inventory: &NativeSourceInventory) -> Result<String> {

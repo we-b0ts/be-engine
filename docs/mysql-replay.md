@@ -680,7 +680,7 @@ Global format preflight treats SQL-less session commands such as `COM_PING` as
 exact protocol controls, with no positive format-rule witness. Missing SQL in a
 business query or prepared statement remains invalid evidence.
 
-Protected `backend-rewrite evidence --api PATH --witness ID --pointer POINTER`
+Protected `backend-rewrite evidence-detail --api PATH --witness ID --pointer POINTER`
 queries can select a SQL literal or bound parameter without reading the whole
 statement. Use `/sql_values/<token-index>/value`, or
 `/sql_values/<token-index>/json/<JSON-pointer>` for JSON encoded in that value.

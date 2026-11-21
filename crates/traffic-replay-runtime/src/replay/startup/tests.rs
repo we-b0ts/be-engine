@@ -23,14 +23,29 @@ fn phase_fence_keeps_real_inflight_and_never_counts_protocol_control_or_process(
     assert!(!StartupPhase::default().report().is_dirty());
 }
 
-fn get(connection: uuid::Uuid, sequence: u64) -> Value {
+fn exchange(connection: uuid::Uuid, command: &str, args: &[&str]) -> Value {
     let capture = |value: &str| json!({"encoding":"utf8","data":value,"truncated":false});
-    json!({"event_type":"redis_exchange","connection_id":connection,"sequence":sequence,"target_host":"redis.test","target_port":6379,"database":0,"resp_version":2,"command":"GET","args":[capture("same")],"response_kind":"bulk_string","response":capture("$1\r\nx\r\n"),"duration_ms":0,"replay_safe":true})
+    let args = args.iter().map(|arg| capture(arg)).collect::<Vec<_>>();
+    json!({"event_type":"redis_exchange","connection_id":connection,"sequence":1,"target_host":"redis.test","target_port":6379,"database":0,"resp_version":2,"command":command,"args":args,"response_kind":"bulk_string","response":capture("$1\r\nx\r\n"),"duration_ms":0,"replay_safe":true})
 }
 
 #[tokio::test]
 async fn primary_boundary_prevents_a_case_call_from_paying_missing_startup_even_if_process_matches()
 {
+    assert_finite_process_exchange("GET", &["same"], b"*2\r\n$3\r\nGET\r\n$4\r\nsame\r\n").await;
+}
+
+#[tokio::test]
+async fn process_eval_returns_the_recorded_reply_once() {
+    assert_finite_process_exchange(
+        "EVAL",
+        &["return ARGV[1]", "1", "same", "x"],
+        b"*5\r\n$4\r\nEVAL\r\n$14\r\nreturn ARGV[1]\r\n$1\r\n1\r\n$4\r\nsame\r\n$1\r\nx\r\n",
+    )
+    .await;
+}
+
+async fn assert_finite_process_exchange(command: &str, args: &[&str], request: &[u8]) {
     let temp = tempfile::tempdir().unwrap();
     let raw_case = temp.path().join("raw-case");
     std::fs::create_dir_all(&raw_case).unwrap();
@@ -39,8 +54,8 @@ async fn primary_boundary_prevents_a_case_call_from_paying_missing_startup_even_
         raw_case.join("global-dependencies.jsonl"),
         format!(
             "{}\n{}\n",
-            get(uuid::Uuid::new_v4(), 1),
-            get(uuid::Uuid::new_v4(), 1)
+            exchange(uuid::Uuid::new_v4(), command, args),
+            exchange(uuid::Uuid::new_v4(), command, args)
         ),
     )
     .unwrap();
@@ -92,7 +107,6 @@ async fn primary_boundary_prevents_a_case_call_from_paying_missing_startup_even_
         let _ = runtime.run_tcp(listener).await;
     });
     let mut client = TcpStream::connect(addr).await.unwrap();
-    let request = b"*2\r\n$3\r\nGET\r\n$4\r\nsame\r\n";
     client.write_all(request).await.unwrap();
     let mut response = [0; 7];
     client.read_exact(&mut response).await.unwrap();

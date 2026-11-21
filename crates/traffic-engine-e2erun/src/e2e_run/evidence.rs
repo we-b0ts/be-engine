@@ -438,6 +438,13 @@ pub fn query_redis_unordered_candidates(context: E2eRunContext, api: &str) -> Re
 
 pub fn query_execution_context(context: E2eRunContext, api: &str, attempt: u64) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
+    let mut context = execution_context(&state, attempt)?;
+    context["execution_failures"] = serde_json::json!(super::execution_failure::diagnosis(&state));
+    context["execution_failures_summary"] = super::execution_failure::summary(&state);
+    Ok(context)
+}
+
+pub(super) fn execution_context(state: &model::ActiveRunState, attempt: u64) -> Result<Value> {
     ensure!(
         state.sequence == attempt,
         "execution failures belong to attempt {}, not active issue attempt {attempt}",
@@ -448,10 +455,8 @@ pub fn query_execution_context(context: E2eRunContext, api: &str, attempt: u64) 
         "session_id":state.session_id,
         "executed_cases":state.cases.iter().filter(|case|case.assertion_passed.is_some()).count(),
         "selected_cases":state.cases.len(),
-        "case_selection":super::case_selection::diagnosis(&state),
-        "lifecycle_errors":state.errors.iter().rev().take(3).rev().map(|error|super::result::bounded_error(error)).collect::<Vec<_>>(),
-        "execution_failures":super::execution_failure::diagnosis(&state),
-        "execution_failures_summary":super::execution_failure::summary(&state)
+        "case_selection":super::case_selection::diagnosis(state),
+        "lifecycle_errors":super::result::lifecycle_errors(state)
     }))
 }
 

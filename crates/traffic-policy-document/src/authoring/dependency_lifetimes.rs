@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::resources;
 use crate::native::{
     FiniteSharingEffect, NativeKeySelector, ProcessOwnedEffect, ProcessSelector, RedisPubsubKind,
-    RedisPubsubSelector,
+    RedisPubsubSelector, supports_script,
 };
 use crate::{NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, ResourceDeclaration};
 
@@ -309,8 +309,16 @@ pub fn process(
     } else {
         None
     };
+    let script_operation = entry
+        .payload
+        .get("operation")
+        .and_then(Value::as_str)
+        .filter(|operation| entry.protocol == "redis" && supports_script(operation))
+        .map(str::to_ascii_uppercase);
     let protocol = if subscription.is_some() {
         "redis_pubsub"
+    } else if script_operation.is_some() {
+        "redis_script"
     } else {
         &entry.protocol
     };
@@ -335,9 +343,10 @@ pub fn process(
         !selector.contains_key("protocol"),
         "process request protocol belongs in its wrapper"
     );
+    if let Some(operation) = script_operation {
+        selector.insert("operation".into(), operation.into());
+    }
     selector.insert("protocol".into(), protocol.into());
-    // Only the existing schema-owned MySQL selector/member resource positions
-    // are expanded. SQL, argument strings and business values are not traversed.
     let mut owned: Value = serde_yaml::from_str("effect: {kind: process_owned}")?;
     owned["effect"]["task_name"] = task.into();
     owned["effect"]["selector"] = selector.into();
@@ -564,6 +573,9 @@ pub fn entry_from_rule(
                     "arguments".into(),
                     serde_yaml::to_value(vec![selected.channel.clone()])?,
                 );
+                protocol = "redis".into();
+            }
+            if matches!(&effect.selector, ProcessSelector::RedisScript(_)) {
                 protocol = "redis".into();
             }
             if protocol == "http" {

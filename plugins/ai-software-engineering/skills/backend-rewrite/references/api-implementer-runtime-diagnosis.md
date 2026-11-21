@@ -7,17 +7,15 @@ below; the common evidence and handoff contracts still apply.
 
 ## Rejected Egress And IP Capture Preflight
 
-When response/dependency verification fails, the issue overview's
-`facts.issue.egress_rejections` and `dirty_clusters` may report REJECT packet-count deltas and sampled time
-windows. Treat these as investigation leads: they identify no IP or origin,
-include retries/background traffic, and do not prove response causality. A null
-count means the read or rule generation was unavailable, not zero rejections.
-A clean passing run needs no investigation based only on these counters.
+When response or dependency verification fails, the referenced runtime evidence
+may report REJECT packet-count deltas and sampled time windows. Treat these as
+investigation leads. Counts include retries and background traffic. A null
+count marks an unavailable read or rule generation. A clean passing run needs
+no investigation based only on these counters.
 
-Follow `rule_hints[].help` to discover response URL rewriting. Trace the source
-call and the missing dependency before submitting a system defect. Return the
-current evidence ID, case ID, literal IP:port and source citation to the
-coordinator. If feedback requests more origin proof, supply it. A source-proven
+Trace the Source call and missing dependency before submitting a system defect.
+Return the evidence reference, Case ID, literal IP:port and Source citation to
+the coordinator. If feedback requests more origin proof, supply it. A source-proven
 `http-response` origin may support a response URL capture rule; return matching
 JSON selectors and source proof. Reassess any remaining engine defect against
 the next assigned recording evidence. Static/hardcoded addresses require source
@@ -27,15 +25,12 @@ source consumption or the absence of an equivalent recorded endpoint.
 
 ## Local Cache And Runtime State
 
-Startup dirt does not decide API acceptance and the ordinary API result does not
-list initialization dependencies. When a real response or Case dependency failure
-suggests missing startup state, run `backend-rewrite evidence --api /route` and
-follow the returned query ending in `source-process-traffic` with
-`backend-rewrite evidence <query-id>`. This is the on-demand entry point for
-recorded bootstrap and background traffic; use the returned
-`target-runtime-diagnostics` query for the actual Target startup and readiness
-evidence. These observations guide source tracing and do not establish causality
-or successful dependency consumption on their own.
+When an observed response or Case dependency failure suggests missing startup
+state, read the startup and readiness evidence referenced by
+`backend-rewrite evidence --api /route`. If the explanation needs recorded
+bootstrap or background traffic, identify the specific missing observation for
+the coordinator's runtime investigation. Use these observations to guide
+Source tracing and check the full cache path before drawing a conclusion.
 
 A response-affecting local cache is target behavior. Preserve source cache:
 
@@ -55,7 +50,7 @@ response -> cache read -> key -> hit/miss branch -> loader dependency ->
 write/refresh -> readiness or request lifecycle
 ```
 
-Use `source_process_traffic` only to prioritize source startup schedulers,
+Use any available process traffic to prioritize Source startup schedulers,
 background refreshers, and cache loaders for the returned endpoints. An absent
 endpoint is not proof that no process-local cache exists, and a high interaction
 count or configured process-owned match is not proof that the traffic populates
@@ -98,8 +93,8 @@ Replay control, or expected-response access to the target repository.
 
 ## Replay Issues
 
-`replay=incomplete` means the engine did not publish complete lifecycle
-evidence. Use the returned issue and dirty-cluster query to distinguish:
+For incomplete Replay, use the reported failure phase and its case or artifact
+reference to distinguish these causes.
 
 - target never emitted the expected genuine dependency call;
 - semantic dependency evidence exists but Replay cannot match or reproduce it;
@@ -111,6 +106,6 @@ For the last case, follow
 before classifying a capability gap or external-data blocker.
 
 If target topology differs, repair target behavior. If semantic evidence exists
-but the engine lacks support, return the current evidence ID, source
+but the engine lacks support, return the evidence reference, Source
 reference, and exact required system change to the workflow coordinator. Never implement a target workaround for
 a Replay capability gap or supply an arbitrary acceptance command.

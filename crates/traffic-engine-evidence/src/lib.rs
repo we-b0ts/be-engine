@@ -15,6 +15,7 @@ pub mod dependency;
 pub mod dependency_index;
 pub mod interaction;
 pub mod policy_evidence;
+pub mod process_ownership;
 pub mod protocols;
 pub mod recorder;
 pub mod request_headers;

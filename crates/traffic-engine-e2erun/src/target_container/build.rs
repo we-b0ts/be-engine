@@ -297,7 +297,7 @@ fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
     );
     let dockerfile = std::fs::read_to_string(&config.dockerfile)
         .with_context(|| format!("failed to read {}", config.dockerfile.display()))?;
-    validate_dockerfile_contract(config, &dockerfile)?;
+    validate_build_contexts(&dockerfile, &config.build_contexts)?;
     let dockerignore = config.target_root.join(".dockerignore");
     require_regular_file(&dockerignore, "target .dockerignore")?;
     let contents = std::fs::read_to_string(&dockerignore)
@@ -313,44 +313,11 @@ fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
     Ok(dockerfile_uses_ssh_forwarding(&dockerfile))
 }
 
-fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str) -> Result<()> {
-    ensure!(
-        dockerfile.contains(&format!("FROM {} AS builder", super::TARGET_BUILDER_IMAGE)),
-        "target Dockerfile must use the configured traffic-e2e Rust builder image"
-    );
-    ensure!(
-        dockerfile.contains(&format!("FROM {}", super::TARGET_RUNTIME_IMAGE)),
-        "target Dockerfile must use the configured traffic-e2e Rust runtime as its final stage"
-    );
-    ensure!(
-        dockerfile
-            .lines()
-            .filter(|line| line.trim_start().starts_with("FROM "))
-            .count()
-            >= 2,
-        "target Dockerfile must be a multi-stage build"
-    );
-    for required in [
-        "id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked",
-        "cargo build --locked --release",
-    ] {
-        ensure!(
-            dockerfile.contains(required),
-            "target Dockerfile is missing required build contract {required:?}"
-        );
-    }
-    let tag = image_tag(&config.target_root)?;
-    let project = tag
-        .strip_prefix("traffic-e2e/")
-        .and_then(|value| value.strip_suffix("-target:cache"))
-        .context("failed to derive target cache identity")?;
-    let target_cache =
-        format!("id=traffic-e2e-{project}-target,target=/build/target,sharing=locked");
-    ensure!(
-        dockerfile.contains(&target_cache),
-        "target Dockerfile must use project-specific BuildKit target cache {target_cache:?}"
-    );
-    for context in &config.build_contexts {
+fn validate_build_contexts(
+    dockerfile: &str,
+    contexts: &[crate::e2e_run::TargetBuildContext],
+) -> Result<()> {
+    for context in contexts {
         ensure!(
             dockerfile_uses_build_context(dockerfile, &context.name),
             "target Dockerfile must consume managed build context {:?} with COPY --from, RUN --mount=from, or FROM",
@@ -524,67 +491,56 @@ mod tests {
     }
 
     #[test]
-    fn dockerfile_contract_requires_pinned_images_and_stable_caches() {
+    fn managed_build_accepts_a_single_stage_non_rust_dockerfile() {
+        let root = tempfile::tempdir().unwrap();
+        let dockerfile = root.path().join(super::super::TARGET_DOCKERFILE_RELATIVE);
+        std::fs::create_dir_all(dockerfile.parent().unwrap()).unwrap();
+        std::fs::write(
+            root.path().join(".dockerignore"),
+            ".git\n.traffic-e2e/local\ntarget\n",
+        )
+        .unwrap();
+        let recipe = "FROM python:3.13-slim\nCOPY app.py /app.py\nUSER 998:998\nENTRYPOINT [\"python\", \"/app.py\"]\n";
+        std::fs::write(&dockerfile, recipe).unwrap();
         let config = TargetContainerConfig {
-            target_root: Path::new("/tmp/service").to_path_buf(),
-            dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.target").to_path_buf(),
+            target_root: root.path().to_path_buf(),
+            dockerfile,
             build_contexts: Vec::new(),
             startup: crate::startup::StartupConfig::default(),
             port: 8081,
         };
-        let dockerfile = format!(
-            "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
-            super::super::TARGET_BUILDER_IMAGE,
-            super::super::TARGET_RUNTIME_IMAGE,
-        );
-        validate_dockerfile_contract(&config, &dockerfile).unwrap();
-        assert!(!dockerfile_uses_ssh_forwarding(&dockerfile));
+        assert!(!validate_build_contract(&config).unwrap());
 
-        let ssh_dockerfile = dockerfile.replace(
-            "RUN --mount=type=cache",
-            "RUN --mount=type=ssh,required=true --mount=type=cache",
-        );
-        validate_dockerfile_contract(&config, &ssh_dockerfile).unwrap();
-        assert!(dockerfile_uses_ssh_forwarding(&ssh_dockerfile));
+        std::fs::write(
+            &config.dockerfile,
+            recipe.replace(
+                "COPY app.py /app.py",
+                "RUN --mount=type=ssh,required=true make\nCOPY app.py /app.py",
+            ),
+        )
+        .unwrap();
+        assert!(validate_build_contract(&config).unwrap());
     }
 
     #[test]
     fn dockerfile_contract_requires_declared_build_contexts_to_be_consumed() {
-        let mut config = TargetContainerConfig {
-            target_root: Path::new("/tmp/service").to_path_buf(),
-            dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.target").to_path_buf(),
-            build_contexts: vec![crate::e2e_run::TargetBuildContext {
-                name: "shared-source".to_string(),
-                root: PathBuf::from("/tmp/shared"),
-            }],
-            startup: crate::startup::StartupConfig::default(),
-            port: 8081,
-        };
-        let base = format!(
-            "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
-            super::super::TARGET_BUILDER_IMAGE,
-            super::super::TARGET_RUNTIME_IMAGE,
-        );
+        let contexts = [crate::e2e_run::TargetBuildContext {
+            name: "shared-source".into(),
+            root: PathBuf::from("/tmp/shared"),
+        }];
 
         assert!(
-            validate_dockerfile_contract(&config, &base)
+            validate_build_contexts("FROM debian:bookworm-slim", &contexts)
                 .unwrap_err()
                 .to_string()
                 .contains("shared-source")
         );
-        validate_dockerfile_contract(
-            &config,
-            &base.replace(
-                &format!("FROM {}", super::super::TARGET_RUNTIME_IMAGE),
-                &format!(
-                    "COPY --from=shared-source src /build/shared/src\nFROM {}",
-                    super::super::TARGET_RUNTIME_IMAGE
-                ),
-            ),
+        validate_build_contexts(
+            "FROM debian:bookworm-slim\nCOPY --from=shared-source src /app",
+            &contexts,
         )
         .unwrap();
 
-        config.build_contexts[0].name = "mounted-source".to_string();
         assert!(dockerfile_uses_build_context(
             "RUN --mount=type=bind,from=mounted-source,target=/src make",
             "mounted-source"

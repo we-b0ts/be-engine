@@ -2,6 +2,7 @@ use super::*;
 use crate::config::process_owned_dependencies::BackgroundDependencyRuleConfig;
 use crate::policy::Surface;
 use serde_json::Value;
+use traffic_engine_evidence::process_ownership;
 
 pub(super) fn validate(
     scope: &NativeSourceScope<'_>,
@@ -22,16 +23,13 @@ pub(super) fn validate(
         .context("Source ownership projection is missing")?;
     let context = project_source_policy(scope.policy_rules)?;
     let origins = crate::api_trigger::load(scope.case_source, &context.process_owned_dependencies)?;
-    let mut ports = BTreeMap::new();
-    if let BackgroundDependencyRuleConfig::Memcached {
-        name,
-        breeze_identity,
-        ..
-    } = rule
-    {
+    let ports = process_ownership::resolved_memcached_ports(std::slice::from_ref(rule))?;
+    if let BackgroundDependencyRuleConfig::Memcached { name, .. } = rule {
+        ensure!(
+            ports.contains_key(name),
+            "Source ownership rule {name:?} has no registered Breeze descriptor"
+        );
         let directory = Path::new(crate::breeze::SOCKS_DIR);
-        let descriptor = crate::breeze::resolve_identity(directory, breeze_identity)?;
-        ports.insert(name.clone(), BTreeSet::from([descriptor.port]));
         for entry in std::fs::read_dir(directory)? {
             let entry = entry?;
             if entry.file_type()?.is_file() {
@@ -64,47 +62,30 @@ pub(super) fn validate(
             },
         )?;
     }
-    let event_kind = match rule {
-        BackgroundDependencyRuleConfig::Mysql { .. } => "mysql_exchange",
-        BackgroundDependencyRuleConfig::Redis { .. }
-        | BackgroundDependencyRuleConfig::RedisPublish { .. } => "redis_exchange",
-        BackgroundDependencyRuleConfig::RedisPubsub { .. } => "redis_pub_sub_push",
-        BackgroundDependencyRuleConfig::Http { .. } => "http_exchange",
-        BackgroundDependencyRuleConfig::Memcached { .. } => "memcached_exchange",
-        BackgroundDependencyRuleConfig::Motan { .. } => "motan_exchange",
-    };
+    let provider_finite = rule.finite_request().is_some();
     each_event(
         files,
         |role, event| {
-            if event["_source_proof_requires_original"] == true
-                || event_kind == "redis_pub_sub_push"
-            {
-                // Oversized selector fields require a conservative original
-                // read. Complete metadata retains origin wire identity and
-                // SQL fingerprints; the original event still decides ownership.
-                return Ok(event["event_type"] == event_kind);
+            if process_ownership::needs_original(rule, event) {
+                return Ok(true);
             }
-            if let BackgroundDependencyRuleConfig::RedisPublish { selector, .. } = rule {
-                // Compact metadata has request selectors. Confirm the integer
-                // reply from the original record before authorizing ownership.
-                return Ok(selector.matches_recorded_request(event));
+            if provider_finite || event["_source_proof_requires_original"] == true {
+                return Ok(false);
             }
-            crate::protocols::replay::report::ownership::source_owned_match(
-                event,
-                role.case_id(),
-                rule,
-                &ports,
-                &origins,
-            )
+            process_ownership::source_owned_match(event, role.case_id(), rule, &ports, &origins)
         },
         |path, role, event| {
-            if !crate::protocols::replay::report::ownership::source_owned_match(
+            if !process_ownership::source_owned_match(
                 event,
                 role.case_id(),
                 rule,
                 &ports,
                 &origins,
             )? {
+                return Ok(());
+            }
+            count += 1;
+            if provider_finite {
                 return Ok(());
             }
             match event["event_type"].as_str() {
@@ -182,11 +163,8 @@ pub(super) fn validate(
                         event["replay_safe"] == true && event["outcome"] == "response",
                         "Source-owned exchange is unsafe or incomplete"
                     );
-                    if matches!(
-                        rule,
-                        BackgroundDependencyRuleConfig::Redis { .. }
-                            | BackgroundDependencyRuleConfig::RedisPublish { .. }
-                    ) && !rule.uses_redis_snapshot()
+                    if matches!(rule, BackgroundDependencyRuleConfig::Redis { .. })
+                        && !rule.uses_redis_snapshot()
                     {
                         ensure!(
                             event["cache_snapshot_rule"].is_null()
@@ -199,7 +177,6 @@ pub(super) fn validate(
                 }
                 _ => (),
             }
-            count += 1;
             Ok(())
         },
     )?;

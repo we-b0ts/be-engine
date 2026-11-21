@@ -97,6 +97,17 @@ pub trait ServerSession: Send {
 
 pub trait RequestHost: Send + Sync {
     fn release_session(&self) {}
+
+    /// Report a native command rejected before request admission. The host may
+    /// identify the current Source command without claiming its exchange.
+    fn reject_command<'a>(
+        &'a self,
+        command: RejectedCommand<'a>,
+        _session: RequestSession,
+    ) -> NativeFuture<'a, String> {
+        Box::pin(async move { Ok(command.reason(None)) })
+    }
+
     /// Execute within a provider-owned lifetime using a receipt from this connection.
     fn execute_in_session(
         &self,
@@ -152,6 +163,35 @@ pub trait RequestHost: Send + Sync {
         &self,
         request: Arc<dyn ProtocolMessage>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>>;
+}
+
+pub struct RejectedCommand<'a> {
+    pub protocol_name: &'static str,
+    pub received: &'a str,
+    pub observation: Vec<u8>,
+}
+
+impl RejectedCommand<'_> {
+    pub fn reason(&self, expected: Option<&str>) -> String {
+        let Self {
+            protocol_name,
+            received,
+            ..
+        } = self;
+        match expected {
+            Some(expected) if expected != *received => {
+                format!(
+                    "{protocol_name} command mismatch: expected {expected}, received {received}"
+                )
+            }
+            _ => {
+                let expected = expected.unwrap_or("unknown");
+                format!(
+                    "{protocol_name} command unavailable in Replay: expected {expected}, received {received}"
+                )
+            }
+        }
+    }
 }
 
 /// A live request retains its original I/O ownership until its parser or delivery ends.

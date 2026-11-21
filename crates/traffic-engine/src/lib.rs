@@ -48,6 +48,7 @@ pub use traffic_engine_recording::network_probe;
 pub mod policy;
 pub use traffic_engine_config::protocol_contract;
 pub use traffic_engine_evidence::policy_evidence;
+pub use traffic_engine_evidence::process_ownership;
 pub use traffic_engine_verification::primary_protocol;
 pub mod protocols;
 pub use traffic_engine_config::recording_api;

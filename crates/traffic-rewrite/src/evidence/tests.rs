@@ -147,7 +147,7 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
             .contains("case-response-differences-case-")
     );
     assert!(commands[0].query_id.ends_with("-page-0"));
-    assert_eq!(commands[0].command.argv[3], "evidence");
+    assert_eq!(commands[0].command.argv[3], "evidence-detail");
     assert_eq!(commands[0].command.argv[4], commands[0].query_id);
     // A dependency-primary attempt can also contain independent HTTP failures.
     // Keep their bounded response query available without demoting the cause.

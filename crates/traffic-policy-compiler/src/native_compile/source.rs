@@ -109,6 +109,13 @@ pub fn validate(rule: &NativeRule, context: &crate::CompilationContext<'_>) -> R
                     );
                     crate::validation::pubsub(selector)?;
                 }
+                ProcessSelector::RedisScript(selector) => {
+                    ensure!(
+                        effect.origin.is_none(),
+                        "process Redis script ownership has no API origin"
+                    );
+                    validate_redis_script(selector)?;
+                }
                 ProcessSelector::Mysql {
                     selector,
                     transaction_members,
@@ -172,12 +179,17 @@ pub fn validate(rule: &NativeRule, context: &crate::CompilationContext<'_>) -> R
                 }
                 ProcessSelector::Redis {
                     ports,
+                    operation,
                     keys,
                     key_templates,
                     key_sequence,
                     script,
                     ..
                 } => {
+                    ensure!(
+                        !supports_script(operation),
+                        "process Redis script requires an exact resource, script.sha256 and ordered keys"
+                    );
                     ensure!(
                         (1..=64).contains(&ports.len()) && ports.iter().all(|p| *p > 0),
                         "process Redis requires bounded ports"

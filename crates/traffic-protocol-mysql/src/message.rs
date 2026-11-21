@@ -35,6 +35,10 @@ pub enum RequestLocation {
 }
 
 impl ProtocolMessage for RequestMessage {
+    fn command_name(&self) -> Option<&str> {
+        Some(&self.command)
+    }
+
     fn project(&self) -> Result<ProjectedMessage> {
         ensure!(
             !matches!(

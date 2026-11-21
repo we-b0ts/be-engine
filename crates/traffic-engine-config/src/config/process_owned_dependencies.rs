@@ -1,6 +1,5 @@
 mod matching;
 pub mod mysql;
-pub mod publish;
 pub mod pubsub;
 mod redis;
 pub use mysql::{MysqlBackgroundSelector, MysqlBackgroundTableSeries};
@@ -12,6 +11,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
+use traffic_protocol::evidence::FiniteProcessRequest;
+use traffic_protocol_redis::process_request::PublishSelector;
 
 use crate::protocols::recording::events::RecorderEvent;
 
@@ -31,9 +32,16 @@ pub struct RedisKeyPatternConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
+    RedisScript {
+        name: String,
+        selector: crate::policy::native::RedisScriptSelector,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        source_revision: String,
+        source_evidence: String,
+    },
     RedisPublish {
         name: String,
-        selector: publish::Selector,
+        selector: PublishSelector,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
@@ -141,12 +149,21 @@ impl BackgroundDependencyRuleConfig {
             | Self::Redis { name, .. }
             | Self::RedisPubsub { name, .. }
             | Self::RedisPublish { name, .. }
+            | Self::RedisScript { name, .. }
             | Self::Motan { name, .. } => name,
         }
     }
 
     pub fn matches(&self, event: &RecorderEvent) -> bool {
         matching::matches(self, event)
+    }
+
+    pub fn finite_request(&self) -> Option<&dyn FiniteProcessRequest> {
+        match self {
+            Self::RedisScript { selector, .. } => Some(selector),
+            Self::RedisPublish { selector, .. } => Some(selector),
+            _ => None,
+        }
     }
 
     /// Only an explicit initial-load contract authorizes reusable snapshot reads.
@@ -174,6 +191,18 @@ pub fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
             bail!("duplicate process-owned dependency rule name {name:?}");
         }
         match rule {
+            BackgroundDependencyRuleConfig::RedisScript {
+                selector,
+                source_revision,
+                source_evidence,
+                ..
+            } => {
+                crate::policy::native::validate_redis_script(selector)?;
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
+                validate_optional_source_evidence(source_evidence)?;
+            }
             BackgroundDependencyRuleConfig::RedisPublish {
                 selector,
                 source_revision,

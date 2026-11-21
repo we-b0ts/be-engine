@@ -43,6 +43,10 @@ impl ProjectedValue {
 /// A protocol supplies locations, intrinsic structure and native encoding. The
 /// framework applies codecs and field rules to the projected byte values.
 pub trait ProtocolMessage: Send + Sync {
+    fn command_name(&self) -> Option<&str> {
+        None
+    }
+
     fn project(&self) -> Result<ProjectedMessage>;
     fn locate(&self, selector: &Value) -> Result<Vec<String>>;
     fn evidence(&self, query: &Value) -> Result<Value>;

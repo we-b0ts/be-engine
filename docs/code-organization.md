@@ -2254,9 +2254,11 @@ explicit repository-wide audit.
   matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
   planning and atomic configuration application.
   `config/process_owned_dependencies/redis` validates finite Redis task selectors,
-  including exact-key process writes without snapshot permission. Its `publish`
-  sibling owns exact channels, bounded JSON predicates and successful replies for
-  outgoing process publications. The `pubsub` sibling validates exact
+  including exact-key process writes without snapshot permission.
+  `traffic-protocol-redis::process_request` owns finite script and publication
+  selectors and native evidence validation. `traffic-engine-evidence::process_ownership`
+  uses the same finite request interface for rule validation and attribution.
+  The config `pubsub` sibling validates exact
   received-notification scope and original subscription
   confirmations; it never matches outgoing commands or infers external producers.
   Recorder classification, Source-only rule preflight and independent attribution

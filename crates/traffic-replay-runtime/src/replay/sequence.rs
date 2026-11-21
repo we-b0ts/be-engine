@@ -61,7 +61,6 @@ impl<P: super::ReplayProtocolSet> super::RuntimeState<P> {
                     case_id: self.active_case_id.clone(),
                     expected,
                     ownership_revision: self.admission_epoch,
-                    attribution_review: "required",
                 });
             }
             runtime.abort();

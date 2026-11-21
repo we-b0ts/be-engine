@@ -18,12 +18,16 @@ mod diagnosis;
 pub(crate) mod execution;
 #[cfg(test)]
 mod http_requests;
+mod implementer;
 mod overview;
 pub(crate) mod policy_freshness;
 mod redis_argument;
 mod report;
 mod witness;
-pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
+pub use access::{
+    query_implementer_evidence, query_rewrite_evidence, query_rewrite_evidence_for_scope,
+};
+pub use implementer::ImplementerEvidence;
 pub use redis_argument::query_rewrite_redis_argument_for_scope;
 pub use witness::query_rewrite_witness_for_scope;
 

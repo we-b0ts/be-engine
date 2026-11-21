@@ -166,6 +166,7 @@ impl BackgroundDependencyMatcher {
                 | BackgroundDependencyRuleConfig::Http { .. }
                 | BackgroundDependencyRuleConfig::RedisPubsub { .. }
                 | BackgroundDependencyRuleConfig::RedisPublish { .. }
+                | BackgroundDependencyRuleConfig::RedisScript { .. }
                 | BackgroundDependencyRuleConfig::Motan { .. } => {
                     rules_without_specialized_matching.push(rule.clone());
                 }

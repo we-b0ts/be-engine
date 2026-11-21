@@ -3,8 +3,8 @@ use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use traffic_protocol::{
     connection::{
-        ConnectionInfo, ConnectionIo, NativeFuture, ReplaySessionStep, RequestHost, RequestSession,
-        ResponseDelivery, ResponseFramer,
+        ConnectionInfo, ConnectionIo, NativeFuture, RejectedCommand, ReplaySessionStep,
+        RequestHost, RequestSession, ResponseDelivery, ResponseFramer,
     },
     message::ProtocolMessage,
 };
@@ -99,6 +99,74 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
     fn release_session(&self) {
         self.bindings.release(self.session);
     }
+
+    fn reject_command<'a>(
+        &'a self,
+        command: RejectedCommand<'a>,
+        session: RequestSession,
+    ) -> NativeFuture<'a, String> {
+        Box::pin(async move {
+            let observed = Utc::now();
+            let mut state = self.state.lock().await;
+            if state.finalized_at.is_some() {
+                return Ok(command.reason(None));
+            }
+            let case = state.active_case_id.clone();
+            let expected = self.session_owner(Some(&session)).ok().and_then(|owner| {
+                state
+                    .native
+                    .core
+                    .expected_request(self.protocol, &self.endpoint, case.as_deref(), &session)
+                    .filter(|exchange| {
+                        owner.as_ref().is_none_or(|owner| {
+                            owner
+                                .epoch
+                                .is_none_or(|epoch| epoch == state.admission_epoch)
+                                && owner.scope == exchange.source.source
+                                && owner.case == exchange.source.case_id
+                        })
+                    })
+            });
+            let capture = expected.and_then(|exchange| exchange.source.capture.as_ref());
+            let expected_command = expected
+                .and_then(|exchange| exchange.native.request())
+                .and_then(ProtocolMessage::command_name);
+            let reason = command.reason(expected_command);
+            let diagnostics = diagnosis::CandidateDiagnostics {
+                command_mismatch: Some(diagnosis::CommandMismatch {
+                    expected: expected_command.map(str::to_owned),
+                    received: command.received.to_owned(),
+                    source_dependency_sequence: capture.map(|capture| capture.sequence),
+                    source_reference: expected.map(|exchange| exchange.native.reference.clone()),
+                    source_exchange_id: capture.map(|capture| capture.exchange_id),
+                }),
+                ..Default::default()
+            };
+            let event = state.native.order.reserve(case.as_deref());
+            let id = Uuid::new_v4();
+            let retention = state.target_observations.record(
+                id,
+                case.as_deref(),
+                None,
+                self.protocol.as_str(),
+                observed,
+                &command.observation,
+            );
+            let observation = state.target_observations.retained(&retention).then_some(id);
+            state.native.record_failure(
+                self.protocol,
+                &self.endpoint,
+                case,
+                Some(event),
+                observation,
+                &reason,
+                diagnostics,
+            );
+            self.reported.store(true, Ordering::Release);
+            Ok(reason)
+        })
+    }
+
     fn execute_bound(
         &self,
         message: Arc<dyn ProtocolMessage>,
@@ -250,6 +318,23 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
 }
 
 impl<P: ReplayProtocolSet> Host<P> {
+    fn session_owner(
+        &self,
+        session: Option<&RequestSession>,
+    ) -> Result<Option<request::SessionOwner>> {
+        session
+            .and_then(|session| session.after.as_ref())
+            .map(|after| {
+                self.delivered
+                    .lock()
+                    .expect("native delivery anchors")
+                    .get(after)
+                    .context("native transaction predecessor was not delivered on this connection")
+                    .map(|anchor| anchor.owner.clone())
+            })
+            .transpose()
+    }
+
     fn execute_required(
         &self,
         message: Arc<dyn ProtocolMessage>,
@@ -298,22 +383,7 @@ impl<P: ReplayProtocolSet> Host<P> {
                     )
             })
             .transpose()?;
-        let session_owner = if let Some(after) = request_session
-            .as_ref()
-            .and_then(|session| session.after.as_ref())
-        {
-            Some(
-                self.delivered
-                    .lock()
-                    .expect("native delivery anchors")
-                    .get(after)
-                    .context("native transaction predecessor was not delivered on this connection")?
-                    .owner
-                    .clone(),
-            )
-        } else {
-            None
-        };
+        let session_owner = self.session_owner(request_session.as_ref())?;
         let mut request = request::Request {
             protocol: self.protocol,
             endpoint: self.endpoint.clone(),

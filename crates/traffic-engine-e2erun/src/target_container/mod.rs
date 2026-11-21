@@ -6,7 +6,6 @@ mod ssh_agent;
 mod startup_mounts;
 
 use crate::TRAFFIC_PROCESS_USER;
-use crate::build_info::TARGET_RUNTIME_IMAGE;
 
 pub(crate) use build::{build_image, image_tag};
 pub use model::TargetImage;
@@ -20,7 +19,5 @@ pub(crate) use runtime::{
 pub(crate) const TARGET_DOCKERFILE_RELATIVE: &str = ".traffic-e2e/Dockerfile.target";
 pub(crate) const TARGET_REPLAY_CA_PATH: &str = "/traffic-e2e/trust/replay-ca.pem";
 pub(crate) const TARGET_USER: &str = TRAFFIC_PROCESS_USER;
-
-const TARGET_BUILDER_IMAGE: &str = env!("TRAFFIC_E2E_TARGET_BUILDER_IMAGE");
 
 const NETWORK_ANCHOR_IMAGE: &str = "be-engine-network-anchor:local";

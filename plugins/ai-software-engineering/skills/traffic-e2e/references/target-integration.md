@@ -6,9 +6,10 @@ The target repository exposes one conventional build contract:
 .traffic-e2e/Dockerfile.target
 ```
 
-The Dockerfile is a BuildKit multi-stage build. Its final image must declare a
-non-empty OCI entrypoint, default to `USER 998:998`, run the normal target and
-genuine dependency clients in the foreground, and stop cleanly on `SIGTERM`.
+The project defines the Dockerfile's base images, build tools, stages, and
+caches. The final Linux/amd64 image must declare a non-empty OCI entrypoint,
+default to `USER 998:998`, run the normal target and genuine dependency clients
+in the foreground, and stop cleanly on `SIGTERM`.
 Application logs belong in a configured writable runtime output such as
 `/data1/weibo/logs`; stdout/stderr output is not required. Each configured
 source-compatible startup path is mounted at the same absolute path it had in
@@ -33,14 +34,12 @@ path, and mounts it at the configured absolute container path. Diagnostic prefli
 inputs. Their contents never enter the startup snapshot, target build context,
 Replay inputs, or expected-response evidence.
 
-Use the pinned shared Rust builder/runtime images, the required BuildKit SSH
-mount, and stable BuildKit cache mount IDs. traffic-e2e owns the repository-local
+When the Dockerfile uses a BuildKit SSH mount, traffic-e2e owns the repository-local
 SSH agent at `.traffic-e2e/local/socks/ssh-agent.sock`: it reuses a usable agent,
 recreates a stale socket, loads the calling account's default OpenSSH identities,
 and forwards that exact socket to Docker. The private keys never enter the
-image. The target stays alive for every case in one focused/full round. A
-Docker or Cargo build failure must remain bounded but include actionable build
-output in preflight and E2E APIs.
+image. The target stays alive for every case in one focused/full round. Failed
+builds include a bounded, actionable output tail in preflight and E2E APIs.
 
 Do not add traffic-specific `status`, `e2e`, test, check, recording,
 case execution, response capture, assertion, Replay lifecycle, or

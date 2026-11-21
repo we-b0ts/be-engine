@@ -1,20 +1,42 @@
 use anyhow::Result;
 use clap::Args;
 use traffic_e2e::{
-    RewriteContext, RewriteEvidenceReport, RewriteWorkScope, query_rewrite_evidence,
-    query_rewrite_evidence_for_scope, query_rewrite_redis_argument_for_scope,
+    ImplementerEvidence, RewriteContext, RewriteEvidenceReport, RewriteWorkScope,
+    query_implementer_evidence, query_rewrite_evidence, query_rewrite_redis_argument_for_scope,
     query_rewrite_witness_for_scope,
 };
 
 #[derive(Debug, Args)]
+pub(super) struct EvidenceArgs {
+    /// Public API path or pattern.
+    #[arg(long, value_name = "PATH_OR_PATTERN")]
+    api: traffic_e2e::RewriteApiSelector,
+}
+
+impl EvidenceArgs {
+    pub(super) fn query(self, context: RewriteContext) -> Result<ImplementerEvidence> {
+        query_implementer_evidence(
+            context,
+            &RewriteWorkScope::Api {
+                api: self.api.to_string(),
+            },
+        )
+    }
+}
+
+#[derive(Debug, Args)]
 #[group(required = true, multiple = true)]
 #[command(group(clap::ArgGroup::new("protected_value_source").args(["witness","redis_target_event"]).multiple(false)))]
-pub(super) struct EvidenceArgs {
+pub(super) struct EvidenceDetailArgs {
     /// Current overview or detail-query id returned by the engine.
     #[arg(conflicts_with = "api")]
     query_id: Option<String>,
-    /// Fetch this exact API implementer's current issue, identity, and evidence queries.
-    #[arg(long, value_name = "PATH_OR_PATTERN")]
+    /// Show the current API's failures, representative evidence, and assignment.
+    #[arg(
+        long,
+        value_name = "PATH_OR_PATTERN",
+        requires = "protected_value_source"
+    )]
     api: Option<traffic_e2e::RewriteApiSelector>,
     /// Read one authenticated dependency witness in this API's current attempt.
     #[arg(long, requires_all = ["api", "pointer"])]
@@ -33,7 +55,7 @@ pub(super) struct EvidenceArgs {
     argument_index: Option<usize>,
 }
 
-impl EvidenceArgs {
+impl EvidenceDetailArgs {
     pub(super) fn query(self, context: RewriteContext) -> Result<RewriteEvidenceReport> {
         if let (Some(api), Some(event), Some(argument)) =
             (&self.api, &self.redis_target_event, self.argument_index)
@@ -64,16 +86,10 @@ impl EvidenceArgs {
                 self.value_index.unwrap_or(0),
             );
         }
-        match (self.query_id, self.api) {
-            (Some(id), None) => query_rewrite_evidence(context, &id),
-            (None, Some(api)) => query_rewrite_evidence_for_scope(
-                context,
-                &RewriteWorkScope::Api {
-                    api: api.to_string(),
-                },
-            ),
-            _ => anyhow::bail!("select exactly one evidence query id or --api"),
-        }
+        let id = self
+            .query_id
+            .ok_or_else(|| anyhow::anyhow!("select an evidence detail"))?;
+        query_rewrite_evidence(context, &id)
     }
 }
 
@@ -84,10 +100,26 @@ mod tests {
     use crate::{Cli, RewriteCommand};
 
     #[test]
-    fn evidence_requires_exactly_one_selector() {
+    fn evidence_accepts_only_the_api_selector() {
+        for args in [
+            vec![],
+            vec!["evq-current-overview"],
+            vec!["--api", "not-an-api"],
+        ] {
+            assert!(
+                Cli::try_parse_from(["backend-rewrite", "evidence"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
+        let cli =
+            Cli::try_parse_from(["backend-rewrite", "evidence", "--api", "/api/tasks/*"]).unwrap();
+        assert!(matches!(cli.command, RewriteCommand::Evidence(_)));
+    }
+
+    #[test]
+    fn evidence_detail_requires_exactly_one_selector() {
         for args in [
             vec!["evq-current-overview"],
-            vec!["--api", "/api/tasks/*"],
             vec![
                 "--api",
                 "/api",
@@ -115,12 +147,17 @@ mod tests {
                 "/client_ip",
             ],
         ] {
-            let cli = Cli::try_parse_from(["backend-rewrite", "evidence"].into_iter().chain(args))
-                .unwrap();
-            assert!(matches!(cli.command, RewriteCommand::Evidence(_)));
+            let cli = Cli::try_parse_from(
+                ["backend-rewrite", "evidence-detail"]
+                    .into_iter()
+                    .chain(args),
+            )
+            .unwrap();
+            assert!(matches!(cli.command, RewriteCommand::EvidenceDetail(_)));
         }
         for args in [
             vec![],
+            vec!["--api", "/api/tasks/*"],
             vec!["evq-id", "--api", "/api"],
             vec!["--api", "not-an-api"],
             vec!["--witness", "witness-id", "--pointer", "/client_ip"],
@@ -143,8 +180,12 @@ mod tests {
             ],
         ] {
             assert!(
-                Cli::try_parse_from(["backend-rewrite", "evidence"].into_iter().chain(args))
-                    .is_err()
+                Cli::try_parse_from(
+                    ["backend-rewrite", "evidence-detail"]
+                        .into_iter()
+                        .chain(args)
+                )
+                .is_err()
             );
         }
     }

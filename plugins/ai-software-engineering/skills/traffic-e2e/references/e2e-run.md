@@ -55,8 +55,8 @@ Before a run, the runner requires:
 
 - a regular `.traffic-e2e/Dockerfile.target` and a root `.dockerignore` that
   excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
-- a required BuildKit SSH mount in the target Dockerfile and at least one
-  default OpenSSH identity loadable by the repository-local managed agent;
+- at least one default OpenSSH identity loadable by the repository-local
+  managed agent when the target Dockerfile uses a BuildKit SSH mount;
 - valid project settings and one compiled unified policy;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
 - a validated `.traffic-e2e/local/source/` snapshot containing the immutable
@@ -101,13 +101,11 @@ One attempt:
 7. sends `SIGTERM`, requires a clean target exit, removes the target namespace,
    and finalizes Replay.
 
-BuildKit cache mounts preserve Cargo registry, git, and target artifacts across
-builds. Source changes may rerun Cargo, but must not force dependency downloads
-when the pinned builder and stable cache IDs are unchanged.
-traffic-e2e manages the build agent at
-`.traffic-e2e/local/socks/ssh-agent.sock`, recreates it when the socket is
-stale, and forwards it directly to BuildKit. Failed builds return a bounded
-actionable Docker/Cargo output tail in `diagnosis.lifecycle_errors`.
+The project's Dockerfile selects its base images, build tools, stages, and
+caches. When the Dockerfile uses a BuildKit SSH mount, traffic-e2e manages the
+build agent at `.traffic-e2e/local/socks/ssh-agent.sock`, recreates it when the
+socket is stale, and forwards it directly to BuildKit. Failed builds return a
+bounded, actionable output tail in `diagnosis.lifecycle_errors`.
 
 Keeping one target lifetime preserves observable local-cache, connection-pool,
 startup, and warmup behavior. The target never reads a case or writes an actual

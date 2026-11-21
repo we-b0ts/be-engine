@@ -292,6 +292,59 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             .context("native semantic reference is ambiguous in its Case inventory")
     }
 
+    /// Inspect the unique eligible Source request at the live sequence heads.
+    /// Rejected commands never claim or advance an exchange.
+    pub fn expected_request(
+        &self,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        active_case: Option<&str>,
+        session: &RequestSession,
+    ) -> Option<&PreparedExchange<R>> {
+        let expected = [
+            self.lifecycle.sequence.expected_in(ReplaySource::Case),
+            self.lifecycle.sequence.expected_in(ReplaySource::Startup),
+        ];
+        let mut eligible = expected
+            .iter()
+            .flatten()
+            .flat_map(|indices| indices.iter())
+            .map(|&index| &self.exchanges[index])
+            .filter(|exchange| {
+                let source = &exchange.source;
+                (source.source.is_run_owned()
+                    || source.source == ReplaySource::Case
+                        && source.case_id.as_deref() == active_case)
+                    && exchange.protocol == protocol
+                    && &exchange.native.endpoint == endpoint
+                    && self
+                        .lifecycle
+                        .live_status(exchange.index, exchange.status)
+                        .is_available()
+                    && self.sessions.accepts(
+                        protocol,
+                        endpoint,
+                        exchange.native.lane.as_deref(),
+                        None,
+                    )
+                    && accepts_session(exchange.session_step.as_ref(), Some(session))
+                    && self.lane_blocker(exchange.index).is_none()
+            });
+        let exchange = eligible.next()?;
+        eligible.next().is_none().then_some(exchange)
+    }
+
+    fn lane_blocker(&self, index: usize) -> Option<usize> {
+        self.lanes.blocker(index, |prior| {
+            let exchange = &self.exchanges[prior];
+            !Lifecycle::satisfies(
+                self.lifecycle.live_status(prior, exchange.status),
+                exchange.source.source,
+                Barrier::Admitted,
+            )
+        })
+    }
+
     pub fn select(
         &self,
         context: MatchContext<'_, R>,
@@ -407,16 +460,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                 }
             },
             |_| true,
-            |index| {
-                self.lanes.blocker(index, |prior| {
-                    let exchange = &self.exchanges[prior];
-                    !Lifecycle::satisfies(
-                        self.lifecycle.live_status(prior, exchange.status),
-                        exchange.source.source,
-                        Barrier::Admitted,
-                    )
-                })
-            },
+            |index| self.lane_blocker(index),
         );
         if let Some(error) = failed.into_inner() {
             return Err(error);

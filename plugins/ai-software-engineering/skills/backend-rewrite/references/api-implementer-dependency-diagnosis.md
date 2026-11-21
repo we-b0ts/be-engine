@@ -224,11 +224,11 @@ declarations can reclassify existing unused
 evidence without a new recording; target unmatched queries and incomplete
 evidence remain dirty.
 
-Inspect dirty dependencies whenever the engine returns `dirty_clusters`,
-including while the active issue is a response mismatch. Response equality is
-not a prerequisite for discovering a dependency-value rule. Continue to use
-the [gate order](api-implementer-diagnosis.md#work-scope-contract) when deciding
-which failure owns the next repair.
+Inspect dependency failures in the API evidence, including those reported
+alongside response differences. Use the
+[gate order](api-implementer-diagnosis.md#interpret-the-failure) to select the
+next repair. A dependency-value rule can be investigated when the response
+also differs.
 For HTTP request-body mismatches, inspect `http_unordered_candidates` and the
 `unordered` hint. Same-request array reorderings may support a global
 `json.fields` unordered declaration; prove Source collection and downstream

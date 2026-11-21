@@ -42,6 +42,10 @@ coordinates, shapes and digests.
 
 ## Report a disputed Source owner
 
+An expected dependency request that times out remains a Replay failure for the
+API implementer to diagnose. An explicit ownership claim requires a concrete
+unused Source occurrence and a factual reason to dispute its current owner.
+
 Only the independent repository analyst investigates disputed or unknown Source
 traffic ownership, including which Case, API or task triggered the traffic and
 which lifecycle rule applies. The current implementer can trigger this analysis

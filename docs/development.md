@@ -54,8 +54,8 @@ IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 random identifiers and signed JWTs against independent dependency request clocks.
 [Shared HTTP stream/input timing](http-stream-input-timing.md) preserves client-close
 ordering while accelerating dependency streams.
-[Rewrite evidence](rewrite-evidence.md) describes the lightweight implementer
-overview, conditional strategies and authenticated on-demand dependency metadata.
+[Rewrite evidence](rewrite-evidence.md) describes the compact implementer report
+and authenticated dependency metadata.
 [SSE response diagnostics](interaction-diagnostics.md) expose authenticated
 per-frame response values through bounded, read-only evidence queries.
 [JWT response rules](jwt-response-rules.md) validate signatures, stable claims
@@ -153,10 +153,9 @@ dirty Replay; primary status mismatches take diagnosis priority over derivative
 body fields. Nothing in this path marks the response or unused dependencies as
 passed, and rule planning retains its complete-evidence checks.
 
-Execution failure overviews contain at most eight Cases and expose explicit
-total, returned and omitted counts. Follow `execution_failures_query` and each
-`pagination.next_page` for remaining Cases from the same issue attempt. Missing
-rows in the overview do not prove a Case had no rejected dependency.
+API evidence groups the retained execution failures and includes representative
+Cases. Check the coverage and omission counts before reaching an API-wide
+conclusion.
 
 Terminal E2E `diagnosis.replay_finalized` reports session publication separately
 from selected-case coverage. A failure-limited attempt can finalize normally
@@ -199,8 +198,8 @@ dependency issues also expose bounded target runtime logs for attribution.
 See [standalone recording](recording.md) for its container contract, direct
 standby, generated run IDs and handoff to rewrite.
 
-All binaries report the package version, build revision, and exact pinned
-target-runtime image from `--version`. Git checkouts derive the revision
+All binaries report the package version, build revision, and Target scaffold
+runtime image from `--version`. Git checkouts derive the revision
 automatically and append `-dirty` for uncommitted content. Builds without Git
 metadata should set `TRAFFIC_E2E_BUILD_REVISION` to a 1-64 character release
 revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
@@ -308,8 +307,9 @@ distribution images contain no kubeconfig.
 
 ### Runtime images
 
-Build and load the Linux/amd64 runtime images on the Docker host before
-managed recording, preflight, or Target builds:
+Build and load the Linux/amd64 support images on the Docker host before
+managed recording, diagnostic preflight, or Replay. The same script builds the
+runtime used by the generated Target Dockerfile:
 
 ```bash
 ./scripts/build-runtime-images.sh
@@ -334,9 +334,9 @@ user.
 
 Generated Target Dockerfiles use the pinned official Rust builder and the
 local Target runtime. Set `TRAFFIC_E2E_TARGET_BUILDER_IMAGE` or
-`TRAFFIC_E2E_TARGET_RUNTIME_IMAGE` when compiling the engine to accept another
-base image. Existing Target Dockerfiles must use the same references as their
-engine binary. Use image digests for shared registry builds.
+`TRAFFIC_E2E_TARGET_RUNTIME_IMAGE` when compiling the engine to customize those
+scaffold defaults. Each project's Target Dockerfile selects its own base images.
+Use image digests for reproducible shared registry builds.
 
 Build the optional Rust image with the musl target from the repository root:
 
@@ -385,7 +385,7 @@ handoffs stay integrated, including after interrupted reporting.
 check is needed, and captures only identity. It performs no source scans or
 repository checks. Neither implementer nor ordinary integrator needs to invoke
 it. Missing/stale ordinary review receipts do not block focused Replay. Worker
-evidence exposes `context.delivery.assignment` and optional `required_repairs`,
+evidence exposes `assignment` and optional repair findings,
 without a review check command.
 
 When the target is nested in a Git repository, keep `--target-root` at that
@@ -1041,11 +1041,10 @@ by this diagnostic.
 
 These counters do not affect dirty, response, or completion gates. Only when
 responses differ or dependencies are dirty does `run-api` expose the auxiliary
-`diagnosis.egress_rejections`; backend-rewrite exposes it through the issue
-overview's `facts.issue.egress_rejections`. The `dirty_clusters` evidence response adds
-the same bounded observations. Positive counts add a `rule_hints` entry with
-`recorder-capture plan-http-response --help`; they do not by themselves produce
-an applicable rule or establish causality.
+`diagnosis.egress_rejections`. The specialist `dirty_clusters` evidence
+response includes the same bounded observations. Positive counts add a
+`rule_hints` entry with `recorder-capture plan-http-response --help`. Use
+Source evidence to identify the rejected dependency and establish causality.
 
 After source investigation establishes a missing IP dependency, the coordinator
 can run `route --cause unrecorded-ip --endpoint IP:PORT --case-id CASE
@@ -1193,7 +1192,7 @@ backend-rewrite next --api '/api/widgets/*' \
 backend-rewrite status
 backend-rewrite status --api '/api/widgets/*'
 backend-rewrite inventory
-backend-rewrite evidence <query-id>
+backend-rewrite evidence --api '/api/widgets/*'
 backend-rewrite repository-analysis context
 backend-rewrite repository-analysis apply <batch-id> --file /absolute/analysis.json
 # Provide finalized external recordings in .traffic-e2e/local/artifacts/recordings/<run-id>/.
@@ -1223,31 +1222,18 @@ Workers fetch their own current context and evidence:
 backend-rewrite --target-root /path/to/target evidence --api '/api/widgets/*'
 ```
 
-Exactly one selector or opaque query ID is required. These read-only selectors
-resolve the requested item without switching the active API or advancing state,
-including parked APIs. Unknown items and items with no current issue fail
-explicitly. Dispatch confirmation still gates evidence; workers wait for the
-coordinator to confirm and retry the same query if they start too early.
-Evidence schema v4 overviews include `context` with canonical target root,
-workflow/recording identity, revision, and the worker's
-binding/dispatch identity. `facts.issue` retains the complete bounded issue.
-API overviews supply further exact commands in `queries`.
-Workers retain the initial identity in their returned handoff along with
-supporting proof, tests, commit/patch and necessary coordinator inputs. The
-coordinator gets current acceptance commands from the engine; workers do not
-need an action JSON or evidence command in their assignment.
+The read-only selector resolves the requested API, including parked APIs, and
+leaves scheduling state unchanged. Unknown items and items with no current
+issue fail explicitly. Workers who start before dispatch confirmation retry
+after the coordinator confirms.
 
-Relevant API overviews include a `source_process_traffic` query for bounded
-bootstrap, configured `process_owned`, and Redis snapshot triage. Existing
-`evidence <query-id>` calls remain supported for overview/detail queries and
-pagination. Query identities follow the owning item across concurrent scheduling
-and reject replaced evidence. Current context metadata is excluded from evidence
-hashing so unrelated workflow revisions do not invalidate diagnostic evidence.
-The overview does not authorize rule planning; use the applicable planner
-returned by a specific evidence query. A current overview supplied to `rule plan`
-returns its exact supported detail-query command, without calling it stale or
-requiring another Replay or dispatch. Use the detail response's evidence ID;
-replaced issue evidence still rejects as stale.
+The result includes per-method Replay attempts, Case counts, grouped failures
+and the assigned worktree and base. Each failure group includes the relevant
+comparison and a representative Case with original evidence or its reference
+when available. See [implementer evidence](rewrite-evidence.md).
+Workers retain the original assignment identities, commit, supporting proof
+and test results for the coordinator. Rule planning uses separately validated
+evidence bound to the current issue.
 Schema v24 added top-level `pending`, counting only coordinator actions executable
 now. Inventory summaries rename their old `pending` count to `unverified`.
 Persisted state uses version 2 with the dependency-review ledger, optional worker
@@ -1765,10 +1751,10 @@ from target and code fingerprints.
 Skipped passes are scheduling history, never fresh response or dependency
 evidence. `diagnosis.case_selection` reports available, selected and skipped
 counts; other attempt counts describe only selected cases.
-Backend-rewrite overview and execution-failure queries expose the same diagnostic
-as `case_selection`, including for an already finalized attempt. It describes
-the runner's selection, separately from the low-level Replay report's `mode`.
-Missing legacy selection metadata is reported as null, without inferring skips.
+Backend-rewrite API evidence includes Case counts for the retained method
+attempts. The runner's `case_selection` and the low-level Replay report's
+`mode` describe distinct facts. Missing selection metadata leaves skips
+unknown.
 Existing explicit localcache and cross-case dependency rules still load from the
 complete recording.
 Logical progress keeps the recorded case totals and cannot mark a partially
@@ -2047,20 +2033,15 @@ previous/current attempt numbers, and whether the latest attempt passed. It
 describes the latest completed attempt, so a repeated `next` with no target
 change returns the same evidence without claiming another replay occurred.
 
-Workers fetch the overview through `backend-rewrite evidence --api`, bound to their canonical target root. Further gate and
-aggregate facts use only the returned `backend-rewrite evidence <query-id>`
-commands.
-For a response issue, `facts.issue.response_diagnosis` in that overview
-contains exact total/indexed/omitted difference counts plus at most 20 clusters
-grouped by normalized Pointer pattern and difference kind. Each cluster reports
-affected cases, total occurrences, and one exact representative. The first
-entry in the overview's `queries` is `case_response_differences`; it returns at
-most 20 ordered differences from that representative case with bounded expected/actual values.
+Workers use `backend-rewrite evidence --api` against the canonical Target root.
+Response failures include a comparison location and bounded expected and
+received values. Read the representative Case or referenced report when the
+inline evidence leaves the cause open.
 If a selected case finishes without usable target response assertion evidence,
-the diagnosis counts one `response_unavailable` difference at `$response`; the
-evidence page reports the recorded response as present and the target response
-as unavailable. When the HTTP driver can classify the observed transport
-failure, both the representative and evidence page include an
+the response diagnosis counts one `response_unavailable` difference at
+`$response`. The recorded response is present and the Target response is
+unavailable. When the HTTP driver classifies the observed transport failure,
+the response evidence includes an
 `unavailable_reason`, such as `target_connection_closed`,
 `target_connection_failed`, or `target_request_timed_out`.
 The managed HTTP request deadline includes the recorded Source response's
@@ -2069,14 +2050,8 @@ The managed HTTP request deadline includes the recorded Source response's
 being cut off by a shorter fixed client deadline. Missing elapsed metadata
 retains the allowance; malformed elapsed metadata fails explicitly. Only elapsed
 time affects this budget; Source status, headers and body remain assertion data.
-When more are available it returns the next opaque evidence command instead of
-an open cursor. The `representatives` result includes the representative case
-ID, its exact immutable standard `case_dir`, and a structured
-response difference. A focused E2E difference contains expected and actual
-observations. It does not duplicate the complete Replay response
-or expose a Replay-local result directory. The AI may inspect all persisted
-files under `.traffic-e2e/local/artifacts/`, starting with the representative case for
-efficiency. Artifacts remain read-only, and coordinator results remain
+Inspect persisted files under `.traffic-e2e/local/artifacts/` by their reported
+reference. Artifacts remain read-only, and coordinator results remain
 authoritative for the active run and legal transitions.
 
 For a response, Replay, or dependency issue, `dirty_clusters` reads a bounded
@@ -2548,16 +2523,17 @@ checks, or adds a missing source-compatible absolute path while preserving
 existing captured content. Replacing or refreshing content remains
 administrator-owned.
 
-The initialized target repository contains `.traffic-e2e/Dockerfile.target`. It
-is a BuildKit multi-stage build whose final image has a non-empty OCI entrypoint
-and defaults to `USER 998:998`. Every target build requires a BuildKit SSH
-mount. traffic-e2e manages its agent at
+The initialized target repository contains `.traffic-e2e/Dockerfile.target`.
+The project defines its base images, build tools, stages, and caches in this
+file. traffic-e2e validates that the final image is Linux/amd64, declares a
+non-empty OCI entrypoint, and defaults to `USER 998:998`. When the Dockerfile
+uses a BuildKit SSH mount, traffic-e2e manages its agent at
 `.traffic-e2e/local/socks/ssh-agent.sock`, recreates a stale socket, loads the
 calling account's default OpenSSH identities with `ssh-add`, and passes that
 exact socket to `docker build --ssh`. The agent exposes signing only; keys
 remain build-time inputs and are not copied into the image. Build output
 continues to stream to the caller, while a bounded actionable tail is returned
-through preflight and E2E API errors when Docker or Cargo fails. traffic-e2e
+through preflight and E2E API errors when the build fails. traffic-e2e
 builds the image from the repository root, tags the cache as
 `traffic-e2e/<project>-target:cache`, validates the resulting immutable image
 ID, and runs that ID directly. A target start receives each declared startup
@@ -2621,11 +2597,9 @@ cleanly on `SIGTERM`. Application logs belong in a configured writable runtime
 output such as `/data1/weibo/logs`; stdout/stderr output is not required.
 traffic-e2e owns network namespaces, readiness, signals, and cleanup.
 
-Use the pinned shared Rust builder/runtime images and stable BuildKit cache
-mount IDs described by the backend-rewrite initialization contract. A source
-change reruns the relevant Cargo build layer, but cached registry, git, and
-target artifacts prevent downloading the dependency graph again when the
-builder identity and cache IDs are unchanged.
+The generated Rust scaffold uses BuildKit cache mounts for the Cargo registry
+and build artifacts so builds can reuse them across source changes. Projects
+configure caches for their chosen build tools in their Target Dockerfiles.
 
 For diagnostic preflight, the runtime keeps a target-scoped
 source-adaptor cache image. `.traffic-e2e/local/source/` is authoritative for
@@ -3438,19 +3412,17 @@ and the dirty-cluster evidence query expose these causes before downstream
 missing responses, stream events or unused calls. No expected output drives
 request execution and no response or ACK is synthesized.
 
-Backend rewrite issue selection prioritizes these actual execution failures over
-response assertions and opens dependency investigation. The evidence overview
-also exposes same-attempt execution failures for retained response issues, with
-the dependency diagnosis command first. It preserves issue identity and does not
-borrow failures from newer attempts. Other cases retain their independent
-response differences; unused inventory alone does not change issue priority.
+Backend rewrite issue selection prioritizes actual execution failures that
+prevent a response assertion. API evidence keeps the retained attempt and
+preserves independent response differences from other Cases. Unused inventory
+alone leaves the ordinary gate order in place.
 Global-format plan failures identify Source self-validation versus independent
 Target validation, the response/dependency surface and original case or trace
 record. Dependency comparisons retain witness and slot references; differences
 retain their logical JSON pointers. These locations expose no payload values.
 
-The overview's `dependency_witness_query` supplies the protected detail entrypoint:
-`backend-rewrite evidence --api <API> --witness <id> --pointer /client_ip`.
+Use `backend-rewrite evidence-detail --api <API> --witness <id> --pointer /client_ip`
+to read a specific protected witness value.
 It requires the confirmed current assignment and finalized attempt, authenticates
 the original Source exchange and private witness, and returns only the requested
 JSON value (up to 4096 bytes). `--value-index` selects a document in multi-value
@@ -3462,9 +3434,9 @@ actual names without their values; an empty public `headers` placeholder is not
 evidence that a forwarding or authentication header was absent. No plaintext
 artifacts are written by this query.
 
-For an unmatched Redis call without a paired Source witness, use the overview's
-`redis_target_argument_query`: `backend-rewrite evidence --api <API>
---redis-target-event <case-id>:<target-event-index> --argument-index <index>`.
+For an unmatched Redis call without a paired Source witness, use
+`backend-rewrite evidence-detail --api <API> --redis-target-event
+<case-id>:<target-event-index> --argument-index <index>`.
 The zero-based argument index excludes the command name. An optional `--pointer`
 selects one JSON member inside that argument. The query authenticates independent
 Target observations and correlates the exact native request fingerprint within

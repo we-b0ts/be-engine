@@ -17,6 +17,7 @@ use crate::{
 
 pub mod execution;
 pub mod http_requests;
+pub mod implementer;
 pub mod query_catalog;
 pub mod redis_stream_progress;
 use query_catalog::query_kinds;
@@ -59,7 +60,7 @@ pub fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidence
                 purpose: purpose.to_string(),
                 command: super::action::command(
                     target_root,
-                    vec!["evidence".to_string(), query_id.clone()],
+                    vec!["evidence-detail".to_string(), query_id.clone()],
                     Vec::new(),
                 ),
                 query_id,
@@ -343,7 +344,7 @@ pub fn facts(
             facts["dynamic_capture_candidates"] = crate::e2e_run::query_dynamic_capture_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {
                 facts["http_request_differences_command"] = serde_json::to_value(super::action::command(target_root,
-                    vec!["evidence".into(), query_id(state, issue, QUERY_HTTP_REQUESTS)], Vec::new()))?;
+                    vec!["evidence-detail".into(), query_id(state, issue, QUERY_HTTP_REQUESTS)], Vec::new()))?;
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["cross_case_candidates"] = crate::e2e_run::query_http_cross_case_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
@@ -523,7 +524,7 @@ pub fn case_response_difference_facts(
             "query_id": query_id,
             "command": super::action::command(
                 target_root,
-                vec!["evidence".to_string(), query_id],
+                vec!["evidence-detail".to_string(), query_id],
                 Vec::new(),
             ),
         })
