@@ -223,11 +223,6 @@ pub fn native_kind_owner(effect: &NativeEffect) -> (RuleKind, ExecutionOwner) {
     match effect {
         E::Identity(_) => (K::Identity, O::IdentityState),
         E::RedisSequence(_) => (K::RedisSequence, O::RedisState),
-        E::RedisAppendStream => (K::RedisAppendStream, O::RedisState),
-        E::RedisReadCommutation(_) => (K::RedisReadCommutation, O::RedisState),
-        E::RedisReadObservation(_) => (K::RedisReadObservation, O::RedisState),
-        E::RedisExpiryRefresh(_) => (K::RedisExpiryRefresh, O::RedisState),
-        E::RedisActivityRefresh(_) => (K::RedisActivityRefresh, O::RedisState),
         E::ResponseJwt(_) => (K::ResponseJwt, O::ResponseDelivery),
         E::ResponseHeaderDate(_) => (K::ResponseHeaderDate, O::ResponseDelivery),
         E::ResponseGenerated(_) => (K::ResponseGenerated, O::ResponseDelivery),

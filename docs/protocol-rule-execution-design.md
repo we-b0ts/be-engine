@@ -69,9 +69,9 @@ protocol-owned workflow.
 Admission and delivered-value barriers are separate contracts. A request already
 claimed in an ordinary Case can satisfy admission ordering before delivery
 bookkeeping obtains the mutex. Rules that depend on delivered values still wait
-for the stronger barrier. Protocol-specific transactions, quiet responses and
-proven state observations select their required native constraints; they do not
-reimplement claim transitions or invent delivery. Wait registration occurs under
+for the stronger barrier. Protocol-specific transactions and quiet responses
+select their required native constraints; they do not reimplement claim
+transitions or invent delivery. Wait registration occurs under
 the same ownership lock as its predicate, and retries retain the original Target
 observation, arrival index and clocks. Case epochs, cancellation and deadlines
 bound the shared wait.
@@ -79,9 +79,7 @@ bound the shared wait.
 Connection framing/authentication/session data stay native. Target connection
 termination, request ownership, Case cancellation, finite claims and lane
 progress use shared contracts. This avoids adding a single global write lock:
-independent connections and lanes continue to progress concurrently. Redis-only
-repeat/coalescing operators remain explicitly named native claims rather than
-an implicit bypass for ordinary finite requests.
+independent connections and lanes continue to progress concurrently.
 
 Conformance includes the historical pooled-request race, cross-command lane
 barriers, failed semantic commit after actual wire delivery, cancellation of an

@@ -100,9 +100,8 @@ bytes from a proven earlier write, including its exact stored times. Each read
 and mutation still consumes a finite Source exchange. See
 [write-to-read delivery](redis-read-back.md).
 
-Key-local APPEND, read commutation and expiry refresh belong under
-`redis.keys`. Finite process initialization reads belong under
-`localcache.requests`. Actual process tasks use
+Redis command and key-format declarations belong under `redis.keys`. Finite
+process initialization reads belong under `localcache.requests`. Actual process tasks use
 `process_dependencies.tasks.<Source-task-name>.requests`. HTTP lifetime entries
 require an explicit host. These lifetimes do not duplicate value formats.
 There is no authored `redis_lock` effect or separate lock-token state machine.

@@ -7,7 +7,6 @@ use serde::Serialize;
 use super::{Proof, Protocol, SourceCondition, TimestampFormat, compiler};
 use traffic_policy_schema::native::*;
 
-mod activity_refresh;
 pub mod codec_binding;
 mod http_request;
 pub mod ownership;
@@ -214,70 +213,6 @@ fn validate_effect(rule: &NativeRule, context: &crate::CompilationContext<'_>) -
     match &rule.effect {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
-        NativeEffect::RedisActivityRefresh(effect) => activity_refresh::validate(rule, effect),
-        NativeEffect::RedisReadCommutation(_)
-        | NativeEffect::RedisReadObservation(_)
-        | NativeEffect::RedisExpiryRefresh(_) => {
-            if let NativeEffect::RedisReadObservation(effect) = &rule.effect {
-                ensure!(
-                    !effect.transient_nil || effect.state_values,
-                    "transient nil permission requires the complete key-state contract"
-                );
-            }
-            if selector.resource.is_none() {
-                validate_discovered_redis_key(selector)?;
-            } else {
-                let resource = resource(selector, Protocol::Redis)?;
-                ensure!(
-                    resource
-                        .database
-                        .as_ref()
-                        .and_then(crate::Database::index)
-                        .is_some(),
-                    "Redis observations require an explicit numeric Redis database"
-                );
-            }
-            ensure!(
-                selector.operation.as_deref()
-                    == Some(
-                        if matches!(rule.effect, NativeEffect::RedisExpiryRefresh(_)) {
-                            "EXPIRE"
-                        } else {
-                            "GET"
-                        }
-                    ),
-                "observation contract requires its exact GET or EXPIRE operation"
-            );
-            ensure!(
-                selector.key.is_some(),
-                "Redis observations require a bounded key selector"
-            );
-            Ok(())
-        }
-        NativeEffect::RedisAppendStream => {
-            if selector.resource.is_some() {
-                resource(selector, Protocol::Redis)?;
-                ensure!(
-                    selector
-                        .resource
-                        .as_ref()
-                        .and_then(|r| r.database.as_ref())
-                        .is_some(),
-                    "append stream requires an explicit Redis database"
-                );
-            } else {
-                validate_discovered_redis_key(selector)?;
-            }
-            ensure!(
-                selector.operation.as_deref() == Some("APPEND"),
-                "append stream requires operation APPEND"
-            );
-            ensure!(
-                selector.key.is_some(),
-                "append stream requires a bounded key selector"
-            );
-            Ok(())
-        }
         NativeEffect::ResponseJwt(effect) => {
             response_scope(rule)?;
             compiler::validate_pointer(&effect.pointer, true)?;

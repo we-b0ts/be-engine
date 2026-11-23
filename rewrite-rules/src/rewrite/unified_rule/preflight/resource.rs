@@ -15,8 +15,7 @@ pub fn selected(policy: &CompiledPolicy, ids: &BTreeSet<String>) -> BTreeSet<Str
         .filter(|r| {
             ids.contains(&r.rule.id)
                 && r.domain == NativeDomain::Runtime
-                && (r.rule.selector.resource.is_some()
-                    || matches!(r.rule.effect, NativeEffect::RedisActivityRefresh(_)))
+                && r.rule.selector.resource.is_some()
                 && r.rule.selector.api.is_none()
                 && !source::owns(r)
         })
@@ -137,14 +136,6 @@ impl ResourceRecordMethods for ResourceRecord {
 fn matches(policy: &CompiledPolicy, ids: &BTreeSet<String>, event: &Value) -> Result<bool> {
     let protocol = dependency::protocol(event);
     for rule in policy.native.iter().filter(|r| ids.contains(&r.rule.id)) {
-        // Key-only refresh permissions must see every Redis Case to exclude
-        // foreign writers and scripts on each discovered physical resource.
-        if matches!(rule.rule.effect, NativeEffect::RedisActivityRefresh(_))
-            && rule.rule.selector.resource.is_none()
-            && protocol == Some(Protocol::Redis)
-        {
-            return Ok(true);
-        }
         if matches!(rule.rule.effect, NativeEffect::HttpRequest(_))
             && (rule
                 .rule

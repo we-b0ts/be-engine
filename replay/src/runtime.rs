@@ -54,9 +54,20 @@ impl SequenceRuntime {
     }
 
     pub fn with_fast_gap_cap(plan: Arc<SequencePlan>, fast_gap_cap: Option<Duration>) -> Arc<Self> {
+        Self::with_request_gates(plan, fast_gap_cap, std::iter::empty())
+    }
+
+    /// External prerequisites can delay a real recorded request. They cannot consume it.
+    pub fn with_request_gates(
+        plan: Arc<SequencePlan>,
+        fast_gap_cap: Option<Duration>,
+        request_gates: impl IntoIterator<Item = u64>,
+    ) -> Arc<Self> {
+        let mut scheduler = SequenceScheduler::new(plan.clone());
+        scheduler.request_gates.extend(request_gates);
         Arc::new(Self {
             state: Mutex::new(State {
-                scheduler: SequenceScheduler::new(plan.clone()),
+                scheduler,
                 pending: 0,
                 pending_bytes: 0,
                 progressed_at: None,
@@ -74,6 +85,38 @@ impl SequenceRuntime {
             .expect("sequence runtime poisoned")
             .scheduler
             .expected()
+    }
+
+    pub(crate) fn admissible_request(&self) -> Option<SourceEvent> {
+        let state = self.state.lock().expect("sequence runtime poisoned");
+        state.scheduler.expected().filter(|event| {
+            event.kind == EventKind::Request && !state.scheduler.request_is_gated(event.sequence)
+        })
+    }
+
+    pub(crate) fn request_is_gated(&self, sequence: u64) -> bool {
+        self.state
+            .lock()
+            .expect("sequence runtime poisoned")
+            .scheduler
+            .request_is_gated(sequence)
+    }
+
+    /// Accept a prerequisite receipt only while its recorded request is at the frontier.
+    pub fn release_request_gate(&self, sequence: u64) -> Result<()> {
+        let mut state = self.state.lock().expect("sequence runtime poisoned");
+        ensure!(
+            !state.scheduler.failed()
+                && state
+                    .scheduler
+                    .expected()
+                    .is_some_and(|event| event.sequence == sequence)
+                && state.scheduler.request_gates.remove(&sequence),
+            "request gate is stale or already released"
+        );
+        drop(state);
+        self.notify();
+        Ok(())
     }
 
     pub fn contains(&self, dependency: u64) -> bool {

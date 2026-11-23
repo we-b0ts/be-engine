@@ -196,16 +196,9 @@ also completes recording, with no authored timeout or failure switch. Keep
 the finite dependencies in the Case; do not replace this lifecycle with
 process-owned exemptions. See [recording](../../../../../docs/recording.md).
 
-`redis_append_stream` grants Source-proven APPEND chunk-boundary equivalence only
-under an explicit resource/database/key scope. Literal byte order, reads,
-resets, expiry calls and finite consumption remain checked; APPEND responses
-reflect actual Target cumulative lengths. See [APPEND streams](../../../../../docs/redis-append-stream.md).
-
-`redis_read_commutation` permits explicitly scoped finite nil GET observations
-to cross unrelated commands only after complete Source key validation. It
-preserves each read's count and delivery; extra or missing reads still fail.
-Use it for proven independent polling, never to suppress a cancellation value
-or repair missing business reads. See [finite read commutation](../../../../../docs/redis-read-commutation.md).
+Timer-driven APPEND batches, expiry calls and polling GETs retain finite matching.
+To release an instrumented Target wait at a recorded dependency checkpoint, see
+[Replay timers](../../../../../docs/replay-timers.md).
 
 Ordinary global identity formats relate complete typed Source values automatically.
 Use a typed native owner for additional protocol, contextual or stateful behavior:

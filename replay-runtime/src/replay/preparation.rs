@@ -40,6 +40,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
                 .filter_map(|index| self.native.recorded_sequence(*index));
             plan.sequence = Some(catalog.scope(protocols.chain(registered))?);
         }
+        self.timers.validate_case(case, plan.sequence.as_deref())?;
         plan.rules = rules;
         self.native.finish_storage_preparation(case);
         self.case_execution_plans

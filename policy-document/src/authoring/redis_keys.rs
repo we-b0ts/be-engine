@@ -1,4 +1,4 @@
-//! Key-local behavior declarations lower to the existing native effect owners.
+//! Author key-local Redis scalar formats and native command contracts.
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
@@ -6,78 +6,60 @@ use serde::{Deserialize, Deserializer};
 use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
 
-use crate::native::{NativeKeySelector, RedisReadCommutationEffect};
+use crate::native::{NativeKeySelector, Proven, RedisSequenceEffect};
 use crate::{GlobalField, NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, Resource};
 
 pub mod commands;
 pub mod key_format;
-pub mod state;
 
 pub const ID_PREFIX: &str = "redis.key.";
 
 #[derive(Debug)]
 pub struct Entry {
     pub scalar: Option<GlobalField>,
-    pub behaviors: Vec<Behavior>,
+    commands: Option<CommandContract>,
     pub proof: Option<Proof>,
     declared_state: bool,
 }
 
-#[derive(Debug, Clone)]
-pub enum Behavior {
-    State(state::Operation),
-    ReadCommutation,
-    Commands {
-        key_format: Option<key_format::KeyFormat>,
-        declarations: commands::Commands,
-    },
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FiniteState {
+    set: SetTransition,
 }
 
-impl Behavior {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::State(operation) => operation.name(),
-            Self::ReadCommutation => "read_commutation",
-            Self::Commands { .. } => "commands",
-        }
-    }
-    fn operation(&self) -> Option<&str> {
-        match self {
-            Self::State(operation) => operation.operation(),
-            Self::ReadCommutation => Some("GET"),
-            Self::Commands { .. } => None,
-        }
-    }
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SetTransition {
+    Transition,
+}
+
+#[derive(Debug)]
+struct CommandContract {
+    key_format: Option<key_format::KeyFormat>,
+    declarations: commands::Commands,
+}
+
+impl CommandContract {
     fn effect(
         &self,
         pattern: &str,
         proof: Option<&Proof>,
         context: &crate::AuthoringContext<'_>,
     ) -> Result<NativeEffect> {
-        Ok(match self {
-            Self::State(operation) => operation.effect(),
-            Self::ReadCommutation => {
-                NativeEffect::RedisReadCommutation(RedisReadCommutationEffect {})
-            }
-            Self::Commands {
-                key_format,
-                declarations,
-            } => {
-                use crate::native::{Proven, RedisSequenceEffect};
-                NativeEffect::RedisSequence(RedisSequenceEffect {
-                    key: key_format
-                        .as_ref()
-                        .map(|format| {
-                            Ok::<_, anyhow::Error>(Proven {
-                                contract: format.lower(pattern)?,
-                                proof: proof.cloned(),
-                            })
-                        })
-                        .transpose()?,
-                    commands: declarations.compile(proof, context)?,
+        Ok(NativeEffect::RedisSequence(RedisSequenceEffect {
+            key: self
+                .key_format
+                .as_ref()
+                .map(|format| {
+                    Ok::<_, anyhow::Error>(Proven {
+                        contract: format.lower(pattern)?,
+                        proof: proof.cloned(),
+                    })
                 })
-            }
-        })
+                .transpose()?,
+            commands: self.declarations.compile(proof, context)?,
+        }))
     }
 }
 
@@ -89,22 +71,16 @@ impl<'de> Deserialize<'de> for Entry {
                 .remove("proof")
                 .map(serde_yaml::from_value)
                 .transpose()?;
-            let mut behaviors = Vec::new();
             let state = fields
                 .remove("state")
-                .map(serde_yaml::from_value::<state::Contract>)
+                .map(serde_yaml::from_value::<FiniteState>)
                 .transpose()?;
-            let declared_state = state.is_some();
-            if let Some(state) = state {
-                behaviors.extend(state.operations()?);
-            }
-            if let Some(value) = fields.remove("read_commutation") {
-                ensure!(
-                    value == Value::Bool(true),
-                    "Redis key read_commutation must be true when declared"
-                );
-                behaviors.push(Behavior::ReadCommutation);
-            }
+            let declared_state = matches!(
+                state,
+                Some(FiniteState {
+                    set: SetTransition::Transition
+                })
+            );
             let key_format = fields
                 .remove("key_format")
                 .map(serde_yaml::from_value::<key_format::KeyFormat>)
@@ -117,12 +93,10 @@ impl<'de> Deserialize<'de> for Entry {
                 key_format.is_none() || commands.is_some(),
                 "Redis key_format requires its command declarations"
             );
-            if let Some(declarations) = commands {
-                behaviors.push(Behavior::Commands {
-                    key_format,
-                    declarations,
-                });
-            }
+            let commands = commands.map(|declarations| CommandContract {
+                key_format,
+                declarations,
+            });
             let scalar = if fields.is_empty() {
                 None
             } else {
@@ -131,16 +105,16 @@ impl<'de> Deserialize<'de> for Entry {
                 )?)
             };
             ensure!(
-                scalar.is_some() || !behaviors.is_empty() || declared_state,
+                scalar.is_some() || commands.is_some() || declared_state,
                 "Redis key declaration is empty"
             );
             ensure!(
-                proof.is_none() || !behaviors.is_empty(),
+                proof.is_none() || commands.is_some(),
                 "Redis scalar declarations do not accept behavior proof"
             );
             Ok(Self {
                 scalar,
-                behaviors,
+                commands,
                 proof,
                 declared_state,
             })
@@ -149,8 +123,7 @@ impl<'de> Deserialize<'de> for Entry {
     }
 }
 
-/// Validate proof at the authored key boundary before lowering splits the
-/// declaration into native rules or drops an explicit finite SET transition.
+/// Validate Source proof before lowering command contracts and finite SET declarations.
 pub fn require_source_proofs(policy: &Value, revision: Option<&str>) -> Result<()> {
     let Some(keys) = policy
         .get("redis")
@@ -166,7 +139,7 @@ pub fn require_source_proofs(policy: &Value, revision: Option<&str>) -> Result<(
             .and_then(|entry| entry.remove("proof"));
         let entry: Entry = serde_yaml::from_value(declaration)
             .with_context(|| format!("invalid Redis key {pattern:?} declaration"))?;
-        if entry.declared_state || !entry.behaviors.is_empty() {
+        if entry.declared_state || entry.commands.is_some() {
             let mut local = Mapping::new();
             if let Some(proof) = proof {
                 local.insert("proof".into(), proof);
@@ -204,26 +177,25 @@ pub fn selector(pattern: &str) -> Result<NativeKeySelector> {
     })
 }
 
-pub fn lower(
+fn lower(
     pattern: &str,
     resource: Option<Resource>,
-    behavior: &Behavior,
+    commands: &CommandContract,
     proof: Option<Proof>,
     context: &crate::AuthoringContext<'_>,
 ) -> Result<NativeRule> {
-    let semantic_effect = behavior.effect(pattern, None, context)?;
+    let semantic_effect = commands.effect(pattern, None, context)?;
     let digest = Sha256::digest(serde_json::to_vec(&(
         &resource,
         pattern,
-        behavior.name(),
+        "commands",
         semantic_effect,
     ))?);
-    let effect = behavior.effect(pattern, proof.as_ref(), context)?;
+    let effect = commands.effect(pattern, proof.as_ref(), context)?;
     Ok(NativeRule {
-        id: format!("{ID_PREFIX}{}.{digest:x}", behavior.name()),
+        id: format!("{ID_PREFIX}commands.{digest:x}"),
         selector: NativeMatch {
             resource,
-            operation: behavior.operation().map(str::to_owned),
             key: Some(selector(pattern)?),
             ..Default::default()
         },
@@ -241,16 +213,14 @@ pub fn expand(
     let mut scalars = BTreeMap::new();
     let mut rules = Vec::new();
     for (pattern, entry) in entries {
-        if !entry.behaviors.is_empty() {
-            for behavior in entry.behaviors {
-                rules.push(serde_yaml::to_value(lower(
-                    &pattern,
-                    None,
-                    &behavior,
-                    entry.proof.clone(),
-                    context,
-                )?)?);
-            }
+        if let Some(commands) = entry.commands {
+            rules.push(serde_yaml::to_value(lower(
+                &pattern,
+                None,
+                &commands,
+                entry.proof,
+                context,
+            )?)?);
         }
         if let Some(field) = entry.scalar {
             scalars.insert(pattern, field);
@@ -281,38 +251,28 @@ pub fn compact(
         Some(NativeKeySelector::Affix { prefix, suffix }) => format!("{prefix}*{suffix}"),
         _ => return Ok(false),
     };
-    let behavior = if native.id.starts_with("redis.key.state.") {
-        let Some(operation) = state::Operation::reverse(&native.effect) else {
+    let NativeEffect::RedisSequence(effect) = &native.effect else {
+        return Ok(false);
+    };
+    let key_format = if let Some(key) = &effect.key {
+        let Some(format) = key_format::reverse(&pattern, &key.contract)? else {
             return Ok(false);
         };
-        Behavior::State(operation)
+        Some(format)
     } else {
-        match &native.effect {
-            NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
-            NativeEffect::RedisSequence(effect) => {
-                let key_format = if let Some(key) = &effect.key {
-                    let Some(format) = key_format::reverse(&pattern, &key.contract)? else {
-                        return Ok(false);
-                    };
-                    Some(format)
-                } else {
-                    None
-                };
-                let Some(declarations) = commands::Commands::reverse(&effect.commands)? else {
-                    return Ok(false);
-                };
-                Behavior::Commands {
-                    key_format,
-                    declarations,
-                }
-            }
-            _ => return Ok(false),
-        }
+        None
+    };
+    let Some(declarations) = commands::Commands::reverse(&effect.commands)? else {
+        return Ok(false);
+    };
+    let commands = CommandContract {
+        key_format,
+        declarations,
     };
     let mut semantic = native.clone();
     semantic.proof = None;
-    semantic.effect = behavior.effect(&pattern, None, context)?;
-    if semantic != lower(&pattern, None, &behavior, None, context)? {
+    semantic.effect = commands.effect(&pattern, None, context)?;
+    if semantic != lower(&pattern, None, &commands, None, context)? {
         return Ok(false);
     }
     let redis = root
@@ -330,29 +290,21 @@ pub fn compact(
         .or_insert_with(|| Value::Mapping(Mapping::new()))
         .as_mapping_mut()
         .context("Redis key declaration requires a mapping")?;
-    if let Behavior::State(operation) = &behavior {
-        operation.compact(entry)?;
-        return Ok(true);
+    if let Some(format) = &commands.key_format {
+        ensure!(
+            entry
+                .insert("key_format".into(), serde_yaml::to_value(format)?)
+                .is_none(),
+            "duplicate Redis key format owner"
+        );
     }
-    let value = match &behavior {
-        Behavior::Commands {
-            key_format,
-            declarations,
-        } => {
-            if let Some(format) = key_format {
-                ensure!(
-                    entry
-                        .insert("key_format".into(), serde_yaml::to_value(format)?)
-                        .is_none(),
-                    "duplicate Redis key format owner"
-                );
-            }
-            serde_yaml::to_value(declarations)?
-        }
-        _ => Value::Bool(true),
-    };
     ensure!(
-        entry.insert(behavior.name().into(), value).is_none(),
+        entry
+            .insert(
+                "commands".into(),
+                serde_yaml::to_value(commands.declarations)?
+            )
+            .is_none(),
         "duplicate Redis key behavior owner"
     );
     Ok(true)

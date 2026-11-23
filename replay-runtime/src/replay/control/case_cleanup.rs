@@ -47,6 +47,7 @@ pub(super) fn mark_failed<P: ReplayProtocolSet>(
         .entry(case.into())
         .or_insert_with(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE);
     state.protocols.close_case(case);
+    state.timers.activate(None);
     Ok(())
 }
 

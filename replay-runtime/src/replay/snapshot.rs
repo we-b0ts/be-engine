@@ -6,6 +6,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
         let mut report = ReplayReport {
             dependency_protocols: self.native.snapshot(),
             dependency_sequence_missing: self.sequence_missing.clone(),
+            timer_events: self.timers.events().to_vec(),
             batch_reconciliation: None,
             startup_phase: self.startup_phase.report(),
             dependency_attribution_snapshot: self.dependency_attribution_snapshot.clone(),

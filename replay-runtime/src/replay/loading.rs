@@ -10,10 +10,11 @@ impl<P: ReplayProtocolSet> Runtime<P> {
         lifecycle: ReplayLifecycleConfig,
         providers: Arc<crate::protocols::DependencyProviders>,
         loader: P::SourceLoader,
+        timers: timers::Timers,
     ) -> Result<Self> {
         // Keep the injected loader and Source preparation state on the heap across startup.
         let loaded = Box::pin(load_state(
-            config, dns_listen, tcp_listen, lifecycle, providers, loader,
+            config, dns_listen, tcp_listen, lifecycle, providers, loader, timers,
         ))
         .await?;
         let runtime = Self {
@@ -52,6 +53,7 @@ async fn load_state<P: ReplayProtocolSet>(
     lifecycle: ReplayLifecycleConfig,
     providers: Arc<crate::protocols::DependencyProviders>,
     mut loader: P::SourceLoader,
+    timers: timers::Timers,
 ) -> Result<LoadedRuntime<P>> {
     lifecycle.dependency_loading.validate()?;
     ensure!(
@@ -373,6 +375,7 @@ async fn load_state<P: ReplayProtocolSet>(
         providers,
         native,
         admission_epoch: 0,
+        timers,
         case_execution_plans: BTreeMap::new(),
         sequence_catalog,
         active_sequence: None,

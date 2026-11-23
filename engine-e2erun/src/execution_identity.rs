@@ -34,6 +34,10 @@ pub fn review_fingerprint(target_root: &Path) -> Result<String> {
 /// Identity of executed behavior. Only process-owned traffic classification may
 /// change when reusing responses from a finalized Replay.
 pub fn replay_identity(target_root: &Path) -> Result<String> {
+    replay_identity_with_timer_plan(target_root).map(|(identity, _)| identity)
+}
+
+fn replay_identity_with_timer_plan(target_root: &Path) -> Result<(String, Option<Vec<u8>>)> {
     let mut hash = Fnv1a::default();
     hash.update(b"rewrite-replay-identity-v1");
     hash.update(review_fingerprint(target_root)?.as_bytes());
@@ -44,6 +48,13 @@ pub fn replay_identity(target_root: &Path) -> Result<String> {
         if timing == crate::replay::ReplayStreamTiming::Fast {
             hash.update(&regression.replay_interval_cap_ms.to_le_bytes());
         }
+    }
+    let timer_plan = crate::replay_timer::read_plan(target_root, regression.replay_timing)?;
+    if let Some(timer_plan) = &timer_plan {
+        use sha2::Digest as _;
+
+        hash.update(b"replay-timer-plan-v1");
+        hash.update(&sha2::Sha256::digest(timer_plan));
     }
     let policy = policy_file(target_root)?;
     match fs::read(&policy) {
@@ -59,7 +70,7 @@ pub fn replay_identity(target_root: &Path) -> Result<String> {
             return Err(error).context("failed to fingerprint Replay verification policy");
         }
     }
-    Ok(hash.finish())
+    Ok((hash.finish(), timer_plan))
 }
 
 fn runtime_inputs_fingerprint(target_root: &Path, mut hash: Fnv1a) -> Result<String> {
@@ -115,6 +126,12 @@ pub fn with_repository_cache<T>(operation: impl FnOnce() -> T) -> T {
 
 pub fn fresh_replay_identity(root: &Path) -> Result<String> {
     cache::fresh(|| replay_identity(root))
+}
+
+pub(crate) fn fresh_replay_identity_with_timer_plan(
+    root: &Path,
+) -> Result<(String, Option<Vec<u8>>)> {
+    cache::fresh(|| replay_identity_with_timer_plan(root))
 }
 
 fn directory_files_hash(target_root: &Path, review: bool, policy: &Path) -> Result<Fnv1a> {

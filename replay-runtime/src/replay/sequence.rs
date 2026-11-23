@@ -65,10 +65,17 @@ impl<P: super::ReplayProtocolSet> super::RuntimeState<P> {
             }
             runtime.abort();
         }
-        self.active_sequence = case
-            .and_then(|case| self.case_execution_plans.get(case))
-            .and_then(|plan| plan.sequence.clone())
-            .map(|plan| self.sequence_runtime(plan));
+        self.timers.activate(case);
+        self.active_sequence = case.and_then(|case| {
+            let plan = self.case_execution_plans.get(case)?.sequence.clone()?;
+            let cap = super::control::input_timing::source_fast_cap(self)
+                .map(std::time::Duration::from_millis);
+            Some(SequenceRuntime::with_request_gates(
+                plan,
+                cap,
+                self.timers.request_gates(case),
+            ))
+        });
         let run = self
             .run_sequence
             .as_ref()

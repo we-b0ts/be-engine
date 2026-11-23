@@ -39,8 +39,7 @@ impl SequenceBinding {
         let runtime = self.runtime.as_ref()?;
         Some(
             runtime
-                .expected()
-                .filter(|event| event.kind == EventKind::Request)
+                .admissible_request()
                 .and_then(|event| self.positions.get(&event.dependency_sequence).copied()),
         )
     }

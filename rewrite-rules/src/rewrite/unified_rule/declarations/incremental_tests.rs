@@ -114,7 +114,12 @@ fn additions_reuse_existing_single_protocol_format_limits() {
 fn physical_carriers_add_formats_without_replacing_other_fields_or_native_permissions() {
     let mut current = policy(json!({"format":"traffic-policy/v3",
         "mysql":{"tables":{"tasks":{"pattern":"tasks_*","fields":{"ID":{"kind":"identity","formats":["decimal"]},"retained":{"kind":"time","formats":["unix_seconds"]}}}}},
-        "redis":{"keys":{"id":{"kind":"identity","formats":["uuid"]},"stream:*":{"state":{"append":"concatenate"}}}},
+        "redis":{
+            "keys":{"id":{"kind":"identity","formats":["uuid"]}},
+            "rules":[{"id":"background-scan","match":{},"effect":{"kind":"process_owned",
+                "selector":{"protocol":"redis","ports":[6379],"operation":"HSCAN",
+                    "keys":[{"kind":"exact","value":"inbox"}]}}}]
+        },
         "http":{"headers":{"x-id":{"kind":"identity","formats":["uuid"]},"x-retained":{"kind":"time","formats":["unix_seconds"]}}}
     }));
     let original_rules = current.rules.clone();
@@ -126,7 +131,7 @@ fn physical_carriers_add_formats_without_replacing_other_fields_or_native_permis
     assert!(merge(&mut current, &proposed).unwrap());
     assert_eq!(
         current.rules, original_rules,
-        "format additions must not change stateful native permissions"
+        "format additions must preserve native process ownership"
     );
     assert_eq!(
         current.mysql.as_ref().unwrap().tables["tasks"].fields.len(),

@@ -280,8 +280,6 @@ database, authentication and protocol identities still have to match.
 redis:
   keys:
     'task:current:*': {kind: identity, formats: [uuid]}
-    'task:content:*': {state: {append: concatenate, expire: refresh}}
-    'task:cancel:*': {read_commutation: true}
     'task:counter:*': {commands: [INCRBY, EXPIRE]}
     'task:events:*':
       commands:

@@ -2,7 +2,7 @@ use super::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use crate::ReplayAllowedUnusedHttpConfig;
 use crate::protocols::DependencyProviders;
-use crate::replay::{self, ReplayEgressCounterReader, ReplayLifecycleConfig};
+use crate::replay::{self, ReplayEgressCounterReader, ReplayLifecycleConfig, ReplayTimerConfig};
 pub use crate::{MysqlReplayConfig, ReplayConfig};
 use anyhow::Result;
 use loading::SourceLoader;
@@ -25,11 +25,23 @@ pub async fn run_replay_with_counters(
     lifecycle: ReplayLifecycleConfig,
     counter_reader: Option<ReplayEgressCounterReader>,
 ) -> Result<()> {
-    run_replay_with_providers(
-        config,
+    run_replay_with_timer_config(config, lifecycle, counter_reader, None).await
+}
+
+pub async fn run_replay_with_timer_config(
+    config: ReplayConfig,
+    lifecycle: ReplayLifecycleConfig,
+    counter_reader: Option<ReplayEgressCounterReader>,
+    timers: Option<ReplayTimerConfig>,
+) -> Result<()> {
+    let loader = SourceLoader::new(&config);
+    replay::run::<ReplayProtocols>(
+        config.into(),
         lifecycle,
         counter_reader,
         crate::protocols::default_providers(),
+        loader,
+        timers,
     )
     .await
 }
@@ -41,8 +53,15 @@ pub async fn run_replay_with_providers(
     providers: Arc<DependencyProviders>,
 ) -> Result<()> {
     let loader = SourceLoader::new(&config);
-    replay::run::<ReplayProtocols>(config.into(), lifecycle, counter_reader, providers, loader)
-        .await
+    replay::run::<ReplayProtocols>(
+        config.into(),
+        lifecycle,
+        counter_reader,
+        providers,
+        loader,
+        None,
+    )
+    .await
 }
 
 pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
@@ -94,6 +113,7 @@ impl replay::Runtime<ReplayProtocols> {
             lifecycle,
             providers,
             loader,
+            Default::default(),
         )
         .await
     }

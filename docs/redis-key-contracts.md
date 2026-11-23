@@ -6,8 +6,6 @@ resource aliases or database selectors:
 ```yaml
 redis:
   keys:
-    'chat:streaming:*': {state: {append: concatenate, expire: refresh}}
-    'chat:cancel:*': {read_commutation: true}
     'chat:streaming:text_block:*':
       kind: identity
       formats: [{prefix: text-, format: decimal}]
@@ -25,10 +23,6 @@ localcache:
     - redis: {operation: HGET, key: token_v2, field: '3061639762'}
 ```
 
-Source-proven variable loop reads can use
-`state.get: {transient: [nil]}`; see [state contracts](redis-state-contracts.md).
-This permission requires complete Source proof and a fresh Replay.
-
 `kind`/`formats` describe scalar values; complete JSON values are recognized
 and use `json.fields`. `key_format` describes the wildcard segment of a key
 and requires its ordered `commands` list. A time-window key uses
@@ -41,10 +35,11 @@ Scripts, numkeys, KEYS and unselected ARGV remain strict.
 Finite Replay delivers the actual Target write bytes for supported string and
 hash operations. See [Redis write-to-read delivery](redis-read-back.md).
 
-`state.get` declares variable counts. APPEND preserves the complete byte stream
-across chunks. Read commutation retains finite read counts. Expiry refresh
-preserves key lifetimes and fixed TTL. Actual endpoint, database, authentication,
-protocol, causal ordering and finite inventory are checked independently.
+Each recorded Redis call retains its own matching and delivery requirements,
+including APPEND batch boundaries, EXPIRE calls and GETs that return nil. Actual
+endpoint, database, authentication, protocol and causal ordering are checked
+independently. See [Replay timers](replay-timers.md) for coordinating Target waits
+with the recorded dependency sequence.
 
 `localcache.requests` separately identifies finite process initialization reads.
 It does not declare value formats or arbitrary reusable cache responses.

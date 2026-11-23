@@ -225,46 +225,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             }
             operation_override.set(None);
         }
-        NativeEffect::RedisAppendStream => {
-            add(
-                S::DependencyRequest,
-                L::RedisArgument(1),
-                OwnedLocation::Scalar,
-                false,
-            );
-            add(
-                S::DependencyResponse,
-                L::Value,
-                OwnedLocation::Scalar,
-                false,
-            );
-        }
-        NativeEffect::RedisActivityRefresh(_) => {
-            add(
-                S::DependencyRequest,
-                L::RedisArgument(1),
-                OwnedLocation::Scalar,
-                false,
-            );
-            add(
-                S::DependencyResponse,
-                L::Value,
-                OwnedLocation::Scalar,
-                false,
-            );
-        }
-        NativeEffect::RedisReadCommutation(_)
-        | NativeEffect::RedisReadObservation(_)
-        | NativeEffect::RedisExpiryRefresh(_) => {
-            // The proof requires an unchanged nil response. Another delivery
-            // owner must not rewrite that observation or authorize it twice.
-            add(
-                S::DependencyResponse,
-                L::Value,
-                OwnedLocation::Scalar,
-                false,
-            );
-        }
         NativeEffect::ResponseJwt(effect) => {
             if let Some(location) = &effect.location {
                 add(

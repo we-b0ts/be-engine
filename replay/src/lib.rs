@@ -198,6 +198,13 @@ impl SequencePlan {
     pub fn contains(&self, dependency: u64) -> bool {
         self.slots.contains_key(&dependency)
     }
+
+    pub fn is_request_sequence(&self, sequence: u64) -> bool {
+        self.events
+            .binary_search_by_key(&sequence, |event| event.source.sequence)
+            .ok()
+            .is_some_and(|index| self.events[index].source.kind == EventKind::Request)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,6 +237,7 @@ pub struct SequenceScheduler {
     slots: Vec<SlotState>,
     generation: u64,
     pending_delivery: HashMap<usize, (DeliveryTicket, bool)>,
+    request_gates: std::collections::BTreeSet<u64>,
     diagnosis: Option<(usize, u64)>,
     failed: bool,
 }
@@ -275,6 +283,7 @@ impl SequenceScheduler {
             cursor: 0,
             generation: 0,
             pending_delivery: HashMap::new(),
+            request_gates: Default::default(),
             diagnosis: None,
             failed: false,
         }
@@ -282,6 +291,10 @@ impl SequenceScheduler {
 
     pub fn expected(&self) -> Option<SourceEvent> {
         self.plan.events.get(self.cursor).map(|event| event.source)
+    }
+
+    fn request_is_gated(&self, sequence: u64) -> bool {
+        self.request_gates.contains(&sequence)
     }
 
     fn previous(&self) -> Option<SourceEvent> {
@@ -306,6 +319,7 @@ impl SequenceScheduler {
         };
         if !next.source.kind.is_admission()
             || next.source.dependency_sequence != dependency_sequence
+            || self.request_is_gated(next.source.sequence)
         {
             return Ok(Admission::Waiting(next.source));
         }

@@ -45,8 +45,10 @@ use traffic_engine_replay::replay::exchange;
 mod snapshot;
 mod startup;
 mod target_observation;
+pub(crate) mod timers;
 pub use egress_counter::{ReplayEgressCounterReader, ReplayEgressRejections};
 pub(crate) use target_observation::TargetObservations;
+pub use timers::ReplayTimerConfig;
 #[cfg(test)]
 mod global_dependency_tests;
 #[cfg(test)]
@@ -93,7 +95,21 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
     counter_reader: Option<ReplayEgressCounterReader>,
     providers: Arc<crate::protocols::DependencyProviders>,
     loader: P::SourceLoader,
+    timer_config: Option<ReplayTimerConfig>,
 ) -> Result<()> {
+    let timer_state = if let Some(timer) = &timer_config {
+        ensure!(
+            lifecycle.stream_timing == Some(ReplayStreamTiming::Fast),
+            "Replay timers require fast stream timing"
+        );
+        ensure!(
+            config.control_socket_path.as_ref() != Some(&timer.socket_path),
+            "Replay timers require a separate socket from Case control"
+        );
+        timers::Timers::load(timer).await?
+    } else {
+        timers::Timers::default()
+    };
     validate_replay_request_headers(&config).await?;
     let tcp_listener = TcpListener::bind(config.tcp_listen)
         .await
@@ -112,9 +128,20 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
     let dns_listen = dns_socket
         .local_addr()
         .context("failed to read dependency replay DNS listen address")?;
-    let runtime =
-        Runtime::<P>::from_source(config, dns_listen, tcp_listen, lifecycle, providers, loader)
-            .await?;
+    let runtime = Runtime::<P>::from_source(
+        config,
+        dns_listen,
+        tcp_listen,
+        lifecycle,
+        providers,
+        loader,
+        timer_state,
+    )
+    .await?;
+    let timer_listener = timer_config
+        .as_ref()
+        .map(|timer| timers::Listener::bind(&timer.socket_path))
+        .transpose()?;
     {
         let mut state = runtime.state.lock().await;
         state.egress_counter_reader = counter_reader;
@@ -128,6 +155,12 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
         result = runtime.run_dns(dns_socket) => result,
         result = runtime.run_tcp(tcp_listener) => result,
         result = runtime.run_control() => result,
+        result = async {
+            match timer_listener {
+                Some(listener) => listener.run(runtime.state.clone()).await,
+                None => pending().await,
+            }
+        } => result,
         result = deferred::prefetch::run(runtime.state.clone()) => result,
     }
 }
@@ -245,6 +278,7 @@ pub(crate) struct RuntimeState<P: ReplayProtocolSet> {
     pub(crate) providers: Arc<crate::protocols::DependencyProviders>,
     pub(crate) native: native::Inventory,
     admission_epoch: u64,
+    timers: timers::Timers,
     pub(crate) case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
     sequence_catalog: Option<sequence::Source>,
     pub(crate) active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,

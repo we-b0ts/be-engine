@@ -565,15 +565,18 @@ replace_rules: [old-a, old-b]
 policy:
   format: traffic-policy/v3
   rules:
-    - id: cache-stream
-      match:
-        resource: {protocol: redis, endpoint: 'cache.example:6379', database: 0}
-        operation: APPEND
-        key: {kind: exact, value: task-cache}
-      effect: {kind: redis_append_stream}
+    - id: response-download-token
+      match: {api: POST /api/attachments/*/download-token}
+      effect:
+        kind: response_jwt
+        pointer: /download_token
+        algorithm: HS256
+        signing_key:
+          kind: startup
+          source: {kind: target_env, name: SECRET_KEY}
       proof:
-        source: source/cache.py:write
-        fact: Source appends a finite ordered text stream; only chunk boundaries vary.
+        source: app/attachments.py:create_download_token
+        fact: Source signs stable attachment and user claims with the startup key.
 ```
 
 Only the listed old IDs are replaced; every unlisted rule is retained. The nested

@@ -229,15 +229,7 @@ pub fn redis_rule(rule: &PolicyRule) -> bool {
         .resource
         .as_ref()
         .is_some_and(|resource| resource.protocol == crate::Protocol::Redis)
-        || matches!(
-            rule.effect,
-            crate::NativeEffect::RedisSequence(_)
-                | crate::NativeEffect::RedisAppendStream
-                | crate::NativeEffect::RedisReadCommutation(_)
-                | crate::NativeEffect::RedisReadObservation(_)
-                | crate::NativeEffect::RedisExpiryRefresh(_)
-                | crate::NativeEffect::RedisActivityRefresh(_)
-        )
+        || matches!(rule.effect, crate::NativeEffect::RedisSequence(_))
         || matches!(&rule.effect, crate::NativeEffect::ProcessOwned(effect)
             if matches!(effect.selector, crate::native::ProcessSelector::Redis { .. } | crate::native::ProcessSelector::RedisPubsub(_) | crate::native::ProcessSelector::RedisScript(_)))
 }

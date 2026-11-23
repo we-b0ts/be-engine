@@ -54,6 +54,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
     }
 
     pub(crate) fn advance_admission_epoch(&mut self) {
+        self.timers.epoch_changed();
         self.native.core.lifecycle.notify_waiters();
         if let Some(run) = &self.run_sequence {
             for runtime in &run.runtimes {

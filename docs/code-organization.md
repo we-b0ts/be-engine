@@ -339,21 +339,12 @@ protocol libraries. Value bindings receive the policy registry and comparison
 metadata. Implicit scalar applicability delegates to the shared field plan and its
 installed implementations. Historical planner DTOs retain their existing rejection
 contract, while frozen-evidence checks continue serving pending journals.
-Redis `storage::StorageExchange` supplies immutable RESP facts, original scope and
-authenticated response access. The protocol library owns complete read-commutation,
-absent-state, state-epoch and closed-TTL Source proofs over that port. The host
-supplies preparation clocks, installs complete proofs atomically and retains live
-delivery receipts, failure state and audit publication.
 Redis `storage_replay` owns write and read positions, type and mutation
 boundaries, Source history lookup and invalidation of retained Target values.
 The native Replay adapter supplies Case scope, the finite exchange inventory
 and successful Target delivery receipts. Prepared value rendering accepts an
 explicit stored slot from a proven write and still validates explicit response
 bindings without recomputing that stored value.
-Its `storage::append` owns original byte offsets, cumulative RESP lengths and
-read/reset fences. `storage::activity` proves complete SET/GET/DEL lifetimes and
-accepts value decoding, selected metadata and stable-field equivalence through
-`ValueModel`. The application binds that port to its installed value contracts.
 `storage::snapshot` owns native response equivalence, bootstrap seed selection,
 complete key coverage and bounded evidence collection. `Rule` supplies the
 authorized selector and current seed ownership. The application authenticates
@@ -648,12 +639,9 @@ the same responsibility and 1000-line requirements as the root `src/`.
 
 ## Current Boundaries
 
-- `protocols/replay/redis/append/cancelled` owns automatic cancelled-cache eligibility,
-  bounded authenticated primary-content ceilings and separate omission audits.
-  Native APPEND retains key identity, exact prefix matching and actual wire
-  lengths/consumption. `protocols/replay/http/cancelled` owns real dependency FIN/RST after
-  trusted primary close metadata; input timing supplies only clocks and flushed
-  prefix facts. Neither owner converts cancellation into recorded EOF.
+- `protocols/replay/http/cancelled` owns real dependency FIN/RST after trusted
+  primary close metadata. Input timing supplies clocks and flushed prefix facts.
+  The HTTP owner preserves the actual cancellation outcome.
 
 - `protocol_contract` owns closed protocol, role and native-version identities.
   `primary_protocol` adapts immutable HTTP/Motan inputs to genuine native
@@ -1092,7 +1080,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   Selected independent observation clocks stay authenticated and bounded with
   their IDs; they describe actual admission, not inferred business task origin.
   `rewrite/evidence/redis_stream_progress` projects bounded Case-local APPEND
-  admission cursors and original Source fragments from retained audits. It owns
+  admission cursors and original Source fragments from historical audits. It owns
   omission reporting, exposes no payload and does not infer delivery, pair a
   rejected request or change protocol matching.
   `control/case_cleanup` owns failure-phase deadlines and the shared actual-I/O
@@ -1139,9 +1127,9 @@ the same responsibility and 1000-line requirements as the root `src/`.
   `value_contract/redis_scalar` preserves Source scalar wire encoding and shares
   the global comparator without a second time/identity kernel. `policy/authoring` resolves endpoint aliases,
   plan-local proof inheritance and compact runtime contracts. Its Redis authoring
-  namespace groups stateful effects under `redis.rules`; its `redis_keys` child
-  lowers key-local append, read, expiry and sharing permissions into that same
-  native runtime list and reverses only exact generated forms when rendering.
+  namespace groups native effects under `redis.rules`. Its `redis_keys` child
+  lowers command and key-format declarations into the same native runtime list
+  and reverses exact generated forms when rendering.
   No second rule evaluator or fingerprint is introduced. Resource field graphs, per-API value declarations and
   field-reference expansion are retired.
   `policy/proof` owns shared proof byte limits and bounded Source references;
@@ -1348,61 +1336,10 @@ the same responsibility and 1000-line requirements as the root `src/`.
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.
 
-- `protocols/replay/redis/append` owns explicitly authorized Case-local APPEND byte
-  reservations, derived lengths, delivery completion and fingerprint-only range
-  audits. Its `trace` child validates complete immutable Source byte order,
-  resets and observation fences; `source` reuses that preparation for native
-  rule preflight. A preexisting prefix needs only a Source-derived length base;
-  its contents and creator remain outside this Case's increment proof.
-  Ordinary Redis adapters retain all non-APPEND matching and
-  finite consumption. Partial byte delivery is separate from active transport.
-  Stream key selection reuses the request-contract owner's projection of
-  already accepted complete identities; stream bytes remain with the APPEND owner.
-  `redis/observations/absence` proves absent-state read lifetimes between owned
-  deletion boundaries and concurrent accesses that preserve that proven state,
-  retaining per-connection order and initial-reset causal fences. The existing observation runtime owns bounded repeats,
-  delivery and audit. Native policy compilation and normal plan/apply retain
-  permission ownership. `redis/read_commutation` owns explicit finite nil-observation ordering
-  permission; its `source` child rejects mutations and validates absent-key
-  participation in causally later multi-key cleanup before installing any
-  permission. Cleanup itself retains ordinary finite command ownership.
-  `redis/key_access` supplies conservative
-  key-access exclusion to both Source proofs, and `redis/native_source` loads
-  their complete scoped Source inventories. `redis/case_scope` identifies other
-  ordinary Case records consistently for preparation and later inventory
-  additions: they cannot establish or invalidate this Case's proof. Global,
-  snapshot and explicitly shared ownership retain their separate boundary.
-  `redis/connection_scope` partitions ordinary stateful lanes by Case, while
-  Global and explicit session setup retain connection-wide constraints.
-  Native command matching and
-  delivery retain connection eligibility, claims and finite consumption.
-  `policy/authoring/redis_keys/state` lowers key-local GET/APPEND/SET/EXPIRE
-  contracts to native effect owners. `redis/observations/state_trace` proves
-  read-only state epochs; `omissions` reports optional nil observations separately
-  from actual delivery, finite mutation claims and timing receipts. Rule evidence
-  guidance exposes loop candidates without inferring Source intent.
-  `redis/observations` owns explicit SET/DEL state observations and positive TTL
-  refresh equivalence. Its `source` child validates complete, isolated key
-  lifetimes before installing observation permissions; an initial successful
-  EXPIRE may establish existing-key context without a Case-local creator.
-  Request contracts retain write-to-read identity rendering. Preparation and
-  observation slots exclude other ordinary Cases' reads and writes; mutations
-  inside this Case and Global/shared inventory retain their ownership fences.
-  Mutation matching, APPEND bytes and transport completion remain with their
-  existing owners.
-  `redis/observations/closed_expiry` proves unchanged scalar lifetimes whose
-  matched TTL-bearing SET makes refreshes redundant until a successful finite
-  deletion. It owns monotonic lifetime bounds, delivery-complete coverage and
-  explicit closure audits; it grants no content or lifecycle mutation omission.
-  Its `refresh` child admits extra exact-TTL refreshes from that same proven
-  closed scalar lifetime when Source had none, using the delivered Target SET
-  key and retaining a dirty Case until finite deletion and delivery settle.
-  `redis/activity` owns independently declared JSON metadata refresh lifetimes.
-  Its `source` child proves complete isolated read/SET histories and TTL bounds;
-  `value` reuses global timestamp formats and the shared time kernel while
-  retaining exact unselected fields. `runtime` renders current Target state and
-  `lifecycle` retains finite creation/deletion, actual delivery and bounded audits.
-  It does not grant APPEND or content/list consumption permission.
+- `traffic-protocol-redis::session_binding` partitions stateful lanes by Case.
+  Global and explicit session setup retain connection-wide constraints. Native
+  command matching and delivery retain connection eligibility, finite claims,
+  and consumption for Redis operations including APPEND, EXPIRE and GET.
 
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
@@ -2518,15 +2455,6 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
-  `protocols/replay/redis/admission` owns bounded waits for initial expiry-refresh
-  predecessors and earlier activity GETs that have been claimed but have not
-  finished delivery. `redis/activity/read_barrier` owns the same-lifetime,
-  rule-bound activity predecessor check; admission preserves the original SET
-  observation and excludes later reads.
-  `observations/refresh_barrier` identifies this narrow fence; observation
-  selection retains its completed-delivery requirement. Admission releases the
-  replay mutex while waiting, preserves the original Target observation and
-  event index, and rechecks the case and strict selection after delivery.
 
 - `rewrite/unified_rule/preflight/global_values/redis/script_times` composes
   existing native script ARGV time contracts with global JSON preflight, while
@@ -2650,10 +2578,6 @@ explicit repository-wide audit.
   `discovery/values` derives wildcard fields only from actual decoded arrays and
   combines bounded candidate bindings without inferring generation authority
   from field names, numeric object keys or observed physical shards.
-  `evidence/rule_guidance/stateful_dependencies` projects supported mechanisms
-  from bounded dependency operations and Source binding metadata. It supplies
-  proof requirements and ordinary plan commands without granting permission or
-  changing matching, ownership or consumption.
   `preflight/{api,dependency,session,source}` delegates primary response, native
   envelope, stateful Source trace and whole-recording proof to their existing
   owners. `preflight/response` records available primary responses with different

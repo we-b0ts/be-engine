@@ -252,6 +252,7 @@ async fn run_target_runtime(
         operation: "preflight-replay",
         run_id: run_id.to_string(),
         replay_ca_cert: Some(ca_cert.to_path_buf()),
+        replay_timer_socket: None,
         runtime_outputs: &project.target_runtime_outputs,
         runtime_output_root: runtime_dir.join("target-runtime-outputs"),
     })
@@ -268,6 +269,7 @@ async fn run_target_runtime(
         snapshot.mounts(),
         &project.target_runtime_outputs,
         true,
+        false,
     )
     .await?;
     crate::target_container::verify_listen_address(container, target.port).await?;
