@@ -17,6 +17,7 @@ use super::store;
 use super::support::wait_for_pid_exit;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{ReplayControlConfig, allocate_control_socket, run_replay_control};
+use crate::replay_timer::ManagedTimer;
 
 const REPLAY_TARGET_HOST_NETWORK: bool = true;
 const _: () = assert!(
@@ -63,6 +64,7 @@ pub(super) fn spawn_replay(
     layout: &RunLayout,
     inventory: &CaseGroupInventory,
     state: &ActiveRunState,
+    timer: Option<&ManagedTimer>,
 ) -> Result<Child> {
     let replay_override = std::env::var_os("TRAFFIC_E2E_TRAFFIC_REPLAY").map(PathBuf::from);
     let replay_command = match replay_override.as_ref() {
@@ -103,6 +105,9 @@ pub(super) fn spawn_replay(
         command.arg("--pre-match");
     }
     command.args(replay_stream_timing_args(config));
+    if let Some(timer) = timer {
+        command.args(timer.replay_args());
+    }
     if config.replay_loading.lazy_cases {
         command.arg("--lazy-case-dependencies");
     }
@@ -218,7 +223,9 @@ pub(super) async fn start_target_with_replay_ca(
     state: &mut ActiveRunState,
     image: &crate::TargetImage,
     replay_ca_cert_path: &Path,
+    timer: Option<&ManagedTimer>,
 ) -> Result<()> {
+    let replay_timer_socket = timer.map(ManagedTimer::socket_for_target).transpose()?;
     let runtime_id = Uuid::new_v4().simple().to_string();
     let anchor_name = crate::target_container::runtime_name(
         &layout.target_root,
@@ -269,6 +276,7 @@ pub(super) async fn start_target_with_replay_ca(
             operation: "replay",
             run_id: runtime_id,
             replay_ca_cert: Some(replay_ca_cert_path.to_path_buf()),
+            replay_timer_socket,
             runtime_outputs: &config.target_runtime_outputs,
             runtime_output_root,
         })
@@ -294,6 +302,7 @@ pub(super) async fn verify_target_runtime_contract(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
     state: &ActiveRunState,
+    replay_timer: bool,
 ) -> Result<()> {
     let container = state
         .target_container_name
@@ -311,6 +320,7 @@ pub(super) async fn verify_target_runtime_contract(
         snapshot.mounts(),
         &config.target_runtime_outputs,
         true,
+        replay_timer,
     )
     .await?;
     if config.target_http_readiness_enabled {

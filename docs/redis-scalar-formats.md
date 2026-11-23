@@ -25,8 +25,8 @@ For supported string and hash operations, Replay delivers the actual Target
 bytes after a proven successful write, including timestamps stored inside JSON.
 See [write-to-read delivery](redis-read-back.md).
 
-Key-local APPEND, polling order, expiry-refresh and ordered command
-permissions can share the same `redis.keys` entry. Initialization sharing is a
+Scalar formats and ordered commands can share the same `redis.keys` entry.
+Initialization sharing is a
 dependency lifetime under `localcache.requests`; JSON value fields stay global.
 Actual endpoint/database/authentication partitions remain exact. See
 [key declarations](redis-key-contracts.md) for the current syntax.

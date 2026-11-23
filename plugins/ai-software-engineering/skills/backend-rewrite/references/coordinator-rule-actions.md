@@ -123,28 +123,16 @@ write the same unified policy atomically. They are not value relaxations.
 
 ## Redis Key Behavior And Dependency Lifetimes
 
-Declare `state.append: concatenate`, `read_commutation: true` or
-`state.expire: refresh` on a bounded `redis.keys` pattern. The engine retains
-actual endpoint, database and authentication partitions and complete causal
-Source proof. APPEND preserves ordered bytes and read/reset fences. Finite nil
-polling retains its call counts. Explicit `state.get` permits variable
-observations, and transient nil permits 0..N nil reads. Positive TTL refresh
-retains exact TTLs. Inspect the earliest Target admission error.
+When fast Replay changes the timing of an APPEND batch, EXPIRE or polling GET,
+inspect the earliest Target admission error and the preceding wait. These
+operations use finite matching. See [Replay timers](../../../../../docs/replay-timers.md).
 
 `commands` lists ordered Redis operations. Selected scalar time arguments use
 one format; script operations retain exact script digests. Optional `key_format`
 describes a generated wildcard key segment. Complete JSON values always use
 root `json.fields`. Do not author bindings, shared clock groups or relations.
-See [key declarations](../../../../../docs/redis-key-contracts.md),
-[APPEND](../../../../../docs/redis-append-stream.md),
-[write-to-read delivery](../../../../../docs/redis-read-back.md) and
-[state contracts](../../../../../docs/redis-state-contracts.md).
-
-A redis_loop_state hint identifies a possible Source loop, polling/retry body or
-debounce flush. Have the implementer prove the full condition, body, writers and
-cleanup before selecting each key-local effect. Business writes remain required;
-allowed_state_omissions reports skipped nil observations separately from actual
-delivery. Use current issue detail evidence for plan/apply and fresh fast Replay.
+See [key declarations](../../../../../docs/redis-key-contracts.md) and
+[write-to-read delivery](../../../../../docs/redis-read-back.md).
 
 Keep dependency lifetime classification separate from formats:
 
@@ -366,5 +354,4 @@ For a policy update after ordinary API completion, `verification request --focus
 --api <route> --reason <policy-change>` requests fresh API Replay without entering
 final acceptance. It can also retire idle final admission blocked on recording
 completeness. Follow its returned action; preserve the complete final Source gate,
-active repair issues and all outstanding obligations. See
-[Redis state contracts](../../../../../docs/redis-state-contracts.md).
+active repair issues and all outstanding obligations.

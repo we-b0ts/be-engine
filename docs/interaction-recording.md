@@ -291,12 +291,8 @@ become prerequisites. Native client ACKs, Engine.IO heartbeat controls and
 independent cancellation stay runnable while a business input waits; the
 existing request/session budgets bound a missing prefix.
 
-Source-proven native effects keep their existing timing authority: coalesced
-observations/refreshes, APPEND regrouping, read commutation and shared setup
-cannot become new hard input predecessors. They still require their native
-coverage and final verification; they are not marked delivered or made optional.
-Compression uses exact successful native coverage, including fully delivered
-Source APPEND pieces. Partial writes cannot authorize a complete Source piece.
+Source-proven shared setup retains its own coverage and verification requirements.
+Compression uses successful delivery of each required finite Redis exchange.
 Process-owned subscription aliases reuse only their validated real subscription
 response, while ordinary business responses retain their Case and epoch.
 

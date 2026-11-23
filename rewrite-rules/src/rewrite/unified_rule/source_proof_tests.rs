@@ -3,9 +3,10 @@ use serde_json::json;
 
 fn proposal() -> serde_json::Value {
     json!({"format":"traffic-policy/v3","rules":[{
-        "id":"append","match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"APPEND","key":{"kind":"exact","value":"proof"}},
-        "effect":{"kind":"redis_append_stream"},
-        "proof":{"source":"session.py:42","fact":"Source appends exact chunks to this stream"}
+        "id":"refresh-scan","match":{},
+        "effect":{"kind":"process_owned","selector":{"protocol":"redis","ports":[6379],
+            "operation":"HSCAN","keys":[{"kind":"exact","value":"proof"}]}},
+        "proof":{"source":"session.py:42","fact":"Source background task scans only this hash"}
     }]})
 }
 
@@ -54,7 +55,7 @@ fn independent_snapshot_is_hash_bound_and_cannot_authorize_a_different_runtime_p
             .contains("snapshot changed")
     );
     let mut other = proposal();
-    other["rules"][0]["match"]["key"]["value"] = json!("other");
+    other["rules"][0]["effect"]["selector"]["keys"][0]["value"] = json!("other");
     let other =
         crate::policy::compile_policy(&crate::policy::parse_policy(&other.to_string()).unwrap())
             .unwrap();
@@ -67,7 +68,7 @@ fn editing_evidence_alone_does_not_change_runtime_or_capture_fingerprints() {
     let mut right = left.clone();
     right["rules"][0]["proof"]["source"] = json!("session.py:43");
     right["rules"][0]["proof"]["fact"] =
-        json!("A clearer explanation of the same exact chunk appends");
+        json!("A clearer explanation of the same background hash scan");
     let parse = |value: serde_json::Value| crate::policy::parse_policy(&value.to_string()).unwrap();
     let (left, right) = (parse(left), parse(right));
     assert_eq!(
@@ -83,9 +84,7 @@ fn editing_evidence_alone_does_not_change_runtime_or_capture_fingerprints() {
 #[test]
 fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
     for (behavior, entry) in [
-        ("state.get", json!({"state":{"get":{"transient":["nil"]}}})),
         ("state.set", json!({"state":{"set":"transition"}})),
-        ("read_commutation", json!({"read_commutation":true})),
         ("commands", json!({"commands":["SET"]})),
         (
             "key_format",

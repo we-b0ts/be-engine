@@ -37,26 +37,9 @@ HTTPS observes TCP errors before TLS can translate them. An observed FIN keeps
 its write-half scope; it qualifies only alongside an unfinished BodyDrop after
 the actual primary close, and never becomes a fabricated connection reset.
 
-The same actual primary cancellation automatically permits tail-length
-differences in temporary Redis streaming caches. An existing APPEND-stream
-contract, an initially empty value, successful key-local expiry and absence of
-read/reset fences must prove eligibility. Exact Source APPEND bytes must be a
-prefix of a unique stream of string fields in the authenticated pre-close
-primary response. Target APPENDs must follow that same continuous byte prefix;
-they can stop earlier or extend up to the primary response's finite content
-ceiling. APPEND returns the actual Target cumulative length. A complete response
-assertion is still required for the case to pass. There is no Target option.
-
-`redis.allowed_cancelled_cache_tails` reports Source and Target lengths, missing
-or additional bytes, and partially or fully omitted Source exchanges. Omitted
-records retain their real native delivery status. These differences are accepted
-because business flush timers run independently of accelerated stream timing;
-this tradeoff can conceal a missing final cache flush in a cancelled request.
-Dependency-tail waiting and no-progress diagnostics use the same native
-cancellation allowances; input-delivery proofs still require real consumption.
-Normal completed requests, nonexpiring values, observed/reset state and other
-dependency protocols retain their strict contracts. Candidate derivation is
-bounded and performed once, outside input execution and the stream delivery loop.
+Timer-driven Redis flushes use ordinary finite matching for each recorded
+command. Fast Replay can coordinate an instrumented Target wait with the Case
+sequence. See [Replay timers](replay-timers.md).
 
 Standalone `traffic-e2e prepare`, `run-api` and `run` validate the current
 checkout, including the configured delivery base branch. Their execution does

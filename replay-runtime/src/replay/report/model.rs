@@ -6,6 +6,8 @@ pub(crate) struct ReplayReport<S: traffic_replay::report::SessionSnapshot> {
     pub(crate) dependency_protocols: BTreeMap<String, native::ProtocolReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) dependency_sequence_missing: Vec<sequence::MissingDependency>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) timer_events: Vec<timers::TimerEvent>,
     pub(crate) batch_reconciliation: Option<reconciliation::BatchReconciliation>,
     pub(crate) startup_phase: startup::StartupPhaseReport,
     pub(crate) dependency_attribution_snapshot: Option<String>,

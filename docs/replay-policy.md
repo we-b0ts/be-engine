@@ -83,10 +83,9 @@ Source-cache or JSON traversal limits remain explicit under
 available. Continuation commands are bound to the active issue and reject stale
 queries. Empty candidates do not establish a missing engine capability.
 
-Bounded dependency operations also expose supported APPEND, finite nil-read
-commutation, expiry-refresh and Redis state mechanisms with their
-Source proof requirements. These hints identify capabilities to investigate;
-they never authorize changed values, ordering or call counts.
+For timing differences in Redis flushes or polling, compare the first diverging
+dependency request with the recorded Case sequence and the Target's wait site.
+See [Replay timers](replay-timers.md).
 
 The coordinator proposes a rule, a rule list or an authored v2 document containing
 global format/lifetime declarations and any additional native rules:

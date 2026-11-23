@@ -1,5 +1,6 @@
 //! Default application composition for traffic execution and rewrite coordination.
 pub use traffic_engine::*;
+pub use traffic_replay_runtime::ReplayTimerConfig;
 pub use traffic_rewrite::*;
 
 pub fn initialize_application() {
@@ -58,6 +59,16 @@ pub async fn run_replay_with_providers(
 ) -> anyhow::Result<()> {
     initialize_application();
     traffic_replay_runtime::run_replay_with_providers(config, lifecycle, counters, providers).await
+}
+
+pub async fn run_replay_with_timer_config(
+    config: ReplayConfig,
+    lifecycle: ReplayLifecycleConfig,
+    counters: Option<ReplayEgressCounterReader>,
+    timers: Option<ReplayTimerConfig>,
+) -> anyhow::Result<()> {
+    initialize_application();
+    traffic_replay_runtime::run_replay_with_timer_config(config, lifecycle, counters, timers).await
 }
 
 pub async fn run_mysql_replay(config: MysqlReplayConfig) -> anyhow::Result<()> {

@@ -57,12 +57,6 @@ pub fn project_native(rules: &[CompiledNativeRule]) -> Result<NativeRuntimeProje
             | n::NativeEffect::ResponseHeaderDate(_)
             | n::NativeEffect::ResponseBody(_) => response::project(&mut output, rule)?,
             n::NativeEffect::ResponseGenerated(_) => (),
-            // Native protocol owners consume these typed effects directly.
-            n::NativeEffect::RedisAppendStream
-            | n::NativeEffect::RedisReadCommutation(_)
-            | n::NativeEffect::RedisReadObservation(_)
-            | n::NativeEffect::RedisExpiryRefresh(_)
-            | n::NativeEffect::RedisActivityRefresh(_) => (),
             n::NativeEffect::InputJwt(effect) => input(&mut output, rule, effect)?,
             // The inbound runtime consumes this typed effect directly; no
             // legacy request-rule document represents custom signatures.

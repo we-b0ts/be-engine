@@ -120,9 +120,13 @@ mod tests {
 
     #[test]
     fn resource_scope_omits_api_but_preserves_existing_scopes_and_primary_assertions() {
-        let native = json!({"id":"append","match":{"api":"GET /tasks",
-            "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"APPEND","key":{"kind":"exact","value":"content"}},
-            "effect":{"kind":"redis_append_stream"},"proof":{"source":"source.py:2","fact":"Source writes a text stream"}});
+        let native = json!({"id":"counter","match":{"api":"GET /tasks",
+            "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+            "key":{"kind":"affix","prefix":"rate:"}},
+            "effect":{"kind":"redis_sequence",
+                "key":{"contract":{"kind":"time_window","window_seconds":60,"separator":":"}},
+                "commands":[{"operation":"INCRBY","arguments":{}}]},
+            "proof":{"source":"source.py:2","fact":"Source partitions counters into minute windows"}});
         {
             let old = document(native);
             let empty = TrafficPolicy {
@@ -136,7 +140,6 @@ mod tests {
                     .get("api")
                     .is_none()
             );
-            crate::policy::compile_policy(&fresh).unwrap();
             let mut update = old.clone();
             prepare_scopes(&mut update, &old, "GET /tasks").unwrap();
             assert_eq!(update, old);

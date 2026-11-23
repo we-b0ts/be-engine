@@ -7,12 +7,8 @@ use crate::{
     recover_rewrite_rule_plan,
 };
 
-#[path = "transaction_activity_refresh.rs"]
-mod activity_refresh_transaction;
 #[path = "transaction_api_time.rs"]
 mod api_time_transaction;
-#[path = "transaction_append.rs"]
-mod append_transaction;
 #[path = "transaction_batch.rs"]
 mod batch_transaction;
 #[path = "transaction_builtin_time.rs"]
@@ -57,10 +53,6 @@ mod native_transaction;
 mod ownership_transaction;
 #[path = "transaction_partial_redis.rs"]
 mod partial_redis_transaction;
-#[path = "transaction_read_commutation.rs"]
-mod read_commutation_transaction;
-#[path = "transaction_read_observation.rs"]
-mod read_observation_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
 #[path = "transaction_redis_candidates.rs"]

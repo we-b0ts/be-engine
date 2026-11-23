@@ -35,8 +35,9 @@ then explicitly apply reviewed plans at the next idle boundary.
 
 Redis JSON/Protobuf values and source-proven collection ordering use
 [Redis value rules](redis-value-rules.md), with the same discovery and plan/apply lifecycle.
-[Redis APPEND streams](redis-append-stream.md) support Source-proven changes to
-batch boundaries under explicit API/resource/key scope, retaining read fences.
+For timer-driven flushes and polling, fast Replay can release a Target wait at
+a recorded dependency checkpoint and match each Redis operation individually.
+See [Replay timers](replay-timers.md).
 Source-proven expiry drift in Redis JSON read responses uses explicit
 [Redis time-shift rules](redis-time-shift-rules.md), discovered through worker
 source diagnosis without heuristic hints.
@@ -3454,10 +3455,11 @@ their Case/dependency clocks, so admission time can be correlated with transport
 evidence without reading the private witness graph. A clock does not prove which
 application task initiated the call.
 
-`append_stream_progress` summarizes up to sixteen Source key fingerprint groups
-for that same Case, with each group's last retained APPEND admission cursor and
-up to eight original Source connection/sequence fragments. Grouping does not
-infer physical resource or state epoch ownership. Omitted groups, fragments and
+For historical reports containing APPEND stream audits, `append_stream_progress`
+summarizes up to sixteen Source key fingerprint groups in that Case, with each
+group's last retained APPEND admission cursor and up to eight original Source
+connection/sequence fragments. Grouping by key fingerprint leaves physical
+resources and state epochs unspecified. Omitted groups, fragments and
 report-wide audit omissions remain explicit. These audits contain fingerprints and byte
 offsets, never stream contents. Admission does not prove transport delivery or
 Source consumption, and an omitted audit can advance a cursor beyond the last

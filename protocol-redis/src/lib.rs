@@ -4,7 +4,6 @@ pub mod builtins;
 pub mod client_info;
 pub mod expiration;
 pub mod index;
-pub mod key_access;
 pub mod key_selector;
 pub mod key_slots;
 pub mod keys;

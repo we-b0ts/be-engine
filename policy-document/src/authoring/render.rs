@@ -39,7 +39,7 @@ pub fn inline(value: &Value) -> Result<Option<String>> {
                     Some("jwt" | "md5_sorted_fields")
                 )
             || map.get("kind").and_then(Value::as_str) == Some("time_window")
-            || ["state", "read_commutation", "key_format", "commands"]
+            || ["key_format", "commands"]
                 .iter()
                 .any(|field| map.contains_key(*field)))
         && let Some(flow) = format_flow(value)?

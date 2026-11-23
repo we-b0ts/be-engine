@@ -64,7 +64,9 @@ impl RequestWait {
             let Some(expected) = scope.runtime.expected() else {
                 continue;
             };
-            let until = if expected.kind == EventKind::Request {
+            let until = if expected.kind == EventKind::Request
+                && !scope.runtime.request_is_gated(expected.sequence)
+            {
                 if scope
                     .missing
                     .as_ref()

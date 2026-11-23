@@ -8,7 +8,8 @@ use serde::Deserialize;
 use traffic_e2e::{
     AppConfig, DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_LISTEN,
     DEFAULT_UDP_GATEWAY_PORT, RecordingApi, ReplayAllowedUnusedHttpConfig, ReplayConfig,
-    ReplayLifecycleConfig, resolve_recording_api_case_ids, run_replay_with_counters,
+    ReplayLifecycleConfig, ReplayTimerConfig, resolve_recording_api_case_ids,
+    run_replay_with_timer_config,
 };
 use uuid::Uuid;
 
@@ -54,6 +55,12 @@ pub(super) struct ReplayArgs {
     session: Option<PathBuf>,
     #[arg(long)]
     control_socket: Option<PathBuf>,
+    /// JSON plan attaching Target timer waits to recorded request events.
+    #[arg(long, requires = "timer_socket")]
+    timer_plan: Option<PathBuf>,
+    /// Dedicated Unix socket for the Target timer SDK.
+    #[arg(long, requires = "timer_plan")]
+    timer_socket: Option<PathBuf>,
     #[arg(long)]
     dns_listen: Option<SocketAddr>,
     #[arg(long)]
@@ -126,6 +133,7 @@ struct ResolvedReplay {
     report: PathBuf,
     session: PathBuf,
     control_socket: PathBuf,
+    timers: Option<ReplayTimerConfig>,
     dns_listen: SocketAddr,
     tcp_listen: SocketAddr,
     udp_port: u16,
@@ -174,7 +182,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
             resolved.case_dependency_post_response_window_ms,
         ),
     };
-    let replay = run_replay_with_counters(
+    let replay = run_replay_with_timer_config(
         ReplayConfig {
             case_dir: resolved.case,
             selected_case_ids: resolved.case_ids,
@@ -196,6 +204,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
             .intercept
             .then(super::interception::counter_reader)
             .transpose()?,
+        resolved.timers,
     );
     tokio::pin!(replay);
     let result = tokio::select! {
@@ -395,6 +404,13 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         report,
         session,
         control_socket,
+        timers: args
+            .timer_plan
+            .zip(args.timer_socket)
+            .map(|(plan, socket)| ReplayTimerConfig {
+                plan_path: absolute_from(&cwd, &plan),
+                socket_path: absolute_from(&cwd, &socket),
+            }),
         dns_listen,
         tcp_listen,
         udp_port,
@@ -784,6 +800,8 @@ mod tests {
             report: None,
             session: None,
             control_socket: None,
+            timer_plan: None,
+            timer_socket: None,
             dns_listen: None,
             tcp_listen: None,
             fake_cidr: None,

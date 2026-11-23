@@ -30,18 +30,19 @@ pub(in crate::e2e_run) fn freeze(
     config: &ResolvedProjectConfig,
     root: &Path,
     state: &mut ActiveRunState,
-) -> Result<()> {
+) -> Result<Option<Vec<u8>>> {
     ensure!(
         state.executed_replay_identity.is_none(),
         "Replay already has a frozen execution identity; start a fresh attempt"
     );
     validate_timing(config, root, state)?;
-    let identity = crate::execution_identity::fresh_replay_identity(root)?;
+    let (identity, timer_plan) =
+        crate::execution_identity::fresh_replay_identity_with_timer_plan(root)?;
     // Fingerprinting reads Source and runtime metadata synchronously. A local
     // timing edit during that work must not certify different launch arguments.
     validate_timing(config, root, state)?;
     state.executed_replay_identity = Some(identity);
-    Ok(())
+    Ok(timer_plan)
 }
 
 pub(in crate::e2e_run) fn before_spawn(

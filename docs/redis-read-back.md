@@ -36,5 +36,4 @@ When the installed policy can affect Redis values, Replay collects causal
 metadata during ordinary registration and keeps Target payloads only for
 writes whose matched value bytes differ. The existing
 recording supplies the command arguments, reply and order evidence. Ordinary
-write-to-read delivery keeps finite request counts. See
-[Redis state contracts](redis-state-contracts.md) for variable-count observations.
+write-to-read delivery keeps finite request counts.

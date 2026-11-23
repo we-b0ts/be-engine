@@ -2,15 +2,17 @@ use crate::policy::{compile_policy, parse_policy, render_policy};
 use serde_json::{Value, json};
 
 fn native_redis() -> Value {
-    json!({"id":"chunks","match":{"resource":"cache","operation":"APPEND","key":{"kind":"exact","value":"content"}},
-        "effect":{"kind":"redis_append_stream"},"proof":{"source":"cache.py:1","fact":"Source appends ordered text chunks"}})
+    json!({"id":"background-scan","match":{},
+        "effect":{"kind":"process_owned","selector":{"protocol":"redis","ports":[6379],
+            "operation":"HSCAN","keys":[{"kind":"exact","value":"content"}]}},
+        "proof":{"source":"cache.py:1","fact":"Source background task scans the content hash"}})
 }
 fn header() -> Value {
     json!({"id":"date","match":{"api":"GET /items"},"effect":{"kind":"response_header_date","header":"content-disposition","parameter":"filename","format":"%Y-%m-%d"},
         "proof":{"source":"api.py:1","fact":"Source renders the current request date"}})
 }
 fn base() -> Value {
-    json!({"format":"traffic-policy/v3","source_revision":"source-v1","resources":{"cache":{"protocol":"redis","endpoint":"cache.test:6379","database":0}}})
+    json!({"format":"traffic-policy/v3","source_revision":format!("sha256:{}", "a".repeat(64))})
 }
 
 #[test]
@@ -42,7 +44,7 @@ fn redis_native_namespace_flattens_to_one_runtime_and_keeps_no_empty_scalar_poli
 }
 
 #[test]
-fn redis_scalar_settings_and_stateful_rules_share_author_section_without_duplicate_ownership() {
+fn redis_scalar_settings_and_process_rules_share_author_section_without_duplicate_ownership() {
     let mut raw = base();
     raw["redis"] = json!({"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}},"rules":[native_redis()]});
     let policy = parse_policy(&raw.to_string()).unwrap();

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -41,6 +41,7 @@ pub(crate) struct TargetStartOptions<'a> {
     pub(crate) operation: &'static str,
     pub(crate) run_id: String,
     pub(crate) replay_ca_cert: Option<PathBuf>,
+    pub(crate) replay_timer_socket: Option<&'a Path>,
     pub(crate) runtime_outputs: &'a [crate::runtime_output::RuntimeOutputConfig],
     pub(crate) runtime_output_root: PathBuf,
 }

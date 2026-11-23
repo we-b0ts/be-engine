@@ -142,33 +142,33 @@ fn unsupported_cells_are_explicit_instead_of_claiming_protocol_equivalence() {
         "SQL cannot silently use a key/value slot"
     );
 }
+fn redis_sequence() -> NativeEffect {
+    serde_json::from_value(serde_json::json!({
+        "kind":"redis_sequence",
+        "key":{"contract":{"kind":"time_window","window_seconds":60,"separator":":"}},
+        "commands":[{"operation":"INCRBY","arguments":{}}]
+    }))
+    .unwrap()
+}
+
 #[test]
-fn native_state_capture_and_attribution_never_masquerade_as_value_rules() {
-    for (effect, kind, owner) in [
-        (
-            NativeEffect::RedisAppendStream,
-            RuleKind::RedisAppendStream,
-            ExecutionOwner::RedisState,
-        ),
-        (
-            NativeEffect::RedisReadObservation(Default::default()),
-            RuleKind::RedisReadObservation,
-            ExecutionOwner::RedisState,
-        ),
-    ] {
-        assert_eq!(native_kind_owner(&effect), (kind, owner));
-        let plan = validate_native_coverage(&NativeRule {
-            id: "native".into(),
-            selector: Default::default(),
-            effect,
-            proof: None,
-            when: None,
-        })
-        .unwrap();
-        assert_eq!(plan.protocol, Some(ProtocolKind::Redis));
-        assert!(plan.codec.is_none());
-        assert!(plan.evidence.native_delivery);
-    }
+fn native_redis_sequence_keeps_native_delivery_ownership() {
+    let effect = redis_sequence();
+    assert_eq!(
+        native_kind_owner(&effect),
+        (RuleKind::RedisSequence, ExecutionOwner::RedisState)
+    );
+    let plan = validate_native_coverage(&NativeRule {
+        id: "native".into(),
+        selector: Default::default(),
+        effect,
+        proof: None,
+        when: None,
+    })
+    .unwrap();
+    assert_eq!(plan.protocol, Some(ProtocolKind::Redis));
+    assert!(plan.codec.is_none());
+    assert!(plan.evidence.native_delivery);
 }
 
 #[test]
@@ -196,7 +196,7 @@ proof: {source: 'clock.py:elapsed', fact: 'Source stores elapsed request seconds
     let native = NativeRule {
         id: "native".into(),
         selector: Default::default(),
-        effect: NativeEffect::RedisAppendStream,
+        effect: redis_sequence(),
         proof: None,
         when: None,
     };

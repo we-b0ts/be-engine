@@ -9,11 +9,6 @@ pub fn validate(rule: &n::NativeRule) -> Result<()> {
             | n::NativeEffect::HttpRequest(_)
             | n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Http)
             | n::NativeEffect::RedisSequence(_)
-            | n::NativeEffect::RedisAppendStream
-            | n::NativeEffect::RedisReadCommutation(_)
-            | n::NativeEffect::RedisReadObservation(_)
-            | n::NativeEffect::RedisExpiryRefresh(_)
-            | n::NativeEffect::RedisActivityRefresh(_)
             | n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis { .. })
             | n::NativeEffect::Identity(_)
     );

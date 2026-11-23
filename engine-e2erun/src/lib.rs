@@ -8,6 +8,7 @@ pub mod platform;
 pub use e2e_run::*;
 pub use target_container::TargetImage;
 mod config;
+mod replay_timer;
 mod target_container;
 
 use case_group::CaseGroupEnsureResult;

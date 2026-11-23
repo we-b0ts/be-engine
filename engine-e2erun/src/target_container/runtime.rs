@@ -12,6 +12,7 @@ use super::model::{
 };
 use super::{NETWORK_ANCHOR_IMAGE, TARGET_REPLAY_CA_PATH, TARGET_USER};
 use super::{runtime_outputs, startup_mounts};
+use crate::replay_timer::{TARGET_SOCKET, TARGET_SOCKET_ENV};
 use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
 
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
@@ -129,6 +130,10 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     } else {
         None
     };
+    let replay_timer_mount = options
+        .replay_timer_socket
+        .map(|socket| bind_mount(socket, TARGET_SOCKET, false))
+        .transpose()?;
     let environment_file = crate::internal_runtime::root(&options.config.target_root)
         .join("target-container")
         .join(format!("{}.env", options.container_name));
@@ -219,6 +224,10 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
         command.args(["--mount", replay_ca_mount]);
     }
     command.arg("--env-file").arg(&environment_file);
+    if let Some(replay_timer_mount) = &replay_timer_mount {
+        command.args(["--mount", replay_timer_mount]);
+        command.args(["--env", &format!("{TARGET_SOCKET_ENV}={TARGET_SOCKET}")]);
+    }
     command.arg(&options.image.id);
     let output = docker_output(&mut command, "start target container").await;
     if let Err(error) = remove_environment_file(&environment_file).await {
@@ -312,6 +321,7 @@ pub(crate) async fn verify_runtime_mounts(
     mounts: &[crate::startup::StartupSnapshotMount],
     runtime_outputs: &[crate::runtime_output::RuntimeOutputConfig],
     replay_ca: bool,
+    replay_timer: bool,
 ) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
@@ -337,7 +347,10 @@ pub(crate) async fn verify_runtime_mounts(
             expected.container_path.display()
         );
     }
-    let managed_read_only_mounts = replay_ca.then_some(TARGET_REPLAY_CA_PATH).into_iter();
+    let managed_read_only_mounts = replay_ca
+        .then_some(TARGET_REPLAY_CA_PATH)
+        .into_iter()
+        .chain(replay_timer.then_some(TARGET_SOCKET));
     for expected in managed_read_only_mounts {
         ensure!(
             inspection
@@ -345,6 +358,13 @@ pub(crate) async fn verify_runtime_mounts(
                 .iter()
                 .any(|mount| { Path::new(&mount.destination) == Path::new(expected) && !mount.rw }),
             "target managed mount is missing or writable: {expected}"
+        );
+    }
+    if replay_timer {
+        let timer_env = format!("{TARGET_SOCKET_ENV}={TARGET_SOCKET}");
+        ensure!(
+            inspection.config.env.contains(&timer_env),
+            "target Replay timer environment is missing or does not name its socket mount"
         );
     }
     Ok(())
