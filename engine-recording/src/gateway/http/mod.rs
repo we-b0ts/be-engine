@@ -42,6 +42,7 @@ pub mod transport;
 
 use admission::try_admit_case;
 use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_group};
+pub(crate) use session::Ingress as SessionIngress;
 use transport::{
     GatewayBody, build_fixed_response, build_upstream_request, build_upstream_uri, simple_response,
 };
@@ -103,6 +104,14 @@ pub async fn run_with_listener(state: AppState, listener: TcpListener) -> Result
         let connection = state
             .session_events()
             .then(|| state.recorder().capture.next_connection_id());
+        let ingress = if connection.is_some() {
+            let Some(ingress) = state.inner.session_ingress.connect() else {
+                continue;
+            };
+            Some(ingress)
+        } else {
+            None
+        };
         let mut protocol_session =
             match crate::protocols::http_session(state.dependency_providers()) {
                 Ok(session) => session,
@@ -112,6 +121,8 @@ pub async fn run_with_listener(state: AppState, listener: TcpListener) -> Result
                 }
             };
         tokio::spawn(async move {
+            // The connection future and socket are dropped before this guard.
+            let _ingress = ingress;
             let termination =
                 match crate::http::termination::ClientTermination::with_control(&stream) {
                     Ok(termination) => termination,
@@ -122,6 +133,7 @@ pub async fn run_with_listener(state: AppState, listener: TcpListener) -> Result
                 };
             let io = TokioIo::new(stream);
             let client_addr = Some(peer_addr.to_string());
+            let shutdown_state = state.clone();
             let service = service_fn(move |req| {
                 let state = state.clone();
                 let config = config.clone();
@@ -134,14 +146,15 @@ pub async fn run_with_listener(state: AppState, listener: TcpListener) -> Result
                 }
             });
 
-            if let Err(err) = termination
-                .serve(
-                    protocol_session
-                        .connection(io.into_inner(), service, true)
-                        .with_upgrades(),
-                )
-                .await
-            {
+            let connection = protocol_session
+                .connection(io.into_inner(), service, true)
+                .with_upgrades();
+            let result = tokio::select! {
+                biased;
+                _ = shutdown_state.inner.session_ingress.wait_for_disconnect(), if _ingress.is_some() => return,
+                result = termination.serve(connection) => result,
+            };
+            if let Err(err) = result {
                 warn!(error = %err, "HTTP gateway connection ended with error");
             }
         });

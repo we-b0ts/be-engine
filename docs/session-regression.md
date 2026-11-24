@@ -14,9 +14,10 @@ and notifications in `dependencies-push.tsv` share one recording sequence.
 Replay loads dependency rows through `dependency-locations.bin` and uses the
 event location and span indexes to build the sequence. Startup, readiness and
 shutdown are lifecycle events on that sequence.
-The recorder drains already admitted ingress within a bounded wait on
-shutdown. The session journal and capture status retain the evidence of how it
-ended.
+During shutdown, the recorder closes admission and gives active ingress up to
+15 seconds to finish. It records `primary_cancel` with reason `engine_shutdown`
+for each remaining request and disconnects it before stopping Source. Replay
+disconnects the corresponding Target request at that event's sequence.
 Protocol adapters handle canonical transport maintenance locally. Replay
 validates the evidence for driver setup or cleanup before omitting the
 corresponding recorded exchanges from the required sequence.

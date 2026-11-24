@@ -23,6 +23,9 @@ use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 use crate::protocols::recording::events::{capture_case_body, redact_headers};
 use crate::protocols::recording::http::case::{CaseRequestRecord, CaseResponseRecord};
 
+mod ingress;
+pub(crate) use ingress::Ingress;
+
 pub(super) async fn handle(
     mut request: Request<Incoming>,
     state: &AppState,
@@ -124,6 +127,10 @@ struct ForwardError {
 impl ForwardError {
     fn capture(state: &AppState, source: anyhow::Error) -> Self {
         state.fail_session_recording(&source);
+        Self::record(source)
+    }
+
+    fn record(source: anyhow::Error) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             source,
@@ -161,8 +168,10 @@ async fn forward(
         .map_err(|error| ForwardError::capture(state, error))?;
     let exchange = state.recorder().capture.next_case_id();
     state
-        .session_event(SessionEvent::PrimaryRequest { exchange, request })
-        .map_err(|error| ForwardError::capture(state, error))?;
+        .inner
+        .session_ingress
+        .record(state, SessionEvent::PrimaryRequest { exchange, request })
+        .map_err(ForwardError::record)?;
     let mut observation = Exchange {
         state: state.clone(),
         exchange,
@@ -207,13 +216,11 @@ async fn forward(
         interaction: None,
     })
     .map_err(|error| ForwardError::capture(state, error.into()))?;
-    state
-        .session_event(SessionEvent::PrimaryResponseHeaders { exchange, response })
-        .map_err(|error| ForwardError::capture(state, error))?;
+    observation
+        .record(SessionEvent::PrimaryResponseHeaders { exchange, response })
+        .map_err(ForwardError::record)?;
     let body = if body.is_end_stream() {
-        observation
-            .end()
-            .map_err(|error| ForwardError::capture(state, error))?;
+        observation.end().map_err(ForwardError::record)?;
         body.map_err(anyhow::Error::from).boxed_unsync()
     } else {
         observe_body(body, observation, deadline)
@@ -265,6 +272,10 @@ struct Exchange {
 }
 
 impl Exchange {
+    fn record(&self, event: SessionEvent) -> Result<()> {
+        self.state.inner.session_ingress.record(&self.state, event)
+    }
+
     fn redacted(
         &self,
         headers: &HeaderMap,
@@ -275,33 +286,31 @@ impl Exchange {
     fn frame(&mut self, frame: &hyper::body::Frame<Bytes>) -> Result<()> {
         let exchange = self.exchange;
         if let Some(data) = frame.data_ref() {
-            self.state
-                .session_event(SessionEvent::PrimaryResponsePart {
-                    exchange,
-                    part: self.next_part,
-                    data_base64: STANDARD.encode(data),
-                })?;
+            self.record(SessionEvent::PrimaryResponsePart {
+                exchange,
+                part: self.next_part,
+                data_base64: STANDARD.encode(data),
+            })?;
             self.next_part += 1;
         } else if let Some(trailers) = frame.trailers_ref() {
-            self.state
-                .session_event(SessionEvent::PrimaryResponseTrailers {
-                    exchange,
-                    trailers: serde_json::to_value(self.redacted(trailers))?,
-                })?;
+            self.record(SessionEvent::PrimaryResponseTrailers {
+                exchange,
+                trailers: serde_json::to_value(self.redacted(trailers))?,
+            })?;
         }
         Ok(())
     }
 
     fn end(&mut self) -> Result<()> {
         self.terminal = true;
-        self.state.session_event(SessionEvent::PrimaryResponseEnd {
+        self.record(SessionEvent::PrimaryResponseEnd {
             exchange: self.exchange,
         })
     }
 
     fn cancel(&mut self, reason: &str) -> Result<()> {
         self.terminal = true;
-        self.state.session_event(SessionEvent::PrimaryCancel {
+        self.record(SessionEvent::PrimaryCancel {
             exchange: self.exchange,
             reason: reason.to_owned(),
         })

@@ -12,7 +12,10 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::process::Child;
-use traffic_model::{session::SessionEvent, trace::RecordedEvent};
+use traffic_model::{
+    session::{ENGINE_SHUTDOWN_CANCEL_REASON, SessionEvent},
+    trace::RecordedEvent,
+};
 use uuid::Uuid;
 
 use self::{control::SessionControl, http::Http, target::Target};
@@ -350,8 +353,11 @@ async fn apply(
         }
         SessionEvent::PrimaryResponseEnd { exchange } => http.end(exchange).await?,
         SessionEvent::PrimaryCancel { exchange, reason } => {
-            if reason == "client_cancelled" {
-                http.admits_client_cancel(exchange)?;
+            if matches!(
+                reason.as_str(),
+                "client_cancelled" | ENGINE_SHUTDOWN_CANCEL_REASON
+            ) {
+                http.admits_disconnect(exchange)?;
                 control.commit(sequence).await?;
                 return http.cancel(exchange, &reason).await;
             }

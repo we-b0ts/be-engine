@@ -11,24 +11,26 @@ use crate::AppState;
 use crate::recorder::{CaseInvalidation, CaseInvalidationContext};
 
 const DRAIN_BUDGET: Duration = Duration::from_secs(60);
+const SESSION_DRAIN_BUDGET: Duration = Duration::from_secs(15);
 
 pub(super) async fn drain<R: Redis + Clone + 'static>(
     state: &AppState,
     relay: &Relay<R>,
 ) -> Result<()> {
     if state.session_events() {
-        drain_session(state, relay).await
+        drain_session(state, relay, SESSION_DRAIN_BUDGET).await
     } else {
         drain_cases(state, relay).await
     }
 }
 
-async fn drain_session<R: Redis + Clone + 'static>(
+pub(super) async fn drain_session<R: Redis + Clone + 'static>(
     state: &AppState,
     relay: &Relay<R>,
+    budget: Duration,
 ) -> Result<()> {
     info!(
-        timeout_ms = DRAIN_BUDGET.as_millis(),
+        timeout_ms = budget.as_millis(),
         "normal recording shutdown waiting for admitted session ingress"
     );
     tokio::select! {
@@ -36,12 +38,12 @@ async fn drain_session<R: Redis + Clone + 'static>(
         _ = state.wait_for_interaction_source_stop() => {},
         _ = state.inner.active_cases.wait_for_quiescing() => {},
         _ = relay.drain() => {},
-        _ = tokio::time::sleep(DRAIN_BUDGET) => {
-            let error = anyhow::anyhow!("session ingress did not drain before Source shutdown");
-            state.fail_session_recording(&error);
-            return Err(error);
+        _ = tokio::time::sleep(budget) => {
+            info!("closing remaining session ingress before Source shutdown");
         }
     }
+    state.inner.session_ingress.disconnect(state).await?;
+    relay.drain().await;
     if let Some(error) = state.inner.recording_lifecycle.snapshot().error {
         anyhow::bail!("session capture failed: {error}");
     }

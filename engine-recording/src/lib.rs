@@ -85,6 +85,7 @@ struct AppStateInner {
     upstream_tls_config: Arc<ClientConfig>,
     active_cases: ActiveCaseRegistry,
     interactions: gateway::http::interaction::Sessions,
+    session_ingress: gateway::http::SessionIngress,
     dependency_connections: DependencyConnections,
     kubectl_proxy_manager: KubectlProxyManager,
     response_rewrites: http::rewrite::CompiledRewrites,
@@ -241,6 +242,7 @@ impl AppState {
                 active_cases: ActiveCaseRegistry::new(case_matching_ready)
                     .with_capture(capture_registry),
                 interactions: gateway::http::interaction::Sessions::default(),
+                session_ingress: gateway::http::SessionIngress::default(),
                 dependency_connections: DependencyConnections::default(),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
                 response_rewrites,

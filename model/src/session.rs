@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// The recording engine closed the primary connection during shutdown.
+pub const ENGINE_SHUTDOWN_CANCEL_REASON: &str = "engine_shutdown";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionEvent {

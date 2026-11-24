@@ -22,6 +22,10 @@ impl SessionRelay {
             active_tickets: Default::default(),
         }
     }
+
+    pub(super) async fn wait_for_disconnect(&self) {
+        self.app.inner.session_ingress.wait_for_disconnect().await;
+    }
 }
 
 impl<R: Redis + Clone + 'static> Relay<R> {
@@ -103,6 +107,9 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         let upstream = match upstream {
             Ok(response) => response,
             Err(error) => {
+                if session.app.inner.session_ingress.disconnected() {
+                    return response(StatusCode::SERVICE_UNAVAILABLE, "recording ingress closed");
+                }
                 session
                     .app
                     .fail_session_recording("session relay could not forward admitted request");

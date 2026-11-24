@@ -1,7 +1,7 @@
 use super::*;
 use crate::dependency_index::{RecordStream, recording, scoped};
 use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
-use traffic_model::session::SessionEvent;
+use traffic_model::session::{ENGINE_SHUTDOWN_CANCEL_REASON, SessionEvent};
 use traffic_model::{DependencyExchangeOutcome, capture::capture_body};
 
 #[test]
@@ -78,14 +78,31 @@ async fn verify_session() {
     assert_eq!(slow_body.collect().await.unwrap().to_bytes(), "done");
     drop(startup);
 
+    let long = send(address, "/api/long").await;
+    assert_eq!(long.status(), StatusCode::OK);
+    let mut long_body = long.into_body();
+    assert_eq!(
+        long_body
+            .frame()
+            .await
+            .unwrap()
+            .unwrap()
+            .into_data()
+            .unwrap(),
+        Bytes::from_static(b"open")
+    );
     relay.close();
-    super::super::shutdown::drain(&state, &relay).await.unwrap();
+    super::super::shutdown::drain_session(&state, &relay, Duration::from_millis(20))
+        .await
+        .unwrap();
+    state.session_event(SessionEvent::Stop).unwrap();
+    assert!(long_body.frame().await.is_none_or(|frame| frame.is_err()));
+    // Source observes the disconnect while its HTTP gateway is still running.
+    source.await.unwrap();
     stop.send_replace(true);
     adapter.await.unwrap().unwrap();
     gateway.abort();
     let _ = gateway.await;
-    source.await.unwrap();
-    state.session_event(SessionEvent::Stop).unwrap();
     state
         .session_event(SessionEvent::SourceExit { status: Some(0) })
         .unwrap();
@@ -98,21 +115,26 @@ async fn verify_session() {
         .collect();
     let (slow_index, slow_id) = request(&rows, "/api/slow");
     let (fast_index, _) = request(&rows, "/api/fast");
+    let (long_index, long_id) = request(&rows, "/api/long");
     let ready = rows
         .iter()
         .position(|event| matches!(event, SessionEvent::Ready))
         .unwrap();
     let slow_end = rows.iter().position(|event| matches!(event, SessionEvent::PrimaryResponseEnd { exchange } if *exchange == slow_id)).unwrap();
     assert!(ready < slow_index && slow_index < fast_index && fast_index < slow_end);
+    assert!(slow_end < long_index);
     assert!(matches!(
-        &rows[rows.len() - 2..],
+        &rows[..],
         [
+            ..,
+            SessionEvent::PrimaryCancel { exchange, reason },
             SessionEvent::Stop,
             SessionEvent::SourceExit { status: Some(0) }
-        ]
+        ] if *exchange == long_id && reason == ENGINE_SHUTDOWN_CANCEL_REASON
     ));
     let run_dir = &state.recorder().run_dir;
     let (_, manifest) = recording::manifest(run_dir).unwrap();
+    assert!(manifest.sealed && manifest.capture_complete);
     for path in [
         "apis",
         "dependencies-process.tsv",
@@ -227,11 +249,24 @@ async fn run_source(source: TcpListener) {
     drop(ready);
     let (mut slow, _) = source.accept().await.unwrap();
     assert!(read_request(&mut slow).await.starts_with("GET /api/slow "));
-    slow.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nstart\r\n").await.unwrap();
+    slow.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nstart\r\n").await.unwrap();
     let (mut fast, _) = source.accept().await.unwrap();
     assert!(read_request(&mut fast).await.starts_with("GET /api/fast "));
     fast.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfast")
         .await
         .unwrap();
     slow.write_all(b"4\r\ndone\r\n0\r\n\r\n").await.unwrap();
+    drop(slow);
+    let (mut long, _) = source.accept().await.unwrap();
+    assert!(read_request(&mut long).await.starts_with("GET /api/long "));
+    long.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nopen\r\n").await.unwrap();
+    match long.read(&mut [0]).await {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) => {}
+        result => panic!("Source SSE connection was not closed: {result:?}"),
+    }
 }

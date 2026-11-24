@@ -18,6 +18,7 @@ use tokio::{
     task::JoinHandle,
     time::{Duration, Instant},
 };
+use traffic_model::session::ENGINE_SHUTDOWN_CANCEL_REASON;
 use uuid::Uuid;
 
 use super::super::model::ResolvedProjectConfig;
@@ -198,10 +199,10 @@ impl<'a> Http<'a> {
         })
     }
 
-    pub(super) fn admits_client_cancel(&self, id: Uuid) -> Result<()> {
+    pub(super) fn admits_disconnect(&self, id: Uuid) -> Result<()> {
         ensure!(
             self.exchanges.contains_key(&id),
-            "client cancellation has no primary request"
+            "driver disconnect has no primary request"
         );
         Ok(())
     }
@@ -212,7 +213,7 @@ impl<'a> Http<'a> {
             .remove(&id)
             .context("cancellation has no primary request")?;
         match reason {
-            "client_cancelled" => Ok(()),
+            "client_cancelled" | ENGINE_SHUTDOWN_CANCEL_REASON => Ok(()),
             "source_request_failed" => {
                 let incoming = exchange
                     .incoming
