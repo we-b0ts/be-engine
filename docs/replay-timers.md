@@ -82,6 +82,12 @@ plan at launch. It mounts only the dedicated timer socket into the Target
 container and sets `BRZ_REPLAY_TIMER_SOCKET` there. Keep the same plan bytes
 available when verifying the attempt's identity.
 
+Session Replay uses fast timing with zero recorded intervals. For a managed
+Session set the same plan environment variable and run `backend-rewrite session
+run`. Direct Session Replay uses `traffic-e2e replay --session-events` with
+`--timer-plan` and `--timer-socket`. A Session plan uses `cases.session` for
+the scope. See [Source session regression](session-regression.md).
+
 Target passes the active Case ID, site, stream, occurrence and consumed ordinal
 to `brz_replay::tokio::time::sleep_until`. Keep one pinned Future per logical
 wait when using `tokio::select!`. A wait without a matching plan in the active

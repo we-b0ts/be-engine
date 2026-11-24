@@ -57,6 +57,9 @@ impl State {
     }
 
     fn event_due(&self, next: SourceEvent, cap: Option<Duration>) -> Option<Instant> {
+        if cap == Some(Duration::ZERO) {
+            return None;
+        }
         let previous = self.scheduler.previous()?;
         let gap = Duration::from_micros(next.offset_micros.saturating_sub(previous.offset_micros));
         self.progressed_at?

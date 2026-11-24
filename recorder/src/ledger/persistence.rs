@@ -366,6 +366,9 @@ impl LedgerWriter {
             )
             .await?;
         }
+        if self.session.is_some() {
+            return Ok(());
+        }
         let location = ScopeRecordLocation {
             line: position.line,
             offset: position.offset,

@@ -100,6 +100,7 @@ async fn session_driver_and_dependency_receipts_share_the_contiguous_frontier() 
     assert!(runtime.commit_driver(6).is_err());
     runtime.commit_driver(4).unwrap();
     assert_eq!(runtime.progress().last_sequence, Some(5));
+    assert!(runtime.driver_due(6).is_none());
     runtime.commit_driver(6).unwrap();
     assert!(!runtime.complete());
     runtime.commit_driver(7).unwrap();

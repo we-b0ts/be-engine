@@ -5,6 +5,7 @@ use super::transport::{Completion, Outcome, read_frame, write_frame};
 use super::*;
 use crate::ReplayConfig;
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
@@ -25,6 +26,65 @@ impl Drop for Fixture {
     }
 }
 
+fn replay_config(root: &Path, case_dir: PathBuf) -> ReplayConfig {
+    ReplayConfig {
+        case_dir,
+        selected_case_ids: vec![],
+        dns_listen: "127.0.0.1:0".parse().unwrap(),
+        tcp_listen: "127.0.0.1:0".parse().unwrap(),
+        fake_cidr: "198.18.0.0/15".into(),
+        report_path: None,
+        session_path: None,
+        control_socket_path: None,
+        ca_cert_path: Some(root.join("ca.pem")),
+        ca_key_path: Some(root.join("ca-key.pem")),
+        policy_path: None,
+        http_ignore_query_params: vec![],
+        process_owned_dependencies: vec![],
+        allowed_unused_http: None,
+    }
+}
+
+#[tokio::test]
+async fn session_loads_its_timer_plan_with_default_or_recorded_case_timing() {
+    use crate::replay::{ReplayLifecycleConfig, ReplayStreamTiming};
+
+    let dir = tempfile::tempdir().unwrap();
+    let timer = ReplayTimerConfig {
+        plan_path: dir.path().join("timers.json"),
+        socket_path: dir.path().join("timers.sock"),
+    };
+    tokio::fs::write(
+        &timer.plan_path,
+        br#"{"cases":{"session":[{"site":"shutdown","stream":"source","occurrence":1,"consumed_through":0,"before_event":50}]}}"#,
+    )
+    .await
+    .unwrap();
+    for stream_timing in [None, Some(ReplayStreamTiming::Recorded)] {
+        let lifecycle = ReplayLifecycleConfig {
+            stream_timing,
+            ..Default::default()
+        };
+        let config = replay_config(dir.path(), dir.path().to_owned());
+        let error = crate::run_session_replay(config.clone(), lifecycle, None, Some(timer.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "session Replay requires a control socket"
+        );
+
+        let error =
+            crate::run_replay_with_timer_config(config, lifecycle, None, Some(timer.clone()))
+                .await
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Replay timers require fast stream timing"
+        );
+    }
+}
+
 impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
@@ -35,22 +95,7 @@ impl Fixture {
             .unwrap();
         write_test_recording_network_manifest(&case_dir);
         let runtime = ReplayRuntime::load(
-            ReplayConfig {
-                case_dir,
-                selected_case_ids: vec![],
-                dns_listen: "127.0.0.1:0".parse().unwrap(),
-                tcp_listen: "127.0.0.1:0".parse().unwrap(),
-                fake_cidr: "198.18.0.0/15".into(),
-                report_path: None,
-                session_path: None,
-                control_socket_path: None,
-                ca_cert_path: Some(dir.path().join("ca.pem")),
-                ca_key_path: Some(dir.path().join("ca-key.pem")),
-                policy_path: None,
-                http_ignore_query_params: vec![],
-                process_owned_dependencies: vec![],
-                allowed_unused_http: None,
-            },
+            replay_config(dir.path(), case_dir),
             "127.0.0.1:0".parse().unwrap(),
             "127.0.0.1:0".parse().unwrap(),
         )

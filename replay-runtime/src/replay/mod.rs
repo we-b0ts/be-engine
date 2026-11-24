@@ -92,13 +92,18 @@ pub use traffic_engine_replay::replay::{
 };
 pub(crate) async fn run<P: ReplayProtocolSet>(
     config: RuntimeConfig,
-    lifecycle: ReplayLifecycleConfig,
+    mut lifecycle: ReplayLifecycleConfig,
     counter_reader: Option<ReplayEgressCounterReader>,
     providers: Arc<crate::protocols::DependencyProviders>,
     loader: P::SourceLoader,
     timer_config: Option<ReplayTimerConfig>,
     session_events: bool,
 ) -> Result<()> {
+    if session_events {
+        lifecycle.stream_timing = Some(ReplayLifecycleConfig::EVENT_SESSION_STREAM_TIMING);
+        lifecycle.stream_interval_cap_ms =
+            ReplayLifecycleConfig::EVENT_SESSION_STREAM_INTERVAL_CAP_MS;
+    }
     let timer_state = if let Some(timer) = &timer_config {
         ensure!(
             lifecycle.stream_timing == Some(ReplayStreamTiming::Fast),

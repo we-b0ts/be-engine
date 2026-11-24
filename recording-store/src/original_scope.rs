@@ -28,10 +28,7 @@ const ENTRY_BYTES: usize = 60;
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
 pub(crate) fn files(session: bool) -> impl Iterator<Item = (usize, &'static str)> {
-    FILES
-        .into_iter()
-        .enumerate()
-        .filter(move |(index, _)| !session || *index == 0)
+    FILES.into_iter().enumerate().filter(move |_| !session)
 }
 
 pub(crate) struct OriginalScopes {
@@ -41,9 +38,11 @@ pub(crate) struct OriginalScopes {
 
 impl OriginalScopes {
     pub(crate) async fn initialize(root: &Path, session: bool) -> Result<Self> {
-        tokio::fs::create_dir_all(root.join("indexes")).await?;
-        for (_, file) in files(session) {
-            crate::storage::write(&root.join(file), b"").await?;
+        if !session {
+            tokio::fs::create_dir_all(root.join("indexes")).await?;
+            for file in FILES {
+                crate::storage::write(&root.join(file), b"").await?;
+            }
         }
         Ok(Self {
             digests: Default::default(),
@@ -58,6 +57,10 @@ impl OriginalScopes {
         kind: ScopeKind,
         location: &ScopeRecordLocation,
     ) -> Result<()> {
+        ensure!(
+            !self.session,
+            "case attribution scope in a session recording"
+        );
         let scope = match kind {
             ScopeKind::Startup => 0,
             ScopeKind::Process => 1,
@@ -65,10 +68,6 @@ impl OriginalScopes {
             ScopeKind::Unattributed => 3,
             ScopeKind::Case { .. } => anyhow::bail!("Case dependencies use their Case scope"),
         };
-        ensure!(
-            !self.session || scope == 0,
-            "case attribution scope in a session recording"
-        );
         let mut entry = [0; ENTRY_BYTES];
         entry[..8].copy_from_slice(&u64::try_from(location.line)?.to_le_bytes());
         let hash = location.sha256.as_bytes();

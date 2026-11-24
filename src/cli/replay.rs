@@ -21,10 +21,10 @@ pub(super) struct ReplayArgs {
     /// Continue through supported tentative value rules while retaining dirty evidence.
     #[arg(long)]
     pre_match: bool,
-    /// Replay recorded stream timing or cap successful HTTP and ordinary Case Pub/Sub intervals.
+    /// Set stream timing for Case Replay. Session Replay always runs without recorded waits.
     #[arg(long, value_enum)]
     stream_timing: Option<traffic_e2e::ReplayStreamTiming>,
-    /// Maximum HTTP stream or ordinary Case Pub/Sub input gap in fast mode, in milliseconds (default: 5).
+    /// Maximum Case HTTP stream or Pub/Sub gap in fast mode, in milliseconds (default: 5).
     #[arg(long)]
     stream_interval_cap_ms: Option<u64>,
     /// Published Case, collection, or sealed recording session directory.

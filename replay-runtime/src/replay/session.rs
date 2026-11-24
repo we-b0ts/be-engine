@@ -118,11 +118,10 @@ pub(super) fn source_scope(source: &Path) -> Result<attribution::Frozen> {
             == inventory.total_mandatory,
         "session recording has dependencies outside its finite session scope"
     );
-    let startup = root.join("indexes/startup-scope.json");
     Ok(attribution::Frozen {
         run_value_scopes: BTreeMap::new(),
         snapshot: None,
-        startup: (inventory.total_mandatory > 0 || startup.is_file()).then_some(startup),
+        startup: Some(crate::dependency_index::recording::dependency_path(&root)),
         process: None,
         unattributed: None,
         batch_scope: None,

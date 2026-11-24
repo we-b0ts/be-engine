@@ -224,7 +224,7 @@ async fn run_prepared(
         && let Err(error) = shutdown::drain(&state, &relay).await
         && result.is_ok()
     {
-        result = Err(error.context("failed to persist recording shutdown diagnostics"));
+        result = Err(error.context("normal recording shutdown failed"));
     }
     state.close_interactions();
     state.begin_case_quiescing();

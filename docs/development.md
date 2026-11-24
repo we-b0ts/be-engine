@@ -1693,7 +1693,8 @@ Regression settings are local to the target repository in
 `.traffic-e2e/regression.yaml`. Initialization generates this file and adds it to `.gitignore` and `.dockerignore`.
 It does not need a commit and is explicitly excluded from code and target
 fingerprints, even if manually tracked. Existing projects without the file use
-all recorded APIs.
+all recorded APIs in Case workflows. [Session Replay](session-regression.md)
+uses a fixed zero interval and verifies the full recording on each attempt.
 
 ```yaml
 # Optional: directly reuse this completed standard recording.

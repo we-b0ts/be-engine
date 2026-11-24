@@ -10,7 +10,9 @@ use super::model::{
 };
 use super::project_validation::validate_project_config;
 use super::{E2eRunInitOptions, E2eRunInitResult, branch};
+use crate::config::regression::{RegressionScope, SessionRegression};
 use crate::policy::runtime::validate_replay_policy;
+use crate::replay::{ReplayLifecycleConfig, ReplayStreamTiming};
 use anyhow::{Context, Result, bail, ensure};
 
 use traffic_engine_config::project::config::cache;
@@ -152,6 +154,33 @@ pub(super) fn resolve_layout(
     explicit_run_key: Option<&str>,
 ) -> Result<(ResolvedProjectConfig, RunLayout)> {
     let (target_root, resolved) = resolve_project(target_root)?;
+    resolve_project_layout(target_root, resolved, case_source, explicit_run_key)
+}
+
+pub(super) fn resolve_session_layout(
+    target_root: &Path,
+    recording_root: &Path,
+    explicit_run_key: Option<&str>,
+) -> Result<(ResolvedProjectConfig, RunLayout)> {
+    let target_root = canonical_target_root(target_root)?;
+    SessionRegression::load(&target_root)?;
+    let resolved = resolve_project_config(
+        &target_root,
+        Some(ReplayLifecycleConfig::EVENT_SESSION_STREAM_TIMING),
+        ReplayLifecycleConfig::EVENT_SESSION_STREAM_INTERVAL_CAP_MS,
+    )?;
+    let (resolved, layout) =
+        resolve_project_layout(target_root, resolved, recording_root, explicit_run_key)?;
+    require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
+    Ok((resolved, layout))
+}
+
+fn resolve_project_layout(
+    target_root: PathBuf,
+    resolved: ResolvedProjectConfig,
+    case_source: &Path,
+    explicit_run_key: Option<&str>,
+) -> Result<(ResolvedProjectConfig, RunLayout)> {
     require_regular_file(&resolved.target_dockerfile, "target Dockerfile")?;
     ensure!(
         resolved.recorder_config.is_file(),
@@ -191,17 +220,36 @@ pub(super) fn resolve_layout(
 }
 
 pub fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedProjectConfig)> {
-    let target_root = fs::canonicalize(target_root)
-        .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
+    let target_root = canonical_target_root(target_root)?;
     if let Some(project) = cache::get(&target_root) {
         return Ok((target_root, project));
     }
+    let regression = RegressionScope::load(&target_root)?;
+    let project = resolve_project_config(
+        &target_root,
+        regression.replay_timing,
+        regression.replay_interval_cap_ms,
+    )?;
+    cache::insert(target_root.clone(), project.clone());
+    Ok((target_root, project))
+}
+
+fn canonical_target_root(target_root: &Path) -> Result<PathBuf> {
+    fs::canonicalize(target_root)
+        .with_context(|| format!("failed to resolve target root {}", target_root.display()))
+}
+
+fn resolve_project_config(
+    target_root: &Path,
+    replay_stream_timing: Option<ReplayStreamTiming>,
+    replay_stream_interval_cap_ms: u64,
+) -> Result<ResolvedProjectConfig> {
     let config_path = target_root
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(PROJECT_CONFIG_FILE);
-    let config = load_project_config(&target_root, &config_path)?;
+    let config = load_project_config(target_root, &config_path)?;
     let managed = super::delivery::resolve_project_managed_paths(
-        &target_root,
+        target_root,
         &config.project.delivery.managed_paths,
     )?;
     let policy_path = crate::config::resolve_unified_policy_path(&config_path)?;
@@ -222,17 +270,16 @@ pub fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedProjectCo
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_port = recorder_target_http_port(&recorder.http_gateway.matched_upstream)?;
     let target_http_readiness_enabled = recorder.http_gateway.enabled;
-    let regression = crate::config::regression::RegressionScope::load(&target_root)?;
-    let project = ResolvedProjectConfig {
+    Ok(ResolvedProjectConfig {
         replay_pre_match: config.project.replay.pre_match,
-        replay_stream_timing: regression.replay_timing,
-        replay_stream_interval_cap_ms: regression.replay_interval_cap_ms,
+        replay_stream_timing,
+        replay_stream_interval_cap_ms,
         replay_socketio_timing: config.project.replay.socketio_timing,
         replay_case_no_progress_timeout: Duration::from_millis(
             config.project.replay.case_no_progress_timeout_ms,
         ),
         replay_loading: config.project.replay.dependency_loading,
-        target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
+        target_dockerfile: resolve_under(target_root, &config.project.target.dockerfile),
         target_build_contexts: managed.build_contexts,
         target_startup: config.project.target.startup,
         target_runtime_outputs: config.project.target.runtime_outputs,
@@ -259,9 +306,7 @@ pub fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedProjectCo
         recorder_config,
         source_traffic_policy,
         runner_owned_response_assertions: policy.runner_owned_response_assertions,
-    };
-    cache::insert(target_root.clone(), project.clone());
-    Ok((target_root, project))
+    })
 }
 
 pub fn with_project_resolution_cache<T>(operation: impl FnOnce() -> T) -> T {
@@ -736,6 +781,19 @@ mod tests {
         let (config, _) = resolve_layout(target.path(), &cases, None).unwrap();
 
         assert_eq!(config.target_max_response_bytes, 1234);
+    }
+
+    #[test]
+    fn managed_session_uses_fast_timing_with_zero_recorded_delay() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let recording = target.path().join("20261123161021");
+        fs::create_dir(&recording).unwrap();
+
+        let (config, _) = resolve_session_layout(target.path(), &recording, None).unwrap();
+
+        assert_eq!(config.replay_stream_timing, Some(ReplayStreamTiming::Fast));
+        assert_eq!(config.replay_stream_interval_cap_ms, 0);
     }
 
     #[test]

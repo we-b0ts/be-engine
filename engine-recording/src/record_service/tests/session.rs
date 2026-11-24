@@ -1,6 +1,8 @@
 use super::*;
-use crate::dependency_index::{recording, scoped};
+use crate::dependency_index::{RecordStream, recording, scoped};
+use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
 use traffic_model::session::SessionEvent;
+use traffic_model::{DependencyExchangeOutcome, capture::capture_body};
 
 #[test]
 fn session_ingress_opens_while_startup_is_active_and_records_overlapping_responses() {
@@ -48,6 +50,7 @@ async fn verify_session() {
 
     state.session_event(SessionEvent::SourceStart).unwrap();
     state.inner.source_started.send_replace(true);
+    record_redis_read(&state);
     let gateway = tokio::spawn(crate::gateway::http::run_with_listener(
         state.clone(),
         gateway,
@@ -76,7 +79,7 @@ async fn verify_session() {
     drop(startup);
 
     relay.close();
-    relay.drain().await;
+    super::super::shutdown::drain(&state, &relay).await.unwrap();
     stop.send_replace(true);
     adapter.await.unwrap().unwrap();
     gateway.abort();
@@ -101,6 +104,13 @@ async fn verify_session() {
         .unwrap();
     let slow_end = rows.iter().position(|event| matches!(event, SessionEvent::PrimaryResponseEnd { exchange } if *exchange == slow_id)).unwrap();
     assert!(ready < slow_index && slow_index < fast_index && fast_index < slow_end);
+    assert!(matches!(
+        &rows[rows.len() - 2..],
+        [
+            SessionEvent::Stop,
+            SessionEvent::SourceExit { status: Some(0) }
+        ]
+    ));
     let run_dir = &state.recorder().run_dir;
     let (_, manifest) = recording::manifest(run_dir).unwrap();
     for path in [
@@ -109,7 +119,11 @@ async fn verify_session() {
         "dependencies-unattributed.tsv",
         "indexes/process-scope.bin",
         "indexes/shutdown-scope.bin",
+        "indexes/startup-scope.bin",
         "indexes/unattributed-scope.bin",
+        "global-dependencies-summary.json",
+        "pre-readiness-traffic-summary.json",
+        "recording-shutdown.json",
         traffic_recorder::source_process::SUMMARY_FILENAME,
     ] {
         assert!(!run_dir.join(path).exists(), "unexpected artifact {path}");
@@ -121,6 +135,21 @@ async fn verify_session() {
     recording::authenticate(run_dir).unwrap();
     let central = recording::dependency_path(run_dir);
     assert!(scoped::selected_bytes(&central).unwrap() > 0);
+    assert_eq!(manifest.semantic_inventory.total_mandatory, 1);
+    let mut records = RecordStream::open(&central).unwrap();
+    let (location, row) = records.next().unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(row).unwrap()["command"],
+        "GET"
+    );
+    let source = scoped::resolve(&central).unwrap();
+    let mut locations = source.replay_locations().unwrap();
+    let indexed = locations.next().unwrap().unwrap();
+    assert_eq!(
+        (indexed.line, indexed.offset, indexed.length),
+        (location.line, location.offset, location.length)
+    );
+    assert!(locations.next().is_none());
     let report: serde_json::Value = serde_json::from_slice(
         &tokio::fs::read(state.recorder().run_dir.join("recording-run.json"))
             .await
@@ -129,6 +158,37 @@ async fn verify_session() {
     .unwrap();
     assert_eq!(report["status"], "completed");
     assert_eq!(report["published_cases"], 0);
+}
+
+fn record_redis_read(state: &crate::AppState) {
+    let now = chrono::Utc::now();
+    state.record_event(RecorderEvent::RedisExchange(RedisExchangeEvent {
+        id: uuid::Uuid::new_v4(),
+        connection_id: uuid::Uuid::new_v4(),
+        sequence: 1,
+        timestamp: now,
+        request_started_at: now,
+        client_addr: None,
+        target_host: "cache.session.test".into(),
+        target_port: 6379,
+        target_addr: "cache.session.test:6379".into(),
+        upstream_addr: "127.0.0.1:6379".into(),
+        resp_version: 2,
+        database: 0,
+        username: None,
+        command: "GET".into(),
+        args: vec![capture_body(b"key", 3)],
+        response_kind: "bulk".into(),
+        response: capture_body(b"$5\r\nvalue\r\n", 11),
+        rpc_callback_capture: None,
+        cache_snapshot_rule: None,
+        cache_snapshot_hit: false,
+        session_setup: false,
+        outcome: DependencyExchangeOutcome::Response,
+        duration_ms: 1,
+        replay_safe: true,
+        parse_warnings: Vec::new(),
+    }));
 }
 
 async fn send(

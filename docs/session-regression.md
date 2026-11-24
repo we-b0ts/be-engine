@@ -11,8 +11,12 @@ Stop the recorder normally to seal the recording. Keep its
 `dependency-manifest.json` and the full recording tree together. Primary
 events in `request-response.tsv`, dependency events in `dependencies.tsv`,
 and notifications in `dependencies-push.tsv` share one recording sequence.
-Session recording stores each dependency by its event kind and uses a single
-scope index to locate dependency records.
+Replay loads dependency rows through `dependency-locations.bin` and uses the
+event location and span indexes to build the sequence. Startup, readiness and
+shutdown are lifecycle events on that sequence.
+The recorder drains already admitted ingress within a bounded wait on
+shutdown. The session journal and capture status retain the evidence of how it
+ended.
 Protocol adapters handle canonical transport maintenance locally. Replay
 validates the evidence for driver setup or cleanup before omitting the
 corresponding recorded exchanges from the required sequence.
@@ -24,8 +28,10 @@ directory name and run:
 backend-rewrite --target-root /absolute/target session run
 ```
 
-The session starts the isolated Target and verifies from process launch. The
-runner reports matched and total events. A failure stops event delivery and
+The session starts the isolated Target and verifies from process launch.
+Session regression settings are limited to `recording_run_id` and
+`max_implementers`. The latter configures 1 to 16 implementation slots.
+The runner reports matched and total events. A failure stops event delivery and
 publishes the failed sequence and an evidence query. The following query pages
 through the original Source minute starting at sequence 182:
 
@@ -49,7 +55,9 @@ finding. Implementers can also query the full Source timeline. Events after
 the failure provide context for investigation and receive no verification
 credit until the next replay reaches them.
 
-With fast replay, the engine advances recorded I/O on the shared timeline.
+Session Replay advances recorded I/O on the shared timeline as soon as its
+matching request, delivery receipt, or timer gate allows it. Recorded intervals
+add zero delay. Target execution and actual I/O still take real time.
 For a Target-owned periodic wait, use a [Replay timer](replay-timers.md) with
 the scope `cases.session` and a recorded dependency request as its wake
 anchor. Use `TRAFFIC_E2E_REPLAY_TIMER_PLAN` to select the plan for the run.

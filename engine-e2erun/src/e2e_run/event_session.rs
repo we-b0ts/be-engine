@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use self::{control::SessionControl, http::Http, target::Target};
 use super::{
-    E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, E2eRunContext, execute,
+    E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, config,
     model::{ActiveRunState, ResolvedProjectConfig, RunLayout, RunStatus},
     runtime, store,
 };
@@ -26,13 +26,10 @@ use crate::replay_timer::{self, ManagedTimer};
 pub async fn run_e2e_event_session(
     options: E2eEventSessionOptions,
 ) -> Result<E2eEventSessionResult> {
-    let (config, mut layout) = execute::resolve_for_execution(
-        &E2eRunContext {
-            target_root: options.target_root,
-            case_source: options.recording_root,
-            run_key: options.run_key,
-        },
-        false,
+    let (config, mut layout) = config::resolve_session_layout(
+        &options.target_root,
+        &options.recording_root,
+        options.run_key.as_deref(),
     )?;
     let recording = layout.case_source.clone();
     let tape =

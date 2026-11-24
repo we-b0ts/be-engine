@@ -24,6 +24,37 @@ pub struct Source {
     pub view: Option<(PathBuf, FileStamp)>,
 }
 
+impl Source {
+    /// Iterate compact ledger locations for Replay without reading payload cells.
+    pub fn replay_locations(&self) -> Result<impl Iterator<Item = Result<RecordLocation>> + '_> {
+        let mut selected = self.locations.as_deref().map(|rows| rows.iter());
+        let mut central = if selected.is_none() {
+            let count = crate::partitions::record_count(FileStamp::read_native(&self.path)?.size)?;
+            let directory = crate::partitions::Reader::open(&self.path)?;
+            Some((directory, 1..=usize::try_from(count)?))
+        } else {
+            None
+        };
+        Ok(std::iter::from_fn(move || {
+            if let Some(rows) = &mut selected {
+                return rows.next().cloned().map(Ok);
+            }
+            let (directory, lines) = central.as_mut()?;
+            let line = lines.next()?;
+            Some(directory.span(line).and_then(|span| {
+                Ok(RecordLocation {
+                    line,
+                    offset: span.logical,
+                    length: span.length()?,
+                    // The central Replay cursor validates each physical range.
+                    // Authenticated evidence readers calculate record digests separately.
+                    sha256: String::new(),
+                })
+            }))
+        }))
+    }
+}
+
 struct CachedScope {
     source: Source,
     ledger: FileStamp,
@@ -207,12 +238,8 @@ pub fn selected_bytes(path: &Path) -> Result<u64> {
             .parent()
             .context("missing dependency directory root")?;
         let session = root.join(crate::session::FILE).try_exists()?;
-        return crate::partitions::files(false).try_fold(0u64, |size, (index, name)| {
-            let file = root.join(name);
-            if session && crate::partitions::attribution_only(index) && !file.try_exists()? {
-                return Ok(size);
-            }
-            size.checked_add(FileStamp::read_native(&file)?.size)
+        return crate::partitions::files(session).try_fold(0u64, |size, (_, name)| {
+            size.checked_add(FileStamp::read_native(&root.join(name))?.size)
                 .context("dependency ledger byte count overflow")
         });
     }

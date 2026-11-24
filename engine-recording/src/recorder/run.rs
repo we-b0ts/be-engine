@@ -285,7 +285,9 @@ impl Recorder {
                     "recording inventory could not be completed; partial ledger was sealed",
                 );
             }
-            write_global_dependency_summary(&self.run_dir, self.evidence.clone()).await?;
+            if !self.session_events {
+                write_global_dependency_summary(&self.run_dir, self.evidence.clone()).await?;
+            }
             let mut unfinished = Vec::new();
             for case in self.unfinished_staging_cases().await? {
                 let failed_dir = self.move_case_to_failed(&case).await?;

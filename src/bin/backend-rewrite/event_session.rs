@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 use traffic_e2e::{
-    E2eEventSessionOptions, E2eEventSessionResult, config::regression::RegressionScope,
+    E2eEventSessionOptions, E2eEventSessionResult, config::regression::SessionRegression,
     repository::LOCAL_ARTIFACTS_ROOT, run_e2e_event_session, session,
 };
 
@@ -63,7 +63,7 @@ enum SessionCommand {
 
 pub(super) async fn run(target_root: PathBuf, args: SessionArgs, pretty: bool) -> Result<()> {
     let target_root = target_root.canonicalize()?;
-    let scope = RegressionScope::load(&target_root)?;
+    let scope = SessionRegression::load(&target_root)?;
     let id = args
         .recording_run_id
         .or(scope.recording_run_id)
@@ -71,10 +71,6 @@ pub(super) async fn run(target_root: PathBuf, args: SessionArgs, pretty: bool) -
     let recording_root = resolve_recording(&target_root, &id)?;
     match args.command {
         SessionCommand::Run { run_key } => {
-            ensure!(
-                (1..=16).contains(&scope.max_implementers),
-                "session regressions require max_implementers between 1 and 16"
-            );
             let result = run_e2e_event_session(E2eEventSessionOptions {
                 target_root: target_root.clone(),
                 recording_root: recording_root.clone(),
