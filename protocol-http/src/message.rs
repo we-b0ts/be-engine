@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessage};
 mod response;
 pub use response::ResponseMessage;
+pub(crate) use response::{CHUNKED_HEADER, StreamResponse};
 
 pub struct RequestMessage {
     pub method: String,

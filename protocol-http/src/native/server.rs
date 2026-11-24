@@ -1,11 +1,25 @@
 //! Native HTTP request parsing delegates value matching and actual response writes.
 use super::*;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use traffic_protocol::connection::{ConnectionIo, NativeFuture, RequestHost, ResponseFramer};
 
 pub(super) struct Server;
-struct Framer;
-impl ResponseFramer for Framer {}
+struct Framer {
+    check_http10_head: bool,
+}
+
+impl ResponseFramer for Framer {
+    fn frame(&mut self, bytes: Bytes) -> Result<Bytes> {
+        if std::mem::take(&mut self.check_http10_head) {
+            let chunked = bytes
+                .split(|byte| *byte == b'\n')
+                .take_while(|line| *line != b"\r")
+                .any(|line| line.strip_suffix(b"\r") == Some(crate::message::CHUNKED_HEADER));
+            ensure!(!chunked, "chunked HTTP Replay requires an HTTP/1.1 request");
+        }
+        Ok(bytes)
+    }
+}
 
 impl ServerSession for Server {
     fn run(
@@ -38,11 +52,34 @@ impl ServerSession for Server {
                     request
                 };
                 let delivery = host.execute(request).await?;
-                delivery.write(&mut reader.io, &mut Framer).await?;
+                let mut framer = Framer {
+                    check_http10_head: !http11,
+                };
+                delivery.write(&mut reader.io, &mut framer).await?;
             }
             reader.io.shutdown().await?;
             Ok(())
         })
     }
 }
-use tokio::io::AsyncBufReadExt;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http10_rejects_chunked_framing_only_in_the_response_head() {
+        let mut framer = Framer {
+            check_http10_head: true,
+        };
+        let wire = Bytes::from_static(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n");
+        assert!(framer.frame(wire).is_err());
+
+        let mut framer = Framer {
+            check_http10_head: true,
+        };
+        let wire = Bytes::from_static(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 26\r\n\r\ntransfer-encoding: chunked",
+        );
+        assert_eq!(framer.frame(wire.clone()).unwrap(), wire);
+    }
+}

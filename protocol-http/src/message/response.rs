@@ -1,7 +1,10 @@
-//! Finite HTTP response values and native HTTP/1 rendering.
+//! HTTP response values and shared HTTP/1 header rendering.
 use super::*;
 use traffic_protocol::message::MessageEncoder;
 use traffic_protocol::output::{BufferedOutput, OutputBoundary, OutputChunk, OutputStream};
+
+mod stream;
+pub(crate) use stream::{CHUNKED_HEADER, StreamResponse};
 
 pub struct ResponseMessage {
     pub status: u16,
@@ -92,11 +95,48 @@ impl MessageEncoder for ResponseMessage {
     }
 
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes> {
+        let status = hyper::StatusCode::from_u16(self.status)?;
+        let mut bytes = self.encode_headers(status, values)?;
+        let body = &values["/body"];
+        if self.head_request {
+            let source = crate::headers::normalized(&self.headers);
+            if let Some(length) = source
+                .get("content-length")
+                .and_then(|values| values.first())
+            {
+                let length = length.parse::<usize>()?;
+                bytes.extend_from_slice(format!("content-length: {length}\r\n").as_bytes());
+            }
+        } else if self.allows_body(status) {
+            bytes.extend_from_slice(format!("content-length: {}\r\n", body.len()).as_bytes());
+        } else {
+            ensure!(body.is_empty(), "bodyless HTTP response contains payload");
+        }
+        bytes.extend_from_slice(b"connection: close\r\n\r\n");
+        if !self.head_request {
+            bytes.extend_from_slice(body);
+        }
+        Ok(bytes.into())
+    }
+}
+
+impl ResponseMessage {
+    fn allows_body(&self, status: hyper::StatusCode) -> bool {
+        !self.head_request
+            && !status.is_informational()
+            && status != hyper::StatusCode::NO_CONTENT
+            && status != hyper::StatusCode::NOT_MODIFIED
+    }
+
+    fn encode_headers(
+        &self,
+        status: hyper::StatusCode,
+        values: &BTreeMap<String, Bytes>,
+    ) -> Result<Vec<u8>> {
         ensure!(
             self.project()?.values.keys().eq(values.keys()),
             "HTTP response value inventory changed"
         );
-        let status = hyper::StatusCode::from_u16(self.status)?;
         ensure!(
             status != hyper::StatusCode::SWITCHING_PROTOCOLS,
             "HTTP upgrades require an installed streaming capability"
@@ -121,29 +161,7 @@ impl MessageEncoder for ResponseMessage {
                 bytes.extend_from_slice(b"\r\n");
             }
         }
-        let body = &values["/body"];
-        if self.head_request {
-            let source = crate::headers::normalized(&self.headers);
-            if let Some(length) = source
-                .get("content-length")
-                .and_then(|values| values.first())
-            {
-                let length = length.parse::<usize>()?;
-                bytes.extend_from_slice(format!("content-length: {length}\r\n").as_bytes());
-            }
-        } else if !status.is_informational()
-            && status != hyper::StatusCode::NO_CONTENT
-            && status != hyper::StatusCode::NOT_MODIFIED
-        {
-            bytes.extend_from_slice(format!("content-length: {}\r\n", body.len()).as_bytes());
-        } else {
-            ensure!(body.is_empty(), "bodyless HTTP response contains payload");
-        }
-        bytes.extend_from_slice(b"connection: close\r\n\r\n");
-        if !self.head_request {
-            bytes.extend_from_slice(body);
-        }
-        Ok(bytes.into())
+        Ok(bytes)
     }
 }
 

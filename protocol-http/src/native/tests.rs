@@ -4,6 +4,7 @@ use traffic_protocol::ProtocolId;
 use traffic_protocol::{
     connection::{NativeFuture, RequestHost, ResponseDelivery, ResponseFramer},
     message::{MessageEncoder, ProtocolMessage},
+    output::OutputBoundary,
 };
 use traffic_replay::{
     ReplaySource,
@@ -329,6 +330,127 @@ fn native_replay_cannot_prepare_or_encode_switching_protocols() {
             )]))
             .is_err()
     );
+}
+
+fn sse_event() -> Value {
+    serde_json::json!({
+        "event_type": "http_exchange",
+        "id": uuid::Uuid::nil(),
+        "scheme": "https",
+        "authority": "api.test:443",
+        "method": "POST",
+        "uri": "/messages",
+        "request_headers": {"Host": ["api.test"]},
+        "request_body": {"encoding": "utf8", "data": "{}", "truncated": false},
+        "response_status": 200,
+        "response_headers": {
+            "Content-Type": ["text/event-stream; charset=utf-8"],
+            "Content-Length": ["18"],
+            "X-Request-Id": ["source-id"],
+        },
+        "response_body": {
+            "encoding": "utf8", "data": "data: a\n\ndata: b\n\n", "truncated": false
+        },
+        "response_stream": {
+            "version": 2,
+            "headers_ms": 10,
+            "chunks": [
+                {"start": 0, "end": 7, "at_ms": 15},
+                {"start": 7, "end": 18, "at_ms": 25},
+            ],
+            "end_ms": 30,
+            "complete": true,
+        },
+    })
+}
+
+#[test]
+fn native_replay_preserves_recorded_sse_boundaries_with_chunked_framing() {
+    let response = Native
+        .recorded_exchange(&sse_event())
+        .unwrap()
+        .unwrap()
+        .response;
+    let mut values: std::collections::BTreeMap<_, _> = response
+        .project()
+        .unwrap()
+        .values
+        .into_iter()
+        .map(|(path, value)| (path, value.bytes))
+        .collect();
+    let header = response
+        .locate(&serde_json::json!({"kind": "header", "name": "x-request-id"}))
+        .unwrap()
+        .pop()
+        .unwrap();
+    values.insert(header, Bytes::from_static(b"target-id"));
+
+    let mut output = response.output(&values).unwrap();
+    assert_eq!(output.part_count(), 2);
+    let mut events = Vec::new();
+    let mut pending = Vec::new();
+    let mut boundary = None;
+    while let Some(chunk) = output.next().unwrap() {
+        assert_eq!(*boundary.get_or_insert(chunk.boundary), chunk.boundary);
+        pending.extend_from_slice(&chunk.bytes);
+        if chunk.complete {
+            events.push((boundary.take().unwrap(), std::mem::take(&mut pending)));
+        }
+    }
+    assert!(boundary.is_none());
+    let [
+        (OutputBoundary::Headers, headers),
+        (OutputBoundary::Part, first),
+        (OutputBoundary::Part, second),
+        (OutputBoundary::End, end),
+    ] = events.as_slice()
+    else {
+        panic!("SSE response emitted unexpected logical boundaries");
+    };
+    let headers = std::str::from_utf8(headers).unwrap().to_ascii_lowercase();
+    assert!(headers.starts_with("http/1.1 200 ok\r\n"));
+    assert!(headers.contains("content-type: text/event-stream; charset=utf-8\r\n"));
+    assert!(headers.contains("transfer-encoding: chunked\r\n"));
+    assert!(headers.contains("x-request-id: target-id\r\n"));
+    assert!(!headers.contains("content-length:"));
+    assert!(headers.ends_with("\r\n\r\n"));
+    assert_eq!(first, b"7\r\ndata: a\r\n");
+    assert_eq!(second, b"b\r\n\n\ndata: b\n\n\r\n");
+    assert_eq!(end, b"0\r\n\r\n");
+}
+
+#[test]
+fn native_replay_rejects_sse_without_complete_consistent_stream_evidence() {
+    let mut missing = sse_event();
+    missing.as_object_mut().unwrap().remove("response_stream");
+    let mut incomplete = sse_event();
+    incomplete["response_stream"]["complete"] = false.into();
+    let mut gap = sse_event();
+    gap["response_stream"]["chunks"][1]["start"] = 8.into();
+    for event in [missing, incomplete, gap] {
+        assert!(Native.recorded_exchange(&event).is_err());
+    }
+}
+
+#[test]
+fn native_replay_requires_unchanged_sse_body_bytes() {
+    let response = Native
+        .recorded_exchange(&sse_event())
+        .unwrap()
+        .unwrap()
+        .response;
+    let mut values: std::collections::BTreeMap<_, _> = response
+        .project()
+        .unwrap()
+        .values
+        .into_iter()
+        .map(|(path, value)| (path, value.bytes))
+        .collect();
+    values.insert(
+        "/body".into(),
+        Bytes::from_static(b"data: x\n\ndata: b\n\n"),
+    );
+    assert!(response.output(&values).is_err());
 }
 
 #[tokio::test]
