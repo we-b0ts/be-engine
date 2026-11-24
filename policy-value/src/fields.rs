@@ -679,8 +679,16 @@ impl<'a> FieldPlan<'a> {
         Vec<SelectedGlobalField>,
     )> {
         let projection = traffic_contract::compare::LogicalProjection::new(source)?;
-        let fields = self.select_fields(projection.json(), clocks, Some(source))?;
+        let fields = self.select_projected_fields(&projection, clocks)?;
         Ok((projection, fields))
+    }
+
+    pub fn select_projected_fields(
+        &self,
+        source: &traffic_contract::compare::LogicalProjection<'_>,
+        clocks: AnchorClocks,
+    ) -> Result<Vec<SelectedGlobalField>> {
+        self.select_fields(source.json(), clocks, Some(source.logical()))
     }
 
     fn select_fields(

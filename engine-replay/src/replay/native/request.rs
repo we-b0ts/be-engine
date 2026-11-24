@@ -119,12 +119,26 @@ impl Inventory {
         observed: DateTime<Utc>,
         loaded: &mut LoadedResponse,
         storage: &super::StorageDelivery,
-    ) -> Result<ResponsePlan> {
+    ) -> Result<(ResponsePlan, bool)> {
         if let Some(source) = &mut loaded.source {
             self.contracts.observe_source_comparison(&Comparison {
                 evaluated: std::mem::take(&mut source.observed_rules),
                 ..Comparison::default()
             });
+            if let Some(packet) = source.packet.take()
+                && self.event_session
+                && storage.is_empty()
+                && packet.is_current(self.contracts.as_ref(), Self::EVENT_SESSION_VALUE_SCOPE)
+            {
+                return Ok((
+                    ResponsePlan {
+                        output: Box::new(traffic_protocol::output::SingleOutput::new(packet.bytes)),
+                        comparison: packet.comparison,
+                        identity: packet.identity,
+                    },
+                    true,
+                ));
+            }
         }
         self.render_loaded_response(
             index,
@@ -133,6 +147,7 @@ impl Inventory {
             loaded.source.as_ref(),
             storage,
         )
+        .map(|plan| (plan, false))
     }
 
     fn render_loaded_response(
@@ -171,7 +186,7 @@ impl Inventory {
         let scope = self.scope(index);
         let clocks = self.clocks(index, observed, true);
         let storage_values = self.storage_values(index, storage, response)?;
-        let rendered = response.render_delivery_with_lazy_documents(
+        let rendered = response.render_delivery_with_prepared_documents(
             clocks,
             self.contracts.metadata(),
             &exchange.delivery,
@@ -181,7 +196,12 @@ impl Inventory {
                     .identity_deliveries(&scope, selected)
                     .map(|(values, _)| values)
             },
-            |source, delivered| {
+            |source, delivered, prepared| {
+                if let Some(prepared) = prepared
+                    && prepared.apply(&scope, source, delivered, clocks)?
+                {
+                    return Ok(());
+                }
                 self.contracts
                     .translate_delivery_document(&scope, source, delivered, clocks)
             },

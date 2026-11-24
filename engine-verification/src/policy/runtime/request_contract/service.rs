@@ -51,6 +51,14 @@ impl ValueRuleHost for RequestContracts {
         true
     }
 
+    fn prefetch_delivery_revision(&self, scope: &str) -> Option<u64> {
+        self.values.prefetch_delivery_revision(scope)
+    }
+
+    fn prefetched_identity_is_current(&self, proposed: &IdentityDecision) -> bool {
+        self.values.prefetched_identity_is_current(proposed)
+    }
+
     fn translate_document(
         &self,
         scope: &str,

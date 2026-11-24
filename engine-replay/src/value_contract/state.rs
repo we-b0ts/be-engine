@@ -40,15 +40,17 @@ impl ValueState {
     }
 
     fn identity_scope(&self, scope: &str) -> IdentityScope {
-        if self
-            .session_scope
-            .get()
-            .is_some_and(|session| session == scope)
-        {
+        if self.is_session_identity_scope(scope) {
             IdentityScope::Session
         } else {
             IdentityScope::Case(scope.into())
         }
+    }
+
+    pub fn is_session_identity_scope(&self, scope: &str) -> bool {
+        self.session_scope
+            .get()
+            .is_some_and(|session| session == scope)
     }
 
     pub fn preview(&self, scope: &str, pairs: &[IdentityPair]) -> Result<IdentityDecision> {
@@ -63,6 +65,16 @@ impl ValueState {
             .lock()
             .expect("identity contracts")
             .validate_with_preview(decision, self.identity_preview.as_deref())
+    }
+
+    pub fn prefetched_identity_is_current(&self, proposed: &IdentityDecision) -> bool {
+        self.session_scope.get().is_some()
+            && self.identity_preview.is_none()
+            && self
+                .identities
+                .lock()
+                .expect("identity contracts")
+                .prefetched_session_identity_is_current(proposed)
     }
 
     pub fn with_identity_preview(&self, decision: IdentityDecision) -> Result<Self> {
@@ -132,6 +144,33 @@ impl ValueState {
             )
     }
 
+    pub fn prefetch_session_identity_deliveries(
+        &self,
+        selected: &[IdentityDelivery<'_>],
+    ) -> Result<Option<(Vec<Value>, IdentityDecision)>> {
+        if self.session_scope.get().is_none()
+            || self.identity_preview.is_some()
+            || selected.is_empty()
+        {
+            return Ok(None);
+        }
+        ensure!(
+            selected.len() <= 4096,
+            "identity delivery leaf bound exceeded"
+        );
+        let prepared = selected
+            .iter()
+            .copied()
+            .map(|selected| selected.prepare(traffic_extensions::policies()))
+            .collect::<Result<_>>()?;
+        let snapshot = self
+            .identities
+            .lock()
+            .expect("identity contracts")
+            .committed_session_delivery(prepared);
+        snapshot.map(|snapshot| snapshot.resolve()).transpose()
+    }
+
     pub fn clear(&self, scope: &str) {
         self.identities
             .lock()
@@ -148,6 +187,19 @@ impl ValueRuleHost for ValueState {
 
     fn prefetch_source_response(&self) -> bool {
         true
+    }
+
+    fn prefetch_delivery_revision(&self, scope: &str) -> Option<u64> {
+        (self.identity_preview.is_none() && self.is_session_identity_scope(scope)).then(|| {
+            self.identities
+                .lock()
+                .expect("identity contracts")
+                .revision()
+        })
+    }
+
+    fn prefetched_identity_is_current(&self, proposed: &IdentityDecision) -> bool {
+        Self::prefetched_identity_is_current(self, proposed)
     }
 
     fn translate_delivery_document(

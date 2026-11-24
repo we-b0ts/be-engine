@@ -38,6 +38,10 @@ impl std::fmt::Debug for Observations {
 }
 
 impl Observations {
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty()
+    }
+
     pub fn observe(
         &mut self,
         descriptor: &PolicyDescriptor,

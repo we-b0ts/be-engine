@@ -117,6 +117,15 @@ impl IdentityDecision {
         self.pairs.is_empty()
     }
 
+    pub fn retained_bytes(&self) -> usize {
+        self.pairs.capacity() * std::mem::size_of::<PreparedPair>()
+            + self
+                .pairs
+                .iter()
+                .map(|pair| pair.pair.source.capacity() + pair.pair.target.capacity())
+                .sum::<usize>()
+    }
+
     pub fn prepare(case: &str, pairs: Vec<IdentityPair>) -> Result<Self> {
         Self::prepare_in_scope(IdentityScope::Case(case.into()), pairs)
     }
@@ -181,6 +190,7 @@ pub struct IdentityStore {
     session_limit: Option<usize>,
     entities: usize,
     bytes: usize,
+    revision: u64,
 }
 
 pub struct IdentityPreview {
@@ -206,6 +216,18 @@ impl std::fmt::Debug for IdentityStore {
 }
 
 impl IdentityStore {
+    /// Identifies the current committed correspondences in this store.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn advance_revision(&mut self) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("identity revision overflow");
+    }
+
     /// Only an authenticated finite Session plan may configure this scope.
     pub fn configure_session(&mut self, dependency_count: usize) -> Result<()> {
         ensure!(
@@ -224,6 +246,7 @@ impl IdentityStore {
         if let Some(case) = self.scopes.remove(&IdentityScope::Case(case.into())) {
             self.entities -= case.entities;
             self.bytes -= case.bytes;
+            self.advance_revision();
         }
     }
 
@@ -370,11 +393,43 @@ impl IdentityStore {
             .is_some_and(|(target, _)| target == pair.target))
     }
 
+    /// Recheck a previously validated delivery proposal against committed Session
+    /// state. The producer has already validated the pairs as one proposal.
+    pub fn prefetched_session_identity_is_current(&self, decision: &IdentityDecision) -> bool {
+        let Some(limit) = self.session_limit else {
+            return false;
+        };
+        if decision.scope != IdentityScope::Session {
+            return false;
+        }
+        let bindings = self.scopes.get(&IdentityScope::Session);
+        let mut new_entities = 0usize;
+        let mut new_bytes = 0usize;
+        for pair in &decision.pairs {
+            if let Some((target, _)) = bindings.and_then(|scope| scope.forward.get(&pair.source)) {
+                // The committed forward and reverse maps are always paired.
+                if *target != pair.target {
+                    return false;
+                }
+                continue;
+            }
+            if bindings.is_some_and(|scope| scope.reverse.contains_key(&pair.target)) {
+                return false;
+            }
+            // Duplicates conservatively count against capacity on this path.
+            new_entities += 1;
+            new_bytes = new_bytes.saturating_add(pair.pair.target.len());
+        }
+        bindings.map_or(0, |scope| scope.entities) + new_entities <= limit
+            && self.bytes.saturating_add(new_bytes) <= MAX_RUN_BYTES
+    }
+
     pub fn commit(&mut self, decision: IdentityDecision) -> Result<()> {
         self.validate(&decision)?;
         if decision.pairs.is_empty() {
             return Ok(());
         }
+        let previous_entities = self.entities;
         let bindings = self.scopes.entry(decision.scope).or_default();
         for pair in decision.pairs {
             if bindings.forward.contains_key(&pair.source) {
@@ -388,6 +443,9 @@ impl IdentityStore {
             bindings.reverse.insert(pair.target, pair.source);
             bindings.entities += 1;
             self.entities += 1;
+        }
+        if self.entities != previous_entities {
+            self.advance_revision();
         }
         Ok(())
     }
@@ -419,22 +477,27 @@ impl IdentityStore {
             let (target_hash, token) = self
                 .target(&scope, &selected.source_hash, preview)
                 .unwrap_or((selected.source_hash, selected.source.as_str()));
-            let value: Value =
-                serde_json::from_str(token).context("invalid typed identity delivery")?;
-            selected.validate(&value)?;
+            let (value, pair) = selected.resolve(target_hash, token)?;
             values.push(value);
-            pairs.push(PreparedPair {
-                pair: IdentityPair {
-                    source: selected.source.clone(),
-                    target: token.to_owned(),
-                },
-                source: selected.source_hash,
-                target: target_hash,
-            });
+            pairs.push(pair);
         }
         let decision = IdentityDecision { scope, pairs };
         self.validate_with_preview(&decision, preview)?;
         Ok((values, decision))
+    }
+
+    /// Read only committed Session bindings, where a positive lookup is fixed
+    /// for the duration of Replay. A missing binding must be resolved later.
+    pub fn committed_session_delivery(
+        &self,
+        selected: Vec<PreparedIdentityDelivery>,
+    ) -> Option<CommittedSessionDelivery> {
+        let bindings = self.scopes.get(&IdentityScope::Session)?;
+        let targets = selected
+            .iter()
+            .map(|identity| bindings.forward.get(&identity.source_hash).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(CommittedSessionDelivery { selected, targets })
     }
 
     fn target<'a>(
@@ -452,6 +515,46 @@ impl IdentityStore {
                     .filter(|preview| &preview.decision.scope == scope)?
                     .target(source)
             })
+    }
+}
+
+/// An owned read of committed Session bindings. Typed validation and construction
+/// of the proposal can run after the store guard has been released.
+pub struct CommittedSessionDelivery {
+    selected: Vec<PreparedIdentityDelivery>,
+    targets: Vec<(Fingerprint, Box<str>)>,
+}
+
+impl CommittedSessionDelivery {
+    pub fn resolve(self) -> Result<(Vec<Value>, IdentityDecision)> {
+        ensure!(
+            self.selected.len() <= MAX_PROPOSAL_PAIRS
+                && self
+                    .selected
+                    .iter()
+                    .zip(&self.targets)
+                    .try_fold(0usize, |bytes, (source, (_, target))| {
+                        bytes
+                            .checked_add(source.source.len())?
+                            .checked_add(target.len())
+                    },)
+                    .is_some_and(|bytes| bytes <= MAX_PROPOSAL_BYTES),
+            "identity proposal bound exceeded"
+        );
+        let mut values = Vec::with_capacity(self.selected.len());
+        let mut pairs = Vec::with_capacity(self.selected.len());
+        for (source, (target_hash, token)) in self.selected.into_iter().zip(self.targets) {
+            let (value, pair) = source.resolve(target_hash, &token)?;
+            values.push(value);
+            pairs.push(pair);
+        }
+        Ok((
+            values,
+            IdentityDecision {
+                scope: IdentityScope::Session,
+                pairs,
+            },
+        ))
     }
 }
 
@@ -480,6 +583,22 @@ impl PreparedIdentityDelivery {
             "identity representation is invalid"
         );
         Ok(())
+    }
+
+    fn resolve(&self, target_hash: Fingerprint, token: &str) -> Result<(Value, PreparedPair)> {
+        let value = serde_json::from_str(token).context("invalid typed identity delivery")?;
+        self.validate(&value)?;
+        Ok((
+            value,
+            PreparedPair {
+                pair: IdentityPair {
+                    source: self.source.clone(),
+                    target: token.to_owned(),
+                },
+                source: self.source_hash,
+                target: target_hash,
+            },
+        ))
     }
 }
 

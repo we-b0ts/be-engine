@@ -25,6 +25,24 @@ impl std::fmt::Debug for Bijection {
 mod tests;
 
 impl Bijection {
+    pub(super) fn prefetch_retained_bytes(&self) -> usize {
+        if self.forward.is_empty() {
+            return 0;
+        }
+        let nodes = btree_retained_bytes::<[u8; 32], [u8; 32]>(self.forward.len())
+            .saturating_add(btree_retained_bytes::<[u8; 32], [u8; 32]>(
+                self.reverse.len(),
+            ))
+            .saturating_add(btree_retained_bytes::<[u8; 32], (String, String)>(
+                self.tokens.len(),
+            ));
+        self.tokens.values().fold(nodes, |bytes, (source, target)| {
+            bytes
+                .saturating_add(source.capacity())
+                .saturating_add(target.capacity())
+        })
+    }
+
     fn bind(&mut self, source: [u8; 32], target: [u8; 32]) -> Result<(), &'static str> {
         if self.forward.get(&source).is_some_and(|v| *v != target)
             || self.reverse.get(&target).is_some_and(|v| *v != source)

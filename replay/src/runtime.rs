@@ -39,6 +39,14 @@ struct State {
 }
 
 impl State {
+    fn should_wake_requests(&self) -> bool {
+        self.scheduler.failed()
+            || self
+                .scheduler
+                .expected()
+                .is_none_or(|event| event.kind == EventKind::Request)
+    }
+
     fn record_progress(&mut self, previous: Option<SourceEvent>) {
         if self.scheduler.previous() != previous {
             self.progressed_at = Some(Instant::now());
@@ -173,8 +181,9 @@ impl SequenceRuntime {
         let previous = state.scheduler.previous();
         state.scheduler.commit_driver(sequence)?;
         state.record_progress(previous);
+        let wake_requests = state.should_wake_requests();
         drop(state);
-        self.notify();
+        self.notify(wake_requests);
         Ok(())
     }
 
@@ -210,8 +219,9 @@ impl SequenceRuntime {
                 && state.scheduler.event_gates.remove(&sequence),
             "event gate is stale or already released"
         );
+        let wake_requests = state.should_wake_requests();
         drop(state);
-        self.notify();
+        self.notify(wake_requests);
         Ok(())
     }
 
@@ -246,20 +256,13 @@ impl SequenceRuntime {
             .expect("sequence runtime poisoned")
             .scheduler
             .abort();
-        self.notify();
+        self.notify(true);
     }
 
-    fn notify(&self) {
+    fn notify(&self, wake_requests: bool) {
         self.changed
             .send_modify(|revision| *revision = revision.wrapping_add(1));
-        let state = self.state.lock().expect("sequence runtime poisoned");
-        let request = state.scheduler.failed()
-            || state
-                .scheduler
-                .expected()
-                .is_none_or(|event| event.kind == EventKind::Request);
-        drop(state);
-        if request {
+        if wake_requests {
             self.wake_requests();
         }
     }
@@ -274,8 +277,9 @@ impl SequenceRuntime {
         if self.tracks_progress() {
             state.record_progress(previous);
         }
+        let wake_requests = state.should_wake_requests();
         drop(state);
-        self.notify();
+        self.notify(wake_requests);
         Ok(SequenceClaim(Arc::new(Claim {
             runtime: self.clone(),
             dependency,
@@ -383,6 +387,12 @@ impl SequenceClaim {
             _ => None,
         }
     }
+
+    /// A reserved output may be invalidated by a failure on another connection.
+    pub fn sequence_failed(&self) -> bool {
+        self.0.runtime.failed()
+    }
+
     pub fn fail(&self) {
         let mut delivery = self.0.delivery.lock().expect("sequence delivery poisoned");
         let mut state = self
@@ -397,7 +407,7 @@ impl SequenceClaim {
             *delivery = Delivery::Failed;
             drop(state);
             drop(delivery);
-            self.0.runtime.notify();
+            self.0.runtime.notify(true);
         }
     }
     pub async fn wait_delivery(&self, deadline: Instant) -> Result<()> {
@@ -420,10 +430,10 @@ impl SequenceClaim {
         after_headers: bool,
         after: Option<u64>,
     ) -> Result<()> {
-        let mut changed = self.0.runtime.subscribe();
+        let mut changes = None;
         loop {
             let mut due = None;
-            {
+            let changed = {
                 let mut delivery = self.0.delivery.lock().expect("sequence delivery poisoned");
                 let mut state = self
                     .0
@@ -443,11 +453,12 @@ impl SequenceClaim {
                 {
                     return Ok(());
                 }
-                let headers = state
-                    .scheduler
-                    .expected()
-                    .is_some_and(|event| event.kind.delivered() == EventKind::ResponseHeaders);
-                if matches!(*delivery, Delivery::Waiting) && !(after_headers && headers) {
+                let waiting_for_headers = after_headers
+                    && state
+                        .scheduler
+                        .expected()
+                        .is_some_and(|event| event.kind.delivered() == EventKind::ResponseHeaders);
+                if matches!(*delivery, Delivery::Waiting) && !waiting_for_headers {
                     due = self
                         .0
                         .runtime
@@ -462,14 +473,17 @@ impl SequenceClaim {
                             if self.0.runtime.tracks_progress() {
                                 state.record_progress(previous);
                             }
+                            let wake_requests = state.should_wake_requests();
                             drop(state);
                             drop(delivery);
-                            self.0.runtime.notify();
+                            self.0.runtime.notify(wake_requests);
                             return Ok(());
                         }
                     }
                 }
-            }
+                // Subscribe before releasing the lock that protects the cursor.
+                changes.get_or_insert_with(|| self.0.runtime.subscribe())
+            };
             if let Some(due) = due.filter(|due| *due < deadline) {
                 tokio::select! {
                     result = changed.changed() => { result.context("recorded output sequence closed")?; }
@@ -561,9 +575,10 @@ impl SequenceClaim {
             Delivery::Waiting
         };
         delivery.refresh(&state.scheduler);
+        let wake_requests = state.should_wake_requests();
         drop(state);
         drop(delivery);
-        self.0.runtime.notify();
+        self.0.runtime.notify(wake_requests);
         Ok(())
     }
     pub fn complete(&self) -> bool {

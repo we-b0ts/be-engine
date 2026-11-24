@@ -8,8 +8,17 @@ pub mod url;
 type Check<'a> = Box<dyn Fn(LeafContext<'_>) -> Result<LeafObservations, String> + 'a>;
 pub struct FormatChecks<'a> {
     checks: Vec<(String, Check<'a>)>,
+    clock_independent: bool,
 }
 impl FormatChecks<'_> {
+    pub fn clock_independent(&self) -> bool {
+        self.clock_independent
+    }
+
+    pub fn pointers(&self) -> impl Iterator<Item = &str> {
+        self.checks.iter().map(|(pointer, _)| pointer.as_str())
+    }
+
     pub fn fields(&self) -> Vec<VerifiedField<'_>> {
         self.checks
             .iter()
@@ -26,6 +35,7 @@ pub fn checks<'a>(
     source: &serde_json::Value,
 ) -> anyhow::Result<FormatChecks<'a>> {
     let mut checks: Vec<(String, Check<'a>)> = Vec::new();
+    let mut clock_independent = true;
     for (pattern, field) in plan.fields() {
         if let GlobalField::Template { formats } = field {
             for pointer in plan.select_paths(pattern, source)? {
@@ -38,6 +48,7 @@ pub fn checks<'a>(
         }
         if let GlobalField::Jwt { signature } = field {
             for pointer in plan.select_paths(pattern, source)? {
+                clock_independent = false;
                 checks.push((
                     pointer,
                     Box::new(move |context| jwt::compare(context, plan, signature)),
@@ -49,6 +60,7 @@ pub fn checks<'a>(
             continue;
         };
         for pointer in plan.select_paths(pattern, source)? {
+            clock_independent = false;
             anyhow::ensure!(
                 source
                     .pointer(&pointer)
@@ -72,7 +84,10 @@ pub fn checks<'a>(
             ));
         }
     }
-    Ok(FormatChecks { checks })
+    Ok(FormatChecks {
+        checks,
+        clock_independent,
+    })
 }
 /// Compact JWT syntax only. Claims and signatures remain opaque token content;
 /// correspondence uses the complete typed string, never a decoded field.

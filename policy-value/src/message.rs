@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use traffic_contract::{
     codec::{Codec, CodecPlan, DecodedDocument},
-    compare::{self, AnchorClocks, Comparison, Field, RuleMetadata},
+    compare::{self, AnchorClocks, Comparison, Field, LogicalProjection, RuleMetadata},
     comparison::Difference,
     rule::FieldContract,
 };
@@ -15,7 +15,10 @@ use traffic_protocol::message::{
 use traffic_value::codec::CodecRegistry;
 
 mod delivery;
-pub use delivery::{RenderedMessage, StoredValue};
+pub use delivery::{
+    PrefetchedMessage, PreparedDeliveryGuard, PreparedDocumentDelivery, RenderedMessage,
+    StoredValue,
+};
 mod registry;
 pub use registry::{BindingRegistry, MessageSide};
 
@@ -36,12 +39,25 @@ pub struct RuleBinding {
 
 /// Prepared content rules operate on decoded documents from every native carrier.
 pub trait DocumentPolicy: Send + Sync {
+    fn prepare_delivery(
+        &self,
+        _source: &Value,
+    ) -> Result<Option<Box<dyn PreparedDocumentDelivery>>> {
+        Ok(None)
+    }
+
     fn paths(&self, source: &traffic_value::Value) -> Result<Vec<String>>;
     fn prepare_source(&self, source: &traffic_value::Value) -> Result<DocumentPolicyPreparation> {
         Ok(DocumentPolicyPreparation {
             paths: self.paths(source)?,
             comparison: None,
         })
+    }
+    fn prepare_projected_source(
+        &self,
+        source: &LogicalProjection<'_>,
+    ) -> Result<DocumentPolicyPreparation> {
+        self.prepare_source(source.logical())
     }
     fn compare(
         &self,
@@ -50,6 +66,15 @@ pub trait DocumentPolicy: Send + Sync {
         fields: &[Field<'_>],
         clocks: AnchorClocks,
     ) -> Result<Comparison>;
+    fn compare_projected(
+        &self,
+        source: &LogicalProjection<'_>,
+        target: &traffic_value::Value,
+        fields: &[Field<'_>],
+        clocks: AnchorClocks,
+    ) -> Result<Comparison> {
+        self.compare(source.logical(), target, fields, clocks)
+    }
 }
 
 pub struct DocumentPolicyPreparation {
@@ -61,6 +86,12 @@ pub struct DocumentPolicyPreparation {
 /// the current Target value to evaluate the selected contracts.
 pub trait PreparedDocumentComparison: Send + Sync {
     fn applies_at(&self, clocks: AnchorClocks) -> bool;
+
+    /// All selected comparison rules are independent of the live Target clocks.
+    fn clock_independent(&self) -> bool {
+        false
+    }
+
     fn compare(
         &self,
         source: &traffic_value::Value,
@@ -68,6 +99,15 @@ pub trait PreparedDocumentComparison: Send + Sync {
         fields: &[Field<'_>],
         clocks: AnchorClocks,
     ) -> Result<Comparison>;
+    fn compare_projected(
+        &self,
+        source: &LogicalProjection<'_>,
+        target: &traffic_value::Value,
+        fields: &[Field<'_>],
+        clocks: AnchorClocks,
+    ) -> Result<Comparison> {
+        self.compare(source.logical(), target, fields, clocks)
+    }
     fn retained_bytes(&self) -> usize;
 }
 
@@ -84,6 +124,7 @@ struct BoundValue {
     fields: Vec<FieldBinding>,
     pointers: Vec<String>,
     prepared_comparison: Option<Box<dyn PreparedDocumentComparison>>,
+    prepared_delivery: Option<Box<dyn PreparedDocumentDelivery>>,
 }
 
 /// Prepared once per immutable Source message. Each attempted candidate keeps
@@ -180,6 +221,7 @@ impl PreparedMessage {
                             fields: Vec::new(),
                             pointers: Vec::new(),
                             prepared_comparison: None,
+                            prepared_delivery: None,
                         },
                     );
                 }
@@ -218,7 +260,7 @@ impl PreparedMessage {
                     }
                     _ => decode(&plan, &codec, value)?,
                 };
-                let prepared = policy.prepare_source(source.value())?;
+                let prepared = policy.prepare_projected_source(&source.projection())?;
                 if prepared.paths.is_empty() {
                     continue;
                 }
@@ -232,11 +274,12 @@ impl PreparedMessage {
                         fields: Vec::new(),
                         pointers: prepared.paths,
                         prepared_comparison: prepared.comparison,
+                        prepared_delivery: None,
                     },
                 );
             }
             for value in values.values_mut().filter(|value| !value.fields.is_empty()) {
-                let prepared = policy.prepare_source(value.source.value())?;
+                let prepared = policy.prepare_projected_source(&value.source.projection())?;
                 value.pointers.extend(prepared.paths);
                 value.prepared_comparison = prepared.comparison;
             }
@@ -289,6 +332,10 @@ impl PreparedMessage {
                 + bound.pointers.iter().map(String::capacity).sum::<usize>()
                 + bound
                     .prepared_comparison
+                    .as_ref()
+                    .map_or(0, |prepared| prepared.retained_bytes())
+                + bound
+                    .prepared_delivery
                     .as_ref()
                     .map_or(0, |prepared| prepared.retained_bytes());
         }
@@ -357,6 +404,8 @@ impl PreparedMessage {
             };
             let source = bound.source.logical_comparison_view(&bound.pointers);
             let target = target.logical_comparison_view(&bound.pointers);
+            let projection = std::ptr::eq(source.as_ref(), bound.source.value())
+                .then(|| bound.source.projection());
             let fields = bound
                 .fields
                 .iter()
@@ -368,12 +417,17 @@ impl PreparedMessage {
                 .collect::<Vec<_>>();
             let mut comparison = match &self.policy {
                 Some(policy) if !stored => {
-                    let prepared = bound.prepared_comparison.as_ref().filter(|prepared| {
-                        std::ptr::eq(source.as_ref(), bound.source.value())
-                            && prepared.applies_at(clocks)
-                    });
-                    let comparison = match prepared {
-                        Some(prepared) => prepared.compare(&source, &target, &fields, clocks),
+                    let comparison = match projection {
+                        Some(projection) => match bound
+                            .prepared_comparison
+                            .as_ref()
+                            .filter(|prepared| prepared.applies_at(clocks))
+                        {
+                            Some(prepared) => {
+                                prepared.compare_projected(&projection, &target, &fields, clocks)
+                            }
+                            None => policy.compare_projected(&projection, &target, &fields, clocks),
+                        },
                         None => policy.compare(&source, &target, &fields, clocks),
                     };
                     match comparison {
@@ -386,16 +440,28 @@ impl PreparedMessage {
                         }
                     }
                 }
-                _ => compare::compare_logical_all(
-                    &source,
-                    &target,
-                    &fields,
-                    &[],
-                    &[],
-                    clocks,
-                    &[],
-                    metadata,
-                ),
+                _ => match projection {
+                    Some(projection) => compare::compare_projected_logical_all(
+                        &projection,
+                        &target,
+                        &fields,
+                        &[],
+                        &[],
+                        clocks,
+                        &[],
+                        metadata,
+                    ),
+                    None => compare::compare_logical_all(
+                        &source,
+                        &target,
+                        &fields,
+                        &[],
+                        &[],
+                        clocks,
+                        &[],
+                        metadata,
+                    ),
+                },
             };
             comparison.scope_observations(location);
             for difference in &mut comparison.differences {

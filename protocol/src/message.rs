@@ -86,6 +86,12 @@ pub trait MessageEncoder: ProtocolMessage {
         None
     }
 
+    /// Encode an immutable single-frame response for read-ahead. The byte
+    /// estimate covers only heap allocations beyond the retained encoder.
+    fn prefetch_packet(&self, _values: &BTreeMap<String, Bytes>) -> Result<Option<(Bytes, usize)>> {
+        Ok(None)
+    }
+
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes>;
 
     fn output(

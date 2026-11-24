@@ -338,6 +338,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                             storage: Default::default(),
                         };
                         return Ok(Box::new(Delivery {
+                            ready_to_write: false,
                             retain_anchor: false,
                             session_step: None,
                             reference: state.native.core.exchanges[index].native.reference.clone(),
@@ -523,6 +524,7 @@ impl<P: ReplayProtocolSet> Host<P> {
             )
         };
         Ok(Some(Box::new(Delivery {
+            ready_to_write: false,
             retain_anchor: false,
             session_step,
             reference,
@@ -539,6 +541,7 @@ impl<P: ReplayProtocolSet> Host<P> {
 }
 
 struct Delivery<P: ReplayProtocolSet> {
+    ready_to_write: bool,
     retain_anchor: bool,
     session_step: Option<ReplaySessionStep>,
     reference: traffic_model::recording::ProtocolRef,
@@ -557,35 +560,41 @@ struct Delivery<P: ReplayProtocolSet> {
 }
 
 impl<P: ReplayProtocolSet> Delivery<P> {
+    fn ensure_owner_active(&self, state: &RuntimeState<P>) -> Result<()> {
+        let matched = &self.matched;
+        ensure!(
+            state.finalized_at.is_none()
+                && !state.target_session_stopped
+                && (matched.run_owned
+                    || state.admission_epoch == matched.epoch
+                        && state.active_case_id == matched.case
+                        && !state.async_case_quiescing()
+                        && matched
+                            .case
+                            .as_ref()
+                            .is_none_or(|case| !state.target_stop_prepared.contains(case))),
+            "native response owner stopped before delivery"
+        );
+        Ok(())
+    }
+
     async fn wait_ready(&self) -> Result<()> {
         self.matched.ticket.wait_sequence_delivery().await?;
         loop {
-            let (changed, due, fast) =
+            let (changed, due) = {
+                let state = self.state.lock().await;
+                self.ensure_owner_active(&state)?;
+                let due = self
+                    .started
+                    .checked_add(self.matched.delay)
+                    .context("native delivery clock overflow")?;
+                if state.stream_timing == Some(ReplayStreamTiming::Fast)
+                    || tokio::time::Instant::now() >= due
                 {
-                    let state = self.state.lock().await;
-                    ensure!(
-                        state.finalized_at.is_none()
-                            && !state.target_session_stopped
-                            && (self.matched.run_owned
-                                || state.admission_epoch == self.matched.epoch
-                                    && state.active_case_id == self.matched.case
-                                    && !state.async_case_quiescing()
-                                    && self.matched.case.as_ref().is_none_or(|case| !state
-                                        .target_stop_prepared
-                                        .contains(case))),
-                        "native response owner stopped before delivery"
-                    );
-                    (
-                        state.native.core.lifecycle.subscribe(),
-                        self.started
-                            .checked_add(self.matched.delay)
-                            .context("native delivery clock overflow")?,
-                        state.stream_timing == Some(ReplayStreamTiming::Fast),
-                    )
-                };
-            if fast || tokio::time::Instant::now() >= due {
-                return Ok(());
-            }
+                    return Ok(());
+                }
+                (state.native.core.lifecycle.subscribe(), due)
+            };
             tokio::select! {
                 _ = tokio::time::sleep_until(due) => {},
                 _ = changed.changed() => {},
@@ -596,7 +605,11 @@ impl<P: ReplayProtocolSet> Delivery<P> {
 
 impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
     fn ready(&mut self) -> NativeFuture<'_, ()> {
-        Box::pin(self.wait_ready())
+        Box::pin(async move {
+            self.wait_ready().await?;
+            self.ready_to_write = true;
+            Ok(())
+        })
     }
     fn retain_as_anchor(&mut self) {
         self.retain_anchor = true;
@@ -616,9 +629,22 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
         Box::pin(async move {
             let matched = &self.matched;
             let result = async {
-                self.wait_ready().await?;
+                if self.ready_to_write {
+                    // The writer already reserved the first boundary. Check
+                    // for abort before reading or applying response rules.
+                    ensure!(
+                        matched
+                            .ticket
+                            .sequence()
+                            .is_none_or(|sequence| !sequence.sequence_failed()),
+                        "sequence delivery is already finished or failed"
+                    );
+                } else {
+                    self.wait_ready().await?;
+                }
                 let (response, prefetch) = {
                     let state = self.state.lock().await;
+                    self.ensure_owner_active(&state)?;
                     let response = state.native.core.exchanges[matched.index]
                         .native
                         .response
@@ -629,7 +655,7 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                         .and_then(|session| session.prefetch.clone());
                     (response, prefetch)
                 };
-                let mut prefetched = match prefetch {
+                let mut prefetched = match &prefetch {
                     Some(prefetch) => prefetch.take(matched.index).await?,
                     None => None,
                 };
@@ -645,20 +671,9 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                     None
                 };
                 let mut deadline = None;
-                let response = loop {
+                let (response, used_prefetched_packet) = loop {
                     let state = self.state.lock().await;
-                    ensure!(
-                        state.finalized_at.is_none()
-                            && !state.target_session_stopped
-                            && (matched.run_owned
-                                || state.admission_epoch == matched.epoch
-                                    && state.active_case_id == matched.case
-                                    && !state.async_case_quiescing()
-                                    && matched.case.as_ref().is_none_or(|case| !state
-                                        .target_stop_prepared
-                                        .contains(case))),
-                        "native response owner stopped before delivery"
-                    );
+                    self.ensure_owner_active(&state)?;
                     if let Some(wait) = state.native.wait_for_storage_delivery(&matched.storage)? {
                         drop(state);
                         let deadline = *deadline.get_or_insert_with(|| {
@@ -677,15 +692,21 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                             prefetched,
                             &matched.storage,
                         ),
-                        None => state.native.render_response(
-                            matched.index,
-                            matched.observed,
-                            loaded.as_deref(),
-                            &matched.storage,
-                        ),
+                        None => state
+                            .native
+                            .render_response(
+                                matched.index,
+                                matched.observed,
+                                loaded.as_deref(),
+                                &matched.storage,
+                            )
+                            .map(|plan| (plan, false)),
                     };
                     break rendered?;
                 };
+                if used_prefetched_packet && let Some(prefetch) = &prefetch {
+                    prefetch.record_prefetched_packet_use();
+                }
                 let request::ResponsePlan {
                     output: response,
                     comparison,

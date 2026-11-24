@@ -16,6 +16,70 @@ fn decision(case: &str, pairs: Vec<IdentityPair>) -> IdentityDecision {
 }
 
 #[test]
+fn revision_changes_only_with_committed_correspondences() {
+    let mut store = IdentityStore::default();
+    store.configure_session(1).unwrap();
+    let session =
+        |pairs| IdentityDecision::prepare_in_scope(IdentityScope::Session, pairs).unwrap();
+    let first = session(vec![pair("1", "101"), pair("2", "102")]);
+    store.preview(first.clone(), None).unwrap();
+    assert_eq!(store.revision(), 0);
+
+    store.commit(first.clone()).unwrap();
+    assert_eq!(store.revision(), 1);
+    store.commit(first).unwrap();
+    store.commit(session(Vec::new())).unwrap();
+    assert!(store.commit(session(vec![pair("1", "999")])).is_err());
+    assert_eq!(store.revision(), 1);
+
+    store
+        .commit(decision("case", vec![pair("1", "201")]))
+        .unwrap();
+    assert_eq!(store.revision(), 2);
+    store.begin_case("case");
+    assert_eq!(store.revision(), 3);
+    store.begin_case("case");
+    assert_eq!(store.revision(), 3);
+}
+
+#[test]
+fn prefetched_session_identities_recheck_conflicts_after_unrelated_progress() {
+    let mut store = IdentityStore::default();
+    let known = session_decision(vec![pair("1", "101")]);
+    let unbound = session_decision(vec![pair("2", "102")]);
+    let changed_target = session_decision(vec![pair("1", "901")]);
+    let occupied_target = session_decision(vec![pair("9", "101")]);
+    assert!(!store.prefetched_session_identity_is_current(&known));
+    store.configure_session(1).unwrap();
+    for proposed in [&known, &unbound, &changed_target, &occupied_target] {
+        store.validate(proposed).unwrap();
+        assert!(store.prefetched_session_identity_is_current(proposed));
+    }
+
+    store.commit(known.clone()).unwrap();
+    assert!(store.prefetched_session_identity_is_current(&known));
+    assert!(store.prefetched_session_identity_is_current(&unbound));
+    assert!(!store.prefetched_session_identity_is_current(&changed_target));
+    assert!(!store.prefetched_session_identity_is_current(&occupied_target));
+    assert!(!store.prefetched_session_identity_is_current(&decision("session", Vec::new())));
+}
+
+#[test]
+fn prefetched_session_identities_require_room_for_unbound_pairs() {
+    let mut store = IdentityStore {
+        session_limit: Some(1),
+        ..IdentityStore::default()
+    };
+    let first = session_decision(vec![pair("1", "101")]);
+    let second = session_decision(vec![pair("2", "102")]);
+    assert!(store.prefetched_session_identity_is_current(&second));
+
+    store.commit(first.clone()).unwrap();
+    assert!(store.prefetched_session_identity_is_current(&first));
+    assert!(!store.prefetched_session_identity_is_current(&second));
+}
+
+#[test]
 fn accepted_relations_span_observations_and_preserve_distinct_entities() {
     let mut store = IdentityStore::default();
     store

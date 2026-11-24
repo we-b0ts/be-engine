@@ -191,6 +191,32 @@ impl NotificationMessage {
         let push = frame::decode(&original)?.context("Redis notification has no push frame")?;
         Ok(Self { original, push })
     }
+
+    fn encode_packet(&self, values: &BTreeMap<String, Bytes>) -> Result<(Bytes, usize)> {
+        ensure!(
+            values.len() == 1,
+            "Redis notification value inventory changed"
+        );
+        let payload = values
+            .get("/payload")
+            .context("Redis notification payload is absent")?;
+        if *payload == self.push.payload {
+            return Ok((self.original.clone(), 0));
+        }
+        let subject = self.push.subject.as_ref();
+        let parts: &[&[u8]] = match self.push.kind {
+            RedisSubscriptionKind::Channel => &[b"message", subject, payload],
+            RedisSubscriptionKind::Pattern => &[b"pmessage", subject, &self.push.channel, payload],
+            RedisSubscriptionKind::ShardChannel => &[b"smessage", subject, payload],
+        };
+        let packet = crate::encode_array(parts);
+        // Converting the Vec to Bytes retains its capacity and may allocate a
+        // shared owner in addition to the packet buffer.
+        let retained = packet
+            .capacity()
+            .saturating_add(std::mem::size_of::<Bytes>());
+        Ok((packet.into(), retained))
+    }
 }
 
 impl ProtocolMessage for NotificationMessage {
@@ -226,24 +252,12 @@ impl MessageEncoder for NotificationMessage {
         Some(std::mem::size_of::<Self>() + self.original.len())
     }
 
+    fn prefetch_packet(&self, values: &BTreeMap<String, Bytes>) -> Result<Option<(Bytes, usize)>> {
+        self.encode_packet(values).map(Some)
+    }
+
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes> {
-        ensure!(
-            values.len() == 1,
-            "Redis notification value inventory changed"
-        );
-        let payload = values
-            .get("/payload")
-            .context("Redis notification payload is absent")?;
-        if *payload == self.push.payload {
-            return Ok(self.original.clone());
-        }
-        let subject = self.push.subject.as_ref();
-        let parts: &[&[u8]] = match self.push.kind {
-            RedisSubscriptionKind::Channel => &[b"message", subject, payload],
-            RedisSubscriptionKind::Pattern => &[b"pmessage", subject, &self.push.channel, payload],
-            RedisSubscriptionKind::ShardChannel => &[b"smessage", subject, payload],
-        };
-        Ok(crate::encode_array(parts).into())
+        self.encode_packet(values).map(|(bytes, _)| bytes)
     }
 }
 
@@ -259,13 +273,20 @@ mod tests {
         let payload = &projected.values["/payload"].bytes;
         assert_eq!(payload.as_ref(), b"a\0b");
         assert_eq!(payload.as_ptr(), raw[raw.len() - 5..].as_ptr());
-        let output = message
-            .encode(&BTreeMap::from([("/payload".into(), payload.clone())]))
-            .unwrap();
+        let values = BTreeMap::from([("/payload".into(), payload.clone())]);
+        let output = message.encode(&values).unwrap();
         assert_eq!(output.as_ptr(), raw.as_ptr());
+        let (prefetched, retained) = message.prefetch_packet(&values).unwrap().unwrap();
+        assert_eq!(prefetched.as_ptr(), raw.as_ptr());
+        assert_eq!(retained, 0);
         assert_eq!(
             message.prefetch_retained_bytes(),
             Some(std::mem::size_of_val(&message) + raw.len())
         );
+
+        let values = BTreeMap::from([("/payload".into(), Bytes::from_static(b"translated"))]);
+        let (prefetched, retained) = message.prefetch_packet(&values).unwrap().unwrap();
+        assert_eq!(prefetched, message.encode(&values).unwrap());
+        assert!(retained >= prefetched.len());
     }
 }

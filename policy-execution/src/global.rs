@@ -13,7 +13,7 @@ use traffic_contract::rule::{RuleBinding, ValueRule};
 use traffic_contract::{
     codec::{CodecPlan, DecodedValue},
     compare::LogicalProjection,
-    rule::TimestampFormat,
+    rule::{FieldContract, TimestampFormat},
     time,
 };
 use traffic_policy_value::{
@@ -223,16 +223,43 @@ pub fn prepare_fields(
     plan: &dyn FormatHost,
     clocks: AnchorClocks,
 ) -> Result<(Vec<String>, Vec<SelectedGlobalField>)> {
-    let (projection, selected) = plan
-        .field_plan()
-        .project_fields_with_clocks(source, clocks)?;
-    let native = traffic_policy_value::formats::checks(plan, projection.json())?;
+    let prepared = prepare_projected_fields(&LogicalProjection::new(source)?, plan, clocks)?;
+    Ok((prepared.paths, prepared.selected))
+}
+
+pub struct PreparedGlobalFields {
+    pub paths: Vec<String>,
+    pub selected: Vec<SelectedGlobalField>,
+    pub clock_independent: bool,
+}
+
+pub fn prepare_projected_fields(
+    source: &LogicalProjection<'_>,
+    plan: &dyn FormatHost,
+    clocks: AnchorClocks,
+) -> Result<PreparedGlobalFields> {
+    let selected = plan.field_plan().select_projected_fields(source, clocks)?;
+    let native = traffic_policy_value::formats::checks(plan, source.json())?;
     let paths = selected
         .iter()
         .map(|field| field.pointer.clone())
-        .chain(native.fields().iter().map(|field| field.pointer.to_owned()))
+        .chain(native.pointers().map(str::to_owned))
         .collect();
-    Ok((paths, selected))
+    let clock_independent = native.clock_independent()
+        && selected.iter().all(|field| {
+            matches!(
+                field.contract,
+                FieldContract::Exact
+                    | FieldContract::Identity { .. }
+                    | FieldContract::IdentityAnchor
+                    | FieldContract::Unordered
+            )
+        });
+    Ok(PreparedGlobalFields {
+        paths,
+        selected,
+        clock_independent,
+    })
 }
 
 pub fn compare_fields(
@@ -243,16 +270,13 @@ pub fn compare_fields(
     fields: &[Field<'_>],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
-    let (projection, selected) = plan
-        .field_plan()
-        .project_fields_with_clocks(source, clocks)?;
-    compare_selected_fields(
+    compare_projected_fields(
         context,
-        &projection,
+        &LogicalProjection::new(source)?,
         target,
         plan,
         fields,
-        &selected,
+        None,
         clocks,
     )
 }
@@ -266,26 +290,34 @@ pub fn compare_prepared_fields(
     selected: &[SelectedGlobalField],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
-    compare_selected_fields(
+    compare_projected_fields(
         context,
         &LogicalProjection::new(source)?,
         target,
         plan,
         fields,
-        selected,
+        Some(selected),
         clocks,
     )
 }
 
-fn compare_selected_fields(
+pub fn compare_projected_fields(
     context: &ExecutionContext<'_>,
     source: &LogicalProjection<'_>,
     target: &traffic_value::Value,
     plan: &dyn FormatHost,
     fields: &[Field<'_>],
-    selected: &[SelectedGlobalField],
+    selected: Option<&[SelectedGlobalField]>,
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
+    let live_selection;
+    let selected = match selected {
+        Some(selected) => selected,
+        None => {
+            live_selection = plan.field_plan().select_projected_fields(source, clocks)?;
+            &live_selection
+        }
+    };
     let native = traffic_policy_value::formats::checks(plan, source.json())?;
     let fields = field_composition::append(source.json(), fields.to_vec(), selected);
     let mut compared = traffic_contract::compare::compare_projected_logical_all(
@@ -476,8 +508,50 @@ pub fn translate_times_cow(
     plan: &dyn FormatHost,
     clocks: AnchorClocks,
 ) -> Result<()> {
-    if plan.fields().is_empty() {
+    let Some(selected) = time_delivery_fields(context, source, plan, clocks)? else {
         return Ok(());
+    };
+    translate_selected_times(context, source, delivered, &selected, clocks)
+}
+
+pub fn translate_selected_times(
+    context: &ExecutionContext<'_>,
+    source: &Value,
+    delivered: &mut std::borrow::Cow<'_, Value>,
+    selected: &[SelectedGlobalField],
+    clocks: AnchorClocks,
+) -> Result<()> {
+    let timed = materialize_selected::<RuleBinding<'_>>(context, source, selected, &[], clocks)?;
+    if matches!(delivered, std::borrow::Cow::Borrowed(original) if std::ptr::eq(*original, source))
+    {
+        *delivered = std::borrow::Cow::Owned(timed);
+        return Ok(());
+    }
+    for field in selected {
+        let pointer = &field.pointer;
+        if source.pointer(pointer) == delivered.pointer(pointer) {
+            *delivered
+                .to_mut()
+                .pointer_mut(pointer)
+                .context("global time delivery field disappeared")? = timed
+                .pointer(pointer)
+                .context("global time delivery value disappeared")?
+                .clone();
+        }
+    }
+    Ok(())
+}
+
+/// Resolve authored time delivery against the Source clock before Replay reaches it.
+/// `None` proves that even a different Target clock cannot require this translation.
+pub fn time_delivery_fields(
+    context: &ExecutionContext<'_>,
+    source: &Value,
+    plan: &dyn FormatHost,
+    clocks: AnchorClocks,
+) -> Result<Option<Vec<SelectedGlobalField>>> {
+    if plan.fields().is_empty() {
+        return Ok(None);
     }
     let mut selected = plan
         .field_plan()
@@ -496,27 +570,9 @@ pub fn translate_times_cow(
         )
         .passed()
     {
-        return Ok(());
+        return Ok(None);
     }
-    let timed = materialize_selected::<RuleBinding<'_>>(context, source, &selected, &[], clocks)?;
-    if matches!(delivered, std::borrow::Cow::Borrowed(original) if std::ptr::eq(*original, source))
-    {
-        *delivered = std::borrow::Cow::Owned(timed);
-        return Ok(());
-    }
-    for field in selected {
-        let pointer = field.pointer;
-        if source.pointer(&pointer) == delivered.pointer(&pointer) {
-            *delivered
-                .to_mut()
-                .pointer_mut(&pointer)
-                .context("global time delivery field disappeared")? = timed
-                .pointer(&pointer)
-                .context("global time delivery value disappeared")?
-                .clone();
-        }
-    }
-    Ok(())
+    Ok(Some(selected))
 }
 
 fn materialize_selected<R: ValueRule + ?Sized>(

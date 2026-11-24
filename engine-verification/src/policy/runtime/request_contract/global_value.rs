@@ -180,28 +180,57 @@ impl RequestContracts {
         global: &CompiledJsonPolicy,
     ) -> Result<(IdentityDecision, Vec<String>)> {
         let selected = global.identity_fields(source)?;
-        let mut pointers = Vec::new();
-        let mut entries = Vec::new();
-        let mut anchors = Vec::new();
-        for (pointer, contract) in &selected {
-            if let Some(value) = source.pointer(pointer) {
-                if let FieldContract::Identity { prefix, format } = contract {
-                    pointers.push(pointer.clone());
-                    entries.push(IdentityDelivery {
-                        prefix,
-                        format: *format,
-                        value,
-                    });
-                } else if matches!(contract, FieldContract::IdentityAnchor) {
-                    let encoded = serde_json::to_string(value)?;
-                    anchors.push(crate::value_contract::identities::IdentityPair {
-                        source: encoded.clone(),
-                        target: encoded,
-                    });
-                }
-            }
-        }
-        let (values, decision) = self.identity_deliveries(case, &entries)?;
+        self.translate_selected_identities_cow(case, source, logical, global, &selected)
+    }
+
+    pub(super) fn translate_selected_identities_cow(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+        selected: &[(String, FieldContract)],
+    ) -> Result<(IdentityDecision, Vec<String>)> {
+        let fields = RootIdentityFields::select(source, selected)?;
+        let (values, decision) = self.identity_deliveries(case, &fields.entries)?;
+        self.translate_resolved_identities_cow(
+            case,
+            source,
+            logical,
+            global,
+            fields.resolve(values, decision),
+        )
+    }
+
+    pub(super) fn prefetch_root_identities(
+        &self,
+        source: &Value,
+        selected: &[(String, FieldContract)],
+    ) -> Result<Option<ResolvedRootIdentities>> {
+        let fields = RootIdentityFields::select(source, selected)?;
+        let Some((values, decision)) = self
+            .values
+            .prefetch_session_identity_deliveries(&fields.entries)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(fields.resolve(values, decision)))
+    }
+
+    pub(super) fn translate_resolved_identities_cow(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+        resolved: ResolvedRootIdentities,
+    ) -> Result<(IdentityDecision, Vec<String>)> {
+        let ResolvedRootIdentities {
+            mut pointers,
+            values,
+            decision,
+            anchors,
+        } = resolved;
         let mut combined = Decision {
             identity: Some(decision),
             ..Default::default()
@@ -280,5 +309,83 @@ impl RequestContracts {
             combined.identity.expect("identity delivery proposal"),
             pointers,
         ))
+    }
+}
+
+struct RootIdentityFields<'a> {
+    pointers: Vec<String>,
+    entries: Vec<IdentityDelivery<'a>>,
+    anchors: Vec<crate::value_contract::identities::IdentityPair>,
+}
+
+impl<'a> RootIdentityFields<'a> {
+    fn select(source: &'a Value, selected: &'a [(String, FieldContract)]) -> Result<Self> {
+        let mut fields = Self {
+            pointers: Vec::new(),
+            entries: Vec::new(),
+            anchors: Vec::new(),
+        };
+        for (pointer, contract) in selected {
+            if let Some(value) = source.pointer(pointer) {
+                if let FieldContract::Identity { prefix, format } = contract {
+                    fields.pointers.push(pointer.clone());
+                    fields.entries.push(IdentityDelivery {
+                        prefix,
+                        format: *format,
+                        value,
+                    });
+                } else if matches!(contract, FieldContract::IdentityAnchor) {
+                    let encoded = serde_json::to_string(value)?;
+                    fields
+                        .anchors
+                        .push(crate::value_contract::identities::IdentityPair {
+                            source: encoded.clone(),
+                            target: encoded,
+                        });
+                }
+            }
+        }
+        Ok(fields)
+    }
+
+    fn resolve(self, values: Vec<Value>, decision: IdentityDecision) -> ResolvedRootIdentities {
+        ResolvedRootIdentities {
+            pointers: self.pointers,
+            values,
+            decision,
+            anchors: self.anchors,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ResolvedRootIdentities {
+    pointers: Vec<String>,
+    values: Vec<Value>,
+    decision: IdentityDecision,
+    anchors: Vec<crate::value_contract::identities::IdentityPair>,
+}
+
+impl ResolvedRootIdentities {
+    pub(super) fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        self.decision.retained_bytes()
+            + self.pointers.capacity() * size_of::<String>()
+            + self.pointers.iter().map(String::capacity).sum::<usize>()
+            + self.values.capacity() * size_of::<Value>()
+            + self
+                .values
+                .iter()
+                .map(|value| match value {
+                    Value::String(text) => text.capacity(),
+                    _ => 0,
+                })
+                .sum::<usize>()
+            + self.anchors.capacity() * size_of::<crate::value_contract::identities::IdentityPair>()
+            + self
+                .anchors
+                .iter()
+                .map(|pair| pair.source.capacity() + pair.target.capacity())
+                .sum::<usize>()
     }
 }

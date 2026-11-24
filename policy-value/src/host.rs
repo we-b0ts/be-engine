@@ -71,6 +71,16 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     fn prefetch_source_response(&self) -> bool {
         false
     }
+    /// Committed identity revision for speculative delivery in this Session.
+    /// The consumer rechecks it before using the prepared result.
+    fn prefetch_delivery_revision(&self, _scope: &str) -> Option<u64> {
+        None
+    }
+    /// Recheck identity bindings from a delivery validated by this Session owner.
+    /// Returning true permits reuse but does not commit the proposal.
+    fn prefetched_identity_is_current(&self, _proposed: &IdentityDecision) -> bool {
+        false
+    }
     fn observe_source_comparison(&self, _comparison: &Comparison) {}
     fn begin_case(&self, case: &str);
     fn clear_case_values(&self, case: &str);

@@ -1,6 +1,9 @@
 //! Pure, bounded comparison of a decoded value. Protocol admission and commits
 //! remain with the caller. Selected fields compose before the strict remainder.
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem::size_of,
+};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -30,7 +33,8 @@ pub use native::{
 const MAX_COMPARISONS: usize = 16_384;
 const MAX_DEPTH: usize = 128;
 
-type NonceRelationships = BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>;
+type NonceRelationship = ([u8; 32], [u8; 32]);
+type NonceRelationships = BTreeMap<(String, String), Vec<NonceRelationship>>;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AnchorClocks {
@@ -112,6 +116,38 @@ impl Comparison {
     pub fn passed(&self) -> bool {
         self.differences.is_empty()
     }
+
+    /// Conservative heap estimate for a successful comparison kept by Replay.
+    /// Opaque observations, diagnostics and nonce state use the live path.
+    pub fn prefetch_retained_bytes(&self) -> Option<usize> {
+        if !self.passed()
+            || !self.pre_matches.is_empty()
+            || !self.observations.is_empty()
+            || !self.nonce_relationships.is_empty()
+        {
+            return None;
+        }
+        let mut bytes = self
+            .identities
+            .prefetch_retained_bytes()
+            .saturating_add(self.pre_matches.capacity() * size_of::<crate::hypothesis::Candidate>())
+            .saturating_add(self.differences.capacity() * size_of::<Difference>())
+            .saturating_add(btree_retained_bytes::<String, ()>(self.evaluated.len()))
+            .saturating_add(string_map_retained_bytes(&self.time_validations))
+            .saturating_add(string_map_retained_bytes(&self.policy_counts))
+            .saturating_add(btree_retained_bytes::<
+                (String, String),
+                Vec<NonceRelationship>,
+            >(0));
+        for rule in &self.evaluated {
+            bytes = bytes.saturating_add(rule.capacity());
+        }
+        for counters in self.policy_counts.values() {
+            bytes = bytes.saturating_add(string_map_retained_bytes(counters));
+        }
+        Some(bytes)
+    }
+
     pub fn merge_and_validate(&mut self, other: Comparison) {
         self.pre_matches.extend(other.pre_matches);
         if let Err(reason) = self.identities.merge(other.identities) {
@@ -147,6 +183,21 @@ impl Comparison {
             }
         }
     }
+}
+
+fn string_map_retained_bytes<V>(map: &BTreeMap<String, V>) -> usize {
+    map.keys().fold(
+        btree_retained_bytes::<String, V>(map.len()),
+        |bytes, key| bytes.saturating_add(key.capacity()),
+    )
+}
+
+fn btree_retained_bytes<K, V>(len: usize) -> usize {
+    // Rust's B-tree nodes carry up to eleven entries and twelve edges. Charge
+    // every node as internal, including a possible retained empty root. All
+    // nodes below the root have at least five entries.
+    let nodes = 1 + len.saturating_sub(1) / 5;
+    nodes.saturating_mul(12 * size_of::<(K, V)>() + 128)
 }
 
 #[derive(Clone, Default)]
@@ -818,4 +869,20 @@ fn exact_same_reference_keeps_the_comparison_budget_and_diagnostic() {
         result.differences[0].reason,
         "contract comparison limit exceeded"
     );
+}
+
+#[cfg(test)]
+#[test]
+fn prefetch_estimate_includes_identity_tokens_and_requires_success() {
+    let mut result = Comparison::default();
+    let before = result.prefetch_retained_bytes().unwrap();
+    let source = Value::String("recorded-token".repeat(16));
+    let target = Value::String("delivered-token".repeat(16));
+    result.identities.observe(&source, &target).unwrap();
+    assert!(
+        result.prefetch_retained_bytes().unwrap()
+            >= before + source.as_str().unwrap().len() + target.as_str().unwrap().len()
+    );
+    result.differences.push(difference("", "failed"));
+    assert!(result.prefetch_retained_bytes().is_none());
 }

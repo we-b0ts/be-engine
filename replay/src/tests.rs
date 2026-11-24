@@ -36,6 +36,42 @@ async fn output_start_allows_a_causally_subsequent_request_before_its_flush_rece
 }
 
 #[tokio::test]
+async fn a_waiting_output_wakes_on_progress_and_can_be_invalidated_after_reserving() {
+    let runtime = SequenceRuntime::new(
+        SequencePlan::compile([
+            event(1, 1, EventKind::Request),
+            event(2, 2, EventKind::Request),
+            event(3, 1, EventKind::ResponseEndStarted),
+            event(4, 2, EventKind::ResponseEndStarted),
+            event(5, 1, EventKind::ResponseEnd),
+            event(6, 2, EventKind::ResponseEnd),
+        ])
+        .unwrap(),
+    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    let first = runtime.admit(1).unwrap();
+    let second = runtime.admit(2).unwrap();
+    let (registered, registration) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn({
+        let second = second.clone();
+        async move {
+            let delivery = second.wait_delivery(deadline);
+            tokio::pin!(delivery);
+            assert!(futures_util::poll!(delivery.as_mut()).is_pending());
+            registered.send(()).unwrap();
+            delivery.await.unwrap();
+        }
+    });
+    registration.await.unwrap();
+
+    first.wait_delivery(deadline).await.unwrap();
+    waiter.await.unwrap();
+    assert!(!second.sequence_failed());
+    first.fail();
+    assert!(second.sequence_failed());
+}
+
+#[tokio::test]
 async fn a_flushed_terminal_receipt_survives_its_claim_while_an_earlier_push_finishes() {
     let runtime = SequenceRuntime::with_session_timing(
         SequencePlan::compile([

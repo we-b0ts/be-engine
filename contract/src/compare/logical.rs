@@ -1,17 +1,30 @@
 //! Pair logical values with their compatibility projection for comparison.
+use std::borrow::Cow;
+
 use super::*;
 
 pub struct LogicalProjection<'a> {
     logical: &'a traffic_value::Value,
-    json: Value,
+    json: Cow<'a, Value>,
 }
 
 impl<'a> LogicalProjection<'a> {
     pub fn new(logical: &'a traffic_value::Value) -> serde_json::Result<Self> {
         Ok(Self {
             logical,
-            json: serde_json::to_value(logical)?,
+            json: Cow::Owned(serde_json::to_value(logical)?),
         })
+    }
+
+    pub(crate) fn borrowed(logical: &'a traffic_value::Value, json: &'a Value) -> Self {
+        Self {
+            logical,
+            json: Cow::Borrowed(json),
+        }
+    }
+
+    pub fn logical(&self) -> &traffic_value::Value {
+        self.logical
     }
 
     pub fn json(&self) -> &Value {
@@ -84,6 +97,21 @@ mod tests {
     use super::*;
     use serde_json::json;
     use traffic_value::Value as LogicalValue;
+
+    #[test]
+    fn decoded_document_reuses_its_compatibility_projection() {
+        use crate::codec::{Codec, CodecView};
+
+        let decoded = CodecView::decode(
+            &Codec::Json,
+            br#"{"array":[1,2,3]}"#,
+            traffic_extensions::codecs(),
+        )
+        .unwrap();
+        let projected = decoded.projection();
+        assert!(std::ptr::eq(projected.json(), &decoded.logical));
+        assert!(std::ptr::eq(projected.logical(), decoded.value()));
+    }
 
     #[test]
     fn projected_comparison_still_distinguishes_bytes_from_projected_arrays() {

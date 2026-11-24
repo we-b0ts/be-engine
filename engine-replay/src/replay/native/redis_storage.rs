@@ -40,6 +40,12 @@ pub struct StorageDelivery {
     reads: Vec<ReadLink>,
 }
 
+impl StorageDelivery {
+    pub(super) fn is_empty(&self) -> bool {
+        self.writes.is_empty() && self.reads.is_empty()
+    }
+}
+
 type Exchange = traffic_replay::exchange::PreparedExchange<crate::value_extensions::ValueRules>;
 
 fn messages(exchange: &Exchange) -> Option<(&RequestMessage, &PreparedMessage)> {

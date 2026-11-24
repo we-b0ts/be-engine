@@ -10,6 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
+use traffic_contract::compare::LogicalProjection;
 use traffic_policy_execution::global as execution;
 
 pub fn compare(
@@ -147,7 +148,7 @@ pub fn policy_paths(
     execution::policy_paths(source, plan, clocks)
 }
 
-pub use execution::prepare_fields;
+pub use execution::{prepare_fields, prepare_projected_fields};
 
 pub fn compare_fields(
     source: &traffic_value::Value,
@@ -175,6 +176,25 @@ pub fn compare_prepared_fields(
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
     execution::compare_prepared_fields(
+        &super::execution_context(),
+        source,
+        target,
+        plan,
+        fields,
+        selected,
+        clocks,
+    )
+}
+
+pub fn compare_projected_fields(
+    source: &LogicalProjection<'_>,
+    target: &traffic_value::Value,
+    plan: &CompiledJsonPolicy,
+    fields: &[Field<'_>],
+    selected: Option<&[traffic_policy_value::fields::SelectedGlobalField]>,
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    execution::compare_projected_fields(
         &super::execution_context(),
         source,
         target,
