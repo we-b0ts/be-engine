@@ -10,6 +10,71 @@ fn event(sequence: u64, dependency_sequence: u64, kind: EventKind) -> SourceEven
 }
 
 #[tokio::test]
+async fn frontier_wait_retains_notifications_at_the_anchor_and_on_abort() {
+    let runtime = SequenceRuntime::with_session_timing(
+        SequencePlan::compile([
+            event(10, 0, EventKind::SessionSourceStart),
+            event(20, 0, EventKind::SessionReady),
+            event(40, 0, EventKind::SessionSourceExit),
+        ])
+        .unwrap(),
+        Some(std::time::Duration::ZERO),
+        [40],
+    );
+
+    let passed = runtime.wait_for_frontier(19).unwrap();
+    let at_ready = runtime.wait_for_frontier(20).unwrap();
+    let cancelled = runtime.wait_for_frontier(40).unwrap();
+    let at_exit = runtime.wait_for_frontier(40).unwrap().changed();
+    tokio::pin!(at_exit);
+    drop(cancelled);
+
+    runtime.commit_driver(10).unwrap();
+    assert!(futures_util::poll!(std::pin::pin!(passed.changed())).is_ready());
+    assert!(futures_util::poll!(std::pin::pin!(at_ready.changed())).is_ready());
+    assert!(runtime.wait_for_frontier(19).is_none());
+    assert!(runtime.wait_for_frontier(20).is_none());
+    assert!(futures_util::poll!(at_exit.as_mut()).is_pending());
+
+    runtime.abort();
+    assert!(futures_util::poll!(at_exit.as_mut()).is_ready());
+    assert!(runtime.wait_for_frontier(40).is_none());
+}
+
+#[tokio::test]
+async fn message_watch_only_signals_the_message_frontier_and_abort() {
+    let runtime = SequenceRuntime::with_session_timing(
+        SequencePlan::compile([
+            event(1, 0, EventKind::SessionSourceStart),
+            event(2, 2, EventKind::Request),
+            event(3, 2, EventKind::ResponseEnd),
+            event(4, 4, EventKind::Message),
+            event(5, 4, EventKind::ResponseEnd),
+        ])
+        .unwrap(),
+        Some(std::time::Duration::ZERO),
+        [],
+    );
+    let mut messages = runtime.subscribe_messages();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    runtime.commit_driver(1).unwrap();
+    let request = runtime.admit(2).unwrap();
+    request.wait_delivery(deadline).await.unwrap();
+    assert!(!messages.has_changed().unwrap());
+
+    request.publish().unwrap();
+    assert!(messages.has_changed().unwrap());
+    messages.borrow_and_update();
+
+    let push = runtime.admit(4).unwrap();
+    push.wait_delivery(deadline).await.unwrap();
+    push.publish().unwrap();
+    assert!(!messages.has_changed().unwrap());
+    runtime.abort();
+    assert!(messages.has_changed().unwrap());
+}
+
+#[tokio::test]
 async fn output_start_allows_a_causally_subsequent_request_before_its_flush_receipt() {
     let runtime = SequenceRuntime::new(
         SequencePlan::compile([
@@ -123,6 +188,8 @@ async fn session_driver_and_dependency_receipts_share_the_contiguous_frontier() 
         Some(std::time::Duration::ZERO),
         [],
     );
+    let primary_request = runtime.wait_for_frontier(6).unwrap().changed();
+    tokio::pin!(primary_request);
     assert!(runtime.admit(2).is_err());
     runtime.commit_driver(1).unwrap();
     let claim = runtime.admit(2).unwrap();
@@ -132,10 +199,12 @@ async fn session_driver_and_dependency_receipts_share_the_contiguous_frontier() 
         .unwrap();
     claim.publish().unwrap();
     assert_eq!(runtime.progress().last_sequence, Some(3));
+    assert!(futures_util::poll!(primary_request.as_mut()).is_pending());
     assert!(runtime.commit_driver(5).is_err());
     assert!(runtime.commit_driver(6).is_err());
     runtime.commit_driver(4).unwrap();
     assert_eq!(runtime.progress().last_sequence, Some(5));
+    assert!(futures_util::poll!(primary_request.as_mut()).is_ready());
     assert!(runtime.driver_due(6).is_none());
     runtime.commit_driver(6).unwrap();
     assert!(!runtime.complete());

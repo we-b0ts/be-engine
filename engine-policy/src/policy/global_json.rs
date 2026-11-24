@@ -68,9 +68,12 @@ impl JsonPolicy {
         )?;
         Ok(CompiledJsonPolicy {
             fields: self.fields.clone(),
-            selectors: Arc::new(traffic_policy_value::fields::FieldSelectors::compile(
-                &self.fields,
-            )?),
+            selectors: Arc::new(
+                traffic_policy_value::fields::FieldSelectors::compile_with_registry(
+                    &self.fields,
+                    traffic_extensions::policies(),
+                )?,
+            ),
             time: time.clone(),
             fingerprint: super::digest(
                 "traffic-policy/global-json/v2",

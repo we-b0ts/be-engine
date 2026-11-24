@@ -7,6 +7,10 @@ use tokio::{
     time::{Duration, Instant},
 };
 
+mod frontier;
+pub use frontier::FrontierWait;
+use frontier::FrontierWaiters;
+
 const MAX_PENDING_REQUESTS: usize = 256;
 const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
@@ -15,6 +19,7 @@ pub struct SequenceRuntime {
     state: Mutex<State>,
     changed: watch::Sender<u64>,
     requests_changed: watch::Sender<u64>,
+    messages_changed: watch::Sender<()>,
     plan: Arc<SequencePlan>,
     fast_gap_cap: Option<Duration>,
     session_timing: bool,
@@ -36,21 +41,38 @@ struct State {
     pending: usize,
     pending_bytes: usize,
     progressed_at: Option<Instant>,
+    frontier_waiters: FrontierWaiters,
+}
+
+struct Notifications {
+    requests: bool,
+    messages: bool,
+    frontier: Vec<Arc<tokio::sync::Notify>>,
 }
 
 impl State {
-    fn should_wake_requests(&self) -> bool {
-        self.scheduler.failed()
-            || self
-                .scheduler
-                .expected()
-                .is_none_or(|event| event.kind == EventKind::Request)
+    fn notifications(&mut self, progressed_or_gate_released: bool) -> Notifications {
+        let failed = self.scheduler.failed();
+        let expected = self.scheduler.expected();
+        Notifications {
+            requests: failed || expected.is_none_or(|event| event.kind == EventKind::Request),
+            messages: failed
+                || progressed_or_gate_released
+                    && expected.is_some_and(|event| event.kind == EventKind::Message),
+            frontier: if progressed_or_gate_released || failed {
+                self.frontier_waiters.take_ready(if failed {
+                    u64::MAX
+                } else {
+                    expected.map_or(u64::MAX, |event| event.sequence)
+                })
+            } else {
+                Vec::new()
+            },
+        }
     }
 
-    fn record_progress(&mut self, previous: Option<SourceEvent>) {
-        if self.scheduler.previous() != previous {
-            self.progressed_at = Some(Instant::now());
-        }
+    fn record_progress(&mut self) {
+        self.progressed_at = Some(Instant::now());
     }
 
     fn output_due(&self, dependency: u64, cap: Duration) -> Option<Instant> {
@@ -115,9 +137,11 @@ impl SequenceRuntime {
                 pending: 0,
                 pending_bytes: 0,
                 progressed_at: None,
+                frontier_waiters: FrontierWaiters::default(),
             }),
             changed: watch::channel(0).0,
             requests_changed: watch::channel(0).0,
+            messages_changed: watch::channel(()).0,
             plan,
             fast_gap_cap,
             session_timing,
@@ -178,12 +202,11 @@ impl SequenceRuntime {
                 .is_none_or(|due| Instant::now() >= due),
             "driver event {sequence} is earlier than its scheduled delivery"
         );
-        let previous = state.scheduler.previous();
         state.scheduler.commit_driver(sequence)?;
-        state.record_progress(previous);
-        let wake_requests = state.should_wake_requests();
+        state.record_progress();
+        let notifications = state.notifications(true);
         drop(state);
-        self.notify(wake_requests);
+        self.notify(notifications);
         Ok(())
     }
 
@@ -219,9 +242,9 @@ impl SequenceRuntime {
                 && state.scheduler.event_gates.remove(&sequence),
             "event gate is stale or already released"
         );
-        let wake_requests = state.should_wake_requests();
+        let notifications = state.notifications(true);
         drop(state);
-        self.notify(wake_requests);
+        self.notify(notifications);
         Ok(())
     }
 
@@ -235,6 +258,27 @@ impl SequenceRuntime {
 
     pub fn subscribe_requests(&self) -> watch::Receiver<u64> {
         self.requests_changed.subscribe()
+    }
+
+    /// Wake when an emission can enter the sequence, or when the sequence fails.
+    pub fn subscribe_messages(&self) -> watch::Receiver<()> {
+        self.messages_changed.subscribe()
+    }
+
+    /// Register only if the frontier has yet to reach the requested sequence.
+    /// A `None` result means it has reached or passed the sequence, or failed.
+    pub fn wait_for_frontier(&self, sequence: u64) -> Option<FrontierWait<'_>> {
+        let mut state = self.state.lock().expect("sequence runtime poisoned");
+        if !state.scheduler.failed()
+            && state
+                .scheduler
+                .expected()
+                .is_some_and(|event| event.sequence < sequence)
+        {
+            Some(state.frontier_waiters.register(self, sequence))
+        } else {
+            None
+        }
     }
 
     pub fn wake_requests(&self) {
@@ -251,35 +295,39 @@ impl SequenceRuntime {
     }
 
     pub fn abort(&self) {
-        self.state
-            .lock()
-            .expect("sequence runtime poisoned")
-            .scheduler
-            .abort();
-        self.notify(true);
+        let mut state = self.state.lock().expect("sequence runtime poisoned");
+        state.scheduler.abort();
+        let notifications = state.notifications(false);
+        drop(state);
+        self.notify(notifications);
     }
 
-    fn notify(&self, wake_requests: bool) {
+    fn notify(&self, notifications: Notifications) {
         self.changed
             .send_modify(|revision| *revision = revision.wrapping_add(1));
-        if wake_requests {
+        if notifications.requests {
             self.wake_requests();
+        }
+        if notifications.messages {
+            let _ = self.messages_changed.send(());
+        }
+        for waiter in notifications.frontier {
+            waiter.notify_one();
         }
     }
 
     pub fn admit(self: &Arc<Self>, dependency: u64) -> Result<SequenceClaim> {
         let mut state = self.state.lock().expect("sequence runtime poisoned");
-        let previous = state.scheduler.previous();
         ensure!(
             state.scheduler.admit(dependency)? == Admission::Accepted,
             "request is earlier than its recorded sequence"
         );
         if self.tracks_progress() {
-            state.record_progress(previous);
+            state.record_progress();
         }
-        let wake_requests = state.should_wake_requests();
+        let notifications = state.notifications(true);
         drop(state);
-        self.notify(wake_requests);
+        self.notify(notifications);
         Ok(SequenceClaim(Arc::new(Claim {
             runtime: self.clone(),
             dependency,
@@ -405,9 +453,10 @@ impl SequenceClaim {
         if !matches!(*delivery, Delivery::Finished | Delivery::Failed) {
             state.scheduler.abort();
             *delivery = Delivery::Failed;
+            let notifications = state.notifications(false);
             drop(state);
             drop(delivery);
-            self.0.runtime.notify(true);
+            self.0.runtime.notify(notifications);
         }
     }
     pub async fn wait_delivery(&self, deadline: Instant) -> Result<()> {
@@ -470,13 +519,14 @@ impl SequenceClaim {
                         if let Some(ticket) = state.scheduler.reserve_delivery(self.0.dependency)? {
                             let source = state.scheduler.receipt_source(ticket);
                             *delivery = Delivery::Reserved { ticket, source };
-                            if self.0.runtime.tracks_progress() {
-                                state.record_progress(previous);
+                            let progressed = state.scheduler.previous() != previous;
+                            if progressed && self.0.runtime.tracks_progress() {
+                                state.record_progress();
                             }
-                            let wake_requests = state.should_wake_requests();
+                            let notifications = state.notifications(progressed);
                             drop(state);
                             drop(delivery);
-                            self.0.runtime.notify(wake_requests);
+                            self.0.runtime.notify(notifications);
                             return Ok(());
                         }
                     }
@@ -566,8 +616,9 @@ impl SequenceClaim {
                 .context("contiguous output reservation is unavailable")?;
             state.scheduler.finish_delivery(ticket, true)?;
         }
-        if self.0.runtime.tracks_progress() {
-            state.record_progress(previous);
+        let progressed = state.scheduler.previous() != previous;
+        if progressed && self.0.runtime.tracks_progress() {
+            state.record_progress();
         }
         *delivery = if source.kind.is_terminal() {
             Delivery::TerminalPublished(ticket)
@@ -575,10 +626,10 @@ impl SequenceClaim {
             Delivery::Waiting
         };
         delivery.refresh(&state.scheduler);
-        let wake_requests = state.should_wake_requests();
+        let notifications = state.notifications(progressed);
         drop(state);
         drop(delivery);
-        self.0.runtime.notify(wake_requests);
+        self.0.runtime.notify(notifications);
         Ok(())
     }
     pub fn complete(&self) -> bool {

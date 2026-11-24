@@ -178,6 +178,7 @@ pub struct Lifecycle {
     // allocate/initialize every unrelated earlier inventory position.
     slots: HashMap<usize, Slot>,
     changed: Arc<Notify>,
+    control_changed: Arc<Notify>,
     cancelled: Arc<std::sync::Mutex<Vec<(usize, u64)>>>,
 }
 
@@ -191,6 +192,7 @@ pub enum Finish<T> {
 impl Lifecycle {
     pub fn notify_waiters(&self) {
         self.changed.notify_waiters();
+        self.control_changed.notify_waiters();
     }
     pub fn claim(
         &mut self,
@@ -395,6 +397,10 @@ impl Lifecycle {
     /// Register while holding ReplayState's mutex, before releasing it to wait.
     pub fn subscribe(&self) -> WaitRegistration {
         WaitRegistration::new(self.changed.clone())
+    }
+    /// Session lifecycle changes that can invalidate a sequence-based wait.
+    pub fn subscribe_control(&self) -> WaitRegistration {
+        WaitRegistration::new(self.control_changed.clone())
     }
     pub fn wait_for(&self, index: usize, barrier: Barrier) -> Option<WaitRegistration> {
         let receipt = self.slots.get(&index)?.receipt.as_ref()?;

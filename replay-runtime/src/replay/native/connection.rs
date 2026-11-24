@@ -289,6 +289,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                 !anchors.is_empty() && anchors.len() <= 256,
                 "native message anchor budget exceeded"
             );
+            let mut messages = None;
             loop {
                 let (changed, mut sequence) = {
                     let mut state = self.state.lock().await;
@@ -296,21 +297,41 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                         state.finalized_at.is_none() && !state.target_session_stopped,
                         "Replay session stopped before native message delivery"
                     );
-                    let changed = state.native.core.lifecycle.subscribe();
-                    let sequence = state.native.core.lifecycle.sequence.subscriptions();
+                    let session = state.session_events.as_ref();
+                    let fallback = session.is_none().then(|| {
+                        let lifecycle = &state.native.core.lifecycle;
+                        (lifecycle.subscribe(), lifecycle.sequence.subscriptions())
+                    });
                     let delivered = self.delivered.lock().expect("native delivery anchors");
                     ensure!(
                         anchors.iter().all(|anchor| delivered.contains_key(anchor)),
                         "native emission anchor has no successful delivery on this connection"
                     );
-                    if !state.async_case_quiescing()
-                        && let Some(index) = state.native.core.select_message(
+                    let select = || {
+                        if state.async_case_quiescing() {
+                            return None;
+                        }
+                        state.native.core.select_message(
                             self.protocol,
                             &self.endpoint,
                             state.active_case_id.as_deref(),
                             &anchors,
                         )
+                    };
+                    let mut selected = select();
+                    if selected.is_none()
+                        && let Some(session) = session
                     {
+                        let runtime = &session.runtime;
+                        if messages.is_none() {
+                            messages = Some(runtime.subscribe_messages());
+                            // A wire receipt can advance the sequence without holding
+                            // ReplayState. Recheck once the message watch is attached.
+                            selected = select();
+                        }
+                        ensure!(!runtime.failed(), "Replay sequence was aborted");
+                    }
+                    if let Some(index) = selected {
                         let traffic_protocol::connection::RecordedInput::Emission { after, offset } =
                             &state.native.core.exchanges[index].native.input
                         else {
@@ -352,8 +373,17 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                             delivered: self.delivered.clone(),
                         }) as Box<dyn ResponseDelivery>);
                     }
-                    (changed, sequence)
+                    fallback.unwrap_or_else(|| {
+                        (state.native.core.lifecycle.subscribe_control(), Vec::new())
+                    })
                 };
+                if let Some(messages) = &mut messages {
+                    tokio::select! {
+                        _ = changed.changed() => {},
+                        result = messages.changed() => { result?; }
+                    }
+                    continue;
+                }
                 use futures_util::{StreamExt, stream::FuturesUnordered};
                 let mut changes: FuturesUnordered<_> = sequence
                     .iter_mut()

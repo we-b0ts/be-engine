@@ -2,6 +2,27 @@ use super::*;
 use crate::{RequestOrder, WaitOutcome};
 use std::cell::Cell;
 
+#[tokio::test]
+async fn control_waiters_ignore_wire_and_semantic_delivery_notifications() {
+    let mut lifecycle = Lifecycle::default();
+    let mut status = ReplayExchangeStatus::Available;
+    let control = lifecycle.subscribe_control().changed();
+    tokio::pin!(control);
+    let delivery = lifecycle.subscribe().changed();
+    tokio::pin!(delivery);
+
+    let ticket = lifecycle
+        .claim(4, &mut status, ClaimKind::Response)
+        .unwrap();
+    assert!(ticket.publish_wire());
+    assert!(futures_util::poll!(delivery.as_mut()).is_ready());
+    assert!(lifecycle.complete(&ticket, &mut status));
+    assert!(futures_util::poll!(control.as_mut()).is_pending());
+
+    lifecycle.notify_waiters();
+    assert!(futures_util::poll!(control.as_mut()).is_ready());
+}
+
 #[test]
 fn a_matched_owner_cancels_before_any_delivery_guard_while_inventory_observers_do_not_own_it() {
     let mut lifecycle = Lifecycle::default();

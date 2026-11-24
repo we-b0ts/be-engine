@@ -166,18 +166,25 @@ async fn drive<P: ReplayProtocolSet>(
     write: &mut (impl AsyncWrite + Unpin),
     state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Result<()> {
-    let mut progress = lease.sequence.subscribe();
     loop {
-        {
+        let frontier = {
             let mut state = state.lock().await;
             ensure_live(&state, lease)?;
-            if lease.at_frontier()? {
+            let Some(frontier) = lease
+                .sequence
+                .wait_for_frontier(lease.step.anchor.sequence())
+            else {
+                ensure!(
+                    lease.at_frontier()?,
+                    "Replay timer anchor has an unexpected event kind"
+                );
                 state.timers.record(lease, TimerEventKind::Wake)?;
                 break;
-            }
-        }
+            };
+            frontier
+        };
         tokio::select! {
-            result = progress.changed() => { result?; }
+            _ = frontier.changed() => {}
             result = lease.scope_changed.changed() => { result?; }
             result = read.fill_buf() => {
                 ensure!(result?.is_empty(), "unexpected Replay timer frame before wake");

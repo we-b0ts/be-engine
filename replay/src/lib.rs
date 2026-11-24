@@ -30,7 +30,7 @@ pub use admission::{Barrier, ClaimKind, ClaimTicket, DeliveryGuard, Finish, Life
 mod catalog;
 pub use catalog::{SequenceCatalog, SessionPlanEvent};
 mod runtime;
-pub use runtime::{PendingRequest, SequenceClaim, SequenceProgress, SequenceRuntime};
+pub use runtime::{FrontierWait, PendingRequest, SequenceClaim, SequenceProgress, SequenceRuntime};
 mod ingress;
 pub use ingress::AdmissionQueue;
 

@@ -808,8 +808,8 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                         if anchors.contains(after))
             };
             let position = |index: &usize| self.exchanges[*index].source.position;
-            if let Some(expected) = self.lifecycle.sequence.expected_messages(source) {
-                expected.into_iter().filter(matches).min_by_key(position)
+            if let Some(expected) = self.lifecycle.sequence.expected_message_indices(source) {
+                expected.filter(matches).min_by_key(position)
             } else {
                 anchors
                     .iter()

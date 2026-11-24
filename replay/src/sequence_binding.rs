@@ -80,28 +80,25 @@ impl SequenceBinding {
     }
 
     pub fn expected_messages(&self, source: crate::ReplaySource) -> Option<Vec<usize>> {
-        if source == crate::ReplaySource::Case {
-            self.runtime.as_ref().map(|runtime| {
-                runtime
-                    .expected()
-                    .filter(|event| event.kind == EventKind::Message)
-                    .and_then(|event| self.positions.get(&event.dependency_sequence).copied())
-                    .into_iter()
-                    .collect()
-            })
+        self.expected_message_indices(source).map(Iterator::collect)
+    }
+
+    pub(crate) fn expected_message_indices(
+        &self,
+        source: crate::ReplaySource,
+    ) -> Option<impl Iterator<Item = usize> + '_> {
+        let (binding, runtimes) = if source == crate::ReplaySource::Case {
+            (self, std::slice::from_ref(self.runtime.as_ref()?))
         } else {
-            self.run.as_ref().map(|run| {
-                run.runtimes
-                    .iter()
-                    .filter_map(|runtime| {
-                        let event = runtime.expected()?;
-                        (event.kind == EventKind::Message)
-                            .then(|| run.positions.get(&event.dependency_sequence).copied())
-                            .flatten()
-                    })
-                    .collect()
-            })
-        }
+            let run = self.run.as_deref()?;
+            (run, run.runtimes.as_slice())
+        };
+        Some(runtimes.iter().filter_map(move |runtime| {
+            let event = runtime
+                .expected()
+                .filter(|event| event.kind == EventKind::Message)?;
+            binding.positions.get(&event.dependency_sequence).copied()
+        }))
     }
 
     pub fn subscriptions(&self) -> Vec<tokio::sync::watch::Receiver<u64>> {
