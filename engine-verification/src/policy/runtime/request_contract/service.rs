@@ -59,6 +59,10 @@ impl ValueRuleHost for RequestContracts {
         self.values.prefetched_identity_is_current(proposed)
     }
 
+    fn prefetched_identity_is_committed(&self, proposed: &IdentityDecision) -> bool {
+        self.values.prefetched_identity_is_committed(proposed)
+    }
+
     fn translate_document(
         &self,
         scope: &str,

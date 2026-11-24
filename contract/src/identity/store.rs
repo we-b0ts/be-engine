@@ -424,6 +424,20 @@ impl IdentityStore {
             && self.bytes.saturating_add(new_bytes) <= MAX_RUN_BYTES
     }
 
+    /// Check that a prefetched decision only repeats permanent Session pairs.
+    /// A compatible but absent pair still requires ordered live publication.
+    pub fn prefetched_session_identity_is_committed(&self, decision: &IdentityDecision) -> bool {
+        if self.session_limit.is_none() || decision.scope != IdentityScope::Session {
+            return false;
+        }
+        let bindings = self.scopes.get(&IdentityScope::Session);
+        decision.pairs.iter().all(|pair| {
+            bindings
+                .and_then(|scope| scope.forward.get(&pair.source))
+                .is_some_and(|(target, _)| *target == pair.target)
+        })
+    }
+
     pub fn commit(&mut self, decision: IdentityDecision) -> Result<()> {
         self.validate(&decision)?;
         if decision.pairs.is_empty() {

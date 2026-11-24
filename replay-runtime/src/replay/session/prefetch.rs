@@ -31,6 +31,9 @@ struct Shared {
     state: Mutex<Window>,
     refill: Notify,
     packets_used: AtomicUsize,
+    packet_batches: AtomicUsize,
+    packet_batch_frames: AtomicUsize,
+    packet_batch_writes: AtomicUsize,
 }
 
 #[derive(Default)]
@@ -105,10 +108,7 @@ impl Responses {
                         waiting = true;
                     }
                 } else if let Some(response) = &response {
-                    state.hits += 1;
-                    state.prepared_hits += usize::from(response.has_source_preparation());
-                    state.delivery_prepared_hits += usize::from(response.has_prepared_delivery());
-                    state.packet_prepared_hits += usize::from(response.has_prefetched_packet());
+                    state.record_hit(response);
                 } else {
                     state.misses += 1;
                 }
@@ -124,17 +124,67 @@ impl Responses {
                 });
                 (response, available, change)
             };
-            if let Some(head) = head {
-                head.notify_waiters();
-            }
-            if refill {
-                self.shared.refill.notify_one();
-            }
+            self.shared.notify_advance(head, refill);
             match available {
                 Some(available) => available.await,
                 None => return Ok(response),
             }
         }
+    }
+
+    /// Take an already loaded, consecutive prefix when it contains at least
+    /// two acceptable responses. A shorter prefix stays available to `take`.
+    pub(in crate::replay) fn take_ready_batch<T>(
+        &self,
+        indices: impl IntoIterator<Item = usize>,
+        mut accept: impl FnMut(usize, &LoadedResponse) -> Option<T>,
+    ) -> Vec<(usize, LoadedResponse, T)> {
+        let (batch, (head, refill)) = {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .expect("response prefetch poisoned");
+            if state.closed {
+                return Vec::new();
+            }
+            let mut accepted = Vec::new();
+            let mut next = None;
+            for index in indices.into_iter().take(READ_BATCH) {
+                let Some(&ordinal) = self.ordinals.get(&index) else {
+                    break;
+                };
+                if next.is_some_and(|next| ordinal != next) {
+                    break;
+                }
+                let Some(Some(response)) = state.completed.get(&ordinal) else {
+                    break;
+                };
+                let Some(value) = accept(index, response) else {
+                    break;
+                };
+                accepted.push((index, ordinal, value));
+                next = Some(ordinal + 1);
+            }
+            if accepted.len() < 2 {
+                return Vec::new();
+            }
+            let batch = accepted
+                .into_iter()
+                .map(|(index, ordinal, value)| {
+                    let response = state
+                        .remove(ordinal)
+                        .flatten()
+                        .expect("checked under prefetch lock");
+                    state.record_hit(&response);
+                    (index, response, value)
+                })
+                .collect();
+            let change = state.advance(next.expect("accepted prefetch prefix has an end"));
+            (batch, change)
+        };
+        self.shared.notify_advance(head, refill);
+        batch
     }
 
     pub(in crate::replay) fn close(&self) {
@@ -145,12 +195,32 @@ impl Responses {
         self.shared.packets_used.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(in crate::replay) fn record_packet_batch(&self, frames: usize, writes: usize) {
+        self.shared
+            .packets_used
+            .fetch_add(frames, Ordering::Relaxed);
+        self.shared.packet_batches.fetch_add(1, Ordering::Relaxed);
+        self.shared
+            .packet_batch_frames
+            .fetch_add(frames, Ordering::Relaxed);
+        self.shared
+            .packet_batch_writes
+            .fetch_add(writes, Ordering::Relaxed);
+    }
+
     pub(in crate::replay) fn close_on_drop(&self) -> CloseOnDrop {
         CloseOnDrop(self.shared.clone())
     }
 }
 
 impl Window {
+    fn record_hit(&mut self, response: &LoadedResponse) {
+        self.hits += 1;
+        self.prepared_hits += usize::from(response.has_source_preparation());
+        self.delivery_prepared_hits += usize::from(response.has_prepared_delivery());
+        self.packet_prepared_hits += usize::from(response.has_prefetched_packet());
+    }
+
     fn remove(&mut self, ordinal: usize) -> Option<Option<LoadedResponse>> {
         let response = self.completed.remove(&ordinal)?;
         self.release(response.as_ref());
@@ -321,6 +391,9 @@ impl Drop for Responses {
             delivery_prepared_hits,
             packet_prepared_hits,
             packets_used = self.shared.packets_used.load(Ordering::Relaxed),
+            packet_batches = self.shared.packet_batches.load(Ordering::Relaxed),
+            packet_batch_frames = self.shared.packet_batch_frames.load(Ordering::Relaxed),
+            packet_batch_writes = self.shared.packet_batch_writes.load(Ordering::Relaxed),
             misses,
             waits,
             peak_bytes,
@@ -336,6 +409,15 @@ impl Drop for CloseOnDrop {
 }
 
 impl Shared {
+    fn notify_advance(&self, head: Option<Arc<Notify>>, refill: bool) {
+        if let Some(head) = head {
+            head.notify_waiters();
+        }
+        if refill {
+            self.refill.notify_one();
+        }
+    }
+
     fn close(&self) -> (usize, usize, usize, usize, usize, usize, usize) {
         let mut state = self.state.lock().expect("response prefetch poisoned");
         state.closed = true;
@@ -449,6 +531,48 @@ mod tests {
             queue.take(9).await.unwrap().is_none(),
             "earlier delivery can load on demand"
         );
+    }
+
+    #[test]
+    fn ready_batch_leaves_a_single_candidate_for_normal_delivery() {
+        let shared = Arc::new(Shared::default());
+        let queue = Responses {
+            ordinals: HashMap::from([(7, 0), (9, 1), (11, 2), (13, 3)]),
+            shared: shared.clone(),
+        };
+        load_batch(
+            &shared,
+            vec![
+                (0, (7, stored_response(3))),
+                (1, (9, stored_response(5))),
+                (3, (13, stored_response(8))),
+            ],
+        );
+
+        let batch = queue.take_ready_batch([7, 9], |index, _| (index == 7).then_some(()));
+        assert!(batch.is_empty());
+        {
+            let state = shared.state.lock().unwrap();
+            assert_eq!(state.first, 0);
+            assert_eq!(state.hits, 0);
+            assert_eq!(state.bytes, 16);
+        }
+
+        let batch = queue.take_ready_batch([7, 9, 13], |_, response| {
+            Some(response.prefetch_retained_bytes())
+        });
+        let entries: Vec<_> = batch
+            .into_iter()
+            .map(|(index, _, bytes)| (index, bytes))
+            .collect();
+        assert_eq!(entries, [(7, 3), (9, 5)]);
+        assert!(queue.take_ready_batch([11, 13], |_, _| Some(())).is_empty());
+        let state = shared.state.lock().unwrap();
+        assert_eq!(state.first, 2);
+        assert_eq!(state.hits, 2);
+        assert_eq!(state.waits, 0);
+        assert_eq!(state.bytes, 8);
+        assert!(state.completed[&3].is_some());
     }
 
     #[tokio::test]

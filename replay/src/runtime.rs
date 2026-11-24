@@ -10,6 +10,8 @@ use tokio::{
 mod frontier;
 pub use frontier::FrontierWait;
 use frontier::FrontierWaiters;
+mod message_batch;
+pub use message_batch::{MessageBatch, PublishedMessageBatch};
 
 const MAX_PENDING_REQUESTS: usize = 256;
 const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
@@ -42,6 +44,7 @@ struct State {
     pending_bytes: usize,
     progressed_at: Option<Instant>,
     frontier_waiters: FrontierWaiters,
+    message_batch_reserved: bool,
 }
 
 struct Notifications {
@@ -138,6 +141,7 @@ impl SequenceRuntime {
                 pending_bytes: 0,
                 progressed_at: None,
                 frontier_waiters: FrontierWaiters::default(),
+                message_batch_reserved: false,
             }),
             changed: watch::channel(0).0,
             requests_changed: watch::channel(0).0,
@@ -214,6 +218,16 @@ impl SequenceRuntime {
         let state = self.state.lock().expect("sequence runtime poisoned");
         state.scheduler.expected().filter(|event| {
             event.kind == EventKind::Request && !state.scheduler.event_is_gated(event.sequence)
+        })
+    }
+
+    pub(crate) fn admissible_message(&self) -> Option<SourceEvent> {
+        let state = self.state.lock().expect("sequence runtime poisoned");
+        if state.message_batch_reserved || state.scheduler.failed() {
+            return None;
+        }
+        state.scheduler.expected().filter(|event| {
+            event.kind == EventKind::Message && !state.scheduler.event_is_gated(event.sequence)
         })
     }
 
@@ -318,6 +332,10 @@ impl SequenceRuntime {
 
     pub fn admit(self: &Arc<Self>, dependency: u64) -> Result<SequenceClaim> {
         let mut state = self.state.lock().expect("sequence runtime poisoned");
+        ensure!(
+            !state.message_batch_reserved,
+            "sequence frontier is reserved for a message batch"
+        );
         ensure!(
             state.scheduler.admit(dependency)? == Admission::Accepted,
             "request is earlier than its recorded sequence"

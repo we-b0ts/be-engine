@@ -4,6 +4,9 @@ use anyhow::Result;
 use bytes::Bytes;
 use std::collections::VecDeque;
 
+mod vectored;
+pub use vectored::{BatchWrite, MAX_MESSAGE_BATCH_FRAMES, write_message_batch};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputBoundary {
     Headers,

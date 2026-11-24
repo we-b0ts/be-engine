@@ -65,6 +65,34 @@ fn prefetched_session_identities_recheck_conflicts_after_unrelated_progress() {
 }
 
 #[test]
+fn batch_identity_reuse_requires_permanent_session_pairs() {
+    let mut store = IdentityStore::default();
+    let empty = session_decision(Vec::new());
+    let first = session_decision(vec![pair("1", "101")]);
+    let both = session_decision(vec![pair("1", "101"), pair("2", "102")]);
+    assert!(!store.prefetched_session_identity_is_committed(&empty));
+
+    store.configure_session(1).unwrap();
+    assert!(store.prefetched_session_identity_is_committed(&empty));
+    assert!(!store.prefetched_session_identity_is_committed(&first));
+    store.commit(first.clone()).unwrap();
+    assert!(store.prefetched_session_identity_is_committed(&first));
+    assert!(store.prefetched_session_identity_is_current(&both));
+    assert!(!store.prefetched_session_identity_is_committed(&both));
+
+    let case = decision("session", vec![pair("2", "102")]);
+    store.commit(case.clone()).unwrap();
+    assert!(!store.prefetched_session_identity_is_committed(&case));
+    assert!(!store.prefetched_session_identity_is_committed(&both));
+    store.commit(both.clone()).unwrap();
+    assert!(
+        !store.prefetched_session_identity_is_committed(&session_decision(vec![pair("2", "101")]))
+    );
+    store.begin_case("session");
+    assert!(store.prefetched_session_identity_is_committed(&both));
+}
+
+#[test]
 fn prefetched_session_identities_require_room_for_unbound_pairs() {
     let mut store = IdentityStore {
         session_limit: Some(1),

@@ -81,6 +81,11 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     fn prefetched_identity_is_current(&self, _proposed: &IdentityDecision) -> bool {
         false
     }
+    /// Batch reuse permits an already committed Session pair as well as an
+    /// empty decision. Committing these decisions adds no correspondences.
+    fn prefetched_identity_is_committed(&self, proposed: &IdentityDecision) -> bool {
+        proposed.is_empty()
+    }
     fn observe_source_comparison(&self, _comparison: &Comparison) {}
     fn begin_case(&self, case: &str);
     fn clear_case_values(&self, case: &str);

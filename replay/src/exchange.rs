@@ -19,7 +19,8 @@ mod sessions;
 pub use sessions::SessionBindings;
 
 use crate::{
-    Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle, ReplayExchangeStatus, ReplaySource,
+    Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle, PublishedMessageBatch,
+    ReplayExchangeStatus, ReplaySource,
     command::{CommandExchangeScope, PreferredMatch, preferred_match_indexed_with_priority},
     index::{
         CandidateCursor, CandidateIndex, CaseMembership, LaneIndex, LaneKey, LaneOwner,
@@ -789,23 +790,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
     ) -> Option<usize> {
         let select_scope = |source| {
             let matches = |index: &usize| {
-                let exchange = &self.exchanges[*index];
-                let scope = &exchange.source;
-                let owned = if source == ReplaySource::Case {
-                    scope.source == ReplaySource::Case && scope.case_id.as_deref() == active_case
-                } else {
-                    scope.source.is_run_owned()
-                };
-                owned
-                    && exchange.protocol == protocol
-                    && exchange.native.endpoint == *endpoint
-                    && self
-                        .lifecycle
-                        .live_status(*index, exchange.status)
-                        .is_available()
-                    && matches!(&exchange.native.input,
-                        traffic_protocol::connection::RecordedInput::Emission { after, .. }
-                        if anchors.contains(after))
+                self.matches_message(*index, protocol, endpoint, active_case, anchors, source)
             };
             let position = |index: &usize| self.exchanges[*index].source.position;
             if let Some(expected) = self.lifecycle.sequence.expected_message_indices(source) {
@@ -825,6 +810,93 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             return Some(index);
         }
         select_scope(ReplaySource::Startup)
+    }
+
+    /// Resolve one session batch member against the physical connection's
+    /// already delivered subscription anchors.
+    pub fn session_message_index(
+        &self,
+        dependency: u64,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        anchors: &[ProtocolRef],
+    ) -> Option<usize> {
+        self.lifecycle
+            .sequence
+            .session_position(dependency)
+            .filter(|&index| {
+                self.matches_message(
+                    index,
+                    protocol,
+                    endpoint,
+                    None,
+                    anchors,
+                    ReplaySource::Startup,
+                )
+            })
+    }
+
+    fn matches_message(
+        &self,
+        index: usize,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        active_case: Option<&str>,
+        anchors: &[ProtocolRef],
+        source: ReplaySource,
+    ) -> bool {
+        let exchange = &self.exchanges[index];
+        let scope = &exchange.source;
+        let owned = if source == ReplaySource::Case {
+            scope.source == ReplaySource::Case && scope.case_id.as_deref() == active_case
+        } else {
+            scope.source.is_run_owned()
+        };
+        owned
+            && exchange.protocol == protocol
+            && exchange.native.endpoint == *endpoint
+            && self
+                .lifecycle
+                .live_status(index, exchange.status)
+                .is_available()
+            && matches!(&exchange.native.input,
+                traffic_protocol::connection::RecordedInput::Emission { after, .. }
+                if anchors.contains(after))
+    }
+
+    /// Mark only receipt-confirmed members consumed. The batch path already
+    /// validated semantic work before obtaining this receipt.
+    pub fn complete_message_batch(&mut self, batch: &PublishedMessageBatch) -> Result<()> {
+        ensure!(
+            self.lifecycle.sequence.matches_message_batch(batch),
+            "message batch belongs to a different sequence"
+        );
+        let positions = || {
+            batch.dependencies().iter().map(|dependency| {
+                self.lifecycle
+                    .sequence
+                    .session_position(*dependency)
+                    .context("batch member is not bound to the native inventory")
+            })
+        };
+        for index in positions() {
+            let exchange = &self.exchanges[index?];
+            ensure!(
+                exchange.status.is_available()
+                    && matches!(
+                        exchange.native.input,
+                        traffic_protocol::connection::RecordedInput::Emission { .. }
+                    ),
+                "batch member is not an available native emission"
+            );
+        }
+        for index in positions() {
+            self.exchanges[index?].status = ReplayExchangeStatus::Consumed;
+        }
+        if !batch.dependencies().is_empty() {
+            self.lifecycle.notify_delivered_messages();
+        }
+        Ok(())
     }
 
     pub fn claim_bound(&mut self, index: usize, owner: Uuid) -> Result<ClaimTicket> {

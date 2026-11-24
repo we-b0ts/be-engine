@@ -9,6 +9,8 @@ use traffic_protocol::{
     message::ProtocolMessage,
 };
 
+mod message_batch;
+
 pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
     stream: TcpStream,
     peer: SocketAddr,
@@ -109,6 +111,15 @@ impl<P: ReplayProtocolSet> Drop for Host<P> {
 impl<P: ReplayProtocolSet> RequestHost for Host<P> {
     fn release_session(&self) {
         self.bindings.release(self.session);
+    }
+
+    fn try_write_message_batch<'a>(
+        &'a self,
+        anchors: &'a [traffic_model::recording::ProtocolRef],
+        io: &'a mut dyn traffic_protocol::connection::OutputIo,
+        framer: &'a mut dyn traffic_protocol::connection::MessageBatchFramer,
+    ) -> NativeFuture<'a, bool> {
+        Box::pin(self.write_message_batch(anchors, io, framer))
     }
 
     fn reject_command<'a>(

@@ -1,5 +1,5 @@
 //! Native inventory positions bound to protocol-independent event schedules.
-use crate::{EventKind, SequenceClaim, SequenceRuntime};
+use crate::{PublishedMessageBatch, SequenceClaim, SequenceRuntime};
 use anyhow::{Context, Result};
 use std::{collections::HashMap, sync::Arc};
 
@@ -94,11 +94,28 @@ impl SequenceBinding {
             (run, run.runtimes.as_slice())
         };
         Some(runtimes.iter().filter_map(move |runtime| {
-            let event = runtime
-                .expected()
-                .filter(|event| event.kind == EventKind::Message)?;
+            let event = runtime.admissible_message()?;
             binding.positions.get(&event.dependency_sequence).copied()
         }))
+    }
+
+    pub(crate) fn session_position(&self, dependency: u64) -> Option<usize> {
+        self.session_run()?.0.positions.get(&dependency).copied()
+    }
+
+    pub(crate) fn matches_message_batch(&self, batch: &PublishedMessageBatch) -> bool {
+        self.session_run()
+            .is_some_and(|(_, runtime)| batch.belongs_to(runtime))
+    }
+
+    fn session_run(&self) -> Option<(&Self, &SequenceRuntime)> {
+        let run = self.run.as_deref()?;
+        let [runtime] = run.runtimes.as_slice() else {
+            return None;
+        };
+        runtime
+            .is_session_trace()
+            .then_some((run, runtime.as_ref()))
     }
 
     pub fn subscriptions(&self) -> Vec<tokio::sync::watch::Receiver<u64>> {

@@ -48,6 +48,7 @@ pub(super) struct PreparedPacket {
     pub(super) bytes: Bytes,
     pub(super) comparison: Comparison,
     pub(super) identity: IdentityDecision,
+    batchable: bool,
     guards: Vec<Box<dyn PreparedDeliveryGuard>>,
 }
 
@@ -213,6 +214,9 @@ impl FrozenSource {
         let Some((bytes, wire_bytes)) = encoder.prefetch_packet(&rendered.values)? else {
             return Ok(None);
         };
+        let batchable = self.contracts.prefetched_identity_is_committed(&identity)
+            && rendered.comparison.passed()
+            && guards.iter().all(|guard| guard.is_state_independent());
         let retained = std::mem::size_of::<PreparedPacket>()
             .saturating_add(wire_bytes)
             .saturating_add(comparison_bytes)
@@ -232,6 +236,7 @@ impl FrozenSource {
                 bytes,
                 comparison: rendered.comparison,
                 identity,
+                batchable,
                 guards,
             },
             retained,
@@ -240,6 +245,12 @@ impl FrozenSource {
 }
 
 impl LoadedResponse {
+    /// A prepared packet that neither reads nor writes live delivery state.
+    pub fn batchable_message_packet(&self) -> Option<&Bytes> {
+        let packet = self.source.as_ref()?.packet.as_ref()?;
+        packet.batchable.then_some(&packet.bytes)
+    }
+
     pub fn prefetch_retained_bytes(&self) -> usize {
         self.bytes
     }
@@ -258,6 +269,24 @@ impl LoadedResponse {
         self.source
             .as_ref()
             .is_some_and(|source| source.packet.is_some())
+    }
+}
+
+impl Inventory {
+    pub fn commit_batched_message(&self, loaded: LoadedResponse) -> Result<()> {
+        let prepared = loaded
+            .source
+            .context("message batch has no Source comparison")?;
+        let packet = prepared
+            .packet
+            .filter(|packet| packet.batchable)
+            .context("message batch has no independent prepared packet")?;
+        self.contracts.observe_source_comparison(&Comparison {
+            evaluated: prepared.observed_rules,
+            ..Comparison::default()
+        });
+        self.contracts
+            .commit_comparison(packet.comparison, packet.identity)
     }
 }
 

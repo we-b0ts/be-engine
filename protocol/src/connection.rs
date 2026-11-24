@@ -177,6 +177,17 @@ pub trait RequestHost: Send + Sync {
         Box::pin(async { anyhow::bail!("server messages are unavailable") })
     }
 
+    /// Deliver an immediately available prefix of server messages together.
+    /// A false result leaves the ordinary single-message path available.
+    fn try_write_message_batch<'a>(
+        &'a self,
+        _anchors: &'a [ProtocolRef],
+        _io: &'a mut dyn OutputIo,
+        _framer: &'a mut dyn MessageBatchFramer,
+    ) -> NativeFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
     fn begin_input(&self) -> NativeFuture<'_, Box<dyn RequestInput>> {
         Box::pin(async { Ok(Box::new(()) as Box<dyn RequestInput>) })
     }
@@ -191,6 +202,12 @@ pub trait RequestHost: Send + Sync {
         &self,
         request: Arc<dyn ProtocolMessage>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>>;
+}
+
+/// Applies each server message's connection-local protocol framing using the
+/// recorded anchor already authenticated on this connection by the host.
+pub trait MessageBatchFramer: Send {
+    fn frame_message(&mut self, anchor: &ProtocolRef, bytes: Bytes) -> Result<Bytes>;
 }
 
 pub struct RejectedCommand<'a> {

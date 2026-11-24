@@ -4,10 +4,14 @@ use std::sync::Mutex;
 use anyhow::Context;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    sync::{mpsc, oneshot},
+    sync::{
+        mpsc::{self, error::TryRecvError},
+        oneshot,
+    },
 };
 use traffic_protocol::connection::{
-    ConnectionIo, NativeFuture, OutputIo, RequestHost, ResponseDelivery, ResponseFramer,
+    ConnectionIo, MessageBatchFramer, NativeFuture, OutputIo, RequestHost, ResponseDelivery,
+    ResponseFramer,
 };
 
 use super::{
@@ -179,6 +183,26 @@ async fn deliver(
             .expect("Redis session")
             .subscriptions
             .anchors();
+        if reply.is_none()
+            && emission.is_none()
+            && !anchors.is_empty()
+            && host.event_session()
+            && writer.is_write_vectored()
+        {
+            // Retain the normal writer's priority for a queued command.
+            match rx.try_recv() {
+                Ok(next) => reply = Some(next),
+                Err(TryRecvError::Disconnected) => return Ok(()),
+                Err(TryRecvError::Empty) => {
+                    if host
+                        .try_write_message_batch(&anchors, writer, &mut BatchPushFramer(session))
+                        .await?
+                    {
+                        continue;
+                    }
+                }
+            }
+        }
         tokio::select! {
             biased;
             next = rx.recv(), if reply.is_none() => {
@@ -188,7 +212,7 @@ async fn deliver(
             ready = async { emission.as_mut().expect("queued emission").delivery.ready().await }, if emission.is_some() => {
                 ready?;
                 let Emission { delivery, anchors, after } = emission.take().expect("ready emission");
-                delivery.write(writer, &mut PushFramer { session, anchors, after }).await?;
+                delivery.write(writer, &mut PushFramer { session, anchors: &anchors, after: after.as_ref() }).await?;
             }
             delivery = host.next_message(anchors.clone()), if emission.is_none() && !anchors.is_empty() => {
                 let delivery = delivery?;
@@ -305,28 +329,44 @@ impl ResponseFramer for ReplyFramer<'_> {
 
 struct PushFramer<'a> {
     session: &'a Mutex<Session>,
-    anchors: Vec<ProtocolRef>,
-    after: Option<ProtocolRef>,
+    anchors: &'a [ProtocolRef],
+    after: Option<&'a ProtocolRef>,
 }
 
 impl ResponseFramer for PushFramer<'_> {
     fn frame(&mut self, bytes: Bytes) -> Result<Bytes> {
-        let push = frame::decode(&bytes)?.context("Redis delivery has no notification frame")?;
-        let session = self.session.lock().expect("Redis session");
-        let subscription = session
-            .subscriptions
-            .get(push.kind, &push.subject)
-            .context("Redis notification subject has no active subscription")?;
-        ensure!(
-            self.after.as_ref().map_or_else(
-                || self.anchors.contains(&subscription.anchor),
-                |after| after == &subscription.anchor
-            ),
-            "Redis notification subscription generation changed"
-        );
-        if subscription.target.as_slice() == push.subject.as_ref() {
-            return Ok(bytes);
-        }
-        crate::subject::translate_frame(&push, &subscription.target).map(Bytes::from)
+        frame_push(self.session, bytes, |anchor| {
+            self.after
+                .map_or_else(|| self.anchors.contains(anchor), |after| after == anchor)
+        })
     }
+}
+
+struct BatchPushFramer<'a>(&'a Mutex<Session>);
+
+impl MessageBatchFramer for BatchPushFramer<'_> {
+    fn frame_message(&mut self, anchor: &ProtocolRef, bytes: Bytes) -> Result<Bytes> {
+        frame_push(self.0, bytes, |active| anchor == active)
+    }
+}
+
+fn frame_push(
+    session: &Mutex<Session>,
+    bytes: Bytes,
+    accepts_anchor: impl FnOnce(&ProtocolRef) -> bool,
+) -> Result<Bytes> {
+    let push = frame::decode(&bytes)?.context("Redis delivery has no notification frame")?;
+    let session = session.lock().expect("Redis session");
+    let subscription = session
+        .subscriptions
+        .get(push.kind, &push.subject)
+        .context("Redis notification subject has no active subscription")?;
+    ensure!(
+        accepts_anchor(&subscription.anchor),
+        "Redis notification subscription generation changed"
+    );
+    if subscription.target.as_slice() == push.subject.as_ref() {
+        return Ok(bytes);
+    }
+    crate::subject::translate_frame(&push, &subscription.target).map(Bytes::from)
 }

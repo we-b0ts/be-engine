@@ -174,4 +174,10 @@ impl PreparedDeliveryGuard for DeliveryIdentityGuard {
             .values
             .prefetched_identity_is_current(&self.identity)
     }
+
+    fn is_state_independent(&self) -> bool {
+        self.owner
+            .values
+            .prefetched_identity_is_committed(&self.identity)
+    }
 }

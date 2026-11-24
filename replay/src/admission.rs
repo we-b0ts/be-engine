@@ -194,6 +194,10 @@ impl Lifecycle {
         self.changed.notify_waiters();
         self.control_changed.notify_waiters();
     }
+
+    pub(crate) fn notify_delivered_messages(&self) {
+        self.changed.notify_waiters();
+    }
     pub fn claim(
         &mut self,
         index: usize,

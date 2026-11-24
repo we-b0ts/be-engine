@@ -23,6 +23,10 @@ pub struct PrefetchedMessage {
 pub trait PreparedDeliveryGuard: Send + Sync {
     fn retained_bytes(&self) -> usize;
     fn is_current(&self) -> bool;
+    /// Whether subsequent Session state changes can affect this prepared result.
+    fn is_state_independent(&self) -> bool {
+        false
+    }
 }
 
 impl RenderedMessage {

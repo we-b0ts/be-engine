@@ -77,6 +77,16 @@ impl ValueState {
                 .prefetched_session_identity_is_current(proposed)
     }
 
+    pub fn prefetched_identity_is_committed(&self, proposed: &IdentityDecision) -> bool {
+        self.session_scope.get().is_some()
+            && self.identity_preview.is_none()
+            && self
+                .identities
+                .lock()
+                .expect("identity contracts")
+                .prefetched_session_identity_is_committed(proposed)
+    }
+
     pub fn with_identity_preview(&self, decision: IdentityDecision) -> Result<Self> {
         let preview = self
             .identities
@@ -200,6 +210,10 @@ impl ValueRuleHost for ValueState {
 
     fn prefetched_identity_is_current(&self, proposed: &IdentityDecision) -> bool {
         Self::prefetched_identity_is_current(self, proposed)
+    }
+
+    fn prefetched_identity_is_committed(&self, proposed: &IdentityDecision) -> bool {
+        Self::prefetched_identity_is_committed(self, proposed)
     }
 
     fn translate_delivery_document(
