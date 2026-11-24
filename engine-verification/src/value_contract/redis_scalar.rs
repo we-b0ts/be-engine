@@ -53,10 +53,9 @@ pub fn plan(
     field: &GlobalField,
     settings: &crate::policy::TimePolicy,
 ) -> crate::policy::CompiledJsonPolicy {
-    crate::policy::CompiledJsonPolicy {
-        time: settings.clone(),
-        signatures: Default::default(),
-        fields: std::collections::BTreeMap::from([(String::new(), field.clone())]),
-        fingerprint: String::new(),
-    }
+    let mut plan = crate::policy::CompiledJsonPolicy::default().with_fields(
+        std::collections::BTreeMap::from([(String::new(), field.clone())]),
+    );
+    plan.time = settings.clone();
+    plan
 }

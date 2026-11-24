@@ -1,7 +1,7 @@
 //! Native requests enter the common observe/select/wait/commit execution loop.
 use super::*;
 use traffic_contract::{compare::Comparison, identity::IdentityDecision};
-use traffic_protocol::message::ProtocolMessage;
+use traffic_protocol::message::{MessageEncoder, ProtocolMessage};
 
 pub struct Request {
     pub protocol: ProtocolId,
@@ -107,12 +107,47 @@ impl Inventory {
         &self,
         index: usize,
         observed: DateTime<Utc>,
-        loaded: Option<&dyn traffic_protocol::message::MessageEncoder>,
+        loaded: Option<&dyn MessageEncoder>,
+        storage: &super::StorageDelivery,
+    ) -> Result<ResponsePlan> {
+        self.render_loaded_response(index, observed, loaded, None, storage)
+    }
+
+    pub fn render_prefetched_response(
+        &self,
+        index: usize,
+        observed: DateTime<Utc>,
+        loaded: &mut LoadedResponse,
+        storage: &super::StorageDelivery,
+    ) -> Result<ResponsePlan> {
+        if let Some(source) = &mut loaded.source {
+            self.contracts.observe_source_comparison(&Comparison {
+                evaluated: std::mem::take(&mut source.observed_rules),
+                ..Comparison::default()
+            });
+        }
+        self.render_loaded_response(
+            index,
+            observed,
+            Some(loaded.encoder.as_ref()),
+            loaded.source.as_ref(),
+            storage,
+        )
+    }
+
+    fn render_loaded_response(
+        &self,
+        index: usize,
+        observed: DateTime<Utc>,
+        loaded: Option<&dyn MessageEncoder>,
+        source: Option<&stored::PreparedSource>,
         storage: &super::StorageDelivery,
     ) -> Result<ResponsePlan> {
         let exchange = &self.core.exchanges[index];
         let prepared;
-        let (response, encoder) = if let Some(encoder) = loaded {
+        let (response, encoder) = if let (Some(source), Some(encoder)) = (source, loaded) {
+            (&source.message, encoder)
+        } else if let Some(encoder) = loaded {
             prepared = self
                 .prepared_messages(
                     &exchange.native,
@@ -136,7 +171,7 @@ impl Inventory {
         let scope = self.scope(index);
         let clocks = self.clocks(index, observed, true);
         let storage_values = self.storage_values(index, storage, response)?;
-        let rendered = response.render_delivery_with_storage(
+        let rendered = response.render_delivery_with_lazy_documents(
             clocks,
             self.contracts.metadata(),
             &exchange.delivery,
@@ -148,7 +183,7 @@ impl Inventory {
             },
             |source, delivered| {
                 self.contracts
-                    .translate_document(&scope, source, delivered, clocks)
+                    .translate_delivery_document(&scope, source, delivered, clocks)
             },
         )?;
         let proposed = identity(self.contracts.as_ref(), self, index, &rendered.comparison)?;

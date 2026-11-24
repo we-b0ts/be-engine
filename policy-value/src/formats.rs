@@ -28,7 +28,7 @@ pub fn checks<'a>(
     let mut checks: Vec<(String, Check<'a>)> = Vec::new();
     for (pattern, field) in plan.fields() {
         if let GlobalField::Template { formats } = field {
-            for pointer in traffic_contract::delivery::select(pattern, source)? {
+            for pointer in plan.select_paths(pattern, source)? {
                 checks.push((
                     pointer,
                     Box::new(move |context| template::compare(context, formats, plan.policies())),
@@ -37,7 +37,7 @@ pub fn checks<'a>(
             continue;
         }
         if let GlobalField::Jwt { signature } = field {
-            for pointer in traffic_contract::delivery::select(pattern, source)? {
+            for pointer in plan.select_paths(pattern, source)? {
                 checks.push((
                     pointer,
                     Box::new(move |context| jwt::compare(context, plan, signature)),
@@ -48,7 +48,7 @@ pub fn checks<'a>(
         let GlobalField::Url { formats } = field else {
             continue;
         };
-        for pointer in traffic_contract::delivery::select(pattern, source)? {
+        for pointer in plan.select_paths(pattern, source)? {
             anyhow::ensure!(
                 source
                     .pointer(&pointer)
@@ -180,8 +180,15 @@ pub trait FormatHost: Send + Sync {
         fields: &BTreeMap<String, GlobalField>,
         clocks: AnchorClocks,
     ) -> Result<Comparison>;
+    fn selectors(&self) -> Option<&crate::fields::FieldSelectors> {
+        None
+    }
     fn field_plan(&self) -> crate::fields::FieldPlan<'_> {
         crate::fields::FieldPlan::new(self.fields(), self.time(), self.policies())
+            .with_selectors(self.selectors())
+    }
+    fn select_paths(&self, pattern: &str, source: &serde_json::Value) -> Result<Vec<String>> {
+        self.field_plan().select_paths(pattern, source)
     }
 }
 
@@ -198,6 +205,9 @@ impl FormatHost for FilteredHost<'_> {
     }
     fn policies(&self) -> &PolicyRegistry {
         self.parent.policies()
+    }
+    fn selectors(&self) -> Option<&crate::fields::FieldSelectors> {
+        self.parent.selectors()
     }
     fn signing_key(&self, signature: &str) -> Result<(traffic_jwt::Algorithm, &[u8])> {
         self.parent.signing_key(signature)

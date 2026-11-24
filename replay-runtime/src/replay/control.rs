@@ -304,6 +304,9 @@ async fn finalize_replay<P: ReplayProtocolSet>(
     }
     let finalized_at = Utc::now();
     state.finalized_at = Some(finalized_at);
+    if let Some(session) = &mut state.session_events {
+        session.stop_prefetch();
+    }
     state.native.core.lifecycle.notify_waiters();
     report.finalized_at = Some(finalized_at);
     report.finalized = true;

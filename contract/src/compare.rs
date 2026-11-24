@@ -10,14 +10,18 @@ use crate::rule::{FieldContract, TimeAnchor};
 mod composition;
 pub mod diagnosis;
 pub mod identity;
+mod logical;
 mod scope;
 pub use identity::key as identity_key;
+pub use logical::{LogicalProjection, compare_logical_all, compare_projected_logical_all};
 mod native;
 mod observations;
 mod pointers;
 mod policy;
+mod walk;
 pub use ValueCopyProof as TimeCopyProof;
 pub use capabilities::{ExplicitRules, RegisteredRules, RuleMetadata, ValueCopyProof};
+use walk::{Node, Paths};
 mod capabilities;
 pub use native::{
     LeafContext, LeafObservations, NativeContext, NativeField, NonceIdentity, VerifiedField,
@@ -275,41 +279,6 @@ pub fn compare_all(
     )
 }
 
-#[allow(clippy::too_many_arguments)] // Logical documents retain native verifiers and authenticated copy capabilities.
-pub fn compare_logical_all(
-    source: &traffic_value::Value,
-    target: &traffic_value::Value,
-    fields: &[Field<'_>],
-    native: &[NativeField<'_>],
-    verified: &[VerifiedField<'_>],
-    clocks: AnchorClocks,
-    copies: &[&dyn ValueCopyProof],
-    metadata: &dyn RuleMetadata,
-) -> Comparison {
-    let (Ok(source_projection), Ok(target_projection)) =
-        (serde_json::to_value(source), serde_json::to_value(target))
-    else {
-        return Comparison {
-            differences: vec![difference(
-                "",
-                "logical values cannot enter the compatibility projection",
-            )],
-            ..Default::default()
-        };
-    };
-    compare_inputs(
-        &source_projection,
-        &target_projection,
-        fields,
-        native,
-        verified,
-        clocks,
-        copies,
-        metadata,
-        Some((source, target)),
-    )
-}
-
 #[allow(clippy::too_many_arguments)] // The optional typed roots preserve codec scalar categories beside legacy adapters.
 fn compare_inputs(
     source: &Value,
@@ -322,6 +291,16 @@ fn compare_inputs(
     rule_metadata: &dyn RuleMetadata,
     logical_roots: Option<(&traffic_value::Value, &traffic_value::Value)>,
 ) -> Comparison {
+    let mut remaining = MAX_COMPARISONS;
+    if std::ptr::eq(source, target)
+        && fields.is_empty()
+        && native.is_empty()
+        && verified.is_empty()
+        && time_copies.is_empty()
+        && within_comparison_budget(source, &mut remaining, 0)
+    {
+        return Comparison::default();
+    }
     let mut comparator = Comparator {
         rule_metadata,
         fields,
@@ -344,7 +323,19 @@ fn compare_inputs(
     };
     let mut decisions = Decisions::default();
     let result = comparator
-        .node(source, target, "", "", &mut decisions, 0)
+        .node(
+            Node {
+                projected: source,
+                logical: logical_roots.map(|(source, _)| source),
+            },
+            Node {
+                projected: target,
+                logical: logical_roots.map(|(_, target)| target),
+            },
+            &mut Paths::default(),
+            &mut decisions,
+            0,
+        )
         .and_then(|()| {
             if let Some(missing) = fields.iter().enumerate().find(|(index, field)| {
                 !decisions.selected.contains(index) && pointer_observed(source, field.pointer)
@@ -383,6 +374,22 @@ fn compare_inputs(
         policy_counts,
         nonce_relationships: decisions.nonces,
         identities: decisions.identities,
+    }
+}
+
+fn within_comparison_budget(value: &Value, remaining: &mut usize, depth: usize) -> bool {
+    if depth > MAX_DEPTH || *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .all(|value| within_comparison_budget(value, remaining, depth + 1)),
+        Value::Object(fields) => fields
+            .values()
+            .all(|value| within_comparison_budget(value, remaining, depth + 1)),
+        _ => true,
     }
 }
 
@@ -440,31 +447,24 @@ fn escape(value: &str) -> String {
 }
 
 impl Comparator<'_> {
-    fn equal_values(
-        &self,
-        source: &Value,
-        target: &Value,
-        source_path: &str,
-        target_path: &str,
-    ) -> bool {
-        match self.logical_roots {
-            Some((left, right)) => {
-                left.pointer(source_path).is_some()
-                    && left.pointer(source_path) == right.pointer(target_path)
-            }
-            None => source == target,
+    fn equal_values(&self, source: Node<'_>, target: Node<'_>) -> bool {
+        if self.logical_roots.is_some() {
+            source.logical.is_some() && source.logical == target.logical
+        } else {
+            source.projected == target.projected
         }
     }
 
     fn node(
         &mut self,
-        source: &Value,
-        target: &Value,
-        pointer: &str,
-        target_pointer: &str,
+        source_node: Node<'_>,
+        target_node: Node<'_>,
+        paths: &mut Paths,
         decisions: &mut Decisions,
         depth: usize,
     ) -> Result<(), Difference> {
+        let (pointer, target_pointer) = paths.pair();
+        let (source, target) = (source_node.projected, target_node.projected);
         if depth > MAX_DEPTH || self.remaining == 0 {
             return Err(difference(pointer, "contract comparison limit exceeded"));
         }
@@ -574,7 +574,7 @@ impl Comparator<'_> {
                     }
                 }
                 if inactive {
-                    if !self.equal_values(source, target, pointer, target_pointer) {
+                    if !self.equal_values(source_node, target_node) {
                         return Err(difference(
                             pointer,
                             "inactive field contract requires exact equality",
@@ -644,7 +644,7 @@ impl Comparator<'_> {
                         )
                     })?
                 {
-                    return if self.equal_values(source, target, pointer, target_pointer) {
+                    return if self.equal_values(source_node, target_node) {
                         Ok(())
                     } else {
                         Err(difference(
@@ -673,7 +673,7 @@ impl Comparator<'_> {
             }
             match contract {
                 FieldContract::Exact => {
-                    return if self.equal_values(source, target, pointer, target_pointer) {
+                    return if self.equal_values(source_node, target_node) {
                         Ok(())
                     } else {
                         Err(difference(
@@ -683,7 +683,7 @@ impl Comparator<'_> {
                     };
                 }
                 FieldContract::IdentityAnchor => {
-                    if !self.equal_values(source, target, pointer, target_pointer) {
+                    if !self.equal_values(source_node, target_node) {
                         return Err(difference(pointer, "exact identity value changed"));
                     }
                     return decisions
@@ -706,9 +706,8 @@ impl Comparator<'_> {
                 }
             }
         }
-        if let Some((source, target)) = self.logical_roots {
-            let source = source.pointer(pointer);
-            let target = target.pointer(target_pointer);
+        if self.logical_roots.is_some() {
+            let (source, target) = (source_node.logical, target_node.logical);
             let scalar = |value: Option<&traffic_value::Value>| {
                 value.is_some_and(|value| {
                     !matches!(
@@ -740,18 +739,18 @@ impl Comparator<'_> {
                     ));
                 }
                 for (key, source) in source {
-                    let child = format!("{pointer}/{}", escape(key));
-                    let target = target
-                        .get(key)
-                        .ok_or_else(|| difference(&child, "field presence changed"))?;
-                    self.node(
-                        source,
-                        target,
-                        &child,
-                        &format!("{target_pointer}/{}", escape(key)),
-                        decisions,
-                        depth + 1,
-                    )?;
+                    paths.at_key(key, |paths| {
+                        let target = target
+                            .get(key)
+                            .ok_or_else(|| difference(paths.pair().0, "field presence changed"))?;
+                        self.node(
+                            source_node.object_child(source, key),
+                            target_node.object_child(target, key),
+                            paths,
+                            decisions,
+                            depth + 1,
+                        )
+                    })?;
                 }
             }
             (Value::Array(source), Value::Array(target)) => {
@@ -759,14 +758,15 @@ impl Comparator<'_> {
                     return Err(difference(pointer, "array cardinality changed"));
                 }
                 for (index, (source, target)) in source.iter().zip(target).enumerate() {
-                    self.node(
-                        source,
-                        target,
-                        &format!("{pointer}/{index}"),
-                        &format!("{target_pointer}/{index}"),
-                        decisions,
-                        depth + 1,
-                    )?;
+                    paths.at_index(index, |paths| {
+                        self.node(
+                            source_node.array_child(source, index),
+                            target_node.array_child(target, index),
+                            paths,
+                            decisions,
+                            depth + 1,
+                        )
+                    })?;
                 }
             }
             _ if source == target && same_type(source, target) => (),
@@ -800,4 +800,22 @@ fn test_compare(
         &[],
         &RegisteredRules(traffic_extensions::policies()),
     )
+}
+
+#[cfg(test)]
+#[test]
+fn exact_same_reference_keeps_the_comparison_budget_and_diagnostic() {
+    let source = Value::Array(vec![Value::Null; MAX_COMPARISONS - 1]);
+    assert!(compare(&source, &source, &[], AnchorClocks::default()).passed());
+    let source = Value::Array(vec![Value::Null; MAX_COMPARISONS]);
+    let result = compare(&source, &source, &[], AnchorClocks::default());
+    assert_eq!(result.differences.len(), 1);
+    assert_eq!(
+        result.differences[0].pointer,
+        format!("/{}", MAX_COMPARISONS - 1)
+    );
+    assert_eq!(
+        result.differences[0].reason,
+        "contract comparison limit exceeded"
+    );
 }

@@ -2,9 +2,11 @@
 use super::*;
 use crate::policy::{CompiledJsonPolicy, CompiledRule, FieldContract};
 use crate::value_contract::{
+    global_protocol::url,
     identities::{IdentityDecision, IdentityDelivery},
     json::{AnchorClocks, Comparison},
 };
+use std::borrow::Cow;
 #[cfg(test)]
 mod signature_tests;
 #[cfg(test)]
@@ -44,14 +46,8 @@ impl RequestContracts {
     pub fn global_json(&self) -> Option<&CompiledJsonPolicy> {
         self.compiled.as_ref()?.global_json.as_ref().or_else(|| {
             static EMPTY: std::sync::OnceLock<CompiledJsonPolicy> = std::sync::OnceLock::new();
-            self.pre_match_enabled.then(|| {
-                EMPTY.get_or_init(|| CompiledJsonPolicy {
-                    time: Default::default(),
-                    signatures: Default::default(),
-                    fields: Default::default(),
-                    fingerprint: String::new(),
-                })
-            })
+            self.pre_match_enabled
+                .then(|| EMPTY.get_or_init(CompiledJsonPolicy::default))
         })
     }
 
@@ -170,6 +166,19 @@ impl RequestContracts {
         logical: &mut Value,
         global: &CompiledJsonPolicy,
     ) -> Result<(IdentityDecision, Vec<String>)> {
+        let mut delivered = Cow::Owned(std::mem::take(logical));
+        let result = self.translate_identity_plan_cow(case, source, &mut delivered, global);
+        *logical = delivered.into_owned();
+        result
+    }
+
+    pub(super) fn translate_identity_plan_cow(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+    ) -> Result<(IdentityDecision, Vec<String>)> {
         let selected = global.identity_fields(source)?;
         let mut pointers = Vec::new();
         let mut entries = Vec::new();
@@ -204,31 +213,31 @@ impl RequestContracts {
             )?;
         }
         for (pointer, value) in pointers.iter().zip(values) {
-            *logical
-                .pointer_mut(pointer)
-                .context("global identity delivery field disappeared")? = value;
+            if matches!(logical, Cow::Owned(_)) || logical.pointer(pointer) != Some(&value) {
+                *logical
+                    .to_mut()
+                    .pointer_mut(pointer)
+                    .context("global identity delivery field disappeared")? = value;
+            }
         }
-        let query_plan = crate::value_contract::global_protocol::url::query_plan(global);
-        for pointer in crate::value_contract::global_protocol::url::selected(global, source)? {
+        let mut query_plan = None;
+        for pointer in url::selected(global, source)? {
             let Some(value) = source.pointer(&pointer) else {
                 continue;
             };
-            let Ok(document) = crate::value_contract::global_protocol::url::Document::parse(value)
-            else {
+            let Ok(document) = url::Document::parse(value) else {
                 continue;
             };
+            let plan = query_plan.get_or_insert_with(|| url::query_plan(global));
             let mut query = document.logical.clone();
             let preview = self.with_identity_proposals(combined.identity.iter())?;
-            let (nested, _) = preview.translate_identity_plan(
-                case,
-                &document.logical,
-                &mut query,
-                &query_plan,
-            )?;
+            let (nested, _) =
+                preview.translate_identity_plan(case, &document.logical, &mut query, plan)?;
             self.merge_identity_decision(&mut combined, nested)?;
             let rebuilt = Value::String(document.rebuild(&query)?);
             if logical.pointer(&pointer) != Some(&rebuilt) {
                 *logical
+                    .to_mut()
                     .pointer_mut(&pointer)
                     .context("global URL delivery field disappeared")? = rebuilt;
                 pointers.push(pointer);
@@ -261,6 +270,7 @@ impl RequestContracts {
             let rebuilt = Value::String(document.rebuild(&tokens)?);
             if logical.pointer(&pointer) != Some(&rebuilt) {
                 *logical
+                    .to_mut()
                     .pointer_mut(&pointer)
                     .context("global template delivery field disappeared")? = rebuilt;
                 pointers.push(pointer);

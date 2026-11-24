@@ -71,6 +71,28 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
         let timer_scope = super::super::session::TIMER_SCOPE;
         self.timers.validate_session(timer_scope, &plan)?;
         self.timers.activate(Some(timer_scope));
+        let mut stored = std::collections::HashMap::new();
+        for &(index, sequence) in &native {
+            if let Some(preparation) = self.native.stored_response_preparation(index) {
+                stored.insert(sequence, (index, preparation));
+            }
+        }
+        let responses = plan
+            .events()
+            .filter(|event| {
+                matches!(
+                    event.kind,
+                    traffic_replay::EventKind::ResponseHeadersStarted
+                        | traffic_replay::EventKind::ResponsePartStarted
+                        | traffic_replay::EventKind::ResponseEndStarted
+                        | traffic_replay::EventKind::ResponseHeaders
+                        | traffic_replay::EventKind::ResponsePart
+                        | traffic_replay::EventKind::ResponseEnd
+                )
+            })
+            .filter_map(|event| stored.remove(&event.dependency_sequence))
+            .collect();
+        let prefetch = super::super::session::prefetch::Responses::start(responses);
         let cap = super::super::control::input_timing::source_fast_cap(self)
             .map(std::time::Duration::from_millis);
         let runtime =
@@ -93,7 +115,9 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
             protocols,
             registered,
         });
-        self.session_events = Some(super::super::session::Session::new(runtime, timeout));
+        let mut session = super::super::session::Session::new(runtime, timeout);
+        session.prefetch = prefetch;
+        self.session_events = Some(session);
         Ok(())
     }
 

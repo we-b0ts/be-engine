@@ -147,6 +147,8 @@ pub fn policy_paths(
     execution::policy_paths(source, plan, clocks)
 }
 
+pub use execution::prepare_fields;
+
 pub fn compare_fields(
     source: &traffic_value::Value,
     target: &traffic_value::Value,
@@ -160,6 +162,25 @@ pub fn compare_fields(
         target,
         plan,
         fields,
+        clocks,
+    )
+}
+
+pub fn compare_prepared_fields(
+    source: &traffic_value::Value,
+    target: &traffic_value::Value,
+    plan: &CompiledJsonPolicy,
+    fields: &[Field<'_>],
+    selected: &[traffic_policy_value::fields::SelectedGlobalField],
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    execution::compare_prepared_fields(
+        &super::execution_context(),
+        source,
+        target,
+        plan,
+        fields,
+        selected,
         clocks,
     )
 }
@@ -209,6 +230,24 @@ pub fn materialize_logical(
     clocks: AnchorClocks,
 ) -> Result<Value> {
     execution::materialize_logical(&super::execution_context(), source, plan, rules, clocks)
+}
+
+pub fn translate_times(
+    source: &Value,
+    delivered: &mut Value,
+    plan: &CompiledJsonPolicy,
+    clocks: AnchorClocks,
+) -> Result<()> {
+    execution::translate_times(&super::execution_context(), source, delivered, plan, clocks)
+}
+
+pub fn translate_times_cow(
+    source: &Value,
+    delivered: &mut std::borrow::Cow<'_, Value>,
+    plan: &CompiledJsonPolicy,
+    clocks: AnchorClocks,
+) -> Result<()> {
+    execution::translate_times_cow(&super::execution_context(), source, delivered, plan, clocks)
 }
 
 #[cfg(test)]

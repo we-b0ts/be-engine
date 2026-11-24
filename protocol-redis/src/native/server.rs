@@ -14,7 +14,7 @@ use super::{
     subscription::{Confirmation, Subscriptions},
     *,
 };
-use crate::RedisCommand;
+use crate::{RedisCommand, pubsub::frame};
 
 pub(super) struct Server {
     pub limit: usize,
@@ -311,12 +311,11 @@ struct PushFramer<'a> {
 
 impl ResponseFramer for PushFramer<'_> {
     fn frame(&mut self, bytes: Bytes) -> Result<Bytes> {
-        let push = crate::parse_pubsub_push(&bytes)?
-            .context("Redis delivery has no notification frame")?;
+        let push = frame::decode(&bytes)?.context("Redis delivery has no notification frame")?;
         let session = self.session.lock().expect("Redis session");
         let subscription = session
             .subscriptions
-            .get(&push)
+            .get(push.kind, &push.subject)
             .context("Redis notification subject has no active subscription")?;
         ensure!(
             self.after.as_ref().map_or_else(
@@ -325,15 +324,9 @@ impl ResponseFramer for PushFramer<'_> {
             ),
             "Redis notification subscription generation changed"
         );
-        if subscription.target == push.subject {
+        if subscription.target.as_slice() == push.subject.as_ref() {
             return Ok(bytes);
         }
-        crate::subject::translate(
-            &bytes,
-            push.subscription_kind,
-            &push.subject,
-            &subscription.target,
-        )
-        .map(Bytes::from)
+        crate::subject::translate_frame(&push, &subscription.target).map(Bytes::from)
     }
 }

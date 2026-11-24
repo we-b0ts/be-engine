@@ -236,6 +236,10 @@ impl SequencePlan {
         self.events.len()
     }
 
+    pub fn events(&self) -> impl Iterator<Item = SourceEvent> + '_ {
+        self.events.iter().map(|event| event.source)
+    }
+
     pub fn dependency_count(&self) -> usize {
         self.slots.len()
     }

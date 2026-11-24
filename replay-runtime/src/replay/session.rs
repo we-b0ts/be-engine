@@ -1,4 +1,6 @@
 //! One frozen timeline for dependency providers and the primary input driver.
+pub(super) mod prefetch;
+
 use super::*;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -11,6 +13,7 @@ pub(super) const TIMER_SCOPE: &str = "session";
 pub(super) struct Session {
     pub(super) runtime: Arc<SequenceRuntime>,
     pub(super) no_progress_timeout: Duration,
+    pub(super) prefetch: Option<Arc<prefetch::Responses>>,
     first_failure: Option<Failure>,
 }
 
@@ -44,6 +47,7 @@ impl Session {
         Self {
             runtime,
             no_progress_timeout,
+            prefetch: None,
             first_failure: None,
         }
     }
@@ -71,7 +75,14 @@ impl Session {
             target_observation_id: observation,
             reason: reason.chars().take(2048).collect(),
         });
+        self.stop_prefetch();
         self.runtime.abort();
+    }
+
+    pub(super) fn stop_prefetch(&mut self) {
+        if let Some(prefetch) = self.prefetch.take() {
+            prefetch.close();
+        }
     }
 
     fn response(&self, error: Option<&str>) -> Value {

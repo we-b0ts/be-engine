@@ -617,11 +617,23 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
             let matched = &self.matched;
             let result = async {
                 self.wait_ready().await?;
-                let response = self.state.lock().await.native.core.exchanges[matched.index]
-                    .native
-                    .response
-                    .clone();
-                let loaded = if response.stored().is_some() {
+                let (response, prefetch) = {
+                    let state = self.state.lock().await;
+                    let response = state.native.core.exchanges[matched.index]
+                        .native
+                        .response
+                        .clone();
+                    let prefetch = state
+                        .session_events
+                        .as_ref()
+                        .and_then(|session| session.prefetch.clone());
+                    (response, prefetch)
+                };
+                let mut prefetched = match prefetch {
+                    Some(prefetch) => prefetch.take(matched.index).await?,
+                    None => None,
+                };
+                let loaded = if prefetched.is_none() && response.stored().is_some() {
                     Some(
                         tokio::task::spawn_blocking(move || {
                             response.stored().expect("stored response").load()
@@ -658,12 +670,21 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                         );
                         continue;
                     }
-                    break state.native.render_response(
-                        matched.index,
-                        matched.observed,
-                        loaded.as_deref(),
-                        &matched.storage,
-                    )?;
+                    let rendered = match &mut prefetched {
+                        Some(prefetched) => state.native.render_prefetched_response(
+                            matched.index,
+                            matched.observed,
+                            prefetched,
+                            &matched.storage,
+                        ),
+                        None => state.native.render_response(
+                            matched.index,
+                            matched.observed,
+                            loaded.as_deref(),
+                            &matched.storage,
+                        ),
+                    };
+                    break rendered?;
                 };
                 let request::ResponsePlan {
                     output: response,

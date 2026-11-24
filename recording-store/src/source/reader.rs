@@ -146,7 +146,28 @@ impl RecordReader {
         stamp: &FileStamp,
         location: &RecordLocation,
     ) -> Result<Arc<Vec<u8>>> {
-        let source = match &self.source {
+        let source = self.resolve_source(path)?;
+        self.read_source(&source, stamp, location)
+    }
+
+    pub(super) fn read_value(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+    ) -> Result<serde_json::Value> {
+        let source = self.resolve_source(path)?;
+        self.read_record(
+            &source,
+            stamp,
+            location,
+            |bytes| Ok(serde_json::from_slice(&bytes)?),
+            |record, _| Ok(record),
+        )
+    }
+
+    fn resolve_source(&mut self, path: &Path) -> Result<super::scoped::Source> {
+        Ok(match &self.source {
             Some((original, source)) if original == path => source.clone(),
             _ => {
                 let mut source = super::scoped::resolve(path)?;
@@ -156,8 +177,7 @@ impl RecordReader {
                 self.source = Some((path.to_owned(), source.clone()));
                 source
             }
-        };
-        self.read_source(&source, stamp, location)
+        })
     }
 
     pub fn read_source(
@@ -166,6 +186,20 @@ impl RecordReader {
         stamp: &FileStamp,
         location: &RecordLocation,
     ) -> Result<Arc<Vec<u8>>> {
+        self.read_record(source, stamp, location, Ok, |record, mut bytes| {
+            compact::encode_materialized(&record, &mut bytes)?;
+            Ok(Arc::new(bytes))
+        })
+    }
+
+    fn read_record<T>(
+        &mut self,
+        source: &super::scoped::Source,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+        json: impl FnOnce(Arc<Vec<u8>>) -> Result<T>,
+        compact: impl FnOnce(serde_json::Value, Vec<u8>) -> Result<T>,
+    ) -> Result<T> {
         let path = &source.path;
         if self.verify {
             source.validate()?;
@@ -194,7 +228,7 @@ impl RecordReader {
             if self.verify {
                 source.validate()?;
             }
-            return Ok(bytes);
+            return json(bytes);
         }
         let mut bytes = Vec::new();
         let recording_id = if crate::partitions::is_directory(path) {
@@ -232,12 +266,11 @@ impl RecordReader {
         }
         self.source_bytes += location.length;
         if let Some(recording_id) = recording_id {
-            let compact = self.compact_reader(path, stamp, recording_id)?;
-            compact.validate()?;
-            let record = compact.read(&bytes)?;
-            compact::encode_materialized(&record, &mut bytes)?;
-            compact.validate()?;
-            return Ok(Arc::new(bytes));
+            let reader = self.compact_reader(path, stamp, recording_id)?;
+            reader.validate()?;
+            let record = compact(reader.read(&bytes)?, bytes)?;
+            reader.validate()?;
+            return Ok(record);
         }
         let bytes = Arc::new(bytes);
         if bytes.len() <= self.capacity {
@@ -260,13 +293,92 @@ impl RecordReader {
             self.order.push_back((key.clone(), self.generation));
             self.records.insert(key, (bytes.clone(), self.generation));
         }
-        Ok(bytes)
+        json(bytes)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::RecordSource;
+    use crate::writer::{
+        JsonlBufferSettings, JsonlWriterPool, LedgerFiles, RecordKind, RowLayout, RowStamp,
+    };
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+    use traffic_model::attribution::DependencyOwner;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn compact_values_restore_payloads_using_indexed_read_checks() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let recording_id = Uuid::new_v4();
+        let process_epoch = Uuid::new_v4();
+        let mut ledger =
+            LedgerFiles::initialize_for_mode(root, recording_id, process_epoch, true).await?;
+        let mut files = JsonlWriterPool::new(JsonlBufferSettings {
+            capacity: 4096,
+            flush_interval: std::time::Duration::from_secs(30),
+        });
+        let event = json!({
+            "recording_id": recording_id,
+            "capture": {"sequence":1,"process_epoch":process_epoch},
+            "outcome": {"kind":"response"},
+            "capture_complete": true,
+            "response": {"value":"x".repeat(5000)},
+        });
+        let row_stamp = |sequence| RowStamp {
+            sequence,
+            offset_micros: sequence,
+        };
+        let location = ledger
+            .append_dependency(
+                &mut files,
+                event.clone(),
+                &DependencyOwner::Startup {
+                    process_epoch,
+                    initialization_unit: "test".into(),
+                },
+                RecordKind::Exchange,
+                &RowLayout::default(),
+                Some(row_stamp(1)),
+                row_stamp(2),
+            )
+            .await?;
+        ledger.seal(&mut files).await?;
+        assert!(root.join("payload").is_dir());
+
+        let path = crate::source::recording::dependency_path(root);
+        let stamp = FileStamp::read(&path)?;
+        let source = RecordSource::new(
+            &path,
+            stamp.clone(),
+            Arc::new(Mutex::new(RecordReader::new(0))),
+        );
+        let reference = source.reference(location.clone());
+        let value = reference.load_value()?;
+        assert_eq!(value, reference.load::<Value>()?);
+        assert_eq!(value["response"], event["response"]);
+        let bad_digest = RecordLocation {
+            sha256: String::new(),
+            ..location.clone()
+        };
+        assert!(source.reference(bad_digest).load_value().is_err());
+
+        let replay = RecordSource::new(
+            &path,
+            stamp,
+            Arc::new(Mutex::new(RecordReader::for_replay(0))),
+        );
+        assert_eq!(replay.reference(location.clone()).load_value()?, value);
+        let bad_range = RecordLocation {
+            length: location.length + 1,
+            ..location
+        };
+        assert!(replay.reference(bad_range).load_value().is_err());
+        Ok(())
+    }
 
     #[test]
     fn replay_reads_indexed_ranges_without_rechecking_the_file_or_record_digest() -> Result<()> {

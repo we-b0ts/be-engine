@@ -160,16 +160,21 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
         .as_ref()
         .map(|timer| timers::Listener::bind(&timer.socket_path))
         .transpose()?;
-    {
+    let _prefetch_guard = {
         let mut state = runtime.state.lock().await;
         state.egress_counter_reader = counter_reader;
-    }
+        state
+            .session_events
+            .as_ref()
+            .and_then(|session| session.prefetch.as_ref())
+            .map(|responses| responses.close_on_drop())
+    };
     info!(
         dns_listen = %dns_listen,
         tcp_listen = %tcp_listen,
         "dependency replay intercept listening"
     );
-    tokio::select! {
+    let outcome = tokio::select! {
         result = runtime.run_dns(dns_socket) => result,
         result = runtime.run_tcp(tcp_listener) => result,
         result = runtime.run_control() => result,
@@ -180,7 +185,11 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
             }
         } => result,
         result = deferred::prefetch::run(runtime.state.clone()) => result,
+    };
+    if let Some(session) = &mut runtime.state.lock().await.session_events {
+        session.stop_prefetch();
     }
+    outcome
 }
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use crate::adapters::runtime::{MysqlReplayConfig, ReplayAllowedUnusedHttpConfig};

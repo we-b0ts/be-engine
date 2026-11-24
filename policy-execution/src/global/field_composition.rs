@@ -13,6 +13,9 @@ pub(super) fn append<'a>(
     mut fields: Vec<Field<'a>>,
     selected: &'a [SelectedGlobalField],
 ) -> Vec<Field<'a>> {
+    if fields.is_empty() {
+        return selected.iter().map(comparison_field).collect();
+    }
     let mut owners = Owners::new();
     for field in &fields {
         index(&mut owners, source, field.pointer, field.contract);
@@ -29,14 +32,18 @@ pub(super) fn append<'a>(
         });
         if !duplicate {
             index(&mut owners, source, &selected.pointer, &selected.contract);
-            fields.push(Field {
-                rule_id: selected.rule_id,
-                pointer: &selected.pointer,
-                contract: &selected.contract,
-            });
+            fields.push(comparison_field(selected));
         }
     }
     fields
+}
+
+fn comparison_field(selected: &SelectedGlobalField) -> Field<'_> {
+    Field {
+        rule_id: selected.rule_id,
+        pointer: &selected.pointer,
+        contract: &selected.contract,
+    }
 }
 
 fn index<'a>(owners: &mut Owners<'a>, source: &Value, pattern: &str, contract: &'a FieldContract) {

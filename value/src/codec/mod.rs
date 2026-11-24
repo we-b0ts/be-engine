@@ -7,7 +7,7 @@ use crate::Value;
 
 mod registry;
 pub use crate::schema::{FieldSchema, ValueType};
-pub use registry::{CodecIdentity, CodecProbe, CodecRegistry, PreparedCodec};
+pub use registry::{CodecIdentity, CodecProbe, CodecRegistry, PreparedCodec, RecognizedSource};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodecDescriptor {
@@ -32,6 +32,18 @@ pub enum Recognition {
 pub trait CodecProvider: Send + Sync {
     fn descriptor(&self) -> CodecDescriptor;
     fn recognize(&self, source: &[u8], metadata: &Value) -> Result<Recognition>;
+
+    /// A provider that decodes while recognizing may return that document
+    /// alongside a definite recognition. The registry retains it only if
+    /// this provider wins selection.
+    fn recognize_source(
+        &self,
+        source: &[u8],
+        metadata: &Value,
+    ) -> Result<(Recognition, Option<Arc<dyn ValueDocument>>)> {
+        Ok((self.recognize(source, metadata)?, None))
+    }
+
     fn prepare(&self, configuration: &Value) -> Result<Arc<dyn ValueCodec>>;
     fn field_schema(&self, _configuration: &Value, _path: &str) -> Result<FieldSchema> {
         Ok(FieldSchema::Dynamic)

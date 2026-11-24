@@ -165,7 +165,7 @@ pub fn selected(plan: &dyn FormatHost, source: &Value) -> Result<Vec<String>> {
     let mut selected = Vec::new();
     for (pattern, field) in plan.fields() {
         if matches!(field,GlobalField::Url {formats} if formats == &[GlobalUrlFormat::Url]) {
-            selected.extend(traffic_contract::delivery::select(pattern, source)?);
+            selected.extend(plan.select_paths(pattern, source)?);
         }
     }
     Ok(selected)

@@ -3,7 +3,10 @@ use crate::replay::policy::ValueRuleHost;
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex, OnceLock},
+};
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
     identity::{IdentityDecision, IdentityPair, IdentityPreview, IdentityScope, IdentityStore},
@@ -141,6 +144,20 @@ impl ValueState {
 impl ValueRuleHost for ValueState {
     fn metadata(&self) -> &(dyn traffic_contract::compare::RuleMetadata + 'static) {
         &crate::value_contract::json::PolicyMetadata
+    }
+
+    fn prefetch_source_response(&self) -> bool {
+        true
+    }
+
+    fn translate_delivery_document(
+        &self,
+        _: &str,
+        _: &Value,
+        _: &mut Cow<'_, Value>,
+        _: AnchorClocks,
+    ) -> Result<()> {
+        Ok(())
     }
 
     fn configure_session_identities(&self, scope: &str, dependency_count: usize) -> Result<()> {

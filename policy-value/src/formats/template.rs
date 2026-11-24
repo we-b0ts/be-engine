@@ -125,7 +125,7 @@ pub fn selected<'a>(
         let GlobalField::Template { formats } = field else {
             continue;
         };
-        for pointer in traffic_contract::delivery::select(pattern, source)? {
+        for pointer in plan.select_paths(pattern, source)? {
             let value = source
                 .pointer(&pointer)
                 .context("template field disappeared")?;

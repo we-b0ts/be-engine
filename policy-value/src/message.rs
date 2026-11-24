@@ -37,6 +37,12 @@ pub struct RuleBinding {
 /// Prepared content rules operate on decoded documents from every native carrier.
 pub trait DocumentPolicy: Send + Sync {
     fn paths(&self, source: &traffic_value::Value) -> Result<Vec<String>>;
+    fn prepare_source(&self, source: &traffic_value::Value) -> Result<DocumentPolicyPreparation> {
+        Ok(DocumentPolicyPreparation {
+            paths: self.paths(source)?,
+            comparison: None,
+        })
+    }
     fn compare(
         &self,
         source: &traffic_value::Value,
@@ -44,6 +50,25 @@ pub trait DocumentPolicy: Send + Sync {
         fields: &[Field<'_>],
         clocks: AnchorClocks,
     ) -> Result<Comparison>;
+}
+
+pub struct DocumentPolicyPreparation {
+    pub paths: Vec<String>,
+    pub comparison: Option<Box<dyn PreparedDocumentComparison>>,
+}
+
+/// Immutable Source rule selection. The caller still supplies live clocks and
+/// the current Target value to evaluate the selected contracts.
+pub trait PreparedDocumentComparison: Send + Sync {
+    fn applies_at(&self, clocks: AnchorClocks) -> bool;
+    fn compare(
+        &self,
+        source: &traffic_value::Value,
+        target: &traffic_value::Value,
+        fields: &[Field<'_>],
+        clocks: AnchorClocks,
+    ) -> Result<Comparison>;
+    fn retained_bytes(&self) -> usize;
 }
 
 struct FieldBinding {
@@ -58,6 +83,7 @@ struct BoundValue {
     source: DecodedDocument,
     fields: Vec<FieldBinding>,
     pointers: Vec<String>,
+    prepared_comparison: Option<Box<dyn PreparedDocumentComparison>>,
 }
 
 /// Prepared once per immutable Source message. Each attempted candidate keeps
@@ -66,6 +92,21 @@ pub struct PreparedMessage {
     projection: ProjectedMessage,
     values: BTreeMap<String, BoundValue>,
     policy: Option<Arc<dyn DocumentPolicy>>,
+}
+
+fn json_heap_bytes(value: &Value) -> usize {
+    match value {
+        Value::String(text) => text.capacity(),
+        Value::Array(items) => {
+            items.capacity() * std::mem::size_of::<Value>()
+                + items.iter().map(json_heap_bytes).sum::<usize>()
+        }
+        Value::Object(fields) => fields
+            .iter()
+            .map(|(name, value)| 128 + name.capacity() + json_heap_bytes(value))
+            .sum(),
+        _ => 0,
+    }
 }
 
 impl std::fmt::Debug for PreparedMessage {
@@ -138,6 +179,7 @@ impl PreparedMessage {
                             source,
                             fields: Vec::new(),
                             pointers: Vec::new(),
+                            prepared_comparison: None,
                         },
                     );
                 }
@@ -161,13 +203,23 @@ impl PreparedMessage {
                 let metadata = serde_json::from_value(serde_json::json!({
                     "native":{"location":location,"structure":projection.structure},
                 }))?;
-                let Some(plan) = CodecPlan::try_recognize(&value.bytes, &metadata, codecs)? else {
+                let Some((plan, decoded)) =
+                    CodecPlan::try_recognize_source(&value.bytes, &metadata, codecs)?
+                else {
                     continue;
                 };
                 let codec = plan.declaration()?;
-                let source = decode(&plan, &codec, value)?;
-                let pointers = policy.paths(source.value())?;
-                if pointers.is_empty() {
+                let source = match decoded {
+                    Some(decoded)
+                        if codec != Codec::Scalar
+                            || value.scalar_encoding != ScalarEncoding::Utf8 =>
+                    {
+                        decoded
+                    }
+                    _ => decode(&plan, &codec, value)?,
+                };
+                let prepared = policy.prepare_source(source.value())?;
+                if prepared.paths.is_empty() {
                     continue;
                 }
                 values.insert(
@@ -178,12 +230,15 @@ impl PreparedMessage {
                         plan,
                         source,
                         fields: Vec::new(),
-                        pointers,
+                        pointers: prepared.paths,
+                        prepared_comparison: prepared.comparison,
                     },
                 );
             }
             for value in values.values_mut().filter(|value| !value.fields.is_empty()) {
-                value.pointers.extend(policy.paths(value.source.value())?);
+                let prepared = policy.prepare_source(value.source.value())?;
+                value.pointers.extend(prepared.paths);
+                value.prepared_comparison = prepared.comparison;
             }
         }
         Ok(Self {
@@ -201,6 +256,43 @@ impl PreparedMessage {
     ) -> Result<Comparison> {
         let actual = actual.project()?;
         Ok(self.compare_projection(&actual, clocks, metadata, &BTreeMap::new()))
+    }
+
+    pub fn compare_source(&self, clocks: AnchorClocks, metadata: &dyn RuleMetadata) -> Comparison {
+        self.compare_projection(&self.projection, clocks, metadata, &BTreeMap::new())
+    }
+
+    /// Estimate retained Source preparation for codecs with a known layout.
+    /// Include projected values whose bytes can be independent of the encoder.
+    pub fn prefetch_retained_bytes(&self) -> Option<usize> {
+        let mut bytes = std::mem::size_of::<Self>() + json_heap_bytes(&self.projection.structure);
+        for (location, value) in &self.projection.values {
+            bytes += 128 + location.capacity() + value.bytes.len();
+        }
+        for (location, bound) in &self.values {
+            if !matches!(bound.codec.id(), "json" | "scalar") {
+                return None;
+            }
+            // The JSON codec retains its logical tree and the projected JSON
+            // tree, alongside the original wire bytes.
+            bytes += 128
+                + location.capacity()
+                + bound.source.original_bytes().len()
+                + 2 * json_heap_bytes(&bound.source.logical)
+                + bound.fields.capacity() * std::mem::size_of::<FieldBinding>()
+                + bound
+                    .fields
+                    .iter()
+                    .map(|field| field.pointer.capacity())
+                    .sum::<usize>()
+                + bound.pointers.capacity() * std::mem::size_of::<String>()
+                + bound.pointers.iter().map(String::capacity).sum::<usize>()
+                + bound
+                    .prepared_comparison
+                    .as_ref()
+                    .map_or(0, |prepared| prepared.retained_bytes());
+        }
+        Some(bytes)
     }
 
     fn compare_projection(
@@ -245,14 +337,22 @@ impl PreparedMessage {
                 }
                 continue;
             };
-            let target = match decode(&bound.plan, &bound.codec, target) {
-                Ok(target) => target,
-                Err(_) => {
-                    result.differences.push(difference(
-                        location,
-                        "Target value violates its content codec",
-                    ));
-                    continue;
+            let decoded_target;
+            let target = if std::ptr::eq(source.bytes.as_ref(), target.bytes.as_ref()) {
+                &bound.source
+            } else {
+                match decode(&bound.plan, &bound.codec, target) {
+                    Ok(target) => {
+                        decoded_target = target;
+                        &decoded_target
+                    }
+                    Err(_) => {
+                        result.differences.push(difference(
+                            location,
+                            "Target value violates its content codec",
+                        ));
+                        continue;
+                    }
                 }
             };
             let source = bound.source.logical_comparison_view(&bound.pointers);
@@ -268,7 +368,15 @@ impl PreparedMessage {
                 .collect::<Vec<_>>();
             let mut comparison = match &self.policy {
                 Some(policy) if !stored => {
-                    match policy.compare(&source, &target, &fields, clocks) {
+                    let prepared = bound.prepared_comparison.as_ref().filter(|prepared| {
+                        std::ptr::eq(source.as_ref(), bound.source.value())
+                            && prepared.applies_at(clocks)
+                    });
+                    let comparison = match prepared {
+                        Some(prepared) => prepared.compare(&source, &target, &fields, clocks),
+                        None => policy.compare(&source, &target, &fields, clocks),
+                    };
+                    match comparison {
                         Ok(comparison) => comparison,
                         Err(error) => {
                             result
@@ -314,9 +422,9 @@ impl PreparedMessage {
             .collect())
     }
 
-    fn render_projection(
+    fn render_projection<'a>(
         &self,
-        updates: &BTreeMap<String, Value>,
+        updates: impl IntoIterator<Item = (&'a String, &'a Value)>,
         clocks: AnchorClocks,
         metadata: &dyn RuleMetadata,
         delivered_by_protocol: &BTreeMap<String, StoredValue>,
@@ -338,6 +446,12 @@ impl PreparedMessage {
                 .values
                 .get(location)
                 .context("delivery changes an unbound physical value")?;
+            if bound.codec == Codec::Json
+                && !delivered_by_protocol.contains_key(location)
+                && bound.source.view().logical() == logical
+            {
+                continue;
+            }
             let encoded = bound.source.encode(logical, &bound.pointers)?;
             let bytes =
                 if bound.codec == Codec::Scalar && bound.scalar_encoding == ScalarEncoding::Utf8 {

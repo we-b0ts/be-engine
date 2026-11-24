@@ -4,7 +4,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
-use traffic_value::codec::{CodecRegistry, PreparedCodec};
+use std::sync::Arc;
+use traffic_value::codec::{CodecRegistry, PreparedCodec, ValueDocument};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -66,6 +67,24 @@ impl CodecPlan {
             codec,
         }))
     }
+    pub fn try_recognize_source(
+        source: &[u8],
+        metadata: &traffic_value::Value,
+        registry: &CodecRegistry,
+    ) -> Result<Option<(Self, Option<DecodedDocument>)>> {
+        let Some(selected) = registry.try_recognize_source(source, metadata)? else {
+            return Ok(None);
+        };
+        let plan = Self {
+            kind: CodecKind(Cow::Borrowed(selected.codec.descriptor().id)),
+            codec: selected.codec,
+        };
+        let document = selected
+            .document
+            .map(|document| plan.decoded(document))
+            .transpose()?;
+        Ok(Some((plan, document)))
+    }
     pub fn declaration(&self) -> Result<Codec> {
         Codec::registered(
             self.codec.descriptor().id,
@@ -84,6 +103,15 @@ impl CodecPlan {
     }
     pub fn decode(&self, bytes: &[u8]) -> Result<DecodedDocument> {
         ValueCodec::decode(self, bytes)
+    }
+
+    fn decoded(&self, document: Arc<dyn ValueDocument>) -> Result<DecodedDocument> {
+        let logical = serde_json::to_value(document.value())?;
+        Ok(DecodedDocument {
+            logical,
+            document,
+            kind: self.kind.clone(),
+        })
     }
 }
 
@@ -105,13 +133,7 @@ impl ValueCodec for CodecPlan {
     fn decode(&self, bytes: &[u8]) -> Result<DecodedDocument> {
         #[cfg(any(test, feature = "test-support"))]
         super::DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-        let document = self.codec.decode(bytes)?;
-        let logical = serde_json::to_value(document.value())?;
-        Ok(DecodedDocument {
-            logical,
-            document,
-            kind: self.kind.clone(),
-        })
+        self.decoded(self.codec.decode(bytes)?)
     }
 }
 

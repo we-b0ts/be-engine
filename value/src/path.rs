@@ -1,4 +1,6 @@
 //! Logical selectors shared by codec and policy implementations.
+use std::borrow::Cow;
+
 use anyhow::{Result, ensure};
 
 pub fn validate(pointer: &str, wildcard: bool) -> Result<()> {
@@ -29,7 +31,33 @@ pub fn validate(pointer: &str, wildcard: bool) -> Result<()> {
 }
 
 pub fn escape(segment: &str) -> String {
-    segment.replace('~', "~0").replace('/', "~1")
+    let mut escaped = String::with_capacity(segment.len());
+    push_escaped(&mut escaped, segment);
+    escaped
+}
+
+/// Append a literal key to a JSON Pointer without allocating a separate segment.
+pub fn push_segment(pointer: &mut String, segment: &str) {
+    pointer.push('/');
+    push_escaped(pointer, segment);
+}
+
+fn push_escaped(output: &mut String, segment: &str) {
+    let mut start = 0;
+    for (index, character) in segment.match_indices(['~', '/']) {
+        output.push_str(&segment[start..index]);
+        output.push_str(if character == "~" { "~0" } else { "~1" });
+        start = index + 1;
+    }
+    output.push_str(&segment[start..]);
+}
+
+pub(crate) fn unescape(segment: &str) -> Cow<'_, str> {
+    if segment.contains('~') {
+        Cow::Owned(segment.replace("~1", "/").replace("~0", "~"))
+    } else {
+        Cow::Borrowed(segment)
+    }
 }
 
 pub fn matches(pattern: &str, pointer: &str) -> bool {

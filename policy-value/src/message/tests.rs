@@ -94,6 +94,37 @@ fn automatic_codec_selection_is_pinned_to_source_for_normal_message_comparison()
     assert!(!compare(&opaque, b"\xfe"));
 }
 
+#[test]
+fn unchanged_json_delivery_carries_original_bytes_and_still_compares() {
+    let source = RawDocument(br#"{ "name": "ALPHA", "amount": 10 }"#);
+    let rule = Arc::new(ValueRule {
+        id: "name".into(),
+        contract: FieldContract::Exact,
+    });
+    let prepared = PreparedMessage::compile(
+        &source,
+        &[binding(rule, "value", "/name")],
+        traffic_extensions::codecs(),
+    )
+    .unwrap();
+    let rendered = prepared
+        .render_delivery(
+            AnchorClocks::default(),
+            &ExplicitRules,
+            &Default::default(),
+            |_| Ok(vec![]),
+        )
+        .unwrap();
+    let output = &rendered.values["value"];
+    assert_eq!(output.as_ref(), source.0);
+    assert_eq!(
+        output.as_ptr(),
+        prepared.projection().values["value"].bytes.as_ptr()
+    );
+    assert!(rendered.comparison.passed());
+    assert!(rendered.comparison.evaluated.contains("name"));
+}
+
 struct CasePolicy;
 
 impl traffic_policy::PolicyProvider for CasePolicy {
@@ -264,6 +295,22 @@ fn binding(rule: Arc<ValueRule>, location: &str, pointer: &str) -> RuleBinding {
         codec: Codec::Json,
         pointer: pointer.into(),
     }
+}
+
+#[test]
+fn prefetched_source_comparison_observes_the_same_bound_rules() {
+    let message = Document(BTreeMap::from([("response".into(), json!({"id": 1}))]));
+    let exact = Arc::new(ValueRule {
+        id: "source-id".into(),
+        contract: FieldContract::Exact,
+    });
+    let prepared = prepare(&message, &[binding(exact, "response", "/id")]).unwrap();
+    let clocks = AnchorClocks::default();
+    let ordinary = prepared.compare(&message, clocks, &ExplicitRules).unwrap();
+    let source = prepared.compare_source(clocks, &ExplicitRules);
+    assert!(ordinary.passed() && source.passed());
+    assert_eq!(source.evaluated, ordinary.evaluated);
+    assert!(prepared.prefetch_retained_bytes().unwrap() > 0);
 }
 
 #[test]

@@ -13,7 +13,7 @@ use traffic_protocol::{
 };
 use uuid::Uuid;
 
-use crate::{RedisPubSubPush, RedisSubscriptionKind, events::RedisPubSubPushEvent};
+use crate::{RedisSubscriptionKind, events::RedisPubSubPushEvent, pubsub::frame};
 
 #[derive(Serialize)]
 pub(super) struct CapturedPush {
@@ -175,7 +175,7 @@ fn subscription_identity(event: &Value) -> Result<(Uuid, u64)> {
 
 pub(super) struct NotificationMessage {
     original: Bytes,
-    push: RedisPubSubPush,
+    push: frame::Push,
 }
 
 pub(super) fn kind_name(kind: RedisSubscriptionKind) -> &'static str {
@@ -188,15 +188,14 @@ pub(super) fn kind_name(kind: RedisSubscriptionKind) -> &'static str {
 
 impl NotificationMessage {
     pub(super) fn decode(original: Bytes) -> Result<Self> {
-        let push =
-            crate::parse_pubsub_push(&original)?.context("Redis notification has no push frame")?;
+        let push = frame::decode(&original)?.context("Redis notification has no push frame")?;
         Ok(Self { original, push })
     }
 }
 
 impl ProtocolMessage for NotificationMessage {
     fn project(&self) -> Result<ProjectedMessage> {
-        let kind = kind_name(self.push.subscription_kind);
+        let kind = kind_name(self.push.kind);
         Ok(ProjectedMessage {
             structure: json!({"kind":kind}),
             values: BTreeMap::from([(
@@ -222,6 +221,11 @@ impl ProtocolMessage for NotificationMessage {
 }
 
 impl MessageEncoder for NotificationMessage {
+    fn prefetch_retained_bytes(&self) -> Option<usize> {
+        // All push fields are slices of the same original frame allocation.
+        Some(std::mem::size_of::<Self>() + self.original.len())
+    }
+
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes> {
         ensure!(
             values.len() == 1,
@@ -230,15 +234,38 @@ impl MessageEncoder for NotificationMessage {
         let payload = values
             .get("/payload")
             .context("Redis notification payload is absent")?;
-        if payload.as_ref() == self.push.payload {
+        if *payload == self.push.payload {
             return Ok(self.original.clone());
         }
-        let subject = self.push.subject.as_slice();
-        let parts: &[&[u8]] = match self.push.subscription_kind {
+        let subject = self.push.subject.as_ref();
+        let parts: &[&[u8]] = match self.push.kind {
             RedisSubscriptionKind::Channel => &[b"message", subject, payload],
             RedisSubscriptionKind::Pattern => &[b"pmessage", subject, &self.push.channel, payload],
             RedisSubscriptionKind::ShardChannel => &[b"smessage", subject, payload],
         };
         Ok(crate::encode_array(parts).into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projected_payload_and_unchanged_output_share_the_original_frame() {
+        let raw = Bytes::from(crate::encode_array(&[b"message", b"events", b"a\0b"]));
+        let message = NotificationMessage::decode(raw.clone()).unwrap();
+        let projected = message.project().unwrap();
+        let payload = &projected.values["/payload"].bytes;
+        assert_eq!(payload.as_ref(), b"a\0b");
+        assert_eq!(payload.as_ptr(), raw[raw.len() - 5..].as_ptr());
+        let output = message
+            .encode(&BTreeMap::from([("/payload".into(), payload.clone())]))
+            .unwrap();
+        assert_eq!(output.as_ptr(), raw.as_ptr());
+        assert_eq!(
+            message.prefetch_retained_bytes(),
+            Some(std::mem::size_of_val(&message) + raw.len())
+        );
     }
 }

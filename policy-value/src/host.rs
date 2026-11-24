@@ -3,7 +3,7 @@ use crate::{RuleBinding, identity::IdentityDelivery};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
     identity::{IdentityDecision, IdentityPair},
@@ -31,6 +31,17 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+    /// Native delivery can keep Source JSON borrowed until a field is edited.
+    /// Hosts that supply the mutable document callback keep that behavior.
+    fn translate_delivery_document(
+        &self,
+        scope: &str,
+        source: &Value,
+        delivered: &mut Cow<'_, Value>,
+        clocks: AnchorClocks,
+    ) -> Result<()> {
+        self.translate_document(scope, source, delivered.to_mut(), clocks)
+    }
     fn document_policy(&self, _clocks: AnchorClocks) -> Option<Arc<dyn crate::DocumentPolicy>> {
         None
     }
@@ -54,6 +65,11 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     /// Conservative capability check before any Source messages are prepared.
     fn may_bind_native_documents(&self) -> bool {
         true
+    }
+    /// Opt in when Source validation is independent of live Target state and
+    /// publication of a Source comparison needs only the evaluated rule IDs.
+    fn prefetch_source_response(&self) -> bool {
+        false
     }
     fn observe_source_comparison(&self, _comparison: &Comparison) {}
     fn begin_case(&self, case: &str);

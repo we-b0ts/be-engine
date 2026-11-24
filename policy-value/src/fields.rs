@@ -521,11 +521,29 @@ fn overlaps(left: &str, right: &str) -> bool {
             .all(|(a, b)| *a == b || *a == "*" || b == "*")
 }
 
+/// Compiled paths are derived from authored declarations and never persisted.
+#[derive(Debug, Default)]
+pub struct FieldSelectors(BTreeMap<String, traffic_contract::delivery::CompiledSelector>);
+
+impl FieldSelectors {
+    pub fn compile(fields: &BTreeMap<String, GlobalField>) -> Result<Self> {
+        let selectors = fields
+            .keys()
+            .map(|pattern| {
+                let selector = traffic_contract::delivery::CompiledSelector::new(pattern)?;
+                Ok((pattern.clone(), selector))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self(selectors))
+    }
+}
+
 /// Immutable declarations are borrowed while a host supplies its installed policies.
 pub struct FieldPlan<'a> {
     pub fields: &'a BTreeMap<String, GlobalField>,
     pub time: &'a TimePolicy,
     policies: &'a PolicyRegistry,
+    selectors: Option<&'a FieldSelectors>,
 }
 
 impl<'a> FieldPlan<'a> {
@@ -538,6 +556,36 @@ impl<'a> FieldPlan<'a> {
             fields,
             time,
             policies,
+            selectors: None,
+        }
+    }
+
+    pub fn with_selectors(mut self, selectors: Option<&'a FieldSelectors>) -> Self {
+        self.selectors = selectors;
+        self
+    }
+
+    pub(crate) fn select_paths(&self, pattern: &str, source: &Value) -> Result<Vec<String>> {
+        let mut selected = Vec::new();
+        self.visit_paths(pattern, source, |pointer, _| {
+            selected.push(pointer.to_owned());
+            Ok(())
+        })?;
+        Ok(selected)
+    }
+
+    fn visit_paths<'source>(
+        &self,
+        pattern: &str,
+        source: &'source Value,
+        visitor: impl FnMut(&str, &'source Value) -> Result<()>,
+    ) -> Result<()> {
+        match self
+            .selectors
+            .and_then(|selectors| selectors.0.get(pattern))
+        {
+            Some(selector) => selector.visit(source, visitor),
+            None => traffic_contract::delivery::visit_uncompiled(pattern, source, visitor),
         }
     }
     /// Ask installed implementations whether Source has an implicit scalar contract.
@@ -616,7 +664,23 @@ impl<'a> FieldPlan<'a> {
         source: &traffic_value::Value,
         clocks: AnchorClocks,
     ) -> Result<Vec<SelectedGlobalField>> {
-        self.select_fields(&serde_json::to_value(source)?, clocks, Some(source))
+        let (_, fields) = self.project_fields_with_clocks(source, clocks)?;
+        Ok(fields)
+    }
+
+    /// Project Source once for field selection and callers' native format checks.
+    /// The typed Source still owns scalar formats and inference.
+    pub fn project_fields_with_clocks<'source>(
+        &self,
+        source: &'source traffic_value::Value,
+        clocks: AnchorClocks,
+    ) -> Result<(
+        traffic_contract::compare::LogicalProjection<'source>,
+        Vec<SelectedGlobalField>,
+    )> {
+        let projection = traffic_contract::compare::LogicalProjection::new(source)?;
+        let fields = self.select_fields(projection.json(), clocks, Some(source))?;
+        Ok((projection, fields))
     }
 
     fn select_fields(
@@ -637,7 +701,10 @@ impl<'a> FieldPlan<'a> {
                 field,
                 GlobalField::Url { .. } | GlobalField::Template { .. } | GlobalField::Jwt { .. }
             ) {
-                protocol_owned.extend(traffic_contract::delivery::select(pattern, source)?);
+                self.visit_paths(pattern, source, |pointer, _| {
+                    protocol_owned.insert(pointer.to_owned());
+                    Ok(())
+                })?;
             }
         }
         let decoded;
@@ -695,12 +762,11 @@ impl<'a> FieldPlan<'a> {
             }
             if matches!(field, GlobalField::Jwt { .. }) {
                 if identity_only {
-                    for pointer in traffic_contract::delivery::select(pattern, source)? {
-                        let value = source.pointer(&pointer).context("JWT field disappeared")?;
+                    self.visit_paths(pattern, source, |pointer, value| {
                         if crate::formats::is_jwt(value) {
                             fields.push(SelectedGlobalField {
                                 pattern: pattern.clone(),
-                                pointer,
+                                pointer: pointer.to_owned(),
                                 contract: FieldContract::Identity {
                                     prefix: String::new(),
                                     format: IdentityFormat::Jwt,
@@ -711,26 +777,24 @@ impl<'a> FieldPlan<'a> {
                         } else if !value.is_null() && !value.is_array() && !value.is_object() {
                             fields.push(SelectedGlobalField {
                                 pattern: pattern.clone(),
-                                pointer,
+                                pointer: pointer.to_owned(),
                                 contract: FieldContract::IdentityAnchor,
                                 rule_id: GLOBAL_JSON_ID,
                                 origin: FieldOrigin::Declared,
                             });
                         }
-                    }
+                        Ok(())
+                    })?;
                 }
                 continue;
             }
             if identity_only && !field.is_identity() {
                 continue;
             }
-            for pointer in traffic_contract::delivery::select(pattern, source)? {
-                let value = source
-                    .pointer(&pointer)
-                    .context("selected Source field disappeared")?;
+            self.visit_paths(pattern, source, |pointer, value| {
                 let selected = if let Some(values) = values {
-                    let Some(value) = values.pointer(&pointer) else {
-                        continue;
+                    let Some(value) = values.pointer(pointer) else {
+                        return Ok(());
                     };
                     field.select_value_contract(value, source_clock, self.policies)
                 } else {
@@ -744,17 +808,18 @@ impl<'a> FieldPlan<'a> {
                         FieldContract::Identity { .. } | FieldContract::IdentityAnchor
                     )
                 {
-                    continue;
+                    return Ok(());
                 }
-                scope_time(&pointer, &mut contract)?;
+                scope_time(pointer, &mut contract)?;
                 fields.push(SelectedGlobalField {
                     pattern: pattern.clone(),
-                    pointer,
+                    pointer: pointer.to_owned(),
                     contract,
                     rule_id: GLOBAL_JSON_ID,
                     origin: FieldOrigin::Declared,
                 });
-            }
+                Ok(())
+            })?;
         }
         Ok(fields)
     }

@@ -12,7 +12,9 @@ use traffic_protocol::{
 use uuid::Uuid;
 
 use super::{notification::CapturedPush, subscription::Subscriptions, *};
-use crate::{RedisCommand, RedisFrame, RedisFrameKind, capture::CaptureSessionState};
+use crate::{
+    RedisCommand, RedisFrame, RedisFrameKind, capture::CaptureSessionState, pubsub::frame,
+};
 
 pub(super) struct Capture(pub ConnectionInfo);
 
@@ -59,18 +61,17 @@ impl MaintenanceCommand {
         }
     }
 
-    fn canonical_reply(self, command: &RedisCommand, raw: &[u8]) -> bool {
+    fn canonical_reply(self, command: &RedisCommand, frame: &RedisFrame) -> bool {
+        let raw = frame.raw.as_ref();
         match self {
             Self::Ping => raw == b"+PONG\r\n",
             Self::SetInfo => {
-                raw == b"+OK\r\n"
-                    || raw.eq_ignore_ascii_case(b"-ERR unknown subcommand 'SETINFO'. Try CLIENT HELP.\r\n")
-                    || raw.eq_ignore_ascii_case(b"-ERR Unknown subcommand or wrong number of arguments for 'SETINFO'. Try CLIENT HELP.\r\n")
+                // Redis clients can ignore rejected advisory library metadata.
+                raw == b"+OK\r\n" || frame.kind == RedisFrameKind::Error
             }
             Self::Authenticate => {
                 raw == b"+OK\r\n"
-                    && matches!(command.args.as_slice(),
-                        [_] | [_, _])
+                    && matches!(command.args.as_slice(), [_] | [_, _])
                     && (command.args.len() == 1
                         || std::str::from_utf8(&command.args[0])
                             .is_ok_and(|username| !username.is_empty()))
@@ -136,10 +137,10 @@ impl CaptureSession for Capture {
                             ensure!(pending.is_none(), "Redis upstream ended before a complete response");
                             break;
                         };
-                        if subscriptions.active() && let Some(push) = crate::parse_pubsub_push(&frame.raw)? {
-                            let anchor = subscriptions.get(&push)
+                        if subscriptions.active() && let Some(push) = frame::decode(&frame.raw)? {
+                            let anchor = subscriptions.get(push.kind, &push.subject)
                                 .context("Redis notification has no confirmed subscription")?.anchor;
-                            self.capture_push(&*host, &mut *client.inner, (&frame, push.subscription_kind), &session, connection_id, anchor).await?;
+                            self.capture_push(&*host, &mut *client.inner, (&frame, push.kind), &session, connection_id, anchor).await?;
                             continue;
                         }
 
@@ -149,7 +150,7 @@ impl CaptureSession for Capture {
                             PendingCapture::Maintenance(kind, guard) => {
                                 client.inner.write_all(&frame.raw).await?;
                                 client.inner.flush().await?;
-                                let canonical = kind.canonical_reply(&request.command, &frame.raw);
+                                let canonical = kind.canonical_reply(&request.command, &frame);
                                 if canonical {
                                     session.apply_successful_setup(&request.command, &frame.raw, request.sequence);
                                 }

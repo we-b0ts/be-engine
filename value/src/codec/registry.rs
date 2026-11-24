@@ -28,6 +28,11 @@ pub struct CodecProbe {
     pub recognition: Recognition,
 }
 
+pub struct RecognizedSource {
+    pub codec: PreparedCodec,
+    pub document: Option<Arc<dyn ValueDocument>>,
+}
+
 impl CodecRegistry {
     pub fn installation_identity(&self, id: &str) -> Option<CodecIdentity> {
         self.providers.get(id).cloned().map(CodecIdentity)
@@ -107,25 +112,58 @@ impl CodecRegistry {
     }
 
     pub fn try_recognize(&self, source: &[u8], metadata: &Value) -> Result<Option<PreparedCodec>> {
+        Ok(self
+            .select_source(source, metadata, false)?
+            .map(|selected| selected.codec))
+    }
+
+    pub fn try_recognize_source(
+        &self,
+        source: &[u8],
+        metadata: &Value,
+    ) -> Result<Option<RecognizedSource>> {
+        self.select_source(source, metadata, true)
+    }
+
+    fn select_source(
+        &self,
+        source: &[u8],
+        metadata: &Value,
+        retain_document: bool,
+    ) -> Result<Option<RecognizedSource>> {
+        ensure!(
+            source.len() <= crate::MAX_VALUE_BYTES,
+            "payload exceeds the 64 MiB codec limit"
+        );
         let mut recognized = Vec::new();
-        for probe in self.inspect(source, metadata)? {
+        for provider in self.providers.values() {
+            let id = provider.descriptor().id;
+            let (recognition, document) = if retain_document {
+                provider.recognize_source(source, metadata)?
+            } else {
+                (provider.recognize(source, metadata)?, None)
+            };
             if let Recognition::Recognized {
                 confidence,
                 configuration,
-            } = probe.recognition
+            } = recognition
             {
-                recognized.push((confidence, probe.descriptor.id, configuration));
+                recognized.push((confidence, id, configuration, document));
             }
         }
         recognized.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-        let Some((confidence, id, configuration)) = recognized.first() else {
+        let mut recognized = recognized.into_iter();
+        let Some((confidence, id, configuration, document)) = recognized.next() else {
             return Ok(None);
         };
         ensure!(
-            recognized.get(1).is_none_or(|other| other.0 != *confidence),
+            recognized.next().is_none_or(|other| other.0 != confidence),
             "Source value has ambiguous codec recognition"
         );
-        self.prepare(id, configuration).map(Some)
+        Ok(Some(RecognizedSource {
+            codec: self.prepare(id, &configuration)?,
+            document,
+        }))
     }
 
     pub fn inspect(&self, source: &[u8], metadata: &Value) -> Result<Vec<CodecProbe>> {

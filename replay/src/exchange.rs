@@ -819,7 +819,12 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                     .min_by_key(position)
             }
         };
-        select_scope(ReplaySource::Case).or_else(|| select_scope(ReplaySource::Startup))
+        if !self.lifecycle.sequence.is_session_trace()
+            && let Some(index) = select_scope(ReplaySource::Case)
+        {
+            return Some(index);
+        }
+        select_scope(ReplaySource::Startup)
     }
 
     pub fn claim_bound(&mut self, index: usize, owner: Uuid) -> Result<ClaimTicket> {

@@ -137,6 +137,25 @@ fn session_native_template_delivery_reuses_the_registered_identity_scope() {
     native_template_delivery("session", false);
 }
 
+#[test]
+fn unchanged_identity_delivery_stays_borrowed() {
+    use crate::replay::policy::ValueRuleHost;
+
+    let owner = owner();
+    let source_session = session(1);
+    let source = json!({"session_id":source_session,"url":url(&source_session),"stable":true});
+    let mut delivered = Cow::Borrowed(&source);
+    ValueRuleHost::translate_delivery_document(
+        &owner,
+        "case",
+        &source,
+        &mut delivered,
+        Default::default(),
+    )
+    .unwrap();
+    assert!(matches!(delivered, Cow::Borrowed(value) if std::ptr::eq(value, &source)));
+}
+
 fn native_template_delivery(scope: &str, case_owned: bool) {
     use crate::replay::policy::ValueRuleHost;
     use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessage};
@@ -201,16 +220,22 @@ fn native_template_delivery(scope: &str, case_owned: bool) {
     let prepared =
         crate::value_extensions::prepare_message_with_policy(&response, &[], policy).unwrap();
     let rendered = prepared
-        .render_delivery_with_documents(
+        .render_delivery_with_lazy_documents(
             clocks,
             &crate::value_contract::json::PolicyMetadata,
+            &Default::default(),
             &Default::default(),
             |selected| {
                 ValueRuleHost::identity_deliveries(&owner, scope, selected)
                     .map(|(values, _)| values)
             },
             |source, delivered| {
-                ValueRuleHost::translate_document(&owner, scope, source, delivered, clocks)
+                assert!(matches!(delivered, Cow::Borrowed(_)));
+                ValueRuleHost::translate_delivery_document(
+                    &owner, scope, source, delivered, clocks,
+                )?;
+                assert!(matches!(delivered, Cow::Owned(_)));
+                Ok(())
             },
         )
         .unwrap();

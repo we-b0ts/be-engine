@@ -3,6 +3,7 @@ use super::*;
 use crate::replay::policy::RequestRuleRuntime;
 use crate::replay::policy::ValueRuleHost;
 use crate::value_contract::response_delivery::IdentityDeliveryHost;
+use std::borrow::Cow;
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
     identity::{IdentityDecision, IdentityPair},
@@ -15,6 +16,7 @@ use traffic_protocol::{
     message::ProtocolMessage,
 };
 
+mod document_policy;
 mod redis_eval_time;
 mod response_constraints;
 mod response_identities;
@@ -28,39 +30,6 @@ impl IdentityDeliveryHost for RequestContracts {
         global: &crate::policy::CompiledJsonPolicy,
     ) -> Result<(IdentityDecision, Vec<String>)> {
         Self::translate_identity_plan(self, case, source, delivered, global)
-    }
-}
-
-struct GlobalDocumentPolicy {
-    owner: RequestContracts,
-    clocks: AnchorClocks,
-}
-impl traffic_policy_value::DocumentPolicy for GlobalDocumentPolicy {
-    fn paths(&self, source: &traffic_value::Value) -> Result<Vec<String>> {
-        crate::value_contract::global::policy_paths(
-            source,
-            self.owner
-                .global_json()
-                .expect("prepared global document policy"),
-            self.clocks,
-        )
-    }
-    fn compare(
-        &self,
-        source: &traffic_value::Value,
-        target: &traffic_value::Value,
-        fields: &[traffic_contract::compare::Field<'_>],
-        clocks: AnchorClocks,
-    ) -> Result<Comparison> {
-        crate::value_contract::global::compare_fields(
-            source,
-            target,
-            self.owner
-                .global_json()
-                .expect("prepared global document policy"),
-            fields,
-            clocks,
-        )
     }
 }
 
@@ -78,6 +47,10 @@ impl ValueRuleHost for RequestContracts {
         self.observe_value_slot_applicable(comparison.evaluated.iter().cloned());
     }
 
+    fn prefetch_source_response(&self) -> bool {
+        true
+    }
+
     fn translate_document(
         &self,
         scope: &str,
@@ -85,23 +58,21 @@ impl ValueRuleHost for RequestContracts {
         delivered: &mut Value,
         clocks: AnchorClocks,
     ) -> Result<()> {
+        let mut document = Cow::Owned(std::mem::take(delivered));
+        let result = self.translate_delivery_document(scope, source, &mut document, clocks);
+        *delivered = document.into_owned();
+        result
+    }
+    fn translate_delivery_document(
+        &self,
+        scope: &str,
+        source: &Value,
+        delivered: &mut Cow<'_, Value>,
+        clocks: AnchorClocks,
+    ) -> Result<()> {
         if let Some(global) = self.global_json() {
-            let timed =
-                crate::value_contract::global::materialize_logical(source, global, &[], clocks)?;
-            for field in global.selected_delivery_fields_with_clocks(source, clocks)? {
-                let pointer = field.pointer;
-                if field.contract.time().is_some()
-                    && source.pointer(&pointer) == delivered.pointer(&pointer)
-                {
-                    *delivered
-                        .pointer_mut(&pointer)
-                        .context("global time delivery field disappeared")? = timed
-                        .pointer(&pointer)
-                        .context("global time delivery value disappeared")?
-                        .clone();
-                }
-            }
-            self.translate_identity_plan(scope, source, delivered, global)?;
+            crate::value_contract::global::translate_times_cow(source, delivered, global, clocks)?;
+            self.translate_identity_plan_cow(scope, source, delivered, global)?;
         }
         Ok(())
     }
@@ -110,10 +81,10 @@ impl ValueRuleHost for RequestContracts {
         clocks: AnchorClocks,
     ) -> Option<Arc<dyn traffic_policy_value::DocumentPolicy>> {
         self.global_json().map(|_| {
-            Arc::new(GlobalDocumentPolicy {
-                owner: self.clone(),
+            Arc::new(document_policy::GlobalDocumentPolicy::new(
+                self.clone(),
                 clocks,
-            }) as Arc<dyn traffic_policy_value::DocumentPolicy>
+            )) as Arc<dyn traffic_policy_value::DocumentPolicy>
         })
     }
     fn native_request_bindings(

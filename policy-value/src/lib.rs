@@ -4,8 +4,9 @@ pub mod host;
 pub mod inference;
 mod message;
 pub use message::{
-    BindingRegistry, DocumentPolicy, MessageSide, PreparedMessage, RenderedMessage, RuleBinding,
-    StoredValue, ValueRule,
+    BindingRegistry, DocumentPolicy, DocumentPolicyPreparation, MessageSide,
+    PreparedDocumentComparison, PreparedMessage, RenderedMessage, RuleBinding, StoredValue,
+    ValueRule,
 };
 
 #[derive(Default)]

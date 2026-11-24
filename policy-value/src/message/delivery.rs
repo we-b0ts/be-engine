@@ -1,6 +1,6 @@
 //! Shared identity delivery and explicitly authorized time translation.
 use crate::identity::IdentityDelivery;
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 use traffic_contract::{
     delivery::{self, TimeField},
@@ -34,10 +34,11 @@ impl PreparedMessage {
         rebase_time: &BTreeSet<String>,
         resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
     ) -> Result<RenderedMessage> {
-        self.render_delivery_with_documents(
+        self.render_delivery_with_lazy_documents(
             clocks,
             metadata,
             rebase_time,
+            &BTreeMap::new(),
             resolve_identities,
             |_, _| Ok(()),
         )
@@ -72,6 +73,27 @@ impl PreparedMessage {
         delivered_by_protocol: &BTreeMap<String, StoredValue>,
         resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
         translate_document: impl Fn(&Value, &mut Value) -> Result<()>,
+    ) -> Result<RenderedMessage> {
+        self.render_delivery_with_lazy_documents(
+            clocks,
+            metadata,
+            rebase_time,
+            delivered_by_protocol,
+            resolve_identities,
+            |source, delivered| translate_document(source, delivered.to_mut()),
+        )
+    }
+
+    /// Translate a delivery document while borrowing the original JSON until
+    /// a translation needs an owned value.
+    pub fn render_delivery_with_lazy_documents(
+        &self,
+        clocks: AnchorClocks,
+        metadata: &dyn RuleMetadata,
+        rebase_time: &BTreeSet<String>,
+        delivered_by_protocol: &BTreeMap<String, StoredValue>,
+        resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
+        translate_document: impl Fn(&Value, &mut Cow<'_, Value>) -> Result<()>,
     ) -> Result<RenderedMessage> {
         let mut updates = BTreeMap::new();
         let mut identity_fields = Vec::new();
@@ -126,10 +148,12 @@ impl PreparedMessage {
                     contract,
                 })
                 .collect::<Vec<_>>();
-            updates.insert(
-                location.clone(),
-                delivery::materialize(original, &fields, clocks, metadata)?,
-            );
+            let mut delivered = delivery::materialize_cow(original, &fields, clocks, metadata)?;
+            if bound.codec != Codec::Json {
+                // Other codecs still own their own delivery serialization.
+                delivered = Cow::Owned(delivered.into_owned());
+            }
+            updates.insert(location.clone(), (bound, delivered));
         }
         let values = resolve_identities(&identities)?;
         ensure!(
@@ -137,16 +161,30 @@ impl PreparedMessage {
             "identity resolver changed field cardinality"
         );
         for ((location, pointer), value) in identity_fields.into_iter().zip(values) {
-            *updates
+            let (_, document) = updates
                 .get_mut(&location)
-                .and_then(|logical| logical.pointer_mut(&pointer))
-                .context("derived identity field disappeared")? = value;
+                .context("derived identity field disappeared")?;
+            if document.pointer(&pointer) != Some(&value) {
+                *document
+                    .to_mut()
+                    .pointer_mut(&pointer)
+                    .context("derived identity field disappeared")? = value;
+            }
         }
-        for (location, update) in &mut updates {
-            translate_document(self.values[location].source.view().logical(), update)?;
+        for (bound, document) in updates.values_mut() {
+            translate_document(bound.source.view().logical(), document)?;
         }
+        let edited = updates.iter().filter_map(|(location, (bound, document))| {
+            if bound.codec == Codec::Json
+                && std::ptr::eq(bound.source.view().logical(), document.as_ref())
+            {
+                None
+            } else {
+                Some((location, document.as_ref()))
+            }
+        });
         let (projection, comparison) =
-            self.render_projection(&updates, clocks, metadata, delivered_by_protocol)?;
+            self.render_projection(edited, clocks, metadata, delivered_by_protocol)?;
         Ok(RenderedMessage {
             values: projection
                 .values

@@ -205,11 +205,15 @@ async fn session_maintenance_is_forwarded_without_a_capture_admission() {
         Box::new(capture_upstream),
         sink.clone(),
     ));
-    let calls: [(&[&[u8]], &[u8]); 8] = [
+    let calls: [(&[&[u8]], &[u8]); 9] = [
         (&[b"PING"], b"+PONG\r\n"),
         (
             &[b"CLIENT", b"SETINFO", b"LIB-NAME", b"redis-py"],
             b"-ERR Unknown subcommand or wrong number of arguments for 'SETINFO'. Try CLIENT HELP.\r\n",
+        ),
+        (
+            &[b"CLIENT", b"SETINFO", b"LIB-VER", b"6.2.0"],
+            b"-ERR Unknown subcommand or wrong number of arguments for 'SETINFO'. Try CLIENT HELP\r\n",
         ),
         (&[b"AUTH", b"tester", b"secret"], b"+OK\r\n"),
         (&[b"SELECT", b"2"], b"+OK\r\n"),

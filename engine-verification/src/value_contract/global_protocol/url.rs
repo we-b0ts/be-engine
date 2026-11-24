@@ -2,10 +2,7 @@
 pub use traffic_policy_value::formats::url::{Document, selected};
 
 pub fn query_plan(plan: &crate::policy::CompiledJsonPolicy) -> crate::policy::CompiledJsonPolicy {
-    crate::policy::CompiledJsonPolicy {
-        fields: traffic_policy_value::formats::url::query_fields(plan),
-        ..plan.clone()
-    }
+    plan.with_fields(traffic_policy_value::formats::url::query_fields(plan))
 }
 
 #[cfg(test)]

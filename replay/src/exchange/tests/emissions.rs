@@ -203,6 +203,59 @@ async fn prepared_trace_selects_requests_and_messages_without_postings() {
     );
 }
 
+#[test]
+fn session_emissions_select_the_global_head_without_a_case_candidate_scan() {
+    let mut inventory = with_emission();
+    let anchor = inventory.exchanges[0].native.reference.clone();
+    let index = inventory
+        .register(
+            PROTOCOL,
+            RecordedExchange {
+                reference: ProtocolRef::exchange(PROTOCOL.as_str(), Uuid::new_v4()),
+                endpoint: endpoint(),
+                lane: None,
+                response_delay: Default::default(),
+                input: RecordedInput::Emission {
+                    after: anchor.clone(),
+                    offset: Default::default(),
+                },
+                response: Arc::new(Message("session notification")),
+            },
+            SourceContext {
+                source: ReplaySource::Startup,
+                case_id: None,
+                position: 3,
+                capture: None,
+            },
+            ExchangeRules::default(),
+        )
+        .unwrap();
+    inventory.seal();
+    let plan = SequencePlan::compile(
+        [EventKind::Message, EventKind::ResponseEnd]
+            .into_iter()
+            .enumerate()
+            .map(|(position, kind)| SourceEvent {
+                sequence: position as u64 + 1,
+                dependency_sequence: 4,
+                offset_micros: 0,
+                kind,
+            }),
+    )
+    .unwrap();
+    let runtime = SequenceRuntime::with_session_timing(plan, Some(std::time::Duration::ZERO), []);
+    inventory.lifecycle.sequence = SequenceBinding::default();
+    inventory
+        .lifecycle
+        .sequence
+        .attach_run(SequenceBinding::new(runtime, [(index, 4)].into_iter()));
+
+    assert_eq!(
+        inventory.select_message(PROTOCOL, &endpoint(), Some("case"), &[anchor]),
+        Some(index)
+    );
+}
+
 #[tokio::test]
 async fn cancelled_emission_remains_failed_and_cannot_advance_to_the_next_request() {
     let mut inventory = with_emission();

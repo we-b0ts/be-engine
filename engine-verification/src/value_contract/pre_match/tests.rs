@@ -1,12 +1,7 @@
 use super::*;
 
 fn plan() -> CompiledJsonPolicy {
-    CompiledJsonPolicy {
-        time: Default::default(),
-        signatures: Default::default(),
-        fields: Default::default(),
-        fingerprint: String::new(),
-    }
+    CompiledJsonPolicy::default()
 }
 
 #[test]

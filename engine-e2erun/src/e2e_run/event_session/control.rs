@@ -16,11 +16,10 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) struct SessionControl {
     socket: std::path::PathBuf,
-    wait_timeout: Duration,
 }
 
 impl SessionControl {
-    pub(super) async fn from_session(path: &Path, wait_timeout: Duration) -> Result<Self> {
+    pub(super) async fn from_session(path: &Path) -> Result<Self> {
         let raw = tokio::fs::read(path)
             .await
             .context("read Replay session identity")?;
@@ -32,23 +31,21 @@ impl SessionControl {
             .context("Replay session has no absolute control socket")?;
         Ok(Self {
             socket: socket.to_owned(),
-            wait_timeout,
         })
     }
 
     pub(super) async fn wait(&self, sequence: u64) -> Result<()> {
-        self.request(
-            json!({"command":"session_wait","sequence":sequence}),
-            self.wait_timeout,
-        )
-        .await?;
+        // Replay enforces a rolling no-progress deadline while the driver
+        // independently checks control socket health with session_status.
+        self.request(json!({"command":"session_wait","sequence":sequence}), None)
+            .await?;
         Ok(())
     }
 
     pub(super) async fn commit(&self, sequence: u64) -> Result<()> {
         self.request(
             json!({"command":"session_commit","sequence":sequence}),
-            COMMAND_TIMEOUT,
+            Some(COMMAND_TIMEOUT),
         )
         .await?;
         Ok(())
@@ -58,7 +55,7 @@ impl SessionControl {
         let reply = self
             .exchange(
                 json!({"command":"session_fail","sequence":sequence,"reason":reason}),
-                COMMAND_TIMEOUT,
+                Some(COMMAND_TIMEOUT),
             )
             .await?;
         ensure!(
@@ -72,12 +69,12 @@ impl SessionControl {
 
     pub(super) async fn status(&self) -> Result<E2eEventSessionProgress> {
         let reply = self
-            .exchange(json!({"command":"session_status"}), COMMAND_TIMEOUT)
+            .exchange(json!({"command":"session_status"}), Some(COMMAND_TIMEOUT))
             .await?;
         Ok(serde_json::from_value(reply["session_events"].clone())?)
     }
 
-    async fn request(&self, request: Value, timeout: Duration) -> Result<Value> {
+    async fn request(&self, request: Value, timeout: Option<Duration>) -> Result<Value> {
         let reply = self.exchange(request, timeout).await?;
         ensure!(
             reply["ok"] == true,
@@ -89,11 +86,12 @@ impl SessionControl {
         Ok(reply)
     }
 
-    async fn exchange(&self, request: Value, timeout: Duration) -> Result<Value> {
+    async fn exchange(&self, request: Value, timeout: Option<Duration>) -> Result<Value> {
         let command = request["command"]
             .as_str()
             .expect("internal Replay command");
-        tokio::time::timeout(timeout, async {
+        let started = tokio::time::Instant::now();
+        let stream = tokio::time::timeout_at(started + COMMAND_TIMEOUT, async {
             let mut stream = UnixStream::connect(&self.socket).await?;
             let mut frame = serde_json::to_vec(&request)?;
             ensure!(
@@ -102,6 +100,11 @@ impl SessionControl {
             );
             frame.push(b'\n');
             stream.write_all(&frame).await?;
+            Ok::<_, anyhow::Error>(stream)
+        })
+        .await
+        .with_context(|| format!("Replay event control send timed out ({command})"))??;
+        let receive = async {
             let mut reply = Vec::new();
             BufReader::new(stream)
                 .take((FRAME_LIMIT + 1) as u64)
@@ -113,8 +116,42 @@ impl SessionControl {
             );
             let reply: Value = serde_json::from_slice(&reply)?;
             Ok(reply)
-        })
-        .await
-        .with_context(|| format!("Replay event control timed out ({command})"))?
+        };
+        match timeout {
+            Some(timeout) => tokio::time::timeout_at(started + timeout, receive)
+                .await
+                .with_context(|| format!("Replay event control timed out ({command})"))?,
+            None => receive.await,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn session_wait_allows_replay_to_keep_advancing_before_the_next_driver_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let driver = tokio::spawn(async move { SessionControl { socket }.wait(50).await });
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut frame = String::new();
+        stream.read_line(&mut frame).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&frame).unwrap(),
+            json!({"command":"session_wait","sequence":50})
+        );
+        tokio::time::advance(COMMAND_TIMEOUT * 2).await;
+        assert!(!driver.is_finished());
+        stream
+            .get_mut()
+            .write_all(b"{\"ok\":true}\n")
+            .await
+            .unwrap();
+        driver.await.unwrap().unwrap();
     }
 }

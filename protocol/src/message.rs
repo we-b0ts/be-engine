@@ -81,6 +81,11 @@ pub trait MessageEncoder: ProtocolMessage {
         None
     }
 
+    /// Estimated retained memory for an immutable decoded response.
+    fn prefetch_retained_bytes(&self) -> Option<usize> {
+        None
+    }
+
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes>;
 
     fn output(

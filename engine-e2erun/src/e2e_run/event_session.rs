@@ -203,11 +203,7 @@ async fn ready(
         state.session_id.is_some(),
         "event Replay session has no identity"
     );
-    let timeout = config
-        .target_startup_timeout
-        .max(config.target_request_timeout)
-        .saturating_add(config.replay_case_no_progress_timeout);
-    let control = SessionControl::from_session(&state.replay_session, timeout).await?;
+    let control = SessionControl::from_session(&state.replay_session).await?;
     Ok((control, runtime::replay_ca_cert_path(&response)?))
 }
 

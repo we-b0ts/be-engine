@@ -6,9 +6,9 @@ use bytes::Bytes;
 use redis_protocol::resp2::types::BytesFrame;
 use traffic_model::recording::ProtocolRef;
 
-use crate::{RedisCommand, RedisFrameKind, RedisPubSubPush, RedisSubscriptionKind};
+use crate::{RedisCommand, RedisFrameKind, RedisSubscriptionKind};
 
-type Subject = (RedisSubscriptionKind, Vec<u8>);
+type Subject = (RedisSubscriptionKind, Bytes);
 
 #[derive(Clone)]
 pub(super) struct Subscription<A> {
@@ -33,8 +33,8 @@ impl<A> Subscriptions<A> {
         self.0.clear();
     }
 
-    pub fn get(&self, push: &RedisPubSubPush) -> Option<&Subscription<A>> {
-        self.0.get(&(push.subscription_kind, push.subject.clone()))
+    pub fn get(&self, kind: RedisSubscriptionKind, subject: &Bytes) -> Option<&Subscription<A>> {
+        self.0.get(&(kind, subject.clone()))
     }
 
     pub fn confirmation(
@@ -82,7 +82,7 @@ impl<A> Subscriptions<A> {
             args: vec![source.to_vec()],
         };
         crate::validate_subscription_confirmation(&source_command, raw)?;
-        let source_key = (kind, source.to_vec());
+        let source_key = (kind, Bytes::copy_from_slice(source));
         let existing = self.0.get(&source_key);
         let active = self
             .0

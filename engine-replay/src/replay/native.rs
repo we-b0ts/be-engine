@@ -15,6 +15,7 @@ pub mod request;
 mod stored;
 pub use redis_storage::StorageDelivery;
 pub use report::ProtocolReport;
+pub use stored::{LoadedResponse, ResponsePreparation};
 
 #[derive(Debug)]
 pub struct Inventory {
@@ -397,13 +398,8 @@ impl Inventory {
         Option<traffic_policy_value::PreparedMessage>,
         Option<traffic_policy_value::PreparedMessage>,
     )> {
-        let start = capture.map(|capture| capture.started_at);
-        let delivered = start.and_then(|start| {
-            chrono::Duration::from_std(exchange.response_delay)
-                .ok()
-                .and_then(|delay| start.checked_add_signed(delay))
-        });
-        let clocks = contracts.contract_clocks(case, start, None, delivered, None);
+        let (clocks, delivered) =
+            stored::recorded_clocks(contracts, case, capture, exchange.response_delay);
         let rules = self
             .providers
             .bindings()
@@ -413,11 +409,7 @@ impl Inventory {
                 Some(bindings) => (bindings, None),
                 None => (rules.request, contracts.document_policy(clocks)),
             };
-        let mut response_clocks = clocks;
-        response_clocks.observation = Some(traffic_contract::time::ClockPair {
-            source: delivered,
-            target: None,
-        });
+        let response_clocks = stored::response_policy_clocks(clocks, delivered);
         let response_policy = contracts.document_policy(response_clocks);
         let response = loaded_response.or_else(|| {
             exchange
@@ -447,10 +439,7 @@ impl Inventory {
                 })
                 .transpose()?,
         );
-        let mut source_clocks = clocks;
-        source_clocks.case.target = source_clocks.case.source;
-        source_clocks.dependency.target = source_clocks.dependency.source;
-        source_clocks.delivery.target = source_clocks.delivery.source;
+        let source_clocks = stored::comparison_clocks(clocks);
         let request = prepared
             .0
             .as_ref()
