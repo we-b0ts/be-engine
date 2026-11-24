@@ -14,6 +14,7 @@ use super::{
 const BODY: &str = "$body";
 const JSON: &str = "$json";
 const LITERAL: &str = "$literal";
+const JSON_PREFIX: &[u8] = b"json:";
 
 /// A serialized protocol cell with slots for offsets assigned by the segment writer.
 pub(super) struct SerializedCell {
@@ -24,7 +25,7 @@ pub(super) struct SerializedCell {
 struct PendingLink {
     range: Range<usize>,
     index: usize,
-    text: bool,
+    kind: ExternalKind,
 }
 
 impl SerializedCell {
@@ -39,9 +40,13 @@ impl SerializedCell {
             let encoded = std::str::from_utf8(&bytes)?;
             for (start, _) in encoded.match_indices("pending") {
                 let (prefix, suffix) = encoded.split_at(start);
-                let (number, text, tag_size) = match suffix {
-                    suffix if suffix.starts_with("pending:") => (&suffix[8..], false, 8),
-                    suffix if suffix.starts_with("pending-text:") => (&suffix[13..], true, 13),
+                let (number, kind, tag_size) = match suffix {
+                    suffix if suffix.starts_with("pending:") => {
+                        (&suffix[8..], ExternalKind::Bytes, 8)
+                    }
+                    suffix if suffix.starts_with("pending-text:") => {
+                        (&suffix[13..], ExternalKind::Text, 13)
+                    }
                     _ => continue,
                 };
                 let digits = number.bytes().take_while(u8::is_ascii_digit).count();
@@ -55,12 +60,47 @@ impl SerializedCell {
                     links.push(PendingLink {
                         range: start..start + tag_size + digits,
                         index: number[..digits].parse()?,
-                        text,
+                        kind,
                     });
                 }
             }
         }
         Ok(Self { bytes, links })
+    }
+
+    pub(super) fn is_inline_json(&self) -> bool {
+        self.bytes.starts_with(JSON_PREFIX)
+    }
+
+    /// Move an inline field map into payload storage after its child blobs.
+    pub(super) fn into_external_fields(mut self, index: usize) -> Result<(Self, Self)> {
+        ensure!(
+            self.is_inline_json(),
+            "dependency cell has no inline field map"
+        );
+        self.bytes.drain(..JSON_PREFIX.len());
+        for link in &mut self.links {
+            link.range.start -= JSON_PREFIX.len();
+            link.range.end -= JSON_PREFIX.len();
+        }
+        let reference = Self {
+            bytes: Vec::new(),
+            links: vec![PendingLink {
+                range: 0..0,
+                index,
+                kind: ExternalKind::JsonFields,
+            }],
+        };
+        Ok((reference, self))
+    }
+
+    pub(super) fn literal(name: &str) -> Self {
+        let mut bytes = b"const:".to_vec();
+        bytes.extend_from_slice(name.as_bytes());
+        Self {
+            bytes,
+            links: Vec::new(),
+        }
     }
 
     pub(super) fn finish(self, refs: &[Option<PayloadRef>]) -> Result<Vec<u8>> {
@@ -75,11 +115,13 @@ impl SerializedCell {
                 .get(link.index)
                 .and_then(Option::as_ref)
                 .context("unlinked protocol payload")?;
-            let kind = if link.text { "path-text" } else { "path" };
             write!(
                 bytes,
-                "{kind}:{}:{}:{}",
-                reference.segment, reference.offset, reference.length
+                "{}:{}:{}:{}",
+                link.kind.tag(),
+                reference.segment,
+                reference.offset,
+                reference.length
             )?;
             previous = link.range.end;
         }
@@ -127,10 +169,11 @@ pub(super) fn shrink_fields(
     fields: &mut Map<String, Value>,
     payloads: &mut Vec<Payload>,
     offload_json: bool,
+    inline_body_bytes: usize,
 ) -> Result<()> {
     for value in fields.values_mut() {
         let before = payloads.len();
-        let capture = shrink(value, payloads)?;
+        let capture = shrink(value, payloads, inline_body_bytes)?;
         if offload_json
             && !capture
             && payloads.len() == before
@@ -146,20 +189,24 @@ pub(super) fn shrink_fields(
     Ok(())
 }
 
-fn shrink(value: &mut Value, payloads: &mut Vec<Payload>) -> Result<bool> {
+fn shrink(
+    value: &mut Value,
+    payloads: &mut Vec<Payload>,
+    inline_body_bytes: usize,
+) -> Result<bool> {
     match value {
         Value::Array(items) => {
             for item in items {
-                shrink(item, payloads)?;
+                shrink(item, payloads, inline_body_bytes)?;
             }
         }
         Value::Object(fields) => {
-            if let Some(token) = pack_body(fields, payloads)? {
+            if let Some(token) = pack_body(fields, payloads, inline_body_bytes)? {
                 *value = json!({BODY:token});
                 return Ok(true);
             }
             for item in fields.values_mut() {
-                shrink(item, payloads)?;
+                shrink(item, payloads, inline_body_bytes)?;
             }
             if fields.len() == 1 && fields.keys().any(|key| is_token(key)) {
                 let (key, inner) = std::mem::take(fields)
@@ -178,7 +225,11 @@ fn is_token(key: &str) -> bool {
     matches!(key, BODY | JSON | LITERAL)
 }
 
-fn pack_body(fields: &Map<String, Value>, payloads: &mut Vec<Payload>) -> Result<Option<String>> {
+fn pack_body(
+    fields: &Map<String, Value>,
+    payloads: &mut Vec<Payload>,
+    inline_body_bytes: usize,
+) -> Result<Option<String>> {
     if fields.len() != 5 {
         return Ok(None);
     }
@@ -211,7 +262,7 @@ fn pack_body(fields: &Map<String, Value>, payloads: &mut Vec<Payload>) -> Result
         len as u64 == stored,
         "captured payload length disagrees with its data"
     );
-    if len <= INLINE_BYTES {
+    if len <= inline_body_bytes {
         let tag = if encoding == "base64" { "b64" } else { "text" };
         return Ok(Some(format!("{tag}:{data}")));
     }
@@ -226,7 +277,7 @@ fn pack_body(fields: &Map<String, Value>, payloads: &mut Vec<Payload>) -> Result
 
 fn add_payload(payloads: &mut Vec<Payload>, bytes: Vec<u8>) -> usize {
     let index = payloads.len();
-    payloads.push(Payload { index, bytes });
+    payloads.push(Payload::raw(index, bytes));
     index
 }
 
@@ -317,7 +368,7 @@ fn encode_cell(singleton: &str, fields: &Map<String, Value>) -> Result<Vec<u8>> 
             return Ok(out);
         }
     }
-    out.extend_from_slice(b"json:");
+    out.extend_from_slice(JSON_PREFIX);
     serde_json::to_writer(&mut out, fields)?;
     Ok(out)
 }
@@ -331,14 +382,27 @@ pub(super) fn decode_cell(
         PayloadCell::Absent => return Ok(Map::new()),
         PayloadCell::Text(value) => capture("utf8", value.to_owned(), value.len()),
         PayloadCell::Base64(value) => capture("base64", value.to_owned(), b64_len(value)?),
-        PayloadCell::Json(data) => {
-            let mut fields = serde_json::from_str(data)?;
-            restore_fields(&mut fields, read)?;
-            return Ok(fields);
+        PayloadCell::Json(data) => return decode_fields(data.as_bytes(), read),
+        PayloadCell::External {
+            kind: ExternalKind::JsonFields,
+            reference,
+        } => {
+            let bytes = read_payload(&reference, read)?;
+            return decode_fields(&bytes, read);
         }
+        PayloadCell::Literal(name) => anyhow::bail!("unresolved dependency literal {name:?}"),
         PayloadCell::External { kind, reference } => unpack_external(kind, &reference, read)?,
     };
     Ok(Map::from_iter([(singleton.into(), field)]))
+}
+
+fn decode_fields(
+    data: &[u8],
+    read: &mut impl FnMut(&PayloadRef) -> Result<Vec<u8>>,
+) -> Result<Map<String, Value>> {
+    let mut fields = serde_json::from_slice(data)?;
+    restore_fields(&mut fields, read)?;
+    Ok(fields)
 }
 
 pub(super) fn restore_fields(
@@ -399,12 +463,8 @@ fn unpack_external(
     reference: &PayloadRef,
     read: &mut impl FnMut(&PayloadRef) -> Result<Vec<u8>>,
 ) -> Result<Value> {
-    let bytes = read(reference)?;
+    let bytes = read_payload(reference, read)?;
     let length = bytes.len();
-    ensure!(
-        length as u64 == reference.length,
-        "incomplete dependency payload"
-    );
     Ok(match kind {
         ExternalKind::Bytes => capture("base64", STANDARD.encode(bytes), length),
         ExternalKind::Text => capture("utf8", String::from_utf8(bytes)?, length),
@@ -413,7 +473,20 @@ fn unpack_external(
             restore(&mut value, read)?;
             value
         }
+        ExternalKind::JsonFields => anyhow::bail!("field map used as a singleton payload"),
     })
+}
+
+fn read_payload(
+    reference: &PayloadRef,
+    read: &mut impl FnMut(&PayloadRef) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    let bytes = read(reference)?;
+    ensure!(
+        bytes.len() as u64 == reference.length,
+        "incomplete dependency payload"
+    );
+    Ok(bytes)
 }
 
 fn unpack_body(
@@ -428,5 +501,60 @@ fn unpack_body(
             reference,
         } => unpack_external(kind, &reference, read),
         _ => anyhow::bail!("unknown dependency body kind"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::PayloadContent;
+
+    #[test]
+    fn external_field_map_restores_nested_payloads_and_literal_tokens() -> Result<()> {
+        let payload = b"\0body\xff";
+        let original = Map::from_iter([
+            ("method".into(), json!("POST")),
+            (
+                "request_body".into(),
+                capture("base64", STANDARD.encode(payload), payload.len()),
+            ),
+            ("metadata".into(), json!({"$body": "literal"})),
+        ]);
+        let mut fields = original.clone();
+        let mut bodies = Vec::new();
+        shrink_fields(&mut fields, &mut bodies, true, 0)?;
+        assert_eq!(bodies.len(), 1);
+        let PayloadContent::Bytes(raw) = &bodies[0].content else {
+            panic!("captured body should use raw payload storage");
+        };
+        assert_eq!(raw.as_slice(), payload);
+
+        let cell = SerializedCell::prepare("request", &fields, true)?;
+        assert!(cell.is_inline_json());
+        let (cell, body) = cell.into_external_fields(1)?;
+        let inner = PayloadRef {
+            segment: 0,
+            offset: 0,
+            length: payload.len() as u64,
+        };
+        let body = body.finish(&[Some(inner)])?;
+        assert!(body.starts_with(b"{"));
+        let outer = PayloadRef {
+            segment: 0,
+            offset: payload.len() as u64,
+            length: body.len() as u64,
+        };
+        let cell = cell.finish(&[None, Some(outer)])?;
+        assert!(cell.starts_with(b"fields-path:0:"));
+
+        let bytes = [raw.as_slice(), body.as_slice()].concat();
+        let parsed = PayloadCell::parse(std::str::from_utf8(&cell)?)?;
+        let decoded = decode_cell("request", parsed, &mut |reference| {
+            assert_eq!(reference.segment, 0);
+            let start = reference.offset as usize;
+            Ok(bytes[start..start + reference.length as usize].to_vec())
+        })?;
+        assert_eq!(decoded, original);
+        Ok(())
     }
 }

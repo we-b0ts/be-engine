@@ -28,7 +28,7 @@ mod admission;
 pub use admission::{Barrier, ClaimKind, ClaimTicket, DeliveryGuard, Finish, Lifecycle};
 
 mod catalog;
-pub use catalog::SequenceCatalog;
+pub use catalog::{SequenceCatalog, SessionPlanEvent};
 mod runtime;
 pub use runtime::{PendingRequest, SequenceClaim, SequenceProgress, SequenceRuntime};
 mod ingress;

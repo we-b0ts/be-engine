@@ -21,6 +21,7 @@ pub struct RowLayout {
     pub declaration: Option<RecordingLayout>,
     pub target: Option<String>,
     pub upstream: Option<String>,
+    pub response_literal: Option<&'static str>,
 }
 
 pub(super) struct RecordProjection {
@@ -35,6 +36,7 @@ impl RecordProjection {
         &mut self,
         terms: &mut WriteTerms,
         layout: &RowLayout,
+        session: bool,
     ) -> Result<(DependencyPrefix<'static>, Vec<u8>)> {
         let epoch = terms.recording_id();
         let process_epoch = self.capture.remove("process_epoch");
@@ -139,7 +141,16 @@ impl RecordProjection {
             outcome.insert("outcome".into(), std::mem::take(&mut self.outcome));
             atoms::named(out, "", &outcome, terms)?;
         }
-        project_empty(&mut self.capture, &mut self.native, out)?;
+        project_defaults(
+            &mut self.capture,
+            &mut self.native,
+            out,
+            session,
+            terms.process_epoch(),
+        )?;
+        if session {
+            project_clocks(&mut self.capture, &mut self.native, out, terms)?;
+        }
         atoms::named(out, "c.", &self.capture, terms)?;
         atoms::named(out, "n.", &self.native, terms)?;
         Ok((prefix, extension))
@@ -214,7 +225,7 @@ impl RecordProjection {
         let mut address_fields: u8 = 0;
         let mut reference = None;
         let mut outcome = Value::from("response");
-        let mut empty: u8 = 0;
+        let mut default_fields = None;
         for item in extension.metadata.split_ascii_whitespace() {
             let (key, value) = item
                 .split_once('=')
@@ -223,7 +234,11 @@ impl RecordProjection {
                 "f" => flags = value.parse()?,
                 "a" => address_fields = value.parse()?,
                 "r" => reference = Some(value),
-                "d" => empty = value.parse()?,
+                "d" => ensure!(
+                    default_fields.replace(value.parse()?).is_none(),
+                    "duplicate dependency defaults"
+                ),
+                "t" => restore_clocks(&mut capture, &mut native, value, terms)?,
                 "outcome" => outcome = atoms::read_named(value, terms)?,
                 _ => {
                     let (scope, field) =
@@ -304,7 +319,12 @@ impl RecordProjection {
                 }
             }
         }
-        restore_empty(&mut capture, &mut native, empty)?;
+        restore_defaults(
+            &mut capture,
+            &mut native,
+            default_fields.unwrap_or_default(),
+            terms.process_epoch(),
+        )?;
         if let Some(form) = reference {
             reference::restore(
                 &mut capture,
@@ -422,6 +442,59 @@ fn insert(map: &mut Map<String, Value>, key: String, value: Value) -> Result<()>
     Ok(())
 }
 
+const NATIVE_CLOCKS: [&str; 2] = ["request_started_at", "timestamp"];
+
+fn project_clocks(
+    capture: &mut Map<String, Value>,
+    native: &mut Map<String, Value>,
+    out: &mut Vec<u8>,
+    terms: &WriteTerms,
+) -> Result<()> {
+    let Some(start) = capture
+        .get("started_at")
+        .and_then(|value| terms.relative("started_at", value))
+    else {
+        return Ok(());
+    };
+    capture.remove("started_at");
+    write!(out, " t={start}")?;
+    for key in NATIVE_CLOCKS {
+        if let Some(delta) = native
+            .get(key)
+            .and_then(|value| terms.relative(key, value))
+            .and_then(|offset| offset.checked_sub(start))
+        {
+            native.remove(key);
+            write!(out, ",{delta}")?;
+        } else {
+            out.extend_from_slice(b",-");
+        }
+    }
+    Ok(())
+}
+
+fn restore_clocks(
+    capture: &mut Map<String, Value>,
+    native: &mut Map<String, Value>,
+    value: &str,
+    terms: &ReadTerms,
+) -> Result<()> {
+    let mut offsets = value.split(',');
+    let start: i64 = offsets.next().context("missing capture clock")?.parse()?;
+    insert(capture, "started_at".into(), terms.clock(start)?)?;
+    for key in NATIVE_CLOCKS {
+        let delta = offsets.next().context("missing native clock slot")?;
+        if delta != "-" {
+            let offset = start
+                .checked_add(delta.parse()?)
+                .context("dependency clock offset is out of range")?;
+            insert(native, key.into(), terms.clock(offset)?)?;
+        }
+    }
+    ensure!(offsets.next().is_none(), "unexpected dependency clock slot");
+    Ok(())
+}
+
 fn defaults() -> [(bool, &'static str, Value); 8] {
     [
         (true, "matched_rule_id", Value::Null),
@@ -435,17 +508,63 @@ fn defaults() -> [(bool, &'static str, Value); 8] {
     ]
 }
 
-fn project_empty(
+const SESSION_ATTRIBUTION: u16 = 1 << 8;
+const SESSION_EFFECT_INDEX: u16 = 1 << 9;
+const SESSION_OBSERVED_CASE: u16 = 1 << 10;
+const SESSION_ADMITTED_CASE: u16 = 1 << 11;
+const SESSION_PHASE_SHIFT: u16 = 12;
+const SESSION_PHASE_MASK: u16 = 0b11 << SESSION_PHASE_SHIFT;
+const ALL_DEFAULT_FIELDS: u16 = (1 << 14) - 1;
+const SESSION_PHASES: [&str; 3] = ["startup", "runtime", "shutdown"];
+
+fn session_defaults() -> [(u16, &'static str, Value); 3] {
+    [
+        (SESSION_EFFECT_INDEX, "effect_index", Value::from(0)),
+        (SESSION_OBSERVED_CASE, "observed_case", Value::Null),
+        (SESSION_ADMITTED_CASE, "admitted_case", Value::Null),
+    ]
+}
+
+fn project_defaults(
     capture: &mut Map<String, Value>,
     native: &mut Map<String, Value>,
     out: &mut Vec<u8>,
+    session: bool,
+    process_epoch: &str,
 ) -> Result<()> {
-    let mut fields: u8 = 0;
+    let mut fields: u16 = 0;
     for (index, (shared, key, default)) in defaults().into_iter().enumerate() {
         let map = if shared { &mut *capture } else { &mut *native };
         if map.get(key) == Some(&default) {
             map.remove(key);
             fields |= 1 << index;
+        }
+    }
+    if session {
+        if capture
+            .get("attribution")
+            .and_then(Value::as_object)
+            .is_some_and(|owner| {
+                owner.len() == 3
+                    && owner.get("kind").and_then(Value::as_str) == Some("startup")
+                    && owner.get("initialization_unit").and_then(Value::as_str) == Some("session")
+                    && owner.get("process_epoch").and_then(Value::as_str) == Some(process_epoch)
+            })
+        {
+            capture.remove("attribution");
+            fields |= SESSION_ATTRIBUTION;
+        }
+        for (bit, key, default) in session_defaults() {
+            if capture.get(key) == Some(&default) {
+                capture.remove(key);
+                fields |= bit;
+            }
+        }
+        if let Some(phase) = capture.get("phase").and_then(Value::as_str)
+            && let Some(index) = SESSION_PHASES.iter().position(|&name| name == phase)
+        {
+            capture.remove("phase");
+            fields |= (index as u16 + 1) << SESSION_PHASE_SHIFT;
         }
     }
     if fields != 0 {
@@ -454,16 +573,214 @@ fn project_empty(
     Ok(())
 }
 
-fn restore_empty(
+fn restore_defaults(
     capture: &mut Map<String, Value>,
     native: &mut Map<String, Value>,
-    fields: u8,
+    fields: u16,
+    process_epoch: &str,
 ) -> Result<()> {
+    ensure!(
+        fields & !ALL_DEFAULT_FIELDS == 0,
+        "unknown dependency default field"
+    );
     for (index, (shared, key, default)) in defaults().into_iter().enumerate() {
         if fields & (1 << index) != 0 {
             let map = if shared { &mut *capture } else { &mut *native };
             insert(map, key.into(), default)?;
         }
     }
+    if fields & SESSION_ATTRIBUTION != 0 {
+        insert(
+            capture,
+            "attribution".into(),
+            json!({
+                "kind": "startup",
+                "initialization_unit": "session",
+                "process_epoch": process_epoch,
+            }),
+        )?;
+    }
+    for (bit, key, default) in session_defaults() {
+        if fields & bit != 0 {
+            insert(capture, key.into(), default)?;
+        }
+    }
+    let phase = (fields & SESSION_PHASE_MASK) >> SESSION_PHASE_SHIFT;
+    if phase != 0 {
+        insert(
+            capture,
+            "phase".into(),
+            SESSION_PHASES[usize::from(phase - 1)].into(),
+        )?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_header_rehydrates_only_exact_defaults() -> Result<()> {
+        let epoch = Uuid::nil().to_string();
+        let attribution = json!({
+            "kind": "startup",
+            "initialization_unit": "session",
+            "process_epoch": epoch,
+        });
+        let original = Map::from_iter([
+            ("attribution".into(), attribution.clone()),
+            ("effect_index".into(), 0.into()),
+            ("observed_case".into(), Value::Null),
+            ("admitted_case".into(), Value::Null),
+        ]);
+        let mut native = Map::new();
+        let mut capture = original.clone();
+        let mut extension = Vec::new();
+        project_defaults(&mut capture, &mut native, &mut extension, false, &epoch)?;
+        assert!(extension.is_empty());
+        assert_eq!(capture, original);
+
+        project_defaults(&mut capture, &mut native, &mut extension, true, &epoch)?;
+        let fields = SESSION_ATTRIBUTION
+            | SESSION_EFFECT_INDEX
+            | SESSION_OBSERVED_CASE
+            | SESSION_ADMITTED_CASE;
+        assert_eq!(extension, format!(" d={fields}").as_bytes());
+        assert!(capture.is_empty());
+        restore_defaults(&mut capture, &mut native, fields, &epoch)?;
+        assert_eq!(capture, original);
+        assert!(restore_defaults(&mut capture, &mut native, fields, &epoch).is_err());
+
+        let mut capture = original;
+        capture["attribution"]["initialization_unit"] = "other".into();
+        capture.insert("effect_index".into(), 1.into());
+        capture.insert("observed_case".into(), Uuid::new_v4().to_string().into());
+        capture.remove("admitted_case");
+        let nondefaults = capture.clone();
+        extension.clear();
+        project_defaults(&mut capture, &mut native, &mut extension, true, &epoch)?;
+        assert!(extension.is_empty());
+        assert_eq!(capture, nondefaults);
+        Ok(())
+    }
+
+    #[test]
+    fn session_header_round_trips_phase() -> Result<()> {
+        let epoch = Uuid::nil().to_string();
+        let mut native = Map::new();
+        for (phase, code) in [
+            ("startup", 1),
+            ("runtime", 2),
+            ("shutdown", 3),
+            ("other", 0),
+        ] {
+            let original = Map::from_iter([("phase".into(), phase.into())]);
+            let mut capture = original.clone();
+            let mut extension = Vec::new();
+            project_defaults(&mut capture, &mut native, &mut extension, false, &epoch)?;
+            assert!(extension.is_empty());
+            assert_eq!(capture, original);
+
+            project_defaults(&mut capture, &mut native, &mut extension, true, &epoch)?;
+            let fields = code << SESSION_PHASE_SHIFT;
+            if fields != 0 {
+                assert_eq!(extension, format!(" d={fields}").as_bytes());
+                assert!(capture.is_empty());
+            } else {
+                assert!(extension.is_empty());
+            }
+            restore_defaults(&mut capture, &mut native, fields, &epoch)?;
+            assert_eq!(capture, original);
+            if fields != 0 {
+                assert!(restore_defaults(&mut capture, &mut native, fields, &epoch).is_err());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn session_header_compacts_signed_clock_deltas() -> Result<()> {
+        let epoch = Uuid::nil();
+        let mut terms = WriteTerms::new("2026-11-24T00:00:00Z".parse()?, epoch, epoch);
+        let capture = Map::from_iter([
+            ("sequence".into(), 1.into()),
+            ("process_epoch".into(), epoch.to_string().into()),
+            ("started_at".into(), "2026-11-23T23:59:59.999999900Z".into()),
+        ]);
+        let native = Map::from_iter([
+            (
+                "request_started_at".into(),
+                "2026-11-23T23:59:59.999999899Z".into(),
+            ),
+            ("timestamp".into(), "2026-11-24T00:00:00.000000125Z".into()),
+        ]);
+        let read = ReadTerms::decode(&terms.take_pending())?;
+        for session in [false, true] {
+            let mut projected = RecordProjection {
+                capture: capture.clone(),
+                native: native.clone(),
+                outcome: "response".into(),
+                complete: true,
+            };
+            let (prefix, extension) =
+                projected.project(&mut terms, &RowLayout::default(), session)?;
+            if session {
+                assert_eq!(extension, b"ext:- t=-100,-1,225");
+            } else {
+                assert!(extension.starts_with(b"ext:- c.started_at=t-100 "));
+            }
+            let extension = ProtocolExtension::parse(std::str::from_utf8(&extension)?)?;
+            let record = RecordProjection::materialize(prefix, extension, epoch, &read)?;
+            assert_eq!(record.capture, capture);
+            assert_eq!(record.native, native);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_clocks_preserve_fallbacks_and_reject_invalid_slots() -> Result<()> {
+        let epoch = Uuid::nil();
+        let mut terms = WriteTerms::new("1970-01-01T00:00:00Z".parse()?, epoch, epoch);
+        let read = ReadTerms::decode(&terms.take_pending())?;
+        let mut native = Map::from_iter([("request_started_at".into(), Value::Null)]);
+        let mut capture = Map::new();
+        let mut extension = Vec::new();
+        for start in [None, Some("1970-01-01T00:00:00+00:00")] {
+            if let Some(value) = start {
+                capture.insert("started_at".into(), value.into());
+            }
+            let original = capture.clone();
+            project_clocks(&mut capture, &mut native, &mut extension, &terms)?;
+            assert_eq!(capture, original);
+            assert!(extension.is_empty());
+        }
+
+        let start = Value::from("1700-01-01T00:00:00Z");
+        let offset = terms
+            .relative("started_at", &start)
+            .context("missing test clock")?;
+        capture.insert("started_at".into(), start.clone());
+        project_clocks(&mut capture, &mut native, &mut extension, &terms)?;
+        assert_eq!(extension, format!(" t={offset},-,-").as_bytes());
+        assert_eq!(native.get("request_started_at"), Some(&Value::Null));
+        assert!(!native.contains_key("timestamp"));
+        restore_clocks(&mut capture, &mut native, &format!("{offset},-,-"), &read)?;
+        assert_eq!(capture.get("started_at"), Some(&start));
+        assert!(
+            restore_clocks(&mut capture, &mut native, &format!("{offset},-,-"), &read).is_err()
+        );
+
+        extension.clear();
+        let far = Value::from("2200-01-01T00:00:00Z");
+        assert!(terms.relative("timestamp", &far).is_some());
+        native.insert("timestamp".into(), far.clone());
+        project_clocks(&mut capture, &mut native, &mut extension, &terms)?;
+        assert_eq!(extension, format!(" t={offset},-,-").as_bytes());
+        assert_eq!(native.get("timestamp"), Some(&far));
+        for malformed in ["0,,0", "1,-", "0,0,0,0", "9223372036854775807,1,-"] {
+            assert!(restore_clocks(&mut Map::new(), &mut Map::new(), malformed, &read).is_err());
+        }
+        Ok(())
+    }
 }

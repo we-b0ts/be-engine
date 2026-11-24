@@ -5,6 +5,8 @@ use anyhow::{Context, Result, ensure};
 use traffic_model::recording::identity::IdentityKind;
 use uuid::Uuid;
 
+use crate::dependency_columns::valid_response_literal_name;
+
 use super::{PayloadRef, atoms};
 
 pub(crate) const COLUMN_COUNT: usize = 11;
@@ -105,6 +107,7 @@ pub(crate) enum PayloadCell<'a> {
     Text(&'a str),
     Base64(&'a str),
     Json(&'a str),
+    Literal(&'a str),
     External {
         kind: ExternalKind,
         reference: PayloadRef,
@@ -116,6 +119,18 @@ pub(crate) enum ExternalKind {
     Bytes,
     Text,
     Json,
+    JsonFields,
+}
+
+impl ExternalKind {
+    pub(super) fn tag(self) -> &'static str {
+        match self {
+            Self::Bytes => "path",
+            Self::Text => "path-text",
+            Self::Json => "json-path",
+            Self::JsonFields => "fields-path",
+        }
+    }
 }
 
 impl<'a> PayloadCell<'a> {
@@ -130,11 +145,19 @@ impl<'a> PayloadCell<'a> {
             "text" => Self::Text(bytes),
             "b64" => Self::Base64(bytes),
             "json" => Self::Json(bytes),
-            "path" | "path-text" | "json-path" => Self::External {
+            "const" => {
+                ensure!(
+                    valid_response_literal_name(bytes),
+                    "invalid response literal name"
+                );
+                Self::Literal(bytes)
+            }
+            "path" | "path-text" | "json-path" | "fields-path" => Self::External {
                 kind: match tag {
                     "path" => ExternalKind::Bytes,
                     "path-text" => ExternalKind::Text,
-                    _ => ExternalKind::Json,
+                    "json-path" => ExternalKind::Json,
+                    _ => ExternalKind::JsonFields,
                 },
                 reference: bytes.parse()?,
             },
@@ -157,16 +180,22 @@ impl<'a> PayloadCell<'a> {
                 out.extend_from_slice(b"json:");
                 out.extend_from_slice(value.as_bytes());
             }
+            Self::Literal(name) => {
+                ensure!(
+                    valid_response_literal_name(name),
+                    "invalid response literal name"
+                );
+                out.extend_from_slice(b"const:");
+                out.extend_from_slice(name.as_bytes());
+            }
             Self::External { kind, reference } => {
-                let tag = match kind {
-                    ExternalKind::Bytes => "path",
-                    ExternalKind::Text => "path-text",
-                    ExternalKind::Json => "json-path",
-                };
                 write!(
                     out,
-                    "{tag}:{}:{}:{}",
-                    reference.segment, reference.offset, reference.length
+                    "{}:{}:{}:{}",
+                    kind.tag(),
+                    reference.segment,
+                    reference.offset,
+                    reference.length
                 )?;
             }
         }

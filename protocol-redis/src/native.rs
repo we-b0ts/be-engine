@@ -73,6 +73,10 @@ impl NativeProtocol for Native {
             .map(|kind| json!({"kind":kind}))
     }
 
+    fn emission_body_decoder(&self) -> Option<traffic_protocol::connection::EmissionBodyDecoder> {
+        Some(|body| Ok(Arc::new(notification::NotificationMessage::decode(body)?)))
+    }
+
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>> {
         if event["event_type"] == "redis_pub_sub_push" {
             return notification::recorded(event).map(Some);

@@ -258,7 +258,7 @@ impl AppConfig {
     pub fn load_for_recording(path: impl AsRef<Path>, session_events: bool) -> Result<Self> {
         let path = path.as_ref();
         let mut config = Self::read_static(path)?;
-        config.recording.session_events |= session_events;
+        config.recording.session_events = session_events;
         let rules_path = resolve_unified_policy_path(path)?;
         let (rules, fingerprints) = SourceTrafficPolicyConfig::load_with_fingerprints(&rules_path)?;
         let catalog = if config.recording.session_events {

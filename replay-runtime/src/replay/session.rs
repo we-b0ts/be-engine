@@ -1,11 +1,18 @@
 //! One frozen timeline for dependency providers and the primary input driver.
 pub(super) mod prefetch;
+#[cfg(test)]
+mod tests;
 
 use super::*;
 use std::time::Duration;
 use tokio::time::Instant;
-use traffic_model::session::SessionEvent;
-use traffic_replay::{EventKind, SequencePlan, SequenceProgress, SequenceRuntime, SourceEvent};
+use traffic_recording_store::{
+    session::PrimaryEventKind,
+    session_timeline::{self, SessionTimelineEvent},
+};
+use traffic_replay::{
+    EventKind, SequencePlan, SequenceProgress, SequenceRuntime, SessionPlanEvent, SourceEvent,
+};
 
 pub(super) const TIMER_SCOPE: &str = "session";
 
@@ -157,38 +164,44 @@ pub(super) fn plan(
         driver_preludes.len(),
         manifest.semantic_inventory.total_mandatory,
     );
-    let driver = traffic_recording_store::session::read(root)?;
-    let index = crate::dependency_index::recording::event_index_for_replay(root)?
-        .context("session recording has no Source dependency event index")?;
-    let events = index.selected(references.union(&driver_preludes).copied())?;
-    let events = events.filter(|record| {
-        !record.as_ref().is_ok_and(|record| {
-            record
-                .event
-                .dependency_sequence()
-                .is_some_and(|sequence| driver_preludes.contains(&sequence))
-        })
+    let mut unseen_preludes = driver_preludes;
+    let events = session_timeline::read(root)?.filter_map(|row| match row {
+        Err(error) => Some(Err(error)),
+        Ok(SessionTimelineEvent::Primary(event)) => {
+            Some(Ok(SessionPlanEvent::Driver(SourceEvent {
+                sequence: event.sequence,
+                dependency_sequence: 0,
+                offset_micros: event.offset_micros,
+                kind: match event.event {
+                    PrimaryEventKind::SourceStart => EventKind::SessionSourceStart,
+                    PrimaryEventKind::Ready => EventKind::SessionReady,
+                    PrimaryEventKind::Stop => EventKind::SessionStop,
+                    PrimaryEventKind::SourceExit => EventKind::SessionSourceExit,
+                    PrimaryEventKind::PrimaryRequest => EventKind::PrimaryRequest,
+                    PrimaryEventKind::PrimaryResponseHeaders => EventKind::PrimaryResponseHeaders,
+                    PrimaryEventKind::PrimaryResponsePart => EventKind::PrimaryResponsePart,
+                    PrimaryEventKind::PrimaryResponseTrailers => EventKind::PrimaryResponseTrailers,
+                    PrimaryEventKind::PrimaryResponseEnd => EventKind::PrimaryResponseEnd,
+                    PrimaryEventKind::PrimaryCancel => EventKind::PrimaryCancel,
+                },
+            })))
+        }
+        Ok(SessionTimelineEvent::Dependency(event)) => {
+            let sequence = event.event.dependency_sequence()?;
+            if sequence == event.sequence {
+                unseen_preludes.remove(&sequence);
+            }
+            references
+                .contains(&sequence)
+                .then_some(Ok(SessionPlanEvent::Dependency(event)))
+        }
     });
-    SequencePlan::compile_session(
-        events,
-        driver.into_iter().map(|event| SourceEvent {
-            sequence: event.sequence,
-            dependency_sequence: 0,
-            offset_micros: event.offset_micros,
-            kind: match event.event {
-                SessionEvent::SourceStart => EventKind::SessionSourceStart,
-                SessionEvent::Ready => EventKind::SessionReady,
-                SessionEvent::Stop => EventKind::SessionStop,
-                SessionEvent::SourceExit { .. } => EventKind::SessionSourceExit,
-                SessionEvent::PrimaryRequest { .. } => EventKind::PrimaryRequest,
-                SessionEvent::PrimaryResponseHeaders { .. } => EventKind::PrimaryResponseHeaders,
-                SessionEvent::PrimaryResponsePart { .. } => EventKind::PrimaryResponsePart,
-                SessionEvent::PrimaryResponseTrailers { .. } => EventKind::PrimaryResponseTrailers,
-                SessionEvent::PrimaryResponseEnd { .. } => EventKind::PrimaryResponseEnd,
-                SessionEvent::PrimaryCancel { .. } => EventKind::PrimaryCancel,
-            },
-        }),
-    )
+    let plan = SequencePlan::compile_session(events)?;
+    ensure!(
+        plan.dependency_count() == references.len() && unseen_preludes.is_empty(),
+        "session dependency inventory is missing a Source event trace"
+    );
+    Ok(plan)
 }
 
 pub(super) async fn control<P: ReplayProtocolSet>(

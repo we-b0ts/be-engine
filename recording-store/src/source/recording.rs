@@ -70,8 +70,23 @@ pub fn has_separated_messages(path: &Path) -> Result<bool> {
 }
 
 /// Merge the journals of a sealed recording in original Source order.
-pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<CaptureEvent>>>> {
+pub fn events(
+    path: &Path,
+) -> Result<impl Iterator<Item = Result<RecordedEvent<CaptureEvent>>> + Send + use<>> {
+    type Events = Box<dyn Iterator<Item = Result<RecordedEvent<CaptureEvent>>> + Send>;
     let (root, manifest) = manifest(path)?;
+    if manifest
+        .files
+        .iter()
+        .any(|file| file.path == crate::session::FILE)
+    {
+        let stream = crate::session_timeline::read(&root)?.filter_map(|row| match row {
+            Ok(crate::session_timeline::SessionTimelineEvent::Primary(_)) => None,
+            Ok(crate::session_timeline::SessionTimelineEvent::Dependency(event)) => Some(Ok(event)),
+            Err(error) => Some(Err(error)),
+        });
+        return Ok(Box::new(stream) as Events);
+    }
     let compact = manifest.schema == COMPACT_RECORDING_SCHEMA;
     let name = if compact {
         JOURNALS[0]
@@ -82,13 +97,13 @@ pub fn events(path: &Path) -> Result<impl Iterator<Item = Result<RecordedEvent<C
     let ordinary = open(name)?;
     let pushes = compact.then(|| open(JOURNALS[1])).transpose()?;
     let epoch = manifest.run_epoch;
-    Ok(event_index::merge(
+    Ok(Box::new(event_index::merge(
         event_stream(ordinary, epoch, compact),
         pushes
             .into_iter()
             .flat_map(move |file| event_stream(file, epoch, compact)),
         compact,
-    ))
+    )) as Events)
 }
 
 fn event_stream(
@@ -128,7 +143,12 @@ pub fn event_index_for_replay(path: &Path) -> Result<Option<SourceEventIndex>> {
 
 fn open_event_index(path: &Path, verify: bool) -> Result<Option<SourceEventIndex>> {
     let (root, manifest) = manifest(path)?;
-    if manifest.schema == COMPACT_RECORDING_SCHEMA {
+    if manifest.schema == COMPACT_RECORDING_SCHEMA
+        && !manifest
+            .files
+            .iter()
+            .any(|file| file.path == crate::session::FILE)
+    {
         let index = if verify {
             SourceEventIndex::open(root, manifest.run_epoch)?
         } else {
@@ -268,7 +288,7 @@ pub fn authenticate(path: &Path) -> Result<()> {
         partitions::files(session)
             .chain(crate::original_scope::files(session))
             .map(|(_, name)| name)
-            .chain(event_index::FILES)
+            .chain(event_index::FILES.into_iter().filter(|_| !session))
             .chain([partitions::DIRECTORY, crate::dependency_columns::FILE])
             .collect::<Vec<_>>()
     } else {

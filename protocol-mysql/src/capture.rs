@@ -1,10 +1,11 @@
 //! MySQL capture completeness and native semantic obligations.
-use traffic_model::recording::ProtocolRef;
+use traffic_model::{DependencyExchangeOutcome, recording::ProtocolRef};
 use traffic_protocol::capture::{
     CaptureEvidence, CaptureFacts, RecordingLayout, RecordingScalar, SemanticRequirement,
 };
 
 use crate::events::*;
+use crate::semantic::MysqlExchangeResponse;
 pub mod connection;
 mod response;
 mod semantic;
@@ -65,8 +66,34 @@ impl CaptureEvidence for MysqlExchangeEvent {
             facts.semantic = SemanticRequirement::Observation;
         }
         facts.traffic_error = self.response.error_code.is_some();
+        if complete
+            && self.outcome == DependencyExchangeOutcome::Response
+            && self.parse_warnings.is_empty()
+        {
+            facts.recording_response_literal = recording_response_literal(&self.response);
+        }
         facts
     }
+}
+
+fn recording_response_literal(response: &MysqlExchangeResponse) -> Option<&'static str> {
+    matches!(
+        response,
+        MysqlExchangeResponse {
+            wire_prefix,
+            server_status: Some(0),
+            status,
+            error_code: None,
+            error_message: None,
+            affected_rows: Some(0),
+            last_insert_id: Some(0),
+            columns,
+            rows,
+            row_count: 0,
+            rows_truncated: false,
+        } if status == "ok" && wire_prefix.is_empty() && columns.is_empty() && rows.is_empty()
+    )
+    .then_some("mysql_ok_zero")
 }
 
 impl CaptureEvidence for MysqlConnectionEvent {

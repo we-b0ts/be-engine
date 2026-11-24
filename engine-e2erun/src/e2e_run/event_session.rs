@@ -16,6 +16,7 @@ use traffic_model::{
     session::{ENGINE_SHUTDOWN_CANCEL_REASON, SessionEvent},
     trace::RecordedEvent,
 };
+use traffic_recording_store::session::{self, ReplayEvent, ReplayEvents};
 use uuid::Uuid;
 
 use self::{control::SessionControl, http::Http, target::Target};
@@ -35,10 +36,13 @@ pub async fn run_e2e_event_session(
         options.run_key.as_deref(),
     )?;
     let recording = layout.case_source.clone();
-    let tape =
-        tokio::task::spawn_blocking(move || traffic_recording_store::session::read(&recording))
-            .await
-            .context("session recording reader task failed")??;
+    let tape = tokio::task::spawn_blocking(move || {
+        // SAFETY: managed Replay reads one sealed recording and does not modify
+        // its payload segments while the reader or delivery slices are live.
+        unsafe { session::read_for_replay(&recording) }
+    })
+    .await
+    .context("session recording reader task failed")??;
     let _guard = lock(&layout.internal_root)?;
     ensure!(
         !layout.active_dir.exists() && store::focused_active_directories(&layout)?.is_empty(),
@@ -104,7 +108,7 @@ async fn run(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
     mut state: ActiveRunState,
-    tape: Vec<RecordedEvent<SessionEvent>>,
+    tape: ReplayEvents,
     result: &mut E2eEventSessionResult,
 ) -> Result<()> {
     let plan = replay_timer::read_plan(&layout.target_root, config.replay_stream_timing)?;
@@ -215,7 +219,7 @@ async fn drive(
     layout: &RunLayout,
     control: &SessionControl,
     target: &mut Target<'_>,
-    tape: Vec<RecordedEvent<SessionEvent>>,
+    tape: ReplayEvents,
     result: &mut E2eEventSessionResult,
 ) -> Result<()> {
     let mut http = Http::new(config, &layout.case_source, &layout.target_root)?;
@@ -247,12 +251,22 @@ async fn run_events(
     control: &SessionControl,
     target: &mut Target<'_>,
     http: &mut Http<'_>,
-    tape: Vec<RecordedEvent<SessionEvent>>,
+    tape: ReplayEvents,
 ) -> Result<()> {
-    for RecordedEvent {
-        sequence, event, ..
-    } in tape
-    {
+    // Read storage off the async executor. Delivery owns only the current
+    // event and this small queue of subsequent events.
+    let (send, mut pending) = tokio::sync::mpsc::channel(8);
+    let reader = tokio::task::spawn_blocking(move || {
+        for event in tape {
+            if send.blocking_send(event).is_err() {
+                break;
+            }
+        }
+    });
+    while let Some(event) = pending.recv().await {
+        let RecordedEvent {
+            sequence, event, ..
+        } = event?;
         control.wait(sequence).await?;
         let handling = apply(config, control, sequence, target, http, event).await;
         if let Err(error) = handling {
@@ -263,6 +277,9 @@ async fn run_events(
                 .with_context(|| format!("event Replay failed at sequence {sequence}"));
         }
     }
+    reader
+        .await
+        .context("session recording reader task failed")?;
     ensure!(
         http.is_empty(),
         "event Replay ended with unclosed primary HTTP exchanges"
@@ -314,8 +331,19 @@ async fn apply(
     sequence: u64,
     target: &mut Target<'_>,
     http: &mut Http<'_>,
-    event: SessionEvent,
+    event: ReplayEvent,
 ) -> Result<()> {
+    let event = match event {
+        ReplayEvent::Event(event) => event,
+        ReplayEvent::ResponsePart {
+            exchange,
+            part,
+            data,
+        } => {
+            http.part(exchange, part, &data).await?;
+            return control.commit(sequence).await;
+        }
+    };
     match event {
         SessionEvent::SourceStart => {
             control.commit(sequence).await?;
@@ -343,11 +371,9 @@ async fn apply(
         SessionEvent::PrimaryResponseHeaders { exchange, response } => {
             http.headers(exchange, response).await?
         }
-        SessionEvent::PrimaryResponsePart {
-            exchange,
-            part,
-            data_base64,
-        } => http.part(exchange, part, &data_base64).await?,
+        SessionEvent::PrimaryResponsePart { .. } => {
+            bail!("encoded primary response part entered the Replay driver")
+        }
         SessionEvent::PrimaryResponseTrailers { exchange, trailers } => {
             http.trailers(exchange, trailers).await?
         }

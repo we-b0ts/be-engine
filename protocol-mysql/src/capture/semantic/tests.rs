@@ -3,6 +3,7 @@ use crate::parse_client_command;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use traffic_model::capture::BodyCapture;
+use traffic_protocol::capture::CaptureEvidence;
 
 mod transaction_status;
 
@@ -62,6 +63,13 @@ fn rollback_ok_preserves_server_transaction_status_without_guessing_truncated_fl
         });
         let exchange = tracker.finish_active("ok", None, None, Some(1)).unwrap();
         assert_eq!(exchange.response.server_status, expected);
+        assert_eq!(
+            exchange.capture_facts().recording_response_literal,
+            (expected == Some(0)).then_some("mysql_ok_zero")
+        );
+        let mut affected = exchange.clone();
+        affected.response.affected_rows = Some(1);
+        assert_eq!(affected.capture_facts().recording_response_literal, None);
         let value = serde_json::to_value(exchange).unwrap();
         assert_eq!(
             value["response"]["server_status"],

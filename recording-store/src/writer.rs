@@ -1,5 +1,8 @@
 //! Write and seal the physical dependency ledger for one recording.
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
@@ -30,17 +33,23 @@ pub use buffer::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
 pub struct LedgerFiles {
     root: PathBuf,
     recording_id: uuid::Uuid,
-    streams: [FileDigest; partitions::FILES.len()],
+    streams: [FileDigest; partitions::PARTITION_COUNT],
     last_sequence: u64,
     directory: FileDigest,
     terms: WriteTerms,
     terms_digest: FileDigest,
     dependency_bytes: u64,
-    events: EventLocations,
+    events: Option<EventLocations>,
     records: usize,
     payloads: segments::PayloadSegments,
     scopes: OriginalScopes,
-    session: Option<FileDigest>,
+    session: Option<SessionState>,
+}
+
+#[derive(Default)]
+struct SessionState {
+    wire_ends: HashSet<u64>,
+    requests: HashMap<uuid::Uuid, u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,9 +101,6 @@ impl LedgerFiles {
         for (_, name) in partitions::files(session) {
             crate::storage::write(&root.join(name), b"").await?;
         }
-        if session {
-            crate::storage::write(&root.join(crate::session::FILE), b"").await?;
-        }
         let header = recording_id.as_bytes();
         crate::storage::write(&root.join(partitions::DIRECTORY), header).await?;
         let mut directory = FileDigest::default();
@@ -113,11 +119,15 @@ impl LedgerFiles {
             terms,
             terms_digest,
             dependency_bytes: 0,
-            events: EventLocations::initialize(root).await?,
+            events: if session {
+                None
+            } else {
+                Some(EventLocations::initialize(root).await?)
+            },
             records: 0,
             payloads: Default::default(),
             scopes: OriginalScopes::initialize(root, session).await?,
-            session: session.then(FileDigest::default),
+            session: session.then(SessionState::default),
         })
     }
 
@@ -130,16 +140,51 @@ impl LedgerFiles {
         files: &mut JsonlWriterPool,
         event: &RecordedEvent<SessionEvent>,
     ) -> Result<()> {
-        let name = crate::session::FILE;
-        self.ensure_next_sequence(name, event.sequence)?;
+        self.ensure_next_sequence(crate::session::FILE, event.sequence)?;
         let session = self
             .session
-            .as_mut()
+            .as_ref()
             .context("session capture is disabled")?;
-        let bytes = crate::session::encode(event)?;
-        files.append(&self.root.join(name), &bytes).await?;
-        session.observe(&bytes);
-        self.last_sequence = event.sequence;
+        use SessionEvent::*;
+        let request_sequence = match event.event {
+            PrimaryRequest { exchange, .. } => {
+                ensure!(
+                    !session.requests.contains_key(&exchange),
+                    "duplicate primary request exchange"
+                );
+                Some(event.sequence)
+            }
+            PrimaryResponseHeaders { exchange, .. }
+            | PrimaryResponsePart { exchange, .. }
+            | PrimaryResponseTrailers { exchange, .. }
+            | PrimaryResponseEnd { exchange }
+            | PrimaryCancel { exchange, .. } => Some(
+                *session
+                    .requests
+                    .get(&exchange)
+                    .context("primary response has no request")?,
+            ),
+            _ => None,
+        };
+        let (pending, payload) = crate::session::split(event, request_sequence)?;
+        let reference = if let Some(payload) = payload {
+            Some(self.payloads.append(&self.root, files, &payload).await?)
+        } else {
+            None
+        };
+        let row = pending.encode(reference.as_ref())?;
+        self.append_row(files, partitions::SESSION, event.sequence, &row)
+            .await?;
+        let session = self.session.as_mut().expect("Session state");
+        match event.event {
+            PrimaryRequest { exchange, .. } => {
+                session.requests.insert(exchange, event.sequence);
+            }
+            PrimaryResponseEnd { exchange } | PrimaryCancel { exchange, .. } => {
+                session.requests.remove(&exchange);
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -159,12 +204,51 @@ impl LedgerFiles {
     ) -> Result<()> {
         use CaptureEvent::*;
         let dependency = event.event.dependency_sequence();
+        let wire_end = matches!(
+            event.event,
+            Output {
+                output: OutputKind::End,
+                ..
+            }
+        );
+        let terminal = if let Terminal {
+            dependency_sequence,
+            outcome,
+            capture_complete,
+        } = &event.event
+        {
+            Some((
+                *dependency_sequence,
+                *capture_complete && matches!(outcome.as_str(), "response" | "delivery"),
+            ))
+        } else {
+            None
+        };
+        if let Some(session) = &self.session {
+            let delivered = terminal.is_some_and(|(dependency, complete)| {
+                complete && session.wire_ends.contains(&dependency)
+            });
+            if delivered {
+                self.ensure_next_sequence(crate::session::FILE, event.sequence)?;
+                self.last_sequence = event.sequence;
+            } else {
+                let row = crate::event_format::encode_event(event, self.recording_id)?;
+                self.append_row(files, partitions::SESSION, event.sequence, &row)
+                    .await?;
+            }
+            let session = self.session.as_mut().expect("Session state");
+            if let Some((dependency, _)) = terminal {
+                session.wire_ends.remove(&dependency);
+            } else if wire_end && let Some(dependency) = dependency {
+                session.wire_ends.insert(dependency);
+            }
+            return Ok(());
+        }
+        let events = self.events.as_ref().expect("non-Session event locations");
         let journal = if matches!(event.event, MessageStarted { .. }) {
             1
         } else {
-            dependency
-                .and_then(|id| self.events.journal(id))
-                .unwrap_or(0)
+            dependency.and_then(|id| events.journal(id)).unwrap_or(0)
         };
         let partition = if journal == 1 {
             partitions::PUSH
@@ -173,16 +257,15 @@ impl LedgerFiles {
         };
         // The successful wire end already gives Replay its completion boundary.
         // Close the trace at capture termination so post-output events survive.
-        if let Terminal {
-            dependency_sequence,
-            outcome,
-            capture_complete: true,
-        } = &event.event
-            && matches!(outcome.as_str(), "response" | "delivery")
-            && self.events.has_wire_end(*dependency_sequence)
+        if let Some((dependency, true)) = terminal
+            && events.has_wire_end(dependency)
         {
             self.ensure_next_sequence(partitions::FILES[partition], event.sequence)?;
-            self.events.finish(files, *dependency_sequence).await?;
+            self.events
+                .as_mut()
+                .expect("non-Session event locations")
+                .finish(files, dependency)
+                .await?;
             self.last_sequence = event.sequence;
             return Ok(());
         }
@@ -191,21 +274,10 @@ impl LedgerFiles {
             .append_row(files, partition, event.sequence, &row)
             .await?;
         if let Some(dependency) = dependency {
-            self.events.append(
-                journal,
-                dependency,
-                offset,
-                row.len(),
-                matches!(
-                    event.event,
-                    Output {
-                        output: OutputKind::End,
-                        ..
-                    }
-                ),
-            )?;
-            if matches!(event.event, Terminal { .. }) {
-                self.events.finish(files, dependency).await?;
+            let events = self.events.as_mut().expect("non-Session event locations");
+            events.append(journal, dependency, offset, row.len(), wire_end)?;
+            if terminal.is_some() {
+                events.finish(files, dependency).await?;
             }
         }
         Ok(())
@@ -227,12 +299,11 @@ impl LedgerFiles {
         sequence: u64,
         bytes: &[u8],
     ) -> Result<u64> {
-        self.ensure_next_sequence(partitions::FILES[partition], sequence)?;
+        let name = partitions::file(partition).expect("known recording partition");
+        self.ensure_next_sequence(name, sequence)?;
         let stream = &mut self.streams[partition];
         let offset = stream.length;
-        files
-            .append(&self.root.join(partitions::FILES[partition]), bytes)
-            .await?;
+        files.append(&self.root.join(name), bytes).await?;
         stream.observe(bytes);
         self.last_sequence = sequence;
         Ok(offset)
@@ -252,13 +323,21 @@ impl LedgerFiles {
         let Value::Object(record) = record else {
             anyhow::bail!("recorded dependency is not an object");
         };
-        let (mut row, payloads) = PendingDependency::split(record, self.recording_id, layout)?;
+        let session = self.session.is_some();
+        let (mut row, payloads) = if session {
+            PendingDependency::split_with_payload_refs(
+                record,
+                self.recording_id,
+                layout,
+                &mut self.terms,
+            )?
+        } else {
+            PendingDependency::split(record, self.recording_id, layout)?
+        };
         for payload in payloads {
-            let reference = self
-                .payloads
-                .append(&self.root, files, payload.bytes())
-                .await?;
-            row.link(payload, reference);
+            let (index, bytes) = row.resolve_payload(payload)?;
+            let reference = self.payloads.append(&self.root, files, &bytes).await?;
+            row.link(index, reference);
         }
         let bytes = row.encode(&mut self.terms, layout)?;
         let (header, request, response) = compact_cells(&bytes)?;
@@ -283,7 +362,7 @@ impl LedgerFiles {
                 .await?;
             self.terms_digest.observe(&additions);
         }
-        let partition = partitions::partition(owner, kind, self.session.is_some());
+        let partition = partitions::partition(owner, kind, session);
         let header_offset;
         let response_offset;
         if let Some(stamp) = request_stamp {
@@ -360,12 +439,11 @@ impl LedgerFiles {
         for (index, name) in partitions::files(self.session.is_some()) {
             identities.push(self.streams[index].identity(name));
         }
-        identities.extend(self.events.seal().await?);
+        if let Some(events) = &mut self.events {
+            identities.extend(events.seal().await?);
+        }
         identities.extend(self.payloads.identities());
         identities.extend(self.scopes.identities());
-        if let Some(session) = &self.session {
-            identities.push(session.identity(crate::session::FILE));
-        }
         Ok(identities)
     }
 }

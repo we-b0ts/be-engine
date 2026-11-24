@@ -718,14 +718,13 @@ type. The recording assigns `seq` globally and uses monotonic microsecond
 offsets. The admission sequence identifies the dependency. Later rows refer to
 that sequence.
 
-`dependencies.tsv` holds ordinary lifecycle events. In
-[Session recordings](session-regression.md) it also holds all dependency
-exchanges. Case recordings use it for Case dependency data and store process
-and unattributed data in `dependencies-process.tsv` and
-`dependencies-unattributed.tsv`. The push partition, `dependencies-push.tsv`,
-holds notifications and their lifecycle events. Nonmatching observations use
+[Session recordings](session-regression.md) put primary, dependency and push
+events in a single `events.tsv`. Case recordings put ordinary lifecycle events
+and Case dependencies in `dependencies.tsv`, process and unattributed
+dependencies in `dependencies-process.tsv` and `dependencies-unattributed.tsv`,
+and notifications in `dependencies-push.tsv`. Nonmatching observations use
 `observations.tsv` and remain available to route discovery and evidence readers.
-The dependency and event locators link rows across partitions by byte position.
+The dependency locator links data rows by byte position.
 
 A `request` data row carries the dependency metadata followed by its request
 cell. Its `response` row carries the dependency sequence and response cell
@@ -746,9 +745,11 @@ the existing semantic evidence model from these fields.
 
 Request and response cells can contain encoded text, Base64, JSON, or a
 segment reference. Complete body values carry their encoding and data. A
-payload over 4 KiB is stored out of line and referenced by segment number, byte
-offset, and byte length. Segments roll over before the next value once they have
-reached 32 MiB. A value that crosses the threshold stays together. The dependency writer rejects truncated bodies.
+Session body is stored out of line when nonempty. Case recordings place body
+values larger than 4 KiB out of line. Both formats reference them by segment
+number, byte offset and byte length. Segments roll over before the next value
+once they reach 32 MiB. A value that crosses the threshold stays together.
+The dependency writer rejects truncated bodies.
 
 Replay prepares event plans from the selected dependency sequences. The
 ordinary Replay read path uses the persisted locations and validates their

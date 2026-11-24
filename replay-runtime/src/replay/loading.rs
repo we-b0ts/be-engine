@@ -164,14 +164,18 @@ async fn load_state<P: ReplayProtocolSet>(
         native.configure_event_session_request_projection(native_policy.clone());
     }
     native.configure_storage_preparation(native_policy.as_deref());
+    let capacity = lifecycle.dependency_loading.cache_bytes;
+    let reader = if session_events {
+        // SAFETY: Session Replay admits only completed, sealed recordings.
+        // Source payload segments are required to remain unchanged through delivery.
+        unsafe { crate::dependency_index::RecordReader::for_session_replay(capacity) }
+    } else {
+        crate::dependency_index::RecordReader::for_replay(capacity)
+    };
     let mut resources = SourceResources {
         native,
         targets: BTreeMap::new(),
-        reader: Arc::new(std::sync::Mutex::new(
-            crate::dependency_index::RecordReader::for_replay(
-                lifecycle.dependency_loading.cache_bytes,
-            ),
-        )),
+        reader: Arc::new(std::sync::Mutex::new(reader)),
     };
     let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
     let total_cases = cases.len();

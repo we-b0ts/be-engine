@@ -8,6 +8,7 @@ mod format;
 mod original_scope;
 mod partitions;
 pub mod session;
+pub mod session_timeline;
 pub mod source;
 pub mod storage;
 pub mod writer;

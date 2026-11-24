@@ -51,12 +51,20 @@ impl FromStr for PayloadRef {
 
 pub struct Payload {
     index: usize,
-    bytes: Vec<u8>,
+    content: PayloadContent,
+}
+
+enum PayloadContent {
+    Bytes(Vec<u8>),
+    Fields(payload::SerializedCell),
 }
 
 impl Payload {
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+    fn raw(index: usize, bytes: Vec<u8>) -> Self {
+        Self {
+            index,
+            content: PayloadContent::Bytes(bytes),
+        }
     }
 }
 
@@ -65,13 +73,32 @@ pub(crate) struct PendingDependency {
     request: payload::SerializedCell,
     response: payload::SerializedCell,
     references: Vec<Option<PayloadRef>>,
+    session: bool,
 }
 
 impl PendingDependency {
     pub fn split(
+        event: Map<String, Value>,
+        recording_id: Uuid,
+        layout: &RowLayout,
+    ) -> Result<(Self, Vec<Payload>)> {
+        Self::split_record(event, recording_id, layout, None)
+    }
+
+    pub fn split_with_payload_refs(
+        event: Map<String, Value>,
+        recording_id: Uuid,
+        layout: &RowLayout,
+        terms: &mut WriteTerms,
+    ) -> Result<(Self, Vec<Payload>)> {
+        Self::split_record(event, recording_id, layout, Some(terms))
+    }
+
+    fn split_record(
         mut event: Map<String, Value>,
         recording_id: Uuid,
         layout: &RowLayout,
+        session_terms: Option<&mut WriteTerms>,
     ) -> Result<(Self, Vec<Payload>)> {
         let recorded_id: Uuid = serde_json::from_value(
             event
@@ -94,16 +121,23 @@ impl PendingDependency {
             .context("missing capture completeness")?;
         let (mut request, mut response) = payload::take_fields(&mut event, layout.declaration);
         let mut payloads = Vec::new();
-        payload::shrink_fields(&mut request, &mut payloads, true)?;
-        let request = payload::SerializedCell::prepare("request", &request, !payloads.is_empty())?;
-        let request_payloads = payloads.len();
-        payload::shrink_fields(&mut response, &mut payloads, true)?;
-        let response = payload::SerializedCell::prepare(
-            "response",
-            &response,
-            payloads.len() != request_payloads,
-        )?;
-        payload::shrink_fields(&mut event, &mut payloads, false)?;
+        let session = session_terms.is_some();
+        let inline_body_bytes = if session { 0 } else { INLINE_BYTES };
+        payload::shrink_fields(&mut event, &mut payloads, false, inline_body_bytes)?;
+        let request = prepare_cell("request", &mut request, &mut payloads, session)?;
+        let response = if let (Some(terms), Some(name), Some(event_type)) = (
+            session_terms,
+            layout.response_literal,
+            event.get("event_type").and_then(Value::as_str),
+        ) && complete
+            && outcome == "response"
+            && !response.is_empty()
+            && terms.declare_response_literal(name, event_type, &response)?
+        {
+            payload::SerializedCell::literal(name)
+        } else {
+            prepare_cell("response", &mut response, &mut payloads, session)?
+        };
         let references = (0..payloads.len()).map(|_| None).collect();
         Ok((
             Self {
@@ -116,18 +150,27 @@ impl PendingDependency {
                 request,
                 response,
                 references,
+                session,
             },
             payloads,
         ))
     }
 
-    pub fn link(&mut self, payload: Payload, reference: PayloadRef) {
-        self.references[payload.index] = Some(reference);
+    pub fn resolve_payload(&self, payload: Payload) -> Result<(usize, Vec<u8>)> {
+        let bytes = match payload.content {
+            PayloadContent::Bytes(bytes) => bytes,
+            PayloadContent::Fields(cell) => cell.finish(&self.references)?,
+        };
+        Ok((payload.index, bytes))
+    }
+
+    pub fn link(&mut self, index: usize, reference: PayloadRef) {
+        self.references[index] = Some(reference);
     }
 
     pub(crate) fn encode(mut self, terms: &mut WriteTerms, layout: &RowLayout) -> Result<Vec<u8>> {
         payload::link(&mut self.header.native, &self.references)?;
-        let (prefix, extension) = self.header.project(terms, layout)?;
+        let (prefix, extension) = self.header.project(terms, layout, self.session)?;
         let request = self.request.finish(&self.references)?;
         let response = self.response.finish(&self.references)?;
         DependencyRow::write(
@@ -158,10 +201,16 @@ impl PendingDependency {
             mut native,
         } = RecordProjection::materialize(prefix, extension, recording_id, terms)?;
         payload::restore_fields(&mut native, &mut read)?;
-        for (key, value) in payload::decode_cell("request", request, &mut read)?
-            .into_iter()
-            .chain(payload::decode_cell("response", response, &mut read)?)
-        {
+        let request = payload::decode_cell("request", request, &mut read)?;
+        let response = if let PayloadCell::Literal(name) = response {
+            let event_type = native["event_type"]
+                .as_str()
+                .context("response literal has no event type")?;
+            terms.response_literal(name, event_type)?
+        } else {
+            payload::decode_cell("response", response, &mut read)?
+        };
+        for (key, value) in request.into_iter().chain(response) {
             ensure!(
                 native.insert(key, value).is_none(),
                 "duplicate dependency payload field"
@@ -194,6 +243,38 @@ impl PendingDependency {
         native.insert("capture_complete".into(), Value::Bool(complete));
         Ok(Value::Object(native))
     }
+}
+
+fn prepare_cell(
+    singleton: &str,
+    fields: &mut Map<String, Value>,
+    payloads: &mut Vec<Payload>,
+    session: bool,
+) -> Result<payload::SerializedCell> {
+    let before = payloads.len();
+    let inline_body_bytes = if session { 0 } else { INLINE_BYTES };
+    payload::shrink_fields(fields, payloads, !session, inline_body_bytes)?;
+    let cell = payload::SerializedCell::prepare(singleton, fields, payloads.len() != before)?;
+    if session && cell.is_inline_json() {
+        let index = payloads.len();
+        let (cell, body) = cell.into_external_fields(index)?;
+        payloads.push(Payload {
+            index,
+            content: PayloadContent::Fields(body),
+        });
+        return Ok(cell);
+    }
+    Ok(cell)
+}
+
+pub(crate) fn response_payload_ref(cell: &[u8]) -> Result<Option<PayloadRef>> {
+    Ok(match PayloadCell::parse(std::str::from_utf8(cell)?)? {
+        PayloadCell::External {
+            kind: row::ExternalKind::Bytes | row::ExternalKind::Text,
+            reference,
+        } => Some(reference),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -239,14 +320,16 @@ mod tests {
             }),
             target: Some("example.test:80".into()),
             upstream: Some("192.0.2.32:80".into()),
+            ..RowLayout::default()
         };
         let (mut pending, mut payloads) =
             PendingDependency::split(event.as_object().unwrap().clone(), epoch, &layout).unwrap();
         assert_eq!(payloads.len(), 1);
         let payload = payloads.pop().unwrap();
-        assert_eq!(payload.bytes(), body);
+        let (index, bytes) = pending.resolve_payload(payload).unwrap();
+        assert_eq!(bytes, body);
         pending.link(
-            payload,
+            index,
             PayloadRef {
                 segment: 4,
                 offset: 32,
@@ -337,14 +420,14 @@ mod tests {
         assert_eq!(fields.len(), 2);
         let mut parts = Vec::new();
         for field in fields {
-            let bytes = field.bytes().to_vec();
+            let (index, bytes) = row.resolve_payload(field).unwrap();
             assert!(bytes.len() > INLINE_BYTES);
             let reference = PayloadRef {
                 segment: parts.len() as u64,
                 offset: 0,
                 length: bytes.len() as u64,
             };
-            row.link(field, reference);
+            row.link(index, reference);
             parts.push(bytes);
         }
         let mut terms = WriteTerms::new(

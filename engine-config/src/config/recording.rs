@@ -12,7 +12,8 @@ use crate::mysql::operation::MysqlWriteOperation;
 #[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
     pub output_dir: PathBuf,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// Managed runtime mode, independent of project Recorder settings.
+    #[serde(skip)]
     pub session_events: bool,
     pub max_body_bytes: usize,
     pub max_decoded_body_bytes: Option<usize>,

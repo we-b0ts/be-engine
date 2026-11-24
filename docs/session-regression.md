@@ -1,19 +1,33 @@
 # Source session regression
 
-Enable session capture with `traffic-e2e record --session-events` or
-`recorder.recording.session_events: true` in the recording project. Set HTTP
+`traffic-e2e record` captures a globally ordered Source session. Set HTTP
 gateway rules before recording to select the ingress workload. The session
 includes startup and background traffic at the configured capture points.
 Recorder opens ingress at application readiness while already admitted I/O
 continues on the same sequence.
 
 Stop the recorder normally to seal the recording. Keep its
-`dependency-manifest.json` and the full recording tree together. Primary
-events in `request-response.tsv`, dependency events in `dependencies.tsv`,
-and notifications in `dependencies-push.tsv` share one recording sequence.
-Replay loads dependency rows through `dependency-locations.bin` and uses the
-event location and span indexes to build the sequence. Startup, readiness and
-shutdown are lifecycle events on that sequence.
+`dependency-manifest.json` and the full recording tree together. One
+`events.tsv` lists startup, primary HTTP, dependency exchanges, notifications
+and shutdown in increasing Source sequence. The first three columns are
+`seq`, `offset_us` and the event kind. Sequences can have gaps. An HTTP
+response refers to the sequence of its primary request.
+
+Body references name a segment, byte offset and length under `payload/`.
+Structured dependency requests and responses each have one `fields-path:`
+reference. Embedded binary values remain raw segment slices. Exact protocol
+responses such as MySQL zero OK, Redis RESP2 `+OK` and Redis RESP2 null bulk use
+`const:` references to a shared response in the sealed dependency term table.
+Session dependency rows encode capture phase and default ownership, effect
+index and empty Case links in the existing `d=` metadata field.
+The `t=` tuple gives the capture clock as a nanosecond offset from the term
+table's UTC anchor, followed by request-start and protocol timestamp offsets
+relative to that capture clock. A dash leaves the corresponding field outside
+the tuple. The monotonic `offset_us` column still drives event ordering.
+Replay scans the TSV to build the event plan and uses
+`dependency-locations.bin` to find the data for individual exchanges.
+Redis pushes and primary HTTP response chunks can use raw bytes from the
+segment reader. Treat a sealed recording as read-only throughout Replay.
 During shutdown, the recorder closes admission and gives active ingress up to
 15 seconds to finish. It records `primary_cancel` with reason `engine_shutdown`
 for each remaining request and disconnects it before stopping Source. Replay

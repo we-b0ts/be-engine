@@ -347,6 +347,7 @@ impl LedgerWriter {
                     declaration: facts.recording_layout,
                     target: facts.recording_target,
                     upstream: facts.recording_upstream,
+                    response_literal: facts.recording_response_literal,
                 },
                 stamps.request,
                 stamps.response.context("dependency has no payload stamp")?,

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, ensure};
+use bytes::Bytes;
 
 use super::compact;
 use super::digest;
@@ -14,6 +15,7 @@ use super::model::{FileStamp, RecordLocation};
 #[derive(Debug)]
 pub struct RecordReader {
     verify: bool,
+    map_payloads: bool,
     capacity: usize,
     bytes: usize,
     records: HashMap<RecordKey, CachedRecord>,
@@ -22,6 +24,7 @@ pub struct RecordReader {
     source: Option<(PathBuf, super::scoped::Source)>,
     partitions: Option<(PathBuf, FileStamp, crate::partitions::Reader)>,
     compact: Option<(PathBuf, FileStamp, compact::Reader)>,
+    response_cell: Vec<u8>,
     pub source_bytes: u64,
     pub hits: usize,
 }
@@ -33,6 +36,7 @@ impl RecordReader {
     pub fn new(capacity: usize) -> Self {
         Self {
             verify: true,
+            map_payloads: false,
             capacity,
             bytes: 0,
             records: HashMap::new(),
@@ -41,6 +45,7 @@ impl RecordReader {
             source: None,
             partitions: None,
             compact: None,
+            response_cell: Vec::new(),
             source_bytes: 0,
             hits: 0,
         }
@@ -52,6 +57,18 @@ impl RecordReader {
         Self {
             verify: false,
             ..Self::new(capacity)
+        }
+    }
+
+    /// Enable mapped payload slices for an immutable Session recording.
+    ///
+    /// # Safety
+    ///
+    /// Sealed segment files must remain unchanged while a returned slice is live.
+    pub unsafe fn for_session_replay(capacity: usize) -> Self {
+        Self {
+            map_payloads: true,
+            ..Self::for_replay(capacity)
         }
     }
 
@@ -96,6 +113,40 @@ impl RecordReader {
         Ok(metadata)
     }
 
+    pub(super) fn read_response_bytes(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+    ) -> Result<Option<Bytes>> {
+        if self.verify || !crate::partitions::is_directory(path) {
+            return Ok(None);
+        }
+        let mut cell = std::mem::take(&mut self.response_cell);
+        let result = self.read_response_cell(path, stamp, location, &mut cell);
+        self.response_cell = cell;
+        result
+    }
+
+    fn read_response_cell(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+        cell: &mut Vec<u8>,
+    ) -> Result<Option<Bytes>> {
+        let reader = self.partition_reader(path, stamp)?;
+        if !reader.read_response_cell(location.line, (location.offset, location.length), cell)? {
+            return Ok(None);
+        }
+        let recording_id = reader.recording_id;
+        let body = self
+            .compact_reader(path, stamp, recording_id)?
+            .read_response_bytes(cell)?;
+        self.source_bytes += cell.len() as u64 + body.as_ref().map_or(0, |body| body.len() as u64);
+        Ok(body)
+    }
+
     fn partition_reader(
         &mut self,
         path: &Path,
@@ -132,6 +183,10 @@ impl RecordReader {
         {
             let reader = if self.verify {
                 compact::Reader::open(path, recording_id)?
+            } else if self.map_payloads {
+                // SAFETY: `map_payloads` is only enabled by the Session
+                // constructor, which requires sealed immutable input.
+                unsafe { compact::Reader::open_for_session_replay(path, recording_id)? }
             } else {
                 compact::Reader::open_for_replay(path, recording_id)?
             };

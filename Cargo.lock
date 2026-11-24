@@ -3129,6 +3129,7 @@ dependencies = [
  "traffic-protocol-mysql",
  "traffic-recorder",
  "traffic-recording-model",
+ "traffic-recording-store",
  "traffic-replay",
  "url",
  "uuid",
@@ -3650,6 +3651,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "bytes",
  "chrono",
  "libc",
  "serde",

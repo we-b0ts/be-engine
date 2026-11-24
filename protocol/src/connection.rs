@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub type NativeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+pub type EmissionBodyDecoder = fn(Bytes) -> Result<Arc<dyn MessageEncoder>>;
 
 pub trait OutputIo: AsyncWrite + Unpin + Send {}
 impl<T: AsyncWrite + Unpin + Send + ?Sized> OutputIo for T {}
@@ -494,6 +495,11 @@ pub trait NativeProtocol: Send + Sync {
         Ok(None)
     }
     fn recorded_emission_structure(&self, _metadata: &Value) -> Option<Value> {
+        None
+    }
+    /// Optional decoder for an admitted server emission stored as a single
+    /// native response body. Routing and timing were validated at registration.
+    fn emission_body_decoder(&self) -> Option<EmissionBodyDecoder> {
         None
     }
     fn recorded_exchange_with_secrets(

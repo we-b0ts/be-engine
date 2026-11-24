@@ -23,9 +23,8 @@ pub struct RecordOptions {
         value_name = "PATH"
     )]
     pub config_path: Option<PathBuf>,
-    /// Capture one concurrent Source session with globally sequenced events.
-    #[arg(long, env = "TRAFFIC_E2E_SESSION_EVENTS")]
-    pub session_events: bool,
+    #[arg(skip)]
+    pub(super) session_events: bool,
     #[arg(
         long,
         env = "TRAFFIC_E2E_RECORD_LISTEN",
@@ -271,7 +270,7 @@ impl RecordOptions {
         if let Some(path) = &self.ready_path {
             config.http_gateway.ready.path = path.clone();
         }
-        config.recording.session_events |= self.session_events;
+        config.recording.session_events = self.session_events;
         if config.recording.session_events {
             config.clear_case_capture_settings();
         } else if let Some(limit) = self.case_limit {

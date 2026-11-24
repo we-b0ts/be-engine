@@ -148,7 +148,7 @@ impl<'a> Http<'a> {
         Ok(())
     }
 
-    pub(super) async fn part(&mut self, id: Uuid, part: u64, encoded: &str) -> Result<()> {
+    pub(super) async fn part(&mut self, id: Uuid, part: u64, expected: &[u8]) -> Result<()> {
         let exchange = self
             .exchanges
             .get_mut(&id)
@@ -157,7 +157,7 @@ impl<'a> Http<'a> {
             .response
             .as_mut()
             .context("response part preceded HTTP headers")?;
-        tokio::time::timeout_at(exchange.deadline, response.part(part, encoded))
+        tokio::time::timeout_at(exchange.deadline, response.part(part, expected))
             .await
             .context("Target primary HTTP body did not arrive before its deadline")?
     }

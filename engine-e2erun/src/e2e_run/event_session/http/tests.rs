@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use super::*;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -11,15 +10,15 @@ use tokio::{
 #[tokio::test]
 async fn primary_stream_observes_source_parts_across_target_chunks() {
     let mut response = target_stream().await;
-    response.part(1, &STANDARD.encode(b"a")).await.unwrap();
-    response.part(2, &STANDARD.encode(b"bcde")).await.unwrap();
+    response.part(1, b"a").await.unwrap();
+    response.part(2, b"bcde").await.unwrap();
     response.end().await.unwrap();
 }
 
 #[tokio::test]
 async fn primary_stream_rejects_bytes_beyond_the_recorded_end() {
     let mut response = target_stream().await;
-    response.part(1, &STANDARD.encode(b"abcd")).await.unwrap();
+    response.part(1, b"abcd").await.unwrap();
     let error = response.end().await.expect_err("unrecorded response byte");
     assert!(error.to_string().contains("extra primary stream data"));
 }

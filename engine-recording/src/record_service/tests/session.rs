@@ -107,11 +107,10 @@ async fn verify_session() {
         .session_event(SessionEvent::SourceExit { status: Some(0) })
         .unwrap();
     state.recorder().finish_run().await.unwrap();
-    let path = state.recorder().run_dir.join("request-response.tsv");
-    let events = tokio::fs::read_to_string(path).await.unwrap();
-    let rows: Vec<SessionEvent> = events
-        .lines()
-        .map(|row| serde_json::from_str(row.splitn(4, '\t').nth(3).unwrap()).unwrap())
+    let rows: Vec<SessionEvent> = traffic_recording_store::session::read(&state.recorder().run_dir)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.event)
         .collect();
     let (slow_index, slow_id) = request(&rows, "/api/slow");
     let (fast_index, _) = request(&rows, "/api/fast");
@@ -137,8 +136,13 @@ async fn verify_session() {
     assert!(manifest.sealed && manifest.capture_complete);
     for path in [
         "apis",
+        "request-response.tsv",
+        "dependencies.tsv",
+        "dependencies-push.tsv",
         "dependencies-process.tsv",
         "dependencies-unattributed.tsv",
+        "event-locations.bin",
+        "event-spans.bin",
         "indexes/process-scope.bin",
         "indexes/shutdown-scope.bin",
         "indexes/startup-scope.bin",

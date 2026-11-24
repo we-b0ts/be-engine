@@ -28,7 +28,7 @@ use traffic_model::session::SessionEvent;
 
 /// Initializes Recorder and Source, advertises after readiness, and serves
 /// independently of best-effort address registration.
-pub async fn run(options: RecordOptions) -> Result<()> {
+pub async fn run(mut options: RecordOptions) -> Result<()> {
     ensure!(
         crate::local_interception::effective_uid() != crate::TRAFFIC_PROCESS_UID,
         "recording service controller cannot use the reserved Source UID"
@@ -38,6 +38,7 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         "recording service with interception requires a root controller"
     );
     process::prepare_fixed_identity()?;
+    options.session_events = true;
     let config = options.config()?;
     let api_policy = options.load_api_policy()?;
     if let Some(path) = &options.config_path {

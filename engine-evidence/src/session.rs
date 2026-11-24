@@ -18,7 +18,7 @@ pub struct SessionEventPage {
     pub next_after_sequence: Option<u64>,
 }
 
-/// Merge both event journals by Source sequence and return a bounded evidence page.
+/// Return a bounded evidence page in original Source sequence.
 pub fn events(
     root: &Path,
     from_sequence: u64,
@@ -32,7 +32,7 @@ pub fn events(
         (1..=200).contains(&limit),
         "event page limit must be between 1 and 200"
     );
-    let mut primary = session::read(root)?.into_iter();
+    let mut primary = session::evidence_events(root)?;
     let (root, manifest) = recording::manifest(root)?;
     let mut dependency = recording::events(&root)?;
     let mut next_primary = None;
@@ -42,7 +42,7 @@ pub fn events(
     let mut events = Vec::new();
     loop {
         if next_primary.is_none() {
-            next_primary = primary.next();
+            next_primary = primary.next().transpose()?;
         }
         if next_dependency.is_none() {
             next_dependency = dependency.next().transpose()?;

@@ -71,16 +71,13 @@ impl Response {
         })
     }
 
-    pub(super) async fn part(&mut self, part: u64, encoded: &str) -> Result<()> {
+    pub(super) async fn part(&mut self, part: u64, expected: &[u8]) -> Result<()> {
         ensure!(
             self.last_part
                 .map_or(part <= 1, |previous| previous.checked_add(1) == Some(part)),
             "invalid primary HTTP body part order"
         );
         self.last_part = Some(part);
-        let expected = STANDARD
-            .decode(encoded)
-            .context("invalid recorded primary HTTP body part")?;
         self.seen_source_bytes = self.seen_source_bytes.saturating_add(expected.len());
         ensure!(
             self.seen_source_bytes <= self.limit,
@@ -94,7 +91,7 @@ impl Response {
                 );
             }
             ensure!(
-                self.actual_body[..expected.len()] == expected,
+                &self.actual_body[..expected.len()] == expected,
                 "Target primary stream body differs at recorded part {part}"
             );
             self.actual_body.advance(expected.len());
@@ -105,7 +102,7 @@ impl Response {
                     "Target primary response ended before a recorded body part"
                 );
             }
-            self.source_body.extend(expected);
+            self.source_body.extend_from_slice(expected);
         }
         Ok(())
     }

@@ -184,6 +184,11 @@ impl StoredMessage for Response {
         let native = provider
             .native_protocol()
             .context("stored response has no native protocol")?;
+        if let Some(decode) = native.emission_body_decoder()
+            && let Some(body) = self.reference.load_response_bytes()?
+        {
+            return decode(body);
+        }
         let event = self.reference.load_value()?;
         let secrets = crate::request_headers::SourceSecrets::new(self.reference.source.path());
         Ok(native
