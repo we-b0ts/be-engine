@@ -1,6 +1,7 @@
 //! Session-wide finite dependencies keep their cursors across Case transitions.
 use super::*;
 use crate::replay::{ReplayProtocolSet, RuntimeState};
+use anyhow::{Context, ensure};
 use std::collections::BTreeMap;
 use traffic_protocol::ProtocolId;
 
@@ -26,6 +27,76 @@ fn task_scope(
 }
 
 impl<P: ReplayProtocolSet> RuntimeState<P> {
+    pub(crate) async fn prepare_session_sequence(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<()> {
+        let protocols = self.protocols.run_sequence_refs()?;
+        let native: Vec<_> = self
+            .native
+            .core
+            .exchanges
+            .iter()
+            .filter_map(|exchange| {
+                let capture = exchange.source.capture.as_ref()?;
+                capture
+                    .semantic_required
+                    .then_some((exchange.index, capture.sequence))
+            })
+            .collect();
+        let references: std::collections::BTreeSet<_> = protocols
+            .values()
+            .flatten()
+            .map(|reference| reference.sequence)
+            .chain(native.iter().map(|(_, sequence)| *sequence))
+            .collect();
+        ensure!(
+            references.len() == native.len() + protocols.values().map(Vec::len).sum::<usize>(),
+            "session dependency sequence is bound to multiple providers"
+        );
+        let root = self.root_dir.clone();
+        let driver_preludes = self
+            .native
+            .event_session_exclusions()
+            .keys()
+            .copied()
+            .collect();
+        let plan = tokio::task::spawn_blocking(move || {
+            super::super::session::plan(&root, references, driver_preludes)
+        })
+        .await
+        .context("session event preparation task failed")??;
+        self.native
+            .configure_session_identities(plan.dependency_count())?;
+        let timer_scope = super::super::session::TIMER_SCOPE;
+        self.timers.validate_session(timer_scope, &plan)?;
+        self.timers.activate(Some(timer_scope));
+        let cap = super::super::control::input_timing::source_fast_cap(self)
+            .map(std::time::Duration::from_millis);
+        let runtime =
+            SequenceRuntime::with_session_timing(plan, cap, self.timers.event_gates(timer_scope));
+        let registered = Binding::merge(vec![Binding::new(runtime.clone(), native.into_iter())]);
+        let protocols = protocols
+            .into_iter()
+            .map(|(protocol, references)| {
+                let binding = Binding::new(
+                    runtime.clone(),
+                    references
+                        .into_iter()
+                        .map(|reference| (reference.index, reference.sequence)),
+                );
+                (protocol, Binding::merge(vec![binding]))
+            })
+            .collect();
+        self.run_sequence = Some(RunBindings {
+            runtimes: vec![runtime.clone()],
+            protocols,
+            registered,
+        });
+        self.session_events = Some(super::super::session::Session::new(runtime, timeout));
+        Ok(())
+    }
+
     pub(crate) fn prepare_run_sequence(&mut self) -> Result<()> {
         let Some(catalog) = &self.sequence_catalog else {
             return Ok(());

@@ -23,6 +23,9 @@ pub struct RecordOptions {
         value_name = "PATH"
     )]
     pub config_path: Option<PathBuf>,
+    /// Capture one concurrent Source session with globally sequenced events.
+    #[arg(long, env = "TRAFFIC_E2E_SESSION_EVENTS")]
+    pub session_events: bool,
     #[arg(
         long,
         env = "TRAFFIC_E2E_RECORD_LISTEN",
@@ -219,7 +222,7 @@ impl RecordOptions {
                     "--policy must name the same file as project.policy when --config is supplied"
                 );
             }
-            AppConfig::load(path)?
+            AppConfig::load_for_recording(path, self.session_events)?
         } else {
             let mut config = AppConfig::default();
             config.http_gateway.per_api_case_limits.default = usize::MAX;
@@ -237,7 +240,9 @@ impl RecordOptions {
                     SourceTrafficPolicyConfig::load_with_fingerprints(path)?;
                 rules.apply_to(&mut config)?;
                 use crate::config::api_catalog::{ApiCatalog, FILE_NAME};
-                if let Some(catalog) = ApiCatalog::load(&path.with_file_name(FILE_NAME))? {
+                if !self.session_events
+                    && let Some(catalog) = ApiCatalog::load(&path.with_file_name(FILE_NAME))?
+                {
                     config.http_gateway.case_path_patterns = catalog.case_paths();
                 }
                 config.global_projection_policy = Some(fingerprints.full);
@@ -266,7 +271,10 @@ impl RecordOptions {
         if let Some(path) = &self.ready_path {
             config.http_gateway.ready.path = path.clone();
         }
-        if let Some(limit) = self.case_limit {
+        config.recording.session_events |= self.session_events;
+        if config.recording.session_events {
+            config.clear_case_capture_settings();
+        } else if let Some(limit) = self.case_limit {
             config.http_gateway.per_api_case_limits.default = limit.get();
         }
         let recorder_data = self.data_root.join(crate::repository::LOCAL_DATA_ROOT);
@@ -328,6 +336,7 @@ impl std::fmt::Debug for RecordOptions {
             .field("coordination", &self.coordination)
             .field("listen", &self.listen)
             .field("run_id", &self.run_id)
+            .field("session_events", &self.session_events)
             .field("data_root", &self.data_root)
             .finish_non_exhaustive()
     }

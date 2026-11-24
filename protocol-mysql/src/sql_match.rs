@@ -16,6 +16,31 @@ pub trait SqlRequest {
 
 pub const MAX_SQL_TOKENS: usize = crate::sql::bounds::MAX_TOKENS;
 
+pub(crate) fn exact_tuple_membership_reordering(recorded: &str, actual: &str) -> bool {
+    let statement = |sql: &str| {
+        crate::sql::bounds::statement_shared(sql).filter(|tokens| {
+            tokens.first().is_some_and(|token| token.is("select"))
+                && tokens.iter().any(|token| token.is("in"))
+                && !tokens
+                    .iter()
+                    .any(|token| *token == Token::Placeholder || token.is("join"))
+                && !traffic_protocol_mysql_sql::read_effect::has_session_effect(tokens)
+        })
+    };
+    let (Some(recorded), Some(actual)) = (statement(recorded), statement(actual)) else {
+        return false;
+    };
+    if recorded == actual {
+        return false;
+    }
+    let canonical = |tokens: &[Token]| {
+        predicate::Template::parse(tokens, true)?.canonical_tuple_literals(tokens)
+    };
+    canonical(&recorded)
+        .zip(canonical(&actual))
+        .is_some_and(|(recorded, actual)| recorded == actual)
+}
+
 pub fn cross_protocol_matches(
     recorded: &impl SqlRequest,
     command: &str,

@@ -3,6 +3,9 @@
 Use this file for local commands, runtime behavior, recording, replay, and
 testing details. Keep `AGENTS.md` as the short navigation map.
 
+[Source session regression](session-regression.md) covers concurrent recording,
+event-based replay, failure evidence, and publication of API progress.
+
 Author resource and API output fields once with the current
 [resource-owned field contracts](resource-field-contracts.md). Contextual clock
 relationships and stateful protocol effects retain explicit rules.

@@ -220,6 +220,107 @@ async fn redis_reads_the_exact_target_string_and_clears_it_after_later_writes() 
 }
 
 #[tokio::test]
+async fn finite_redis_eval_time_keeps_the_unbound_limit_strict() {
+    use sha2::{Digest, Sha256};
+    use traffic_model::{
+        attribution::DependencyOwner,
+        recording::{CaptureMetadata, CapturePhase, ProtocolRef},
+    };
+
+    const SCRIPT: &str = "return {}";
+    const KEY: &str = "pending";
+    const EMPTY: &[u8] = b"*0\r\n";
+    let temp = tempfile::tempdir().unwrap();
+    let case_id = Uuid::new_v4();
+    let case = temp.path().join(case_id.to_string());
+    std::fs::create_dir(&case).unwrap();
+    std::fs::write(case.join("request.json"), r#"{"method":"GET","uri":"/"}"#).unwrap();
+    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    let connection = Uuid::new_v4();
+    let process_epoch = Uuid::new_v4();
+    let started_at = chrono::DateTime::from_timestamp(1_795_450_259, 483_459_500).unwrap();
+    let records = (1..=2)
+        .map(|sequence| {
+            let mut record = exchange(
+                connection,
+                sequence,
+                &[
+                    "EVAL",
+                    SCRIPT,
+                    "1",
+                    KEY,
+                    "1795450259.4834595",
+                    "1795450264.4834595",
+                    "4",
+                ],
+                EMPTY,
+            );
+            let recorded_time = serde_json::to_value(started_at).unwrap();
+            record["request_started_at"] = recorded_time.clone();
+            record["timestamp"] = recorded_time;
+            record["capture"] = serde_json::to_value(CaptureMetadata {
+                transformations: Vec::new(),
+                exchange_id: Uuid::new_v4(),
+                sequence,
+                process_epoch,
+                phase: CapturePhase::Runtime,
+                observed_case: Some(case_id),
+                admitted_case: Some(case_id),
+                started_at,
+                protocol_ref: ProtocolRef::connection("redis", connection, sequence),
+                attribution: DependencyOwner::Case {
+                    origin_case_id: case_id,
+                    task_instance: None,
+                },
+                matched_rule_id: None,
+                matched_rule_ids: Vec::new(),
+                effect_index: 0,
+                semantic_required: true,
+            })
+            .unwrap();
+            record.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(case.join("dependencies.jsonl"), records).unwrap();
+    let policy_path = temp.path().join("policy.yaml");
+    let digest = format!("{:x}", Sha256::digest(SCRIPT));
+    std::fs::write(&policy_path, format!(
+        "format: traffic-policy/v3\nredis:\n  keys:\n    {KEY}:\n      commands:\n        - operation: EVAL\n          script: {{sha256: {digest}}}\n          arguments:\n            3: {{kind: time, formats: [unix_seconds]}}\n            4: {{kind: time, formats: [unix_seconds]}}\n"
+    )).unwrap();
+    let report = temp.path().join("report.json");
+    let (address, task) =
+        spawn_replay_configured(&case, Some(report.clone()), Some(policy_path), vec![]).await;
+    let mut client = TcpStream::connect(address).await.unwrap();
+    let now = chrono::Utc::now().timestamp_micros() as f64 / 1_000_000.0;
+    let now_string = format!("{now:.6}");
+    let deadline = format!("{:.6}", now + 5.0);
+    request(
+        &mut client,
+        &["EVAL", SCRIPT, "1", KEY, &now_string, &deadline, "4"],
+        EMPTY,
+    )
+    .await;
+
+    send(
+        &mut client,
+        &["EVAL", SCRIPT, "1", KEY, &now_string, &deadline, "5"],
+    )
+    .await;
+    assert_closed(&mut client).await;
+    let failed = wait_for_unmatched_count(&report, "redis", 1).await;
+    assert_eq!(failed["dependency_protocols"]["redis"]["matched_count"], 1);
+    assert_eq!(
+        failed["dependency_protocols"]["redis"]["unused_case"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn redis_reads_target_values_on_a_second_connection_with_source_causality() {
     let source_writer = Uuid::new_v4();
     let source_reader = Uuid::new_v4();

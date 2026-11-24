@@ -17,6 +17,7 @@ mod recording;
 mod server;
 #[cfg(test)]
 mod tests;
+mod websocket_refusal;
 mod wire;
 
 pub struct Native;
@@ -132,6 +133,13 @@ impl Native {
             record.outcome == DependencyExchangeOutcome::Response && record.error.is_none(),
             "finite HTTP serving requires a complete response"
         );
+        let status = record
+            .response_status
+            .context("HTTP response status missing")?;
+        ensure!(
+            status != 101,
+            "HTTP upgrades require an installed streaming capability"
+        );
         let (_, endpoint) = record.identity()?;
         let body = recorded::decode_body(
             record
@@ -161,15 +169,19 @@ impl Native {
             body: recorded::decode_body(&record.request_body)?.into(),
         };
         let response = ResponseMessage {
-            status: record
-                .response_status
-                .context("HTTP response status missing")?,
+            status,
             headers: record
                 .response_headers
                 .context("HTTP response headers missing")?,
             body: body.into(),
             head_request: request.method == "HEAD",
         };
+        let request = websocket_refusal::recorded_request(
+            request,
+            status,
+            &response.headers,
+            record.response_stream.is_some(),
+        );
         Ok(Some(RecordedExchange {
             reference: ProtocolRef::exchange(
                 "http",
@@ -187,7 +199,7 @@ impl Native {
                     .and_then(Value::as_u64)
                     .unwrap_or_default(),
             ),
-            input: traffic_protocol::connection::RecordedInput::Request(Arc::new(request)),
+            input: traffic_protocol::connection::RecordedInput::Request(request),
             response: Arc::new(response),
         }))
     }

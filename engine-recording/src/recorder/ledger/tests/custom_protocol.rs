@@ -130,6 +130,7 @@ async fn a_new_native_event_uses_shared_lifecycle_scope_sealing_and_registered_s
             "custom-capture-policy".into(),
             traffic_recorder::RecordingClock::default(),
             Arc::new(evidence.clone()),
+            false,
         )
         .await
         .unwrap();

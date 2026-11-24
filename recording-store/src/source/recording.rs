@@ -264,9 +264,10 @@ pub fn authenticate(path: &Path) -> Result<()> {
         );
     }
     let required = if manifest.schema == COMPACT_RECORDING_SCHEMA {
-        partitions::FILES
-            .into_iter()
-            .chain(crate::original_scope::FILES)
+        let session = seen.contains(crate::session::FILE);
+        partitions::files(session)
+            .chain(crate::original_scope::files(session))
+            .map(|(_, name)| name)
             .chain(event_index::FILES)
             .chain([partitions::DIRECTORY, crate::dependency_columns::FILE])
             .collect::<Vec<_>>()

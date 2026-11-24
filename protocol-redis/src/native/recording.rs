@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 use traffic_model::{capture::capture_body, trace::OutputKind};
 use traffic_protocol::{
     capture::CaptureSnapshot,
-    connection::{CaptureExchange, CaptureHost, ConnectionIo, NativeFuture},
+    connection::{BuiltinMaintenance, CaptureExchange, CaptureHost, ConnectionIo, NativeFuture},
 };
 use uuid::Uuid;
 
@@ -19,9 +19,70 @@ pub(super) struct Capture(pub ConnectionInfo);
 struct Pending {
     sequence: u64,
     command: RedisCommand,
-    permit: Box<dyn CaptureExchange>,
+    capture: PendingCapture,
     started: Instant,
     wall: DateTime<Utc>,
+}
+
+enum PendingCapture {
+    Exchange(Box<dyn CaptureExchange>),
+    Maintenance(MaintenanceCommand, BuiltinMaintenance),
+}
+
+#[derive(Clone, Copy)]
+enum MaintenanceCommand {
+    Ping,
+    SetInfo,
+    Authenticate,
+    Select,
+}
+
+impl MaintenanceCommand {
+    fn classify(command: &RedisCommand) -> Option<Self> {
+        match command.name.as_str() {
+            "PING" if command.args.is_empty() => Some(Self::Ping),
+            "CLIENT" if crate::is_client_library_info(&command.name, &command.args) => {
+                Some(Self::SetInfo)
+            }
+            "AUTH" => Some(Self::Authenticate),
+            "SELECT" => Some(Self::Select),
+            _ => None,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Ping => "PING",
+            Self::SetInfo => "CLIENT SETINFO",
+            Self::Authenticate => "AUTH",
+            Self::Select => "SELECT",
+        }
+    }
+
+    fn canonical_reply(self, command: &RedisCommand, raw: &[u8]) -> bool {
+        match self {
+            Self::Ping => raw == b"+PONG\r\n",
+            Self::SetInfo => {
+                raw == b"+OK\r\n"
+                    || raw.eq_ignore_ascii_case(b"-ERR unknown subcommand 'SETINFO'. Try CLIENT HELP.\r\n")
+                    || raw.eq_ignore_ascii_case(b"-ERR Unknown subcommand or wrong number of arguments for 'SETINFO'. Try CLIENT HELP.\r\n")
+            }
+            Self::Authenticate => {
+                raw == b"+OK\r\n"
+                    && matches!(command.args.as_slice(),
+                        [_] | [_, _])
+                    && (command.args.len() == 1
+                        || std::str::from_utf8(&command.args[0])
+                            .is_ok_and(|username| !username.is_empty()))
+            }
+            Self::Select => {
+                raw == b"+OK\r\n"
+                    && matches!(command.args.as_slice(), [database]
+                        if std::str::from_utf8(database)
+                            .is_ok_and(|database| database.parse::<i64>().is_ok_and(|db| db >= 0)))
+            }
+        }
+    }
 }
 
 impl CaptureSession for Capture {
@@ -51,16 +112,24 @@ impl CaptureSession for Capture {
                         let command = crate::redis_command(&frame.raw)?;
                         sequence = sequence.checked_add(1).context("Redis capture sequence overflow")?;
                         let reference = ProtocolRef::connection("redis", connection_id, sequence);
-                        let Some(permit) = host.begin(reference, crate::access::classify_command(&command)).await? else {
-                            client.inner.write_all(b"-ERR recording access denied\r\n").await?;
-                            client.inner.flush().await?;
-                            continue;
+                        let operation = crate::access::classify_command(&command);
+                        let maintenance = (session.resp_version == 2 && !subscriptions.active())
+                            .then(|| MaintenanceCommand::classify(&command))
+                            .flatten()
+                            .and_then(|kind| BuiltinMaintenance::begin(&host, operation, kind.name()).map(|guard| (kind, guard)));
+                        let capture = if let Some((kind, guard)) = maintenance {
+                            PendingCapture::Maintenance(kind, guard)
+                        } else {
+                            let Some(permit) = host.begin(reference, operation).await? else {
+                                client.inner.write_all(b"-ERR recording access denied\r\n").await?;
+                                client.inner.flush().await?;
+                                continue;
+                            };
+                            PendingCapture::Exchange(permit)
                         };
-                        let started = Instant::now();
-                        let wall = Utc::now();
+                        pending = Some(Pending {sequence, command, capture, started: Instant::now(), wall: Utc::now()});
                         upstream.inner.write_all(&frame.raw).await?;
                         upstream.inner.flush().await?;
-                        pending = Some(Pending {sequence, command, permit, started, wall});
                     }
                     frame = crate::read_frame(&mut upstream), if pending.is_some() || subscriptions.active() => {
                         let Some(frame) = frame? else {
@@ -75,6 +144,19 @@ impl CaptureSession for Capture {
                         }
 
                         let request = pending.take().context("Redis response has no admitted command")?;
+                        let permit = match request.capture {
+                            PendingCapture::Exchange(permit) => permit,
+                            PendingCapture::Maintenance(kind, guard) => {
+                                client.inner.write_all(&frame.raw).await?;
+                                client.inner.flush().await?;
+                                let canonical = kind.canonical_reply(&request.command, &frame.raw);
+                                if canonical {
+                                    session.apply_successful_setup(&request.command, &frame.raw, request.sequence);
+                                }
+                                guard.finish(canonical);
+                                continue;
+                            }
+                        };
                         let supported = session.resp_version == 2 && !crate::builtins::redis_is_unsupported(&request.command);
                         let (arguments, session_setup, safe, mut warnings) =
                             crate::capture::sanitize_and_classify(&request.command);
@@ -90,7 +172,7 @@ impl CaptureSession for Capture {
                             None
                         };
                         let replay_safe = safe && supported && warnings.is_empty();
-                        let receipt = request.permit.prepare_output(OutputKind::End)?;
+                        let receipt = permit.prepare_output(OutputKind::End)?;
                         client.inner.write_all(&frame.raw).await?;
                         client.inner.flush().await?;
                         let delivered = Instant::now();
@@ -123,8 +205,8 @@ impl CaptureSession for Capture {
                             replay_safe,
                             parse_warnings: warnings,
                         };
-                        let dependency_id = request.permit.dependency_id();
-                        request.permit.complete(CaptureSnapshot::capture(&event)?).await?;
+                        let dependency_id = permit.dependency_id();
+                        permit.complete(CaptureSnapshot::capture(&event)?).await?;
                         if !supported || (crate::is_pubsub_command(&request.command.name) && !replay_safe) {
                             upstream.inner.write_all(&client.buffer.split()).await?;
                             client.inner.write_all(&upstream.buffer.split()).await?;

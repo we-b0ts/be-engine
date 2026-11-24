@@ -26,6 +26,7 @@ mod policy;
 mod project;
 mod quiescing;
 mod readiness;
+mod session;
 mod shutdown;
 mod socketio;
 mod sse;

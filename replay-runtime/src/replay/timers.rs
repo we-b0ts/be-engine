@@ -1,4 +1,4 @@
-//! Target waits attached to the live Case's immutable request frontier.
+//! Target waits attached to the live recorded event frontier.
 mod plan;
 mod transport;
 
@@ -13,9 +13,9 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use tokio::sync::watch;
 use tokio::time::Instant;
-use traffic_replay::{EventKind, SequencePlan, SequenceRuntime};
+use traffic_replay::{SequencePlan, SequenceRuntime};
 
-use self::plan::{Checkpoint, Plan};
+use self::plan::{Anchor, Checkpoint, Plan};
 pub(super) use self::transport::Listener;
 use self::transport::Registration;
 
@@ -45,7 +45,8 @@ pub(super) struct TimerEvent {
     site: String,
     stream: String,
     occurrence: u64,
-    before_request: u64,
+    #[serde(flatten)]
+    anchor: Anchor,
     consumed_through: u64,
     offset_micros: u64,
     kind: TimerEventKind,
@@ -86,6 +87,10 @@ impl Timers {
         self.plan.validate_case(case, plan)
     }
 
+    pub(super) fn validate_session(&self, scope: &str, plan: &SequencePlan) -> Result<()> {
+        self.plan.validate_session(scope, plan)
+    }
+
     pub(super) fn activate(&mut self, case: Option<&str>) {
         self.cancel_pending();
         self.active = case
@@ -109,7 +114,7 @@ impl Timers {
         };
         let elapsed = offset_micros(active.started);
         for step in self.plan.checkpoints(&active.case_id) {
-            let Some((epoch, kind)) = active.stages.get_mut(&step.before_request) else {
+            let Some((epoch, kind)) = active.stages.get_mut(&step.anchor.sequence()) else {
                 continue;
             };
             if matches!(kind, TimerEventKind::Start | TimerEventKind::Wake) {
@@ -125,11 +130,11 @@ impl Timers {
         }
     }
 
-    pub(super) fn request_gates<'a>(&'a self, case: &str) -> impl Iterator<Item = u64> + 'a {
+    pub(super) fn event_gates<'a>(&'a self, case: &str) -> impl Iterator<Item = u64> + 'a {
         self.plan
             .checkpoints(case)
             .iter()
-            .map(|step| step.before_request)
+            .map(|step| step.anchor.sequence())
     }
 
     pub(super) fn events(&self) -> &[TimerEvent] {
@@ -169,7 +174,7 @@ impl Timers {
         ensure!(
             active
                 .stages
-                .get(&lease.step.before_request)
+                .get(&lease.step.anchor.sequence())
                 .is_none_or(|(old_epoch, kind)| {
                     *old_epoch != epoch && *kind == TimerEventKind::Cancelled
                 }),
@@ -190,7 +195,7 @@ impl Timers {
         let active = self.active_for(lease)?;
         active
             .stages
-            .insert(lease.step.before_request, (lease.epoch, kind));
+            .insert(lease.step.anchor.sequence(), (lease.epoch, kind));
         let elapsed = offset_micros(active.started);
         self.events.push(TimerEvent::new(
             &lease.case_id,
@@ -217,7 +222,7 @@ impl TimerEvent {
             site: step.site.clone(),
             stream: step.stream.clone(),
             occurrence: step.occurrence,
-            before_request: step.before_request,
+            anchor: step.anchor,
             consumed_through: step.consumed_through,
             offset_micros,
             kind,
@@ -232,14 +237,15 @@ fn offset_micros(started: Instant) -> u64 {
 impl Lease {
     fn at_frontier(&self) -> Result<bool> {
         ensure!(!self.sequence.failed(), "Replay timer sequence was aborted");
+        let anchor = self.step.anchor;
         let expected = self
             .sequence
             .expected()
-            .context("Replay timer request was passed")?;
+            .context("Replay timer anchor was passed")?;
         ensure!(
-            expected.sequence <= self.step.before_request,
-            "Replay timer request was passed"
+            expected.sequence <= anchor.sequence(),
+            "Replay timer anchor was passed"
         );
-        Ok(expected.sequence == self.step.before_request && expected.kind == EventKind::Request)
+        Ok(expected.sequence == anchor.sequence() && expected.kind == anchor.kind())
     }
 }

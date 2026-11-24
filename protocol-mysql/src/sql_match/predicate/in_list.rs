@@ -77,6 +77,26 @@ pub(super) fn bind(values: &[Operand], tokens: &[Token]) -> Option<Vec<Operand>>
     Some(values)
 }
 
+/// Only an actual literal slot can move. The original row and predicate
+/// punctuation stays in place, along with every token outside the list.
+pub(super) fn normalize_literal_rows(rows: &[Operand], tokens: &mut [Token]) -> Option<()> {
+    let sorted = bind(rows, tokens)?;
+    for (original, sorted) in rows.iter().zip(sorted) {
+        let (Operand::Tuple(original), Operand::Tuple(sorted)) = (original, sorted) else {
+            return None;
+        };
+        for (slot, value) in original.iter().zip(sorted) {
+            let (Operand::Slot(slot), Operand::Value(value @ (Token::Number(_) | Token::Bytes(_)))) =
+                (slot, value)
+            else {
+                return None;
+            };
+            *tokens.get_mut(*slot)? = value;
+        }
+    }
+    Some(())
+}
+
 fn has_placeholder(value: &Operand) -> bool {
     match value {
         Operand::Tuple(fields) => fields.iter().any(has_placeholder),

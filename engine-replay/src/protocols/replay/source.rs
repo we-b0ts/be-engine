@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
-use traffic_protocol::connection::ReplaySessionStep;
+use traffic_protocol::connection::EventSessionPreparation;
 use traffic_replay::ReplaySource;
 pub mod preparation;
 mod record;
@@ -62,7 +62,7 @@ pub fn register_dependency_records(
         cleanup.is_empty(),
         "incomplete cleanup exchanges require an installed native lifecycle capability"
     );
-    let plans = prepare_replay_scopes(&records, skip, source, &native.providers)?;
+    let plans = prepare_replay_scopes(&records, skip, source, native)?;
     for (line, record) in records {
         if skip.contains(&line) {
             continue;
@@ -70,7 +70,11 @@ pub fn register_dependency_records(
         match record {
             DependencyRecord::Native(event) => {
                 validate_installed_provider(&event, &native.providers)?;
-                let step = plans.get(&line).cloned();
+                if let Some(&proof) = plans.driver_prelude.get(&line) {
+                    native.exclude_driver_prelude(&event, proof)?;
+                    continue;
+                }
+                let step = plans.steps.get(&line).cloned();
                 native.register_scoped(
                     &event,
                     source,
@@ -109,8 +113,9 @@ fn prepare_replay_scopes(
     records: &[(usize, DependencyRecord)],
     skip: &BTreeSet<usize>,
     source: ReplaySource,
-    providers: &crate::protocols::DependencyProviders,
-) -> Result<BTreeMap<usize, ReplaySessionStep>> {
+    native: &native::Inventory,
+) -> Result<EventSessionPreparation> {
+    let providers = &native.providers;
     let mut scopes = BTreeMap::new();
     for (line, record) in records {
         let DependencyRecord::Native(event) = record else {
@@ -134,9 +139,17 @@ fn prepare_replay_scopes(
             .or_insert_with(|| (provider, Vec::new()));
         scope.push((*line, event.as_ref()));
     }
-    let mut plans = BTreeMap::new();
+    let mut plans = EventSessionPreparation::default();
     for (provider, scope) in scopes.into_values() {
-        plans.extend(provider.prepare_replay_scope(source, &scope)?);
+        if native.event_session {
+            let plan = provider.prepare_event_session(&scope)?;
+            plans.steps.extend(plan.steps);
+            plans.driver_prelude.extend(plan.driver_prelude);
+        } else {
+            plans
+                .steps
+                .extend(provider.prepare_replay_scope(source, &scope)?);
+        }
     }
     Ok(plans)
 }

@@ -89,6 +89,7 @@ struct AppStateInner {
     kubectl_proxy_manager: KubectlProxyManager,
     response_rewrites: http::rewrite::CompiledRewrites,
     recording_lifecycle: RecordingLifecycle,
+    source_started: tokio::sync::watch::Sender<bool>,
     process_owned_dependencies: BackgroundDependencyMatcher,
     #[allow(dead_code)]
     cache_snapshots: CacheSnapshotStore,
@@ -244,6 +245,7 @@ impl AppState {
                 kubectl_proxy_manager: KubectlProxyManager::default(),
                 response_rewrites,
                 recording_lifecycle,
+                source_started: tokio::sync::watch::channel(false).0,
                 process_owned_dependencies,
                 cache_snapshots,
                 preflight_probe,

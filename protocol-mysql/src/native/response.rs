@@ -17,12 +17,12 @@ pub(super) struct ResponseMessage {
 }
 
 impl ResponseMessage {
-    pub(super) fn into_output(self, status: u16) -> Result<Box<dyn OutputStream>> {
-        let mut output = crate::output::response(
-            &self.response,
-            crate::model::ResultRowEncoding::Text,
-            status,
-        );
+    pub(super) fn into_output(
+        self,
+        status: u16,
+        encoding: crate::model::ResultRowEncoding,
+    ) -> Result<Box<dyn OutputStream>> {
+        let mut output = crate::output::response(&self.response, encoding, status);
         let parts = output.part_count();
         let mut chunks = Vec::new();
         while let Some(chunk) = output.next()? {
@@ -64,6 +64,10 @@ impl ResponseMessage {
 }
 
 impl ProtocolMessage for ResponseMessage {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn project(&self) -> Result<ProjectedMessage> {
         let mut values = BTreeMap::new();
         let rows = self

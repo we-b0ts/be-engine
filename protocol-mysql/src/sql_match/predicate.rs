@@ -209,6 +209,13 @@ impl Template {
             .then(|| self.bind_with_order(tokens, false))?
     }
 
+    pub(super) fn canonical_tuple_literals(&self, tokens: &[Token]) -> Option<Vec<Token>> {
+        let mut canonical = tokens.to_vec();
+        self.predicate
+            .normalize_tuple_literals(&mut canonical)?
+            .then_some(canonical)
+    }
+
     fn bind_with_order(&self, tokens: &[Token], sort_logical_terms: bool) -> Option<Key> {
         Some(Key {
             prefix: tokens.get(..self.start)?.to_vec(),
@@ -345,6 +352,19 @@ impl Operand {
 }
 
 impl Predicate {
+    fn normalize_tuple_literals(&self, tokens: &mut [Token]) -> Option<bool> {
+        match self {
+            Self::In(Operand::Tuple(_), false, rows) if rows.len() >= 2 => {
+                in_list::normalize_literal_rows(rows, tokens)?;
+                Some(true)
+            }
+            Self::And(terms) | Self::Or(terms) => terms.iter().try_fold(false, |found, term| {
+                Some(term.normalize_tuple_literals(tokens)? || found)
+            }),
+            _ => Some(false),
+        }
+    }
+
     fn contains_in(&self) -> bool {
         match self {
             Self::In(..) => true,

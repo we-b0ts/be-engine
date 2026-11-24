@@ -14,6 +14,7 @@ pub(super) struct RequestHead {
     method: String,
     uri: String,
     headers: HeaderSnapshot,
+    pub http11: bool,
 }
 
 impl Reader {
@@ -151,13 +152,14 @@ impl Reader {
             .to_owned();
         let headers = snapshot(request.headers)?;
         ensure!(
-            !headers.contains_key("upgrade") && !headers.contains_key("expect"),
-            "HTTP upgrades and expect/continue require an installed streaming capability"
+            !headers.contains_key("expect"),
+            "HTTP expect/continue requires an installed streaming capability"
         );
         Ok(Some(RequestHead {
             method,
             uri,
             headers,
+            http11: request.version == Some(1),
         }))
     }
 
@@ -175,6 +177,10 @@ impl Reader {
         let Some(head) = self.request_head().await? else {
             return Ok(None);
         };
+        ensure!(
+            !head.headers.contains_key("upgrade"),
+            "HTTP upgrades require an installed streaming capability"
+        );
         Ok(Some(self.request_body(head).await?))
     }
 

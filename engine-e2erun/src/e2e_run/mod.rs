@@ -16,6 +16,7 @@ mod delivery;
 mod diagnostic_report;
 pub use diagnostic_report::{batch_diagnostic_report, session_diagnostic_report};
 mod dirty_evidence;
+mod event_session;
 mod evidence;
 mod evidence_admission;
 mod execute;
@@ -70,6 +71,7 @@ pub use dirty_evidence::{
     E2eDependencyRepresentative, E2eDependencyTargetMatch, E2eDirtyCluster, E2eDirtyCounts,
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint,
 };
+pub use event_session::run_e2e_event_session;
 pub use evidence::finalized_focused_attempt_summary;
 pub use evidence::{
     E2eCaseResponseDifference, E2eCaseResponseDifferences, E2eDependencyCorrelation,
@@ -92,9 +94,10 @@ pub use startup_inputs::{
 };
 pub use traffic_engine_e2e_contract::{
     BatchRuleEvidence, E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts,
-    E2eFailureCluster, E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis,
-    E2eResponseGate, E2eResponseUnavailableReason, E2eRunContext, E2eRunResult,
-    E2eValueObservation, E2eValuePresence, E2eVerificationGates,
+    E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, E2eFailureCluster,
+    E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
+    E2eResponseUnavailableReason, E2eRunContext, E2eRunResult, E2eValueObservation,
+    E2eValuePresence, E2eVerificationGates,
 };
 pub use workflow_evidence::completed_workflow_evidence;
 

@@ -3,7 +3,7 @@ use super::*;
 use traffic_model::recording::{CaptureMetadata, ProtocolRef};
 use traffic_protocol::{
     ProtocolId,
-    connection::{Endpoint, ReplaySessionStep},
+    connection::{DriverPrelude, Endpoint, ReplaySessionStep},
 };
 use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
@@ -24,6 +24,7 @@ pub struct Inventory {
     global_usage: BTreeMap<ProtocolId, traffic_replay::report::Usage>,
     pub providers: Arc<crate::protocols::DependencyProviders>,
     pub contracts: Arc<dyn policy::ValueRuleHost>,
+    event_session_request_projection: Option<Arc<dyn policy::ValueRuleHost>>,
     pub order: admission::RequestOrder,
     failures: Vec<report::RequestFailure>,
     failure_counts: BTreeMap<(String, Option<String>), usize>,
@@ -33,6 +34,15 @@ pub struct Inventory {
     optional_references: BTreeMap<String, BTreeSet<ProtocolRef>>,
     redis_storage: redis_storage::Storage,
     prepare_redis_storage: bool,
+    pub(crate) event_session: bool,
+    event_session_exclusions: BTreeMap<u64, DriverPreludeExclusion>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DriverPreludeExclusion {
+    pub sequence: u64,
+    pub reference: ProtocolRef,
+    pub proof: DriverPrelude,
 }
 
 impl Inventory {
@@ -44,6 +54,7 @@ impl Inventory {
             global_usage: Default::default(),
             providers,
             contracts: crate::value_extensions::strict_values(),
+            event_session_request_projection: None,
             order: Default::default(),
             failures: Default::default(),
             matched: Default::default(),
@@ -53,7 +64,53 @@ impl Inventory {
             optional_references: Default::default(),
             redis_storage: Default::default(),
             prepare_redis_storage: true,
+            event_session: false,
+            event_session_exclusions: BTreeMap::new(),
         }
+    }
+
+    pub fn prepare_event_session(&mut self) {
+        self.event_session = true;
+    }
+
+    pub fn configure_event_session_request_projection(
+        &mut self,
+        policy: Option<Arc<dyn policy::ValueRuleHost>>,
+    ) {
+        self.event_session_request_projection = policy;
+    }
+
+    pub fn event_session_request_projection(&self) -> Option<Arc<dyn policy::ValueRuleHost>> {
+        self.event_session_request_projection.clone()
+    }
+
+    pub fn event_session_exclusions(&self) -> &BTreeMap<u64, DriverPreludeExclusion> {
+        &self.event_session_exclusions
+    }
+
+    pub(crate) fn exclude_driver_prelude(
+        &mut self,
+        event: &Value,
+        proof: DriverPrelude,
+    ) -> Result<()> {
+        let capture: CaptureMetadata = serde_json::from_value(event["capture"].clone())?;
+        ensure!(
+            self.event_session && capture.semantic_required && capture.sequence > 0,
+            "driver-prelude proof does not identify a mandatory Source event"
+        );
+        let exclusion = DriverPreludeExclusion {
+            sequence: capture.sequence,
+            reference: capture.protocol_ref,
+            proof,
+        };
+        ensure!(
+            self.event_session_exclusions
+                .insert(exclusion.sequence, exclusion)
+                .is_none(),
+            "duplicate driver-prelude exclusion at Source sequence {}",
+            capture.sequence
+        );
+        Ok(())
     }
 
     /// Select the storage path once, before loading Source dependencies.
@@ -88,7 +145,7 @@ impl Inventory {
         secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
         session_step: Option<ReplaySessionStep>,
     ) -> Result<()> {
-        self.register_source(
+        let registered = self.register_source(
             event,
             source,
             case,
@@ -98,6 +155,12 @@ impl Inventory {
             None,
             session_step,
         )?;
+        ensure!(
+            !self.event_session || event["capture"]["semantic_required"] != true || registered,
+            "mandatory {} dependency at Source sequence {} has no executable session Replay slot",
+            event["event_type"],
+            event["capture"]["sequence"],
+        );
         Ok(())
     }
 
@@ -245,13 +308,33 @@ impl Inventory {
             self.remember_capture(source, case, capture, event, None)?;
             return Ok(false);
         }
-        let prepared = self.prepared_messages(
-            &exchange,
-            case,
-            capture.as_ref(),
-            self.contracts.as_ref(),
-            None,
-        )?;
+        if let Some(policy) = self.event_session_request_projection.as_ref()
+            && let traffic_protocol::connection::RecordedInput::Request(request) =
+                &mut exchange.input
+        {
+            *request = policy.native_request_projection(
+                protocol.id(),
+                &exchange.endpoint,
+                request.clone(),
+                Some(event),
+            )?;
+        }
+        let prepared = self
+            .prepared_messages(
+                &exchange,
+                case,
+                capture.as_ref(),
+                self.contracts.as_ref(),
+                None,
+            )
+            .with_context(|| match &capture {
+                Some(capture) => format!(
+                    "prepare Source {} contracts at sequence {}",
+                    protocol.as_str(),
+                    capture.sequence
+                ),
+                None => format!("prepare Source {} contracts", protocol.as_str()),
+            })?;
         let rules = self.providers.bindings().for_protocol(protocol.as_str());
         let index = self.core.register(
             protocol.id(),
@@ -266,7 +349,7 @@ impl Inventory {
         )?;
         self.core.exchanges[index].request = prepared.0;
         self.core.exchanges[index].response = prepared.1;
-        self.core.exchanges[index].session_step = session_step;
+        self.core.set_session_step(index, session_step);
         if self.prepare_redis_storage {
             self.redis_storage
                 .register(&self.core.exchanges[index], event);
@@ -325,7 +408,11 @@ impl Inventory {
             .providers
             .bindings()
             .for_protocol(exchange.reference.protocol());
-        let request_policy = contracts.document_policy(clocks);
+        let (request_bindings, request_policy) =
+            match contracts.native_request_bindings(exchange)? {
+                Some(bindings) => (bindings, None),
+                None => (rules.request, contracts.document_policy(clocks)),
+            };
         let mut response_clocks = clocks;
         response_clocks.observation = Some(traffic_contract::time::ClockPair {
             source: delivered,
@@ -345,7 +432,7 @@ impl Inventory {
                 .map(|request| {
                     crate::value_extensions::prepare_message_with_policy(
                         request,
-                        &rules.request,
+                        &request_bindings,
                         request_policy,
                     )
                 })
@@ -492,7 +579,21 @@ impl Inventory {
         serde_json::json!({"count":count,"references":rows,"omitted":count.saturating_sub(4)})
     }
 
+    const EVENT_SESSION_VALUE_SCOPE: &str = "session";
+
+    pub fn configure_session_identities(&self, dependency_count: usize) -> Result<()> {
+        ensure!(
+            self.event_session,
+            "session identities require event Session Replay"
+        );
+        self.contracts
+            .configure_session_identities(Self::EVENT_SESSION_VALUE_SCOPE, dependency_count)
+    }
+
     pub fn scope(&self, index: usize) -> String {
+        if self.event_session {
+            return Self::EVENT_SESSION_VALUE_SCOPE.into();
+        }
         let exchange = &self.core.exchanges[index];
         if let Some(case) = &exchange.source.case_id {
             return case.clone();

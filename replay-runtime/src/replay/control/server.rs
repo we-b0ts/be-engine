@@ -144,7 +144,12 @@ async fn serve<P: ReplayProtocolSet>(
     let queued_at = Instant::now();
     let read_only = matches!(
         command.as_str(),
-        "status" | "wait_ready" | "cases" | "case_execution_status"
+        "status"
+            | "wait_ready"
+            | "cases"
+            | "case_execution_status"
+            | "session_wait"
+            | "session_status"
     ) || {
         let state = state.lock().await;
         match &state.replay_policy {

@@ -68,22 +68,26 @@ impl ClaimTicket {
     /// Publish after the actual native wire operation has succeeded. This fact
     /// is deliberately distinct from successful evidence/semantic commit.
     pub fn publish_wire(&self) -> bool {
-        let changed = self
-            .receipt
-            .phase
-            .compare_exchange(CLAIMED, WIRE, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok();
-        if changed {
-            if let Some(sequence) = &self.sequence
-                && !sequence.complete()
-                && sequence.publish().is_err()
-            {
-                cancel(self);
-                return false;
-            }
-            self.changed.notify_waiters();
+        self.try_publish_wire().is_ok()
+    }
+
+    pub fn try_publish_wire(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.receipt
+                .phase
+                .compare_exchange(CLAIMED, WIRE, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok(),
+            "native response delivery receipt was cancelled"
+        );
+        if let Some(sequence) = &self.sequence
+            && !sequence.complete()
+            && let Err(error) = sequence.publish()
+        {
+            cancel(self);
+            return Err(error);
         }
-        changed
+        self.changed.notify_waiters();
+        Ok(())
     }
     pub fn satisfies(&self, barrier: Barrier) -> bool {
         let phase = self.receipt.phase.load(Ordering::Acquire);

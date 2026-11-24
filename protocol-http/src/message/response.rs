@@ -97,6 +97,10 @@ impl MessageEncoder for ResponseMessage {
             "HTTP response value inventory changed"
         );
         let status = hyper::StatusCode::from_u16(self.status)?;
+        ensure!(
+            status != hyper::StatusCode::SWITCHING_PROTOCOLS,
+            "HTTP upgrades require an installed streaming capability"
+        );
         let mut bytes = format!(
             "HTTP/1.1 {} {}\r\n",
             status.as_u16(),

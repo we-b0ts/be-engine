@@ -13,6 +13,9 @@ use crate::recording_control::RecordingListener;
 use super::transport::{build_upstream_request, build_upstream_uri, send_upstream};
 
 pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()> {
+    if state.session_events() {
+        return run_session_probe(state, config).await;
+    }
     let interval = Duration::from_millis(config.ready.interval_ms.max(1));
     let post_ready_quiet = state.config().recording.post_ready_quiet_period();
     let post_ready_max_wait = state.config().recording.post_ready_max_wait();
@@ -70,6 +73,51 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()
 
     info!("HTTP gateway ready probe stopped because bootstrap is already closed");
     Ok(())
+}
+
+async fn run_session_probe(state: AppState, config: HttpGatewayConfig) -> Result<()> {
+    let uri = path_uri(&config.ready.path)?;
+    let source = build_upstream_uri(&config.matched_upstream, &uri)?;
+    let host = source
+        .host()
+        .context("Source readiness origin has no host")?;
+    let port = source
+        .port_u16()
+        .unwrap_or(if source.scheme_str() == Some("https") {
+            443
+        } else {
+            80
+        });
+    let mut ticker = tokio::time::interval(Duration::from_millis(config.ready.interval_ms.max(1)));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    state.wait_for_source_start().await;
+    // Refused socket attempts cannot have reached the application's HTTP handler.
+    loop {
+        ticker.tick().await;
+        if tokio::net::TcpStream::connect((host, port)).await.is_ok() {
+            break;
+        }
+    }
+    loop {
+        let response = super::session::probe(&state, &config, uri.clone()).await?;
+        let ready = response.status().as_u16() == config.ready.success_status;
+        if ready {
+            state
+                .mark_recording_upstream_ready(
+                    RecordingListener::HttpGateway,
+                    "Source session ready",
+                )
+                .await?;
+        }
+        let mut body = response.into_body();
+        while let Some(frame) = body.frame().await {
+            frame.context("Source session health response ended unexpectedly")?;
+        }
+        if ready {
+            return Ok(());
+        }
+        ticker.tick().await;
+    }
 }
 
 async fn probe_once(

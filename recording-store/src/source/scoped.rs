@@ -206,12 +206,15 @@ pub fn selected_bytes(path: &Path) -> Result<u64> {
             .path
             .parent()
             .context("missing dependency directory root")?;
-        return crate::partitions::FILES
-            .into_iter()
-            .try_fold(0u64, |size, name| {
-                size.checked_add(FileStamp::read_native(&root.join(name))?.size)
-                    .context("dependency ledger byte count overflow")
-            });
+        let session = root.join(crate::session::FILE).try_exists()?;
+        return crate::partitions::files(false).try_fold(0u64, |size, (index, name)| {
+            let file = root.join(name);
+            if session && crate::partitions::attribution_only(index) && !file.try_exists()? {
+                return Ok(size);
+            }
+            size.checked_add(FileStamp::read_native(&file)?.size)
+                .context("dependency ledger byte count overflow")
+        });
     }
     Ok(FileStamp::read_native(&source.path)?.size)
 }

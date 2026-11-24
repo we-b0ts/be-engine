@@ -42,6 +42,26 @@ pub async fn run_replay_with_timer_config(
         crate::protocols::default_providers(),
         loader,
         timers,
+        false,
+    )
+    .await
+}
+
+pub async fn run_session_replay(
+    config: ReplayConfig,
+    lifecycle: ReplayLifecycleConfig,
+    counter_reader: Option<ReplayEgressCounterReader>,
+    timers: Option<ReplayTimerConfig>,
+) -> Result<()> {
+    let loader = SourceLoader::new(&config);
+    replay::run::<ReplayProtocols>(
+        config.into(),
+        lifecycle,
+        counter_reader,
+        crate::protocols::default_providers(),
+        loader,
+        timers,
+        true,
     )
     .await
 }
@@ -60,6 +80,7 @@ pub async fn run_replay_with_providers(
         providers,
         loader,
         None,
+        false,
     )
     .await
 }
@@ -108,12 +129,12 @@ impl replay::Runtime<ReplayProtocols> {
         let loader = SourceLoader::new(&config);
         Self::from_source(
             config.into(),
-            dns_listen,
-            tcp_listen,
+            (dns_listen, tcp_listen),
             lifecycle,
             providers,
             loader,
             Default::default(),
+            false,
         )
         .await
     }

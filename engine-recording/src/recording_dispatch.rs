@@ -25,6 +25,10 @@ impl AppState {
     }
 
     pub fn record_event_for_targets(&self, event: RecorderEvent, mut targets: DependencyTargets) {
+        if self.session_events() {
+            let _ = self.enqueue_capture(event, targets, None, false);
+            return;
+        }
         if targets.process_rule_ids.is_empty() {
             let rules = self
                 .inner
@@ -163,6 +167,10 @@ impl AppState {
                     event_type,
                     "failed to enqueue recorder event"
                 );
+                if self.session_events() {
+                    self.fail_session_recording(&err);
+                    return Err(err);
+                }
                 let invalidation = CaseInvalidation::new(
                     "recording_writer_failure",
                     format!("failed to enqueue {event_type} recorder event: {err}"),

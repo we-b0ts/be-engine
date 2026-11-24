@@ -12,6 +12,31 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 impl AppState {
+    pub(crate) fn session_events(&self) -> bool {
+        self.config().recording.session_events
+    }
+
+    pub(crate) fn session_event(&self, event: traffic_model::session::SessionEvent) -> Result<()> {
+        self.recorder()
+            .capture
+            .session_event(event)
+            .map(|_| ())
+            .inspect_err(|error| {
+                self.fail_session_recording(error);
+            })
+    }
+
+    pub(crate) fn fail_session_recording(&self, error: impl std::fmt::Display) {
+        self.recorder().capture.mark_inventory_gap();
+        self.inner.recording_lifecycle.mark_failed(error);
+        self.begin_case_quiescing();
+    }
+
+    pub(crate) async fn wait_for_source_start(&self) {
+        let mut started = self.inner.source_started.subscribe();
+        let _ = started.wait_for(|started| *started).await;
+    }
+
     pub fn select_case_response_observation(
         &self,
         case_id: Uuid,
@@ -191,6 +216,12 @@ impl AppState {
     ) -> Result<bool> {
         if !self.inner.recording_lifecycle.mark_upstream_ready(listener) {
             return Ok(false);
+        }
+        if self.session_events() {
+            self.session_event(traffic_model::session::SessionEvent::Ready)?;
+            self.inner.active_cases.close_bootstrap();
+            self.inner.recording_lifecycle.mark_source_ready();
+            return Ok(true);
         }
         let ready_at = tokio::time::Instant::now();
         if self.has_background_initial_loads()

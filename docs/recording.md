@@ -718,10 +718,12 @@ type. The recording assigns `seq` globally and uses monotonic microsecond
 offsets. The admission sequence identifies the dependency. Later rows refer to
 that sequence.
 
-`dependencies.tsv` holds ordinary lifecycle events and Case dependency data.
-Process, push, and unattributed data use `dependencies-process.tsv`,
-`dependencies-push.tsv`, and `dependencies-unattributed.tsv`. The push partition
-also holds the push lifecycle events. Nonmatching observations use
+`dependencies.tsv` holds ordinary lifecycle events. In
+[Session recordings](session-regression.md) it also holds all dependency
+exchanges. Case recordings use it for Case dependency data and store process
+and unattributed data in `dependencies-process.tsv` and
+`dependencies-unattributed.tsv`. The push partition, `dependencies-push.tsv`,
+holds notifications and their lifecycle events. Nonmatching observations use
 `observations.tsv` and remain available to route discovery and evidence readers.
 The dependency and event locators link rows across partitions by byte position.
 

@@ -16,6 +16,7 @@ traffic-engine-config = { workspace = true }
 traffic-engine-policy = { workspace = true }
 traffic-engine-environment = { workspace = true }
 traffic-recording-model = { workspace = true }
+traffic-model = { workspace = true }
 traffic-recorder = { workspace = true }
 traffic-policy-execution = { workspace = true }
 traffic-contract = { workspace = true }

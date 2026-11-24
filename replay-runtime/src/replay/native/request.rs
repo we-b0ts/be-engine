@@ -8,10 +8,35 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
     type Matched = Matched;
     type Error = Rejected;
     fn sequence_request_bytes(&self) -> Option<usize> {
-        (!self.optional_control).then_some(self.bytes)
+        (self.admission != RequestAdmission::LegacyControl).then_some(self.bytes)
     }
-    fn sequence_wait_allowed(&self, _: &RuntimeState<P>, error: &Rejected) -> bool {
-        error.kind != RejectionKind::UnverifiedSession
+    fn sequence_wait_allowed(&self, state: &RuntimeState<P>, error: &Rejected) -> bool {
+        if error.kind == RejectionKind::UnverifiedSession {
+            return false;
+        }
+        let Some(session) = &state.session_events else {
+            return true;
+        };
+        let Some(expected) = session.runtime.expected() else {
+            return false;
+        };
+        let context = MatchContext {
+            protocol: self.protocol,
+            endpoint: &self.endpoint,
+            active_case: None,
+            request: self.message.as_ref(),
+            session: self.session,
+            lane: self.lane.as_deref(),
+            request_session: self.request_session.as_ref(),
+            metadata: state.native.contracts.metadata(),
+        };
+        state
+            .native
+            .core
+            .may_follow_session_head(&context, expected, |exchange| {
+                state.native.clocks(exchange.index, self.observed, false)
+            })
+            .unwrap_or(false)
     }
 
     fn observe_once(&mut self, state: &mut RuntimeState<P>) -> admission::RequestAdmission {
@@ -117,7 +142,12 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
             }
             Selection::NotFound => {
                 return Err(Rejected {
-                    reason: "no recorded native request matched the active Source scope".into(),
+                    reason: if state.session_events.is_some() {
+                        "no recorded native request matched the expected Source session event"
+                    } else {
+                        "no recorded native request matched the active Source scope"
+                    }
+                    .into(),
                     blocker: None,
                     kind: RejectionKind::NoMatch,
                 });
@@ -172,7 +202,9 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         error: &Rejected,
     ) -> Option<admission::request::WaitDependency<'a>> {
         let blocker = error.blocker?;
-        let barrier = if state.native.core.exchanges[blocker].source.source == ReplaySource::Case {
+        let barrier = if state.session_events.is_some()
+            || state.native.core.exchanges[blocker].source.source == ReplaySource::Case
+        {
             admission::Barrier::Admitted
         } else {
             admission::Barrier::Delivered
@@ -198,15 +230,17 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         observation: &admission::RequestAdmission,
         error: &Rejected,
     ) {
-        if self.optional_control && error.kind == RejectionKind::NoMatch {
+        if self.admission.allows_local_response() && error.kind == RejectionKind::NoMatch {
             return;
+        }
+        if let Some(session) = &mut state.session_events {
+            session.fail(None, observation.observation_id, &error.reason);
         }
         state.native.record_failure(
             self.protocol,
             &self.endpoint,
             observation.case.clone(),
-            observation.event_index,
-            observation.observation_id,
+            (observation.event_index, observation.observation_id),
             &error.reason,
             self.diagnostics.clone(),
         );

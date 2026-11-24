@@ -70,10 +70,8 @@ impl SequenceBinding {
                 run.runtimes
                     .iter()
                     .filter_map(|runtime| {
-                        let event = runtime.expected()?;
-                        (event.kind == EventKind::Request)
-                            .then(|| run.positions.get(&event.dependency_sequence).copied())
-                            .flatten()
+                        let event = runtime.admissible_request()?;
+                        run.positions.get(&event.dependency_sequence).copied()
                     })
                     .collect::<Vec<_>>()
                     .into(),
@@ -120,6 +118,14 @@ impl SequenceBinding {
 
     pub fn attach_run(&mut self, run: SequenceBinding) {
         self.run = Some(Box::new(run));
+    }
+
+    pub(crate) fn is_session_trace(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| {
+            run.runtimes
+                .iter()
+                .any(|runtime| runtime.is_session_trace())
+        })
     }
 
     pub fn claim(&self, index: usize) -> Result<Option<SequenceClaim>> {

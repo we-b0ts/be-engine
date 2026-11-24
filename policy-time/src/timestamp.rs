@@ -30,6 +30,8 @@ struct Configuration {
     #[serde(default)]
     accept_exact: bool,
     #[serde(default)]
+    decimal_text: bool,
+    #[serde(default)]
     tolerance: Tolerance,
 }
 
@@ -99,6 +101,11 @@ impl PolicyProvider for TimestampPolicy {
         );
         let config = &configuration.config;
         ensure!(
+            !configuration.decimal_text
+                || config.format == TimestampFormat::UnixSeconds && !configuration.accept_exact,
+            "decimal timestamp text requires strict Unix seconds"
+        );
+        ensure!(
             config.format != TimestampFormat::CalendarDate || config.utc_offset.is_some(),
             "calendar_date requires an explicit format utc_offset"
         );
@@ -140,6 +147,7 @@ impl ComparisonPolicy for Configuration {
             | TimestampFormat::Iso8601Naive
             | TimestampFormat::SqlDatetime
             | TimestampFormat::CalendarDate => ValueType::String,
+            _ if self.decimal_text => ValueType::String,
             _ => ValueType::Number,
         };
         ensure!(
@@ -150,7 +158,7 @@ impl ComparisonPolicy for Configuration {
     }
 
     fn source_match(&self, source: &Value, facts: &Value) -> Result<traffic_policy::SourceMatch> {
-        let Ok(instant) = parse_time_value(&serde_json::to_value(source)?, &self.config) else {
+        let Ok(instant) = self.time_value(&serde_json::to_value(source)?) else {
             return Ok(traffic_policy::SourceMatch::Inapplicable);
         };
         if !matches!(source, Value::Number(_)) {
@@ -172,11 +180,14 @@ impl ComparisonPolicy for Configuration {
         let mut right = other.config;
         left.clock_group = None;
         right.clock_group = None;
-        Ok(self.clock == other.clock && self.tolerance == other.tolerance && left == right)
+        Ok(self.clock == other.clock
+            && self.tolerance == other.tolerance
+            && self.decimal_text == other.decimal_text
+            && left == right)
     }
 
     fn applies(&self, source: &Value, _: &Value) -> Result<bool> {
-        Ok(parse_time_value(&serde_json::to_value(source)?, &self.config).is_ok())
+        Ok(self.time_value(&serde_json::to_value(source)?).is_ok())
     }
 
     fn evaluate(&self, pair: &ValuePair<'_>, host: &mut dyn EvaluationHost) -> Result<Evaluation> {
@@ -186,7 +197,8 @@ impl ComparisonPolicy for Configuration {
         let source = serde_json::to_value(pair.source)?;
         let target = serde_json::to_value(pair.target)?;
         let requirement = serde_json::from_value(serde_json::to_value(&self.config)?)?;
-        let copied = self.config.relation == TimeRelation::PreserveOffset
+        let copied = !self.decimal_text
+            && self.config.relation == TimeRelation::PreserveOffset
             && host.permits_copy(&requirement)?;
         let facts = host.facts()?;
         let compared = if copied {
@@ -230,13 +242,36 @@ impl ComparisonPolicy for Configuration {
 }
 
 impl Configuration {
+    fn time_value(&self, value: &serde_json::Value) -> Result<i128, TimeError> {
+        if self.decimal_text {
+            return decimal_seconds(value).map(|(instant, _)| instant);
+        }
+        parse_time_value(value, &self.config)
+    }
+
+    fn time_pair(
+        &self,
+        source: &serde_json::Value,
+        target: &serde_json::Value,
+    ) -> Result<(i128, i128), TimeError> {
+        if !self.decimal_text {
+            return parse_time_pair(source, target, &self.config);
+        }
+        let (source, source_fractional) = decimal_seconds(source)?;
+        let (target, target_fractional) = decimal_seconds(target)?;
+        if source_fractional != target_fractional {
+            return Err(TimeError::NumericCategoryChanged);
+        }
+        Ok((source, target))
+    }
+
     fn compare(
         &self,
         source: &serde_json::Value,
         target: &serde_json::Value,
         facts: &Value,
     ) -> Result<(i128, i128), TimeError> {
-        let pair = parse_time_pair(source, target, &self.config)?;
+        let pair = self.time_pair(source, target)?;
         let clocks = clock(facts, &self.clock)?;
         let mode = match self.config.relation {
             TimeRelation::RequestWindow => TimeMode::RequestWindow,
@@ -271,6 +306,19 @@ impl Configuration {
         )?;
         Ok(pair)
     }
+}
+
+fn decimal_seconds(value: &serde_json::Value) -> Result<(i128, bool), TimeError> {
+    let text = value
+        .as_str()
+        .filter(|text| text.len() <= 64)
+        .ok_or(TimeError::InvalidValue)?;
+    // Check decimal syntax without using the rounded JSON Number for arithmetic.
+    text.parse::<serde_json::Number>()
+        .map_err(|_| TimeError::InvalidValue)?;
+    let instant =
+        traffic_time::parse_timestamp(value, traffic_time::TimestampFormat::UnixSeconds, None)?;
+    Ok((instant, text.contains(['.', 'e', 'E'])))
 }
 
 fn clock(facts: &Value, name: &str) -> Result<ClockPair, TimeError> {

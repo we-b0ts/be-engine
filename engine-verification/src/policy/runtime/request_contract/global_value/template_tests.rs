@@ -129,6 +129,15 @@ fn malformed_matched_template_cannot_be_prepared_even_when_bytes_equal() {
 
 #[test]
 fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_store() {
+    native_template_delivery("case", true);
+}
+
+#[test]
+fn session_native_template_delivery_reuses_the_registered_identity_scope() {
+    native_template_delivery("session", false);
+}
+
+fn native_template_delivery(scope: &str, case_owned: bool) {
     use crate::replay::policy::ValueRuleHost;
     use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessage};
 
@@ -152,6 +161,9 @@ fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_stor
     }
 
     let owner = owner();
+    if !case_owned {
+        ValueRuleHost::configure_session_identities(&owner, scope, 60_000).unwrap();
+    }
     let source_session = session(1);
     let target_session = session(2);
     let source = Message(json!({"session_id":source_session}));
@@ -167,9 +179,13 @@ fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_stor
         )
         .unwrap();
     assert!(comparison.passed());
-    let identity =
-        ValueRuleHost::preview_identity_pairs(&owner, "case", &comparison.identity_pairs(), true)
-            .unwrap();
+    let identity = ValueRuleHost::preview_identity_pairs(
+        &owner,
+        scope,
+        &comparison.identity_pairs(),
+        case_owned,
+    )
+    .unwrap();
     ValueRuleHost::commit_comparison(&owner, comparison, identity).unwrap();
 
     let response = Message(json!({"url":url(&source_session),"stable":true,"created_at":1010}));
@@ -190,11 +206,11 @@ fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_stor
             &crate::value_contract::json::PolicyMetadata,
             &Default::default(),
             |selected| {
-                ValueRuleHost::identity_deliveries(&owner, "case", selected)
+                ValueRuleHost::identity_deliveries(&owner, scope, selected)
                     .map(|(values, _)| values)
             },
             |source, delivered| {
-                ValueRuleHost::translate_document(&owner, "case", source, delivered, clocks)
+                ValueRuleHost::translate_document(&owner, scope, source, delivered, clocks)
             },
         )
         .unwrap();
@@ -203,22 +219,14 @@ fn native_json_projection_uses_the_global_template_rule_and_shared_delivery_stor
         json!({"url":url(&target_session),"stable":true,"created_at":2010})
     );
     let ticket = json!(URL_SAFE_NO_PAD.encode([3; 32]));
-    assert!(
-        !owner
-            .knows_identity_value("case", &ticket, &ticket)
-            .unwrap()
-    );
+    assert!(!owner.knows_identity_value(scope, &ticket, &ticket).unwrap());
     let identity = ValueRuleHost::preview_identity_pairs(
         &owner,
-        "case",
+        scope,
         &rendered.comparison.identity_pairs(),
-        true,
+        case_owned,
     )
     .unwrap();
     ValueRuleHost::commit_comparison(&owner, rendered.comparison, identity).unwrap();
-    assert!(
-        owner
-            .knows_identity_value("case", &ticket, &ticket)
-            .unwrap()
-    );
+    assert!(owner.knows_identity_value(scope, &ticket, &ticket).unwrap());
 }

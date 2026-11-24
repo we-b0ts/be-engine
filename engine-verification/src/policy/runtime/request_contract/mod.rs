@@ -185,8 +185,7 @@ impl RequestContracts {
                     .iter()
                     .filter(|r| is_request_rule(r))
                     .cloned()
-                    .collect::<Vec<_>>()
-                    .into(),
+                    .collect::<Vec<_>>(),
             ),
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),

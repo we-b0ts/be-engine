@@ -1,12 +1,17 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use traffic_protocol::ProtocolId;
 use traffic_protocol::{
     connection::{NativeFuture, RequestHost, ResponseDelivery, ResponseFramer},
     message::{MessageEncoder, ProtocolMessage},
 };
+use traffic_replay::{
+    ReplaySource,
+    exchange::{ExchangeInventory, ExchangeRules, MatchContext, Selection, SourceContext},
+};
 
 struct Host;
-struct Delivery(ResponseMessage);
+struct Delivery(Arc<dyn MessageEncoder>);
 impl RequestHost for Host {
     fn execute(
         &self,
@@ -18,12 +23,12 @@ impl RequestHost for Host {
                 request.values["/body"].bytes.as_ref() == br#"{"id":42}"#,
                 "unexpected body"
             );
-            Ok(Box::new(Delivery(ResponseMessage {
+            Ok(Box::new(Delivery(Arc::new(ResponseMessage {
                 status: 200,
                 headers: Default::default(),
                 body: Bytes::from_static(b"ok"),
                 head_request: false,
-            })) as Box<dyn ResponseDelivery>)
+            }))) as Box<dyn ResponseDelivery>)
         })
     }
 }
@@ -86,6 +91,258 @@ async fn ambiguous_http_framing_is_rejected() {
         .unwrap();
     let mut reader = wire::Reader::new(Box::new(io));
     assert!(reader.request().await.is_err());
+}
+
+fn websocket_event(status: u16) -> Value {
+    let capture = |value| serde_json::json!({"encoding":"utf8", "data":value, "truncated":false});
+    serde_json::json!({
+        "event_type":"http_exchange", "id":uuid::Uuid::nil(), "scheme":"http",
+        "authority":"api.test:80", "method":"GET", "uri":"/socket?room=one",
+        "request_headers":{
+            "Host":["api.test"], "Connection":["Upgrade"], "Upgrade":["websocket"],
+            "Sec-WebSocket-Version":["13"], "Sec-WebSocket-Key":["dGhlIHNhbXBsZSBub25jZQ=="],
+            "Sec-WebSocket-Extensions":["permessage-deflate; client_max_window_bits"],
+            "User-Agent":["Python/3.12 websockets/15.0.1"],
+            "Sec-WebSocket-Protocol":["chat"], "X-Sdk-Signature":["business-value"]
+        },
+        "request_body":capture(""), "response_status":status,
+        "response_headers":{"Content-Type":["text/plain"], "X-Request-Id":["refused"]},
+        "response_body":capture("upgrade refused")
+    })
+}
+
+const WEBSOCKET_REQUEST: &str = concat!(
+    "GET /socket?room=one HTTP/1.1\r\nHost: api.test\r\nConnection: Upgrade\r\n",
+    "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n",
+    "Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==\r\nSec-WebSocket-Protocol: chat\r\n",
+    "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n",
+    "User-Agent: Python/3.12 websockets/15.0.1\r\n",
+    "X-Sdk-Signature: business-value\r\n\r\n",
+);
+
+struct RecordedHost(ExchangeInventory);
+
+impl RecordedHost {
+    fn new(event: &Value) -> Self {
+        let mut inventory = ExchangeInventory::default();
+        inventory
+            .register(
+                ProtocolId::new("http"),
+                Native.recorded_exchange(event).unwrap().unwrap(),
+                SourceContext {
+                    source: ReplaySource::Startup,
+                    case_id: None,
+                    position: 0,
+                    capture: None,
+                },
+                ExchangeRules::default(),
+            )
+            .unwrap();
+        inventory.seal();
+        Self(inventory)
+    }
+}
+
+impl RequestHost for RecordedHost {
+    fn execute(
+        &self,
+        request: Arc<dyn ProtocolMessage>,
+    ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
+        Box::pin(async move {
+            let selected = self.0.select(
+                MatchContext {
+                    protocol: ProtocolId::new("http"),
+                    endpoint: &info().endpoint,
+                    active_case: None,
+                    request: request.as_ref(),
+                    session: None,
+                    lane: None,
+                    request_session: None,
+                    metadata: &(),
+                },
+                |_| (),
+                |_, _| Ok(()),
+            )?;
+            let Selection::Matched(selected) = selected else {
+                anyhow::bail!("unmatched HTTP request");
+            };
+            Ok(Box::new(Delivery(
+                self.0.exchanges[selected.index].native.response.clone(),
+            )) as Box<dyn ResponseDelivery>)
+        })
+    }
+}
+
+async fn replay_http(host: Arc<RecordedHost>, wire: &str) -> (String, Result<()>) {
+    let (mut client, io) = tokio::io::duplex(4096);
+    let task = tokio::spawn(
+        Native
+            .server_session(info())
+            .unwrap()
+            .run(Box::new(io), host),
+    );
+    client.write_all(wire.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).await.unwrap();
+    (response, task.await.unwrap())
+}
+
+#[tokio::test]
+async fn native_replay_delivers_only_the_matching_recorded_websocket_refusal() {
+    let host = Arc::new(RecordedHost::new(&websocket_event(400)));
+    let reqwest = WEBSOCKET_REQUEST.replace(
+        "X-Sdk-Signature",
+        "Accept: */*\r\nAccept-Encoding: gzip\r\nX-Sdk-Signature",
+    );
+    let variants = [
+        (WEBSOCKET_REQUEST.to_owned(), true),
+        (reqwest.clone(), true),
+        (reqwest.replace("*/*", "application/json"), false),
+        (
+            reqwest.replace("Accept-Encoding: gzip", "Accept-Encoding: gzip, br"),
+            false,
+        ),
+        (
+            reqwest.replace(
+                "Accept-Encoding: gzip",
+                "Accept-Encoding: gzip\r\nAccept-Encoding: gzip",
+            ),
+            false,
+        ),
+        (
+            reqwest.replace(
+                "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n",
+                "",
+            ),
+            false,
+        ),
+        (
+            reqwest.replace("Python/3.12 websockets/15.0.1", "different-sdk"),
+            false,
+        ),
+        (WEBSOCKET_REQUEST.replace("room=one", "room=two"), false),
+        (
+            WEBSOCKET_REQUEST.replace("business-value", "different"),
+            false,
+        ),
+        (
+            WEBSOCKET_REQUEST.replace("Protocol: chat", "Protocol: other"),
+            false,
+        ),
+        (
+            WEBSOCKET_REQUEST.replace("Version: 13", "Version: 12"),
+            false,
+        ),
+        (
+            WEBSOCKET_REQUEST.replace("Connection: Upgrade", "Connection: close"),
+            false,
+        ),
+        (
+            WEBSOCKET_REQUEST.replace("MDEyMzQ1Njc4OWFiY2RlZg==", "websocket-nonce"),
+            false,
+        ),
+    ];
+    for (wire, matches) in variants {
+        let (response, outcome) = replay_http(host.clone(), &wire).await;
+        if matches {
+            outcome.unwrap();
+            assert_eq!(
+                response,
+                concat!(
+                    "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\n",
+                    "x-request-id: refused\r\ncontent-length: 15\r\nconnection: close\r\n\r\nupgrade refused",
+                )
+            );
+        } else {
+            assert_eq!(outcome.unwrap_err().to_string(), "unmatched HTTP request");
+            assert!(response.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn replay_accept_defaults_only_apply_to_unnegotiated_identity_refusals() {
+    let request = WEBSOCKET_REQUEST.replace(
+        "X-Sdk-Signature",
+        "Accept: */*\r\nAccept-Encoding: gzip\r\nX-Sdk-Signature",
+    );
+    for (name, value) in [
+        ("Vary", "accept-encoding"),
+        ("Content-Encoding", "gzip"),
+        ("Sec-WebSocket-Accept", "negotiated"),
+        ("Sec-WebSocket-Extensions", "permessage-deflate"),
+        ("Sec-WebSocket-Protocol", "chat"),
+        ("Upgrade", "websocket"),
+        ("Connection", "upgrade"),
+    ] {
+        let mut event = websocket_event(400);
+        event["response_headers"][name] = serde_json::json!([value]);
+        assert!(
+            replay_http(Arc::new(RecordedHost::new(&event)), &request)
+                .await
+                .1
+                .is_err(),
+            "{name}"
+        );
+    }
+    let mut streamed = websocket_event(400);
+    streamed["response_stream"] = serde_json::json!({"version":2,"headers_ms":0,"end_ms":2,"complete":true,"chunks":[{"start":0,"end":15,"at_ms":1}]});
+    assert!(
+        replay_http(Arc::new(RecordedHost::new(&streamed)), &request)
+            .await
+            .1
+            .is_err()
+    );
+    assert!(
+        replay_http(Arc::new(RecordedHost::new(&websocket_event(403))), &request)
+            .await
+            .1
+            .is_err()
+    );
+    let mut explicit = websocket_event(400);
+    explicit["request_headers"]["Accept"] = serde_json::json!(["*/*"]);
+    explicit["request_headers"]["Accept-Encoding"] = serde_json::json!(["gzip"]);
+    explicit["response_headers"]["Content-Encoding"] = serde_json::json!(["identity"]);
+    replay_http(Arc::new(RecordedHost::new(&explicit)), WEBSOCKET_REQUEST)
+        .await
+        .1
+        .unwrap();
+}
+
+#[test]
+fn native_replay_cannot_prepare_or_encode_switching_protocols() {
+    let Err(error) = Native.recorded_exchange(&websocket_event(101)) else {
+        panic!("native Replay prepared Switching Protocols");
+    };
+    assert!(error.to_string().contains("HTTP upgrades"));
+    let response = ResponseMessage {
+        status: 101,
+        headers: Default::default(),
+        body: Bytes::new(),
+        head_request: false,
+    };
+    assert!(
+        response
+            .encode(&std::collections::BTreeMap::from([(
+                "/body".into(),
+                Bytes::new()
+            )]))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn native_capture_still_rejects_upgrades_before_forwarding() {
+    let (mut client, io) = tokio::io::duplex(4096);
+    client
+        .write_all(WEBSOCKET_REQUEST.as_bytes())
+        .await
+        .unwrap();
+    let mut reader = wire::Reader::new(Box::new(io));
+    let Err(error) = reader.request().await else {
+        panic!("native capture admitted Upgrade");
+    };
+    assert!(error.to_string().contains("HTTP upgrades"));
 }
 
 #[derive(Default)]

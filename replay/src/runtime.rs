@@ -17,6 +17,17 @@ pub struct SequenceRuntime {
     requests_changed: watch::Sender<u64>,
     plan: Arc<SequencePlan>,
     fast_gap_cap: Option<Duration>,
+    session_timing: bool,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct SequenceProgress {
+    pub matched: usize,
+    pub total: usize,
+    pub last_sequence: Option<u64>,
+    pub expected: Option<SourceEvent>,
+    pub complete: bool,
+    pub failed: bool,
 }
 
 #[derive(Debug)]
@@ -42,9 +53,14 @@ impl State {
                     EventKind::ResponseHeaders | EventKind::ResponsePart | EventKind::ResponseEnd
                 )
         })?;
+        self.event_due(next, Some(cap))
+    }
+
+    fn event_due(&self, next: SourceEvent, cap: Option<Duration>) -> Option<Instant> {
         let previous = self.scheduler.previous()?;
         let gap = Duration::from_micros(next.offset_micros.saturating_sub(previous.offset_micros));
-        self.progressed_at?.checked_add(gap.min(cap))
+        self.progressed_at?
+            .checked_add(cap.map_or(gap, |cap| gap.min(cap)))
     }
 }
 
@@ -63,8 +79,25 @@ impl SequenceRuntime {
         fast_gap_cap: Option<Duration>,
         request_gates: impl IntoIterator<Item = u64>,
     ) -> Arc<Self> {
+        Self::prepare(plan, fast_gap_cap, request_gates, false)
+    }
+
+    pub fn with_session_timing(
+        plan: Arc<SequencePlan>,
+        fast_gap_cap: Option<Duration>,
+        event_gates: impl IntoIterator<Item = u64>,
+    ) -> Arc<Self> {
+        Self::prepare(plan, fast_gap_cap, event_gates, true)
+    }
+
+    fn prepare(
+        plan: Arc<SequencePlan>,
+        fast_gap_cap: Option<Duration>,
+        event_gates: impl IntoIterator<Item = u64>,
+        session_timing: bool,
+    ) -> Arc<Self> {
         let mut scheduler = SequenceScheduler::new(plan.clone());
-        scheduler.request_gates.extend(request_gates);
+        scheduler.event_gates.extend(event_gates);
         Arc::new(Self {
             state: Mutex::new(State {
                 scheduler,
@@ -76,7 +109,16 @@ impl SequenceRuntime {
             requests_changed: watch::channel(0).0,
             plan,
             fast_gap_cap,
+            session_timing,
         })
+    }
+
+    fn tracks_progress(&self) -> bool {
+        self.session_timing || self.fast_gap_cap.is_some()
+    }
+
+    pub(crate) fn is_session_trace(&self) -> bool {
+        self.session_timing
     }
 
     pub fn expected(&self) -> Option<SourceEvent> {
@@ -87,23 +129,74 @@ impl SequenceRuntime {
             .expected()
     }
 
+    pub fn progress(&self) -> SequenceProgress {
+        let state = self.state.lock().expect("sequence runtime poisoned");
+        SequenceProgress {
+            matched: state.scheduler.cursor,
+            total: self.plan.event_count(),
+            last_sequence: state.scheduler.previous().map(|event| event.sequence),
+            expected: state.scheduler.expected(),
+            complete: state.scheduler.complete(),
+            failed: state.scheduler.failed(),
+        }
+    }
+
+    pub fn driver_event(&self, sequence: u64) -> Option<SourceEvent> {
+        self.plan
+            .event(sequence)
+            .filter(|event| event.kind.is_session_driver_event())
+    }
+
+    pub fn driver_due(&self, sequence: u64) -> Option<Instant> {
+        let state = self.state.lock().expect("sequence runtime poisoned");
+        self.driver_due_at_frontier(&state, sequence)
+    }
+
+    fn driver_due_at_frontier(&self, state: &State, sequence: u64) -> Option<Instant> {
+        let next = state
+            .scheduler
+            .expected()
+            .filter(|event| event.sequence == sequence && event.kind.is_scheduled_driver_input())?;
+        state.event_due(next, self.fast_gap_cap)
+    }
+
+    pub fn commit_driver(&self, sequence: u64) -> Result<()> {
+        let mut state = self.state.lock().expect("sequence runtime poisoned");
+        ensure!(
+            self.driver_due_at_frontier(&state, sequence)
+                .is_none_or(|due| Instant::now() >= due),
+            "driver event {sequence} is earlier than its scheduled delivery"
+        );
+        let previous = state.scheduler.previous();
+        state.scheduler.commit_driver(sequence)?;
+        state.record_progress(previous);
+        drop(state);
+        self.notify();
+        Ok(())
+    }
+
     pub(crate) fn admissible_request(&self) -> Option<SourceEvent> {
         let state = self.state.lock().expect("sequence runtime poisoned");
         state.scheduler.expected().filter(|event| {
-            event.kind == EventKind::Request && !state.scheduler.request_is_gated(event.sequence)
+            event.kind == EventKind::Request && !state.scheduler.event_is_gated(event.sequence)
         })
     }
 
-    pub(crate) fn request_is_gated(&self, sequence: u64) -> bool {
+    pub fn event_is_gated(&self, sequence: u64) -> bool {
         self.state
             .lock()
             .expect("sequence runtime poisoned")
             .scheduler
-            .request_is_gated(sequence)
+            .event_is_gated(sequence)
     }
 
     /// Accept a prerequisite receipt only while its recorded request is at the frontier.
     pub fn release_request_gate(&self, sequence: u64) -> Result<()> {
+        self.release_event_gate(sequence)
+    }
+
+    /// Release the prerequisite once its recorded event reaches the frontier.
+    pub fn release_event_gate(&self, sequence: u64) -> Result<()> {
         let mut state = self.state.lock().expect("sequence runtime poisoned");
         ensure!(
             !state.scheduler.failed()
@@ -111,8 +204,8 @@ impl SequenceRuntime {
                     .scheduler
                     .expected()
                     .is_some_and(|event| event.sequence == sequence)
-                && state.scheduler.request_gates.remove(&sequence),
-            "request gate is stale or already released"
+                && state.scheduler.event_gates.remove(&sequence),
+            "event gate is stale or already released"
         );
         drop(state);
         self.notify();
@@ -175,7 +268,7 @@ impl SequenceRuntime {
             state.scheduler.admit(dependency)? == Admission::Accepted,
             "request is earlier than its recorded sequence"
         );
-        if self.fast_gap_cap.is_some() {
+        if self.tracks_progress() {
             state.record_progress(previous);
         }
         drop(state);
@@ -256,24 +349,17 @@ enum Delivery {
         ticket: DeliveryTicket,
         source: SourceEvent,
     },
-    Published {
-        ticket: DeliveryTicket,
-        source: SourceEvent,
-    },
+    TerminalPublished(DeliveryTicket),
     Finished,
     Failed,
 }
 
 impl Delivery {
     fn refresh(&mut self, scheduler: &SequenceScheduler) {
-        if let Self::Published { ticket, source } = *self
+        if let Self::TerminalPublished(ticket) = *self
             && scheduler.receipt_published(ticket)
         {
-            *self = if source.kind.is_terminal() {
-                Self::Finished
-            } else {
-                Self::Waiting
-            };
+            *self = Self::Finished;
         }
     }
 }
@@ -370,7 +456,7 @@ impl SequenceClaim {
                         if let Some(ticket) = state.scheduler.reserve_delivery(self.0.dependency)? {
                             let source = state.scheduler.receipt_source(ticket);
                             *delivery = Delivery::Reserved { ticket, source };
-                            if self.0.runtime.fast_gap_cap.is_some() {
+                            if self.0.runtime.tracks_progress() {
                                 state.record_progress(previous);
                             }
                             drop(state);
@@ -418,11 +504,12 @@ impl SequenceClaim {
             {
                 return 0;
             }
-            if self
-                .0
-                .runtime
-                .fast_gap_cap
-                .is_some_and(|cap| !cap.is_zero())
+            if self.0.runtime.session_timing
+                || self
+                    .0
+                    .runtime
+                    .fast_gap_cap
+                    .is_some_and(|cap| !cap.is_zero())
             {
                 return 1;
             }
@@ -462,11 +549,11 @@ impl SequenceClaim {
                 .context("contiguous output reservation is unavailable")?;
             state.scheduler.finish_delivery(ticket, true)?;
         }
-        if self.0.runtime.fast_gap_cap.is_some() {
+        if self.0.runtime.tracks_progress() {
             state.record_progress(previous);
         }
         *delivery = if source.kind.is_terminal() {
-            Delivery::Published { ticket, source }
+            Delivery::TerminalPublished(ticket)
         } else {
             Delivery::Waiting
         };
@@ -502,18 +589,13 @@ impl SequenceClaim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        let mut delivery = self.delivery.lock().expect("sequence delivery poisoned");
-        let mut state = self
-            .runtime
-            .state
-            .lock()
-            .expect("sequence runtime poisoned");
-        delivery.refresh(&state.scheduler);
-        if !matches!(*delivery, Delivery::Finished | Delivery::Failed) {
-            state.scheduler.abort();
-            drop(state);
-            drop(delivery);
-            self.runtime.notify();
+        // The scheduler owns a flushed terminal receipt until its Source
+        // position arrives, even after the connection releases its claim.
+        if matches!(
+            *self.delivery.get_mut().expect("sequence delivery poisoned"),
+            Delivery::Waiting | Delivery::Reserved { .. }
+        ) {
+            self.runtime.abort();
         }
     }
 }

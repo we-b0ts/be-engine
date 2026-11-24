@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use traffic_model::{
     attribution::DependencyOwner,
     recording::{LedgerFileIdentity, ScopeKind, ScopeRecordLocation},
+    session::SessionEvent,
     trace::{CaptureEvent, OutputKind, RecordedEvent},
 };
 
@@ -39,6 +40,7 @@ pub struct LedgerFiles {
     records: usize,
     payloads: segments::PayloadSegments,
     scopes: OriginalScopes,
+    session: Option<FileDigest>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -78,8 +80,20 @@ impl LedgerFiles {
         recording_id: uuid::Uuid,
         process_epoch: uuid::Uuid,
     ) -> Result<Self> {
-        for name in partitions::FILES {
+        Self::initialize_for_mode(root, recording_id, process_epoch, false).await
+    }
+
+    pub async fn initialize_for_mode(
+        root: &Path,
+        recording_id: uuid::Uuid,
+        process_epoch: uuid::Uuid,
+        session: bool,
+    ) -> Result<Self> {
+        for (_, name) in partitions::files(session) {
             crate::storage::write(&root.join(name), b"").await?;
+        }
+        if session {
+            crate::storage::write(&root.join(crate::session::FILE), b"").await?;
         }
         let header = recording_id.as_bytes();
         crate::storage::write(&root.join(partitions::DIRECTORY), header).await?;
@@ -102,12 +116,31 @@ impl LedgerFiles {
             events: EventLocations::initialize(root).await?,
             records: 0,
             payloads: Default::default(),
-            scopes: OriginalScopes::initialize(root).await?,
+            scopes: OriginalScopes::initialize(root, session).await?,
+            session: session.then(FileDigest::default),
         })
     }
 
     pub fn records(&self) -> usize {
         self.records
+    }
+
+    pub async fn append_session_event(
+        &mut self,
+        files: &mut JsonlWriterPool,
+        event: &RecordedEvent<SessionEvent>,
+    ) -> Result<()> {
+        let name = crate::session::FILE;
+        self.ensure_next_sequence(name, event.sequence)?;
+        let session = self
+            .session
+            .as_mut()
+            .context("session capture is disabled")?;
+        let bytes = crate::session::encode(event)?;
+        files.append(&self.root.join(name), &bytes).await?;
+        session.observe(&bytes);
+        self.last_sequence = event.sequence;
+        Ok(())
     }
 
     pub async fn append_original_scope(
@@ -148,7 +181,7 @@ impl LedgerFiles {
             && matches!(outcome.as_str(), "response" | "delivery")
             && self.events.has_wire_end(*dependency_sequence)
         {
-            self.ensure_next_sequence(partition, event.sequence)?;
+            self.ensure_next_sequence(partitions::FILES[partition], event.sequence)?;
             self.events.finish(files, *dependency_sequence).await?;
             self.last_sequence = event.sequence;
             return Ok(());
@@ -178,8 +211,7 @@ impl LedgerFiles {
         Ok(())
     }
 
-    fn ensure_next_sequence(&self, partition: usize, sequence: u64) -> Result<()> {
-        let name = partitions::FILES[partition];
+    fn ensure_next_sequence(&self, name: &str, sequence: u64) -> Result<()> {
         ensure!(
             sequence > self.last_sequence,
             "recording stream {name} received unordered sequence {sequence} after {}",
@@ -195,7 +227,7 @@ impl LedgerFiles {
         sequence: u64,
         bytes: &[u8],
     ) -> Result<u64> {
-        self.ensure_next_sequence(partition, sequence)?;
+        self.ensure_next_sequence(partitions::FILES[partition], sequence)?;
         let stream = &mut self.streams[partition];
         let offset = stream.length;
         files
@@ -251,7 +283,7 @@ impl LedgerFiles {
                 .await?;
             self.terms_digest.observe(&additions);
         }
-        let partition = partitions::partition(owner, kind);
+        let partition = partitions::partition(owner, kind, self.session.is_some());
         let header_offset;
         let response_offset;
         if let Some(stamp) = request_stamp {
@@ -325,12 +357,15 @@ impl LedgerFiles {
         let mut identities = Vec::new();
         identities.push(self.directory.identity(partitions::DIRECTORY));
         identities.push(self.terms_digest.identity(dependency_columns::FILE));
-        for (name, stream) in partitions::FILES.into_iter().zip(&self.streams) {
-            identities.push(stream.identity(name));
+        for (index, name) in partitions::files(self.session.is_some()) {
+            identities.push(self.streams[index].identity(name));
         }
         identities.extend(self.events.seal().await?);
         identities.extend(self.payloads.identities());
         identities.extend(self.scopes.identities());
+        if let Some(session) = &self.session {
+            identities.push(session.identity(crate::session::FILE));
+        }
         Ok(identities)
     }
 }

@@ -11,10 +11,23 @@ pub struct Request {
     pub lane: Option<String>,
     pub request_session: Option<traffic_protocol::connection::RequestSession>,
     pub session_owner: Option<SessionOwner>,
-    pub optional_control: bool,
+    pub admission: RequestAdmission,
     pub observed: DateTime<Utc>,
     pub bytes: usize,
     pub diagnostics: diagnosis::CandidateDiagnostics,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RequestAdmission {
+    Required,
+    LegacyControl,
+    DriverObservation,
+}
+
+impl RequestAdmission {
+    pub fn allows_local_response(self) -> bool {
+        self != Self::Required
+    }
 }
 
 #[derive(Clone)]

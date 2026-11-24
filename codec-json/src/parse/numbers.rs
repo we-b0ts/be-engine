@@ -79,6 +79,14 @@ fn decimal(value: &str) -> Option<(bool, String, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_point_epoch_seconds_round_trip_without_rounding_to_a_neighbor() {
+        let payload = br#"{"timestamp":1800000000.0000021}"#;
+        let parsed = crate::parse(payload).expect("valid shortest float representation");
+        assert_eq!(parsed["timestamp"].to_string(), "1800000000.0000021");
+    }
+
     #[test]
     fn exact_integer_and_decimal_identity_survive_or_are_rejected() {
         for value in [

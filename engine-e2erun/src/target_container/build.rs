@@ -60,6 +60,13 @@ pub(crate) fn image_tag(target_root: &Path) -> Result<String> {
 }
 
 pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<TargetImage> {
+    build_image_with_timer(config, false).await
+}
+
+pub(crate) async fn build_image_with_timer(
+    config: &TargetContainerConfig,
+    replay_timer: bool,
+) -> Result<TargetImage> {
     let uses_ssh_forwarding = validate_build_contract(config)?;
     let ssh_agent = uses_ssh_forwarding
         .then(|| super::ssh_agent::ManagedSshAgent::prepare(&config.target_root))
@@ -80,6 +87,13 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
         .args(["--build-arg", "HTTPS_PROXY"])
         .args(["--build-arg", "ALL_PROXY"])
         .args(["--build-arg", "NO_PROXY"]);
+    if replay_timer {
+        command.arg("--build-arg").arg(format!(
+            "{}={}",
+            crate::replay_timer::TARGET_SOCKET_ENV,
+            crate::replay_timer::TARGET_SOCKET
+        ));
+    }
     for context in &config.build_contexts {
         command
             .arg("--build-context")

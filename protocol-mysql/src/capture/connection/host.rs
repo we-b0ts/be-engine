@@ -14,6 +14,7 @@ pub struct CaptureRequest<'a> {
     pub connection_id: Uuid,
     pub sequence: u64,
     pub command: &'a ClientCommand,
+    pub payload_len: usize,
     pub prepared_sql: Option<&'a str>,
     pub database: Option<&'a str>,
     pub username: Option<&'a str>,

@@ -11,7 +11,10 @@ use uuid::Uuid;
 pub(crate) const DIRECTORY: &str = "dependency-locations.bin";
 pub(crate) const PUSH_DEPENDENCIES: &str = "dependencies-push.tsv";
 pub(crate) const ORDINARY: usize = 0;
+const PROCESS: usize = 1;
 pub(crate) const PUSH: usize = 2;
+const UNATTRIBUTED: usize = 3;
+const OBSERVATIONS: usize = 4;
 pub(crate) const FILES: [&str; 5] = [
     crate::format::DEPENDENCIES,
     "dependencies-process.tsv",
@@ -53,13 +56,31 @@ pub enum RecordKind {
     Observation,
 }
 
-pub(crate) fn partition(owner: &DependencyOwner, kind: RecordKind) -> usize {
+pub(crate) fn files(session: bool) -> impl Iterator<Item = (usize, &'static str)> {
+    FILES
+        .into_iter()
+        .enumerate()
+        .filter(move |(index, _)| !session || !attribution_only(*index))
+}
+
+pub(crate) fn attribution_only(index: usize) -> bool {
+    matches!(index, PROCESS | UNATTRIBUTED)
+}
+
+pub(crate) fn partition(owner: &DependencyOwner, kind: RecordKind, session: bool) -> usize {
+    if session {
+        return match kind {
+            RecordKind::Exchange => ORDINARY,
+            RecordKind::Message => PUSH,
+            RecordKind::Observation => OBSERVATIONS,
+        };
+    }
     match (owner, kind) {
-        (_, RecordKind::Observation) => 4,
-        (DependencyOwner::Unattributed { .. }, _) => 3,
+        (_, RecordKind::Observation) => OBSERVATIONS,
+        (DependencyOwner::Unattributed { .. }, _) => UNATTRIBUTED,
         (_, RecordKind::Message) => PUSH,
         (DependencyOwner::Case { .. }, _) => ORDINARY,
-        _ => 1,
+        _ => PROCESS,
     }
 }
 

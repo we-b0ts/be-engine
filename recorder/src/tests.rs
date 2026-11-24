@@ -60,6 +60,7 @@ async fn writer(
             process_epoch: epoch,
             policy_identity: "capture-policy".into(),
             evidence: Arc::new(EvidenceRegistry::default()),
+            session_events: false,
         },
     )
     .await

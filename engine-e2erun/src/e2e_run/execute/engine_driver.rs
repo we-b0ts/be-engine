@@ -72,7 +72,7 @@ impl ExecutionDriver for ApplicationDriver<'_> {
                 .context("MySQL Source ownership preparation exceeded the dependency index budget")?
                 .context("MySQL Source ownership preparation task failed")??;
             let _ = active_progress::write(layout, state, ActiveProgressPhase::Building);
-            self.target_image = Some(build_target_image(config, layout).await?);
+            self.target_image = Some(build_target_image(config, layout, false).await?);
             timing_guard::before_spawn(config, &layout.target_root, state)?;
             Ok(())
         })

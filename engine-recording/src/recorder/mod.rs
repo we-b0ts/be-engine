@@ -48,6 +48,7 @@ pub use summary::{
 
 pub struct RecorderOptions {
     pub access_policy: RecordingAccessPolicy,
+    pub session_events: bool,
     pub traffic_jsonl: TrafficJsonlMode,
     pub buffer_settings: jsonl::JsonlBufferSettings,
     pub writer_queue_capacity: usize,
@@ -91,6 +92,7 @@ impl Recorder {
         let RecorderOptions {
             evidence,
             access_policy,
+            session_events,
             traffic_jsonl,
             buffer_settings,
             writer_queue_capacity,
@@ -119,6 +121,7 @@ impl Recorder {
                 process_epoch,
                 policy_identity: capture_policy_identity.clone(),
                 evidence: evidence.clone(),
+                session_events,
             },
         )
         .await?;

@@ -19,6 +19,7 @@ pub mod process_ownership;
 pub mod protocols;
 pub mod recorder;
 pub mod request_headers;
+pub mod session;
 pub use artifact_owner::ArtifactOwner;
 pub mod attribution_defaults;
 pub mod attribution_review;

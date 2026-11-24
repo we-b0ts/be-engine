@@ -36,6 +36,77 @@ async fn output_start_allows_a_causally_subsequent_request_before_its_flush_rece
 }
 
 #[tokio::test]
+async fn a_flushed_terminal_receipt_survives_its_claim_while_an_earlier_push_finishes() {
+    let runtime = SequenceRuntime::with_session_timing(
+        SequencePlan::compile([
+            event(7743, 7743, EventKind::Request),
+            event(7762, 7762, EventKind::Message),
+            event(7763, 7743, EventKind::ResponseHeadersStarted),
+            event(7764, 7762, EventKind::ResponseEndStarted),
+            event(7765, 7743, EventKind::ResponseEndStarted),
+            event(7766, 7762, EventKind::ResponseEnd),
+            event(7767, 7743, EventKind::ResponseHeaders),
+            event(7768, 7743, EventKind::ResponseEnd),
+        ])
+        .unwrap(),
+        Some(std::time::Duration::ZERO),
+        [],
+    );
+    let response = runtime.admit(7743).unwrap();
+    let push = runtime.admit(7762).unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+
+    response.wait_delivery(deadline).await.unwrap();
+    response.publish().unwrap();
+    push.wait_delivery(deadline).await.unwrap();
+    response.wait_delivery(deadline).await.unwrap();
+    response.publish().unwrap();
+    assert!(!response.complete());
+    assert_eq!(runtime.progress().last_sequence, Some(7765));
+    drop(response);
+
+    assert!(!runtime.failed());
+    push.publish().unwrap();
+    assert_eq!(runtime.progress().last_sequence, Some(7768));
+    assert!(runtime.complete());
+}
+
+#[tokio::test]
+async fn session_driver_and_dependency_receipts_share_the_contiguous_frontier() {
+    let runtime = SequenceRuntime::with_session_timing(
+        SequencePlan::compile([
+            event(1, 0, EventKind::SessionSourceStart),
+            event(2, 2, EventKind::Request),
+            event(3, 2, EventKind::ResponseEndStarted),
+            event(4, 0, EventKind::SessionReady),
+            event(5, 2, EventKind::ResponseEnd),
+            event(6, 0, EventKind::PrimaryRequest),
+            event(7, 0, EventKind::PrimaryResponseEnd),
+        ])
+        .unwrap(),
+        Some(std::time::Duration::ZERO),
+        [],
+    );
+    assert!(runtime.admit(2).is_err());
+    runtime.commit_driver(1).unwrap();
+    let claim = runtime.admit(2).unwrap();
+    claim
+        .wait_delivery(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+        .await
+        .unwrap();
+    claim.publish().unwrap();
+    assert_eq!(runtime.progress().last_sequence, Some(3));
+    assert!(runtime.commit_driver(5).is_err());
+    assert!(runtime.commit_driver(6).is_err());
+    runtime.commit_driver(4).unwrap();
+    assert_eq!(runtime.progress().last_sequence, Some(5));
+    runtime.commit_driver(6).unwrap();
+    assert!(!runtime.complete());
+    runtime.commit_driver(7).unwrap();
+    assert!(runtime.complete());
+}
+
+#[tokio::test]
 async fn headers_and_body_started_before_one_source_flush_keep_separate_receipts() {
     let runtime = SequenceRuntime::new(
         SequencePlan::compile([

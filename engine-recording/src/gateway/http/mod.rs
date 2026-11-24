@@ -35,6 +35,7 @@ mod ready;
 mod recovery;
 mod response;
 pub mod rules;
+mod session;
 #[cfg(test)]
 mod timeout_tests;
 pub mod transport;
@@ -44,6 +45,8 @@ use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_grou
 use transport::{
     GatewayBody, build_fixed_response, build_upstream_request, build_upstream_uri, simple_response,
 };
+
+pub(crate) const SESSION_UPGRADE_HEADER: &str = "x-traffic-e2e-session-upgrade";
 
 pub async fn run(state: AppState) -> Result<()> {
     let listen = state.config().http_gateway.listen;
@@ -97,6 +100,9 @@ pub async fn run_with_listener(state: AppState, listener: TcpListener) -> Result
             .context("failed to enable TCP_NODELAY for HTTP gateway client")?;
         let state = state.clone();
         let config = config.clone();
+        let connection = state
+            .session_events()
+            .then(|| state.recorder().capture.next_connection_id());
         let mut protocol_session =
             match crate::protocols::http_session(state.dependency_providers()) {
                 Ok(session) => session,
@@ -122,7 +128,8 @@ pub async fn run_with_listener(state: AppState, listener: TcpListener) -> Result
                 let client_addr = client_addr.clone();
                 async move {
                     Ok::<_, Infallible>(
-                        handle_gateway_request(req, state, config, client_addr).await,
+                        handle_request_for_connection(req, state, config, client_addr, connection)
+                            .await,
                     )
                 }
             });
@@ -141,11 +148,22 @@ pub async fn run_with_listener(state: AppState, listener: TcpListener) -> Result
     }
 }
 
+#[cfg(test)]
 async fn handle_gateway_request(
     req: Request<Incoming>,
     state: AppState,
     config: HttpGatewayConfig,
     client_addr: Option<String>,
+) -> Response<GatewayBody> {
+    handle_request_for_connection(req, state, config, client_addr, None).await
+}
+
+async fn handle_request_for_connection(
+    req: Request<Incoming>,
+    state: AppState,
+    config: HttpGatewayConfig,
+    client_addr: Option<String>,
+    connection: Option<Uuid>,
 ) -> Response<GatewayBody> {
     let id = state.recorder().capture.next_case_id();
     let started = Instant::now();
@@ -168,6 +186,11 @@ async fn handle_gateway_request(
             StatusCode::FORBIDDEN,
             "request blocked by recording access policy",
         );
+    }
+    if state.session_events() {
+        let connection =
+            connection.unwrap_or_else(|| state.recorder().capture.next_connection_id());
+        return session::handle(req, &state, &config, connection, client_addr).await;
     }
     let request_headers = req.headers().clone();
     if let Some(protocol) = interaction::request_protocol(&req) {

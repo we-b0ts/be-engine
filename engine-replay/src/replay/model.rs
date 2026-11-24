@@ -36,6 +36,7 @@ impl ReplayProtocol {
 pub enum ReplayMode {
     Single,
     Collection,
+    Session,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

@@ -12,6 +12,7 @@ pub mod native;
 pub mod origin;
 pub mod path_pattern;
 pub mod query_token;
+pub mod request_metadata;
 pub mod response_headers;
 pub mod sse;
 pub mod stream_capture;

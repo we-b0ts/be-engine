@@ -15,6 +15,7 @@ mod public;
 pub use epoch::begin as begin_epoch;
 
 pub const PROGRESS_VERSION: u8 = 3;
+pub(crate) const EVENT_SESSION_RUN_PREFIX: &str = "event-session:";
 const MIN_SUPPORTED_PROGRESS_VERSION: u8 = 1;
 const MAX_COUNTED_RUNS: usize = 10_000;
 
@@ -622,7 +623,32 @@ pub fn write(path: &Path, report: &ProgressReport) -> Result<()> {
     cleanup_split_public_progress(path)
 }
 
+/// Hold across a progress read-modify-write transaction.
+pub fn lock_publication(path: &Path) -> Result<fs::File> {
+    let lock_path =
+        ledger::path(path, VerificationStage::Progress)?.with_file_name("publication.lock");
+    fs::create_dir_all(
+        lock_path
+            .parent()
+            .context("progress lock has no directory")?,
+    )?;
+    let file = fs::File::options()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open progress lock {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("lock progress publication {}", lock_path.display()))?;
+    Ok(file)
+}
+
 pub fn synchronize(path: &Path, stage: VerificationStage) -> Result<bool> {
+    let _lock = lock_publication(path)?;
+    synchronize_unlocked(path, stage)
+}
+
+fn synchronize_unlocked(path: &Path, stage: VerificationStage) -> Result<bool> {
     let Some(report) = load(path, stage)? else {
         return Ok(false);
     };
@@ -645,6 +671,7 @@ pub fn record_completed_batch(
         apis: &'a BTreeMap<String, u64>,
     }
 
+    let _lock = lock_publication(path)?;
     let mut report = load(path, VerificationStage::Progress)?
         .unwrap_or_else(|| ProgressReport::new(VerificationStage::Progress));
     let requires_persistence = report.requires_persistence();

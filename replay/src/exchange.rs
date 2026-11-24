@@ -1,16 +1,17 @@
 //! Shared finite inventory for protocol-projected dependency exchanges.
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
 use anyhow::{Context, Result, ensure};
+use serde_json::Value;
 use traffic_model::recording::{CaptureMetadata, ProtocolRef};
 use traffic_protocol::{
     ProtocolId,
     connection::{Endpoint, RecordedExchange, ReplaySessionStep, RequestSession},
-    message::ProtocolMessage,
+    message::{MessageEncoder, ProjectedMessage, ProtocolMessage},
 };
 use uuid::Uuid;
 
@@ -112,6 +113,7 @@ pub struct ExchangeInventory<R: RuleRuntime = ExactRules> {
     cases: CaseMembership,
     references: BTreeMap<String, BTreeMap<ProtocolRef, Option<usize>>>,
     emissions: BTreeMap<ProtocolRef, Vec<usize>>,
+    transaction_starts: BTreeSet<usize>,
 }
 
 impl<R: RuleRuntime> Default for ExchangeRules<R> {
@@ -135,6 +137,7 @@ impl<R: RuleRuntime> Default for ExchangeInventory<R> {
             cases: Default::default(),
             references: Default::default(),
             emissions: Default::default(),
+            transaction_starts: Default::default(),
         }
     }
 }
@@ -168,6 +171,104 @@ pub struct MatchContext<'a, R: RuleRuntime = ExactRules> {
     pub lane: Option<&'a str>,
     pub request_session: Option<&'a RequestSession>,
     pub metadata: &'a R::Metadata,
+}
+
+struct RequestForm<'a> {
+    message: &'a dyn ProtocolMessage,
+    projection: ProjectedMessage,
+}
+
+impl<'a> RequestForm<'a> {
+    fn new(message: &'a dyn ProtocolMessage) -> Result<Self> {
+        Ok(Self {
+            message,
+            projection: message.project()?,
+        })
+    }
+}
+
+struct RequestForms<'a> {
+    primary: RequestForm<'a>,
+    read_only_end_alternative: Option<RequestForm<'a>>,
+    exact_alternative: Option<RequestForm<'a>>,
+}
+
+impl<'a> RequestForms<'a> {
+    fn new(request: &'a dyn ProtocolMessage, session: Option<&'a RequestSession>) -> Result<Self> {
+        Ok(Self {
+            primary: RequestForm::new(request)?,
+            read_only_end_alternative: session
+                .and_then(|session| session.read_only_end_alternative.as_deref())
+                .map(RequestForm::new)
+                .transpose()?,
+            exact_alternative: request
+                .exact_request_alternative()
+                .map(RequestForm::new)
+                .transpose()?,
+        })
+    }
+
+    fn matching<R: RuleRuntime>(
+        &self,
+        prepared: &R::Prepared,
+        exchange: &PreparedExchange<R>,
+    ) -> Result<Option<&'a dyn ProtocolMessage>> {
+        let structure = R::structure(prepared);
+        if self.primary.projection.structure == *structure {
+            return Ok(Some(self.primary.message));
+        }
+        if let Some(form) = &self.read_only_end_alternative
+            && matches!(
+                exchange.session_step,
+                Some(ReplaySessionStep::ReadOnlyEnd { .. })
+            )
+            && form.projection.structure == *structure
+        {
+            return Ok(Some(form.message));
+        }
+        if let Some(form) = &self.exact_alternative
+            && form.projection.structure == *structure
+        {
+            let source = exchange
+                .native
+                .request()
+                .context("alternate request has no Source request")?
+                .project()?;
+            if source.structure == form.projection.structure
+                && source.values.len() == form.projection.values.len()
+                && source.values.iter().all(|(path, value)| {
+                    form.projection.values.get(path).is_some_and(|actual| {
+                        actual.scalar_encoding == value.scalar_encoding
+                            && actual.bytes == value.bytes
+                    })
+                })
+            {
+                return Ok(Some(form.message));
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn compare_request<R: RuleRuntime>(
+    exchange: &PreparedExchange<R>,
+    prepared: &R::Prepared,
+    actual: &dyn ProtocolMessage,
+    context: &MatchContext<'_, R>,
+    clocks: &impl Fn(&PreparedExchange<R>) -> R::Context,
+    session_trace: bool,
+) -> Result<R::Comparison> {
+    let comparison = R::compare(prepared, actual, clocks(exchange), context.metadata)?;
+    if session_trace
+        && !R::passed(&comparison)
+        && let Some(source) = exchange.native.request()
+        && actual.exact_request_reordering_of(source)
+    {
+        // The protocol proved that reordering the Target's unchanged values
+        // reconstructs the Source view. Keep physical value-rule locations.
+        return R::compare(prepared, source, clocks(exchange), context.metadata);
+    }
+    Ok(comparison)
 }
 
 impl<R: RuleRuntime> ExchangeInventory<R> {
@@ -275,6 +376,130 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         self.cases.seal();
     }
 
+    pub fn set_session_step(&mut self, index: usize, step: Option<ReplaySessionStep>) {
+        if matches!(
+            step,
+            Some(ReplaySessionStep::Start | ReplaySessionStep::ImplicitStart)
+        ) {
+            self.transaction_starts.insert(index);
+        } else {
+            self.transaction_starts.remove(&index);
+        }
+        self.exchanges[index].session_step = step;
+    }
+
+    pub fn can_defer_transaction_start(
+        &self,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        request: &dyn ProtocolMessage,
+        head: crate::SourceEvent,
+    ) -> bool {
+        self.transaction_starts
+            .iter()
+            .filter_map(|&index| {
+                let exchange = &self.exchanges[index];
+                let capture = exchange.source.capture.as_ref()?;
+                (capture.semantic_required
+                    && capture.sequence >= head.sequence
+                    && exchange.source.source.is_run_owned()
+                    && exchange.protocol == protocol
+                    && exchange.native.endpoint == *endpoint
+                    && self
+                        .lifecycle
+                        .live_status(index, exchange.status)
+                        .is_available()
+                    && exchange
+                        .native
+                        .request()
+                        .is_some_and(|recorded| request.same_session_identity(recorded)))
+                .then_some((capture.sequence, exchange.session_step.as_ref()))
+            })
+            .min_by_key(|(sequence, _)| *sequence)
+            .is_some_and(|(_, step)| step == Some(&ReplaySessionStep::ImplicitStart))
+    }
+
+    fn request_candidates(
+        &self,
+        context: &MatchContext<'_, R>,
+        scope: ScopePartition,
+        forms: &RequestForms<'_>,
+    ) -> Result<CandidateCursor> {
+        let lookup = |structure: &Value| -> Result<CandidateCursor> {
+            Ok(self.candidates.lookup(&CandidateKey {
+                scope: scope.clone(),
+                protocol: context.protocol,
+                endpoint: context.endpoint.clone(),
+                structure: serde_json::to_vec(structure)?,
+            }))
+        };
+        let primary = lookup(&forms.primary.projection.structure)?;
+        let read_only = forms
+            .read_only_end_alternative
+            .as_ref()
+            .map(|form| lookup(&form.projection.structure))
+            .transpose()?;
+        let exact = forms
+            .exact_alternative
+            .as_ref()
+            .map(|form| lookup(&form.projection.structure))
+            .transpose()?;
+        match (read_only, exact) {
+            (Some(read_only), Some(exact)) => Ok(primary.merge(read_only.merge(exact))),
+            (Some(alternate), None) | (None, Some(alternate)) => Ok(primary.merge(alternate)),
+            (None, None) => Ok(primary),
+        }
+    }
+
+    pub fn statement_metadata(
+        &self,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        template: &dyn ProtocolMessage,
+        session: &RequestSession,
+        head: crate::SourceEvent,
+    ) -> Option<Arc<dyn MessageEncoder>> {
+        let matches = |exchange: &PreparedExchange<R>| {
+            exchange
+                .native
+                .request()
+                .is_some_and(|source| template.matches_statement_template(source))
+        };
+        let expected = self
+            .expected_request(protocol, endpoint, None, session)
+            .filter(|exchange| matches(exchange));
+        let future = || {
+            self.exchanges
+                .iter()
+                .filter_map(|exchange| {
+                    let capture = exchange.source.capture.as_ref()?;
+                    (capture.semantic_required
+                        && capture.sequence >= head.sequence
+                        && exchange.source.source.is_run_owned()
+                        && exchange.protocol == protocol
+                        && exchange.native.endpoint == *endpoint
+                        && self
+                            .lifecycle
+                            .live_status(exchange.index, exchange.status)
+                            .is_available()
+                        && self.sessions.accepts(
+                            protocol,
+                            endpoint,
+                            exchange.native.lane.as_deref(),
+                            None,
+                        )
+                        && accepts_session(exchange.session_step.as_ref(), Some(session))
+                        && matches(exchange))
+                    .then_some((capture.sequence, exchange))
+                })
+                .min_by_key(|(sequence, _)| *sequence)
+                .map(|(_, exchange)| exchange)
+        };
+        expected
+            .or_else(future)
+            .map(|exchange| exchange.native.response.clone())
+    }
+
     pub fn case_members(&self, case: &str) -> Arc<[usize]> {
         self.cases.for_case(case)
     }
@@ -335,14 +560,78 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
     }
 
     fn lane_blocker(&self, index: usize) -> Option<usize> {
+        let session = self.lifecycle.sequence.is_session_trace();
         self.lanes.blocker(index, |prior| {
             let exchange = &self.exchanges[prior];
-            !Lifecycle::satisfies(
-                self.lifecycle.live_status(prior, exchange.status),
-                exchange.source.source,
-                Barrier::Admitted,
-            )
+            let status = self.lifecycle.live_status(prior, exchange.status);
+            // A whole-session trace records the actual admission and output
+            // barriers even when Source storage uses the run-owned scope.
+            !(session && status == ReplayExchangeStatus::Responding
+                || Lifecycle::satisfies(status, exchange.source.source, Barrier::Admitted))
         })
+    }
+
+    /// An early observation can wait only while a later compatible request
+    /// remains possible. This preview does not bind lanes or commit value rules.
+    pub fn may_follow_session_head(
+        &self,
+        context: &MatchContext<'_, R>,
+        head: crate::SourceEvent,
+        clocks: impl Fn(&PreparedExchange<R>) -> R::Context,
+    ) -> Result<bool> {
+        const PREVIEW_LIMIT: usize = 256;
+        let include_head = head.kind == crate::EventKind::Request
+            && self
+                .lifecycle
+                .sequence
+                .expected_in(ReplaySource::Startup)
+                .is_some_and(|expected| expected.is_empty());
+        let session_trace = self.lifecycle.sequence.is_session_trace();
+        let forms = RequestForms::new(context.request, context.request_session)?;
+        let candidates = self.request_candidates(context, ScopePartition::Run, &forms)?;
+        for (position, index) in candidates.enumerate() {
+            if position == PREVIEW_LIMIT {
+                return Ok(true);
+            }
+            let exchange = &self.exchanges[index];
+            let Some(prepared) = exchange.request.as_ref() else {
+                continue;
+            };
+            let Some(request) = forms.matching(prepared, exchange)? else {
+                continue;
+            };
+            let Some(capture) = &exchange.source.capture else {
+                continue;
+            };
+            let lane = exchange.native.lane.as_deref();
+            if capture.semantic_required
+                && (capture.sequence > head.sequence
+                    || include_head && capture.sequence == head.sequence)
+                && self
+                    .lifecycle
+                    .live_status(index, exchange.status)
+                    .is_available()
+                && context.lane.is_none_or(|current| Some(current) == lane)
+                && self.sessions.accepts(
+                    exchange.protocol,
+                    &exchange.native.endpoint,
+                    lane,
+                    context.session,
+                )
+                && accepts_session(exchange.session_step.as_ref(), context.request_session)
+                && R::passed(&compare_request(
+                    exchange,
+                    prepared,
+                    request,
+                    context,
+                    &clocks,
+                    session_trace,
+                )?)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn select(
@@ -363,28 +652,20 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
     ) -> Result<Selection<R::Comparison>> {
         let case = self.lifecycle.sequence.expected_in(ReplaySource::Case);
         let run = self.lifecycle.sequence.expected_in(ReplaySource::Startup);
-        let structure = context.request.project()?.structure;
-        let lookup_key = (case.is_none() || run.is_none())
-            .then(|| serde_json::to_vec(&structure))
-            .transpose()?;
-        let candidates = |expected: Option<Arc<[usize]>>, scope| {
-            expected.map_or_else(
-                || {
-                    self.candidates.lookup(&CandidateKey {
-                        scope,
-                        protocol: context.protocol,
-                        endpoint: context.endpoint.clone(),
-                        structure: lookup_key.clone().expect("unsequenced lookup key"),
-                    })
-                },
-                CandidateCursor::new,
-            )
+        let session_trace = self.lifecycle.sequence.is_session_trace();
+        let forms = RequestForms::new(context.request, context.request_session)?;
+        let case = match case {
+            Some(expected) => CandidateCursor::new(expected),
+            None => self.request_candidates(
+                &context,
+                ScopePartition::new(ReplaySource::Case, context.active_case),
+                &forms,
+            )?,
         };
-        let case = candidates(
-            case,
-            ScopePartition::new(ReplaySource::Case, context.active_case),
-        );
-        let run = candidates(run, ScopePartition::Run);
+        let run = match run {
+            Some(expected) => CandidateCursor::new(expected),
+            None => self.request_candidates(&context, ScopePartition::Run, &forms)?,
+        };
         let previews = RefCell::new(HashMap::new());
         let failed = RefCell::new(None);
         let inspected = std::cell::Cell::new(0_usize);
@@ -395,9 +676,11 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             case,
             run,
             |exchange, _| {
+                let Some(prepared) = exchange.request.as_ref() else {
+                    return false;
+                };
                 if exchange.protocol != context.protocol
                     || exchange.native.endpoint != *context.endpoint
-                    || exchange.request.as_ref().map(R::structure) != Some(&structure)
                     || !self
                         .lifecycle
                         .live_status(exchange.index, exchange.status)
@@ -424,6 +707,14 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                 if !session_matches && !session_unverified {
                     return false;
                 }
+                let request = match forms.matching(prepared, exchange) {
+                    Ok(Some(request)) => request,
+                    Ok(None) => return false,
+                    Err(error) => {
+                        *failed.borrow_mut() = Some(error);
+                        return false;
+                    }
+                };
                 inspected.set(inspected.get() + 1);
                 if inspected.get() > 16_384 {
                     *failed.borrow_mut() = Some(anyhow::anyhow!(
@@ -431,11 +722,13 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
                     ));
                     return false;
                 }
-                match R::compare(
-                    exchange.request.as_ref().expect("request candidate"),
-                    context.request,
-                    clocks(exchange),
-                    context.metadata,
+                match compare_request(
+                    exchange,
+                    prepared,
+                    request,
+                    &context,
+                    &clocks,
+                    session_trace,
                 ) {
                     Ok(comparison) => {
                         if let Err(error) = observe(exchange, &comparison) {
@@ -569,15 +862,25 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
 
 fn accepts_session(step: Option<&ReplaySessionStep>, session: Option<&RequestSession>) -> bool {
     let after = session.and_then(|session| session.after.as_ref());
+    if session.is_some_and(|session| session.implicit_start_pending) {
+        return step == Some(&ReplaySessionStep::ImplicitStart)
+            && after.is_none()
+            && session.is_some_and(|session| session.can_start);
+    }
     match step {
         None => after.is_none(),
         Some(ReplaySessionStep::Optional | ReplaySessionStep::Unverified) => false,
-        Some(ReplaySessionStep::Start | ReplaySessionStep::InTransaction) => {
-            after.is_none() && session.is_some_and(|session| session.can_start)
-        }
-        Some(ReplaySessionStep::Continue {
-            after: expected, ..
-        }) => after == Some(expected),
+        Some(
+            ReplaySessionStep::Start
+            | ReplaySessionStep::ImplicitStart
+            | ReplaySessionStep::InTransaction,
+        ) => after.is_none() && session.is_some_and(|session| session.can_start),
+        Some(
+            ReplaySessionStep::Continue {
+                after: expected, ..
+            }
+            | ReplaySessionStep::ReadOnlyEnd { after: expected },
+        ) => after == Some(expected),
     }
 }
 

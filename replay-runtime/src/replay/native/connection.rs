@@ -20,7 +20,7 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
         host: target.host,
         port: target.port,
     };
-    let (protocol, session) = {
+    let (protocol, session, event_session, request_projection) = {
         let state = state.lock().await;
         let entry = state.providers.connection_provider(connection_protocol)?;
         let session = entry
@@ -33,13 +33,20 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
                 upstream_addr: None,
                 max_frame_bytes: traffic_contract::MAX_VALUE_BYTES,
             })?;
-        (entry.kind.id(), session)
+        (
+            entry.kind.id(),
+            session,
+            state.session_events.is_some(),
+            state.native.event_session_request_projection(),
+        )
     };
     let state_bindings = state.lock().await.native.core.sessions.clone();
     let host = Arc::new(Host {
         state,
         protocol,
         endpoint,
+        event_session,
+        request_projection,
         reported: Arc::new(AtomicBool::new(false)),
         delivered: Default::default(),
         session: Uuid::new_v4(),
@@ -51,13 +58,15 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
     {
         let mut state = host.state.lock().await;
         if state.finalized_at.is_none() {
+            if let Some(session) = &mut state.session_events {
+                session.fail(None, None, &error.to_string());
+            }
             let case = state.active_case_id.clone();
             state.native.record_failure(
                 protocol,
                 &host.endpoint,
                 case,
-                None,
-                None,
+                (None, None),
                 &error.to_string(),
                 Default::default(),
             );
@@ -79,6 +88,8 @@ pub(super) struct Host<P: ReplayProtocolSet> {
     bindings: traffic_replay::exchange::SessionBindings,
     protocol: ProtocolId,
     endpoint: Endpoint,
+    event_session: bool,
+    request_projection: Option<Arc<dyn crate::replay::policy::ValueRuleHost>>,
     reported: Arc<AtomicBool>,
     delivered: Arc<
         std::sync::Mutex<
@@ -153,12 +164,14 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                 &command.observation,
             );
             let observation = state.target_observations.retained(&retention).then_some(id);
+            if let Some(session) = &mut state.session_events {
+                session.fail(None, observation, &reason);
+            }
             state.native.record_failure(
                 self.protocol,
                 &self.endpoint,
                 case,
-                Some(event),
-                observation,
+                (Some(event), observation),
                 &reason,
                 diagnostics,
             );
@@ -186,7 +199,80 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
         message: Arc<dyn ProtocolMessage>,
         session: RequestSession,
     ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
-        Box::pin(self.execute_request(message, None, Some(session), true))
+        let admission = if self.event_session {
+            request::RequestAdmission::Required
+        } else {
+            request::RequestAdmission::LegacyControl
+        };
+        Box::pin(self.execute_request(message, None, Some(session), admission))
+    }
+
+    fn event_session(&self) -> bool {
+        self.event_session
+    }
+
+    fn can_defer_transaction_start<'a>(
+        &'a self,
+        request: &'a dyn ProtocolMessage,
+    ) -> NativeFuture<'a, bool> {
+        Box::pin(async move {
+            let state = self.state.lock().await;
+            let head = state
+                .session_events
+                .as_ref()
+                .and_then(|session| session.runtime.expected());
+            Ok(head.is_some_and(|head| {
+                state.native.core.can_defer_transaction_start(
+                    self.protocol,
+                    &self.endpoint,
+                    request,
+                    head,
+                )
+            }))
+        })
+    }
+
+    fn statement_metadata<'a>(
+        &'a self,
+        template: &'a dyn ProtocolMessage,
+        session: &'a RequestSession,
+    ) -> NativeFuture<'a, Option<Arc<dyn traffic_protocol::message::MessageEncoder>>> {
+        Box::pin(async move {
+            let owner = self.session_owner(Some(session))?;
+            let state = self.state.lock().await;
+            let head = state
+                .session_events
+                .as_ref()
+                .and_then(|session| session.runtime.expected());
+            if owner
+                .as_ref()
+                .is_some_and(|owner| !owner.scope.is_run_owned())
+            {
+                return Ok(None);
+            }
+            Ok(head.and_then(|head| {
+                state.native.core.statement_metadata(
+                    self.protocol,
+                    &self.endpoint,
+                    template,
+                    session,
+                    head,
+                )
+            }))
+        })
+    }
+
+    fn try_execute_driver_observation(
+        &self,
+        message: Arc<dyn ProtocolMessage>,
+        session: RequestSession,
+    ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
+        Box::pin(self.execute_request(
+            message,
+            None,
+            Some(session),
+            request::RequestAdmission::DriverObservation,
+        ))
     }
     fn forget_anchor(&self, reference: &traffic_model::recording::ProtocolRef) {
         self.delivered
@@ -343,9 +429,14 @@ impl<P: ReplayProtocolSet> Host<P> {
         request_session: Option<RequestSession>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
         Box::pin(async move {
-            self.execute_request(message, binding, request_session, false)
-                .await?
-                .context("required native delivery missing")
+            self.execute_request(
+                message,
+                binding,
+                request_session,
+                request::RequestAdmission::Required,
+            )
+            .await?
+            .context("required native delivery missing")
         })
     }
 
@@ -354,10 +445,15 @@ impl<P: ReplayProtocolSet> Host<P> {
         message: Arc<dyn ProtocolMessage>,
         binding: Option<Option<traffic_model::recording::ProtocolRef>>,
         request_session: Option<RequestSession>,
-        optional_control: bool,
+        admission: request::RequestAdmission,
     ) -> Result<Option<Box<dyn ResponseDelivery>>> {
         let started = tokio::time::Instant::now();
         let observed = Utc::now();
+        let message = if let Some(policy) = &self.request_projection {
+            policy.native_request_projection(self.protocol, &self.endpoint, message, None)?
+        } else {
+            message
+        };
         let bytes = message
             .project()?
             .values
@@ -393,7 +489,7 @@ impl<P: ReplayProtocolSet> Host<P> {
             lane,
             request_session,
             session_owner,
-            optional_control,
+            admission,
             observed,
             bytes,
             diagnostics: Default::default(),
@@ -406,7 +502,10 @@ impl<P: ReplayProtocolSet> Host<P> {
         .await;
         let matched = match matched {
             Ok(matched) => matched,
-            Err(error) if optional_control && error.kind == request::RejectionKind::NoMatch => {
+            Err(error)
+                if admission.allows_local_response()
+                    && error.kind == request::RejectionKind::NoMatch =>
+            {
                 return Ok(None);
             }
             Err(error) => {
@@ -575,10 +674,7 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                 let mut output = traffic_protocol::output::FramedOutput::new(response, framer);
                 traffic_replay::output::deliver(io, &mut output, matched.ticket.sequence()).await?;
                 let completed_at = tokio::time::Instant::now();
-                ensure!(
-                    matched.ticket.publish_wire(),
-                    "native response delivery receipt was cancelled"
-                );
+                matched.ticket.try_publish_wire()?;
                 let mut state = self.state.lock().await;
                 let contracts = state.native.contracts.clone();
                 match state
@@ -632,16 +728,20 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
             .await;
             if let Err(error) = &result {
                 self.reported.store(true, Ordering::Release);
+                let reason = error.to_string();
                 let mut state = self.state.lock().await;
                 if state.finalized_at.is_none() {
+                    let source_sequence = state.native.recorded_sequence(matched.index);
+                    if let Some(session) = &mut state.session_events {
+                        session.fail(source_sequence, None, &reason);
+                    }
                     state.native.core.fail(matched.index, &matched.ticket);
                     state.native.record_failure(
                         self.protocol,
                         &self.endpoint,
                         matched.case.clone(),
-                        None,
-                        None,
-                        &error.to_string(),
+                        (None, None),
+                        &reason,
                         Default::default(),
                     );
                 }

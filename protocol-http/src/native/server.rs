@@ -29,8 +29,15 @@ impl ServerSession for Server {
             let mut reader = wire::Reader::new(io);
             if let Some(head) = reader.request_head().await? {
                 let _input = host.begin_input().await?;
+                let http11 = head.http11;
                 let request = reader.request_body(head).await?;
-                let delivery = host.execute(Arc::new(request)).await?;
+                let request = websocket_refusal::target_request(request, http11);
+                let request = if tls && http11 {
+                    crate::request_metadata::tls_target_request(request)
+                } else {
+                    request
+                };
+                let delivery = host.execute(request).await?;
                 delivery.write(&mut reader.io, &mut Framer).await?;
             }
             reader.io.shutdown().await?;

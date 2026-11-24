@@ -31,6 +31,7 @@ impl Recorder {
             RecorderOptions {
                 evidence: Arc::new(crate::protocols::default_providers().evidence().clone()),
                 access_policy,
+                session_events: defaults.session_events,
                 traffic_jsonl: defaults.traffic_jsonl,
                 buffer_settings: jsonl::JsonlBufferSettings {
                     capacity: defaults.jsonl_buffer_capacity_bytes,
@@ -83,6 +84,7 @@ impl Recorder {
                 source_preparation: super::super::recording_preparation::strict(evidence.clone()),
                 evidence,
                 access_policy: config.access_policy,
+                session_events: config.session_events,
                 traffic_jsonl: config.traffic_jsonl,
                 buffer_settings: jsonl::JsonlBufferSettings {
                     capacity: config.jsonl_buffer_capacity_bytes,

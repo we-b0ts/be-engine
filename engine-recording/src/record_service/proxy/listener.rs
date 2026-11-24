@@ -30,6 +30,9 @@ pub(in crate::record_service) async fn serve<R: Redis + Clone + 'static>(
                         request.extensions_mut().insert(request_transports.clone());
                         let relay = relay.clone();
                         async move {
+                            if relay.session.is_some() {
+                                return Ok::<_, Infallible>(relay.handle(request).await);
+                            }
                             // Preserve ordinary request completion on downstream disconnect.
                             let result = tokio::spawn(async move { relay.handle(request).await }).await;
                             Ok::<_, Infallible>(result.unwrap_or_else(|_| response(StatusCode::BAD_GATEWAY, "recording request task failed")))

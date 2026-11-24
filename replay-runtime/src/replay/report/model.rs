@@ -8,6 +8,10 @@ pub(crate) struct ReplayReport<S: traffic_replay::report::SessionSnapshot> {
     pub(crate) dependency_sequence_missing: Vec<sequence::MissingDependency>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) timer_events: Vec<timers::TimerEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) session_events: Option<session::Report>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) session_dependency_exclusions: Vec<native::DriverPreludeExclusion>,
     pub(crate) batch_reconciliation: Option<reconciliation::BatchReconciliation>,
     pub(crate) startup_phase: startup::StartupPhaseReport,
     pub(crate) dependency_attribution_snapshot: Option<String>,
@@ -60,6 +64,9 @@ pub(crate) struct ReplayReport<S: traffic_replay::report::SessionSnapshot> {
 
 impl<S: traffic_replay::report::SessionSnapshot> ReplayReport<S> {
     pub(crate) fn is_complete(&self) -> bool {
+        if let Some(session) = &self.session_events {
+            return session.complete();
+        }
         self.active_case_id.is_none()
             && !self.cases.is_empty()
             && self
@@ -69,7 +76,10 @@ impl<S: traffic_replay::report::SessionSnapshot> ReplayReport<S> {
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
-        self.startup_phase.is_dirty()
+        self.session_events
+            .as_ref()
+            .is_some_and(session::Report::failed)
+            || self.startup_phase.is_dirty()
             || self.target_observation_coverage_error.is_some()
             || self.dependency_hypothesis_coverage_error.is_some()
             || !self.dependency_pre_matches.is_empty()

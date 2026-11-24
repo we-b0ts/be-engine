@@ -1,5 +1,5 @@
 //! Phase-independent value services supplied by the execution owner.
-use crate::identity::IdentityDelivery;
+use crate::{RuleBinding, identity::IdentityDelivery};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -8,6 +8,7 @@ use traffic_contract::{
     compare::{AnchorClocks, Comparison},
     identity::{IdentityDecision, IdentityPair},
 };
+use traffic_protocol::{ProtocolId, connection::Endpoint, message::ProtocolMessage};
 
 pub struct ValueDecision {
     pub comparison: Comparison,
@@ -16,6 +17,10 @@ pub struct ValueDecision {
 
 pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     fn metadata(&self) -> &(dyn traffic_contract::compare::RuleMetadata + 'static);
+
+    fn configure_session_identities(&self, _scope: &str, _dependency_count: usize) -> Result<()> {
+        Ok(())
+    }
 
     fn translate_document(
         &self,
@@ -28,6 +33,23 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     }
     fn document_policy(&self, _clocks: AnchorClocks) -> Option<Arc<dyn crate::DocumentPolicy>> {
         None
+    }
+    /// Bind an exact, protocol-owned request shape with strict comparison of
+    /// its remaining values. Other requests use the normal policy bindings.
+    fn native_request_bindings(
+        &self,
+        _exchange: &traffic_protocol::connection::RecordedExchange,
+    ) -> Result<Option<Vec<RuleBinding>>> {
+        Ok(None)
+    }
+    fn native_request_projection(
+        &self,
+        _protocol: ProtocolId,
+        _endpoint: &Endpoint,
+        request: Arc<dyn ProtocolMessage>,
+        _source: Option<&Value>,
+    ) -> Result<Arc<dyn ProtocolMessage>> {
+        Ok(request)
     }
     /// Conservative capability check before any Source messages are prepared.
     fn may_bind_native_documents(&self) -> bool {

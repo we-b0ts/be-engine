@@ -202,6 +202,20 @@ impl ActiveRunState {
                 .then_with(|| left.case_id.cmp(&right.case_id))
         });
         let cases = cases.into_iter().map(|(_, execution)| execution).collect();
+        let mut state =
+            Self::for_runtime(run_key, sequence, inventory.case_source.clone(), active_dir);
+        state.source_revision = inventory.source_revision.clone();
+        state.case_inventory_id = inventory.case_inventory_id.clone();
+        state.cases = cases;
+        state
+    }
+
+    pub(super) fn for_runtime(
+        run_key: String,
+        sequence: u64,
+        case_source: PathBuf,
+        active_dir: &Path,
+    ) -> Self {
         let reports = active_dir.join("reports");
         Self {
             version: STATE_VERSION,
@@ -211,9 +225,9 @@ impl ActiveRunState {
             status: RunStatus::Running,
             started_at: Utc::now(),
             finished_at: None,
-            case_source: inventory.case_source.clone(),
-            source_revision: inventory.source_revision.clone(),
-            case_inventory_id: inventory.case_inventory_id.clone(),
+            case_source,
+            source_revision: String::new(),
+            case_inventory_id: String::new(),
             replay_session: active_dir.join("tmp/session.json"),
             replay_report: reports.join("replay-report.json"),
             aggregate_report: reports.join("aggregate.json"),
@@ -230,7 +244,7 @@ impl ActiveRunState {
             replay_finalized: false,
             aggregate_complete: false,
             aggregate_clean: false,
-            cases,
+            cases: Vec::new(),
             apis: Vec::new(),
             errors: Vec::new(),
         }

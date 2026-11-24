@@ -42,11 +42,14 @@ pub struct HttpPolicy {
         deserialize_with = "traffic_policy_schema::strict_map::unique_map"
     )]
     pub headers: BTreeMap<String, GlobalField>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_metadata: Vec<traffic_protocol_http::request_metadata::RequestMetadataRule>,
 }
 impl HttpPolicy {
     pub fn compile(&self, context: &crate::AuthoringContext<'_>) -> anyhow::Result<Self> {
         use anyhow::ensure;
         let mut headers = BTreeMap::new();
+        traffic_protocol_http::request_metadata::validate_rules(&self.request_metadata)?;
         ensure!(
             self.headers.len() <= 4096,
             "http.headers exceeds 4096 entries"
@@ -92,7 +95,10 @@ impl HttpPolicy {
                 "HTTP header declarations repeat a case-insensitive name"
             );
         }
-        Ok(Self { headers })
+        Ok(Self {
+            headers,
+            request_metadata: self.request_metadata.clone(),
+        })
     }
 }
 

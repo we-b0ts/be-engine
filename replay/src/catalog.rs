@@ -63,6 +63,22 @@ impl SequencePlan {
     ) -> Result<Arc<Self>> {
         Self::compile(project_events(events)?)
     }
+
+    pub fn compile_session(
+        dependencies: impl IntoIterator<Item = Result<RecordedEvent<CaptureEvent>>>,
+        driver: impl IntoIterator<Item = SourceEvent>,
+    ) -> Result<Arc<Self>> {
+        let mut events = project_events(dependencies)?;
+        events.extend(driver);
+        events.sort_unstable_by_key(|event| event.sequence);
+        ensure!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].offset_micros <= pair[1].offset_micros),
+            "session Source event offsets are not monotonic"
+        );
+        Self::compile(events)
+    }
 }
 
 fn project_events(

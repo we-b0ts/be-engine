@@ -77,6 +77,9 @@ pub(crate) async fn handle_control_request<P: ReplayProtocolSet>(
                 "active_case_id": state.active_case_id,
             })
         }
+        "session_wait" | "session_commit" | "session_fail" | "session_status" => {
+            session::control(&request, state.clone()).await
+        }
         "prefetch" => {
             match deferred::prefetch::enqueue(state.clone(), request.case_id.as_deref()).await {
                 Ok(queued) => serde_json::json!({"ok": true, "queued": queued}),
@@ -690,7 +693,7 @@ pub(crate) fn session_snapshot<P: ReplayProtocolSet>(
     report_path: Option<&PathBuf>,
     ready: bool,
 ) -> Value {
-    serde_json::json!({
+    let mut snapshot = serde_json::json!({
         "version": 2,
         "session_id": state.session_id.to_string(),
         "started_at": state.started_at,
@@ -710,7 +713,11 @@ pub(crate) fn session_snapshot<P: ReplayProtocolSet>(
         "cases": state.case_reports(),
         "selected_case_ids": state.cases.keys().cloned().collect::<Vec<_>>(),
         "waiting": state.active_case_id.as_deref().and_then(|case| state.dependency_tails.waiting(case)),
-    })
+    });
+    if let Some(session) = &state.session_events {
+        snapshot["session_events"] = serde_json::json!(session.report());
+    }
+    snapshot
 }
 
 pub(crate) fn report_is_dirty<S: traffic_replay::report::SessionSnapshot>(

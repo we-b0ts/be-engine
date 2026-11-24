@@ -12,6 +12,8 @@ use crate::mysql::operation::MysqlWriteOperation;
 #[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
     pub output_dir: PathBuf,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub session_events: bool,
     pub max_body_bytes: usize,
     pub max_decoded_body_bytes: Option<usize>,
     pub traffic_jsonl: TrafficJsonlMode,
@@ -226,6 +228,7 @@ impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
             output_dir: PathBuf::from("./recordings"),
+            session_events: false,
             max_body_bytes: DEFAULT_BODY_LIMIT_BYTES,
             max_decoded_body_bytes: None,
             traffic_jsonl: TrafficJsonlMode::Full,

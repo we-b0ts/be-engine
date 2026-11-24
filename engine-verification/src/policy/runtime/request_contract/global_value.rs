@@ -34,12 +34,7 @@ impl RequestContracts {
                 "run-owned global value contract failed at {} fields",
                 comparison.differences.len()
             );
-            let identity = IdentityDecision::prepare(scope, comparison.identity_pairs())?;
-            self.values
-                .identities
-                .lock()
-                .expect("identity contracts")
-                .validate(&identity)?;
+            let identity = self.preview_run_identity_pairs(scope, &comparison.identity_pairs())?;
             let mut decision = Decision::from_value_comparison(comparison);
             decision.identity = Some(identity);
             Ok(decision)
@@ -163,7 +158,7 @@ impl RequestContracts {
         logical: &mut Value,
     ) -> Result<(IdentityDecision, Vec<String>)> {
         let Some(global) = self.global_json() else {
-            return Ok((IdentityDecision::prepare(case, vec![])?, vec![]));
+            return Ok((self.values.preview(case, &[])?, vec![]));
         };
         self.translate_identity_plan(case, source, logical, global)
     }

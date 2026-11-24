@@ -27,15 +27,28 @@ pub(crate) const FILES: [&str; 4] = [
 const ENTRY_BYTES: usize = 60;
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
-pub(crate) struct OriginalScopes([FileDigest; FILES.len()]);
+pub(crate) fn files(session: bool) -> impl Iterator<Item = (usize, &'static str)> {
+    FILES
+        .into_iter()
+        .enumerate()
+        .filter(move |(index, _)| !session || *index == 0)
+}
+
+pub(crate) struct OriginalScopes {
+    digests: [FileDigest; FILES.len()],
+    session: bool,
+}
 
 impl OriginalScopes {
-    pub(crate) async fn initialize(root: &Path) -> Result<Self> {
+    pub(crate) async fn initialize(root: &Path, session: bool) -> Result<Self> {
         tokio::fs::create_dir_all(root.join("indexes")).await?;
-        for file in FILES {
+        for (_, file) in files(session) {
             crate::storage::write(&root.join(file), b"").await?;
         }
-        Ok(Self(Default::default()))
+        Ok(Self {
+            digests: Default::default(),
+            session,
+        })
     }
 
     pub(crate) async fn append(
@@ -52,6 +65,10 @@ impl OriginalScopes {
             ScopeKind::Unattributed => 3,
             ScopeKind::Case { .. } => anyhow::bail!("Case dependencies use their Case scope"),
         };
+        ensure!(
+            !self.session || scope == 0,
+            "case attribution scope in a session recording"
+        );
         let mut entry = [0; ENTRY_BYTES];
         entry[..8].copy_from_slice(&u64::try_from(location.line)?.to_le_bytes());
         let hash = location.sha256.as_bytes();
@@ -67,15 +84,13 @@ impl OriginalScopes {
         entry[40..56].copy_from_slice(location.exchange_id.as_bytes());
         entry[56..].copy_from_slice(&location.effect_index.to_le_bytes());
         files.append(&root.join(FILES[scope]), &entry).await?;
-        self.0[scope].observe(&entry);
+        self.digests[scope].observe(&entry);
         Ok(())
     }
 
     pub(crate) fn identities(&self) -> Vec<LedgerFileIdentity> {
-        FILES
-            .into_iter()
-            .zip(&self.0)
-            .map(|(name, file)| file.identity(name))
+        files(self.session)
+            .map(|(index, name)| self.digests[index].identity(name))
             .collect()
     }
 }

@@ -99,5 +99,11 @@ pub(super) async fn drain<R: Redis + Clone + 'static>(
             "elapsed_ms": started.elapsed().as_millis(),
             "cases": cases,
         }))
-        .await
+        .await?;
+    if state.session_events() && outcome == "case_drain_timeout" {
+        let error = anyhow::anyhow!("session ingress did not drain before Source shutdown");
+        state.fail_session_recording(&error);
+        return Err(error);
+    }
+    Ok(())
 }

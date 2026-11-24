@@ -130,6 +130,33 @@ pub trait RequestHost: Send + Sync {
     ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
         Box::pin(async { Ok(None) })
     }
+    /// Authorize a provisional native start without consuming a Source event.
+    fn can_defer_transaction_start<'a>(
+        &'a self,
+        _request: &'a dyn ProtocolMessage,
+    ) -> NativeFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// Inspect matching Source response metadata without claiming an execution.
+    fn statement_metadata<'a>(
+        &'a self,
+        _template: &'a dyn ProtocolMessage,
+        _session: &'a RequestSession,
+    ) -> NativeFuture<'a, Option<Arc<dyn MessageEncoder>>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn event_session(&self) -> bool {
+        false
+    }
+    /// Prefer a scheduled matching request over a provider's exact local observation.
+    fn try_execute_driver_observation(
+        &self,
+        _request: Arc<dyn ProtocolMessage>,
+        _session: RequestSession,
+    ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
+        Box::pin(async { anyhow::bail!("native driver observations are unavailable") })
+    }
     /// Bind a stateful native session to one Source lane. A continuation must
     /// name a successful delivery retained on this physical connection.
     fn execute_bound(
@@ -184,11 +211,13 @@ impl RejectedCommand<'_> {
                     "{protocol_name} command mismatch: expected {expected}, received {received}"
                 )
             }
-            _ => {
-                let expected = expected.unwrap_or("unknown");
+            Some(expected) => {
                 format!(
                     "{protocol_name} command unavailable in Replay: expected {expected}, received {received}"
                 )
+            }
+            None => {
+                format!("{protocol_name} received {received} with no matching recorded command")
             }
         }
     }
@@ -243,14 +272,33 @@ pub enum ReplaySessionStep {
     Unverified,
     InTransaction,
     Start,
+    ImplicitStart,
     Continue { after: ProtocolRef, end: bool },
+    ReadOnlyEnd { after: ProtocolRef },
+}
+
+/// A protocol provider's proof for a complete, non-business Source operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DriverPrelude {
+    MysqlSqlalchemyPymysql,
+    MysqlIdleMetadataRollback,
+    MysqlPostTransactionIdleRollback,
+}
+
+#[derive(Default)]
+pub struct EventSessionPreparation {
+    pub steps: std::collections::BTreeMap<usize, ReplaySessionStep>,
+    pub driver_prelude: std::collections::BTreeMap<usize, DriverPrelude>,
 }
 
 /// A Target request's admissible start and actual preceding delivery.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct RequestSession {
     pub can_start: bool,
     pub after: Option<ProtocolRef>,
+    pub implicit_start_pending: bool,
+    pub read_only_end_alternative: Option<Arc<dyn ProtocolMessage>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -325,7 +373,48 @@ pub trait CaptureHost: Send + Sync {
         operation: Operation,
     ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>>;
 
+    fn omit_builtin_maintenance(&self, _operation: Operation) -> bool {
+        false
+    }
+
+    fn builtin_maintenance_failed(&self, _name: &'static str) {}
+
     fn observe(&self, event: CaptureSnapshot) -> NativeFuture<'_, ()>;
+}
+
+/// A recognized control skips recorded admission only while its protocol facts
+/// can prove the locally reproducible reply. An interrupted or different
+/// reply invalidates capture because its original sequence was not retained.
+pub struct BuiltinMaintenance {
+    host: Option<Arc<dyn CaptureHost>>,
+    name: &'static str,
+}
+
+impl BuiltinMaintenance {
+    pub fn begin(
+        host: &Arc<dyn CaptureHost>,
+        operation: Operation,
+        name: &'static str,
+    ) -> Option<Self> {
+        host.omit_builtin_maintenance(operation).then(|| Self {
+            host: Some(host.clone()),
+            name,
+        })
+    }
+
+    pub fn finish(mut self, canonical_reply: bool) {
+        if canonical_reply {
+            self.host = None;
+        }
+    }
+}
+
+impl Drop for BuiltinMaintenance {
+    fn drop(&mut self) {
+        if let Some(host) = &self.host {
+            host.builtin_maintenance_failed(self.name);
+        }
+    }
 }
 
 pub trait TlsServer: std::fmt::Debug + Send + Sync {
@@ -359,6 +448,19 @@ pub trait NativeProtocol: Send + Sync {
         _records: &[(usize, &Value)],
     ) -> Result<std::collections::BTreeMap<usize, ReplaySessionStep>> {
         Ok(Default::default())
+    }
+    /// Prepare native continuity for a complete strict Source session.
+    fn prepare_event_session(
+        &self,
+        records: &[(usize, &Value)],
+    ) -> Result<EventSessionPreparation> {
+        Ok(EventSessionPreparation {
+            steps: self.prepare_replay_scope(
+                traffic_model::attribution::DependencyScope::Startup,
+                records,
+            )?,
+            ..Default::default()
+        })
     }
     fn has_replay_scope(&self) -> bool {
         false

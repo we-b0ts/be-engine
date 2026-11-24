@@ -8,6 +8,7 @@ pub struct RequestWait {
     scopes: Vec<ScopeWait>,
     pending: Option<crate::PendingRequest>,
     bytes: usize,
+    request_grace: Duration,
 }
 
 struct ScopeWait {
@@ -32,6 +33,14 @@ impl RequestWait {
         scopes: impl IntoIterator<Item = (bool, Arc<SequenceRuntime>)>,
         bytes: usize,
     ) -> Option<Self> {
+        Self::with_grace(scopes, bytes, Duration::from_millis(250))
+    }
+
+    pub fn with_grace(
+        scopes: impl IntoIterator<Item = (bool, Arc<SequenceRuntime>)>,
+        bytes: usize,
+        request_grace: Duration,
+    ) -> Option<Self> {
         let scopes: Vec<_> = scopes
             .into_iter()
             .map(|(case, runtime)| ScopeWait {
@@ -45,6 +54,7 @@ impl RequestWait {
             scopes,
             pending: None,
             bytes,
+            request_grace,
         })
     }
 
@@ -65,17 +75,14 @@ impl RequestWait {
                 continue;
             };
             let until = if expected.kind == EventKind::Request
-                && !scope.runtime.request_is_gated(expected.sequence)
+                && !scope.runtime.event_is_gated(expected.sequence)
             {
                 if scope
                     .missing
                     .as_ref()
                     .is_none_or(|(sequence, _)| *sequence != expected.sequence)
                 {
-                    scope.missing = Some((
-                        expected.sequence,
-                        Instant::now() + Duration::from_millis(250),
-                    ));
+                    scope.missing = Some((expected.sequence, Instant::now() + self.request_grace));
                 }
                 scope
                     .missing

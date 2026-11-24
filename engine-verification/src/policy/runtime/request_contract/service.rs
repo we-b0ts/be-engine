@@ -9,8 +9,13 @@ use traffic_contract::{
     time::ClockPair,
 };
 use traffic_policy_value::identity::IdentityDelivery;
-use traffic_protocol::connection::NativeFuture;
+use traffic_protocol::{
+    ProtocolId,
+    connection::{Endpoint, NativeFuture},
+    message::ProtocolMessage,
+};
 
+mod redis_eval_time;
 mod response_constraints;
 mod response_identities;
 
@@ -64,6 +69,11 @@ impl ValueRuleHost for RequestContracts {
         &crate::value_contract::json::PolicyMetadata
     }
 
+    fn configure_session_identities(&self, scope: &str, dependency_count: usize) -> Result<()> {
+        self.values
+            .configure_session_identities(scope, dependency_count)
+    }
+
     fn observe_source_comparison(&self, comparison: &Comparison) {
         self.observe_value_slot_applicable(comparison.evaluated.iter().cloned());
     }
@@ -105,6 +115,39 @@ impl ValueRuleHost for RequestContracts {
                 clocks,
             }) as Arc<dyn traffic_policy_value::DocumentPolicy>
         })
+    }
+    fn native_request_bindings(
+        &self,
+        exchange: &traffic_protocol::connection::RecordedExchange,
+    ) -> Result<Option<Vec<traffic_policy_value::RuleBinding>>> {
+        match self.compiled.as_deref() {
+            Some(policy) => redis_eval_time::bindings(policy, exchange),
+            None => Ok(None),
+        }
+    }
+    fn native_request_projection(
+        &self,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        request: Arc<dyn ProtocolMessage>,
+        source: Option<&Value>,
+    ) -> Result<Arc<dyn ProtocolMessage>> {
+        let http = self
+            .compiled
+            .as_ref()
+            .and_then(|compiled| compiled.http.as_ref());
+        if let Some(http) = http
+            && matches!(protocol.as_str(), "http" | "https")
+        {
+            traffic_protocol_http::request_metadata::request(
+                &http.request_metadata,
+                endpoint,
+                request,
+                source,
+            )
+        } else {
+            Ok(request)
+        }
     }
     fn may_bind_native_documents(&self) -> bool {
         self.global_json()

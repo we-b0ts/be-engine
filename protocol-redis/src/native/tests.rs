@@ -167,6 +167,78 @@ impl CaptureHost for CaptureSink {
 
 mod pubsub;
 
+#[derive(Default)]
+struct MaintenanceSink {
+    capture: CaptureSink,
+    failed: Mutex<Vec<&'static str>>,
+}
+
+impl CaptureHost for MaintenanceSink {
+    fn begin(
+        &self,
+        reference: ProtocolRef,
+        operation: Operation,
+    ) -> NativeFuture<'_, Option<Box<dyn CaptureExchange>>> {
+        self.capture.begin(reference, operation)
+    }
+
+    fn omit_builtin_maintenance(&self, _: Operation) -> bool {
+        true
+    }
+
+    fn builtin_maintenance_failed(&self, name: &'static str) {
+        self.failed.lock().unwrap().push(name);
+    }
+
+    fn observe(&self, event: CaptureSnapshot) -> NativeFuture<'_, ()> {
+        self.capture.observe(event)
+    }
+}
+
+#[tokio::test]
+async fn session_maintenance_is_forwarded_without_a_capture_admission() {
+    let (client, capture_client) = tokio::io::duplex(4096);
+    let (capture_upstream, upstream) = tokio::io::duplex(4096);
+    let sink = Arc::new(MaintenanceSink::default());
+    let task = tokio::spawn(Native.capture_session(info()).unwrap().run(
+        Box::new(capture_client),
+        Box::new(capture_upstream),
+        sink.clone(),
+    ));
+    let calls: [(&[&[u8]], &[u8]); 8] = [
+        (&[b"PING"], b"+PONG\r\n"),
+        (
+            &[b"CLIENT", b"SETINFO", b"LIB-NAME", b"redis-py"],
+            b"-ERR Unknown subcommand or wrong number of arguments for 'SETINFO'. Try CLIENT HELP.\r\n",
+        ),
+        (&[b"AUTH", b"tester", b"secret"], b"+OK\r\n"),
+        (&[b"SELECT", b"2"], b"+OK\r\n"),
+        (&[b"GET", b"hello"], b"$5\r\nworld\r\n"),
+        (&[b"PING"], b"-ERR failed\r\n"),
+        (&[b"AUTH"], b"+OK\r\n"),
+        (&[b"SELECT", b"1"], b"-ERR invalid DB index\r\n"),
+    ];
+    let mut client = crate::BufferedReader::new(client, 4096);
+    let mut upstream = crate::BufferedReader::new(upstream, 4096);
+    for (command, reply) in calls {
+        let encoded = crate::encode_array(command);
+        client.inner.write_all(&encoded).await.unwrap();
+        let actual = crate::read_frame(&mut upstream).await.unwrap().unwrap();
+        assert_eq!(actual.raw.as_ref(), encoded);
+        upstream.inner.write_all(reply).await.unwrap();
+        let actual = crate::read_frame(&mut client).await.unwrap().unwrap();
+        assert_eq!(actual.raw.as_ref(), reply);
+    }
+    client.inner.shutdown().await.unwrap();
+    task.await.unwrap().unwrap();
+    let captures = sink.capture.0.lock().unwrap();
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0].payload()["command"], "GET");
+    assert_eq!(captures[0].payload()["username"], "tester");
+    assert_eq!(captures[0].payload()["database"], 2);
+    assert_eq!(*sink.failed.lock().unwrap(), ["PING", "AUTH", "SELECT"]);
+}
+
 #[tokio::test]
 async fn native_recording_redacts_credentials_and_produces_executable_records() {
     let (mut client, capture_client) = tokio::io::duplex(4096);

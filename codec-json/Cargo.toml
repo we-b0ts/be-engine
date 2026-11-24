@@ -7,7 +7,7 @@ edition.workspace = true
 traffic-value = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, features = ["raw_value"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 
 [dev-dependencies]
 traffic-codec-protobuf = { workspace = true }

@@ -7,6 +7,13 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
             dependency_protocols: self.native.snapshot(),
             dependency_sequence_missing: self.sequence_missing.clone(),
             timer_events: self.timers.events().to_vec(),
+            session_events: self.session_events.as_ref().map(session::Session::report),
+            session_dependency_exclusions: self
+                .native
+                .event_session_exclusions()
+                .values()
+                .cloned()
+                .collect(),
             batch_reconciliation: None,
             startup_phase: self.startup_phase.report(),
             dependency_attribution_snapshot: self.dependency_attribution_snapshot.clone(),

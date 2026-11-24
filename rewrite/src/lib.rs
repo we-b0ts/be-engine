@@ -23,6 +23,7 @@ mod case_patterns;
 mod configuration_commit;
 mod coordination;
 mod engine_retry;
+pub mod event_work;
 mod execution;
 mod expert;
 pub use api_selector::{RewriteApiSelector, status_rewrite_for_selector};
