@@ -13,6 +13,7 @@ use hyper_util::{
 };
 use std::{
     convert::Infallible,
+    num::NonZeroU32,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -47,7 +48,7 @@ pub(super) struct Relay<R> {
     reservations: Option<RedisAdmissionProvider<R>>,
     client: Client<HttpConnector, RelayBody>,
     origin: hyper::Uri,
-    scope: String,
+    scope: Option<String>,
     ready: Arc<AtomicBool>,
     slot: Arc<Semaphore>,
     capacity: u32,
@@ -61,7 +62,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
     pub(super) fn new(
         reservations: Option<RedisAdmissionProvider<R>>,
         origin: hyper::Uri,
-        scope: String,
+        scope: Option<String>,
         timeout: Duration,
         max_body: usize,
     ) -> Self {
@@ -82,9 +83,12 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         }
     }
 
-    pub(super) fn with_session_events(mut self, state: crate::AppState) -> Self {
-        const SESSION_INGRESS_CAPACITY: u32 = 64;
-        self.capacity = SESSION_INGRESS_CAPACITY;
+    pub(super) fn with_session_events(
+        mut self,
+        state: crate::AppState,
+        capacity: NonZeroU32,
+    ) -> Self {
+        self.capacity = capacity.get();
         self.slot = Arc::new(Semaphore::new(self.capacity as usize));
         self.session = Some(session::SessionRelay::new(state));
         self

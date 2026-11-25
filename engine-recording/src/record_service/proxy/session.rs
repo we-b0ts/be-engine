@@ -39,12 +39,9 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         };
 
         let ticket = if let Some(provider) = &self.reservations {
-            let Ok(Some(ticket)) = AdmissionTicket::from_headers(request.headers()) else {
+            let Ok(Some(ticket)) = AdmissionTicket::from_global_headers(request.headers()) else {
                 return response(StatusCode::NOT_FOUND, "recording admission required");
             };
-            if ticket.scope() != self.scope {
-                return response(StatusCode::NOT_FOUND, "recording reservation unavailable");
-            }
             let Some(mut lease) = Lease::admit(provider.clone(), ticket, session) else {
                 return response(
                     StatusCode::NOT_FOUND,

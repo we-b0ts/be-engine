@@ -298,7 +298,7 @@ impl Fixture {
         let relay = proxy::Relay::new(
             Some(provider),
             origin,
-            "all-apis".to_owned(),
+            Some("all-apis".to_owned()),
             timeout,
             max_body,
         );

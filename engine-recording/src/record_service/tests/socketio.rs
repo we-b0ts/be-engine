@@ -93,7 +93,7 @@ impl ManagedSocketFixture {
         let relay: proxy::Relay<RedisService> = proxy::Relay::new(
             None,
             format!("http://{gateway_address}").parse().unwrap(),
-            "all-apis".into(),
+            None,
             Duration::from_secs(2),
             1024 * 1024,
         )

@@ -10,7 +10,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         let deadline = tokio::time::Instant::now() + self.timeout;
         let ticket = if self.reservations.is_some() {
             match AdmissionTicket::from_headers(request.headers()) {
-                Ok(Some(ticket)) if ticket.scope() == self.scope => Some(ticket),
+                Ok(Some(ticket)) if Some(ticket.scope()) == self.scope.as_deref() => Some(ticket),
                 _ => return response(StatusCode::NOT_FOUND, "recording admission required"),
             }
         } else {

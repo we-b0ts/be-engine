@@ -4,7 +4,7 @@ use super::{RecordOptions, api_policy::ApiPolicy};
 use anyhow::{Context, Result, ensure};
 use brz_http_gateway::redis_admission::{RecorderRegistration, RedisAdmissionProvider};
 use brz_redis::{Redis, RedisService, RedisServiceOptions, Value, cmd};
-use std::time::Duration;
+use std::{num::NonZeroU32, time::Duration};
 use tracing::{info, warn};
 
 pub(super) struct Coordination {
@@ -14,7 +14,7 @@ pub(super) struct Coordination {
 }
 
 impl Coordination {
-    pub(super) async fn connect(options: &RecordOptions) -> Result<Self> {
+    pub(super) async fn connect(options: &RecordOptions, capacity: NonZeroU32) -> Result<Self> {
         if options.coordination.is_none() {
             return Ok(Self {
                 startup: None,
@@ -39,7 +39,8 @@ impl Coordination {
             options.discovery_key(),
             url,
             Duration::from_secs(30),
-        )?;
+        )?
+        .with_max_inflight(capacity)?;
         let reservations =
             RedisAdmissionProvider::new(redis.clone(), &options.prefix, options.discovery_key())?;
         Ok(Self {

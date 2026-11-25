@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -15,6 +16,9 @@ pub struct RecordingConfig {
     /// Managed runtime mode, independent of project Recorder settings.
     #[serde(skip)]
     pub session_events: bool,
+    /// Override the concurrent ingress limit for session recording.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_inflight_requests: Option<NonZeroU32>,
     pub max_body_bytes: usize,
     pub max_decoded_body_bytes: Option<usize>,
     pub traffic_jsonl: TrafficJsonlMode,
@@ -230,6 +234,7 @@ impl Default for RecordingConfig {
         Self {
             output_dir: PathBuf::from("./recordings"),
             session_events: false,
+            max_inflight_requests: None,
             max_body_bytes: DEFAULT_BODY_LIMIT_BYTES,
             max_decoded_body_bytes: None,
             traffic_jsonl: TrafficJsonlMode::Full,

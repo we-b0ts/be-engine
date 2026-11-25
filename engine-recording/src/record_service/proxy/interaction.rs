@@ -270,17 +270,17 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         let Some(provider) = &self.reservations else {
             return Ok(None);
         };
+        let scope = self.scope.as_deref().ok_or("reservation unavailable")?;
         let incoming = AdmissionTicket::from_headers(request.headers())
             .map_err(|_| "invalid recording admission")?;
         if let Some(ticket) = incoming {
             return match provider.owns(&ticket).await {
-                Ok(true) if ticket.scope() == self.scope => Ok(Some(ticket)),
+                Ok(true) if ticket.scope() == scope => Ok(Some(ticket)),
                 _ => Err("reservation unavailable"),
             };
         }
         let acquired =
-            tokio::time::timeout(Duration::from_millis(50), provider.try_acquire(&self.scope))
-                .await;
+            tokio::time::timeout(Duration::from_millis(50), provider.try_acquire(scope)).await;
         let Ok(Ok(AcquireOutcome::Acquired(ticket))) = acquired else {
             return Err("recording reservation unavailable");
         };

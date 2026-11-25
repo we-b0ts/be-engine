@@ -21,6 +21,43 @@ fn standalone_timeout_uses_common_default_and_cli_override_for_streams() {
     }
 }
 
+#[test]
+fn session_ingress_capacity_uses_cli_then_project_then_default() {
+    let default = OptionsCli::try_parse_from(["test", "--", "true"])
+        .unwrap()
+        .options;
+    assert_eq!(
+        default.ingress_capacity(&default.config().unwrap()).get(),
+        8
+    );
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = fixture(&temp);
+    let configured = options(&project);
+    assert_eq!(
+        configured
+            .ingress_capacity(&configured.config().unwrap())
+            .get(),
+        5
+    );
+
+    let cli = OptionsCli::try_parse_from([
+        "test",
+        "--config",
+        project.to_str().unwrap(),
+        "--max-inflight-requests",
+        "2",
+        "--",
+        "true",
+    ])
+    .unwrap()
+    .options;
+    assert_eq!(cli.ingress_capacity(&cli.config().unwrap()).get(), 2);
+    assert!(
+        OptionsCli::try_parse_from(["test", "--max-inflight-requests", "0", "--", "true"]).is_err()
+    );
+}
+
 pub(super) fn fixture(temp: &tempfile::TempDir) -> PathBuf {
     let directory = temp.path().join(".traffic-e2e");
     std::fs::create_dir_all(&directory).unwrap();
@@ -59,6 +96,7 @@ recorder:
     - methods: [POST]
       path_prefixes: [/api]
   recording:
+    max_inflight_requests: 5
     max_body_bytes: 1048576
     encrypt_request_headers: [authorization]
     redact_headers: [x-private-header]

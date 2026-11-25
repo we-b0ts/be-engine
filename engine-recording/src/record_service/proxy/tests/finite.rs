@@ -136,7 +136,7 @@ async fn stalled_finite_delivery_uses_original_deadline_and_keeps_case_tail_owne
         let relay = Relay::<RedisService>::new(
             None,
             format!("http://{address}").parse().unwrap(),
-            "all-apis".into(),
+            None,
             BOUND,
             1024,
         )

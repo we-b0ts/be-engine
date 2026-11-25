@@ -5,6 +5,7 @@ use crate::interaction::{
     model::{EndReason, InputActionKind, InputTranscript, OutputObservation},
     policy::{CompletionRule, EventCompletion},
 };
+#[cfg(feature = "gateway-integration-tests")]
 use brz_http_gateway::{
     AcquireOutcome, AdmissionFuture, AdmissionProvider, AdmissionRegistry, AdmissionTicket,
     Gateway, OriginService, RouteTable, RoutesConfig,
@@ -23,8 +24,10 @@ const CONNECTED: &str = r#"40/chat,{"sid":"chat-session"}"#;
 const JOIN: &str = r#"42/chat,0["task:join",{"task_id":123}]"#;
 const ACK: &str = r#"43/chat,1[{"ok":true}]"#;
 
+#[cfg(feature = "gateway-integration-tests")]
 struct RecordingAdmission(Arc<AtomicUsize>);
 
+#[cfg(feature = "gateway-integration-tests")]
 impl AdmissionProvider for RecordingAdmission {
     fn try_acquire<'a>(&'a self, scope: &'a str) -> AdmissionFuture<'a> {
         Box::pin(async move {
@@ -42,6 +45,7 @@ fn managed_socketio_large_ack_keeps_bidirectional_messages_and_heartbeats() {
     large_message_exchange(false);
 }
 
+#[cfg(feature = "gateway-integration-tests")]
 #[test]
 fn external_sdk_socketio_large_fragmented_ack_keeps_messages_and_heartbeats() {
     large_message_exchange(true);
@@ -66,6 +70,7 @@ async fn text<S: AsyncRead + AsyncWrite + Unpin>(socket: &mut WebSocketStream<S>
         .to_string()
 }
 
+#[cfg(feature = "gateway-integration-tests")]
 async fn attach_external_gateway(fixture: &mut ManagedSocketFixture) -> Arc<AtomicUsize> {
     let origin = fixture.url.parse().unwrap();
     let config: RoutesConfig = serde_json::from_value(serde_json::json!({
@@ -113,6 +118,7 @@ fn large_message_exchange(external_sdk: bool) {
                 }];
             })
             .await;
+        #[cfg(feature = "gateway-integration-tests")]
         let admissions = if external_sdk {
             Some(attach_external_gateway(&mut fixture).await)
         } else {
@@ -202,6 +208,7 @@ fn large_message_exchange(external_sdk: bool) {
         })
         .await
         .expect("large messages must not stall later bidirectional Engine.IO traffic");
+        #[cfg(feature = "gateway-integration-tests")]
         if let Some(admissions) = admissions {
             assert_eq!(admissions.load(Ordering::SeqCst), 1);
         }

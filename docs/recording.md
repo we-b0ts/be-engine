@@ -408,6 +408,14 @@ cargo test --lib record_service::tests::quiescing -- --ignored --test-threads=1
 cargo test --lib record_service::tests::shutdown -- --ignored --test-threads=1
 ```
 
+Verify the Recorder against the full Breeze gateway's Socket.IO transport with
+the opt-in SDK test. Ordinary engine builds use the admission SDK alone.
+
+```bash
+cargo test -p traffic-engine-recording --features gateway-integration-tests,tokio/test-util \
+  external_sdk_socketio_large_fragmented_ack
+```
+
 Run in an isolated container network namespace, with a root controller and
 `NET_ADMIN`/`NET_RAW` for fixed-identity dependency interception. The recording
 container's Source must use the same business configuration as the original
@@ -416,9 +424,8 @@ service. Example environment and command (provide the Redis URL securely):
 ```bash
 export TRAFFIC_E2E_RECORD_URL=http://recorder-host:4080
 export TRAFFIC_E2E_RECORDING_PREFIX=recording:orders
-export TRAFFIC_E2E_RECORDING_SCOPE=all-apis
 export TRAFFIC_E2E_RECORDING_REDIS_URL=redis://redis-host:6379/0
-traffic-e2e record --coordination redis --source-workdir /app --ready-path /health \
+traffic-e2e record --coordination redis --max-inflight-requests 8 --source-workdir /app --ready-path /health \
   -- python -m uvicorn app.main:app --host 127.0.0.1 --port 8080 --workers 1
 ```
 
@@ -508,7 +515,7 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--ready-path` / `TRAFFIC_E2E_SOURCE_READY_PATH` | project value or `/` | Override Source readiness path |
 | `--redis-url` / `TRAFFIC_E2E_RECORDING_REDIS_URL` | required with Redis coordination | Coordination Redis; supports password/default user and DB |
 | `--prefix` / `TRAFFIC_E2E_RECORDING_PREFIX` | `recording` | Shared coordination prefix |
-| `--scope` / `TRAFFIC_E2E_RECORDING_SCOPE` | `all-apis` | One shared request slot |
+| `--max-inflight-requests` / `TRAFFIC_E2E_RECORDING_MAX_INFLIGHT_REQUESTS` | `recorder.recording.max_inflight_requests` or `8` | Maximum concurrent ingress requests across the recording, including open streams |
 | `--url-key` / `TRAFFIC_E2E_RECORDING_URL_KEY` | `<prefix>:url` | Address lease key |
 | `--data-root` / `TRAFFIC_E2E_DATA_ROOT` | `/data/traffic-e2e` | Persistent evidence, encryption key and CA |
 | `--artifact-owner` / `TRAFFIC_E2E_ARTIFACT_OWNER` | invoking controller owner | Numeric host UID:GID for private storage and finalized runs; explicit values require root |
@@ -633,16 +640,16 @@ recording image the `Dockerfile.recording` name. Rename `Dockerfile.e2e` to
 
 The external operator sets `<prefix>:max-gateways` to the participation limit N.
 The app does not own that configuration or gateway leases. Gateway and app must
-use the same Redis writer/database, prefix, URL key and request scope.
+use the same Redis writer/database, prefix and URL key.
 
 The app publishes `<prefix>:url` using `SET NX PX 30000`:
 
 ```json
-{"url":"http://recorder-host:4080","owner":"<32 hex boot token>"}
+{"url":"http://recorder-host:4080","owner":"<32 hex boot token>","max_inflight":8}
 ```
 
-The gateway SDK accepts this lease value as well as an externally managed plain
-URL. Every 10 seconds the app renews the lease only if its complete value still
+The global recording gateway reads the request limit from this value. Every
+10 seconds the app renews the lease only if its complete value still
 matches. A live second recorder cannot overwrite it. On shutdown the app deletes
 only its own value; after a crash TTL expiry allows a replacement to register.
 After readiness, the first address refresh runs immediately and later refreshes
@@ -656,22 +663,16 @@ their independent ownership rules below.
 On normal or recoverable error shutdown, token-checked unregistration is
 best-effort. Failed unregistration and uncatchable exits rely on address TTL.
 
-For an incoming request the adapter validates the reserved scope/token headers
-and checks token ownership with Redis GET. It removes both headers before
-Recorder/Source dispatch. A local semaphore retains exclusive admission, and
-token-checked renewal keeps the Redis reservation alive through dispatch and
-case cleanup. Lost ownership closes admission and fails an active interaction.
-Ordinary HTTP busy admission returns 404 without deleting the active token;
-new streaming connections return 503. Missing/stale ordinary HTTP admission
-also returns 404 without Source dispatch.
+`<prefix>:inflight` is a sorted set shared by every gateway using that prefix.
+Each token is a member scored by its expiration in Redis server time, in Unix
+milliseconds. The gateway removes expired members and reserves a free slot in
+one operation. At capacity it uses the normal fallback.
 
-After the full Recorder response, including its case/dependency finalization,
-the adapter calls `RedisAdmissionProvider::complete` to compare the token and
-delete `<prefix>:inflight:<scope>`. Closed admission, oversized input, or an
-upstream connection failure before dispatch releases that token and returns 404.
-Errors/disconnects after dispatch return 502/504 and retain the reservation for
-TTL recovery. A downstream disconnect does not cancel the upstream operation.
-The core Recorder owns no Redis logic or gateway identity.
+The adapter verifies the `x-breeze-admission-token` reservation and strips the
+header before dispatch. Its local semaphore uses the same limit. The lease and
+local slot stay active through the response stream. Completion or disconnect
+releases that token. Expiry recovers reservations after a crash. The core
+Recorder owns no Redis logic or gateway identity.
 
 Shutdown withdraws the address, stops new adapter connections, stops Source,
 drains active requests and disconnect dependencies, finalizes Recorder, then

@@ -39,11 +39,11 @@ async fn verify_session() {
         format!("http://{}", options.recorder_listen)
             .parse()
             .unwrap(),
-        "all-apis".into(),
+        None,
         Duration::from_secs(2),
         1024,
     )
-    .with_session_events(state.clone());
+    .with_session_events(state.clone(), options.ingress_capacity(state.config()));
     let (stop, stopping) = watch::channel(false);
     let adapter = tokio::spawn(proxy::serve(listener, relay.clone(), stopping));
     let source = tokio::spawn(run_source(source));

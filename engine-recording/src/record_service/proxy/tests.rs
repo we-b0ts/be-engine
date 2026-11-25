@@ -42,7 +42,7 @@ impl Fixture {
         let relay = Relay::new(
             None,
             format!("http://{origin}").parse().unwrap(),
-            "all-apis".into(),
+            None,
             BOUND,
             1024,
         )

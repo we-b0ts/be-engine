@@ -3,6 +3,7 @@
 use super::*;
 use crate::record_service::coordination::Coordination;
 use crate::redis::{BufferedReader, RedisCommand, read_frame, redis_command};
+use std::num::NonZeroU32;
 use tokio::task::JoinSet;
 
 const ADDRESS_KEY: &[u8] = b"registration-test:url";
@@ -142,6 +143,9 @@ fn startup_publishes_gateway_policy_and_resets_counts_without_touching_heartbeat
             .unwrap();
         assert_eq!(fixture.state.lock().unwrap().count, 0);
         fixture.coordination.refresh_registration().await;
+        let address: serde_json::Value =
+            serde_json::from_slice(fixture.state.lock().unwrap().value.as_ref().unwrap()).unwrap();
+        assert_eq!(address["max_inflight"], 3);
         assert_eq!(
             fixture.state.lock().unwrap().startup_commands,
             ["policy", "counts", "url"]
@@ -227,7 +231,9 @@ fn startup_policy_or_count_failure_is_fatal_before_address_publication() {
         let options = OptionsCli::try_parse_from(["test", "--", "true"])
             .unwrap()
             .options;
-        let direct = Coordination::connect(&options).await.unwrap();
+        let direct = Coordination::connect(&options, NonZeroU32::MIN)
+            .await
+            .unwrap();
         direct.initialize_round(None).await.unwrap();
         assert!(direct.reservations.is_none());
     });
@@ -282,7 +288,9 @@ impl RegistrationFixture {
         ])
         .unwrap()
         .options;
-        let coordination = Coordination::connect(&options).await.unwrap();
+        let coordination = Coordination::connect(&options, NonZeroU32::new(3).unwrap())
+            .await
+            .unwrap();
         Self {
             coordination,
             state,
@@ -381,7 +389,7 @@ fn registration_errors_and_timeouts_preserve_in_flight_response_and_next_request
         let relay = proxy::Relay::new(
             fixture.coordination.reservations.clone(),
             format!("http://{}", source.local_addr().unwrap()).parse().unwrap(),
-            "all-apis".into(), Duration::from_secs(3), 1024,
+            Some("all-apis".into()), Duration::from_secs(3), 1024,
         );
         relay.open();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

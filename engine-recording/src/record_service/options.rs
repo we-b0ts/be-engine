@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use clap::{Args, ValueEnum};
-use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
+use std::{ffi::OsString, net::SocketAddr, num::NonZeroU32, path::PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CoordinationBackend {
@@ -56,8 +56,6 @@ pub struct RecordOptions {
     pub prefix: String,
     #[arg(long, env = "TRAFFIC_E2E_RECORDING_URL_KEY")]
     pub url_key: Option<String>,
-    #[arg(long, env = "TRAFFIC_E2E_RECORDING_SCOPE", default_value = "all-apis")]
-    pub scope: String,
     #[arg(
         long,
         env = "TRAFFIC_E2E_RECORDER_LISTEN",
@@ -103,6 +101,9 @@ pub struct RecordOptions {
     /// Override the project case limit; without project configuration it is unlimited.
     #[arg(long, env = "TRAFFIC_E2E_CASE_LIMIT")]
     pub case_limit: Option<std::num::NonZeroUsize>,
+    /// Maximum in-flight ingress requests, including open streaming responses (default: 8).
+    #[arg(long, env = "TRAFFIC_E2E_RECORDING_MAX_INFLIGHT_REQUESTS")]
+    pub max_inflight_requests: Option<NonZeroU32>,
     /// Development only: disable fixed-identity DNS/fake-IP interception.
     #[arg(long)]
     pub no_interception: bool,
@@ -159,6 +160,12 @@ impl RecordOptions {
             .transpose()
     }
 
+    pub(super) fn ingress_capacity(&self, config: &AppConfig) -> NonZeroU32 {
+        self.max_inflight_requests
+            .or(config.recording.max_inflight_requests)
+            .unwrap_or(NonZeroU32::new(8).unwrap())
+    }
+
     pub(super) fn config(&self) -> Result<AppConfig> {
         ensure!(
             !self.source_command.is_empty(),
@@ -177,11 +184,11 @@ impl RecordOptions {
         if let Some(run_id) = &self.run_id {
             parse_run_id(run_id).map_err(anyhow::Error::msg)?;
         }
-        brz_http_gateway::AdmissionTicket::new(&self.scope, "validation")?;
         ensure!(
             self.discovery_key() != format!("{}:max-gateways", self.prefix)
                 && self.discovery_key() != format!("{}:api-policy", self.prefix)
                 && self.discovery_key() != format!("{}:api-counts", self.prefix)
+                && self.discovery_key() != format!("{}:inflight", self.prefix)
                 && !self
                     .discovery_key()
                     .starts_with(&format!("{}:gateway:", self.prefix))

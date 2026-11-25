@@ -8,13 +8,7 @@ struct DirectFixture {
 
 impl DirectFixture {
     async fn new(origin: hyper::Uri, max_body: usize) -> Self {
-        let relay = proxy::Relay::new(
-            None,
-            origin,
-            "all-apis".into(),
-            Duration::from_secs(2),
-            max_body,
-        );
+        let relay = proxy::Relay::new(None, origin, None, Duration::from_secs(2), max_body);
         relay.open();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());

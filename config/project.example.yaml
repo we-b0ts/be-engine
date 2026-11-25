@@ -132,6 +132,7 @@ recorder:
       headers: {}
   recording:
     output_dir: ./recordings
+    max_inflight_requests: 8 # Session recording, including open streams.
     max_body_bytes: 67108864
     max_decoded_body_bytes: null
     traffic_jsonl: full

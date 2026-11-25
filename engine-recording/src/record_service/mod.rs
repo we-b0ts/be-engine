@@ -87,7 +87,12 @@ async fn run_prepared(
     forwards: &mut kubernetes::PortForwards,
     mut shutdown: Pin<&mut impl Future<Output = Result<()>>>,
 ) -> Result<()> {
-    let coordination = coordination::Coordination::connect(&options).await?;
+    let capacity = options.ingress_capacity(&config);
+    ensure!(
+        capacity.get() as usize <= tokio::sync::Semaphore::MAX_PERMITS,
+        "max-inflight-requests exceeds the supported semaphore capacity"
+    );
+    let coordination = coordination::Coordination::connect(&options, capacity).await?;
     let program =
         process::resolve_source_program(&options.source_command[0], &options.source_workdir)?;
     process::verify_fixed_identity_access(&options.source_workdir, &program)?;
@@ -130,12 +135,12 @@ async fn run_prepared(
     let relay = proxy::Relay::new(
         coordination.reservations.clone(),
         format!("http://{}", options.recorder_listen).parse()?,
-        options.scope.clone(),
+        None,
         Duration::from_millis(config.http_gateway.request_timeout_ms),
         config.recording.max_body_bytes,
     );
     let relay = if state.session_events() {
-        relay.with_session_events(state.clone())
+        relay.with_session_events(state.clone(), capacity)
     } else {
         relay.with_interactions(
             state.clone(),
@@ -189,7 +194,8 @@ async fn run_prepared(
         relay.open();
         info!(listen = %options.listen, run_id = %state.recorder().run_dir.file_name().unwrap().to_string_lossy(),
             manifest = %state.recorder().run_dir.join("recording-run.json").display(),
-            coordination = ?options.coordination, "recording ready; waiting for requests");
+            coordination = ?options.coordination, max_inflight_requests = capacity.get(),
+            "recording ready; waiting for requests");
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {

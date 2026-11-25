@@ -179,10 +179,9 @@ traffic-value = { path = "value" }
 aes-gcm = "0.10"
 anyhow = "1"
 base64 = "0.22"
-# Recorder leases remain compatible with gateway 0.2.14. Later SDKs pull
-# brz-json/preserve_order into the engine and change persisted JSON identities.
-brz-http-gateway = "=0.2.12"
-brz-redis = "=0.0.16"
+# Use the admission SDK without the gateway server's ordered JSON dependency.
+brz-http-gateway = { version = "=0.2.16", default-features = false }
+brz-redis = "=0.0.18"
 bytes = "1"
 chrono = "0.4"
 clap = "4"
