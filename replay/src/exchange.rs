@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 mod sessions;
 pub use sessions::SessionBindings;
+mod stream;
+pub use stream::ExchangeEntries;
 
 use crate::{
     Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle, PublishedMessageBatch,
@@ -105,7 +107,7 @@ struct CandidateKey {
 type LaneIdentity = (ScopePartition, ProtocolId, Endpoint, String);
 
 pub struct ExchangeInventory<R: RuleRuntime = ExactRules> {
-    pub exchanges: Vec<PreparedExchange<R>>,
+    pub exchanges: ExchangeEntries<R>,
     pub lifecycle: Lifecycle,
     pub sessions: SessionBindings,
     candidates: CandidateIndex<CandidateKey>,
@@ -280,15 +282,6 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         source: SourceContext,
         rules: ExchangeRules<R>,
     ) -> Result<usize> {
-        ensure!(
-            native.reference.protocol() == protocol.as_str(),
-            "native reference protocol changed"
-        );
-        ensure!(
-            source.source != ReplaySource::Case || source.case_id.is_some(),
-            "Case exchange has no owner"
-        );
-        let index = self.exchanges.len();
         let request = native
             .request()
             .map(|request| R::prepare(request, &rules.request))
@@ -299,6 +292,32 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             .is_none()
             .then(|| R::prepare(native.response.as_ref(), &rules.response))
             .transpose()?;
+        self.register_prepared(
+            protocol,
+            native,
+            source,
+            rules.delivery,
+            (request, response),
+        )
+    }
+
+    pub fn register_prepared(
+        &mut self,
+        protocol: ProtocolId,
+        native: RecordedExchange,
+        source: SourceContext,
+        delivery: R::Delivery,
+        (request, response): (Option<R::Prepared>, Option<R::Prepared>),
+    ) -> Result<usize> {
+        ensure!(
+            native.reference.protocol() == protocol.as_str(),
+            "native reference protocol changed"
+        );
+        ensure!(
+            source.source != ReplaySource::Case || source.case_id.is_some(),
+            "Case exchange has no owner"
+        );
+        let index = self.exchanges.next_index(&source)?;
         let scope = ScopePartition::new(source.source, source.case_id.as_deref());
         let lane_id = native
             .lane
@@ -364,7 +383,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             source,
             request,
             response,
-            delivery: rules.delivery,
+            delivery,
             status: ReplayExchangeStatus::Available,
             session_step: None,
             lane_id,

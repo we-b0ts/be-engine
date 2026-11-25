@@ -2,13 +2,15 @@
 
 use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
+use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     ffi::CString,
     fmt,
     fs::{File, OpenOptions},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::{FileExt, OpenOptionsExt},
+        unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
     },
     path::PathBuf,
     ptr::NonNull,
@@ -20,6 +22,7 @@ use std::{
 };
 
 use crate::format::{PayloadRef, SEGMENT_BYTES};
+use traffic_model::recording::{LedgerFileIdentity, RecordingManifest, SESSION_RECORDING_SCHEMA};
 
 // A single value may take a segment past the rollover target. Larger files
 // still support positional reads without expanding the mapping budget.
@@ -34,6 +37,7 @@ pub(crate) struct SegmentWindow {
     current: Option<Segment>,
     next: Option<(u64, JoinHandle<Result<Segment>>)>,
     mapped: Arc<AtomicUsize>,
+    identities: Option<Arc<BTreeMap<String, LedgerFileIdentity>>>,
 }
 
 impl SegmentWindow {
@@ -57,7 +61,22 @@ impl SegmentWindow {
             current: None,
             next: None,
             mapped: Arc::default(),
+            identities: None,
         }
+    }
+
+    pub(crate) fn with_seal(mut self, manifest: &RecordingManifest) -> Self {
+        if manifest.schema == SESSION_RECORDING_SCHEMA {
+            self.identities = Some(Arc::new(
+                manifest
+                    .files
+                    .iter()
+                    .filter(|identity| identity.path.starts_with("payload/"))
+                    .map(|identity| (identity.path.clone(), identity.clone()))
+                    .collect(),
+            ));
+        }
+        self
     }
 
     pub(crate) fn read(&mut self, reference: &PayloadRef) -> Result<Bytes> {
@@ -81,7 +100,8 @@ impl SegmentWindow {
             .is_some_and(|current| number < current.number)
         {
             // A late dependency cannot move the ordered delivery window back.
-            return Segment::open(&directory, number, None, false)?.read(reference);
+            return Segment::open(&directory, number, None, false, self.identities.as_deref())?
+                .read(reference);
         }
         if self
             .current
@@ -108,6 +128,7 @@ impl SegmentWindow {
                     number,
                     self.mapping.then_some(&self.mapped),
                     false,
+                    self.identities.as_deref(),
                 )?,
             };
             self.current = Some(segment);
@@ -136,9 +157,18 @@ impl SegmentWindow {
         }
         self.next = None;
         let mapped = self.mapped.clone();
+        let identities = self.identities.clone();
         if let Ok(task) = Builder::new()
             .name("payload-prefault".into())
-            .spawn(move || Segment::open(&directory, number, Some(&mapped), true))
+            .spawn(move || {
+                Segment::open(
+                    &directory,
+                    number,
+                    Some(&mapped),
+                    true,
+                    identities.as_deref(),
+                )
+            })
         {
             self.next = Some((number, task));
         }
@@ -176,6 +206,7 @@ impl Segment {
         number: u64,
         slots: Option<&Arc<AtomicUsize>>,
         prefault: bool,
+        identities: Option<&BTreeMap<String, LedgerFileIdentity>>,
     ) -> Result<Self> {
         let path = PayloadRef::path(number);
         let name = CString::new(path.strip_prefix("payload/").expect("payload segment path"))?;
@@ -198,6 +229,31 @@ impl Segment {
             "dependency payload segment is not a regular file"
         );
         let length = metadata.len();
+        if let Some(identities) = identities {
+            let identity = identities
+                .get(&path)
+                .context("recording seal omits payload segment")?;
+            ensure!(
+                length == identity.length,
+                "sealed payload length changed: {path}"
+            );
+            let mut hash = Sha256::new();
+            let mut offset = 0;
+            let mut buffer = [0; 64 * 1024];
+            while offset < length {
+                let len = (length - offset).min(buffer.len() as u64) as usize;
+                file.read_exact_at(&mut buffer[..len], offset)?;
+                hash.update(&buffer[..len]);
+                offset += len as u64;
+            }
+            let after = file.metadata()?;
+            ensure!(
+                format!("{:x}", hash.finalize()) == identity.sha256
+                    && (metadata.ctime(), metadata.ctime_nsec())
+                        == (after.ctime(), after.ctime_nsec()),
+                "sealed payload changed: {path}"
+            );
+        }
         let mut segment = Self {
             number,
             file,

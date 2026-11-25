@@ -15,7 +15,7 @@ use traffic_model::{
 use traffic_recording_store::{session, source::recording};
 
 mod progress;
-pub use progress::{SessionApiCounts, api_counts, publish_passed_progress};
+pub use progress::{SessionApiCounts, publish_passed_progress};
 
 #[derive(Debug, Serialize)]
 pub struct SessionEventPage {
@@ -50,7 +50,12 @@ pub fn events(root: &Path, query: SessionEventQuery) -> Result<SessionEventPage>
         (1..=200).contains(&limit),
         "event page limit must be between 1 and 200"
     );
-    let mut primary = session::evidence_events(root)?;
+    let first_sequence = if window_ms.is_none() {
+        from_sequence.max(selected.first().copied().unwrap_or_default())
+    } else {
+        from_sequence
+    };
+    let mut primary = session::evidence_events_from(root, first_sequence)?;
     let (root, manifest) = recording::manifest(root)?;
     let mut dependency = recording::events(&root)?;
     let mut next_primary = None;
@@ -93,7 +98,10 @@ pub fn events(root: &Path, query: SessionEventQuery) -> Result<SessionEventPage>
             "duplicate or unordered Source sequence {sequence}"
         );
         previous_sequence = sequence;
-        if sequence < from_sequence {
+        if selected.last().is_some_and(|&last| sequence > last) {
+            break;
+        }
+        if sequence < first_sequence {
             continue;
         }
         let end_offset = end.get_or_insert_with(|| {
@@ -175,18 +183,7 @@ fn primary_value(row: &RecordedEvent<SessionEvent>, payload: bool) -> Result<Val
 
 /// Resolve a dependency admission sequence to its protected semantic record.
 pub fn dependency(root: &Path, sequence: u64) -> Result<Value> {
-    let (root, manifest) = recording::manifest(root)?;
-    ensure!(manifest.capture_complete, "Source lead-in is incomplete");
-    recording::authenticate(&root)?;
-    let mut rows =
-        traffic_recording_store::source::RecordStream::open(&recording::dependency_path(&root))?;
-    while let Some((_, bytes)) = rows.next()? {
-        let row: Value = serde_json::from_slice(bytes)?;
-        if row["capture"]["sequence"].as_u64() == Some(sequence) {
-            return Ok(row);
-        }
-    }
-    None.context("no protected dependency record for that admission sequence")
+    traffic_recording_store::session_records::dependency(root, sequence)
 }
 
 /// Read a retained Target observation tied to this recording and Replay attempt.

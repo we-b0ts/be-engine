@@ -6,12 +6,17 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use traffic_engine_e2e_contract::{
+    E2eEventSessionApiProgress, E2eEventSessionCounts, E2eEventSessionPhase,
+    E2eEventSessionStatusProgress,
+};
 use uuid::Uuid;
 
 use super::{
-    E2eEventSessionResult, E2eEventSessionState, E2eEventSessionStatus, run_config, store,
+    E2eEventSessionProgress, E2eEventSessionResult, E2eEventSessionState, E2eEventSessionStatus,
+    run_config, store,
 };
 
 const LATEST_ATTEMPT: &str = "current-attempt.json";
@@ -19,6 +24,16 @@ const ATTEMPT_LOCK: &str = "attempt.lock";
 const INITIAL_RESULT: &str = "event-attempt.json";
 const FINAL_RESULT: &str = "event-result.json";
 pub(super) const PROGRESS: &str = "event-progress.json";
+
+#[derive(Serialize, Deserialize)]
+struct ProgressSnapshot<E = E2eEventSessionProgress> {
+    #[serde(flatten)]
+    events: E,
+    #[serde(default)]
+    phase: E2eEventSessionPhase,
+    #[serde(default)]
+    apis: E2eEventSessionApiProgress,
+}
 
 pub(super) struct ReplayLock(pub(super) File);
 
@@ -48,14 +63,25 @@ pub(super) fn begin(
     lock.lock()?;
     let lock = ReplayLock(lock);
     store::write_json(&directory.join(INITIAL_RESULT), initial)?;
-    store::write_json(&directory.join(PROGRESS), &initial.events)?;
+    publish_progress(initial)?;
     store::write_json(&attempts.join(LATEST_ATTEMPT), &attempt_id)?;
     Ok(lock)
 }
 
 pub(super) fn finish(directory: &Path, result: &E2eEventSessionResult) -> Result<()> {
-    store::write_json(&directory.join(PROGRESS), &result.events)?;
+    publish_progress(result)?;
     store::write_json(&directory.join(FINAL_RESULT), result)
+}
+
+pub(super) fn publish_progress(result: &E2eEventSessionResult) -> Result<()> {
+    store::write_json(
+        &result.progress,
+        &ProgressSnapshot {
+            events: &result.events,
+            phase: result.phase,
+            apis: result.apis,
+        },
+    )
 }
 
 pub fn status_e2e_event_session(
@@ -76,6 +102,7 @@ pub fn status_e2e_event_session(
     let Some(id) = selected else {
         return Ok(E2eEventSessionStatus {
             state: E2eEventSessionState::NotStarted,
+            progress: None,
             attempt: None,
         });
     };
@@ -99,7 +126,10 @@ pub fn status_e2e_event_session(
         (state, result)
     } else {
         let mut snapshot: E2eEventSessionResult = read_required(&directory.join(INITIAL_RESULT))?;
-        snapshot.events = read_required(&directory.join(PROGRESS))?;
+        let progress: ProgressSnapshot = read_required(&directory.join(PROGRESS))?;
+        snapshot.events = progress.events;
+        snapshot.phase = progress.phase;
+        snapshot.apis = progress.apis;
         let state = if running {
             E2eEventSessionState::Running
         } else {
@@ -115,6 +145,14 @@ pub fn status_e2e_event_session(
     );
     Ok(E2eEventSessionStatus {
         state,
+        progress: Some(E2eEventSessionStatusProgress {
+            phase: attempt.phase,
+            events: E2eEventSessionCounts {
+                matched: attempt.events.matched,
+                total: attempt.events.total,
+            },
+            apis: attempt.apis,
+        }),
         attempt: Some(attempt),
     })
 }

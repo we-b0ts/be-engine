@@ -11,6 +11,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+http = { workspace = true }
 tracing = { workspace = true }
 traffic-model = { workspace = true }
 traffic-protocol = { workspace = true }

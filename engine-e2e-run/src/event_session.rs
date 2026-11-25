@@ -1,5 +1,6 @@
 //! Managed regression of one sealed, globally ordered Source recording.
 
+mod api_progress;
 mod control;
 mod http;
 mod state;
@@ -8,14 +9,18 @@ mod target;
 pub use state::status_e2e_event_session;
 
 use std::{
-    fs,
+    collections::BTreeMap,
+    fmt, fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::process::Child;
+use traffic_engine_e2e_contract::{E2eEventSessionApiProgress, E2eEventSessionPhase};
+use traffic_engine_evidence::session::SessionApiCounts;
 use traffic_model::{
     session::{ENGINE_SHUTDOWN_CANCEL_REASON, SessionEvent},
     trace::RecordedEvent,
@@ -23,7 +28,7 @@ use traffic_model::{
 use traffic_recording_store::session::{self, ReplayEvent, ReplayEvents};
 use uuid::Uuid;
 
-use self::{control::SessionControl, http::Http, target::Target};
+use self::{api_progress::ApiProgress, control::SessionControl, http::Http, target::Target};
 use super::{
     E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, E2eEventSessionState,
     E2eEventSessionStatus,
@@ -35,6 +40,13 @@ use crate::replay_timer::{self, ManagedTimer};
 pub async fn run_e2e_event_session(
     options: E2eEventSessionOptions,
 ) -> Result<E2eEventSessionResult> {
+    let (result, _) = run_e2e_event_session_with_apis(options).await?;
+    Ok(result)
+}
+
+pub async fn run_e2e_event_session_with_apis(
+    options: E2eEventSessionOptions,
+) -> Result<(E2eEventSessionResult, BTreeMap<String, SessionApiCounts>)> {
     let (config, mut layout) = run_config::resolve_session_layout(
         &options.target_root,
         &options.recording_root,
@@ -70,21 +82,31 @@ pub async fn run_e2e_event_session(
         target_image_id: None,
         passed: false,
         events: E2eEventSessionProgress::default(),
+        phase: E2eEventSessionPhase::PreparingReplay,
+        apis: E2eEventSessionApiProgress::default(),
         error: None,
         progress: layout.run_root.join(state::PROGRESS),
         report: state.replay_report.clone(),
     };
     let _attempt = state::begin(&attempts, attempt_id, &result)?;
+    let mut api_counts = BTreeMap::new();
     let outcome = async {
         let recording = layout.case_source.clone();
-        let tape = tokio::task::spawn_blocking(move || {
+        let target = layout.target_root.clone();
+        let (tape, mut apis) = tokio::task::spawn_blocking(move || {
+            let apis = ApiProgress::load(&target, &recording)?;
             // SAFETY: Replay leaves the sealed segments unchanged while the
             // reader and delivery slices are live.
-            unsafe { session::read_for_replay(&recording) }
+            let tape = unsafe { session::read_for_replay(&recording) }?;
+            Ok::<_, anyhow::Error>((tape, apis))
         })
         .await
         .context("session recording reader task failed")??;
-        run(&config, &layout, state, tape, &mut result).await?;
+        result.apis = apis.status();
+        state::publish_progress(&result)?;
+        let replay = run(&config, &layout, state, tape, &mut result, &mut apis).await;
+        api_counts = apis.into_counts();
+        replay?;
         if let (Some(commit), Some(inputs)) = (&result.target_commit, &result.target_inputs) {
             ensure!(
                 &candidate_inputs(&layout.target_root, commit)? == inputs,
@@ -109,8 +131,11 @@ pub async fn run_e2e_event_session(
         );
     }
     result.passed = result.error.is_none() && result.events.complete;
+    if result.passed {
+        result.phase = E2eEventSessionPhase::Complete;
+    }
     state::finish(&layout.run_root, &result)?;
-    Ok(result)
+    Ok((result, api_counts))
 }
 
 fn candidate_inputs(root: &Path, commit: &str) -> Result<String> {
@@ -151,6 +176,7 @@ async fn run(
     mut state: ActiveRunState,
     tape: ReplayEvents,
     result: &mut E2eEventSessionResult,
+    apis: &mut ApiProgress,
 ) -> Result<()> {
     let plan = replay_timer::read_plan(&layout.target_root, config.replay_stream_timing)?;
     let timer = plan.as_deref().map(ManagedTimer::stage).transpose()?;
@@ -168,7 +194,12 @@ async fn run(
         }
     };
     let image = match async {
-        publish_result_progress(result, control.status().await?)?;
+        publish_result_progress(
+            control.status().await?,
+            E2eEventSessionPhase::Building,
+            apis.status(),
+            result,
+        )?;
         runtime::build_target_image(config, layout, timer.is_some()).await
     }
     .await
@@ -181,27 +212,50 @@ async fn run(
     };
     result.target_image_id = Some(image.id.clone());
     let mut target = Target::new(state, config, layout, image, timer.as_ref(), &ca);
-    let mut outcome = drive(config, layout, &control, &mut target, tape, result).await;
+    let live = Mutex::new(DriverProgress {
+        phase: E2eEventSessionPhase::StartingTarget,
+        apis,
+    });
+    let mut outcome = drive(config, layout, &control, &mut target, tape, result, &live).await;
+    let DriverProgress { phase, apis } = live.into_inner().expect("Replay driver progress");
     if let Ok(progress) = control.status().await {
-        outcome = outcome.and(publish_result_progress(result, progress));
+        outcome = outcome.and(publish_result_progress(
+            progress,
+            phase,
+            apis.status(),
+            result,
+        ));
+    } else {
+        result.phase = phase;
+        result.apis = apis.status();
     }
     let complete = result.events.complete
         && result.events.failure.is_none()
-        && result.events.total > 0
-        && result.events.matched == result.events.total;
+        && result.events.matched > 0
+        && result.events.total == Some(result.events.matched);
     if outcome.is_ok() && !complete {
         outcome = Err(anyhow::anyhow!("recorded event session did not complete"));
     }
+    if outcome.is_ok() && result.apis.total != Some(result.apis.verified) {
+        outcome = Err(anyhow::anyhow!(
+            "passing session does not cover every recorded API exchange"
+        ));
+    }
     if let Err(error) = &outcome {
-        if result.events.failure.is_none()
+        if !error.is::<SourceEventRead>()
+            && result.events.failure.is_none()
             && let Some(sequence) = expected_sequence(&result.events)
         {
             let _ = control.fail(sequence, &short_error(error)).await;
             if let Ok(progress) = control.status().await {
-                let _ = publish_result_progress(result, progress);
+                let _ = publish_result_progress(progress, result.phase, apis.status(), result);
             }
         }
         target.stop_after_failure().await;
+    }
+    if outcome.is_ok() {
+        result.phase = E2eEventSessionPhase::Finalizing;
+        outcome = state::publish_progress(result);
     }
     let strict = outcome.is_ok();
     let finalized = tokio::time::timeout(
@@ -263,9 +317,12 @@ async fn drive(
     target: &mut Target<'_>,
     tape: ReplayEvents,
     result: &mut E2eEventSessionResult,
+    live: &Mutex<DriverProgress<'_>>,
 ) -> Result<()> {
+    result.phase = E2eEventSessionPhase::StartingTarget;
+    state::publish_progress(result)?;
     let mut http = Http::new(config, &layout.case_source, &layout.target_root)?;
-    let execution = run_events(config, control, target, &mut http, tape);
+    let execution = run_events(config, control, target, &mut http, tape, live);
     tokio::pin!(execution);
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -281,10 +338,28 @@ async fn drive(
             _ = tick.tick() => {
                 let progress = control.status().await?;
                 let failed = progress.failure.is_some();
-                publish_result_progress(result, progress)?;
+                let (phase, apis) = {
+                    let live = live.lock().expect("Replay driver progress");
+                    (live.phase, live.apis.status())
+                };
+                publish_result_progress(progress, phase, apis, result)?;
                 ensure!(!failed, "event regression stopped at its first mismatch");
             }
         }
+    }
+}
+
+struct DriverProgress<'a> {
+    phase: E2eEventSessionPhase,
+    apis: &'a mut ApiProgress,
+}
+
+#[derive(Debug)]
+struct SourceEventRead;
+
+impl fmt::Display for SourceEventRead {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("cannot read recorded primary events")
     }
 }
 
@@ -294,6 +369,7 @@ async fn run_events(
     target: &mut Target<'_>,
     http: &mut Http<'_>,
     tape: ReplayEvents,
+    live: &Mutex<DriverProgress<'_>>,
 ) -> Result<()> {
     // Read storage off the async executor. Delivery owns only the current
     // event and this small queue of subsequent events.
@@ -308,9 +384,9 @@ async fn run_events(
     while let Some(event) = pending.recv().await {
         let RecordedEvent {
             sequence, event, ..
-        } = event?;
+        } = event.context(SourceEventRead)?;
         control.wait(sequence).await?;
-        let handling = apply(config, control, sequence, target, http, event).await;
+        let handling = apply(config, control, sequence, target, http, event, live).await;
         if let Err(error) = handling {
             if let Err(publication) = control.fail(sequence, &short_error(&error)).await {
                 tracing::warn!(%publication, sequence, "failed to publish first Replay event failure");
@@ -319,9 +395,7 @@ async fn run_events(
                 .with_context(|| format!("event Replay failed at sequence {sequence}"));
         }
     }
-    reader
-        .await
-        .context("session recording reader task failed")?;
+    reader.await.context(SourceEventRead)?;
     ensure!(
         http.is_empty(),
         "event Replay ended with unclosed primary HTTP exchanges"
@@ -374,6 +448,7 @@ async fn apply(
     target: &mut Target<'_>,
     http: &mut Http<'_>,
     event: ReplayEvent,
+    live: &Mutex<DriverProgress<'_>>,
 ) -> Result<()> {
     let event = match event {
         ReplayEvent::Event(event) => event,
@@ -386,7 +461,7 @@ async fn apply(
             return control.commit(sequence).await;
         }
     };
-    match event {
+    let completed = match event {
         SessionEvent::SourceStart => {
             control.commit(sequence).await?;
             return target.start().await;
@@ -398,28 +473,47 @@ async fn apply(
             );
             control.commit(sequence).await?;
             target.ready();
+            live.lock().expect("Replay driver progress").phase = E2eEventSessionPhase::Replaying;
             return Ok(());
         }
         SessionEvent::Stop => {
             control.commit(sequence).await?;
             return target.stop().await;
         }
-        SessionEvent::SourceExit { status } => target.exited(status).await?,
+        SessionEvent::SourceExit { status } => {
+            target.exited(status).await?;
+            None
+        }
         SessionEvent::PrimaryRequest { exchange, request } => {
+            let api = live
+                .lock()
+                .expect("Replay driver progress")
+                .apis
+                .identify(&request)?;
             let prepared = http.prepare(&request)?;
             control.commit(sequence).await?;
-            return http.start(exchange, request, prepared);
+            http.start(exchange, request, prepared)?;
+            live.lock()
+                .expect("Replay driver progress")
+                .apis
+                .start(exchange, api);
+            return Ok(());
         }
         SessionEvent::PrimaryResponseHeaders { exchange, response } => {
-            http.headers(exchange, response).await?
+            http.headers(exchange, response).await?;
+            None
         }
         SessionEvent::PrimaryResponsePart { .. } => {
             bail!("encoded primary response part entered the Replay driver")
         }
         SessionEvent::PrimaryResponseTrailers { exchange, trailers } => {
-            http.trailers(exchange, trailers).await?
+            http.trailers(exchange, trailers).await?;
+            None
         }
-        SessionEvent::PrimaryResponseEnd { exchange } => http.end(exchange).await?,
+        SessionEvent::PrimaryResponseEnd { exchange } => {
+            http.end(exchange).await?;
+            Some(exchange)
+        }
         SessionEvent::PrimaryCancel { exchange, reason } => {
             if matches!(
                 reason.as_str(),
@@ -427,31 +521,56 @@ async fn apply(
             ) {
                 http.admits_disconnect(exchange)?;
                 control.commit(sequence).await?;
-                return http.cancel(exchange, &reason).await;
+                http.cancel(exchange, &reason).await?;
+                return live
+                    .lock()
+                    .expect("Replay driver progress")
+                    .apis
+                    .finish(exchange);
             }
             http.cancel(exchange, &reason).await?;
+            Some(exchange)
         }
+    };
+    control.commit(sequence).await?;
+    if let Some(exchange) = completed {
+        live.lock()
+            .expect("Replay driver progress")
+            .apis
+            .finish(exchange)?;
     }
-    control.commit(sequence).await
+    Ok(())
 }
 
 fn publish_result_progress(
-    result: &mut E2eEventSessionResult,
     progress: E2eEventSessionProgress,
+    phase: E2eEventSessionPhase,
+    apis: E2eEventSessionApiProgress,
+    result: &mut E2eEventSessionResult,
 ) -> Result<()> {
-    if result.events != progress {
+    if result.events != progress || result.phase != phase || result.apis != apis {
         tracing::info!(
             matched = progress.matched,
-            total = progress.total,
+            total = ?progress.total,
             last_sequence = progress.last_sequence,
+            ?phase,
+            verified_apis = apis.verified,
+            total_apis = ?apis.total,
             "event regression progress"
         );
         result.events = progress;
-        store::write_json(&result.progress, &result.events)?;
+        result.phase = phase;
+        result.apis = apis;
+        state::publish_progress(result)?;
     }
     Ok(())
 }
 
 fn short_error(error: &anyhow::Error) -> String {
-    error.to_string().chars().take(600).collect()
+    let message = if error.is::<SourceEventRead>() {
+        format!("{error:#}")
+    } else {
+        error.to_string()
+    };
+    message.chars().take(600).collect()
 }

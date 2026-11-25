@@ -1,5 +1,7 @@
 //! Bounded asynchronous admission and real delivery receipts over a prepared cursor.
-use crate::{Admission, DeliveryTicket, EventKind, SequencePlan, SequenceScheduler, SourceEvent};
+use crate::{
+    Admission, DeliveryTicket, EventKind, SequencePlan, SequenceScheduler, SourceEvent, StreamEvent,
+};
 use anyhow::{Context, Result, ensure};
 use std::sync::{Arc, Mutex};
 use tokio::{
@@ -22,15 +24,15 @@ pub struct SequenceRuntime {
     changed: watch::Sender<u64>,
     requests_changed: watch::Sender<u64>,
     messages_changed: watch::Sender<()>,
-    plan: Arc<SequencePlan>,
     fast_gap_cap: Option<Duration>,
     session_timing: bool,
+    streaming: bool,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct SequenceProgress {
     pub matched: usize,
-    pub total: usize,
+    pub total: Option<usize>,
     pub last_sequence: Option<u64>,
     pub expected: Option<SourceEvent>,
     pub complete: bool,
@@ -62,7 +64,9 @@ impl State {
             messages: failed
                 || progressed_or_gate_released
                     && expected.is_some_and(|event| event.kind == EventKind::Message),
-            frontier: if progressed_or_gate_released || failed {
+            frontier: if failed
+                || progressed_or_gate_released && (expected.is_some() || self.scheduler.complete())
+            {
                 self.frontier_waiters.take_ready(if failed {
                     u64::MAX
                 } else {
@@ -132,8 +136,37 @@ impl SequenceRuntime {
         event_gates: impl IntoIterator<Item = u64>,
         session_timing: bool,
     ) -> Arc<Self> {
-        let mut scheduler = SequenceScheduler::new(plan.clone());
-        scheduler.event_gates.extend(event_gates);
+        Self::new_runtime(
+            SequenceScheduler::new(plan),
+            fast_gap_cap,
+            event_gates,
+            session_timing,
+            false,
+        )
+    }
+
+    pub fn streaming_session(
+        fast_gap_cap: Option<Duration>,
+        event_gates: impl IntoIterator<Item = u64>,
+    ) -> Arc<Self> {
+        let empty = SequencePlan::compile([]).expect("empty Source plan");
+        Self::new_runtime(
+            SequenceScheduler::streaming(empty),
+            fast_gap_cap,
+            event_gates,
+            true,
+            true,
+        )
+    }
+
+    fn new_runtime(
+        mut scheduler: SequenceScheduler,
+        fast_gap_cap: Option<Duration>,
+        gates: impl IntoIterator<Item = u64>,
+        session_timing: bool,
+        streaming: bool,
+    ) -> Arc<Self> {
+        scheduler.event_gates.extend(gates);
         Arc::new(Self {
             state: Mutex::new(State {
                 scheduler,
@@ -146,10 +179,38 @@ impl SequenceRuntime {
             changed: watch::channel(0).0,
             requests_changed: watch::channel(0).0,
             messages_changed: watch::channel(()).0,
-            plan,
             fast_gap_cap,
             session_timing,
+            streaming,
         })
+    }
+
+    pub fn is_streaming(&self) -> bool {
+        self.streaming
+    }
+
+    pub fn buffered(&self) -> usize {
+        self.state
+            .lock()
+            .expect("sequence runtime poisoned")
+            .scheduler
+            .buffered()
+    }
+
+    pub fn push_stream(&self, batch: Vec<StreamEvent>, finished: bool) -> Result<()> {
+        ensure!(self.streaming, "Session sequence has no streaming schedule");
+        let mut state = self.state.lock().expect("sequence runtime poisoned");
+        let previous = state.scheduler.previous();
+        let was_empty = state.scheduler.expected().is_none();
+        let result = state.scheduler.push_stream(batch, finished);
+        if previous != state.scheduler.previous() {
+            state.record_progress();
+        }
+        let mut notifications = state.notifications(true);
+        notifications.requests |= was_empty;
+        drop(state);
+        self.notify(notifications);
+        result
     }
 
     fn tracks_progress(&self) -> bool {
@@ -172,7 +233,7 @@ impl SequenceRuntime {
         let state = self.state.lock().expect("sequence runtime poisoned");
         SequenceProgress {
             matched: state.scheduler.cursor,
-            total: self.plan.event_count(),
+            total: state.scheduler.total(),
             last_sequence: state.scheduler.previous().map(|event| event.sequence),
             expected: state.scheduler.expected(),
             complete: state.scheduler.complete(),
@@ -181,9 +242,16 @@ impl SequenceRuntime {
     }
 
     pub fn driver_event(&self, sequence: u64) -> Option<SourceEvent> {
-        self.plan
-            .event(sequence)
-            .filter(|event| event.kind.is_session_driver_event())
+        let state = self.state.lock().expect("sequence runtime poisoned");
+        let scheduler = &state.scheduler;
+        let found = if self.streaming {
+            (scheduler.cursor..scheduler.cursor + scheduler.buffered())
+                .filter_map(|index| scheduler.event_at(index))
+                .find_map(|entry| (entry.source.sequence == sequence).then_some(entry.source))
+        } else {
+            scheduler.plan.event(sequence)
+        };
+        found.filter(|event| event.kind.is_session_driver_event())
     }
 
     pub fn driver_due(&self, sequence: u64) -> Option<Instant> {
@@ -263,7 +331,12 @@ impl SequenceRuntime {
     }
 
     pub fn contains(&self, dependency: u64) -> bool {
-        self.plan.contains(dependency)
+        self.state
+            .lock()
+            .expect("sequence runtime poisoned")
+            .scheduler
+            .slot_status(dependency)
+            .is_some()
     }
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
@@ -284,10 +357,10 @@ impl SequenceRuntime {
     pub fn wait_for_frontier(&self, sequence: u64) -> Option<FrontierWait<'_>> {
         let mut state = self.state.lock().expect("sequence runtime poisoned");
         if !state.scheduler.failed()
-            && state
-                .scheduler
-                .expected()
-                .is_some_and(|event| event.sequence < sequence)
+            && state.scheduler.expected().map_or_else(
+                || !state.scheduler.complete(),
+                |event| event.sequence < sequence,
+            )
         {
             Some(state.frontier_waiters.register(self, sequence))
         } else {
@@ -535,7 +608,7 @@ impl SequenceClaim {
                     if due.is_none() {
                         let previous = state.scheduler.previous();
                         if let Some(ticket) = state.scheduler.reserve_delivery(self.0.dependency)? {
-                            let source = state.scheduler.receipt_source(ticket);
+                            let source = ticket.receipt;
                             *delivery = Delivery::Reserved { ticket, source };
                             let progressed = state.scheduler.previous() != previous;
                             if progressed && self.0.runtime.tracks_progress() {

@@ -190,6 +190,10 @@ pub enum Finish<T> {
 }
 
 impl Lifecycle {
+    pub(crate) fn discard(&mut self, index: usize) {
+        self.slots.remove(&index);
+    }
+
     pub fn notify_waiters(&self) {
         self.changed.notify_waiters();
         self.control_changed.notify_waiters();

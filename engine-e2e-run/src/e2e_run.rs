@@ -21,7 +21,9 @@ pub use crate::dirty_evidence::{
     E2eDependencyRepresentative, E2eDependencyTargetMatch, E2eDirtyCluster, E2eDirtyCounts,
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint,
 };
-pub use crate::event_session::{run_e2e_event_session, status_e2e_event_session};
+pub use crate::event_session::{
+    run_e2e_event_session, run_e2e_event_session_with_apis, status_e2e_event_session,
+};
 pub use crate::evidence::{
     E2eCaseResponseDifference, E2eCaseResponseDifferences, E2eDependencyCorrelation,
     E2eSourceValueCount, E2eSourceVariation, E2eTargetLog, E2eTargetRuntimeDiagnostics,
@@ -56,8 +58,10 @@ pub use crate::startup_inputs::{
 pub use crate::workflow_evidence::completed_workflow_evidence;
 pub use traffic_engine_e2e_contract::{
     BatchRuleEvidence, E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts,
-    E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, E2eEventSessionState,
-    E2eEventSessionStatus, E2eFailureCluster, E2eReplayGate, E2eRepresentativeDifference,
-    E2eResponseDifferenceDiagnosis, E2eResponseGate, E2eResponseUnavailableReason, E2eRunContext,
-    E2eRunResult, E2eValueObservation, E2eValuePresence, E2eVerificationGates,
+    E2eEventSessionApiProgress, E2eEventSessionCounts, E2eEventSessionOptions,
+    E2eEventSessionPhase, E2eEventSessionProgress, E2eEventSessionResult, E2eEventSessionState,
+    E2eEventSessionStatus, E2eEventSessionStatusProgress, E2eFailureCluster, E2eReplayGate,
+    E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
+    E2eResponseUnavailableReason, E2eRunContext, E2eRunResult, E2eValueObservation,
+    E2eValuePresence, E2eVerificationGates,
 };

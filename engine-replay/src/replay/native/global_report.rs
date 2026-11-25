@@ -67,7 +67,7 @@ impl Inventory {
         protocol: &str,
         visitor: &mut dyn FnMut(Value) -> Result<()>,
     ) -> Result<()> {
-        for exchange in &self.core.exchanges {
+        for exchange in self.core.exchanges.iter() {
             if exchange.protocol.as_str() == protocol
                 && exchange.source.source.is_run_owned()
                 && !self
@@ -110,9 +110,9 @@ impl GlobalReportProjection for Inventory {
         visitor: &mut dyn FnMut(Row) -> Result<()>,
     ) -> Result<()> {
         let extras = matches!(rows, ReportRows::Extras);
-        for (index, exchange) in self
-            .report_usage(protocol)?
-            .rows(0, &self.core.exchanges, extras)
+        for (index, exchange) in
+            self.report_usage(protocol)?
+                .rows(0, self.core.exchanges.frozen(), extras)
         {
             if exchange.protocol.as_str() == protocol && exchange.source.source.is_run_owned() {
                 visitor(Row {

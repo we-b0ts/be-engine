@@ -1,8 +1,7 @@
 //! Primary interactions stored on the sealed Source timeline.
 
 use std::{
-    fs::File,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::Path,
     str::{self, FromStr},
 };
@@ -205,9 +204,10 @@ impl ReplayEvent {
 }
 
 pub struct ReplayEvents {
-    input: BufReader<File>,
+    input: BufReader<Box<dyn Read + Send>>,
     segments: SegmentWindow,
     recording_id: Uuid,
+    first_sequence: u64,
     line: Vec<u8>,
     row: usize,
     previous: (u64, u64),
@@ -244,11 +244,12 @@ fn open(
             .any(|file| file.path == FILE && file.length > 0),
         "sealed recording has no session events"
     );
-    recording::authenticate(&root)?;
+    let input = crate::session_integrity::events(&root, &manifest)?;
     Ok(ReplayEvents {
-        input: BufReader::new(File::open(root.join(FILE))?),
-        segments: open_segments(root),
+        input: BufReader::new(input),
+        segments: open_segments(root).with_seal(&manifest),
         recording_id: manifest.run_epoch,
+        first_sequence: 0,
         line: Vec::new(),
         row: 0,
         previous: (0, 0),
@@ -261,7 +262,16 @@ fn open(
 pub fn evidence_events(
     root: &Path,
 ) -> Result<impl Iterator<Item = Result<RecordedEvent<SessionEvent>>> + use<>> {
-    Ok(open(root, SegmentWindow::new_copying)?.map(|event| {
+    evidence_events_from(root, 0)
+}
+
+pub fn evidence_events_from(
+    root: &Path,
+    first_sequence: u64,
+) -> Result<impl Iterator<Item = Result<RecordedEvent<SessionEvent>>> + use<>> {
+    let mut events = open(root, SegmentWindow::new_copying)?;
+    events.first_sequence = first_sequence;
+    Ok(events.map(|event| {
         let RecordedEvent {
             sequence,
             offset_micros,
@@ -320,6 +330,9 @@ impl ReplayEvents {
                 "Source session does not start with a process launch"
             );
             self.source_started = true;
+            if sequence < self.first_sequence {
+                continue;
+            }
             let event = decode(
                 kind,
                 sequence,

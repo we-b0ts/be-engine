@@ -1,7 +1,6 @@
 //! Sequential access to the sealed Session timeline without opening payloads.
 
 use std::{
-    fs::File,
     io::{BufRead, BufReader},
     path::Path,
 };
@@ -29,8 +28,8 @@ pub fn read(root: &Path) -> Result<impl Iterator<Item = Result<SessionTimelineEv
             .any(|file| file.path == session::FILE && file.length > 0),
         "sealed recording has no session event stream"
     );
-    recording::authenticate(&root)?;
-    let mut input = BufReader::with_capacity(64 * 1024, File::open(root.join(session::FILE))?);
+    let input = crate::session_integrity::events(&root, &manifest)?;
+    let mut input = BufReader::with_capacity(64 * 1024, input);
     let mut row = Vec::new();
     let mut previous = (0, 0);
     let mut saw_primary = false;

@@ -14,13 +14,44 @@ pub struct E2eEventSessionOptions {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct E2eEventSessionProgress {
     pub matched: usize,
-    pub total: usize,
+    pub total: Option<usize>,
     pub last_sequence: Option<u64>,
     pub complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eEventSessionPhase {
+    #[default]
+    PreparingReplay,
+    Building,
+    StartingTarget,
+    Replaying,
+    Finalizing,
+    Complete,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct E2eEventSessionApiProgress {
+    pub verified: usize,
+    pub total: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct E2eEventSessionCounts {
+    pub matched: usize,
+    pub total: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct E2eEventSessionStatusProgress {
+    pub phase: E2eEventSessionPhase,
+    pub events: E2eEventSessionCounts,
+    pub apis: E2eEventSessionApiProgress,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +67,10 @@ pub struct E2eEventSessionResult {
     pub target_image_id: Option<String>,
     pub passed: bool,
     pub events: E2eEventSessionProgress,
+    #[serde(default)]
+    pub phase: E2eEventSessionPhase,
+    #[serde(default)]
+    pub apis: E2eEventSessionApiProgress,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub progress: PathBuf,
@@ -55,5 +90,6 @@ pub enum E2eEventSessionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eEventSessionStatus {
     pub state: E2eEventSessionState,
+    pub progress: Option<E2eEventSessionStatusProgress>,
     pub attempt: Option<E2eEventSessionResult>,
 }

@@ -157,7 +157,7 @@ Source access, portable lookup indexes and canonical frozen-attribution
 identities. The Recorder supplies capture ownership and the application supplies
 registered evidence projections. The writer and its readers share the semantic
 recording types from `traffic-model`. `traffic-replay`
-owns immutable event plans, ordered candidate postings, finite claims, bounded
+owns immutable Case plans, rolling Session windows, ordered candidate postings, finite claims, bounded
 pending admissions, shared request waiting, scope/lane candidate selection and
 actual delivery receipts. Its value-rule preparation binds protocol-projected
 locations to shared field contracts and codecs.

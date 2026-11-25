@@ -161,6 +161,18 @@ impl Plan {
         }
         Ok(())
     }
+
+    pub(super) fn stream_session_anchors(&self, scope: &str) -> Result<BTreeMap<u64, EventKind>> {
+        ensure!(
+            self.cases.keys().all(|case| case == scope),
+            "session Replay timer plan must use the {scope:?} scope"
+        );
+        Ok(self
+            .checkpoints(scope)
+            .iter()
+            .map(|step| (step.anchor.sequence(), step.anchor.kind()))
+            .collect())
+    }
 }
 
 pub(super) fn valid_name(name: &str) -> bool {

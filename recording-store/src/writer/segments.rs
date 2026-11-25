@@ -54,6 +54,7 @@ impl PayloadSegments {
             path: PayloadRef::path(self.sealed.len() as u64),
             length: self.length,
             sha256: format!("{:x}", self.hash.clone().finalize()),
+            chunk_root: None,
         }
     }
 }

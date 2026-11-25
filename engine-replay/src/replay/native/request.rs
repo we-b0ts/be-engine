@@ -183,16 +183,19 @@ impl Inventory {
         let (response, encoder) = if let (Some(source), Some(encoder)) = (source, loaded) {
             (&source.message, encoder)
         } else if let Some(encoder) = loaded {
-            prepared = self
-                .prepared_messages(
-                    &exchange.native,
-                    exchange.source.case_id.as_deref(),
-                    exchange.source.capture.as_ref(),
-                    self.contracts.as_ref(),
-                    Some(encoder),
-                )?
-                .1
-                .context("stored response was not prepared")?;
+            let (clocks, delivered) = stored::recorded_clocks(
+                self.contracts.as_ref(),
+                exchange.source.case_id.as_deref(),
+                exchange.source.capture.as_ref(),
+                exchange.native.response_delay,
+            );
+            prepared = self.prepare_response_message(
+                &exchange.native,
+                clocks,
+                delivered,
+                encoder,
+                self.contracts.as_ref(),
+            )?;
             (&prepared, encoder)
         } else {
             (

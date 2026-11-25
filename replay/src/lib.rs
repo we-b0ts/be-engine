@@ -34,6 +34,9 @@ pub use runtime::{
     FrontierWait, MessageBatch, PendingRequest, PublishedMessageBatch, SequenceClaim,
     SequenceProgress, SequenceRuntime,
 };
+mod stream;
+pub use stream::StreamEvent;
+use stream::StreamWindow;
 mod ingress;
 pub use ingress::AdmissionQueue;
 
@@ -145,8 +148,8 @@ pub struct SourceEvent {
 #[derive(Debug, Clone, Copy)]
 struct PreparedEvent {
     source: SourceEvent,
-    slot: usize,
     receipt_cursor: usize,
+    receipt_start: Option<u64>,
 }
 
 /// Compiled once for a frozen scope. Live execution only indexes the cursor
@@ -177,8 +180,8 @@ impl SequencePlan {
                 );
                 prepared.push(PreparedEvent {
                     source,
-                    slot: usize::MAX,
                     receipt_cursor: prepared.len(),
+                    receipt_start: None,
                 });
                 continue;
             }
@@ -186,7 +189,8 @@ impl SequencePlan {
                 source.dependency_sequence != 0,
                 "Source dependency sequence is zero"
             );
-            let slot = if source.kind.is_admission() {
+            let mut receipt_start = None;
+            if source.kind.is_admission() {
                 let slot = slots.len();
                 ensure!(
                     slots.insert(source.dependency_sequence, slot).is_none(),
@@ -194,7 +198,6 @@ impl SequencePlan {
                 );
                 complete.push(false);
                 open.push(VecDeque::new());
-                slot
             } else {
                 let slot = *slots
                     .get(&source.dependency_sequence)
@@ -211,14 +214,14 @@ impl SequencePlan {
                         "Source output receipt differs from its start"
                     );
                     prepared[start].receipt_cursor = prepared.len();
+                    receipt_start = Some(prepared[start].source.sequence);
                 }
                 complete[slot] = source.kind.is_terminal();
-                slot
-            };
+            }
             prepared.push(PreparedEvent {
                 source,
-                slot,
                 receipt_cursor: prepared.len(),
+                receipt_start,
             });
         }
         ensure!(
@@ -279,21 +282,22 @@ pub enum Admission {
     Waiting(SourceEvent),
 }
 
-/// A receipt is bound to the exact reserved cursor and delivery generation.
+/// A receipt is bound to an ordered output start and delivery generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeliveryTicket {
-    cursor: usize,
+    id: u64,
+    receipt: SourceEvent,
     generation: u64,
-    slot: usize,
 }
 
 #[derive(Debug)]
 pub struct SequenceScheduler {
     plan: Arc<SequencePlan>,
+    stream: Option<StreamWindow>,
     cursor: usize,
     slots: Vec<SlotState>,
     generation: u64,
-    pending_delivery: HashMap<usize, (DeliveryTicket, bool)>,
+    pending_delivery: HashMap<u64, (DeliveryTicket, bool)>,
     event_gates: std::collections::BTreeSet<u64>,
     diagnosis: Option<(usize, u64)>,
     failed: bool,
@@ -304,7 +308,7 @@ impl SequenceScheduler {
         let mut count = 0;
         let mut cursor = self.cursor;
         while count < limit {
-            let Some(event) = self.plan.events.get(cursor) else {
+            let Some(event) = self.event_at(cursor) else {
                 break;
             };
             if event.source.dependency_sequence != dependency {
@@ -316,7 +320,10 @@ impl SequenceScheduler {
                     cursor += 1;
                 }
                 EventKind::ResponsePartStarted
-                    if count > 0 && event.receipt_cursor == cursor + 1 =>
+                    if count > 0
+                        && self.event_at(cursor + 1).is_some_and(|next| {
+                            next.receipt_start == Some(event.source.sequence)
+                        }) =>
                 {
                     cursor += 1
                 }
@@ -325,11 +332,8 @@ impl SequenceScheduler {
         }
         count
     }
-    fn receipt_source(&self, ticket: DeliveryTicket) -> SourceEvent {
-        self.plan.events[ticket.cursor].source
-    }
     fn receipt_published(&self, ticket: DeliveryTicket) -> bool {
-        self.cursor > ticket.cursor
+        !self.pending_delivery.contains_key(&ticket.id)
     }
 
     pub fn new(plan: Arc<SequencePlan>) -> Self {
@@ -337,6 +341,7 @@ impl SequenceScheduler {
         Self {
             slots: vec![SlotState::Available; count],
             plan,
+            stream: None,
             cursor: 0,
             generation: 0,
             pending_delivery: HashMap::new(),
@@ -347,7 +352,7 @@ impl SequenceScheduler {
     }
 
     pub fn expected(&self) -> Option<SourceEvent> {
-        self.plan.events.get(self.cursor).map(|event| event.source)
+        self.event_at(self.cursor).map(|event| event.source)
     }
 
     fn commit_driver(&mut self, sequence: u64) -> Result<()> {
@@ -362,7 +367,7 @@ impl SequenceScheduler {
             !self.event_is_gated(sequence),
             "driver event {sequence} is waiting for a Replay prerequisite"
         );
-        self.cursor += 1;
+        self.advance();
         self.drain_receipts();
         Ok(())
     }
@@ -372,6 +377,9 @@ impl SequenceScheduler {
     }
 
     fn previous(&self) -> Option<SourceEvent> {
+        if let Some(stream) = &self.stream {
+            return stream.previous();
+        }
         self.cursor
             .checked_sub(1)
             .map(|index| self.plan.events[index].source)
@@ -381,14 +389,14 @@ impl SequenceScheduler {
     /// A later request stays outside the finite claim until its recorded turn.
     pub fn admit(&mut self, dependency_sequence: u64) -> Result<Admission> {
         ensure!(!self.failed, "Replay sequence has failed");
-        let slot = self.plan.slots.get(&dependency_sequence).ok_or_else(|| {
+        let status = self.slot_status(dependency_sequence).ok_or_else(|| {
             anyhow::anyhow!("request has no dependency in the frozen Source scope")
         })?;
         ensure!(
-            self.slots[*slot] == SlotState::Available,
+            status == SlotState::Available,
             "dependency is already admitted"
         );
-        let Some(next) = self.plan.events.get(self.cursor) else {
+        let Some(next) = self.event_at(self.cursor) else {
             bail!("request arrived after the recorded event sequence completed");
         };
         if !next.source.kind.is_admission()
@@ -397,12 +405,8 @@ impl SequenceScheduler {
         {
             return Ok(Admission::Waiting(next.source));
         }
-        ensure!(
-            self.slots[next.slot] == SlotState::Available,
-            "dependency is already admitted"
-        );
-        self.slots[next.slot] = SlotState::Admitted;
-        self.cursor += 1;
+        self.set_slot(dependency_sequence, SlotState::Admitted);
+        self.advance();
         self.drain_receipts();
         Ok(Admission::Accepted)
     }
@@ -411,7 +415,7 @@ impl SequenceScheduler {
     /// Its separately ordered completion still requires the actual wire receipt.
     pub fn reserve_delivery(&mut self, dependency_sequence: u64) -> Result<Option<DeliveryTicket>> {
         ensure!(!self.failed, "Replay sequence has failed");
-        let Some(next) = self.plan.events.get(self.cursor).copied() else {
+        let Some(next) = self.event_at(self.cursor) else {
             return Ok(None);
         };
         if next.source.kind.is_admission() || next.source.dependency_sequence != dependency_sequence
@@ -419,13 +423,13 @@ impl SequenceScheduler {
             return Ok(None);
         }
         ensure!(
-            !self.pending_delivery.contains_key(&next.receipt_cursor),
+            !self.pending_delivery.contains_key(&next.delivery_id()),
             "sequence output is already reserved"
         );
         ensure!(
             matches!(
-                self.slots[next.slot],
-                SlotState::Admitted | SlotState::Delivering
+                self.slot_status(dependency_sequence),
+                Some(SlotState::Admitted | SlotState::Delivering)
             ),
             "output has no admitted request"
         );
@@ -434,14 +438,17 @@ impl SequenceScheduler {
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("delivery generation exhausted"))?;
         let ticket = DeliveryTicket {
-            cursor: next.receipt_cursor,
+            id: next.delivery_id(),
+            receipt: next.receipt.unwrap_or(SourceEvent {
+                kind: next.source.kind.delivered(),
+                ..next.source
+            }),
             generation: self.generation,
-            slot: next.slot,
         };
-        self.pending_delivery.insert(ticket.cursor, (ticket, false));
-        self.slots[next.slot] = SlotState::Delivering;
+        self.pending_delivery.insert(ticket.id, (ticket, false));
+        self.set_slot(dependency_sequence, SlotState::Delivering);
         if next.source.kind.is_started() {
-            self.cursor += 1;
+            self.advance();
             self.drain_receipts();
         }
         Ok(Some(ticket))
@@ -450,34 +457,40 @@ impl SequenceScheduler {
     pub fn finish_delivery(&mut self, ticket: DeliveryTicket, succeeded: bool) -> Result<()> {
         ensure!(!self.failed, "Replay sequence has failed");
         ensure!(
-            self.pending_delivery.get(&ticket.cursor).copied() == Some((ticket, false)),
+            self.pending_delivery.get(&ticket.id).copied() == Some((ticket, false)),
             "delivery receipt is stale or already committed"
         );
         if !succeeded {
-            self.slots[ticket.slot] = SlotState::Failed;
+            self.set_slot(ticket.receipt.dependency_sequence, SlotState::Failed);
             self.failed = true;
             bail!("recorded event delivery failed");
         }
-        self.pending_delivery.insert(ticket.cursor, (ticket, true));
+        self.pending_delivery.insert(ticket.id, (ticket, true));
         self.drain_receipts();
         Ok(())
     }
 
     fn drain_receipts(&mut self) {
-        while let Some(next) = self.plan.events.get(self.cursor) {
-            let Some((ticket, true)) = self.pending_delivery.get(&self.cursor).copied() else {
+        while let Some(next) = self.event_at(self.cursor) {
+            let Some((ticket, true)) = self.pending_delivery.get(&next.delivery_id()).copied()
+            else {
                 break;
             };
-            if ticket.cursor != self.cursor {
-                break;
-            }
-            self.pending_delivery.remove(&self.cursor);
-            self.slots[next.slot] = if next.source.kind.is_terminal() {
-                SlotState::Consumed
-            } else {
-                SlotState::Admitted
-            };
-            self.cursor += 1;
+            debug_assert_eq!(ticket.receipt.kind, next.source.kind);
+            debug_assert_eq!(
+                ticket.receipt.dependency_sequence,
+                next.source.dependency_sequence
+            );
+            self.pending_delivery.remove(&ticket.id);
+            self.set_slot(
+                next.source.dependency_sequence,
+                if next.source.kind.is_terminal() {
+                    SlotState::Consumed
+                } else {
+                    SlotState::Admitted
+                },
+            );
+            self.advance();
         }
     }
 
@@ -494,14 +507,11 @@ impl SequenceScheduler {
     }
 
     pub fn consumed(&self, dependency_sequence: u64) -> bool {
-        self.plan
-            .slots
-            .get(&dependency_sequence)
-            .is_some_and(|slot| self.slots[*slot] == SlotState::Consumed)
+        self.slot_status(dependency_sequence) == Some(SlotState::Consumed)
     }
 
     pub fn complete(&self) -> bool {
-        !self.failed && self.cursor == self.plan.events.len()
+        !self.failed && self.total() == Some(self.cursor)
     }
 
     pub fn abort(&mut self) {

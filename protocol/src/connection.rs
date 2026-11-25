@@ -284,7 +284,8 @@ pub trait ResponseDelivery: Send {
 }
 
 /// Source slot roles supplied by a protocol after inspecting a complete scope.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReplaySessionStep {
     Optional,
     Unverified,
@@ -296,12 +297,20 @@ pub enum ReplaySessionStep {
 }
 
 /// A protocol provider's proof for a complete, non-business Source operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DriverPrelude {
     MysqlSqlalchemyPymysql,
     MysqlIdleMetadataRollback,
     MysqlPostTransactionIdleRollback,
+}
+
+/// A recorded protocol disposition indexed by its original admission sequence.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SessionDecision {
+    pub sequence: u64,
+    pub step: Option<ReplaySessionStep>,
+    pub driver_prelude: Option<DriverPrelude>,
 }
 
 #[derive(Default)]
@@ -349,6 +358,17 @@ pub trait CaptureExchange: Send {
         &self,
         output: traffic_model::trace::OutputKind,
     ) -> Result<Box<dyn CaptureOutput>>;
+    fn supports_staged_output(&self) -> bool {
+        false
+    }
+    /// Publish fully observed content before acquiring its physical output receipt.
+    fn stage_output(
+        self: Box<Self>,
+        _event: CaptureSnapshot,
+        _output: traffic_model::trace::OutputKind,
+    ) -> NativeFuture<'static, Box<dyn CaptureOutput>> {
+        Box::pin(async { anyhow::bail!("staged capture output is unavailable") })
+    }
     fn complete(self: Box<Self>, event: CaptureSnapshot) -> NativeFuture<'static, ()>;
 }
 
@@ -501,6 +521,19 @@ pub trait NativeProtocol: Send + Sync {
     }
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>>;
+
+    fn defers_recorded_response(&self) -> bool {
+        false
+    }
+
+    /// Construct a matching exchange with an authenticated deferred response.
+    fn recorded_request_with_stored_response(
+        &self,
+        _request: &Value,
+        _response: Arc<dyn MessageEncoder>,
+    ) -> Result<RecordedExchange> {
+        anyhow::bail!("stored responses are unavailable for this protocol")
+    }
 
     /// Prepare only the routing and timing of a server emission. Metadata has
     /// no request or response body. Providers may use the ordinary eager path.

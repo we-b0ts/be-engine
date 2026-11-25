@@ -69,6 +69,24 @@ async fn load_state<P: ReplayProtocolSet>(
     let lazy = !session_events && lifecycle.dependency_loading.lazy_cases;
     clear_report_artifacts(config.report_path.as_deref()).await?;
     let root_dir = config.case_dir;
+    let streaming = if session_events {
+        let root = root_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let (_, manifest) = crate::dependency_index::recording::manifest(&root)?;
+            (manifest.schema == traffic_model::recording::SESSION_RECORDING_SCHEMA)
+                .then(|| -> Result<_> {
+                    Ok((
+                        traffic_recording_store::session_summary::read(&root)?,
+                        usize::try_from(manifest.semantic_inventory.total_mandatory)?,
+                    ))
+                })
+                .transpose()
+        })
+        .await
+        .context("Session summary preparation task failed")??
+    } else {
+        None
+    };
     let source_inventory_id =
         if let Some(source) = crate::dependency_index::recording::root(&root_dir) {
             Some(
@@ -177,6 +195,23 @@ async fn load_state<P: ReplayProtocolSet>(
         targets: BTreeMap::new(),
         reader: Arc::new(std::sync::Mutex::new(reader)),
     };
+    if let Some((summary, _)) = &streaming {
+        resources.native.core.enable_streaming()?;
+        for target in &summary.targets {
+            // MySQL speaks first on a new connection. The other installed
+            // protocols and TLS are identified by the Target's first bytes.
+            if target.protocol == "mysql" {
+                register_replay_target(
+                    &mut resources.targets,
+                    &TargetKey {
+                        host: normalize_host(&target.host),
+                        port: target.port,
+                    },
+                    ReplayProtocol::registered(traffic_protocol::ProtocolId::new("mysql")),
+                )?;
+            }
+        }
+    }
     let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
     let total_cases = cases.len();
     let mut next_progress_percent = 5;
@@ -188,23 +223,25 @@ async fn load_state<P: ReplayProtocolSet>(
         "loading replay case dependencies"
     );
 
-    for (path, scope) in [
-        (global_path.as_deref(), ReplaySource::Startup),
-        (attribution.process.as_deref(), ReplaySource::Process),
-        (
-            attribution.unattributed.as_deref(),
-            ReplaySource::Unattributed,
-        ),
-    ] {
-        if let Some(path) = path {
-            loader
-                .load_run(path, scope, process_owned_dependencies, &mut resources)
-                .await?;
+    if streaming.is_none() {
+        for (path, scope) in [
+            (global_path.as_deref(), ReplaySource::Startup),
+            (attribution.process.as_deref(), ReplaySource::Process),
+            (
+                attribution.unattributed.as_deref(),
+                ReplaySource::Unattributed,
+            ),
+        ] {
+            if let Some(path) = path {
+                loader
+                    .load_run(path, scope, process_owned_dependencies, &mut resources)
+                    .await?;
+            }
         }
+        // Source-owned positions are frozen before selected Case inventories.
+        loader.freeze_global_layout();
+        resources.native.freeze_global_report_layout();
     }
-    // Source-owned positions are frozen before selected Case inventories.
-    loader.freeze_global_layout();
-    resources.native.freeze_global_report_layout();
     loader
         .prepare_run(&root_dir, global_debug_path, &mut resources)
         .await?;
@@ -377,6 +414,7 @@ async fn load_state<P: ReplayProtocolSet>(
         loader.observe_policy_sources(policy)?;
     }
     let protocols = loader.finish(lazy, target_observations.clone(), replay_policy.as_ref());
+    let session_reader = streaming.as_ref().map(|_| reader.clone());
     let deferred = lazy.then(|| {
         Arc::new(deferred::DeferredDependencies::new(
             deferred_files,
@@ -398,12 +436,15 @@ async fn load_state<P: ReplayProtocolSet>(
         .report_path
         .clone()
         .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
-    native.install_contracts(
-        replay_policy
-            .as_ref()
-            .map(|policy| policy.contracts().native_rules())
-            .unwrap_or_else(|| crate::value_extensions::strict_values()),
-    )?;
+    let contracts = replay_policy
+        .as_ref()
+        .map(|policy| policy.contracts().native_rules())
+        .unwrap_or_else(|| crate::value_extensions::strict_values());
+    if streaming.is_some() {
+        native.configure_streaming_contracts(contracts)?;
+    } else {
+        native.install_contracts(contracts)?;
+    }
     let mut state = RuntimeState {
         providers,
         native,
@@ -471,13 +512,26 @@ async fn load_state<P: ReplayProtocolSet>(
     };
     // Run-owned inventories are ready before Target startup, including lazy sessions.
     state.prepare_native_candidates();
-    if session_events {
+    let source = if let Some((summary, mandatory_count)) = streaming {
+        Some(
+            session::streaming::install(
+                &mut state,
+                summary,
+                mandatory_count,
+                session_reader.expect("Session dependency reader"),
+                lifecycle.case_no_progress_timeout,
+            )
+            .await?,
+        )
+    } else if session_events {
         state
             .prepare_session_sequence(lifecycle.case_no_progress_timeout)
             .await?;
+        None
     } else {
         state.prepare_run_sequence()?;
-    }
+        None
+    };
     state.attach_run_sequence();
     for (case, source) in prepared_scopes {
         state.install_case_execution_plan(&case, source)?;
@@ -502,6 +556,9 @@ async fn load_state<P: ReplayProtocolSet>(
     .await
     .context("Global report inventory preparation failed")??;
     let state = Arc::new(Mutex::new(state));
+    if let Some(source) = source {
+        session::streaming::start(&state, source).await;
+    }
     P::start(state.clone());
     Ok(LoadedRuntime {
         state,

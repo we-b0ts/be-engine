@@ -126,6 +126,14 @@ impl std::fmt::Debug for CaptureReservation {
 }
 
 impl CaptureRegistry {
+    pub fn note_successful_connection(&self) -> anyhow::Result<()> {
+        let result = self.0.writer.try_record_successful_connection();
+        if result.is_err() {
+            self.mark_inventory_gap();
+        }
+        result
+    }
+
     pub fn session_event(
         &self,
         event: traffic_model::session::SessionEvent,

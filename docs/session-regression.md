@@ -24,10 +24,21 @@ The `t=` tuple gives the capture clock as a nanosecond offset from the term
 table's UTC anchor, followed by request-start and protocol timestamp offsets
 relative to that capture clock. A dash leaves the corresponding field outside
 the tuple. The monotonic `offset_us` column still drives event ordering.
-Replay scans the TSV to build the event plan and uses
-`dependency-locations.bin` to find the data for individual exchanges.
-Redis pushes and primary HTTP response chunks can use raw bytes from the
-segment reader. Treat a sealed recording as read-only throughout Replay.
+Recorder publishes `session-summary.live.json` periodically and seals the
+final route counts, first request sequences, and capture totals in
+`session-summary.json`. Successful TCP connects with no exchange contribute to
+connection counts. Observations used for protocol diagnosis remain available
+in `observations.tsv`. The Recorder also seals the MySQL driver and transaction
+decisions derived from the facts collected as exchanges were recorded.
+
+Replay authenticates timeline chunks as it reads and fills a rolling window in
+Source sequence order. Notifications carry their payload reference before the
+wire output begins. Ordinary exchanges put their semantic record on the same
+timeline when capture completes. A forward reader can look ahead to that row
+when Replay reaches its admission, using a temporary file for displaced records
+that exceed the in-memory window. Redis notifications and primary HTTP chunks
+can use raw bytes through the segment reader. Treat sealed files as read-only
+throughout Replay.
 During shutdown, the recorder closes admission and gives active ingress up to
 15 seconds to finish. It records `primary_cancel` with reason `engine_shutdown`
 for each remaining request and disconnects it before stopping Source. Replay
@@ -57,7 +68,7 @@ recording. An existing named work branch with no round can start by passing
 `status` reads the current round and latest attempt. To inspect an earlier
 attempt, supply `status --attempt-id UUID` with its recording ID and run key
 when needed to select the history.
-The response includes `recording_id`, `state`, `session` and `next`. Attempt
+The response includes `recording_id`, `state`, `progress`, `session` and `next`. Attempt
 states are `not_started`, `running`, `interrupted`, `failed` and `passed`.
 Current-round status uses `candidate_changed` when a pass covers older Target
 code or inputs or when a different commit supersedes a failure without a
@@ -65,6 +76,15 @@ reviewed repair. A managed attempt records the Target commit and input
 fingerprint and adds the image ID when a build succeeds. `session` also
 provides the attempt identity, event progress, report path and any error.
 `next` gives the coordinator the current action.
+
+An active attempt publishes a compact `progress` snapshot. The phase advances
+through `preparing_replay`, `building`, `starting_target`, `replaying`, and
+`finalizing`, then reaches `complete` after a pass. `events.matched` counts the
+matched prefix. `events.total` is `null` until Replay knows the complete plan
+size. `apis.total` is the number of API labels in the sealed route inventory
+after applying `.traffic-e2e/apis.yaml`. `apis.verified` counts labels whose
+recorded primary exchanges have all ended or been cancelled in the matched
+prefix. Readiness probes contribute to event counts only.
 
 | `next.action` | Coordinator action |
 | --- | --- |
@@ -81,6 +101,9 @@ provides the attempt identity, event progress, report path and any error.
 | `integrate_candidate` | Integrate the reported fix commits, validate and publish the candidate, and submit its report. |
 | `verify_candidate` | Replay the bound recording on the published candidate. |
 | `restore_candidate` | Restore the registered candidate or register a newly reviewed candidate covering the same accepted deliveries. |
+
+Unreadable Source artifacts lead to `inspect_session_setup`. When the failing
+position is available, `next.source_sequence` gives its Source sequence.
 
 An event failure stops delivery and returns the expected Source sequence.
 `next.event` selects that exact event. `next.events` queries Source context
@@ -123,17 +146,12 @@ recording. [Finding and report formats](../plugins/ai-engine/skills/be-replay/re
 Session Replay advances recorded I/O on the shared timeline as soon as its
 matching request, delivery receipt, or timer gate allows it. Recorded intervals
 add zero delay. Target execution and actual I/O still take real time.
-For a Target-owned periodic wait, use a [Replay timer](replay-timers.md) with
-the scope `cases.session` and a recorded dependency request as its wake
-anchor. Use `TRAFFIC_E2E_REPLAY_TIMER_PLAN` to select the plan for the run.
-A graceful shutdown wait can use `before_event` with the `source_exit`
-sequence. The wait wakes after earlier events have completed, so background
-connections can receive their final recorded notifications before Target exits.
-Client-enforced deadlines still require instrumentation at their own wait
-sites to preserve whether completion or timeout occurred first.
+Replay timer anchors refer to Source sequences. The engine can wake a graceful
+shutdown wait at `source_exit`, after earlier events and final background
+notifications have completed. [Replay timer mechanics](replay-timers.md)
 
 Replay keeps identity mappings for the full session so later events can
-refer to the same translated values. The authenticated plan sets the
+refer to the same translated values. The sealed mandatory dependency count sets the
 identity count budget, and retained values share a fixed memory limit.
 
 Each recorded ingress request contributes one case to its HTTP method and
@@ -152,4 +170,4 @@ contributes once across retries. The route labels used by the first successful
 publication remain in the history if the catalog changes later. Failed attempts
 and sessions without API cases retain their event reports. Check
 `session.passed` for the Replay verdict and `progress_published` for publication.
-The run result reports API-count and progress-publication errors separately.
+The run result reports any progress-publication error separately.

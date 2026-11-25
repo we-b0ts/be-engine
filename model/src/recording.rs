@@ -7,6 +7,7 @@ use super::attribution::DependencyOwner;
 
 pub const RECORDING_SCHEMA: &str = "traffic-recording/v4";
 pub const COMPACT_RECORDING_SCHEMA: &str = "traffic-recording/v13";
+pub const SESSION_RECORDING_SCHEMA: &str = "traffic-recording/v14";
 pub const SCOPE_SCHEMA: &str = "traffic-dependency-scope/v4";
 pub const MANIFEST_FILE: &str = "dependency-manifest.json";
 
@@ -151,6 +152,8 @@ pub struct LedgerFileIdentity {
     pub path: String,
     pub length: u64,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

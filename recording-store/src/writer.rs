@@ -26,7 +26,7 @@ use crate::source::RecordLocation;
 mod buffer;
 mod segments;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use buffer::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
 
@@ -44,12 +44,14 @@ pub struct LedgerFiles {
     payloads: segments::PayloadSegments,
     scopes: OriginalScopes,
     session: Option<SessionState>,
+    session_chunks: Option<crate::session_integrity::Chunks>,
 }
 
 #[derive(Default)]
 struct SessionState {
     wire_ends: HashSet<u64>,
     requests: HashMap<uuid::Uuid, u64>,
+    summary: crate::session_summary::CaptureSummary,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -79,6 +81,7 @@ impl FileDigest {
             path: path.into(),
             length: self.length,
             sha256: format!("{:x}", self.hash.clone().finalize()),
+            chunk_root: None,
         }
     }
 }
@@ -102,9 +105,11 @@ impl LedgerFiles {
             crate::storage::write(&root.join(name), b"").await?;
         }
         let header = recording_id.as_bytes();
-        crate::storage::write(&root.join(partitions::DIRECTORY), header).await?;
         let mut directory = FileDigest::default();
-        directory.observe(header);
+        if !session {
+            crate::storage::write(&root.join(partitions::DIRECTORY), header).await?;
+            directory.observe(header);
+        }
         let mut terms = WriteTerms::new(chrono::Utc::now(), recording_id, process_epoch);
         let term_header = terms.take_pending();
         crate::storage::write(&root.join(dependency_columns::FILE), &term_header).await?;
@@ -128,6 +133,7 @@ impl LedgerFiles {
             payloads: Default::default(),
             scopes: OriginalScopes::initialize(root, session).await?,
             session: session.then(SessionState::default),
+            session_chunks: session.then(crate::session_integrity::Chunks::default),
         })
     }
 
@@ -176,6 +182,7 @@ impl LedgerFiles {
         self.append_row(files, partitions::SESSION, event.sequence, &row)
             .await?;
         let session = self.session.as_mut().expect("Session state");
+        session.summary.observe(event.sequence, &event.event)?;
         match event.event {
             PrimaryRequest { exchange, .. } => {
                 session.requests.insert(exchange, event.sequence);
@@ -184,6 +191,52 @@ impl LedgerFiles {
                 session.requests.remove(&exchange);
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    pub fn note_successful_connection(&mut self) {
+        if let Some(session) = &mut self.session {
+            session.summary.successful_connections += 1;
+        }
+    }
+
+    pub fn note_mandatory_protocol(&mut self, protocol: &str) {
+        if let Some(session) = &mut self.session {
+            *session
+                .summary
+                .mandatory_by_protocol
+                .entry(protocol.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    pub fn note_unscheduled_admission(&mut self, sequence: u64) {
+        if let Some(session) = &mut self.session {
+            session.summary.unscheduled_admissions.insert(sequence);
+        }
+    }
+
+    pub fn note_session_target(
+        &mut self,
+        protocol: &str,
+        endpoint: traffic_protocol::connection::Endpoint,
+    ) {
+        if let Some(session) = &mut self.session {
+            session
+                .summary
+                .targets
+                .insert(crate::session_summary::SessionTarget {
+                    host: endpoint.host,
+                    port: endpoint.port,
+                    protocol: protocol.to_owned(),
+                });
+        }
+    }
+
+    pub async fn publish_session_summary(&self) -> Result<()> {
+        if let Some(session) = &self.session {
+            crate::session_summary::publish_live(&self.root, &session.summary).await?;
         }
         Ok(())
     }
@@ -237,6 +290,18 @@ impl LedgerFiles {
                     .await?;
             }
             let session = self.session.as_mut().expect("Session state");
+            if let OutputCancelled {
+                started_sequence, ..
+            } = event.event
+            {
+                ensure!(
+                    session
+                        .summary
+                        .cancelled_output_starts
+                        .insert(started_sequence),
+                    "duplicate Session output cancellation"
+                );
+            }
             if let Some((dependency, _)) = terminal {
                 session.wire_ends.remove(&dependency);
             } else if wire_end && let Some(dependency) = dependency {
@@ -305,6 +370,16 @@ impl LedgerFiles {
         let offset = stream.length;
         files.append(&self.root.join(name), bytes).await?;
         stream.observe(bytes);
+        if partition == partitions::SESSION
+            && let Some(chunks) = &mut self.session_chunks
+        {
+            chunks.observe(bytes);
+        }
+        if partition == partitions::SESSION
+            && let Some(session) = &mut self.session
+        {
+            session.summary.physical_events += 1;
+        }
         self.last_sequence = sequence;
         Ok(offset)
     }
@@ -340,6 +415,34 @@ impl LedgerFiles {
             row.link(index, reference);
         }
         let bytes = row.encode(&mut self.terms, layout)?;
+        let additions = self.terms.take_pending();
+        if !additions.is_empty() {
+            files
+                .append(&self.root.join(dependency_columns::FILE), &additions)
+                .await?;
+            self.terms_digest.observe(&additions);
+        }
+        let partition = partitions::partition(owner, kind, session);
+        if session {
+            let kind = match kind {
+                RecordKind::Exchange => "dependency",
+                RecordKind::Message => "notification",
+                RecordKind::Observation => "observation",
+            };
+            let mut row = data_prefix(response_stamp, kind);
+            let prefix = row.len() as u64;
+            row.extend_from_slice(&bytes);
+            let offset = self
+                .append_row(files, partition, response_stamp.sequence, &row)
+                .await?;
+            self.records += 1;
+            return Ok(RecordLocation {
+                line: self.records,
+                offset: offset + prefix,
+                length: bytes.len() as u64,
+                sha256: crate::source::digest(&bytes),
+            });
+        }
         let (header, request, response) = compact_cells(&bytes)?;
         let dependency = header
             .split(|byte| *byte == b'\t')
@@ -355,14 +458,6 @@ impl LedgerFiles {
             request_stamp.is_none_or(|request| request.sequence < response_stamp.sequence),
             "dependency response sequence must follow its request data sequence"
         );
-        let additions = self.terms.take_pending();
-        if !additions.is_empty() {
-            files
-                .append(&self.root.join(dependency_columns::FILE), &additions)
-                .await?;
-            self.terms_digest.observe(&additions);
-        }
-        let partition = partitions::partition(owner, kind, session);
         let header_offset;
         let response_offset;
         if let Some(stamp) = request_stamp {
@@ -432,12 +527,41 @@ impl LedgerFiles {
     }
 
     pub async fn seal(&mut self, files: &mut JsonlWriterPool) -> Result<Vec<LedgerFileIdentity>> {
+        self.seal_with_schedule(files, Vec::new()).await
+    }
+
+    pub async fn seal_with_schedule(
+        &mut self,
+        files: &mut JsonlWriterPool,
+        decisions: Vec<traffic_protocol::connection::SessionDecision>,
+    ) -> Result<Vec<LedgerFileIdentity>> {
         files.flush_all().await?;
         let mut identities = Vec::new();
-        identities.push(self.directory.identity(partitions::DIRECTORY));
+        if let Some(session) = &self.session {
+            let bytes = session.summary.bytes()?;
+            let path = crate::session_summary::FILE;
+            crate::storage::write(&self.root.join(path), &bytes).await?;
+            let mut digest = FileDigest::default();
+            digest.observe(&bytes);
+            identities.push(digest.identity(path));
+            crate::session_summary::remove_live(&self.root).await?;
+            identities.extend(crate::session_schedule::seal(&self.root, decisions).await?);
+        } else {
+            identities.push(self.directory.identity(partitions::DIRECTORY));
+        }
         identities.push(self.terms_digest.identity(dependency_columns::FILE));
         for (index, name) in partitions::files(self.session.is_some()) {
-            identities.push(self.streams[index].identity(name));
+            let mut identity = self.streams[index].identity(name);
+            if index == partitions::SESSION
+                && let Some(chunks) = &mut self.session_chunks
+            {
+                identities.push(
+                    chunks
+                        .seal(&self.root, crate::session_integrity::INDEX, &mut identity)
+                        .await?,
+                );
+            }
+            identities.push(identity);
         }
         if let Some(events) = &mut self.events {
             identities.extend(events.seal().await?);

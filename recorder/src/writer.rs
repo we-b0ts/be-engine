@@ -89,6 +89,7 @@ enum WriterCommand {
     },
     Lifecycle(RecordedEvent<super::ledger::LifecycleRecord>),
     SessionEvent(RecordedEvent<SessionEvent>),
+    SuccessfulConnection,
     RegisterInput {
         case_id: Uuid,
         path: String,
@@ -248,6 +249,12 @@ impl RecorderWriter {
 
     pub fn try_record_lifecycle(&self, record: super::ledger::LifecycleRecord) -> Result<()> {
         self.try_publish_lifecycle(|_| record).map(|_| ())
+    }
+
+    pub(crate) fn try_record_successful_connection(&self) -> Result<()> {
+        let permit = self.try_reserve("recording connection statistics queue is full")?;
+        permit.send(Box::new(WriterCommand::SuccessfulConnection));
+        Ok(())
     }
 
     pub(crate) fn try_record_session_event(&self, event: SessionEvent) -> Result<u64> {
@@ -508,6 +515,7 @@ async fn process_command(
                 warn!(%error, seq = record.sequence, "failed to persist Source session event");
             }
         }
+        WriterCommand::SuccessfulConnection => state.ledger.note_successful_connection(),
         WriterCommand::CapturePolicyIdentity {
             identity,
             process_dependency_tasks,
@@ -777,7 +785,8 @@ impl WriterState {
 
     async fn flush_open(&mut self) -> Result<()> {
         self.flush_traffic().await?;
-        self.dependency_files.flush_open().await
+        self.dependency_files.flush_open().await?;
+        self.ledger.publish_session_summary().await
     }
 
     async fn flush_all(&mut self) -> Result<()> {

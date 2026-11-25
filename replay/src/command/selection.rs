@@ -20,7 +20,7 @@ pub fn prefer_scopes(
 }
 
 pub fn match_candidates_in_scope<T: CommandExchangeScope>(
-    exchanges: &[T],
+    exchanges: &(impl std::ops::Index<usize, Output = T> + ?Sized),
     candidates: impl IntoIterator<Item = usize>,
     source: ReplaySource,
     case_id: Option<&str>,
@@ -60,7 +60,7 @@ pub fn match_candidates_in_scope<T: CommandExchangeScope>(
 }
 
 pub fn preferred_match_indexed_with_priority<T: CommandExchangeScope>(
-    exchanges: &[T],
+    exchanges: &(impl std::ops::Index<usize, Output = T> + ?Sized),
     active_case_id: Option<&str>,
     case_candidates: impl IntoIterator<Item = usize>,
     run_candidates: impl IntoIterator<Item = usize>,

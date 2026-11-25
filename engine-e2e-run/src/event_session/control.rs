@@ -130,6 +130,56 @@ impl SessionControl {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn session_status_preserves_streaming_totals_and_failure_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let driver = tokio::spawn(async move {
+            let control = SessionControl { socket };
+            for (total, complete, has_failure) in [
+                (None, false, false),
+                (None, false, true),
+                (Some(2), true, false),
+            ] {
+                let status = control.status().await.unwrap();
+                assert_eq!(status.total, total);
+                assert_eq!(status.complete, complete);
+                assert_eq!(status.failure.is_some(), has_failure);
+                assert_eq!(status.matched, 2);
+            }
+        });
+        for (total, complete, failure) in [
+            (None, false, None),
+            (
+                None,
+                false,
+                Some(json!({"reported_sequence": 10, "reason": "invalid Source row"})),
+            ),
+            (Some(2), true, None),
+        ] {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            stream.read_line(&mut request).await.unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&request).unwrap(),
+                json!({"command":"session_status"})
+            );
+            let mut reply = serde_json::to_vec(&json!({
+                "ok": failure.is_none(),
+                "session_events": {
+                    "matched": 2, "total": total, "complete": complete, "expected": null,
+                    "last_sequence": 9, "failure": failure,
+                },
+            }))
+            .unwrap();
+            reply.push(b'\n');
+            stream.get_mut().write_all(&reply).await.unwrap();
+        }
+        driver.await.unwrap();
+    }
+
     #[tokio::test(start_paused = true)]
     async fn session_wait_allows_replay_to_keep_advancing_before_the_next_driver_event() {
         let temp = tempfile::tempdir().unwrap();

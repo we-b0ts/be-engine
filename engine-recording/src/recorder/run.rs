@@ -490,7 +490,11 @@ impl Recorder {
     pub async fn write_run_report(&self, status: &'static str) -> Result<()> {
         let state = self.run_state.lock().await;
         let report = RecorderRunReport {
-            schema: crate::dependency::observation::COMPACT_RECORDING_SCHEMA,
+            schema: if self.session_events {
+                traffic_model::recording::SESSION_RECORDING_SCHEMA
+            } else {
+                traffic_model::recording::COMPACT_RECORDING_SCHEMA
+            },
             dependency_manifest: crate::dependency::observation::MANIFEST_FILE,
             run_id: state.run_id.clone(),
             status,

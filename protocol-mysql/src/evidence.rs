@@ -9,6 +9,12 @@ mod index;
 
 pub struct NativeEvidence;
 impl EvidenceAdapter for NativeEvidence {
+    fn session_scope_facts(
+        &self,
+    ) -> Option<Box<dyn traffic_protocol::evidence::SessionScopeFacts>> {
+        Some(Box::new(crate::native::source_scope::ScopeFacts::default()))
+    }
+
     fn proof_selector(&self, event: &Value) -> Value {
         index::proof(event)
     }

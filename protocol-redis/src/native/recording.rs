@@ -260,22 +260,30 @@ impl Capture {
                 subscription_sequence,
                 rpc_request: None,
                 response: capture_body(&frame.raw, frame.raw.len()),
-                duration_ms: 0,
+                duration_ms: u64::try_from(confirmed.elapsed().as_millis())?,
                 replay_safe: session.resp_version == 2,
             },
         };
+        let event = CaptureSnapshot::capture(&push)?.with_source_predecessor(after_id);
         let permit = host
-            .begin_message(&CaptureSnapshot::capture(&push)?)
+            .begin_message(&event)
             .await?
             .context("Redis notification capture admission is closed")?;
-        let receipt = permit.prepare_output(OutputKind::End)?;
+        let (receipt, late_capture) = if permit.supports_staged_output() {
+            (permit.stage_output(event, OutputKind::End).await?, None)
+        } else {
+            (permit.prepare_output(OutputKind::End)?, Some(permit))
+        };
         client.write_all(&frame.raw).await?;
         client.flush().await?;
-        push.event.timestamp = Utc::now();
-        push.event.duration_ms = u64::try_from(confirmed.elapsed().as_millis())?;
         receipt.commit();
-        permit
-            .complete(CaptureSnapshot::capture(&push)?.with_source_predecessor(after_id))
-            .await
+        if let Some(permit) = late_capture {
+            push.event.timestamp = Utc::now();
+            push.event.duration_ms = u64::try_from(confirmed.elapsed().as_millis())?;
+            permit
+                .complete(CaptureSnapshot::capture(&push)?.with_source_predecessor(after_id))
+                .await?;
+        }
+        Ok(())
     }
 }

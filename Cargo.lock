@@ -3793,6 +3793,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "http",
  "serde",
  "serde_json",
  "sha2",
@@ -3832,6 +3833,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "http",
  "libc",
  "serde",
  "serde_json",

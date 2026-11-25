@@ -1,5 +1,5 @@
 //! A single immutable payload ledger and seekable, disposable ownership views.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::{RecordingClock, clock::recorded, writer::RecordStamps};
@@ -30,10 +30,13 @@ pub struct LedgerWriter {
     unattributed: u64,
     synthetic: u64,
     synthetic_failures: u64,
-    lifecycle: BTreeMap<u64, bool>,
+    pending_lifecycle: BTreeSet<u64>,
+    lifecycle_admitted: u64,
+    lifecycle_terminal: u64,
     cases: BTreeMap<Uuid, Vec<ScopeRecordLocation>>,
     inputs: BTreeMap<Uuid, RecordedCase>,
     session: Option<crate::session::SessionCapture>,
+    session_scope_facts: BTreeMap<String, Box<dyn traffic_protocol::evidence::SessionScopeFacts>>,
     capture_policy_identity: String,
     source_artifact: SourceArtifactIdentity,
     sealed: bool,
@@ -52,6 +55,11 @@ impl LedgerWriter {
         session_events: bool,
     ) -> Result<Self> {
         let run_epoch = clock.recording_id();
+        let session_scope_facts = if session_events {
+            evidence.session_scope_facts()
+        } else {
+            BTreeMap::new()
+        };
         Ok(Self {
             evidence,
             root: root.into(),
@@ -69,10 +77,13 @@ impl LedgerWriter {
             unattributed: 0,
             synthetic: 0,
             synthetic_failures: 0,
-            lifecycle: BTreeMap::new(),
+            pending_lifecycle: BTreeSet::new(),
+            lifecycle_admitted: 0,
+            lifecycle_terminal: 0,
             cases: BTreeMap::new(),
             inputs: BTreeMap::new(),
             session: session_events.then(crate::session::SessionCapture::default),
+            session_scope_facts,
             capture_policy_identity,
             source_artifact: SourceArtifactIdentity::Unavailable {
                 reason: "external_source_binary_identity_not_supplied".into(),
@@ -112,11 +123,27 @@ impl LedgerWriter {
         self.source_artifact = identity;
     }
 
+    pub(crate) fn note_successful_connection(&mut self) {
+        self.storage.note_successful_connection();
+    }
+
+    pub(crate) async fn publish_session_summary(&self) -> Result<()> {
+        if !self.sealed {
+            self.storage.publish_session_summary().await?;
+        }
+        Ok(())
+    }
+
     pub async fn lifecycle(
         &mut self,
         files: &mut crate::jsonl::JsonlWriterPool,
         record: &RecordedEvent<LifecycleRecord>,
     ) -> Result<()> {
+        self.observe_lifecycle(record)?;
+        self.storage.append_event(files, record).await
+    }
+
+    fn observe_lifecycle(&mut self, record: &RecordedEvent<LifecycleRecord>) -> Result<()> {
         anyhow::ensure!(
             !self.sealed,
             "recording dependency ledger is already sealed"
@@ -128,21 +155,23 @@ impl LedgerWriter {
             }
             | LifecycleRecord::MessageStarted {
                 dependency_sequence,
-            } => anyhow::ensure!(
-                *dependency_sequence == record.sequence
-                    && self.lifecycle.insert(*dependency_sequence, false).is_none(),
-                "duplicate physical dependency admission"
-            ),
+            } => {
+                anyhow::ensure!(
+                    *dependency_sequence == record.sequence
+                        && self.pending_lifecycle.insert(*dependency_sequence),
+                    "duplicate physical dependency admission"
+                );
+                self.lifecycle_admitted += 1;
+            }
             LifecycleRecord::Terminal {
                 dependency_sequence,
                 ..
             } => {
-                let terminal = self
-                    .lifecycle
-                    .get_mut(dependency_sequence)
-                    .context("terminal dependency has no admission")?;
-                anyhow::ensure!(!*terminal, "duplicate physical dependency termination");
-                *terminal = true;
+                anyhow::ensure!(
+                    self.pending_lifecycle.remove(dependency_sequence),
+                    "terminal dependency has no active admission"
+                );
+                self.lifecycle_terminal += 1;
             }
             LifecycleRecord::OutputStarted {
                 dependency_sequence,
@@ -156,7 +185,7 @@ impl LedgerWriter {
                 dependency_sequence,
                 ..
             } => anyhow::ensure!(
-                self.lifecycle.get(dependency_sequence) == Some(&false),
+                self.pending_lifecycle.contains(dependency_sequence),
                 "dependency pairing changed after termination or without admission"
             ),
             LifecycleRecord::Bound { .. }
@@ -164,7 +193,7 @@ impl LedgerWriter {
             | LifecycleRecord::Input { .. }
             | LifecycleRecord::PrimaryBoundary { .. } => {}
         }
-        self.storage.append_event(files, record).await
+        Ok(())
     }
 
     #[cfg(feature = "test-support")]
@@ -261,6 +290,10 @@ impl LedgerWriter {
         let terminal = facts.terminal;
         let complete = facts.complete;
         let capture = targets.and_then(|t| t.capture);
+        let diagnostic_only = self.session.is_some()
+            && capture.is_none()
+            && complete
+            && matches!(facts.semantic, SemanticRequirement::Observation);
         let mut metadata = if let Some(capture) = capture {
             capture.bind_protocol(facts.reference.clone());
             capture.note_terminal(terminal.clone(), complete);
@@ -291,7 +324,11 @@ impl LedgerWriter {
                     admitted_case,
                 },
             );
-            self.lifecycle(files, &started).await?;
+            if diagnostic_only {
+                self.observe_lifecycle(&started)?;
+            } else {
+                self.lifecycle(files, &started).await?;
+            }
             let exchange_id = traffic_model::recording::identity::IdentityKind::Dependency
                 .bridge(self.run_epoch, sequence);
             CaptureMetadata {
@@ -331,6 +368,21 @@ impl LedgerWriter {
                 crate::supports_replay(&value, &metadata.attribution, &self.evidence),
             );
         }
+        if let Some(facts) = self
+            .evidence
+            .owner(&value)
+            .and_then(|owner| self.session_scope_facts.get_mut(owner))
+        {
+            facts.observe(&value)?;
+        }
+        if self.session.is_some()
+            && complete
+            && let Some(protocol) = self.evidence.owner(&value)
+            && let Some(endpoint) =
+                session_endpoint(&self.evidence, &value, facts.recording_target.as_deref())
+        {
+            self.storage.note_session_target(protocol, endpoint);
+        }
         let kind = match facts.semantic {
             SemanticRequirement::Observation => RecordKind::Observation,
             _ if capture.is_some_and(|capture| capture.is_message()) => RecordKind::Message,
@@ -353,19 +405,26 @@ impl LedgerWriter {
                 stamps.response.context("dependency has no payload stamp")?,
             )
             .await?;
+        if semantic_required {
+            self.storage
+                .note_mandatory_protocol(facts.reference.protocol());
+        } else if capture.is_some() && complete {
+            self.storage.note_unscheduled_admission(metadata.sequence);
+        }
         if let Some(stamp) = stamps.terminal.as_ref() {
-            self.lifecycle(
-                files,
-                &recorded(
-                    stamp,
-                    LifecycleRecord::Terminal {
-                        dependency_sequence: metadata.sequence,
-                        outcome: terminal,
-                        capture_complete: complete,
-                    },
-                ),
-            )
-            .await?;
+            let ended = recorded(
+                stamp,
+                LifecycleRecord::Terminal {
+                    dependency_sequence: metadata.sequence,
+                    outcome: terminal,
+                    capture_complete: complete,
+                },
+            );
+            if diagnostic_only {
+                self.observe_lifecycle(&ended)?;
+            } else {
+                self.lifecycle(files, &ended).await?;
+            }
         }
         if self.session.is_some() {
             return Ok(());
@@ -542,11 +601,15 @@ impl LedgerWriter {
         coverage.admitted += self.synthetic;
         coverage.terminal += self.synthetic;
         coverage.capture_failures += self.synthetic_failures;
-        coverage.inventory_gaps |= self.lifecycle.len() as u64 != coverage.admitted
-            || self.lifecycle.values().filter(|ended| **ended).count() as u64 != coverage.terminal;
+        coverage.inventory_gaps |= self.lifecycle_admitted != coverage.admitted
+            || self.lifecycle_terminal != coverage.terminal;
         self.lifecycle(files, &recorded(&stamp, LifecycleRecord::Sealed))
             .await?;
-        let mut identities = self.storage.seal(files).await?;
+        let mut decisions = Vec::new();
+        for facts in std::mem::take(&mut self.session_scope_facts).into_values() {
+            decisions.extend(facts.finish()?);
+        }
+        let mut identities = self.storage.seal_with_schedule(files, decisions).await?;
         let inputs = self
             .inputs
             .values()
@@ -576,7 +639,12 @@ impl LedgerWriter {
             }
         }
         let manifest = RecordingManifest {
-            schema: COMPACT_RECORDING_SCHEMA.into(),
+            schema: if self.session.is_some() {
+                SESSION_RECORDING_SCHEMA
+            } else {
+                COMPACT_RECORDING_SCHEMA
+            }
+            .into(),
             run_id: self
                 .root
                 .file_name()
@@ -627,6 +695,33 @@ fn capture_phase(
     })
 }
 
+fn session_endpoint(
+    evidence: &traffic_protocol::evidence::EvidenceRegistry,
+    event: &serde_json::Value,
+    captured_target: Option<&str>,
+) -> Option<traffic_protocol::connection::Endpoint> {
+    use traffic_protocol::connection::Endpoint;
+    use traffic_protocol::observation::{normalize_host, optional_endpoint};
+
+    let address = optional_endpoint(
+        event["target_host"].as_str(),
+        event["target_port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok()),
+        captured_target.or_else(|| event["target_addr"].as_str()),
+    );
+    if let Some(address) = address
+        && let Ok(authority) = address.parse::<http::uri::Authority>()
+        && let Some(port) = authority.port_u16()
+    {
+        return Some(Endpoint {
+            host: normalize_host(authority.host()),
+            port,
+        });
+    }
+    evidence.connection_endpoint(event).ok().flatten()
+}
+
 async fn file_identity(root: &Path, path: &Path) -> Result<LedgerFileIdentity> {
     use tokio::io::AsyncReadExt;
     let mut file = tokio::fs::File::open(path).await?;
@@ -645,6 +740,7 @@ async fn file_identity(root: &Path, path: &Path) -> Result<LedgerFileIdentity> {
         path: path.strip_prefix(root)?.to_string_lossy().into(),
         length,
         sha256: format!("{:x}", hash.finalize()),
+        chunk_root: None,
     })
 }
 

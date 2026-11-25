@@ -227,6 +227,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
         request: &'a dyn ProtocolMessage,
     ) -> NativeFuture<'a, bool> {
         Box::pin(async move {
+            self.wait_for_prepared_frontier().await?;
             let state = self.state.lock().await;
             let head = state
                 .session_events
@@ -250,6 +251,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
     ) -> NativeFuture<'a, Option<Arc<dyn traffic_protocol::message::MessageEncoder>>> {
         Box::pin(async move {
             let owner = self.session_owner(Some(session))?;
+            self.wait_for_prepared_frontier().await?;
             let state = self.state.lock().await;
             let head = state
                 .session_events
@@ -261,7 +263,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
             {
                 return Ok(None);
             }
-            Ok(head.and_then(|head| {
+            let response = head.and_then(|head| {
                 state.native.core.statement_metadata(
                     self.protocol,
                     &self.endpoint,
@@ -269,7 +271,24 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                     session,
                     head,
                 )
-            }))
+            });
+            drop(state);
+            if response
+                .as_ref()
+                .is_some_and(|response| response.stored().is_some())
+            {
+                let stored = response.expect("stored Source statement");
+                return tokio::task::spawn_blocking(move || {
+                    stored
+                        .stored()
+                        .expect("stored Source statement")
+                        .load()
+                        .map(Some)
+                })
+                .await
+                .context("read Source statement metadata")?;
+            }
+            Ok(response)
         })
     }
 
@@ -447,6 +466,36 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
 }
 
 impl<P: ReplayProtocolSet> Host<P> {
+    async fn wait_for_prepared_frontier(&self) -> Result<()> {
+        let (runtime, timeout) = {
+            let state = self.state.lock().await;
+            let Some(session) = state
+                .session_events
+                .as_ref()
+                .filter(|session| session.runtime.is_streaming())
+            else {
+                return Ok(());
+            };
+            (session.runtime.clone(), session.no_progress_timeout)
+        };
+        let mut changed = runtime.subscribe();
+        tokio::time::timeout(timeout, async {
+            loop {
+                let progress = runtime.progress();
+                ensure!(!progress.failed, "Source event Replay has stopped");
+                if progress.expected.is_some() || progress.complete {
+                    return Ok(());
+                }
+                changed
+                    .changed()
+                    .await
+                    .context("Source event preparation stopped")?;
+            }
+        })
+        .await
+        .context("next Source event was not prepared before the Replay progress deadline")?
+    }
+
     fn session_owner(
         &self,
         session: Option<&RequestSession>,

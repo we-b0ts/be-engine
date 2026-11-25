@@ -20,6 +20,7 @@ fn identity(root: &Path, path: &Path) -> LedgerFileIdentity {
         path: path.strip_prefix(root).unwrap().to_string_lossy().into(),
         length: bytes.len() as u64,
         sha256: digest(&bytes),
+        chunk_root: None,
     }
 }
 

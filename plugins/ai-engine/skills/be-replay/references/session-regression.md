@@ -53,7 +53,11 @@ be-replay --target-root /absolute/target status --recording-run-id ID --run-key 
 
 `status` reports the current round and attempt. For an earlier attempt, pass
 its exact `--attempt-id`, recording ID and run key. Status includes
-`recording_id`, `state`, selected `session` progress, and `next` when available.
+`recording_id`, `state`, `progress`, `session`, and `next` when available.
+Read `progress.phase` to distinguish Replay preparation, Target build,
+Target startup, event matching, and finalization. `progress.events` shows the
+matched count and the plan total when known. `progress.apis` shows how many
+recorded API labels have completed every primary exchange in the matched prefix.
 
 | State | Meaning and action |
 | --- | --- |
@@ -80,8 +84,10 @@ Retain `recording_id`, `session.attempt_id`, `session.report`,
 `session.events`, and `next` from the run or status. A failed `run` with a
 Replay result prints JSON before exiting unsuccessfully. For
 `next.action: inspect_session_setup`,
-inspect the returned setup error and report. If the CLI fails before printing
-a result, use its error to resolve recording, configuration, or launch inputs.
+inspect the returned setup error and report. `next.source_sequence` identifies
+the failed Source read or preparation position when available. If the CLI fails
+before printing a result, use its error to resolve recording, configuration, or
+launch inputs.
 
 For `next.action: analyze_session_failure`, start with `expected_sequence`
 and the exact `next.event` query when supplied. Use `next.events` for the
@@ -199,6 +205,6 @@ an exchange. Readiness probes contribute only to event verification. A passing
 session with recorded API exchanges contributes once per sealed run ID to
 `.traffic-e2e/progress.yaml`, preserving existing history. A repeat pass or
 a session with no API traffic can have `progress_published: false`. Handle
-any reported API count or progress publication error from `run`.
+any reported progress publication error from `run`.
 
 [Engine session reference](../../../../../docs/session-regression.md)

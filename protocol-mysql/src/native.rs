@@ -15,7 +15,7 @@ mod prepared;
 mod recording;
 mod response;
 mod server;
-mod source_scope;
+pub(crate) mod source_scope;
 #[cfg(test)]
 mod tests;
 
@@ -85,35 +85,34 @@ impl NativeProtocol for Native {
         {
             return Ok(None);
         }
+        Ok(Some(recorded_request(record, |response, before| {
+            Ok(Arc::new(response::ResponseMessage::new(response, before)?))
+        })?))
+    }
+
+    fn defers_recorded_response(&self) -> bool {
+        true
+    }
+
+    fn recorded_request_with_stored_response(
+        &self,
+        request: &Value,
+        response: Arc<dyn traffic_protocol::message::MessageEncoder>,
+    ) -> Result<RecordedExchange> {
         ensure!(
-            matches!(record.command.as_str(), "COM_QUERY" | "COM_INIT_DB"),
-            "unsupported recorded MySQL command {}",
-            record.command
+            request["event_type"] == "mysql_exchange"
+                && request["capture"]["semantic_required"] == true,
+            "stored MySQL request requires mandatory exchange evidence"
         );
-        let endpoint = crate::session_identity::target_from_exchange(&record)
-            .context("MySQL exchange has no endpoint")?;
-        let connection = record
-            .connection_id
-            .context("MySQL exchange has no connection identity")?;
-        let sequence = record
-            .query_sequence
-            .context("MySQL exchange has no sequence")?;
-        let response =
-            response::ResponseMessage::new(record.response, record.server_status_before)?;
-        Ok(Some(RecordedExchange {
-            reference: ProtocolRef::connection("mysql", connection, sequence),
-            endpoint,
-            lane: Some(connection.to_string()),
-            response_delay: Duration::from_millis(record.duration_ms),
-            input: traffic_protocol::connection::RecordedInput::Request(Arc::new(RequestMessage {
-                command: record.command,
-                sql: record.sql,
-                params: record.params,
-                database: record.database,
-                username: record.username,
-            })),
-            response: Arc::new(response),
-        }))
+        let mut event = request.clone();
+        event["response"] = serde_json::json!({"status": "stored"});
+        let record: RecordedMysqlExchange = serde_json::from_value(event)?;
+        ensure!(
+            record.outcome == DependencyExchangeOutcome::Response
+                && record.parse_warnings.is_empty(),
+            "stored MySQL request has unsafe or incomplete capture evidence"
+        );
+        recorded_request(record, |_, _| Ok(response))
     }
 
     fn recorded_endpoint(&self, event: &Value) -> Result<Option<Endpoint>> {
@@ -137,4 +136,41 @@ impl NativeProtocol for Native {
     fn capture_session(&self, info: ConnectionInfo) -> Result<Box<dyn CaptureSession>> {
         Ok(Box::new(recording::Capture(info)))
     }
+}
+
+fn recorded_request(
+    record: RecordedMysqlExchange,
+    response: impl FnOnce(
+        crate::recorded::RecordedMysqlResponse,
+        Option<u16>,
+    ) -> Result<Arc<dyn traffic_protocol::message::MessageEncoder>>,
+) -> Result<RecordedExchange> {
+    ensure!(
+        matches!(record.command.as_str(), "COM_QUERY" | "COM_INIT_DB"),
+        "unsupported recorded MySQL command {}",
+        record.command
+    );
+    let endpoint = crate::session_identity::target_from_exchange(&record)
+        .context("MySQL exchange has no endpoint")?;
+    let connection = record
+        .connection_id
+        .context("MySQL exchange has no connection identity")?;
+    let sequence = record
+        .query_sequence
+        .context("MySQL exchange has no sequence")?;
+    let response = response(record.response, record.server_status_before)?;
+    Ok(RecordedExchange {
+        reference: ProtocolRef::connection("mysql", connection, sequence),
+        endpoint,
+        lane: Some(connection.to_string()),
+        response_delay: Duration::from_millis(record.duration_ms),
+        input: traffic_protocol::connection::RecordedInput::Request(Arc::new(RequestMessage {
+            command: record.command,
+            sql: record.sql,
+            params: record.params,
+            database: record.database,
+            username: record.username,
+        })),
+        response,
+    })
 }

@@ -10,19 +10,41 @@ use traffic_protocol::connection::{EventSessionPreparation, ReplaySessionStep};
 use crate::{recorded::RecordedMysqlExchange, session_control, transaction_source};
 
 mod driver_prelude;
+mod facts;
 mod idle_cleanup;
+pub(crate) use facts::ScopeFacts;
+use facts::ScopeRecord;
 
 pub(super) fn prepare_event_session(
     records: &[(usize, &Value)],
 ) -> Result<EventSessionPreparation> {
-    let mut driver_prelude = driver_prelude::prove(records)?;
-    let mandatory = records
+    let records = records
         .iter()
         .copied()
+        .filter(|(_, event)| event["event_type"] == "mysql_exchange")
+        .map(|(position, event)| Ok((position, ScopeRecord::capture(event)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    prepare_session_facts(&records)
+}
+
+fn prepare_session_facts(
+    records: &BTreeMap<usize, ScopeRecord>,
+) -> Result<EventSessionPreparation> {
+    let mut driver_prelude = driver_prelude::prove(records);
+    let mandatory: BTreeMap<_, _> = records
+        .iter()
         .filter(|(position, _)| !driver_prelude.contains_key(position))
-        .collect::<Vec<_>>();
-    let mut steps = prepare(DependencyScope::Startup, &mandatory, true)?;
-    let cleanup = idle_cleanup::prove(&mandatory, &steps)?;
+        .map(|(&position, record)| (position, record))
+        .collect();
+    let mut steps = prepare_exchanges(
+        DependencyScope::Startup,
+        mandatory
+            .iter()
+            .map(|(&position, record)| (position, &record.exchange))
+            .collect(),
+        true,
+    )?;
+    let cleanup = idle_cleanup::prove(&mandatory, &steps);
     steps.retain(|position, _| !cleanup.contains_key(position));
     driver_prelude.extend(cleanup);
     Ok(EventSessionPreparation {
@@ -37,13 +59,31 @@ pub(super) fn prepare(
     event_session: bool,
 ) -> Result<BTreeMap<usize, ReplaySessionStep>> {
     let mut exchanges = BTreeMap::new();
-    let mut snapshot_constraints = BTreeMap::new();
     for &(index, event) in records {
         if event["event_type"] != "mysql_exchange" {
             continue;
         }
         let mut record = RecordedMysqlExchange::deserialize(event)?;
         record.response.detach(());
+        exchanges.insert(index, record);
+    }
+    prepare_exchanges(
+        scope,
+        exchanges
+            .iter()
+            .map(|(&position, record)| (position, record))
+            .collect(),
+        event_session,
+    )
+}
+
+fn prepare_exchanges(
+    scope: DependencyScope,
+    exchanges: BTreeMap<usize, &RecordedMysqlExchange>,
+    event_session: bool,
+) -> Result<BTreeMap<usize, ReplaySessionStep>> {
+    let mut snapshot_constraints = BTreeMap::new();
+    for record in exchanges.values() {
         if event_session
             && record
                 .sql
@@ -57,10 +97,9 @@ pub(super) fn prepare(
                 .and_modify(|first: &mut u64| *first = (*first).min(sequence))
                 .or_insert(sequence);
         }
-        exchanges.insert(index, record);
     }
     let (controls, plans) = session_control::prepare_source_transactions(
-        exchanges.iter().map(|(&index, record)| (index, record)),
+        exchanges.iter().map(|(&index, &record)| (index, record)),
         scope,
         &transaction_source::GlobalReads::default(),
     );
@@ -121,7 +160,7 @@ pub(super) fn prepare(
                 && controls.get(&begin) == Some(&session_control::SourceControl::BeginMode);
             if mode_only {
                 first = first.max(1);
-            } else if session_control::successful_begin(&exchanges[&begin]) {
+            } else if session_control::successful_begin(exchanges[&begin]) {
                 // Explicit Source setup remains a required member when
                 // the span's effects cannot be reduced to a mode change.
                 first = 0;
@@ -132,7 +171,7 @@ pub(super) fn prepare(
                 }
             }
             let members = &segment.members[first..];
-            let first_record = &exchanges[&members[0]];
+            let first_record = exchanges[&members[0]];
             let implicit_start = event_session
                 && !segment.explicit
                 && !has_savepoint
@@ -223,7 +262,7 @@ fn opens_implicit_read_transaction(record: &RecordedMysqlExchange) -> bool {
 }
 
 fn locked_read_and_rollback(
-    exchanges: &BTreeMap<usize, RecordedMysqlExchange>,
+    exchanges: &BTreeMap<usize, &RecordedMysqlExchange>,
     members: &[usize],
 ) -> bool {
     let [read, end] = members else {

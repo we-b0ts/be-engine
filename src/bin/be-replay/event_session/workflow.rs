@@ -1,11 +1,12 @@
 //! Project the coordinator's next action from the current round and attempt.
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use traffic_e2e::{
     E2eEventSessionOptions, E2eEventSessionResult, E2eEventSessionState, E2eEventSessionStatus,
-    event_work, execution_identity, run_e2e_event_session, session, status_e2e_event_session,
+    event_work, execution_identity, run_e2e_event_session_with_apis, session,
+    status_e2e_event_session,
 };
 use uuid::Uuid;
 
@@ -15,7 +16,7 @@ use crate::{
     round::{self, Recording, Repository, Round},
 };
 
-use super::failure_action;
+use super::{failure_action, mismatch_event};
 
 pub(super) async fn replay(
     root: &Path,
@@ -53,14 +54,14 @@ pub(super) async fn replay(
         round.workflow.require_replay_candidate(&last, &repo.head)?;
     }
     repo.check_checkout(&lock)?;
-    let result = run_e2e_event_session(E2eEventSessionOptions {
+    let (result, apis) = run_e2e_event_session_with_apis(E2eEventSessionOptions {
         target_root: repo.root.clone(),
         recording_root: recording.root.clone(),
         run_key: Some(round.run_key.clone()),
         expected_target_commit: Some(repo.head.clone()),
     })
     .await?;
-    publish_result(&repo, &round, &recording, result, pretty)
+    publish_result(&repo, &round, &recording, result, apis, pretty)
 }
 
 pub(super) fn status(
@@ -119,7 +120,7 @@ pub(super) fn status(
         &json!({
             "recording_id": recording.id, "branch": round.branch, "pr_base": round.pr_base,
             "base_commit": round.base_commit, "target_commit": repo.head, "run_key": round.run_key,
-            "state": state, "session": status.attempt, "next": next
+            "state": state, "progress": status.progress, "session": status.attempt, "next": next
         }),
         pretty,
     )
@@ -147,7 +148,7 @@ fn entry_status(repo: &Repository, id: Option<&str>, pretty: bool) -> Result<()>
     print_json(
         &json!({
             "recording_id":id, "branch":repo.branch, "pr_base":repo.pr_base, "target_commit":repo.head,
-            "state":"not_started", "session":null, "next":next
+            "state":"not_started", "progress":null, "session":null, "next":next
         }),
         pretty,
     )
@@ -173,7 +174,8 @@ fn historical_status(
     let status = status_e2e_event_session(&repo.root, &recording.root, key, attempt_id)?;
     print_json(
         &json!({
-            "recording_id":id, "state":status.state, "session":status.attempt, "next":null
+            "recording_id":id, "state":status.state, "progress":status.progress,
+            "session":status.attempt, "next":null
         }),
         pretty,
     )
@@ -193,7 +195,7 @@ pub(super) fn plan(
     let recording = round_recording(&repo, &round, id)?;
     let last = failed_attempt(&repo, &round, &recording)?;
     ensure!(
-        last.events.failure.is_some() && !last.events.complete,
+        mismatch_event(&last).is_some(),
         "the failed attempt has no event mismatch to plan; inspect status"
     );
     ensure!(
@@ -290,29 +292,24 @@ fn publish_result(
     round: &Round,
     recording: &Recording,
     result: E2eEventSessionResult,
+    apis: BTreeMap<String, session::SessionApiCounts>,
     pretty: bool,
 ) -> Result<()> {
-    let apis = session::api_counts(&repo.root, &recording.root, result.events.last_sequence);
-    let progress = match &apis {
-        Ok(apis) if result.passed => {
-            session::publish_passed_progress(&repo.root, &recording.root, apis)
-        }
-        _ => Ok(false),
+    let progress = if result.passed {
+        session::publish_passed_progress(&repo.root, &recording.root, &apis)
+    } else {
+        Ok(false)
     };
     let next = (!result.passed).then(|| failure_action(&recording.id, &result));
     let mut report = json!({
-        "recording_id":recording.id, "branch":round.branch, "session":result, "apis":apis.as_ref().ok(),
+        "recording_id":recording.id, "branch":round.branch, "session":result, "apis":apis,
         "progress_published":progress.as_ref().copied().unwrap_or(false), "next":next
     });
-    if let Err(error) = &apis {
-        report["api_counts_error"] = json!(format!("{error:#}"));
-    }
     if let Err(error) = &progress {
         report["progress_publication_error"] = json!(format!("{error:#}"));
     }
     print_json(&report, pretty)?;
     ensure!(result.passed, "Source session Replay failed");
-    apis?;
     progress?;
     Ok(())
 }

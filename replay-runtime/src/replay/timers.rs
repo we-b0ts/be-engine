@@ -91,6 +91,13 @@ impl Timers {
         self.plan.validate_session(scope, plan)
     }
 
+    pub(super) fn stream_session_anchors(
+        &self,
+        scope: &str,
+    ) -> Result<BTreeMap<u64, traffic_replay::EventKind>> {
+        self.plan.stream_session_anchors(scope)
+    }
+
     pub(super) fn activate(&mut self, case: Option<&str>) {
         self.cancel_pending();
         self.active = case

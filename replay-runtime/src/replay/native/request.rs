@@ -17,8 +17,18 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         let Some(session) = &state.session_events else {
             return true;
         };
+        if session.runtime.is_streaming()
+            && error.kind == RejectionKind::NoMatch
+            && !self.admission.allows_local_response()
+            && !session.runtime.complete()
+        {
+            // A valid concurrent request can precede preparation of its
+            // Source slot. The finite request budget and progress deadline
+            // still apply at the first unmet Source event.
+            return true;
+        }
         let Some(expected) = session.runtime.expected() else {
-            return false;
+            return session.runtime.is_streaming() && !session.runtime.complete();
         };
         let context = MatchContext {
             protocol: self.protocol,

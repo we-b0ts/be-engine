@@ -253,15 +253,23 @@ impl PreparedMessage {
             }
         }
         if let Some(policy) = &policy {
+            let mut recognition_metadata = None;
             for (location, value) in &projection.values {
                 if values.contains_key(location) {
                     continue;
                 }
-                let metadata = serde_json::from_value(serde_json::json!({
-                    "native":{"location":location,"structure":projection.structure},
-                }))?;
+                let metadata: &mut traffic_value::Value = match &mut recognition_metadata {
+                    Some(metadata) => metadata,
+                    slot => slot.insert(serde_json::from_value(serde_json::json!({
+                        "native":{"location":null,"structure":projection.structure},
+                    }))?),
+                };
+                *metadata
+                    .pointer_mut("/native/location")
+                    .expect("recognition metadata contains a native location") =
+                    traffic_value::Value::String(location.clone());
                 let Some((plan, decoded)) =
-                    CodecPlan::try_recognize_source(&value.bytes, &metadata, codecs)?
+                    CodecPlan::try_recognize_source(&value.bytes, metadata, codecs)?
                 else {
                     continue;
                 };

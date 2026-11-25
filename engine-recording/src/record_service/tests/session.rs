@@ -141,6 +141,7 @@ async fn verify_session() {
         "dependencies-push.tsv",
         "dependencies-process.tsv",
         "dependencies-unattributed.tsv",
+        "dependency-locations.bin",
         "event-locations.bin",
         "event-spans.bin",
         "indexes/process-scope.bin",
@@ -176,6 +177,17 @@ async fn verify_session() {
         (location.line, location.offset, location.length)
     );
     assert!(locations.next().is_none());
+    let summary = traffic_recording_store::session_summary::read(run_dir).unwrap();
+    assert_eq!(summary.primary_cancelled, 1);
+    assert_eq!(summary.mandatory_by_protocol.get("redis"), Some(&1));
+    assert_eq!(
+        summary
+            .routes
+            .iter()
+            .map(|route| (route.path.as_str(), route.requests))
+            .collect::<Vec<_>>(),
+        [("/api/fast", 1), ("/api/long", 1), ("/api/slow", 1)]
+    );
     let report: serde_json::Value = serde_json::from_slice(
         &tokio::fs::read(state.recorder().run_dir.join("recording-run.json"))
             .await

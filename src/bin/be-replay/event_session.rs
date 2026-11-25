@@ -147,21 +147,18 @@ pub(super) async fn run(
 }
 
 fn failure_action(id: &str, result: &E2eEventSessionResult) -> Value {
-    if result.events.failure.is_none() || result.events.complete {
+    let Some((expected, sequence)) = mismatch_event(result) else {
         return json!({
             "action": "inspect_session_setup",
             "description": result.error,
             "report": result.report.is_file().then_some(&result.report),
+            "source_sequence": result.events.failure.as_ref()
+                .and_then(|failure| failure["reported_sequence"].as_u64()),
             "run": ["run"],
         });
-    }
-    let expected = result.events.expected.as_ref();
-    let sequence = expected
-        .and_then(|event| event["sequence"].as_u64())
-        .or(result.events.last_sequence)
-        .unwrap_or(0);
-    let dependency = expected
-        .and_then(|event| event["dependency_sequence"].as_u64())
+    };
+    let dependency = expected["dependency_sequence"]
+        .as_u64()
         .filter(|value| *value > 0)
         .map(|value| json!(["dependency", "--recording-run-id", id, value.to_string()]));
     let observed = result
@@ -183,14 +180,27 @@ fn failure_action(id: &str, result: &E2eEventSessionResult) -> Value {
         "action": "analyze_session_failure",
         "description": result.error,
         "expected_sequence": sequence,
-        "event": (sequence > 0).then(|| json!(["events", "--recording-run-id", id,
-            "--seq", sequence.to_string()])),
+        "event": ["events", "--recording-run-id", id, "--seq", sequence.to_string()],
         "events": ["events", "--recording-run-id", id,
             "--from-seq", sequence.to_string(), "--window-seconds", "60"],
         "dependency": dependency,
         "target": observed,
         "plan": ["plan", "--recording-run-id", id, "--attempt-id", result.attempt_id, "--findings", "<findings.json>"],
     })
+}
+
+fn mismatch_event(result: &E2eEventSessionResult) -> Option<(&Value, u64)> {
+    if result.events.complete {
+        return None;
+    }
+    let failure = result.events.failure.as_ref()?;
+    let expected = failure
+        .get("expected")
+        .or(result.events.expected.as_ref())?;
+    expected["sequence"]
+        .as_u64()
+        .filter(|sequence| *sequence > 0)
+        .map(|sequence| (expected, sequence))
 }
 
 #[cfg(test)]
@@ -212,13 +222,15 @@ mod tests {
             target_image_id: None,
             passed: false,
             events: E2eEventSessionProgress {
-                total: 20,
+                total: Some(20),
                 matched: 7,
                 last_sequence: Some(8),
                 expected: Some(json!({"sequence": 10, "dependency_sequence": 9})),
                 failure: Some(json!({"target_observation_id": Uuid::from_u128(2)})),
                 ..Default::default()
             },
+            phase: Default::default(),
+            apis: Default::default(),
             error: Some("test mismatch".into()),
             progress: "/progress.json".into(),
             report: "/report.json".into(),
@@ -255,5 +267,28 @@ mod tests {
             failure_action(RECORDING, &failed)["action"],
             "inspect_session_setup"
         );
+    }
+
+    #[test]
+    fn a_source_stream_error_points_to_its_row_without_dispatching_analysis() {
+        let mut failed = attempt();
+        failed.events.expected = None;
+        failed.events.failure =
+            Some(json!({"reported_sequence": 13, "reason": "invalid Source row"}));
+        let action = failure_action(RECORDING, &failed);
+        assert_eq!(action["action"], "inspect_session_setup");
+        assert_eq!(action["source_sequence"], 13);
+        assert!(action.get("plan").is_none());
+    }
+
+    #[test]
+    fn analysis_keeps_the_frontier_captured_at_first_failure() {
+        let mut failed = attempt();
+        failed.events.expected = Some(json!({"sequence": 11}));
+        failed.events.failure =
+            Some(json!({"expected": {"sequence": 10, "dependency_sequence": 9}}));
+        let action = failure_action(RECORDING, &failed);
+        assert_eq!(action["expected_sequence"], 10);
+        assert_eq!(action["dependency"][3], "9");
     }
 }
