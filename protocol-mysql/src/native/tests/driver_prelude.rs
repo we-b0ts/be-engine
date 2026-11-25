@@ -156,14 +156,25 @@ fn event_session_attests_clean_adjacent_idle_cleanup_but_keeps_the_real_terminal
         let plan = Native
             .prepare_event_session(&rows.iter().enumerate().collect::<Vec<_>>())
             .unwrap();
-        assert_eq!(
-            plan.driver_prelude,
-            [(2, DriverPrelude::MysqlPostTransactionIdleRollback)].into()
-        );
-        assert!(matches!(
-            plan.steps[&1],
-            ReplaySessionStep::Continue { end: true, .. } | ReplaySessionStep::ReadOnlyEnd { .. }
-        ));
+        let mut expected = std::collections::BTreeMap::from([(
+            2,
+            DriverPrelude::MysqlPostTransactionIdleRollback,
+        )]);
+        if member.starts_with("UPDATE") {
+            assert!(matches!(
+                plan.steps[&1],
+                ReplaySessionStep::AutocommitCommit { .. }
+            ));
+        } else if member.ends_with("FOR UPDATE") {
+            assert!(matches!(
+                plan.steps[&1],
+                ReplaySessionStep::Continue { end: true, .. }
+            ));
+        } else {
+            expected.insert(1, DriverPrelude::MysqlReadOnlyTransactionEnd);
+            assert!(!plan.steps.contains_key(&1));
+        }
+        assert_eq!(plan.driver_prelude, expected);
         assert!(!plan.steps.contains_key(&2));
         assert!(proven(&rows[1..]).is_empty(), "missing transaction start");
     }
@@ -171,8 +182,6 @@ fn event_session_attests_clean_adjacent_idle_cleanup_but_keeps_the_real_terminal
 
 #[test]
 fn idle_rollback_proof_ignores_only_index_diagnostics_before_the_real_terminal() {
-    use traffic_protocol::connection::ReplaySessionStep;
-
     let rows = transaction_then_idle_rollback(
         "ROLLBACK",
         "SELECT id FROM system_configs ORDER BY version",
@@ -186,12 +195,13 @@ fn idle_rollback_proof_ignores_only_index_diagnostics_before_the_real_terminal()
             .unwrap();
         assert_eq!(
             plan.driver_prelude,
-            [(2, DriverPrelude::MysqlPostTransactionIdleRollback)].into()
+            [
+                (1, DriverPrelude::MysqlReadOnlyTransactionEnd),
+                (2, DriverPrelude::MysqlPostTransactionIdleRollback),
+            ]
+            .into()
         );
-        assert!(matches!(
-            plan.steps[&1],
-            ReplaySessionStep::Continue { end: true, .. } | ReplaySessionStep::ReadOnlyEnd { .. }
-        ));
+        assert!(!plan.steps.contains_key(&1));
     }
     for invalid in [0x20, 0x23, 0x29, 0x61, 0x2021] {
         let mut captured = rows.clone();

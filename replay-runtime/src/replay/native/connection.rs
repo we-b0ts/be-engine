@@ -9,6 +9,7 @@ use traffic_protocol::{
     message::ProtocolMessage,
 };
 
+mod autocommit;
 mod message_batch;
 
 pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
@@ -211,11 +212,21 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
         session: RequestSession,
     ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
         let admission = if self.event_session {
-            request::RequestAdmission::Required
+            // Retained Source controls can match in order. Otherwise an
+            // unbound, safe native control can update the local connection.
+            request::RequestAdmission::SessionControl
         } else {
             request::RequestAdmission::LegacyControl
         };
         Box::pin(self.execute_request(message, None, Some(session), admission))
+    }
+
+    fn complete_autocommit(
+        &self,
+        request: Arc<dyn ProtocolMessage>,
+        after: traffic_model::recording::ProtocolRef,
+    ) -> NativeFuture<'_, ()> {
+        Box::pin(self.cover_autocommit_commit(request, after))
     }
 
     fn event_session(&self) -> bool {

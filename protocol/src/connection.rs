@@ -123,6 +123,15 @@ pub trait RequestHost: Send + Sync {
             self.execute(request).await
         })
     }
+    /// Cover the sealed end of a single-statement transaction using the
+    /// successful autocommit write receipt from this connection.
+    fn complete_autocommit(
+        &self,
+        _request: Arc<dyn ProtocolMessage>,
+        _after: ProtocolRef,
+    ) -> NativeFuture<'_, ()> {
+        Box::pin(async { anyhow::bail!("native autocommit completion is unavailable") })
+    }
     /// Try an expected Source control before a protocol emits a safe local reply.
     fn try_execute_session_control(
         &self,
@@ -292,6 +301,8 @@ pub enum ReplaySessionStep {
     InTransaction,
     Start,
     ImplicitStart,
+    AutocommitWrite,
+    AutocommitCommit { after: ProtocolRef },
     Continue { after: ProtocolRef, end: bool },
     ReadOnlyEnd { after: ProtocolRef },
 }
@@ -303,6 +314,8 @@ pub enum DriverPrelude {
     MysqlSqlalchemyPymysql,
     MysqlIdleMetadataRollback,
     MysqlPostTransactionIdleRollback,
+    MysqlTransactionBegin,
+    MysqlReadOnlyTransactionEnd,
 }
 
 /// A recorded protocol disposition indexed by its original admission sequence.
@@ -324,6 +337,8 @@ pub struct EventSessionPreparation {
 pub struct RequestSession {
     pub can_start: bool,
     pub after: Option<ProtocolRef>,
+    pub autocommit: bool,
+    pub autocommit_completion: bool,
     pub implicit_start_pending: bool,
     pub read_only_end_alternative: Option<Arc<dyn ProtocolMessage>>,
 }

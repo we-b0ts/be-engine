@@ -16,6 +16,7 @@ const QUERY_INDEX_FLAGS: u16 = SERVER_QUERY_NO_GOOD_INDEX_USED | SERVER_QUERY_NO
 pub(super) fn prove(
     records: &BTreeMap<usize, &ScopeRecord>,
     steps: &BTreeMap<usize, ReplaySessionStep>,
+    exclusions: &BTreeMap<usize, DriverPrelude>,
 ) -> BTreeMap<usize, DriverPrelude> {
     let mut wire_order = BTreeMap::<(Uuid, u64), Option<(usize, &ScopeRecord)>>::new();
     for (&position, &record) in records {
@@ -54,15 +55,16 @@ pub(super) fn prove(
         else {
             continue;
         };
-        if !matches!(
+        let proved_end = matches!(
             steps.get(&end_position),
             Some(
                 ReplaySessionStep::Continue { end: true, .. }
                     | ReplaySessionStep::ReadOnlyEnd { .. }
+                    | ReplaySessionStep::AutocommitCommit { .. }
             )
-        ) || !end.complete
-            || !cleanup.complete
-        {
+        ) || exclusions.get(&end_position)
+            == Some(&DriverPrelude::MysqlReadOnlyTransactionEnd);
+        if !proved_end || !end.complete || !cleanup.complete {
             continue;
         }
         if idle_rollback_after(&end.exchange, &cleanup.exchange) {

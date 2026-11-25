@@ -15,6 +15,8 @@ use traffic_protocol::{
 };
 use uuid::Uuid;
 
+mod session_admission;
+use session_admission::accepts_session;
 mod sessions;
 pub use sessions::SessionBindings;
 mod stream;
@@ -415,6 +417,9 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         request: &dyn ProtocolMessage,
         head: crate::SourceEvent,
     ) -> bool {
+        if self.independent_request_at_head(protocol, endpoint, request) {
+            return false;
+        }
         self.transaction_starts
             .iter()
             .filter_map(|&index| {
@@ -953,30 +958,6 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
     pub fn fail(&mut self, index: usize, ticket: &ClaimTicket) {
         self.lifecycle
             .fail(ticket, &mut self.exchanges[index].status);
-    }
-}
-
-fn accepts_session(step: Option<&ReplaySessionStep>, session: Option<&RequestSession>) -> bool {
-    let after = session.and_then(|session| session.after.as_ref());
-    if session.is_some_and(|session| session.implicit_start_pending) {
-        return step == Some(&ReplaySessionStep::ImplicitStart)
-            && after.is_none()
-            && session.is_some_and(|session| session.can_start);
-    }
-    match step {
-        None => after.is_none(),
-        Some(ReplaySessionStep::Optional | ReplaySessionStep::Unverified) => false,
-        Some(
-            ReplaySessionStep::Start
-            | ReplaySessionStep::ImplicitStart
-            | ReplaySessionStep::InTransaction,
-        ) => after.is_none() && session.is_some_and(|session| session.can_start),
-        Some(
-            ReplaySessionStep::Continue {
-                after: expected, ..
-            }
-            | ReplaySessionStep::ReadOnlyEnd { after: expected },
-        ) => after == Some(expected),
     }
 }
 

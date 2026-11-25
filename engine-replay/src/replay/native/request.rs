@@ -22,11 +22,16 @@ pub enum RequestAdmission {
     Required,
     LegacyControl,
     DriverObservation,
+    SessionControl,
+    AutocommitCompletion,
 }
 
 impl RequestAdmission {
     pub fn allows_local_response(self) -> bool {
-        self != Self::Required
+        matches!(
+            self,
+            Self::LegacyControl | Self::DriverObservation | Self::SessionControl
+        )
     }
 }
 

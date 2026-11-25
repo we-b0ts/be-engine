@@ -39,8 +39,16 @@ subscription and output sequence.
 
 Use the recorded SQL, bound values, connection ID, query sequence, and server
 status before and after each statement. Trace proven transactions and their
-required statements and terminal events. Keep writes, locks, and
-snapshot-changing controls on the correct transaction.
+required statements and terminal events. Ordinary reads in a proven read-only
+span can use autocommit. Ordinary reads before the first write can also run
+before Target starts its transaction. The first write anchors the remaining
+statements and the recorded end to one Target connection. Locks, savepoints,
+and explicit snapshot semantics retain their transaction constraints.
+
+A proven standalone successful `UPDATE` followed by `COMMIT` can match one
+autocommit `UPDATE`. Its successful delivery covers the sealed commit slot.
+An explicitly started Target transaction still has to issue the recorded
+commit. A write followed by `ROLLBACK` keeps its transactional end.
 
 Replay supports compatible text and prepared SQL. Preserve real bindings,
 types, NULL, duplicates, tables, ordering, and pagination. Supported
@@ -50,12 +58,17 @@ Check the semantic request when a preview omits later clauses. After COMMIT
 or ROLLBACK, a Source ORM can issue another SELECT through attribute access,
 refresh, or lazy loading. Verify the caller in Source code.
 
-The adapter can exclude a proven SQLAlchemy/PyMySQL connection prelude or a
-specific idle cleanup. These exclusions use captured wire order, session
+The adapter can exclude a proven SQLAlchemy/PyMySQL connection prelude,
+transaction controls with no independent effect, or specific idle cleanup.
+These exclusions use captured wire order, session
 identity, and transaction status and appear as `session_dependency_exclusions`
 in the Replay report. Ordinary application reads remain required even when
 they repeat the same result. Preserve normal production driver behavior and
 proven business transaction boundaries.
+
+The recorder seals these decisions in `session-schedule.jsonl`. Use a fresh
+recording to run with updated semantics when an earlier capture sealed
+different decisions.
 
 ## Outbound HTTP
 

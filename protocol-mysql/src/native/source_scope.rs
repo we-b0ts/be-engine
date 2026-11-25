@@ -12,6 +12,7 @@ use crate::{recorded::RecordedMysqlExchange, session_control, transaction_source
 mod driver_prelude;
 mod facts;
 mod idle_cleanup;
+mod semantic;
 pub(crate) use facts::ScopeFacts;
 use facts::ScopeRecord;
 
@@ -36,19 +37,23 @@ fn prepare_session_facts(
         .filter(|(position, _)| !driver_prelude.contains_key(position))
         .map(|(&position, record)| (position, record))
         .collect();
-    let mut steps = prepare_exchanges(
+    let semantic = semantic::Scope::new(&mandatory);
+    let mut plan = prepare_exchanges(
         DependencyScope::Startup,
         mandatory
             .iter()
             .map(|(&position, record)| (position, &record.exchange))
             .collect(),
         true,
+        Some(&semantic),
     )?;
-    let cleanup = idle_cleanup::prove(&mandatory, &steps);
-    steps.retain(|position, _| !cleanup.contains_key(position));
+    let cleanup = idle_cleanup::prove(&mandatory, &plan.steps, &plan.driver_prelude);
+    plan.steps
+        .retain(|position, _| !cleanup.contains_key(position));
     driver_prelude.extend(cleanup);
+    driver_prelude.extend(plan.driver_prelude);
     Ok(EventSessionPreparation {
-        steps,
+        steps: plan.steps,
         driver_prelude,
     })
 }
@@ -74,14 +79,17 @@ pub(super) fn prepare(
             .map(|(&position, record)| (position, record))
             .collect(),
         event_session,
+        None,
     )
+    .map(|plan| plan.steps)
 }
 
 fn prepare_exchanges(
     scope: DependencyScope,
     exchanges: BTreeMap<usize, &RecordedMysqlExchange>,
     event_session: bool,
-) -> Result<BTreeMap<usize, ReplaySessionStep>> {
+    semantic: Option<&semantic::Scope<'_>>,
+) -> Result<EventSessionPreparation> {
     let mut snapshot_constraints = BTreeMap::new();
     for record in exchanges.values() {
         if event_session
@@ -103,10 +111,10 @@ fn prepare_exchanges(
         scope,
         &transaction_source::GlobalReads::default(),
     );
-    let mut steps = BTreeMap::new();
+    let mut projection = EventSessionPreparation::default();
     for (&index, record) in &exchanges {
         if !event_session && controls.contains_key(&index) {
-            steps.insert(index, ReplaySessionStep::Optional);
+            projection.steps.insert(index, ReplaySessionStep::Optional);
         } else if in_transaction(record.server_status_before)
             || in_transaction(record.response.server_status)
             || record.response.server_status.is_none()
@@ -116,7 +124,9 @@ fn prepare_exchanges(
         {
             // Unclosed and cross-owner spans cannot authorize a write or end
             // using an unrelated Target transaction.
-            steps.insert(index, ReplaySessionStep::Unverified);
+            projection
+                .steps
+                .insert(index, ReplaySessionStep::Unverified);
         }
     }
     for plan in plans {
@@ -124,7 +134,9 @@ fn prepare_exchanges(
             if (event_session || !controls.contains_key(&end.index))
                 && exchanges[&end.index].response.status == "ok"
             {
-                steps.insert(end.index, ReplaySessionStep::Unverified);
+                projection
+                    .steps
+                    .insert(end.index, ReplaySessionStep::Unverified);
             }
         }
         for segment in plan.transactions {
@@ -136,6 +148,23 @@ fn prepare_exchanges(
                     .is_some()
             });
             let read_only = segment.write_count == 0 && !segment.strict && !has_savepoint;
+            let snapshot_sensitive = exchanges[&segment.members[0]]
+                .connection_id
+                .and_then(|connection| snapshot_constraints.get(&connection))
+                .is_some_and(|constraint| {
+                    exchanges[segment.members.last().expect("proved terminal")]
+                        .query_sequence
+                        .is_none_or(|sequence| sequence >= *constraint)
+                });
+            if !segment.strict
+                && !has_savepoint
+                && !snapshot_sensitive
+                && let Some(semantic) = semantic
+                && semantic.project(&segment, &controls, &mut projection)
+            {
+                continue;
+            }
+            let steps = &mut projection.steps;
             if !event_session
                 && read_only
                 && segment
@@ -220,7 +249,7 @@ fn prepare_exchanges(
             }
         }
     }
-    steps.retain(|index, step| {
+    projection.steps.retain(|index, step| {
         let record = &exchanges[index];
         if *step != ReplaySessionStep::Unverified {
             return true;
@@ -246,7 +275,7 @@ fn prepare_exchanges(
         }
         true
     });
-    Ok(steps)
+    Ok(projection)
 }
 
 fn opens_implicit_read_transaction(record: &RecordedMysqlExchange) -> bool {
