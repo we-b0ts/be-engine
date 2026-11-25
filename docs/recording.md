@@ -385,13 +385,10 @@ This optional display metadata is fixed with the recording. Historical recording
 without it retain an empty method set; readers never scan or rewrite old cases
 to populate it. It does not change Replay selection or verification gates.
 
-Build the normal engine binary. The gateway SDK uses published
-`brz-http-gateway = 0.2.12` with `redis-recording` enabled; Redis uses published
-`brz-redis = 0.0.16`. Its recorder-side registration, reservation renewal and
-completion protocol is compatible with gateway services using `0.2.14` and the
-API policy below. The Recorder SDK stays on `0.2.12` to avoid newer SDKs' transitive
-`serde_json/preserve_order` feature changing engine JSON serialization and Replay
-identities. No sibling gateway checkout is required.
+Build the normal engine binary with the published `brz-http-gateway` and
+`brz-redis` versions pinned in the workspace. The Recorder enables the gateway
+SDK's Redis admission and route validation features. Gateway services executing
+global reservations by digest require a Recorder that preloads the script.
 
 ```bash
 cargo build --locked --release --bin traffic-e2e
@@ -642,7 +639,8 @@ The external operator sets `<prefix>:max-gateways` to the participation limit N.
 The app does not own that configuration or gateway leases. Gateway and app must
 use the same Redis writer/database, prefix and URL key.
 
-The app publishes `<prefix>:url` using `SET NX PX 30000`:
+The app loads the global reservation Lua script with `SCRIPT LOAD` before
+publishing `<prefix>:url` using `SET NX PX 30000`:
 
 ```json
 {"url":"http://recorder-host:4080","owner":"<32 hex boot token>","max_inflight":8}
@@ -652,6 +650,10 @@ The global recording gateway reads the request limit from this value. Every
 10 seconds the app renews the lease only if its complete value still
 matches. A live second recorder cannot overwrite it. On shutdown the app deletes
 only its own value; after a crash TTL expiry allows a replacement to register.
+After a successful address renewal, the app checks the script cache with
+`SCRIPT EXISTS` and reloads an absent script. Request reservation operations use
+`EVALSHA`. The gateway uses its ordinary admission fallback if Redis reports a
+missing script.
 After readiness, the first address refresh runs immediately and later refreshes
 run every 10 seconds. A missing registration is recreated with `SET NX`, without
 overwriting another owner. Initial registration failure, renewal errors, expiry

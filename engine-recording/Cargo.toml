@@ -58,4 +58,5 @@ traffic-engine-config = { workspace = true, features = ["test-support"] }
 traffic-engine-verification = { workspace = true, features = ["test-support"] }
 traffic-recorder = { workspace = true, features = ["test-support"] }
 traffic-recording-store = { workspace = true }
+sha1 = "0.10"
 tempfile = { workspace = true }
