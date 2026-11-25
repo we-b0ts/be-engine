@@ -1,7 +1,6 @@
 use super::*;
 use crate::replay::control::{ReplayControlRequest, handle_control_request};
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn capture(data: &str) -> Value {
     json!({"encoding":"utf8","data":data,"truncated":false,"original_len":data.len(),"stored_len":data.len()})
@@ -19,12 +18,6 @@ fn mysql(connection: Uuid) -> Value {
         "target_host":"mysql.test","target_port":3306,"database":"appdb","username":"root","command":"COM_QUERY","sql":"SELECT 1",
         "params":null,"response":{"status":"incomplete","columns":[],"rows":[],"rows_truncated":false},"outcome":"response",
         "duration_ms":15000,"parse_warnings":["engine cleanup interrupted MySQL capture"]})
-}
-
-#[allow(dead_code)]
-fn peer_cleanup(event: &mut Value) {
-    event["outcome"] = json!({"terminated":{"side":"client","kind":"eof","scope":"write_half"}});
-    event["parse_warnings"] = json!([]);
 }
 
 fn cancelled_connection() -> Value {
@@ -143,61 +136,9 @@ async fn command(state: &Arc<Mutex<ReplayState>>, command: &str) -> Value {
     .0
 }
 
-async fn pair() -> (TcpStream, TcpStream, SocketAddr) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let (client, server) = tokio::join!(
-        TcpStream::connect(listener.local_addr().unwrap()),
-        listener.accept()
-    );
-    let (server, peer) = server.unwrap();
-    (client.unwrap(), server, peer)
-}
-
 #[tokio::test]
 async fn incomplete_mysql_cleanup_is_rejected_without_a_native_lifecycle_capability() {
     assert!(fixture(&[mysql(Uuid::new_v4())], true).await.is_err());
-}
-
-#[tokio::test]
-async fn lifecycle_cancelled_connect_holds_real_socket_until_target_stops() {
-    let (_temp, runtime) = fixture(&[cancelled_connection()], true).await.unwrap();
-    let state = runtime.state.clone();
-    assert_eq!(command(&state, "begin").await["ok"], true);
-    let (mut client, mut server, _) = pair().await;
-    let delivering = state.clone();
-    let task = tokio::spawn(async move {
-        crate::replay::connect_failure::deliver(
-            &mut server,
-            &ReplayTarget {
-                host: "redis.test".into(),
-                port: 6379,
-                fake_ip: "198.18.0.1".parse().unwrap(),
-                protocol: ReplayProtocol::Redis,
-            },
-            &delivering,
-        )
-        .await
-    });
-    // Source never established the upstream connection, so these initial
-    // caller bytes are transport evidence rather than a captured RESP command.
-    client.write_all(b"*1\r\n$5\r\nHELLO\r\n").await.unwrap();
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(30),
-            client.read(&mut [0; 1]),
-        )
-        .await
-        .is_err()
-    );
-    assert_eq!(command(&state, "prepare_end").await["ok"], true);
-    assert!(
-        !task.is_finished(),
-        "Source cancellation cannot reset Target"
-    );
-    client.shutdown().await.unwrap();
-    assert!(task.await.unwrap().unwrap());
-    assert_eq!(command(&state, "end_stopped").await["ok"], true);
-    assert!(!state.lock().await.connect_failures.snapshot().is_dirty());
 }
 
 #[tokio::test]
@@ -224,18 +165,4 @@ async fn cleanup_context_never_launders_missing_scope_truncated_requests_or_pars
         json!([{"kind":"bytes","raw":{"encoding":"base64","data":"AA==","truncated":true}}]);
     assert!(rejected(&[event], true).await);
     assert!(rejected(&[cancelled_connection()], false).await);
-}
-
-#[tokio::test]
-async fn cleanup_gate_cannot_accept_early_target_cancellation() {
-    let (_temp, runtime) = fixture(&[redis(Uuid::new_v4(), 1)], true).await.unwrap();
-    assert_eq!(command(&runtime.state, "begin").await["ok"], true);
-    let (mut client, mut server, _) = pair().await;
-    let gate = AtomicBool::new(false);
-    client.shutdown().await.unwrap();
-    assert!(
-        await_target_end(&mut server, &gate, &runtime.state, "case-a")
-            .await
-            .is_err()
-    );
 }

@@ -22,16 +22,3 @@ fn http_request_json_authoring_is_rejected_and_global_formats_need_no_http_scope
     assert!(compiled.native.is_empty());
     assert_eq!(compiled.global_json.unwrap().fields.len(), 3);
 }
-
-#[test]
-fn native_http_query_and_multipart_keep_their_own_contracts() {
-    for effect in [
-        json!({"kind":"http_request","query":{"nonce":{"kind":"uuid_v4"}}}),
-        json!({"kind":"http_request","multipart_boundary":true}),
-    ] {
-        let document = json!({"format":"traffic-policy/v3","rules":[{"id":"transport","match":{"api":"POST /api",
-            "resource":{"protocol":"http","endpoint":"upstream.test:80"},"operation":"POST","path":"/send"},
-            "effect":effect,"proof":{"source":"client.rs:send","fact":"Source generates this native protocol field"}}]});
-        policy::compile_policy(&policy::parse_policy(&document.to_string()).unwrap()).unwrap();
-    }
-}

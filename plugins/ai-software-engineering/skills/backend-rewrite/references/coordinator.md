@@ -1,6 +1,10 @@
-# Coordinator
+# Case Workflow Coordinator
 
-Audience: the workflow coordinator. Read at every session start or resume,
+For a sealed Source event recording, use
+[Source Session regression](session-regression.md). This guide covers Case
+workflows operated through `backend-rewrite status` and `next`.
+
+Audience: the Case workflow coordinator. Read at every start or resume,
 including sessions waiting for assigned agents. Own action execution, result
 reconciliation, waiting, and completion. Delegate source diagnosis, code edits,
 and integration analysis. Load only the coordinator references linked at the
@@ -10,8 +14,8 @@ relevant action below.
 
 The engine selects the legal action; the coordinator executes or delegates it.
 Repository analysts own read-only source route, module-group and independent
-dependency attribution analysis, including Source-proven task/lifecycle rule
-proposals. API implementers own API diagnosis and implementation. The retained
+dependency attribution analysis. API implementers own API diagnosis and
+implementation. The retained
 code integrator owns candidate preparation and review. An engine-requested API expert investigates
 read-only and reports through the coordinator to the existing API implementer. The
 task runtime supplies live handles and events but does not replace engine state.
@@ -51,16 +55,14 @@ and enters the work branch. Each return to base requires a new confirmation.
 On a work branch, continue the normal workflow.
 [Regression confirmation protocol](coordinator-agent-protocol.md#authorized-regression-start)
 
-Follow the returned action to start an absent rewrite workflow.
-Before the engine adopts external standard recordings, omit `--api`. Missing
+Follow the returned action to start an absent Case workflow.
+Before the engine adopts a Case-compatible recording, omit `--api`. Missing
 evidence returns `input_required`; follow
 [external recording evidence](coordinator-recording.md). After the engine
 publishes its stable inventory, select work with the exact API path/pattern.
-The standalone recording service has no per-run API selector; ingress and
-preserved Recorder include/exclude rules bound capture. If an action response was lost or the session is
-resuming, recover the engine scheduler's current action with unscoped read-only
-`status`; scoped status serves work-item inspection. Execute the returned
-action's command to advance the workflow.
+If an action response was lost or the workflow is resuming, recover the engine
+scheduler's current action with unscoped read-only `status`. Use scoped status
+for work-item inspection and the returned action command to advance.
 
 After handling a user interruption, worker handoff, integration, or other side
 work, and before waiting or ending the current turn, return to the
@@ -103,14 +105,14 @@ listed protocol before handling that action.
 | `purpose_required` | Start the user-approved regression after the required live runtime query | None | [authorized regression start](coordinator-agent-protocol.md#authorized-regression-start) |
 | `recording_in_progress`, `recording_refresh_pending` | Observe external publication and wait for the selected evidence | External recording owner | [recording actions](coordinator-recording.md) |
 | `repository_analysis_required` | Complete one batch of case pattern identification and API grouping before Replay | Repository analyst | [repository analysis](coordinator-repository-analysis.md) |
-| `dependency_attribution_required` | Obtain the exact context, reconcile rule assessment and proposals, then apply independent ownership proof | Repository analyst in read-only `dependency_attribution` mode | [independent dependency attribution](coordinator-rule-actions.md#independent-dependency-attribution) |
+| `dependency_attribution_required` | Supply the exact unused occurrence and reconcile independent Source findings | Repository analyst in read-only `dependency_attribution` mode | [Case attribution](#dependency_attribution_required) |
 | `implementer_dispatch_required` | Create/resume the fixed slot and confirm its exact same-group API batch | API implementer | [fixed implementers](coordinator-implementers.md) |
 | `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
 | `integration_required` | Retain identity, publish the exact merged candidate, then report integration without review check | Code integrator | [integration](coordinator-integration.md) |
 | `source_review_required`, `target_quality_required` | Reconcile legacy requests; ordinary source review is deferred to final pre-revalidation | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
 | `pre_revalidation_review_required` | Delegate the configured quality requirement and final reporting command, publish the exact candidate, and accept its final-stage receipt | Code integrator | [final review](coordinator-review.md#final-review-before-full-revalidation) |
-| `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer or repository analyst | [rule actions](coordinator-rule-actions.md) |
+| `plan_apply_required` | Apply the reviewed time, id, or token plan with Source-proven inputs | API implementer or repository analyst | [rule actions](coordinator-rule-actions.md) |
 | `input_required` | Resolve only the named input and resume the retained invocation | Delegate semantic/source questions to the owning API implementer or code integrator | [input handling](#input_required) and, for startup inputs, [startup inputs](coordinator-startup-inputs.md) |
 | `system_repair_required`, `recovery_required`, `blocked` | Execute only the returned acceptance/recovery action or stop with retained context | External system owner may install the named repair | [recovery and system repair](coordinator-recovery.md) |
 | `wait_required`, `worker_events_required` | Perform the mandatory runtime query pass, reconcile events, then wait or refresh status | Task runtime provides live observations | [mandatory runtime queries](coordinator-agent-protocol.md#mandatory-runtime-queries) |
@@ -221,7 +223,7 @@ is waiting for Replay, execute the returned bounded wait command. A stopped exec
 `execution_failed` operation requires its reported cause to be resolved before
 its returned retry, without a hot loop.
 
-Worker-proven rule proposals for other completed API attempts may also be
+Source-proven time, id, or token proposals for other completed API attempts may be
 planned during Replay; see [rule actions](coordinator-rule-actions.md). Busy
 Apply preserves the plan and returns waiting guidance. At the next idle
 boundary the engine prioritizes pending plans after either a pass or an
@@ -249,12 +251,8 @@ adopt completed external traffic -> identify patterns for new uncovered APIs
     -> final quality-check review -> one complete actual batch session
     -> project that session's method results -> final delivery
 
-source-proven capture gap -> apply capture rule -> API waits
+source-proven capture gap -> API waits for required evidence
     -> drain other runnable work -> wait for one full-scope external batch
-
-source-proven Redis rule -> derive safe snapshot overlay from immutable evidence
-    -> reuse the same recording
-    -> require an external refresh only when strict derivation fails
 ```
 
 ## Core Action Handling
@@ -312,16 +310,10 @@ worker binding.
 
 ### `dependency_attribution_required`
 
-Read [independent dependency attribution](coordinator-rule-actions.md#independent-dependency-attribution).
-The coordinator submits a claim from the implementer's exact unused Source
-UUIDs, current evidence ID and factual reason. The independent repository
-analyst owns the investigation of the disputed Source traffic.
-Dispatch the exact current context and relevant effective task/lifecycle
-declarations to the read-only repository analyst. Reconcile both its ownership
-proof and its assessment of whether the existing rule covers the Source lifecycle.
-Publish supported rule changes through the existing plan/apply transaction,
-obtain fresh context, then apply the proof. Reuse adequate rules and preserve the
-ordinary manual-proof fallback described by that protocol.
+Use the returned context for the exact unused Source UUIDs and current Case
+evidence ID. Assign the read-only investigation to the repository analyst.
+Require Source citations for the trigger and the occurrence before submitting
+ownership evidence through the returned action.
 
 ### `implementer_dispatch_required`
 
@@ -334,11 +326,9 @@ per-API dispatch and lease identities.
 
 ### `plan_apply_required`
 
-Execute the exact unchanged `commands.apply` once; never rerun planning or
-reconstruct selector inputs. For response-rule, recorder-capture,
-process-owned-dependency or async lifecycle plans, first read
-[coordinator-rule-actions.md](coordinator-rule-actions.md). A response
-rule plan remains bound to its existing evidence and plan ID.
+Review the plan against its time, id, or token finding, evidence and plan ID.
+Execute the returned `commands.apply` once with its original arguments.
+Follow [rule actions](coordinator-rule-actions.md).
 
 ### `advance_required`
 
@@ -368,7 +358,7 @@ An active operation keeps its existing wait/recovery action. Routine generated
 `progress.yaml` updates retain the final-delivery commit flow below.
 
 When `details.reason=source_route_required`, a caller-selected dynamic API has
-not yet produced a standard recording with confirmed case-pattern coverage and
+no Case recording with confirmed case-pattern coverage and
 lacks a proven source registration route. Recorded inventory APIs use their
 confirmed case pattern without interrupting Replay. Assign
 `repository-analyst` a read-only `route_analysis` task with the exact API, source
@@ -479,8 +469,10 @@ authorizes recovery.
 
 ### `recording_refresh_pending`
 
-The scoped API is parked until one consolidated standard recording can replace
-the baseline. Read [coordinator-recording.md](coordinator-recording.md), execute `commands.wait`, and never execute its stale acceptance.
+The scoped API is parked until one consolidated Case-compatible recording can
+replace the baseline. Follow the
+[Case recording handoff](coordinator-recording.md#legacy-case-workflow)
+and execute `commands.wait`.
 Continue other runnable work only through current engine-issued commands.
 
 ### `complete`
@@ -507,7 +499,7 @@ expanded `inventory` for aggregate route status and individual `METHOD API`
 verification states. MOTAN entries retain their protocol-qualified identity.
 These are engine-owned projections, not a coordinator scheduling queue.
 
-`workflow.scope` selects work from the adopted standard recording independently
+`workflow.scope` selects work from the adopted Case recording independently
 of the currently selected API. Without a selector, every API with a published
 case enters the inventory; unobserved APIs do not block completion. The scope
 remains stable as selected workers change.
@@ -569,9 +561,7 @@ invalidate evidence.
 `awaiting_recording_refresh` is parked, not complete or blocked. Continue other
 pending APIs and resume existing workers until the engine returns one
 consolidated external recording requirement. Follow
-[coordinator-rule-actions.md](coordinator-rule-actions.md) for the
-capture/rule transition and [coordinator-recording.md](coordinator-recording.md)
-for external evidence handoff.
+[external evidence handoff](coordinator-recording.md).
 
 ## Completion Invariants
 
@@ -602,8 +592,8 @@ worker/expert actions expose actual `execution_mode: auto_next` or `single`.
 Wait summaries also retain current Replay progress. Treat wait as observation,
 without issuing an extra next.
 
-Optional `recording_run_id` directly selects an existing completed standard
-recording as the regression baseline. Missing or unusable recordings block
+Optional `recording_run_id` directly selects an existing completed
+Case-compatible recording as the regression baseline. Missing or unusable recordings block
 progress; do not substitute another recording or recapture historical requests.
 Switching IDs resets current verification, with `only` / `skip` applied to the
 selected inventory. Respect this selection; a required fresh capture needs the
@@ -616,9 +606,3 @@ caller-required repository checks and delivery after the engine's final gates.
 A worker's external-input blocker is evidence for the existing route, not
 permission to mark completion. Preserve bindings and evidence when the engine
 returns global `blocked`, and resume through its returned action after repair.
-
-Redis scalar ownership tokens use `redis.keys` with the generator's format,
-for example `identity` with `{hex: 32}`. The engine shares complete Source/Target
-correspondences across ordinary writes and later opaque EVAL/EVALSHA ARGV or
-DELEX IFEQ references. Script bytes, numkeys, KEYS, TTL/options, lane order and
-finite consumption remain strict. No lock-specific effect or planner exists.

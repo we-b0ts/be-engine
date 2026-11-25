@@ -1,6 +1,9 @@
 # Coordinator Agent Protocol
 
-Audience: the workflow coordinator. Read for dispatch, resume, worker status
+This protocol covers the Case coordinator. For event-based finding dispatch
+and verification, use [Source Session regression](session-regression.md).
+
+Audience: the Case workflow coordinator. Read for dispatch, resume, worker status
 checks, completion events, expert assistance, or binding recovery. The coordinator
 executes the workflow mutations in this guide and delegates code operations.
 Follow the main loop in

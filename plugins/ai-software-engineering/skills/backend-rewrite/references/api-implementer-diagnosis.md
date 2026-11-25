@@ -1,6 +1,27 @@
 # API Implementer Diagnosis
 
-Audience: API implementers assigned an `implementation_required` work item. Read before work-item diagnosis
+## Source Session Diagnosis
+
+Start from the assigned finding, its recording ID, expected sequence and
+Target attempt. Follow the
+[Session evidence queries](session-regression.md#diagnose-the-first-failure)
+to inspect the exact event, dependency admission and authenticated Target
+observation when available. Trace the first relevant divergence through the
+Source and Target code. Check earlier events for state that affects the
+failure, including startup, background work, and concurrent requests. Later
+Source events can establish shared behavior and remain unverified until Replay
+reaches them.
+
+Use [dependency diagnosis](api-implementer-dependency-diagnosis.md),
+[runtime diagnosis](api-implementer-runtime-diagnosis.md), or
+[rule diagnosis](api-implementer-rule-diagnosis.md) according to the evidence.
+Return the proven cause, Source citations, related sequences, affected Target
+paths, and any required inputs to the coordinator. For a code repair, include
+focused check results and the exact repair commit.
+
+## Case Workflow Diagnosis
+
+Audience: API implementers assigned a Case workflow `implementation_required` work item. Read before work-item diagnosis
 or code changes. Before edits, read
 [target-code-rules.md](target-code-rules.md).
 For a proven environment override, mount, or writable-directory requirement,
@@ -19,8 +40,7 @@ issue and evidence. Read only the relevant specialty document when its signal ap
 | --- | --- |
 | Missing recorded dependency, dirty dependency, MySQL or Redis compatibility | [Dependency diagnosis](api-implementer-dependency-diagnosis.md) |
 | Rejected egress, local cache, target runtime or incomplete Replay | [Runtime and Replay diagnosis](api-implementer-runtime-diagnosis.md) |
-| Source-generated time/random values, non-contractual order, a rule hint, or a possible rule capability gap | [Rule diagnosis](api-implementer-rule-diagnosis.md) |
-| Unused dependencies may come from a source-detached API task | [API-triggered asynchronous process traffic](api-implementer-dependency-diagnosis.md#api-triggered-asynchronous-process-traffic) |
+| Source-generated time, ID, or token differences | [Rule diagnosis](api-implementer-rule-diagnosis.md) |
 
 An issue may require more than one specialty document to distinguish causes. Follow
 the response, Replay, and dependency gate order below when choosing a repair.
@@ -92,34 +112,15 @@ Return the observed fault to the coordinator with its original attempt and
 artifact reference. The coordinator obtains the route-specific evidence and
 follows the engine's repair and verification actions.
 
-When a difference traces to iteration over a Set, HashSet, or another collection
-with non-contractual order, do not make target code reproduce the order seen in
-one recording. Prove from source construction and downstream use that only order
-differs, with element values and duplicate counts preserved. Check the current
-verification policy and the relevant response or dependency `unordered` rule
-before proposing target changes; return exact selectors and source proof to the
-coordinator to reuse or plan a supported rule. If order is contractual or the
-contents differ, repair the target behavior instead.
-
 ## Rule Discovery From Source Diagnosis
 
 Return the Source proof to the coordinator when a typed rule may apply. The
 coordinator checks the evidence identity and policy freshness for that proposal.
 
 After tracing source and target behavior, read
-[Rule diagnosis](api-implementer-rule-diagnosis.md) for generated identities,
-JWT expiry, DOCX/header dates, Redis locks or time values, MySQL result time
-shifts, cross-case HTTP initialization, unordered collections, and protocol
-value rules. Source proof determines applicability; engine hints are additional
-evidence, and their absence does not mean a documented capability is unavailable.
-
-In particular, Redis `time-shift` has no automatic hint. When an earlier matched
-Redis timestamp may cause expiry, extra reads, or an error branch, read its
-[proof contract](api-implementer-rule-diagnosis.md#rule-discovery-from-source-diagnosis)
-and inspect the shared `dependency.response` time contract and explicit delivery
-permission. Check `backend-rewrite rule plan --help` and the typed capabilities
-before declaring a gap. Only the
-coordinator plans/applies rules and runs fresh verification.
+[rule diagnosis](api-implementer-rule-diagnosis.md) for time, id, and token
+contracts. Source proof and the installed comparison adapter determine applicability.
+Only the coordinator plans and applies Case rules and runs fresh verification.
 
 ## Additional evidence
 
@@ -184,11 +185,8 @@ Classify exactly one cause:
 - `local_cache/runtime_state`: cache lifecycle or process-local state differs;
 - `dependency_behavior`: the target calls, selects, or consumes a dependency
   differently;
-- `intentional_nondeterminism`: source code proves current time, duration,
-  UUID, or random generation; nonce and random salt are uses of `random`, and a
-  derived scalar uses its root mechanism with the derivation in source evidence;
-- `unordered_contract`: source collection type and API contract prove order is
-  irrelevant and bounded evidence proves equal contents;
+- `intentional_nondeterminism`: Source code proves the time, ID, or token
+  generation and how the value is used;
 - `missing_external_evidence`: one exact required external value or exchange is
   absent and cannot be derived without invention.
 
@@ -209,8 +207,8 @@ Source proof, shared impact, necessary coordinator inputs and unresolved risks.
 
 - Target API, cache, or startup defect: make one
   coherent repair, run focused tests, and complete [api-implementer-delivery.md](api-implementer-delivery.md).
-- Supported nondeterminism/order: return source proof and exact typed
-  rule inputs. Do not apply the rule.
+- Supported time, id, or token rule: return Source proof and the exact inputs
+  for the coordinator to apply.
 - Source-proven omitted dependency. Return the Case or occurrence reference,
   `hostname[:port]`, Source citation and missing resource proof.
 - Recorder/Replay capability gap: after checking supported mechanisms, return
@@ -231,9 +229,3 @@ the completed subset with original API/dispatch/lease identities and remaining
 assigned tasks; ending a turn does not make the whole slot idle. If two repairs do not
 improve the active issue, stop adding local patches and return a bounded
 structural replan from the current issue and observed changes across attempts.
-
-## API-triggered asynchronous process traffic
-
-When unused dependencies may come from a source-detached API task, read
-[the dependency diagnosis](api-implementer-dependency-diagnosis.md#api-triggered-asynchronous-process-traffic)
-for source ownership proof, supported protocol selectors, and strict boundaries.

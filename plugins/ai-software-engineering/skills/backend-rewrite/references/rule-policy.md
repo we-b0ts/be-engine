@@ -1,58 +1,36 @@
 # Shared Rule Evidence Contract
 
-The engine drives rule work through the current state and evidence APIs.
-Relevant `rule_hints` identify supported rules when the observed difference or
-typed candidate warrants them. Returned `queries`, `applicable_rule_planners`
-and actions provide the bound evidence queries and next legal commands. Follow
-those commands with their current scope, issue and evidence identities. This
-reference explains the evidence boundary; it does not create an action or
-override an engine gate.
+The policy at `project.policy` uses `traffic-policy/v3`. Rule work covers time,
+ID and token values. Establish the Source generation or validation behavior,
+the exact value location and the required relationship. Preserve the unselected
+fields, physical resource identity and finite recorded exchanges. See
+[rule diagnosis](api-implementer-rule-diagnosis.md).
 
-Inspect the reported difference and Source behavior before choosing a rule.
-A hint or draft identifies a supported possibility, not a proven business
-exception. An empty candidate list does not prove a missing capability.
-Equal values, paired nulls, missing fields and random-looking bytes do not prove
-generation or permit a wider comparison. Keep unselected content, physical
-resource identity and finite dependency obligations strict.
+## Source Event Sessions
 
-The API implementer returns Source file/symbol proof, the smallest supported
-declaration, its exact scope and any unresolved differences. Only the coordinator
-plans/applies it and follows the engine's verification actions. Their respective
-role references retain those authorities; a successful worker report is not
-engine acceptance.
+Start from the failed sequence and evidence commands returned by `session run`.
+Use the Source event, the dependency admission sequence and the authenticated
+Target observation when available. Later Source events provide context until
+the next Replay reaches them. See [Source event regression](session-regression.md).
 
-An overview is not planning evidence. If the planner identifies a current
-overview, execute its returned detail-query command and use that response's
-planner/evidence identity. This evidence-type correction does not require a new
-Replay, redispatch, or a different implementation window.
+Return a `kind: rule` finding with the Source sequences and affected
+repository-relative policy path. `session plan` groups findings and selects
+independent work. Review the exact policy diff and rerun the full Source session.
+Verification requires actual completion of the entire event stream.
 
-Check policy freshness before planning. Discovery is bounded; the plan validates
-the complete selected immutable Source inventory and independent Target evidence.
-Source self-validation, derived dependency delivery and actual Target output are
-different evidence roles. A draft never supplies its own Source proof.
+## Case Workflow Evidence
 
-`draft_policy` is a proof-required additive direction, marked `section_update: add`.
-Submit only the new fields or formats. Existing fields remain in place; adding
-format B to an existing format A produces `[A, B]`, preserving order and removing
-exact duplicates. An ordinary empty map does not clear existing declarations.
-An incompatible kind, profile or selector change must not silently overwrite one.
+For an active Case workflow issue, follow the returned detail query, current
+evidence ID and planner action. Use `rule_hints` and drafts to locate candidates
+and verify each with Source code. Check policy freshness and follow the returned
+Replay action when required. The plan checks the complete selected Source
+inventory and available independent Target evidence.
 
-For an intentional change, removal or clear, use `traffic-policy-change/v1` with
-explicit `replace_sections`; provide the complete desired map for each listed
-section and review all removed declarations. `replace_rules` independently names
-native rules to replace and is optional. Sections not listed for replacement
-keep additive behavior; omitted sections and rules remain unchanged. Review the
-plan's diff, scope, coverage and residual failures before application in both modes.
+Compatible format additions preserve declaration order and deduplicate exact
+matches. Intentional replacements use `traffic-policy-change/v1` with explicit
+`replace_sections` and complete desired maps for those sections. Use
+`replace_rules` to identify individual native rules for replacement. Review the
+policy diff, coverage and any remaining failures before applying.
 
-Use the returned plan and follow its apply, wait or recovery action. Policy,
-Source inventory, private startup inputs and protected Target evidence remain
-stale-checked. Application is not verification: finish the required genuine
-Replay and any recording obligations. Preserve recordings and engine-owned state.
-
-For syntax requested by the relevant rule hint, consult
-[content formats and carrier bindings](../../../../../docs/content-policy-layout.md),
-[global formats](../../../../../docs/resource-field-contracts.md) or
-[signature profiles](../../../../../docs/signature-profiles.md).
-[Unified rule contracts](../../../../../docs/unified-rule-contracts.md) documents
-the technical evidence model. Read these details when the current evidence calls
-for them; do not attach the whole mechanism catalog to routine worker dispatches.
+The worker returns the proof and proposed declaration. The coordinator applies
+the reviewed plan and follows the engine's verification actions.

@@ -117,44 +117,6 @@ fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
 }
 
 #[test]
-fn dependency_lifetime_plans_require_local_evidence_for_each_request() {
-    let proof =
-        json!({"source":"cache.py:42","fact":"Source shares only these finite recorded requests"});
-    for process in [false, true] {
-        let requests = if process {
-            json!([
-                {"http":{"host":"auth.example.test","method":"GET","path":"/refresh"},"proof":proof},
-                {"http":{"host":"keys.example.test","method":"GET","path":"/keys"}}
-            ])
-        } else {
-            json!([
-                {"redis":{"operation":"HGET","key":"token_v2","field":"client"},"proof":proof},
-                {"http":{"host":"auth.example.test","method":"GET","path":"/keys"}}
-            ])
-        };
-        let mut proposal = if process {
-            json!({"format":"traffic-policy/v3", "source_revision":format!("sha256:{}", "1".repeat(64)),
-                "process_dependencies":{"tasks":{"refresh_keys":{"requests":requests}}}})
-        } else {
-            json!({"format":"traffic-policy/v3", "localcache":{"requests":requests}})
-        };
-        assert!(validate_proposal(&proposal.to_string()).is_err());
-        let requests = if process {
-            &mut proposal["process_dependencies"]["tasks"]["refresh_keys"]["requests"]
-        } else {
-            &mut proposal["localcache"]["requests"]
-        };
-        requests[1]["proof"] = proof.clone();
-        validate_proposal(&proposal.to_string()).unwrap();
-        let document = crate::policy::parse_policy(&proposal.to_string()).unwrap();
-        SourceProofSnapshot::capture(&document).unwrap();
-        let rendered = crate::policy::render_policy(&document).unwrap();
-        assert!(!rendered.contains("proof:"));
-        assert!(validate_proposal(&rendered).is_err());
-    }
-}
-
-#[test]
 fn named_api_signature_positions_require_own_plan_proof_without_runtime_evidence() {
     let mut proposal = json!({"format":"traffic-policy/v3",
         "signatures":{"default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}},

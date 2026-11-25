@@ -1,5 +1,9 @@
 # Coordinator Recovery And System Repair
 
+For a Source Session setup or execution failure, follow the returned result
+and [Session diagnosis](session-regression.md#diagnose-the-first-failure).
+The action kinds and repair receipts below belong to the Case workflow.
+
 Read this guide for `recovery_required`, `system_repair_required`, `blocked`, or an
 engine-issued repair verification action. The coordinator owns every
 state-mutating command in this guide.
@@ -51,9 +55,8 @@ against the canonical target root; status does not embed evidence or its command
 
 Successful verification chooses the next transition. Replay and external-input
 repairs authorize Replay for the same owning API and immutable cases without a
-new implementation handoff; target quality gates still apply. Recorder or
-source-baseline repairs require fresh external standard traffic. The AI never chooses
-between those transitions.
+new implementation handoff. Target quality gates still apply. For a Recorder
+or Source baseline repair, follow the engine's required Case evidence handoff.
 
 For an accepted `source_change` caused by an upgraded source image, an
 administrator replaces the source baseline without rerunning initialization:
@@ -87,11 +90,9 @@ command. Execute that returned command once. It does not apply to
 transitions.
 
 Before reporting an IP capture defect, use `route --cause unrecorded-ip` with
-the worker's current evidence and inputs. Return requested source investigation
-to that worker; execute recorder rule plan/apply only with its proven inputs. A
-supported JSON response URL rewrite is an acquisition rule; complete its fresh
-recording verification before escalating a remaining engine defect. Rejection
-counts alone establish neither IP origin nor a missing capture mechanism.
+the worker's current evidence and inputs. Route further Source investigation
+to that worker. Establish the address origin and the missing capture mechanism
+from Source and the exact dependency evidence.
 
 Use `recorder-capability-gap` only when the recorder lacks a required mechanism.
 Use `replay-capability-gap` for a proven response decoding or semantic assertion

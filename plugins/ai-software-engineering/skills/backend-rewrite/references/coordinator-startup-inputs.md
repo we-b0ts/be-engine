@@ -55,9 +55,10 @@ baseline may become effective again.
 
 Consume the returned `startup_environment` input. Use `--from-source` for
 `from_source: true`; otherwise use its explicit caller-owned value source and
-evidence. Apply inputs accompanying a code handoff after its publication;
-apply an input-only result while its original dispatch is still confirmed.
-Both paths require the engine's normal acceptance afterward.
+evidence. Apply inputs accompanying a code handoff after its publication.
+For a Source Session, rerun the full session with the applied inputs.
+For a Case workflow, apply an input-only result while its original dispatch
+is confirmed and follow the engine's acceptance action.
 Do not substitute a worker-local file for the canonical override.
 
 ```yaml

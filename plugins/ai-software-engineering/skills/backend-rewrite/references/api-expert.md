@@ -1,5 +1,9 @@
 # API Expert
 
+This reservation protocol is for the Case workflow. Source Session
+investigations use the
+[sequence-based analysis assignment](session-regression.md#diagnose-the-first-failure).
+
 An HTTP reservation is the implementer's canonical route scope. Inspect each
 method and its failures within that assignment. Use the exact scope supplied by
 the coordinator.

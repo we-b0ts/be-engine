@@ -1,7 +1,8 @@
 # API Implementer Delivery
 
-Use before returning a completed API from the assigned worktree, including an
-unchanged implementation after an input-only repair.
+Use before returning a completed API in a Case workflow, including an
+unchanged implementation after an input-only repair. For Source Session
+findings, follow [Session delivery](session-regression.md#plan-implement-and-verify).
 
 ## Prepare The Delivery
 

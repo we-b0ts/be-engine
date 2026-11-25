@@ -279,8 +279,6 @@ fn old_snapshots_do_not_create_a_replay_request() {
     assert!(!any_ready(&loaded));
 }
 
-mod header_apply;
-
 #[test]
 fn changed_process_policy_requests_one_replay_for_a_remaining_dependency_only_failure() {
     let target = configured_target();

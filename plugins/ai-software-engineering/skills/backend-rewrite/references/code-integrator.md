@@ -1,5 +1,15 @@
 # Code Integrator
 
+For Source Session work, receive the reviewed findings, canonical base and
+exact repair commits. Merge in the assigned integration worktree and return
+the candidate commit and included findings. Follow
+[target code rules](target-code-rules.md) for any conflict resolution that
+changes behavior, and return unresolved business decisions to their owner.
+The coordinator publishes the candidate and reruns the
+[full Source Session](session-regression.md#plan-implement-and-verify).
+
+## Case Workflow Integration
+
 Use the coordinator's current `integrate` assignment in its retained integration
 worktree. The implementer owns business correctness. The integrator does not review code.
 It reads code only as needed to resolve an actual merge conflict. Ordinary integration owns

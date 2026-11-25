@@ -70,12 +70,14 @@ differ. traffic-e2e does not infer or special-case an application `PORT`
 variable.
 
 Initialization creates local `dev-migration` from the current `HEAD` when it is
-missing without switching branches. It writes schema-version-18 project,
-source-traffic-policy, and verification configuration; an empty startup mount
-snapshot; missing Dockerfile scaffolds; a target bootstrap when target files
-are absent; and required ignore rules. Existing complete target files and
-Dockerfiles are preserved. Partial or conflicting initialization state is
-rejected.
+missing without switching branches. It writes version 18
+`.traffic-e2e/project.yaml` with verification settings, the unified
+`traffic-policy/v3` document at `.traffic-e2e/policy.yaml`, an empty
+`.traffic-e2e/apis.yaml` catalog, and a local `.traffic-e2e/regression.yaml` if
+absent. It creates an empty startup mount snapshot, missing Dockerfile
+scaffolds, a target bootstrap when target files are absent, and required
+ignore rules. Existing complete target files and Dockerfiles are preserved.
+Partial or conflicting initialization state is rejected.
 
 Do not scan source or target code before this command merely to enumerate
 environment variables, dotenv files, mounts, or writable directories. Do not
@@ -102,17 +104,14 @@ default context to the outer Git repository, or infer sibling paths that the
 project configuration does not declare.
 
 Configure `project.delivery.quality_check` with the final quality tool identifier
-(default `cargo-clippy`; other languages use their project tool). Worker handoff
-and ordinary integration bind committed deliveries without review check.
-Source, Replay-isolation, line-limit and spawn checks run at final pre-revalidation.
-At that final
-stage, the integrator executes the configured tool on the final committed
-candidate, then reports success through `review check --pre-revalidation
---quality-check TOOL` in its assigned worktree. The engine records a
-version-bound final receipt. Publication, acceptance and full revalidation keep
-their existing sequence. Formatting, unit tests and additional development
-requirements belong in `AGENTS.md` or `CLAUDE.md`; they do not replace or disable
-the engine Source/Replay-isolation standard.
+(default `cargo-clippy`). For the legacy Case workflow, worker handoff and
+ordinary integration bind committed deliveries without a review check. At final
+pre-revalidation, the integrator runs the configured tool on the final
+committed candidate, then reports success through
+`review check --pre-revalidation --quality-check TOOL` in its assigned worktree.
+The engine records a version-bound receipt covering Source, Replay isolation,
+line limits and spawn checks. Keep formatting, unit tests and additional
+development requirements in `AGENTS.md` or `CLAUDE.md`.
 
 The generated target exposes a readiness GET endpoint. The readiness path
 must be literal, with no captures, query, fragment, whitespace, or trailing
@@ -139,9 +138,16 @@ traffic-e2e diagnose preflight --target-root <canonical-root> --duration-seconds
 Only overall `status = "passed"` completes the check. On failure, adjust the
 reported build/startup contract or managed input and rerun the same command.
 This traffic-e2e diagnostic checks initialization plumbing, including one
-readiness recording and Replay probes. Its output is not business API evidence
-and must not advance `backend-rewrite next`. Backend rewrite initialization
-only creates configuration and snapshots; it has no recording preflight command.
+readiness recording and Replay probes. For business verification, use a
+separate sealed Source recording from the deployment caller as described in
+[external recording evidence](coordinator-recording.md).
+
+When starting a Source session, set `recording_run_id` in local
+`.traffic-e2e/regression.yaml` or pass it to `backend-rewrite session`. The
+session settings are `recording_run_id` and `max_implementers` (1–16,
+default 16). In this workflow `.traffic-e2e/apis.yaml` labels per-method counts
+and the sealed recording determines the Replay scope. See
+[Source session regression](session-regression.md).
 
 For a missing managed startup input during preflight, use
 [coordinator-startup-inputs.md](coordinator-startup-inputs.md). Use `startup env`

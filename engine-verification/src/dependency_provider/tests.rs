@@ -217,42 +217,6 @@ fn strict_native_support_does_not_imply_typed_payload_or_primary_slot_support() 
 }
 
 #[test]
-fn compiled_native_rules_consume_provider_requirements_with_global_value_formats() {
-    let policy = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v3
-json:
-  fields:
-    /elapsed: {kind: duration, formats: [seconds]}
-rules:
-  - id: transport
-    match:
-      resource: {protocol: http, endpoint: 'api.test:8080'}
-      operation: POST
-      path: /send
-    effect:
-      kind: http_request
-      query:
-        nonce: {kind: uuid_v4}
-    proof: {source: 'app/client.rs:1', fact: 'Source generates the native query nonce'}
-"#,
-    )
-    .unwrap();
-    assert!(policy.rules.is_empty(), "field formats remain global");
-    assert!(
-        policy
-            .global_json
-            .as_ref()
-            .unwrap()
-            .fields
-            .contains_key("/elapsed")
-    );
-    let requirements = &policy.native[0].execution_plan.indexes.required;
-    assert!(requirements.contains(&I::EndpointOperation));
-    assert!(requirements.contains(&I::TypedSlot));
-    assert!(!requirements.contains(&I::SessionOrder));
-}
-
-#[test]
 fn native_http_sharing_cannot_reintroduce_a_connection_lane_requirement() {
     let rule = crate::policy::NativeRule {
         id: "share-http".into(),

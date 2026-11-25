@@ -1,20 +1,41 @@
 ---
 name: backend-rewrite
-description: "Orchestrate, verify, and deliver backend rewrites from source behavior and recorded traffic. Use for cross-language ports, API migrations, and compatibility replacements; coordinate read-only repository analysis, API implementation, and code integration through the backend-rewrite state machine."
+description: "Orchestrate, verify, and deliver backend rewrites from Source behavior and recorded traffic. Use for cross-language ports, API migrations, and compatibility replacements. Coordinate read-only analysis, implementation, integration, and Replay of sealed Source sessions."
 ---
 
 # Backend Rewrite
 
-Use `backend-rewrite` as the authority for workflow state, legal actions,
-verification, and completion. The target is the service being rewritten.
+Use `backend-rewrite` for evidence, Replay, and verification. The Target is
+the service being rewritten.
 
 The deployment caller owns `traffic-e2e record` and its containers. Backend
-rewrite consumes completed immutable batches under the target's
-`.traffic-e2e/local/artifacts/recordings/<run-id>/`; it does not start capture or
-import batches. For missing evidence or capture refreshes, read
+rewrite consumes sealed recordings under the Target's
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`. For missing evidence or
+capture refreshes, read
 [external recording evidence](references/coordinator-recording.md).
 
-## Actor Model
+## Source Session Workflow
+
+For standard recordings with a sealed `events.tsv`, start with
+[Source Session regression](references/session-regression.md). The coordinator
+runs `backend-rewrite session run` for the selected recording and follows the
+returned sequence-based evidence. A passed run verifies the complete timeline
+from startup through shutdown. API counts are projections of that run.
+
+The repository analyst investigates an assigned finding with Source
+sequences and the referenced Target attempt. An implementer works on a reviewed
+finding in its assigned worktree. The integrator combines exact committed fixes
+for the next full session. Read your role entrypoint and the Session references
+it routes to.
+
+## Case Workflow
+
+Use the Case coordinator below when explicitly operating a Case-based workflow
+with compatible recordings and `backend-rewrite status` / `next`. Its action
+state, per-API bindings, ownership analysis, rule transactions, and acceptance
+receipts are scoped to that workflow.
+
+### Actor Model
 
 The workflow has one engine and five agent roles. The task runtime is execution
 infrastructure for agent handles, events, queuing, and concurrency; it is not a
@@ -24,7 +45,7 @@ workflow agent role and is never workflow authority.
 | --- | --- | --- | --- |
 | Rewrite engine | `backend-rewrite` and `traffic-e2e` | Workflow state, legal action selection, evidence identity, traffic serialization, verification, and terminal eligibility | Invent task-runtime state or perform source diagnosis |
 | Rewrite coordinator | Main/root `coordinator` task | Execute engine actions, dispatch and reconcile agents, apply coordinator-owned inputs, publish exact integration candidates, invoke acceptance, and deliver | Diagnose business source, edit target code, or mark work complete from an agent report |
-| Repository analyst | `repository-analyst` assignment | Analyze source routes, modules and cross-API/task dependency attribution read-only; return independent Source ownership proofs and supported task/lifecycle rule proposals | Edit code or configuration, bind an implementer, run Replay, or mutate workflow state |
+| Repository analyst | `repository-analyst` assignment | Analyze Source routes, modules, and disputed dependency ownership read-only | Edit code or configuration, bind an implementer, run Replay, or mutate workflow state |
 | API implementer | Fixed `api-implementer-N` slot | Implement Source-correct APIs one at a time and return committed subsets without review check | Mutate workflow state, publish to the canonical target, or accept its own work |
 | Code integrator | `code-integrator` assignment | Merge accepted deliveries, resolve conflicts and return an exact candidate; consolidated review uses a separate final-stage assignment | Act as an API implementer, mutate engine state, or report implementation-worker activity |
 | API expert | Engine-requested `api-expert` assignment | Investigate one reserved API read-only and return evidence-backed findings for its existing API implementer | Edit code, own the API, mutate workflow state, or satisfy implementation/acceptance gates |
@@ -52,7 +73,7 @@ binding. The coordinator applies its result through the existing engine action.
 External system owners may repair infrastructure, but they are outside this
 agent-role model.
 
-## HTTP Route Work Scope
+### HTTP Route Work Scope
 
 Use the engine's exact canonical path/pattern, for example
 `/api/subscriptions/*`, for dispatch, evidence, review, and acceptance. Each API
@@ -91,7 +112,7 @@ round-robin; the coordinator can explicitly adjust future group assignments.
 Use the [fixed implementer protocol](references/coordinator-implementers.md)
 for batch identities, worktree reuse, runtime reports and partial handoffs.
 
-## Role And Document Routing
+### Case Role And Document Routing
 
 Role comes from the assignment and persists through missing inputs, failures,
 resumed turns, and completed handoffs. Read only your role's entrypoint and the
@@ -109,11 +130,10 @@ or API-expert instructions into one operating guide.
 | Code integrator | [code-integrator.md](references/code-integrator.md) | [target-code-rules.md](references/target-code-rules.md), [source-review-rules.md](references/source-review-rules.md), and `code-integrator-*.md` as directed |
 | API expert | [api-expert.md](references/api-expert.md) | Relevant read-only diagnostic methods in [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md) and its routed specialty documents as directed; never code-repair or delivery instructions |
 
-For an explicit request to initialize an uninitialized target, read
-[project-init.md](references/project-init.md). Ordinary rewrite sessions never
-rerun initialization.
-
 ## Shared Constraints
+
+For an explicit request to initialize an uninitialized target, read
+[project-init.md](references/project-init.md).
 
 - Keep the assigned role, scope, canonical root, and worktree. Return a specific
   missing input or interface gap instead of inventing identity or authority.
@@ -126,37 +146,13 @@ rerun initialization.
 - Recordings and `.traffic-e2e/local/artifacts/` are immutable evidence. Preserve
   engine-generated `progress.yaml`. Do not synthesize evidence, rewrite source
   behavior to manufacture a pass, or replace engine aggregation with scripts.
-- The repository analyst alone investigates disputed or unknown Source traffic
-  ownership. The implementer can flag exact unused Source occurrences with a
-  current evidence ID and factual reason. The coordinator submits the claim and
-  dispatches the engine's read-only `dependency_attribution_required` assignment
-  to the repository analyst. The implementer diagnoses behavior and rules for
-  traffic already owned by its API. After ownership analysis, async lifecycle
-  proposals describe the scenario and end templates, reply/message conditions
-  and occurrence counts from its complete
-  effective Case tail under `recording.async_api`, before independent optional
-  `recording.case_paths`, without enumerating intermediate business requests. Any
-  end can enter ending; once all ends match, close admission immediately and drain
-  admitted requests with no silence interval. A single end follows the same rule.
-  Partial matches permit a fixed one-second probe.
-  A subsequent relevant request start requires a fresh end before closure can
-  become eligible again; another one-second silence cannot close the Case. There is no
-  absolute deadline after the complete primary response. Without a fresh end,
-  five minutes of relevant business I/O silence and no relevant request in flight
-  close the Case normally with completion unobserved, keeping Source running for
-  rule analysis. Explicit shutdown or actual capture
-  failure can interrupt observation; primary HTTP transport timeout is separate.
-  Planning, application, and fresh verification
-  follow the coordinator's rule protocol.
-  Follow the [shared rule evidence contract](references/rule-policy.md): current
-  API hints, evidence queries and legal actions drive rule work.
+- Tie time, id, and token rules to current Source behavior and engine evidence.
+  Follow the [rule evidence contract](references/rule-policy.md).
 - Target behavior must use normal product code and configuration, never recorded
   results, expected responses, Replay sessions, reports, or private engine state.
 - Only the coordinator executes workflow mutations and formal acceptance.
   Worker-local reports and integrator results do not mark a work item complete.
-- Coordinators must actually query runtime status for all outstanding worker
-  assignments before waiting and after each bounded wait. Follow the
-  [runtime query protocol](references/coordinator-agent-protocol.md#mandatory-runtime-queries).
-- Coordinators execute engine commands directly, one at a time, without sleep,
-  wrappers, or loops, and process each complete response. Follow the
-  [coordinator execution rules](references/coordinator.md#execution-rules).
+- Coordinators reconcile outstanding assignments with live runtime status
+  before and after waits. For Case action commands, follow the
+  [runtime query protocol](references/coordinator-agent-protocol.md#mandatory-runtime-queries)
+  and [execution rules](references/coordinator.md#execution-rules).

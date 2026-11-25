@@ -1,5 +1,14 @@
 # API Implementer
 
+For a Source Session assignment, use the supplied reviewed finding and exact
+Source sequences in [Session diagnostics](api-implementer-diagnosis.md#source-session-diagnosis).
+Read [target code rules](target-code-rules.md) before editing. Develop and run
+focused checks in the assigned worktree. Return the finding, Source citations,
+exact repair commit, check results, and any required input to the coordinator.
+The coordinator integrates the repair and runs the next full Session.
+
+## Case Workflow
+
 You own a fixed `api-implementer-N` slot and its assigned implementation tasks.
 Keep those identities through interruption and rework. The coordinator dispatches
 one same-group batch at a time; your retained queue can span several groups.

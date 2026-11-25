@@ -1,6 +1,19 @@
 # Coordinator Repository Analysis
 
-Use for `repository_analysis_required` before Replay or implementation.
+## Source Session
+
+The whole Source session is ready for Replay once the recording and Target
+inputs are ready. `.traffic-e2e/apis.yaml` groups canonical route paths for
+reporting. Source-proven patterns label recorded requests for per-method counts.
+Exact paths take precedence over patterns, and requests outside the catalog use
+their literal path. Ingress filters at recording time select the session
+workload. When a session fails, assign read-only investigation by recording and
+sequence as described in [Source session regression](session-regression.md).
+
+## Legacy Case Workflow
+
+Use this section for `repository_analysis_required` before legacy Case Replay
+or implementation.
 Execute `commands.context` and give one read-only `repository-analyst` the
 complete returned context, an assignment ID and the Source repository location.
 Keep the exact workflow, recording, Source revision and batch in the assignment

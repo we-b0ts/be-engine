@@ -1,76 +1,91 @@
 # API Implementer Dependency Diagnosis
 
 Read after [API Implementer Diagnosis](api-implementer-diagnosis.md) when
-the current issue or evidence concerns missing recordings, dirty
-dependencies, or MySQL/Redis compatibility. Use only the relevant
-sections below; the [shared rule evidence contract](rule-policy.md) and the
-common handoff contract still apply. Use current returned queries, capabilities
-and planner commands; do not reconstruct commands from historical flag examples.
+the evidence points to a missing recording, dependency mismatch, or protocol
+compatibility issue. For a `session run` assignment, start with the Source
+sequences returned by the coordinator.
 
-Also read the API-triggered traffic section when unused dependencies may come
-from a source-detached API task.
+## Source Session Dependency Failures
+
+Start at the attempt's expected Source sequence and any retained Target
+observation. Run the bounded `session events` query and correlate the
+dependency's admission, output, and termination using `dependency_sequence`.
+Use that admission sequence with `session dependency` for the protected Source
+request and result. When the failure includes a Target observation, use
+`session target` with the report from that same attempt. Follow the
+[Source session evidence commands](session-regression.md).
+
+Check the endpoint, request and protocol session first. Trace Source and Target
+through the caller, including startup, detached work and shutdown. A request
+may belong to a later recorded event and wait for the timeline to reach it.
+Use the first failed sequence to locate the blocking event and inspect later
+Source events for context. Those later events have yet to be verified in this
+attempt. If the expected dependency never arrives, trace the preceding primary
+input, delivered dependency output or Target wait that enables it. For a real
+Target wait on that path, follow the
+[session timer guidance](api-implementer-runtime-diagnosis.md#source-session-progress).
+
+Startup and background I/O stay in the shared timeline with ingress traffic.
+Report the Source sequences and the caller that explains the observed ordering,
+including work that continues after the primary response. Session Replay loads
+its dependencies directly from the sealed recording. The Case diagnostics below
+use evidence returned for separate Case workflow assignments.
+
+For suspected capture omission, trace the exact Source endpoint and the
+runtime path that calls it. Check the relevant startup, ingress, and process
+segments using the bounded timeline and protected dependency queries. When
+the evidence establishes an omission, return the endpoint, Source file/symbol,
+relevant sequences and the missing capture mechanism to the coordinator. When
+the record is present but the provider cannot replay it, report that protocol
+capability gap using the same evidence.
+
+### Redis In A Source Session
+
+Compare each recorded application command at its admission sequence. Check the
+command, full arguments, preceding trigger, and corresponding reply or push at
+its recorded delivery boundary. Each recorded application command has a finite
+occurrence on the timeline. Trace generated times, IDs or tokens through the
+calling code and check the
+[current rule capabilities](api-implementer-rule-diagnosis.md).
+
+Preserve production client and pooling behavior. Distinguish canonical Redis
+connection maintenance handled by the protocol adapter from business commands.
+Check endpoint, database, authentication identity and RESP version with the
+recorded command. Retain transaction and subscription continuity, and correlate
+a push with its recorded subscription and output sequence.
+
+### MySQL In A Source Session
+
+Use the recorded SQL, bound values, connection ID, query sequence and before
+and after server-status flags. Trace each proven transaction through its
+required statements and terminal event. Keep actual writes, locks, and
+snapshot-changing controls on the correct transaction.
+
+The adapter can exclude a proven SQLAlchemy/PyMySQL connection prelude and
+specific idle cleanups. These exclusions use complete captured wire order,
+session identity and transaction status, and appear as
+`session_dependency_exclusions` in the Replay report. An ordinary business
+read stays required even when its result matches an earlier call. Use the
+engine's session evidence and production driver behavior before changing
+transaction setup or adding cleanup SQL.
 
 ## Traffic ownership
 
-For a suspected foreign unused dependency, use
-`dependency-attribution show --api <canonical-route>` to identify the concrete
-unused Source occurrence. Return its exact Source UUID, current method evidence
-ID and a bounded factual reason to the coordinator. This is sufficient to
-request review. Proving exclusion, tracing the true trigger across Cases and
-assessing its lifecycle rule are the independent repository analyst's work.
-The coordinator submits the returned `claim_command` and dispatches the analyst.
-For a suspected foreign request with only an unmatched Target observation, report
-the exact observation and evidence IDs as unresolved ownership. The claim
-requires an unused Source UUID from the current finalized attempt.
-
-Your API owns the traffic you report as missing. Investigate its async lifecycle
-and supply its own supported `async_api` rule when the work was captured in
-another scope. Otherwise identify the exact recorder omission and repair inputs,
-including fixed-IP interception or response IP-URL rewriting. Empty candidates
-alone prove neither omission nor asynchronous ownership. Return the diagnosis to
-the coordinator; only the coordinator publishes rules or investigation results.
+For Case evidence, `dependency-attribution show --api <canonical-route>`
+locates an unused Source occurrence. Report its Source UUID, the current
+method evidence ID and the caller established by Source code. If only an
+unmatched Target request is available, return that observation and state
+what Source evidence is missing.
 
 ## Missing Recorded Dependency Evidence
 
-Claiming missing traffic gives this diagnosis an API owner. For an own async
-scope gap, return the actual origin input, recorded occurrence IDs, supported
-async lifecycle rule and positive Source ownership proof to the coordinator.
-The coordinator can apply this known-owner proof through attribution before
-resolving the investigation; it does not dispatch a repository analyst for it.
-An async rule or investigation resolution alone cannot authorize another
-Case's recorded dependencies. Missing origin or occurrence proof remains explicit.
+For Source session assignments, use
+[Source Session Dependency Failures](#source-session-dependency-failures).
+For the Case workflow, investigate a possible omission when Source code
+identifies a response-driving endpoint and the representative evidence has
+no corresponding dependency target or exchange.
 
-After completing an own-API attribution analysis, also return the scenario's
-end-rule assessment under `recording.async_api`, before independent optional
-`recording.case_paths`; do not also emit the legacy root spelling.
-Inspect its complete effective Case traffic, including newly
-assigned occurrences, and propose missing end templates, necessary reply/message
-conditions and counts from Case admission. Reuse already sufficient conditions.
-Redis `when_response: {kind: nil}` selects native null; omitted/`any` accepts a
-successful complete reply, while `when_message` selects PUBLISH request JSON.
-Any end match can enter ending. Once all ends have matched, close admission
-immediately and drain admitted requests, without a silence interval; a single end
-follows this same rule. Partial matches permit a fixed one-second probe. A subsequent
-relevant request start requires another fresh end before closure becomes eligible;
-another one-second silence does not close the Case. Closure also requires no relevant
-request in flight. Only unambiguously process-owned requests are ignored. There
-is no absolute deadline while waiting for the first or next end after the
-complete primary response. Without a fresh end, five continuous minutes of
-relevant business I/O silence and no relevant request in flight close the Case
-normally with completion unobserved, keeping Source running for rule analysis.
-Real business activity restarts that interval; writer queues and definite process
-traffic do not. The primary HTTP transport timeout remains separate; explicit
-shutdown or actual capture failure can interrupt observation. Do not author timing settings,
-all-of groups or an intermediate dependency list. Give this proposal to the
-coordinator alongside the established proof; do not rerun ownership analysis
-merely because plan/apply requires a fresh context.
-
-Treat a recording omission as a bounded hypothesis when a response or Replay difference traces through source code to one exact response-driving
-backend endpoint, but the representative recording contains no corresponding
-dependency target or exchange. The absence alone is not proof of a configured DNS bypass,
-an external-data blocker, or a Recorder capability gap.
-
-Prove the hypothesis in this order:
+Check the exact path from the response to the dependency:
 
 1. Trace the differing response field or status through source construction,
    cache/loading lifecycle, and the exact dependency client call. Identify the
@@ -94,12 +109,6 @@ source-proven port when available.
 Check whether an explicit `dns_mock.bypass_domains` entry matches the endpoint.
 Use `recorder-capability-gap` only when the required capture mechanism itself is
 unsupported.
-
-An extra read may result from an absolute timestamp in an earlier successfully
-replayed response. Check [Rule Discovery From Source Diagnosis](api-implementer-diagnosis.md#rule-discovery-from-source-diagnosis)
-before treating that read as missing external data or a cross-case scope problem.
-The selected response can belong to a previous case of the same API; the extra
-request itself need not have a recorded counterpart.
 
 ## MySQL Driver Compatibility
 
@@ -125,9 +134,7 @@ tuple IN lists; retain these operators instead of rewriting them as `= 1/0`.
 The independent read-effect check also handles derived tables, UNION, ordinary
 joins, EXISTS and pure ROW_NUMBER windows, including long OR chains. Successful
 matching alone never makes unknown effects safe to omit at session cleanup.
-This built-in compatibility composes with direct-column projection mapping;
-it requires no rule or new recording. Complex expressions and positional
-dynamic-parameter policies keep their existing boundaries.
+This built-in compatibility composes with direct-column projection mapping.
 
 Single-table `SELECT DISTINCT` also supports normal prepared statements, bound
 parameters, column/table aliases, table qualifiers, and reordered pure AND
@@ -144,6 +151,9 @@ immutable cases rerun; an engine revision change alone is not functional accepta
 
 ### Read-Only Session Cleanup
 
+This subsection covers the Case workflow. For the Source session, use
+[MySQL In A Source Session](#mysql-in-a-source-session).
+
 Long SELECT projections can fill `sql_summary.preview` before the WHERE clause.
 Read `sql_summary.select_body` and its independent `truncated` flag for the
 outer FROM and following clauses; never infer an id lookup from the selected
@@ -158,17 +168,15 @@ Compare the complete Source occurrence count and actual Target calls, then trace
 the missing Source position. Successful-detail arrays may be capped; absence
 from that array alone does not establish a missing call or projection gap.
 
-For MySQL `unused_recorded`, read `mysql_unused_diagnosis` before proposing a
-rule or engine gap. Trace the complete request, including authentication and
-helper calls. A commit or rollback can expire an ORM object; later attribute
-access, explicit refresh or lazy loading may issue a required SELECT without
-an explicit `get()` call. SQL aliases and LIMIT shape do not identify the
+For MySQL `unused_recorded`, read `mysql_unused_diagnosis` and trace the
+complete request, including authentication and helper calls. A commit or
+rollback can invalidate loaded ORM state. Later attribute access, explicit
+refresh or lazy loading may issue a required SELECT without an explicit
+`get()` call. SQL aliases and LIMIT shape do not identify the
 caller. Use connection/query locators and captured before/after server-status
 flags in dependency details as bounded transaction facts, not ownership proof.
-Equal rows, passing responses, empty candidates or empty planners do not make
-a business read optional or establish an engine capability gap. Proven
-request-owned reads require normal target implementation; retain unresolved
-ownership when source proof is missing.
+Use the Source call path to establish whether a business read is required.
+Repair a required call through normal Target behavior.
 
 Keep ordinary read requests on the shared pool. Source ORMs may close an
 implicit read-only session with ROLLBACK. The engine allows this cleanup to be
@@ -197,6 +205,8 @@ their required rollback/commit behavior, even when HTTP responses agree.
 
 ## Redis Connection Pool Differences
 
+Use these Case matching diagnostics when the assignment carries Case evidence.
+
 Ordinary Redis GET/MGET and other supported data commands do not require the
 target to reproduce source connection counts, pool sizes, or per-call client
 creation. Replay matches across physical connections while preserving exact
@@ -216,106 +226,10 @@ out-of-order calls remain target behavior issues when proven by source evidence.
 
 ## Dirty Dependency Issues
 
-MySQL supports source-proven process-owned SELECT templates with exact
-connection identity and exact, numeric-series, or patterned physical tables,
-including `AS {{table}}_id` aliases tied to the selected table. Return the
-source task name and selector inputs under `process_dependencies`. Such
-declarations can reclassify existing unused
-evidence without a new recording; target unmatched queries and incomplete
-evidence remain dirty.
-
-Inspect dependency failures in the API evidence, including those reported
-alongside response differences. Use the
-[gate order](api-implementer-diagnosis.md#interpret-the-failure) to select the
-next repair. A dependency-value rule can be investigated when the response
-also differs.
-For HTTP request-body mismatches, inspect `http_unordered_candidates` and the
-`unordered` hint. Same-request array reorderings may support a global
-`json.fields` unordered declaration; prove Source collection and downstream
-semantics, then return the logical JSON Pointer and source citation to the
-coordinator. This declaration applies across supported response and dependency
-JSON carriers. An array remains ordered without that Source-proven declaration.
-Submit the newly proven fields or formats; ordinary proposals add them while
-preserving existing declarations and format order. Existing
-complete exchanges need genuine Replay, not new recording evidence, for this change.
-
-For HTTP `unmatched_target`, also inspect `cross_case_candidates` and the
-`cross-case` hint. A verified same-run exchange may support a source-proven
-`localcache.requests` declaration through the returned planner.
-Return the source proof and exact selector inputs. Shared initialization scope
-is not background ownership or permission to ignore a request.
-
-Classify the representative protocol cluster by source ownership:
-
-- request-owned and required: repair target call topology or Replay support;
-- process-owned and case-independent: return the real Source task and supported
-  `process_dependencies` declaration; separately repair target state behavior when source and response
-  evidence prove the dependency is response-driving;
-- unresolved: retain the dirty evidence and name the missing proof.
-
-Timing overlap, high volume, scheduler names, unused exchanges, asynchronous
-execution, and passing responses do not prove process ownership. A
-recording-rule proposal must use
-the current dirty-cluster evidence ID and one protocol-specific planner returned
-in `applicable_rule_planners`. Run its exact read-only help argv and return only
-the source-proven selector inputs to the workflow coordinator. Replay evidence, case
-source, and immutable Source revision come from engine state; do not invent them
-or replace the provided identity. Diagnose the behavior of the known owner. Route
-disputed ownership through [traffic ownership](#traffic-ownership). A request-owned
-result requires normal target implementation; it cannot justify a process-owned rule. Never
-rewrite Replay reports, trim traffic, or edit immutable capture files.
-
-For dependency value mismatches, inspect each entry returned in
-`rule_hints`. Run its exact `help` command, then verify the described value
-mechanism in source and in the representative dependency details before
-planning it. For Memcached, inspect the returned operation, encoding and typed
-capability before proposing a format. A protocol name or byte pattern alone
-does not establish a supported schema; unknown encodings stay exact. The hint
-is discovery guidance, not authorization to apply a rule.
-
-## API-triggered asynchronous process traffic
-
-A source-proven detached API task may produce unused dependencies inside another
-API's recording window. Redis GET, single-key DEL and LRANGE can use
-a self-contained `process_owned` rule with explicit API origin and the unified
-proposal transaction returned by the engine under the [shared contract](rule-policy.md).
-See [API-origin process rules](../../../../../docs/api-triggered-process-traffic.md).
-The native `effect.origin.request_body` selects typed scalars by JSON Pointer in the
-triggering inbound REQUEST BODY: `/background: true` means JSON
-`{"background":true}`, never URL query, response JSON, or the victim API's body.
-Trace spawning and cleanup in source, then supply one explicit successful
-COM_QUERY INSERT identity capture and exact Redis key template/arguments. A shared
-ID or unused exchange is not source ownership proof. Trigger/resource API calls,
-ambiguous origins/references and target failures remain strict. Complete old
-recordings are reusable; the engine caches correlation outside immutable evidence.
-Status performs no origin scan or cache build. This rule does not verify the
-background task's eventual result or enable reusable Redis snapshots.
-
-MySQL API-origin SELECT rules use a typed `process_owned` effect with inline
-origin and `identity_value_index`. The zero-based template `?` slot must be an
-identity equality or singleton IN predicate; other endpoint/table/SQL bounds
-remain exact. Use the same origin capture as related Redis rules. An ordinary
-same-name rule is not API-origin proof. A scope change requires the engine's
-explicit replacement proposal and complete preflight. Do not classify every
-SELECT on a task table as background.
-
-When a helper has polling/cancel callers, also trace indirect detached-task
-callers such as terminal result collectors and accumulated-content helpers.
-Protect direct inbound polling/cancel requests; a task reacting to cancellation
-in its own detached lifecycle can still produce process-owned dependencies.
-Plan proves recording correlation and scope, while source evidence proves
-caller ownership.
-
-API-origin Redis DEL accepts an exact ordered `key_sequence` in its typed
-selector; every key must bind the same captured identity.
-For EVALSHA, the typed `script` contract declares an exact SHA-1, ordered KEYS envelope,
-ARGV count and `identity_argv_index`. Date-keyed metrics may still carry the task
-ID in ARGV. SCRIPT EXISTS requires a proven adjacent same-connection invocation.
-
-API-origin MySQL also supports bounded single-row UPDATEs. Complete transaction
-boundaries require `include_transaction_boundaries`, consistent wire sequences
-and server flags. Typed `transaction_members` can admit explicit read-only helper
-selectors only inside a fully proven transaction. Ordinary write rules, broad
-COMMIT/ROLLBACK exceptions and standalone member matches remain unsupported.
-Inspect actual dirty summaries: source-recorded ROLLBACKs may already be optional
-cleanup and do not by themselves establish a missing capability.
+For a Case workflow failure, inspect dependency evidence alongside any response
+difference. Use the [gate order](api-implementer-diagnosis.md#interpret-the-failure)
+and trace the complete Source caller and Target call path for each relevant
+cluster. Return the original Case evidence ID and the concrete Source or Target
+occurrence. For a candidate time, ID or token rule, verify generation and
+consumption against the protected values and Source code before reporting it.
+Follow the [rule diagnosis](api-implementer-rule-diagnosis.md).

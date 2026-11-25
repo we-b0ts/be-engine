@@ -49,6 +49,6 @@ Use commands available in the actual final stage; do not assume `install`,
 or credential trees. Return `target.runtime_outputs` requirements when content
 must survive container shutdown; these are outputs, not startup snapshots.
 
-Return startup inputs alongside the original issue/dispatch identity and code
-handoff when code changed. Do not apply startup inputs, change `target.env`, or
-invoke recording or acceptance.
+Return startup inputs with the Session finding and Source sequences or the
+Case issue and dispatch identity. Include the code handoff when code changed.
+The coordinator applies the inputs and runs verification.

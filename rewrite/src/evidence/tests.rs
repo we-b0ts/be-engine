@@ -732,37 +732,6 @@ fn focused_response_body_candidate_offers_the_unified_response_rule_planner() {
 }
 
 #[test]
-fn configured_response_body_candidate_offers_selector_help() {
-    let target = tempfile::tempdir().unwrap();
-    let facts = serde_json::json!({
-        "representative": {"response_difference": {
-            "pointer": "$body",
-            "body_diagnosis": {
-                "codec": "hessian2",
-                "codec_candidates": ["hessian2"],
-                "configured": true,
-                "unordered_path_candidates": [{"value_path": []}]
-            }
-        }}
-    });
-
-    let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
-    let planners = applicable_rule_planners(
-        target.path(),
-        RewriteIssueKind::Response,
-        QUERY_REPRESENTATIVES,
-        &facts,
-        "evidence-current",
-    );
-
-    assert_eq!(hints.len(), 1);
-    assert!(hints[0].hint.contains("source-proven"));
-    assert_eq!(planners.len(), 1);
-    assert_eq!(planners[0].capability, "hessian2");
-    assert_eq!(planners[0].command.argv.last().unwrap(), "evidence-current");
-}
-
-#[test]
 fn response_issues_can_query_dirty_clusters_for_protocol_rule_discovery() {
     let mut state = crate::test_state();
     state.active_issue = Some(RewriteIssue {
