@@ -105,6 +105,37 @@ pub(crate) fn open(
     name: &'static str,
     index: &str,
 ) -> Result<Box<dyn Read + Send>> {
+    Ok(Box::new(open_verified(root, manifest, name, index)?))
+}
+
+pub(crate) fn last_event_sequence(root: &Path, manifest: &RecordingManifest) -> Result<u64> {
+    let mut events = open_verified(root, manifest, session::FILE, INDEX)?;
+    // Older v14 summaries lack the last sequence. The capture_sealed row is
+    // short and can straddle a chunk boundary, so verify at most two chunks.
+    let first_chunk = events.blocks.saturating_sub(2);
+    events.next = first_chunk;
+    events.remaining -= first_chunk * CHUNK_BYTES as u64;
+    let mut tail = Vec::with_capacity(usize::try_from(events.remaining)?);
+    events.read_to_end(&mut tail)?;
+    let tail = tail
+        .strip_suffix(b"\n")
+        .context("unterminated Session timeline")?;
+    let row = match tail.iter().rposition(|&byte| byte == b'\n') {
+        Some(index) => &tail[index + 1..],
+        None if first_chunk == 0 => tail,
+        None => anyhow::bail!("final Session row exceeds the authenticated tail"),
+    };
+    let (sequence, _, _, _) = session::parse_prefix(row)?;
+    ensure!(sequence > 0, "sealed Session ends at an invalid sequence");
+    Ok(sequence)
+}
+
+fn open_verified(
+    root: &Path,
+    manifest: &RecordingManifest,
+    name: &'static str,
+    index: &str,
+) -> Result<VerifiedEvents> {
     let identity = manifest
         .files
         .iter()
@@ -134,7 +165,7 @@ pub(crate) fn open(
         "checksum index {index} is missing from the seal or has an invalid length"
     );
     let checksum = open_file(&root.join(index), length)?;
-    Ok(Box::new(VerifiedEvents {
+    Ok(VerifiedEvents {
         file: open_file(&root.join(name), identity.length)?,
         checksum,
         name,
@@ -144,7 +175,7 @@ pub(crate) fn open(
         next: 0,
         buffer: Vec::new(),
         consumed: 0,
-    }))
+    })
 }
 
 fn open_file(path: &Path, expected_len: u64) -> Result<File> {
@@ -261,13 +292,8 @@ fn hex(bytes: &Hash) -> String {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn verifies_each_chunk_before_reading_and_detects_late_corruption() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let path = root.path().join(session::FILE);
-        let mut bytes = vec![1; 2 * CHUNK_BYTES];
-        bytes.push(3);
-        std::fs::write(&path, &bytes)?;
+    async fn seal_timeline(root: &Path, bytes: &[u8]) -> Result<RecordingManifest> {
+        std::fs::write(root.join(session::FILE), bytes)?;
         let mut chunks = Chunks::default();
         for append in bytes.chunks(1201) {
             chunks.observe(append);
@@ -275,12 +301,12 @@ mod tests {
         let mut files = vec![LedgerFileIdentity {
             path: session::FILE.into(),
             length: bytes.len() as u64,
-            sha256: crate::source::digest(&bytes),
+            sha256: crate::source::digest(bytes),
             chunk_root: None,
         }];
-        let index = chunks.seal(root.path(), INDEX, &mut files[0]).await?;
+        let index = chunks.seal(root, INDEX, &mut files[0]).await?;
         files.push(index);
-        let manifest = RecordingManifest {
+        Ok(RecordingManifest {
             schema: SESSION_RECORDING_SCHEMA.into(),
             run_id: "test".into(),
             run_epoch: uuid::Uuid::nil(),
@@ -297,7 +323,16 @@ mod tests {
             semantic_inventory: Default::default(),
             inputs: Vec::new(),
             files,
-        };
+        })
+    }
+
+    #[tokio::test]
+    async fn verifies_each_chunk_before_reading_and_detects_late_corruption() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join(session::FILE);
+        let mut bytes = vec![1; 2 * CHUNK_BYTES];
+        bytes.push(3);
+        let manifest = seal_timeline(root.path(), &bytes).await?;
         let mut reader = events(root.path(), &manifest)?;
         let mut actual = Vec::new();
         reader.read_to_end(&mut actual)?;
@@ -314,6 +349,37 @@ mod tests {
             reader.read_exact(&mut [0]).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn old_summary_verifies_only_the_final_chunks() -> Result<()> {
+        use crate::session_summary::{self, SessionSummary};
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let mut bytes = vec![b'x'; 2 * CHUNK_BYTES - 4];
+        bytes.extend_from_slice(b"\n99\t0\tcapture_sealed\n");
+        let mut manifest = seal_timeline(root, &bytes).await?;
+        let summary = serde_json::to_vec(&SessionSummary::default())?;
+        std::fs::write(root.join(session_summary::FILE), &summary)?;
+        manifest.files.push(LedgerFileIdentity {
+            path: session_summary::FILE.into(),
+            length: summary.len() as u64,
+            sha256: crate::source::digest(&summary),
+            chunk_root: None,
+        });
+        std::fs::write(
+            root.join(traffic_model::recording::MANIFEST_FILE),
+            serde_json::to_vec(&manifest)?,
+        )?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.join(session::FILE))?;
+        file.write_all_at(b"z", 0)?;
+        assert_eq!(session_summary::recording_end_sequence(root)?, Some(99));
+        file.write_all_at(b"z", 2 * CHUNK_BYTES as u64)?;
+        assert!(session_summary::recording_end_sequence(root).is_err());
         Ok(())
     }
 }

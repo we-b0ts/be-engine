@@ -1,17 +1,17 @@
 # Rule Evidence Contract
 
 The policy at `project.policy` uses `traffic-policy/v3`. Rule work covers time,
-IDs, and token values. Establish Source generation or validation, the exact
-value location, and the required relationship. Preserve other fields, physical
-resource identity, and the finite sequence of exchanges. See
+IDs, and token values. When implementing a rule, establish Source generation
+or validation, the exact value location, and the required relationship. Preserve
+other fields, physical resource identity, and the finite sequence of exchanges. See
 [rule diagnosis](api-implementer-rule-diagnosis.md).
 
-Use the failed sequence and evidence commands returned by `run` or `status`.
-Query the Source event and dependency admission, and use the authenticated
-Target observation when supplied. Return a `kind: rule` finding with the
-causal Source sequences, Source references, and affected repository-relative
-policy path.
+Use `failure.seq` from `status` with the [evidence queries](session-regression.md#diagnose-the-first-failure).
+Query the Source event and dependency admission, and read the authenticated
+Target observation when available. Trace the assigned finding's dynamic value
+back to its Source generator or validator.
 
-`plan` groups findings and selects independent work. Review the exact policy
-diff in the integrated candidate. Verify it with a fresh complete `run` of
-the same sealed Source recording. Follow [coordinator rule actions](coordinator-rule-actions.md).
+The implementer confirms the exact selector and supported value relationship,
+then delivers the policy commit and focused check results through the standard
+fixes report. Review the integrated policy diff and verify it with a fresh
+complete `run` of the same sealed Source recording. [Coordinator rule actions](coordinator-rule-actions.md)

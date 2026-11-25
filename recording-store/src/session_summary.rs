@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use traffic_model::session::SessionEvent;
+use traffic_model::{
+    recording::{RecordingManifest, SESSION_RECORDING_SCHEMA},
+    session::SessionEvent,
+};
 
 use crate::source::{FileStamp, digest, recording};
 
@@ -19,6 +22,8 @@ const LIVE_FILE: &str = "session-summary.live.json";
 pub struct SessionSummary {
     pub routes: Vec<SessionRouteSummary>,
     pub physical_events: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sequence: Option<u64>,
     pub primary_completed: u64,
     pub primary_cancelled: u64,
     pub successful_connections: u64,
@@ -48,7 +53,8 @@ pub struct SessionRouteSummary {
 #[derive(Default)]
 pub(crate) struct CaptureSummary {
     routes: BTreeMap<(String, String), (u64, u64)>,
-    pub(crate) physical_events: u64,
+    physical_events: u64,
+    last_sequence: Option<u64>,
     primary_completed: u64,
     primary_cancelled: u64,
     pub(crate) successful_connections: u64,
@@ -59,6 +65,11 @@ pub(crate) struct CaptureSummary {
 }
 
 impl CaptureSummary {
+    pub(crate) fn note_row(&mut self, sequence: u64) {
+        self.physical_events += 1;
+        self.last_sequence = Some(sequence);
+    }
+
     pub(crate) fn observe(&mut self, sequence: u64, event: &SessionEvent) -> Result<()> {
         match event {
             SessionEvent::PrimaryRequest { request, .. }
@@ -98,6 +109,7 @@ impl CaptureSummary {
         let snapshot = SessionSummary {
             routes,
             physical_events: self.physical_events,
+            last_sequence: self.last_sequence,
             primary_completed: self.primary_completed,
             primary_cancelled: self.primary_cancelled,
             successful_connections: self.successful_connections,
@@ -114,6 +126,25 @@ impl CaptureSummary {
 
 pub fn read(root: &Path) -> Result<SessionSummary> {
     let (root, manifest) = recording::manifest(root)?;
+    read_summary(&root, &manifest)
+}
+
+/// Return the final physical sequence in the sealed Source timeline.
+pub fn recording_end_sequence(root: &Path) -> Result<Option<u64>> {
+    let (root, manifest) = recording::manifest(root)?;
+    if manifest.schema != SESSION_RECORDING_SCHEMA {
+        return Ok(None);
+    }
+    if let Some(sequence) = read_summary(&root, &manifest)?.last_sequence {
+        ensure!(sequence > 0, "sealed Session ends at an invalid sequence");
+        return Ok(Some(sequence));
+    }
+    Ok(Some(crate::session_integrity::last_event_sequence(
+        &root, &manifest,
+    )?))
+}
+
+fn read_summary(root: &Path, manifest: &RecordingManifest) -> Result<SessionSummary> {
     let identity = manifest
         .files
         .iter()

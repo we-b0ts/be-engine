@@ -37,7 +37,7 @@ struct Cli {
     /// Target repository root.
     #[arg(long, default_value = ".")]
     target_root: PathBuf,
-    /// Select a sealed Source recording when starting a round or inspecting history.
+    /// Select a sealed Source recording for a run or evidence query.
     #[arg(long, global = true)]
     recording_run_id: Option<String>,
     #[command(subcommand)]

@@ -90,6 +90,44 @@ pub fn status_e2e_event_session(
     run_key: Option<&str>,
     attempt_id: Option<Uuid>,
 ) -> Result<E2eEventSessionStatus> {
+    inspect_status(target_root, recording_root, run_key, attempt_id).map(|(status, _)| status)
+}
+
+/// Resolve a report kept within the selected registered Replay attempt.
+pub fn event_session_report(
+    target_root: &Path,
+    recording_root: &Path,
+    run_key: &str,
+    attempt_id: Uuid,
+) -> Result<PathBuf> {
+    let (status, attempts) =
+        inspect_status(target_root, recording_root, Some(run_key), Some(attempt_id))?;
+    let attempt = status
+        .attempt
+        .context("registered Replay attempt is missing")?;
+    let directory = attempts.join(&attempt.attempt_id);
+    ensure!(
+        attempt.report.starts_with(&directory),
+        "Target report is outside the registered Replay attempt"
+    );
+    let resolved = attempt
+        .report
+        .canonicalize()
+        .with_context(|| format!("Replay attempt {attempt_id} has no readable Target report"))?;
+    let scope = attempts.parent().context("missing Replay attempt scope")?;
+    ensure!(
+        resolved.starts_with(scope.canonicalize()?.join(directory.strip_prefix(scope)?)),
+        "Target report is outside the registered Replay attempt"
+    );
+    Ok(resolved)
+}
+
+fn inspect_status(
+    target_root: &Path,
+    recording_root: &Path,
+    run_key: Option<&str>,
+    attempt_id: Option<Uuid>,
+) -> Result<(E2eEventSessionStatus, PathBuf)> {
     let target_root = fs::canonicalize(target_root).context("resolve Target root")?;
     let recording_root = fs::canonicalize(recording_root).context("resolve Source recording")?;
     let run_key = run_config::select_run_key(&recording_root, run_key)?;
@@ -100,11 +138,14 @@ pub fn status_e2e_event_session(
         None => read_optional(&attempts.join(LATEST_ATTEMPT))?,
     };
     let Some(id) = selected else {
-        return Ok(E2eEventSessionStatus {
-            state: E2eEventSessionState::NotStarted,
-            progress: None,
-            attempt: None,
-        });
+        return Ok((
+            E2eEventSessionStatus {
+                state: E2eEventSessionState::NotStarted,
+                progress: None,
+                attempt: None,
+            },
+            attempts,
+        ));
     };
     let attempt_id = id.simple().to_string();
     let directory = attempts.join(&attempt_id);
@@ -143,18 +184,21 @@ pub fn status_e2e_event_session(
             && attempt.recording_root == recording_root,
         "event attempt identity does not match the selected Source recording"
     );
-    Ok(E2eEventSessionStatus {
-        state,
-        progress: Some(E2eEventSessionStatusProgress {
-            phase: attempt.phase,
-            events: E2eEventSessionCounts {
-                matched: attempt.events.matched,
-                total: attempt.events.total,
-            },
-            apis: attempt.apis,
-        }),
-        attempt: Some(attempt),
-    })
+    Ok((
+        E2eEventSessionStatus {
+            state,
+            progress: Some(E2eEventSessionStatusProgress {
+                phase: attempt.phase,
+                events: E2eEventSessionCounts {
+                    matched: attempt.events.matched,
+                    total: attempt.events.total,
+                },
+                apis: attempt.apis,
+            }),
+            attempt: Some(attempt),
+        },
+        attempts,
+    ))
 }
 
 fn read_required<T: DeserializeOwned>(path: &Path) -> Result<T> {

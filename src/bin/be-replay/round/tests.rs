@@ -49,7 +49,7 @@ fn active_replay_blocks_confirmed_branch_switch() {
     let active = open_lock(&internal_runtime::root(&repo.root).join("event-replay.lock")).unwrap();
     active.try_lock().unwrap();
     let error = repo
-        .start_round(
+        .select_round(
             &lock,
             Recording {
                 id: "20261125131020".to_owned(),

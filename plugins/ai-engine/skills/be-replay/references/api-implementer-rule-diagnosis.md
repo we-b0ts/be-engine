@@ -30,6 +30,5 @@ Check that the live runtime binds the proposed format at the observed carrier.
 JSON paths are root-relative to the recognized document. Session Replay compares
 primary SSE and NDJSON body parts as bytes.
 
-Return a `kind: rule` finding with the causal Source sequences and the policy
-path. Include the proposed declaration, Source proof and residual differences in
-the accompanying analysis. Verify the integrated change with a fresh full session.
+Deliver the policy commit and focused check results for the assigned finding.
+The coordinator verifies the integrated change with a fresh full session.

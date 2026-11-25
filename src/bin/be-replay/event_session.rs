@@ -2,9 +2,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Subcommand;
-use serde_json::{Value, json};
-use traffic_e2e::{E2eEventSessionResult, session};
+use traffic_e2e::session;
 
+mod status;
+mod target;
 mod workflow;
 
 #[derive(Debug, Subcommand)]
@@ -17,6 +18,12 @@ pub(super) enum SourceCommand {
         /// Name the runtime scope when starting a round.
         #[arg(long)]
         run_key: Option<String>,
+    },
+    /// Switch the active recording on this Target branch without starting Replay.
+    SwitchRecordingId {
+        /// ID of the sealed Source recording.
+        #[arg(value_name = "ID", conflicts_with = "recording_run_id")]
+        recording_id: String,
     },
     /// Read the current or specified Source Replay attempt.
     Status {
@@ -52,13 +59,17 @@ pub(super) enum SourceCommand {
     Dependency { sequence: u64 },
     /// Inspect a protected Target observation from the failed attempt.
     Target {
+        /// UUID of a Replay attempt for the active recording.
+        #[arg(long, required_unless_present = "report", conflicts_with = "report")]
+        attempt: Option<uuid::Uuid>,
+        /// Path to an explicitly supplied Replay report.
         #[arg(long)]
-        report: PathBuf,
+        report: Option<PathBuf>,
         observation_id: uuid::Uuid,
     },
     /// Group analysis findings and select independent work for implementers.
     Plan {
-        /// JSON array of findings returned by the analysis workers.
+        /// JSON file with first_unmatched and optional others.
         #[arg(long)]
         findings: PathBuf,
         /// Maximum implementers to assign in this plan.
@@ -66,9 +77,9 @@ pub(super) enum SourceCommand {
         max_implementers: usize,
         /// Require the latest failed attempt to have this identity.
         #[arg(long)]
-        attempt_id: Option<uuid::Uuid>,
+        attempt_id: uuid::Uuid,
     },
-    /// Register accepted implementation fixes or the published integration candidate.
+    /// Register accepted fixes, an engine gap, or the published integration candidate.
     Report {
         /// JSON delivery receipt.
         #[arg(long)]
@@ -88,10 +99,13 @@ pub(super) async fn run(
             user_confirm,
             run_key,
         } => workflow::replay(&target_root, id, user_confirm, run_key, pretty).await,
+        SourceCommand::SwitchRecordingId { recording_id } => {
+            workflow::switch_recording(&target_root, &recording_id, pretty)
+        }
         SourceCommand::Status {
             run_key,
             attempt_id,
-        } => workflow::status(&target_root, id, run_key.as_deref(), attempt_id, pretty),
+        } => status::show(&target_root, id, run_key.as_deref(), attempt_id, pretty),
         SourceCommand::Plan {
             findings,
             max_implementers,
@@ -134,161 +148,12 @@ pub(super) async fn run(
             super::print_json(&session::dependency(&recording.root, sequence)?, pretty)
         }
         SourceCommand::Target {
+            attempt,
             report,
             observation_id,
-        } => {
-            let recording = workflow::evidence_recording(&target_root, id)?;
-            super::print_json(
-                &session::target_observation(&recording.root, &report, observation_id)?,
-                pretty,
-            )
-        }
-    }
-}
-
-fn failure_action(id: &str, result: &E2eEventSessionResult) -> Value {
-    let Some((expected, sequence)) = mismatch_event(result) else {
-        return json!({
-            "action": "inspect_session_setup",
-            "description": result.error,
-            "report": result.report.is_file().then_some(&result.report),
-            "source_sequence": result.events.failure.as_ref()
-                .and_then(|failure| failure["reported_sequence"].as_u64()),
-            "run": ["run"],
-        });
-    };
-    let dependency = expected["dependency_sequence"]
-        .as_u64()
-        .filter(|value| *value > 0)
-        .map(|value| json!(["dependency", "--recording-run-id", id, value.to_string()]));
-    let observed = result
-        .events
-        .failure
-        .as_ref()
-        .and_then(|failure| failure["target_observation_id"].as_str())
-        .map(|observation| {
-            json!([
-                "target",
-                "--recording-run-id",
-                id,
-                "--report",
-                result.report,
-                observation,
-            ])
-        });
-    json!({
-        "action": "analyze_session_failure",
-        "description": result.error,
-        "expected_sequence": sequence,
-        "event": ["events", "--recording-run-id", id, "--seq", sequence.to_string()],
-        "events": ["events", "--recording-run-id", id,
-            "--from-seq", sequence.to_string(), "--window-seconds", "60"],
-        "dependency": dependency,
-        "target": observed,
-        "plan": ["plan", "--recording-run-id", id, "--attempt-id", result.attempt_id, "--findings", "<findings.json>"],
-    })
-}
-
-fn mismatch_event(result: &E2eEventSessionResult) -> Option<(&Value, u64)> {
-    if result.events.complete {
-        return None;
-    }
-    let failure = result.events.failure.as_ref()?;
-    let expected = failure
-        .get("expected")
-        .or(result.events.expected.as_ref())?;
-    expected["sequence"]
-        .as_u64()
-        .filter(|sequence| *sequence > 0)
-        .map(|sequence| (expected, sequence))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-    use traffic_e2e::E2eEventSessionProgress;
-    use uuid::Uuid;
-
-    const RECORDING: &str = "20261125131020";
-
-    fn attempt() -> E2eEventSessionResult {
-        E2eEventSessionResult {
-            run_key: "custom".into(),
-            attempt_id: Uuid::from_u128(1).simple().to_string(),
-            recording_root: "/recording".into(),
-            target_commit: None,
-            target_inputs: None,
-            target_image_id: None,
-            passed: false,
-            events: E2eEventSessionProgress {
-                total: Some(20),
-                matched: 7,
-                last_sequence: Some(8),
-                expected: Some(json!({"sequence": 10, "dependency_sequence": 9})),
-                failure: Some(json!({"target_observation_id": Uuid::from_u128(2)})),
-                ..Default::default()
-            },
-            phase: Default::default(),
-            apis: Default::default(),
-            error: Some("test mismatch".into()),
-            progress: "/progress.json".into(),
-            report: "/report.json".into(),
-        }
-    }
-
-    fn check_command(action: &Value, field: &str, command: &str) {
-        let words = action[field].as_array().unwrap();
-        assert_eq!(words[0], command);
-        let argv = std::iter::once("test").chain(words.iter().map(|word| word.as_str().unwrap()));
-        let parsed = crate::Cli::try_parse_from(argv).unwrap();
-        assert_eq!(parsed.recording_run_id.as_deref(), Some(RECORDING));
-    }
-
-    #[test]
-    fn failed_attempt_emits_flat_evidence_commands() {
-        let action = failure_action(RECORDING, &attempt());
-        assert_eq!(action["expected_sequence"], 10);
-        for command in ["events", "dependency", "target", "plan"] {
-            check_command(&action, command, command);
-        }
-        check_command(&action, "event", "events");
-        assert_eq!(action["event"][3], "--seq");
-        assert_eq!(action["event"][4], "10");
-        assert_eq!(action["dependency"][3], "9");
-        assert_eq!(action["target"][4], "/report.json");
-    }
-
-    #[test]
-    fn a_setup_error_with_a_compiled_plan_does_not_dispatch_analysis() {
-        let mut failed = attempt();
-        failed.events.failure = None;
-        assert_eq!(
-            failure_action(RECORDING, &failed)["action"],
-            "inspect_session_setup"
-        );
-    }
-
-    #[test]
-    fn a_source_stream_error_points_to_its_row_without_dispatching_analysis() {
-        let mut failed = attempt();
-        failed.events.expected = None;
-        failed.events.failure =
-            Some(json!({"reported_sequence": 13, "reason": "invalid Source row"}));
-        let action = failure_action(RECORDING, &failed);
-        assert_eq!(action["action"], "inspect_session_setup");
-        assert_eq!(action["source_sequence"], 13);
-        assert!(action.get("plan").is_none());
-    }
-
-    #[test]
-    fn analysis_keeps_the_frontier_captured_at_first_failure() {
-        let mut failed = attempt();
-        failed.events.expected = Some(json!({"sequence": 11}));
-        failed.events.failure =
-            Some(json!({"expected": {"sequence": 10, "dependency_sequence": 9}}));
-        let action = failure_action(RECORDING, &failed);
-        assert_eq!(action["expected_sequence"], 10);
-        assert_eq!(action["dependency"][3], "9");
+        } => super::print_json(
+            &target::observation(&target_root, id, attempt, report, observation_id)?,
+            pretty,
+        ),
     }
 }

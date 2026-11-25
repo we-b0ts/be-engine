@@ -59,59 +59,99 @@ be-replay --target-root /absolute/target run --user-confirm --recording-run-id 2
 be-replay --target-root /absolute/target status
 ```
 
-The confirmed `run` creates a `codex/replay/YYYYMMDD-N` work branch, binds
-the recording to it, and verifies the isolated Target from process launch.
-Further `run` and `status` commands on that branch use the same round and
-recording. An existing named work branch with no round can start by passing
-`--recording-run-id ID` to `run`.
-
-`status` reads the current round and latest attempt. To inspect an earlier
-attempt, supply `status --attempt-id UUID` with its recording ID and run key
-when needed to select the history.
-The response includes `recording_id`, `state`, `progress`, `session` and `next`. Attempt
-states are `not_started`, `running`, `interrupted`, `failed` and `passed`.
-Current-round status uses `candidate_changed` when a pass covers older Target
-code or inputs or when a different commit supersedes a failure without a
-reviewed repair. A managed attempt records the Target commit and input
-fingerprint and adds the image ID when a build succeeds. `session` also
-provides the attempt identity, event progress, report path and any error.
-`next` gives the coordinator the current action.
-
-An active attempt publishes a compact `progress` snapshot. The phase advances
-through `preparing_replay`, `building`, `starting_target`, `replaying`, and
-`finalizing`, then reaches `complete` after a pass. `events.matched` counts the
-matched prefix. `events.total` is `null` until Replay knows the complete plan
-size. `apis.total` is the number of API labels in the sealed route inventory
-after applying `.traffic-e2e/apis.yaml`. `apis.verified` counts labels whose
-recorded primary exchanges have all ended or been cancelled in the matched
-prefix. Readiness probes contribute to event counts only.
-
-| `next.action` | Coordinator action |
-| --- | --- |
-| `checkout_target_branch` | Use a named Target branch to enter the workflow. |
-| `select_recording` | Obtain the exact ID of a sealed recording. |
-| `confirm_regression` | Obtain caller approval and use the confirmed `run` command. |
-| `run_regression` | Start or rerun Replay on the round's work branch. |
-| `wait_for_session` | Follow the returned status command while Replay is active. |
-| `rerun_interrupted_session` | Start a fresh full attempt with the bound recording. |
-| `inspect_session_setup` | Investigate the attempt's setup error and available report. |
-| `analyze_session_failure` | Inspect the first divergence and submit reviewed findings. |
-| `review_findings` | Resolve findings that stay with the coordinator. |
-| `implement_fixes` | Dispatch the plan, collect tested commits, and submit a fixes report. |
-| `integrate_candidate` | Integrate the reported fix commits, validate and publish the candidate, and submit its report. |
-| `verify_candidate` | Replay the bound recording on the published candidate. |
-| `restore_candidate` | Restore the registered candidate or register a newly reviewed candidate covering the same accepted deliveries. |
-
-Unreadable Source artifacts lead to `inspect_session_setup`. When the failing
-position is available, `next.source_sequence` gives its Source sequence.
-
-An event failure stops delivery and returns the expected Source sequence.
-`next.event` selects that exact event. `next.events` queries Source context
-starting there. For example, page through the original Source minute starting
-at sequence 182:
+The confirmed `run` creates a `codex/replay/YYYYMMDD-N` work branch, selects
+the recording, and verifies the isolated Target from process launch. On a
+named work branch, `switch-recording-id` changes the active recording in the
+current checkout. Use `run --recording-run-id ID` to select and run in one
+command.
 
 ```sh
-be-replay --target-root /absolute/target events --from-seq 182 --window-seconds 60
+be-replay --target-root /absolute/target switch-recording-id 20261125113932
+be-replay --target-root /absolute/target run
+```
+
+Plain `run` and `status` use the active recording. Switching back restores
+that branch's run key, attempts and reviewed workflow for the selected
+recording. Each new attempt replays from Source launch.
+
+`status --recording-run-id ID` previews a different recording and provides
+the command to select it. To inspect a specific earlier attempt, supply
+`status --attempt-id UUID` with its recording ID and run key when needed to
+select the history.
+The response includes `recording_id`, `state`, `phase`, `progress`, `session`,
+`failure` when available, and `action`. Attempt states are `not_started`,
+`running`, `interrupted`, `failed` and `passed`.
+Current-round status uses `candidate_changed` when a pass covers older Target
+code or inputs or when a different commit supersedes a failure without a
+reviewed repair. `session.attempt_id` identifies the attempt. `session` can
+also include the Target commit for that attempt. `failure` can give `seq`,
+an `expected` event summary, a `reason`, and a `target_observation_id`.
+`action` contains a `kind`, a short `summary`, and any `details` and `commands`
+for the coordinator to act on. `commands` contains workflow argument lists,
+such as `action.commands.plan` or `action.commands.run`. Status for a historical
+attempt has `action: null`.
+
+The top-level `phase` advances through `preparing_replay`, `building`,
+`starting_target`, `replaying`, and `finalizing`, then reaches `complete` after a
+pass. Before the first attempt, `phase` and `progress` are `null`.
+
+```json
+{"phase":"replaying","progress":{"apis":"0/17","events":"17893/942000"}}
+```
+
+`progress.events` shows the last reached Source sequence over the sealed
+recording's final Source sequence. Source sequence numbers can have gaps.
+Once Replay completes, both values show the final sequence.
+`progress.apis` shows verified API labels over the total from the sealed route
+inventory after applying `.traffic-e2e/apis.yaml`. An API label is verified
+once all its recorded primary exchanges have ended or been cancelled in the
+matched prefix. An unavailable total appears as `?`.
+
+| `action.kind` | Coordinator action |
+| --- | --- |
+| `checkout_target_branch` | Check out a named branch. |
+| `select_recording` | Obtain the exact ID of a sealed recording. |
+| `switch_recording` | Use the returned `switch` command to select the recording on the current work branch. |
+| `confirm_regression` | Obtain caller approval and use the confirmed `run` command. |
+| `setup_required` | Resolve the setup error or route a confirmed engine issue to its owner. |
+| `analysis_required` | Assign the first divergence to an Issue Analyst and review the findings. |
+| `implementation_required` | Dispatch the eligible findings and accept tested fixes as they arrive. |
+| `integration_required` | Integrate the selected fixes, validate and publish the candidate, and submit its receipt. |
+| `advance_required` | Use `action.commands.run` to start a full Replay on the selected revision. |
+| `wait_required` | Check active Replay or outstanding assignments and use `status` to follow progress. |
+| `complete` | The selected revision has passed Replay. |
+
+```mermaid
+flowchart LR
+    replay[Full Replay] -->|first failed Source seq| analysis[Issue Analyst]
+    replay -->|execution error| setup[Coordinator resolves setup]
+    setup --> replay
+    analysis -->|reviewed first_unmatched and other findings| plan[Engine selects assignments]
+    plan -->|independent assignments| work[Implementers]
+    work -->|engine gap at first unmatched event| setup
+    work -->|tested fix for first unmatched event| integration[Integrator]
+    integration -->|registered candidate commit| replay
+    replay -->|full pass on current revision| complete[Complete]
+```
+
+## Inspect evidence
+
+The coordinator handles `setup_required`, including unreadable Source
+artifacts. `failure.seq` identifies the Source position when available. An
+event failure stops delivery at the first divergence. When `action.kind` is
+`analysis_required`, keep one active analyst per attempt. Pass the recording
+and attempt IDs, `failure.seq`, and the Source and Target repository locations
+and revisions. The analyst groups symptoms that appear to share one repair.
+The findings JSON names the first failure's group in `first_unmatched` and
+includes other groups under optional `others`.
+
+Read the exact Source event and page the surrounding timeline using the
+recording ID and sequence from status. Use `--from-seq` before the failure to
+see preceding requests.
+
+```sh
+be-replay --target-root /absolute/target events --recording-run-id ID --seq SEQ
+be-replay --target-root /absolute/target events --recording-run-id ID --from-seq 182 --window-seconds 60
 ```
 
 Use `--after-seq` with the same `--from-seq` and window to continue a page series.
@@ -122,26 +162,40 @@ show the push rows in a page. Repeat `--seq` to select exact events, including
 push rows. Replay still verifies the full recorded sequence. Use
 `events --payload` when analysis needs the protected primary HTTP payload.
 Use `be-replay dependency <seq>` for the protected request and result
-associated with a dependency admission. Use
-`be-replay target --report <absolute-report> <id>` for the authenticated
-Target observation identified by that attempt.
-Use `be-replay plan --findings FILE` to register reviewed findings against the
-latest eligible failure. Supply `--attempt-id` to require its exact identity.
-The planner deduplicates findings by cause and selects independent work with
-`--max-implementers N` (1 to 16, default 16). Findings include the shared cause,
-summary, disposition, evidence basis, Source sequences, and proposed code
-paths. Findings that require additional analysis or an engine change return to
-the coordinator. Events after the failure provide context for investigation
-and receive no verification credit until a later Replay reaches them.
+associated with a dependency admission. Use `be-replay target --attempt ID
+OBSERVATION_ID` for the authenticated Target observation named by `failure`.
+Explicit `--report` remains available for reading a specific report file.
 
-Submit ready fixes with `be-replay report --file FILE`. A report of kind
-`fixes` binds the failed attempt ID to each reviewed cause, exact fix commit,
-and checks. Have the integrator validate the combined candidate and publish
-its exact commit to the canonical work branch. A report of kind `candidate`
-binds the same failed attempt ID to the published commit, the included fix
-commits, and the candidate checks. The candidate commit must be the work
-branch's current `HEAD`. Follow `status` to verify it against the full
-recording. [Finding and report formats](../plugins/ai-engine/skills/be-replay/references/session-regression.md#plan-implement-and-verify)
+## Plan, implement, and verify
+
+The coordinator reviews the findings JSON and runs `action.commands.plan`
+with the reviewed file. `--attempt-id` binds the findings to the exact
+attempt. The first submission must include `failure.seq` in
+`first_unmatched.sequences`. Use `others` to add findings to the same attempt.
+Each finding contains a free-form `root_cause` string used as a stable group
+ID, a `summary`, and `sequences`. Optional `scope` identifies the owner or
+lifecycle, such as `startup`, `api:GET /users/{id}`, `job:sync_users`,
+`shutdown`, or `shared`. The planner deduplicates findings by group ID and
+prioritizes `first_unmatched`, then fills available slots up to
+`--max-implementers N` (1 to 16, default 16). The coordinator uses a separate
+worktree for each assignment and handles overlapping edits at integration.
+Implementers confirm the cause and deliver a tested Target or time, ID, or
+token policy repair.
+Events after the failure provide context for investigation and receive
+verification credit when a later Replay reaches them.
+
+Submit ready fixes with `be-replay report --file FILE`. Each `fixes` receipt
+binds the originating attempt to the causes, commits, and checks it delivers.
+When an implementer confirms a gap in Replay, the coordinator registers an
+`engine_gap` report with the originating attempt, group ID, and observed
+evidence. The coordinator routes it to the engine owner and follows
+`setup_required` to retry when the gap accounts for the first unmatched
+event. Once a fix for that event is ready, the coordinator can integrate
+it while independent work continues. The integrator
+checks the candidate, and the coordinator publishes and registers its exact
+commit. The `candidate` receipt names the current failed attempt, the
+published `HEAD`, the included fix commits, and the checks. Follow `status`
+to run full Replay against the candidate. [Finding and report formats](../plugins/ai-engine/skills/be-replay/references/session-regression.md#plan-implement-and-verify)
 
 Session Replay advances recorded I/O on the shared timeline as soon as its
 matching request, delivery receipt, or timer gate allows it. Recorded intervals
@@ -163,9 +217,9 @@ The catalog labels the report. The replay workload is determined by the
 recording, including all selected ingress, startup, and background events.
 Each Session attempt starts at Source launch and matches the entire timeline.
 
-`be-replay run` reports recorded and verified counts per API. After all
-events pass in a session with API cases, it adds one regression to
-`.traffic-e2e/progress.yaml` and retains existing API history. A sealed recording
+`be-replay run` reports matched event counts and recorded and verified counts
+per API. After all events pass in a session with API cases, it adds one
+regression to `.traffic-e2e/progress.yaml` and retains existing API history. A sealed recording
 contributes once across retries. The route labels used by the first successful
 publication remain in the history if the catalog changes later. Failed attempts
 and sessions without API cases retain their event reports. Check

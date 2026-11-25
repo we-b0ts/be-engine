@@ -22,7 +22,8 @@ pub use crate::dirty_evidence::{
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint,
 };
 pub use crate::event_session::{
-    run_e2e_event_session, run_e2e_event_session_with_apis, status_e2e_event_session,
+    event_session_report, run_e2e_event_session, run_e2e_event_session_with_apis,
+    status_e2e_event_session,
 };
 pub use crate::evidence::{
     E2eCaseResponseDifference, E2eCaseResponseDifferences, E2eDependencyCorrelation,

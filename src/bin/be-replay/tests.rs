@@ -17,6 +17,7 @@ fn exposes_the_flat_source_commands() {
             "init",
             "startup",
             "run",
+            "switch-recording-id",
             "status",
             "events",
             "dependency",
@@ -99,6 +100,45 @@ fn source_command_options_bind_the_selected_recording_and_attempt() {
     assert!(Cli::try_parse_from(["test", "status", "--attempt-id", "not-a-uuid"]).is_err());
     assert!(Cli::try_parse_from(["test", "status", "--api", "/api"]).is_err());
     assert!(Cli::try_parse_from(["test", "startup", "env", "list"]).is_ok());
+}
+
+#[test]
+fn target_evidence_requires_one_report_selector() {
+    let attempt = uuid::Uuid::from_u128(1);
+    let observation = uuid::Uuid::from_u128(2);
+    let attempt_id = attempt.simple().to_string();
+    let observation_id = observation.to_string();
+    let command =
+        Cli::try_parse_from(["test", "target", "--attempt", &attempt_id, &observation_id])
+            .unwrap()
+            .command;
+    assert!(matches!(
+        command,
+        RewriteCommand::Source(event_session::SourceCommand::Target {
+            attempt: Some(id), report: None, observation_id,
+        }) if id == attempt && observation_id == observation
+    ));
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "target",
+            "--report",
+            "evidence.json",
+            &observation_id
+        ])
+        .is_ok()
+    );
+    for selection in [
+        vec![],
+        vec!["--attempt", "invalid"],
+        vec!["--attempt", &attempt_id, "--report", "evidence.json"],
+    ] {
+        let args = ["test", "target"]
+            .into_iter()
+            .chain(selection)
+            .chain([observation_id.as_str()]);
+        assert!(Cli::try_parse_from(args).is_err());
+    }
 }
 
 #[test]

@@ -18,10 +18,11 @@ format: traffic-policy/v3
 rules: []
 ```
 
-For managed Source session regression, review the evidence for the generated
-time, ID, or token, update the applicable typed policy declaration, and verify
-by rerunning the selected recording with `backend-rewrite run`.
-`backend-rewrite plan --findings <file>` groups reviewed findings for repair.
+For managed Source session regression, the assigned implementer establishes
+the Source contract for a generated time, ID, or token and updates the
+applicable policy declaration. Register the tested policy commit with
+`be-replay report` and verify the integrated candidate by rerunning the
+selected recording with `be-replay run`.
 [Source session regression](session-regression.md)
 
 <details>

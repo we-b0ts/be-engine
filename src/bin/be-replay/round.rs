@@ -1,9 +1,10 @@
-//! Branch-local identity for one confirmed Source regression round.
+//! Source regression rounds and the active recording for a Target branch.
 mod git;
 #[cfg(test)]
 mod tests;
 
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Write},
     os::unix::fs::OpenOptionsExt,
@@ -41,6 +42,14 @@ pub(super) struct Round {
     pub recording_identity: String,
     pub run_key: String,
     pub workflow: Workflow,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BranchRounds {
+    #[serde(flatten)]
+    active: Round,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    inactive: BTreeMap<String, Round>,
 }
 
 #[derive(Debug)]
@@ -82,17 +91,40 @@ impl Repository {
     }
 
     pub fn read_round(&self) -> Result<Option<Round>> {
+        Ok(self.branch_rounds()?.map(|rounds| rounds.active))
+    }
+
+    pub fn inspect_round(&self, id: Option<&str>) -> Result<(Option<Round>, bool)> {
+        let Some(mut rounds) = self.branch_rounds()? else {
+            return Ok((None, false));
+        };
+        if let Some(id) = id.filter(|&id| id != rounds.active.recording_id) {
+            Ok((rounds.inactive.remove(id), true))
+        } else {
+            Ok((Some(rounds.active), false))
+        }
+    }
+
+    fn branch_rounds(&self) -> Result<Option<BranchRounds>> {
         let Some(branch) = self.branch.as_deref().filter(|_| !self.on_base()) else {
             return Ok(None);
         };
-        let Some(round) = read_round(&self.round_path(branch))? else {
+        let Some(rounds) = read_rounds(&self.round_path(branch))? else {
             return Ok(None);
         };
+        let matches_branch =
+            |round: &Round| round.branch == branch && round.pr_base == self.pr_base;
         ensure!(
-            round.branch == branch && round.pr_base == self.pr_base,
+            matches_branch(&rounds.active)
+                && rounds
+                    .inactive
+                    .iter()
+                    .all(|(id, round)| id == &round.recording_id
+                        && id != &rounds.active.recording_id
+                        && matches_branch(round)),
             "stored round does not match the current branch and configured pr_base"
         );
-        Ok(Some(round))
+        Ok(Some(rounds))
     }
 
     pub fn lock(&self) -> Result<RoundLock> {
@@ -123,7 +155,7 @@ impl Repository {
         Ok(())
     }
 
-    pub fn start_round(
+    pub fn select_round(
         &mut self,
         lock: &RoundLock,
         recording: Recording,
@@ -154,33 +186,35 @@ impl Repository {
             branch.to_string()
         };
         let path = self.round_path(&branch);
-        ensure!(
-            !path.exists(),
-            "a round already exists for branch {branch:?}"
-        );
-        let run_key = run_key.unwrap_or_else(|| format!("replay-{}", Uuid::new_v4().simple()));
-        validate_run_key(&run_key)?;
-        ensure!(
-            self.run_key_available(&run_key, &recording.id)?,
-            "run key {run_key:?} already belongs to another round for this recording"
-        );
-        ensure!(
-            status_e2e_event_session(&self.root, &recording.root, Some(&run_key), None)?.state
-                == E2eEventSessionState::NotStarted,
-            "run key {run_key:?} already has attempts for this recording"
-        );
-        let round = Round {
-            branch,
-            pr_base: self.pr_base.clone(),
-            base_commit: self.head.clone(),
-            recording_id: recording.id,
-            recording_identity: recording.identity,
-            run_key,
-            workflow: Workflow::default(),
+        let mut inactive = if let Some(mut current) = self.branch_rounds()? {
+            if current.active.recording_id == recording.id {
+                current.active.validate_recording(&recording)?;
+                current.active.validate_run_key(run_key.as_deref())?;
+                return Ok(current.active);
+            }
+            current
+                .inactive
+                .insert(current.active.recording_id.clone(), current.active);
+            current.inactive
+        } else {
+            BTreeMap::new()
+        };
+        let round = if let Some(round) = inactive.remove(&recording.id) {
+            round.validate_recording(&recording)?;
+            round.validate_run_key(run_key.as_deref())?;
+            round
+        } else {
+            self.new_round(branch, recording, run_key)?
+        };
+        let rounds = BranchRounds {
+            active: round,
+            inactive,
         };
         // Publish the binding before switching so an interruption after Git changes HEAD
         // still leaves a resumable round on the new branch.
-        persist(&path, &round)?;
+        self.check_checkout(lock)?;
+        persist(&path, &rounds)?;
+        let round = rounds.active;
         if on_base {
             self.check_checkout(lock)?;
             if let Err(error) = git::switch(&self.root, &round.branch, &self.head) {
@@ -196,7 +230,35 @@ impl Repository {
         Ok(round)
     }
 
-    pub fn save_round(&self, lock: &RoundLock, round: &Round) -> Result<()> {
+    fn new_round(
+        &self,
+        branch: String,
+        recording: Recording,
+        run_key: Option<String>,
+    ) -> Result<Round> {
+        let run_key = run_key.unwrap_or_else(|| format!("replay-{}", Uuid::new_v4().simple()));
+        validate_run_key(&run_key)?;
+        ensure!(
+            self.run_key_available(&run_key, &recording.id)?,
+            "run key {run_key:?} already belongs to another round for this recording"
+        );
+        ensure!(
+            status_e2e_event_session(&self.root, &recording.root, Some(&run_key), None)?.state
+                == E2eEventSessionState::NotStarted,
+            "run key {run_key:?} already has attempts for this recording"
+        );
+        Ok(Round {
+            branch,
+            pr_base: self.pr_base.clone(),
+            base_commit: self.head.clone(),
+            recording_id: recording.id,
+            recording_identity: recording.identity,
+            run_key,
+            workflow: Workflow::default(),
+        })
+    }
+
+    pub fn save_round(&self, lock: &RoundLock, round: Round) -> Result<()> {
         self.check_checkout(lock)?;
         ensure!(
             self.branch.as_deref() == Some(&round.branch)
@@ -205,7 +267,8 @@ impl Repository {
             "cannot update a round from a different branch or pr_base"
         );
         let path = self.round_path(&round.branch);
-        let current = read_round(&path)?.context("current round disappeared")?;
+        let mut rounds = self.branch_rounds()?.context("current round disappeared")?;
+        let current = &rounds.active;
         ensure!(
             current.branch == round.branch
                 && current.pr_base == round.pr_base
@@ -215,7 +278,8 @@ impl Repository {
                 && current.run_key == round.run_key,
             "round identity changed during be-replay operation"
         );
-        persist(&path, round)
+        rounds.active = round;
+        persist(&path, &rounds)
     }
 
     fn rounds_dir(&self) -> PathBuf {
@@ -236,9 +300,12 @@ impl Repository {
             if path
                 .extension()
                 .is_some_and(|extension| extension == "json")
-                && let Some(round) = read_round(&path)?
-                && round.run_key == run_key
-                && round.recording_id == recording_id
+                && let Some(rounds) = read_rounds(&path)?
+                && (matches_recording_key(&rounds.active, recording_id, run_key)
+                    || rounds
+                        .inactive
+                        .get(recording_id)
+                        .is_some_and(|round| matches_recording_key(round, recording_id, run_key)))
             {
                 return Ok(false);
             }
@@ -248,6 +315,16 @@ impl Repository {
 }
 
 impl Round {
+    pub fn validate_run_key(&self, key: Option<&str>) -> Result<()> {
+        ensure!(
+            key.is_none_or(|key| key == self.run_key),
+            "recording {} already uses run key {} on this branch",
+            self.recording_id,
+            self.run_key
+        );
+        Ok(())
+    }
+
     pub fn validate_recording(&self, recording: &Recording) -> Result<()> {
         ensure!(
             recording.id == self.recording_id && recording.identity == self.recording_identity,
@@ -339,7 +416,11 @@ fn optional_entries(path: &Path) -> Result<Option<fs::ReadDir>> {
     }
 }
 
-fn read_round(path: &Path) -> Result<Option<Round>> {
+fn matches_recording_key(round: &Round, recording_id: &str, key: &str) -> bool {
+    round.recording_id == recording_id && round.run_key == key
+}
+
+fn read_rounds(path: &Path) -> Result<Option<BranchRounds>> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .with_context(|| format!("parse Replay round {}", path.display())),
@@ -348,7 +429,7 @@ fn read_round(path: &Path) -> Result<Option<Round>> {
     }
 }
 
-fn persist(path: &Path, round: &Round) -> Result<()> {
+fn persist(path: &Path, rounds: &BranchRounds) -> Result<()> {
     let directory = path.parent().context("round path has no parent")?;
     fs::create_dir_all(directory)?;
     let temporary = directory.join(format!(".round-{}.tmp", Uuid::new_v4().simple()));
@@ -358,7 +439,7 @@ fn persist(path: &Path, round: &Round) -> Result<()> {
             .create_new(true)
             .mode(0o600)
             .open(&temporary)?;
-        serde_json::to_writer(&mut file, round)?;
+        serde_json::to_writer(&mut file, rounds)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
         drop(file);

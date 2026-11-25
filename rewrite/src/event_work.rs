@@ -1,55 +1,44 @@
-//! Convert event-analysis findings into independent implementer assignments.
+//! Reviewed Source-event findings and dispatch contracts.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Component, PathBuf},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Target,
-    Rule,
-    EngineGap,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Basis {
-    Reproduced,
-    SourceProven,
-    Hypothesis,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Finding {
     pub root_cause: String,
     pub summary: String,
-    pub kind: Kind,
-    pub basis: Basis,
     pub sequences: BTreeSet<u64>,
-    #[serde(default)]
-    pub code_paths: BTreeSet<PathBuf>,
-    #[serde(default)]
-    pub blocked_by: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Findings {
+    pub first_unmatched: Option<Finding>,
+    #[serde(default)]
+    pub others: Vec<Finding>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchPlan {
     pub implementers: Vec<Finding>,
-    pub coordinator: Vec<Finding>,
     pub waiting: Vec<Finding>,
 }
 
-pub fn plan(findings: Vec<Finding>, max_implementers: usize) -> Result<DispatchPlan> {
+pub fn validate_max_implementers(max_implementers: usize) -> Result<()> {
     ensure!(
         (1..=16).contains(&max_implementers),
         "session supports 1 to 16 implementers"
     );
+    Ok(())
+}
+
+/// Validate reviewed findings and merge entries with the same group ID.
+pub fn normalize(findings: Vec<Finding>) -> Result<Vec<Finding>> {
     let mut merged = BTreeMap::<String, Finding>::new();
     for mut finding in findings {
         ensure!(
@@ -61,63 +50,22 @@ pub fn plan(findings: Vec<Finding>, max_implementers: usize) -> Result<DispatchP
             "finding needs at least one valid Source event sequence"
         );
         ensure!(
-            finding.code_paths.iter().all(|path| {
-                !path.as_os_str().is_empty()
-                    && path
-                        .components()
-                        .all(|part| matches!(part, Component::Normal(_)))
-            }),
-            "finding code paths must be relative to the Target repository"
+            finding
+                .scope
+                .as_deref()
+                .is_none_or(|scope| !scope.trim().is_empty()),
+            "finding scope must be nonempty when supplied"
         );
         if let Some(previous) = merged.get(&finding.root_cause) {
-            ensure!(
-                previous.kind == finding.kind,
-                "conflicting dispositions for {}",
-                finding.root_cause
-            );
             finding.sequences.extend(&previous.sequences);
-            finding
-                .code_paths
-                .extend(previous.code_paths.iter().cloned());
-            finding
-                .blocked_by
-                .extend(previous.blocked_by.iter().cloned());
-            if previous.basis < finding.basis {
-                finding.summary.clone_from(&previous.summary);
-                finding.basis = previous.basis;
-            }
+            finding.scope = match (previous.scope.as_deref(), finding.scope) {
+                (Some(previous), Some(current)) if previous != current => Some("shared".into()),
+                (previous, current) => current.or_else(|| previous.map(str::to_owned)),
+            };
         }
         merged.insert(finding.root_cause.clone(), finding);
     }
     let mut findings: Vec<_> = merged.into_values().collect();
-    findings.sort_by_key(|finding| {
-        (
-            finding.basis,
-            *finding.sequences.first().expect("validated"),
-        )
-    });
-    let mut dispatch = DispatchPlan::default();
-    for finding in findings {
-        if finding.basis == Basis::Hypothesis
-            || finding.kind == Kind::EngineGap
-            || finding.code_paths.is_empty()
-        {
-            dispatch.coordinator.push(finding);
-        } else if !finding.blocked_by.is_empty()
-            || dispatch.implementers.len() >= max_implementers
-            || dispatch.implementers.iter().any(|active| {
-                active.code_paths.iter().any(|left| {
-                    finding
-                        .code_paths
-                        .iter()
-                        .any(|right| left.starts_with(right) || right.starts_with(left))
-                })
-            })
-        {
-            dispatch.waiting.push(finding);
-        } else {
-            dispatch.implementers.push(finding);
-        }
-    }
-    Ok(dispatch)
+    findings.sort_by_key(|finding| *finding.sequences.first().expect("validated"));
+    Ok(findings)
 }

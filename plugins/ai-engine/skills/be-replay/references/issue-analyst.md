@@ -1,25 +1,31 @@
 # Issue Analyst
 
-Investigate the coordinator's assigned failure read-only. Retain the Source
-and Target repository locations and revisions, recording ID, Target attempt,
-expected sequence, and evidence queries.
+The coordinator dispatches the read-only `issue-analyst` role when
+`action.kind` is `analysis_required`. Scope your investigation to the
+assigned Source and Target repository locations and revisions,
+`recording_id`, `session.attempt_id`, and `failure.seq`.
 
 ## Source Session failure
 
-Start with the exact `next.event` query when supplied. Use `next.events` to
-inspect the surrounding request admissions and completions. The default event
-window hides server push deliveries. Add `--with-push-event` when the cause
-involves a push, or read a known push position with `events --seq SEQ`.
-Client `PUBLISH` and `SUBSCRIBE` requests remain visible. Use `dependency`
-and `target` for the smallest relevant protected observations. Keep repeated
-operations distinct by sequence. Trace Source call sites, triggers, and
-lifecycle to explain why the expected event occurred. Compare the available Target
-observation and trace the responsible Target code when needed. For periodic
-or shutdown work, identify the application wait and the condition that
-releases it.
+Use `be-replay events --recording-run-id ID --seq SEQ` for `failure.seq`.
+Use `events --from-seq` to inspect request admissions and completions before
+and around the failure. Add `--with-push-event` when the cause involves a
+push. Explicit `--seq` queries include a server push at that position, and
+client `PUBLISH` and `SUBSCRIBE` requests appear in the default event window.
+Read a dependency exchange by its admission sequence with `dependency`. Use
+`target --attempt UUID OBSERVATION_ID` with `session.attempt_id` and
+`failure.target_observation_id` when available.
 
-Cite Source files or symbols, relevant sequences, and any authenticated Target
-observation. Return the shared cause, disposition, and smallest affected Target
-code paths in the [finding format](session-regression.md#plan-implement-and-verify).
-State hypotheses and missing evidence explicitly. Return the findings to the
-coordinator for review and implementation dispatch.
+Keep repeated operations distinct by sequence. Check the Source call site,
+trigger, or lifecycle and compare any available Target observation. Trace the
+code far enough to identify which symptoms likely share one repair.
+[Evidence commands](session-regression.md#diagnose-the-first-failure)
+
+Return one finding per likely shared repair. Choose a free-form, stable
+`root_cause` string as the group ID and include a short `summary` and the
+related `sequences`. Put the finding containing `failure.seq` in
+`first_unmatched` and use optional `others` for additional findings. Add
+`scope` to identify ownership or lifecycle.
+The coordinator reviews the findings and runs `action.commands.plan`.
+Implementers confirm the cause and choose the repair.
+[Finding format](session-regression.md#plan-implement-and-verify)

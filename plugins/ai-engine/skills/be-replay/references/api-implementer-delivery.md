@@ -1,18 +1,14 @@
 # API Implementer Delivery
 
-Commit the reviewed finding's changes in the assigned worktree. Verify the
-diff against the supplied base and the focused checks against the version
-being delivered.
+Commit the Target or policy repair in the assigned worktree. Verify the diff
+against the supplied base and the focused checks against the delivered version.
 
-Return the following to the coordinator:
+Return the full commit ID and focused check results for the assigned
+`root_cause` and originating attempt. Pass along any required startup inputs
+so the coordinator can apply them before Replay.
 
-- Finding identity, recording ID, and Source sequences.
-- Source files or symbols that establish the behavior and the Target paths
-  changed to implement it.
-- Full commit ID, assigned worktree, and the commands and results for focused
-  checks.
-- Any unresolved evidence or supported startup inputs the coordinator needs
-  before Replay.
-
-For an input-only finding, return the evidence and required input. The
-coordinator publishes any code changes and runs full verification.
+For a confirmed engine gap, return the finding group, originating attempt ID,
+Source sequence, observed result, and the engine capability needed. Cite the
+specific event, Target observation, or implementation behavior that establishes
+the gap. The coordinator registers the escalation, routes it to the engine
+owner, and retries after repair. [Engine gap report](session-regression.md#plan-implement-and-verify)

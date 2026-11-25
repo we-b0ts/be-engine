@@ -1132,14 +1132,14 @@ be-replay --target-root /absolute/target events --from-seq 182 --window-seconds 
 
 The work branch keeps the recording for retries. Use `status --attempt-id UUID`
 to inspect a specific attempt with its recording ID and run key when needed.
-On an event failure, `next.event`
-selects the expected Source sequence and `next.events` queries the timeline
-context. Use `events --with-push-event` to include server notification
-lifecycle rows in a page. Inspect the exact dependency admission with
-`dependency <seq>` and the attempt's retained Target observation with
-`target --report <absolute-report> <id>` when supplied. The coordinator submits
-reviewed findings with `plan --findings FILE`. Use `report --file FILE` to
-register the tested fix commits and the published candidate before full Replay.
+After an event failure, use `failure.seq` to query the Source timeline and
+`action.kind` to select the workflow step. The analyst can use `events --seq`,
+`dependency SEQ`, and `target --attempt UUID OBSERVATION_ID` to inspect
+observations and group symptoms that likely share one repair. The coordinator
+submits the reviewed `first_unmatched` and optional `others` with
+`plan --attempt-id UUID --findings FILE`. Implementers confirm the cause and
+choose the repair. Use `report --file FILE` to register tested fixes, confirmed
+engine gaps, and the published candidate.
 [Source session regression](session-regression.md)
 
 <details>
@@ -3238,10 +3238,10 @@ missing responses, stream events or unused calls. No expected output drives
 request execution and no response or ACK is synthesized.
 
 For managed Source session attempts, use `be-replay status` for the
-latest result and the returned evidence queries for the first divergence.
-Read the recorded request and delivery events at their own sequence numbers.
-An authenticated Target observation requires its original report and observation
-ID. [Source session evidence](session-regression.md)
+latest result and first failing sequence. Read recorded requests and
+deliveries at their own sequence numbers. Use the attempt ID and optional
+Target observation ID to read the authenticated observation.
+[Source session evidence](session-regression.md#inspect-evidence)
 
 For historical Case reports, global-format plan failures distinguish Source
 self-validation from independent Target validation. The report identifies the

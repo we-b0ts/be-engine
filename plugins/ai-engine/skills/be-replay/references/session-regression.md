@@ -25,12 +25,14 @@ be-replay --target-root /absolute/target status
 be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 ```
 
-The confirmed command creates a `codex/replay/YYYYMMDD-N` work branch, binds
-the recording to that branch, and starts Replay. To start on an existing
-named work branch with no round, pass `--recording-run-id ID` to `run`.
-Subsequent `status` and `run` reuse the bound recording. Every attempt
-launches an isolated Target against the current committed code and exercises
-the entire recording.
+The confirmed command creates a `codex/replay/YYYYMMDD-N` work branch, selects
+the recording, and starts Replay. On a named work branch, use
+`be-replay switch-recording-id ID` to change the active recording in the
+current checkout. Use `be-replay run --recording-run-id ID` to select and
+replay in one command. Plain `status` and `run` use the active recording.
+Switching back restores that recording's run key, attempts and reviewed
+workflow for the branch. Every new attempt launches an isolated Target on
+the current committed code and replays from Source launch.
 One Source timeline interleaves startup, readiness, concurrent ingress,
 dependency admissions and deliveries, notifications, and shutdown. Replay
 advances by sequence when the matching Target request or delivery receipt is
@@ -51,67 +53,92 @@ be-replay --target-root /absolute/target status
 be-replay --target-root /absolute/target status --recording-run-id ID --run-key KEY --attempt-id UUID
 ```
 
-`status` reports the current round and attempt. For an earlier attempt, pass
-its exact `--attempt-id`, recording ID and run key. Status includes
-`recording_id`, `state`, `progress`, `session`, and `next` when available.
-Read `progress.phase` to distinguish Replay preparation, Target build,
-Target startup, event matching, and finalization. `progress.events` shows the
-matched count and the plan total when known. `progress.apis` shows how many
-recorded API labels have completed every primary exchange in the matched prefix.
+`status` reports the current round and attempt. `status --recording-run-id ID`
+previews a different recording and provides its selection command. For an
+earlier attempt in the selected round, pass its exact `--attempt-id`.
+Supply the recording ID and run key when reading a different round.
+Status includes `recording_id`, `state`, `phase`, `progress`, `session`, and
+`action`, with `failure` when available. Read the top-level `phase` to
+distinguish Replay preparation, Target build, Target startup, event matching,
+and finalization.
+Before the first attempt, `phase` and `progress` are `null`.
+
+`progress.events` shows the last reached Source sequence over the sealed
+recording's final Source sequence, such as `17893/942000`. Source sequence
+numbers can have gaps. Both values show the final sequence after Replay
+completes. `progress.apis` shows verified API labels over the
+total, such as `0/17`. A label is verified once every recorded primary
+exchange under it has completed or been cancelled. An unavailable total
+appears as `?`.
 
 | State | Meaning and action |
 | --- | --- |
 | `not_started` | This recording and run key have no registered attempt. Start with `run`. |
 | `running` | Replay is active. Check the running process and use the returned status query to inspect progress. |
-| `interrupted` | The attempt ended without a terminal result. Use the returned `run` command to start a fresh full attempt. |
-| `failed` | Inspect the terminal error and available evidence queries. |
+| `interrupted` | The attempt ended without a terminal result. Start a fresh full attempt using `action.commands.run`. |
+| `failed` | Read `failure` for the first divergence and follow `action` for the current workflow step. |
 | `passed` | The selected attempt completed full Replay verification. |
 | `candidate_changed` | The latest result covers earlier Target code or inputs. Follow the current action to verify again. |
 
-`next` identifies the workflow step. On the pull-request base, use
-`select_recording` and `confirm_regression` to select the input and obtain
-approval. A round ready for its initial attempt uses `run_regression`. After a
-failed attempt, follow the evidence query and `review_findings` for work the
-coordinator must resolve. Use `implement_fixes`, `integrate_candidate` and
-`verify_candidate` as their evidence is registered. If the canonical `HEAD`
-has moved since candidate registration, `restore_candidate` gives the exact
-published commit. Restore that commit or register a newly reviewed candidate
-covering the same accepted deliveries.
+`action.kind` drives the coordinator's workflow. `action.summary` describes
+the step, `action.details` carries any scheduling information, and
+`action.commands` provides argument lists for the applicable `be-replay`
+workflow commands. Historical attempts have `action: null`.
+
+| `action.kind` | Coordinator responsibility |
+| --- | --- |
+| `checkout_target_branch` | Check out a named branch. |
+| `select_recording` | Select the exact sealed recording. |
+| `confirm_regression` | Obtain caller approval and use the confirmed `run` command from the pull-request base. |
+| `switch_recording` | Use `action.commands.switch` to select a different recording on the current branch. |
+| `setup_required` | Resolve the setup error or route a confirmed engine issue to its owner. |
+| `analysis_required` | Assign read-only investigation of the first divergence. |
+| `implementation_required` | Assign currently eligible work and register each ready delivery. |
+| `integration_required` | Integrate the selected deliveries, publish the candidate, and register its receipt. |
+| `advance_required` | Start a full Replay with `action.commands.run`. |
+| `wait_required` | Follow the active Replay or outstanding assignments and refresh `status`. |
+| `complete` | Report the passing attempt and its verified revision. |
 
 ## Diagnose the first failure
 
-Retain `recording_id`, `session.attempt_id`, `session.report`,
-`session.events`, and `next` from the run or status. A failed `run` with a
-Replay result prints JSON before exiting unsuccessfully. For
-`next.action: inspect_session_setup`,
-inspect the returned setup error and report. `next.source_sequence` identifies
-the failed Source read or preparation position when available. If the CLI fails
-before printing a result, use its error to resolve recording, configuration, or
-launch inputs.
+Retain `recording_id`, `session.attempt_id`, `failure`, and `action`. The
+compact `failure` can give `seq`, an `expected` event summary, a `reason`, and
+a `target_observation_id`. `expected.kind` identifies the expected event.
+`expected.dependency_sequence` identifies the corresponding dependency
+admission when available.
+A failed `run` with a Replay result prints JSON before exiting unsuccessfully.
+For `setup_required`, the coordinator uses the reported error to resolve the
+recording, configuration, or launch inputs. `failure.seq` identifies the
+failed Source read or preparation position when available.
 
-For `next.action: analyze_session_failure`, start with `expected_sequence`
-and the exact `next.event` query when supplied. Use `next.events` for the
-surrounding timeline. Dispatch the read-only Issue Analyst with
-the recording identity, expected sequence, Source and Target revisions and
-locations, and any returned protected queries. Place the returned arguments
-after `be-replay --target-root /absolute/target`:
+When `action.kind` is `analysis_required`, check the task runtime and reuse an
+active `issue-analyst` for the same attempt. Otherwise dispatch one read-only
+analyst with `recording_id`, `session.attempt_id`, `failure.seq`, and the Source
+and Target repository locations and revisions. Include the expected event
+summary and any Target observation ID. The analyst groups related problems by
+likely shared repair and returns concise findings. The first failed Source
+sequence belongs in `first_unmatched.sequences`.
 
-- `events --seq SEQ` reads the exact Source event used by `next.event`.
-  Repeat `--seq` to read multiple exact positions. An explicitly requested
-  server push delivery appears even without `--with-push-event`.
-- `events --from-seq SEQ --window-seconds 60` reads the Source window used
-  by `next.events`. Continue with `--after-seq` set to `next_after_sequence`,
-  keeping the start, window, and push visibility options. Default pages hide
-  server push delivery events. Add `--with-push-event` to show them. Client
+Run the evidence queries from the canonical Target or provide
+`--target-root /absolute/target`.
+
+- `events --recording-run-id ID --seq SEQ` reads the exact Source event.
+  Repeat `--seq` to read multiple exact positions. Explicitly selected server
+  push deliveries appear even without `--with-push-event`.
+- `events --recording-run-id ID --from-seq SEQ --window-seconds 60` reads
+  the surrounding Source window. Start before the expected event. Continue
+  with `--after-seq` set to `next_after_sequence`, keeping the start, window,
+  and push visibility options. Default pages hide server push delivery events.
+  Add `--with-push-event` to show them. Client
   requests such as `PUBLISH` and `SUBSCRIBE` are always visible. This display
-  option leaves Replay verification unchanged. Use `--payload` only when
-  protected primary HTTP payloads are necessary.
-- `dependency SEQ` reads the protected semantic request and result
-  for a dependency's **admission** sequence. An expected delivery event can
-  name that sequence separately as `dependency_sequence`.
-- `target --report /absolute/report.json OBSERVATION_ID` reads the
-  authenticated Target observation when the attempt supplies one. Use the
-  exact report, observation ID, and recording for the attempt.
+  option applies to the event query. Use `--payload` only when protected
+  primary HTTP payloads are necessary.
+- `dependency --recording-run-id ID SEQ` reads the protected semantic request
+  and result for a dependency's **admission** sequence. The exact Source event
+  may identify it in `dependency_sequence`.
+- `target --attempt UUID OBSERVATION_ID` reads an authenticated Target
+  observation for the active recording using the exact attempt and observation
+  ID. Use `--report /absolute/report.json` to read a specific report file.
 
 Follow the earliest divergence to the relevant Source behavior and actual
 Target call or response. Later Source events can support analysis of a shared
@@ -123,44 +150,57 @@ See [dependency diagnosis](api-implementer-dependency-diagnosis.md),
 
 ## Plan, implement, and verify
 
-Collect reviewed findings from analysis and pass a JSON array to
-`plan --findings /absolute/findings.json` for the failed attempt. The current
-eligible failure is selected by default. Use `--attempt-id` to require its
-exact identity. Use the returned `next.plan` template when available. Each
-finding has these fields.
+The coordinator reviews the analyst's findings and runs `action.commands.plan`
+with a JSON object. The command uses the active recording and `--attempt-id`
+binds the submission to the failed attempt. The first submission requires
+`first_unmatched`, a finding with `failure.seq` in `sequences`. Use optional
+`others` for further findings from the same attempt. Include relevant
+earlier Source sequences in the corresponding finding. Submit an object
+containing only `others` to add findings before registering the candidate.
+
+Each finding has these fields.
 
 | Field | Contract |
 | --- | --- |
-| `root_cause`, `summary` | Nonempty shared cause identity and concise explanation |
-| `kind` | `target`, `rule`, or `engine_gap` |
-| `basis` | `reproduced`, `source_proven`, or `hypothesis` |
+| `root_cause` | Free-form, nonempty string used as a stable group ID for symptoms that appear to share one repair |
+| `summary` | Short description of the problem |
 | `sequences` | Nonempty list of positive Source sequence numbers |
-| `code_paths` | Optional list of Target-root-relative paths affected by the repair |
-| `blocked_by` | Optional list of unresolved prerequisite findings |
+| `scope` | Optional string for ownership or lifecycle, such as `startup`, `api:GET /users/{id}`, `job:sync_users`, `shutdown`, or `shared` across scopes |
 
-The planner merges matching causes and rejects conflicting dispositions.
-It prioritizes reproduced and Source-proven findings by sequence within each
-basis. Results in `implementers` fit the `--max-implementers` limit of 1 to 16,
-which defaults to 16, and have independent paths. `waiting` covers
-prerequisites, path overlap, or capacity. Findings in `coordinator` need further
-analysis, an engine change, or specific repair paths. The coordinator reviews
-remaining work as its prerequisites resolve and owns dispatch and runtime
-reconciliation.
+An example `findings.json` for a failure at sequence `42` follows.
 
-Give each implementer its reviewed finding, sequence-based evidence, frozen
-base, and absolute worktree. Require a Source citation, focused checks, the
-exact committed fix, and any outstanding inputs in the handoff. Preserve
-normal Target behavior and keep recording data, expected outputs, and Replay
-internals out of product code. For a `rule` finding, use the
-[Session rule contract](rule-policy.md) for time, id, and token changes.
-For proven environment or mount requirements, use the
-[startup input interface](coordinator-startup-inputs.md).
+```json
+{
+  "first_unmatched": {
+    "root_cause": "startup_cache_lookup",
+    "summary": "Replay stops at the startup cache lookup required for readiness.",
+    "sequences": [42],
+    "scope": "startup"
+  }
+}
+```
+
+Use one `root_cause` for symptoms that appear to share one repair. The planner
+prioritizes `first_unmatched` and fills available slots with distinct groups.
+`--max-implementers` accepts 1 to 16 and defaults to 16. The coordinator
+dispatches each group in a separate worktree and handles overlapping edits
+when integrating fixes. Use `plan` to revise findings whose work has yet to
+be assigned.
+
+Give each implementer its reviewed finding, evidence query context, frozen
+base, and absolute worktree. The implementer confirms the cause and repairs
+Target behavior or a Source-proven time, ID, or token policy. The implementer
+returns the exact commit and focused check results, with any required
+startup inputs. See the
+[rule contract](rule-policy.md) and [startup input interface](coordinator-startup-inputs.md).
 
 Keep findings and receipt files under the ignored Target runtime directory or
-outside the Target checkout. Submit a ready integration batch with
-`be-replay report --file /absolute/fixes.json`.
-The report uses the failed attempt's UUID. For each fix, use the reviewed
-`root_cause`, full commit SHA, and the checks from the delivery.
+outside the Target checkout. Submit each ready set of fixes with
+`be-replay report --file /absolute/fixes.json`. The receipt uses the originating
+attempt's UUID. For each fix, use the reviewed `root_cause`, full commit SHA,
+and the checks from the delivery. The engine combines accepted deliveries
+for the attempt. Independent unfinished work can continue while Replay
+advances. Submit deliveries after the running Replay releases the round lock.
 
 ```json
 {
@@ -168,20 +208,36 @@ The report uses the failed attempt's UUID. For each fix, use the reviewed
   "attempt_id": "11111111-1111-4111-8111-111111111111",
   "fixes": [
     {
-      "root_cause": "route decoding loses a trailing slash",
+      "root_cause": "startup_cache_lookup",
       "commit": "1111111111111111111111111111111111111111",
-      "checks": ["route decoding regression passed"]
+      "checks": ["startup cache regression passed"]
     }
   ]
 }
 ```
 
-Register the fix batch while the canonical branch remains at the failed
-revision. Use `integrate_candidate` to hand the batch to the integrator. After
-validation, publish the exact candidate to the canonical work branch. Submit
-it with `be-replay report --file /absolute/candidate.json`. `commit` must be the
-canonical branch's current `HEAD`. `included_fixes` names the full SHAs from
-the batch. Use the same failed attempt UUID.
+If the implementer confirms an engine gap, the coordinator verifies the
+observation and registers it with `be-replay report --file /absolute/engine-gap.json`.
+Use the assignment's attempt and group ID. Include the exact observation and
+the missing engine behavior in `evidence`.
+
+```json
+{
+  "kind": "engine_gap",
+  "attempt_id": "11111111-1111-4111-8111-111111111111",
+  "root_cause": "startup_cache_lookup",
+  "evidence": "Source seq 42 and the Target observation show the same Redis request on the expected connection. Replay rejects that request as unsupported before comparison."
+}
+```
+
+Route the reported gap to the engine owner.
+
+When `action.kind` is `integration_required`, give the integrator the first
+unmatched group's fix and frozen base. After validation, publish the exact
+candidate to the canonical work branch. Submit it with
+`be-replay report --file /absolute/candidate.json`.
+`commit` must be the canonical branch's current `HEAD`. Put the delivered
+fix's SHA in `included_fixes`. Use the current failed attempt UUID.
 
 ```json
 {
@@ -193,13 +249,13 @@ the batch. Use the same failed attempt UUID.
 }
 ```
 
-Follow `verify_candidate` to run the same complete recording against the
-published candidate.
-For coordinator-owned work with an empty `implementers` list, register the
-candidate with `included_fixes: []` after reviewing any code or startup inputs.
+Follow `advance_required` to run the same complete recording against the
+published candidate. For `setup_required`, use the offered retry command
+after resolving the execution error or confirmed engine issue.
 
-Complete verification when `session.passed` is true. The engine requires the
-complete event sequence and strict finalization. `apis` shows recorded and
+`status` reports `action.kind` as `complete` after verification. The `run`
+result reports `session.passed` and requires the complete event sequence and
+strict finalization. Its `apis` field shows recorded and
 verified primary exchanges. A response end or recorded cancellation completes
 an exchange. Readiness probes contribute only to event verification. A passing
 session with recorded API exchanges contributes once per sealed run ID to

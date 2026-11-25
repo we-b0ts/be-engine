@@ -378,7 +378,7 @@ impl LedgerFiles {
         if partition == partitions::SESSION
             && let Some(session) = &mut self.session
         {
-            session.summary.physical_events += 1;
+            session.summary.note_row(sequence);
         }
         self.last_sequence = sequence;
         Ok(offset)

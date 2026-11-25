@@ -75,6 +75,10 @@ fn status_tracks_the_registered_attempt_and_selects_history() -> Result<()> {
     assert_eq!(status(None)?.state, E2eEventSessionState::Failed);
     drop(running);
 
+    let first_report = result.report.clone();
+    fs::create_dir_all(first_report.parent().unwrap())?;
+    fs::write(&first_report, b"{}")?;
+
     let second = Uuid::new_v4();
     let second_dir = attempts.join(second.simple().to_string());
     fs::create_dir(&second_dir)?;
@@ -87,6 +91,16 @@ fn status_tracks_the_registered_attempt_and_selects_history() -> Result<()> {
     result.apis = Default::default();
     let running = begin(&attempts, second, &result)?;
     assert_eq!(status(Some(first))?.state, E2eEventSessionState::Failed);
+    let first_evidence = || event_session_report(&target, &recording, run_key, first);
+    assert_eq!(first_evidence()?, first_report);
+    assert!(event_session_report(&target, &other_recording, run_key, first).is_err());
+    assert!(event_session_report(&target, &recording, run_key, second).is_err());
+    let outside = target.join("other-report.json");
+    fs::write(&outside, b"{}")?;
+    fs::remove_file(&first_report)?;
+    std::os::unix::fs::symlink(outside, &first_report)?;
+    assert!(first_evidence().is_err());
+
     let inherited = running.0.try_clone()?;
     drop(running);
     assert_eq!(status(None)?.state, E2eEventSessionState::Interrupted);

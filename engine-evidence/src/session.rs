@@ -12,6 +12,7 @@ use traffic_model::{
     session::SessionEvent,
     trace::{CaptureEvent, OutputKind, RecordedEvent},
 };
+pub use traffic_recording_store::session_summary::recording_end_sequence;
 use traffic_recording_store::{session, source::recording};
 
 mod progress;

@@ -30,11 +30,9 @@ behavior compatible with production.
 
 ## Rule Discovery From Source Diagnosis
 
-Trace a suspected dynamic value to the Source generator or validator. Return
-the exact field or argument, observed sequences, and Source reference. Check
-applicability in the [rule evidence contract](rule-policy.md) and
-[rule diagnosis](api-implementer-rule-diagnosis.md).
+Trace a suspected dynamic value to the Source generator or validator. Confirm
+the exact field or argument, observed sequences, and supported value
+relationship. See [rule diagnosis](api-implementer-rule-diagnosis.md).
 
-For a code repair, return the proven cause, Source citations, related sequences,
-affected paths, focused checks, and exact commit. See
-[implementation delivery](api-implementer-delivery.md).
+Deliver the exact repair commit and focused check results.
+[Implementation delivery](api-implementer-delivery.md)

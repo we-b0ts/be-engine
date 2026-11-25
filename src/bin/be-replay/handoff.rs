@@ -1,28 +1,90 @@
-//! Reviewed work and delivery receipts for the latest failed attempt.
-use std::collections::BTreeSet;
+//! Reviewed work, delivery receipts, and candidate admission for a Replay round.
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use traffic_e2e::{E2eEventSessionResult, event_work::DispatchPlan};
+use traffic_e2e::{
+    E2eEventSessionResult,
+    event_work::{DispatchPlan, Finding, Findings, normalize, validate_max_implementers},
+};
 use uuid::Uuid;
+
+mod assignments;
+#[cfg(test)]
+mod tests;
+
+const DEFAULT_IMPLEMENTERS: usize = 16;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(super) struct Workflow {
     repair: Option<Repair>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    earlier: BTreeMap<Uuid, Repair>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Repair {
     attempt_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failed_sequence: Option<u64>,
+    #[serde(default, alias = "blocker", skip_serializing_if = "Option::is_none")]
+    first_unmatched: Option<String>,
+    #[serde(default = "default_implementers")]
+    max_implementers: usize,
+    #[serde(deserialize_with = "read_saved_plan")]
     plan: DispatchPlan,
     fixes: Option<Vec<Fix>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    engine_gaps: BTreeMap<String, EngineGap>,
     candidate: Option<Candidate>,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+fn default_implementers() -> usize {
+    DEFAULT_IMPLEMENTERS
+}
+
+fn read_saved_plan<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<DispatchPlan, D::Error> {
+    let mut plan = Value::deserialize(deserializer)?;
+    let legacy_coordinator = plan
+        .as_object_mut()
+        .and_then(|plan| plan.remove("coordinator"));
+    if let Some(Value::Array(legacy_waiting)) = legacy_coordinator
+        && let Some(waiting) = plan.get_mut("waiting").and_then(Value::as_array_mut)
+    {
+        waiting.extend(legacy_waiting);
+    }
+    for group in ["implementers", "waiting"] {
+        if let Some(findings) = plan.get_mut(group).and_then(Value::as_array_mut) {
+            findings.retain_mut(|finding| {
+                finding.as_object_mut().is_none_or(|entry| {
+                    entry.remove("kind");
+                    entry.remove("evidence");
+                    entry.remove("code_paths");
+                    entry.remove("blocked_by");
+                    entry.remove("basis").as_ref().and_then(Value::as_str) != Some("hypothesis")
+                })
+            });
+        }
+    }
+    serde_json::from_value(plan).map_err(serde::de::Error::custom)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EngineGap {
+    evidence: String,
+    reported_during: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retried_on: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Fix {
     root_cause: String,
@@ -30,7 +92,7 @@ pub(super) struct Fix {
     checks: Vec<String>,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Candidate {
     commit: String,
@@ -45,6 +107,11 @@ pub(super) enum Receipt {
         attempt_id: Uuid,
         fixes: Vec<Fix>,
     },
+    EngineGap {
+        attempt_id: Uuid,
+        root_cause: String,
+        evidence: String,
+    },
     Candidate {
         attempt_id: Uuid,
         commit: String,
@@ -57,26 +124,102 @@ impl Workflow {
     pub(super) fn set_plan(
         &mut self,
         attempt: &E2eEventSessionResult,
-        plan: DispatchPlan,
+        failed_sequence: u64,
+        submissions: Findings,
+        max_implementers: usize,
     ) -> Result<&DispatchPlan> {
         let attempt_id = attempt.attempt_id.parse()?;
-        if let Some(repair) = self
+        let base_commit = attempt
+            .target_commit
+            .as_deref()
+            .context("attempt lacks Target identity")?;
+        validate_max_implementers(max_implementers)?;
+        ensure!(
+            failed_sequence > 0,
+            "the failed attempt has no Source sequence to plan"
+        );
+        let current = self
             .repair
-            .as_mut()
-            .filter(|repair| repair.attempt_id == attempt_id)
-        {
+            .as_ref()
+            .filter(|repair| repair.attempt_id == attempt_id);
+        let existing_first = current.and_then(|repair| repair.first_unmatched.as_deref());
+        let Findings {
+            first_unmatched,
+            others,
+        } = submissions;
+        if let Some(finding) = &first_unmatched {
             ensure!(
-                repair.plan == plan || (repair.fixes.is_none() && repair.candidate.is_none()),
-                "this attempt already has deliveries for its reviewed plan"
+                finding.sequences.contains(&failed_sequence),
+                "first_unmatched must cover the first failed sequence {failed_sequence}"
             );
-            repair.plan = plan;
-        } else {
-            self.repair = Some(Repair {
-                attempt_id,
-                plan,
-                fixes: None,
-                candidate: None,
-            });
+            ensure!(
+                existing_first.is_none_or(|cause| cause == finding.root_cause),
+                "the current attempt already has a different first_unmatched group"
+            );
+        }
+        let first_cause = first_unmatched
+            .as_ref()
+            .map(|finding| finding.root_cause.as_str())
+            .or(existing_first)
+            .with_context(|| {
+                format!("submit first_unmatched for the first failed sequence {failed_sequence}")
+            })?
+            .to_owned();
+        ensure!(
+            others
+                .iter()
+                .all(|finding| finding.root_cause != first_cause),
+            "submit changes to the first unmatched group under first_unmatched"
+        );
+        let combined = normalize(
+            current
+                .into_iter()
+                .flat_map(Repair::findings)
+                .cloned()
+                .chain(first_unmatched)
+                .chain(others)
+                .collect(),
+        )?;
+        if let Some(repair) = current {
+            ensure!(
+                repair
+                    .failed_sequence
+                    .is_none_or(|sequence| sequence == failed_sequence)
+                    && repair
+                        .base_commit
+                        .as_deref()
+                        .is_none_or(|commit| commit == base_commit),
+                "the reviewed plan belongs to another failure or Target revision"
+            );
+            if repair.candidate.is_some() {
+                ensure!(
+                    combined == normalize(repair.findings().cloned().collect())?,
+                    "this attempt already has an integrated candidate"
+                );
+                return Ok(&self.repair.as_ref().expect("current repair").plan);
+            }
+        }
+        let mut repair = current.cloned().unwrap_or_else(|| Repair {
+            attempt_id,
+            base_commit: None,
+            failed_sequence: None,
+            first_unmatched: None,
+            max_implementers,
+            plan: DispatchPlan::default(),
+            fixes: None,
+            engine_gaps: BTreeMap::new(),
+            candidate: None,
+        });
+        repair.base_commit = Some(base_commit.to_owned());
+        repair.failed_sequence = Some(failed_sequence);
+        repair.first_unmatched = Some(first_cause);
+        repair.max_implementers = max_implementers;
+        self.retire_replayed_gap(attempt_id);
+        repair.plan = self.schedule(&repair, combined);
+        if let Some(previous) = self.repair.replace(repair)
+            && previous.attempt_id != attempt_id
+        {
+            self.earlier.insert(previous.attempt_id, previous);
         }
         Ok(&self.repair.as_ref().expect("plan just assigned").plan)
     }
@@ -88,54 +231,23 @@ impl Workflow {
         attempt: &E2eEventSessionResult,
         receipt: Receipt,
     ) -> Result<()> {
-        let expected_id = attempt.attempt_id.parse::<Uuid>()?;
-        let repair = self
-            .repair
-            .as_mut()
-            .filter(|repair| repair.attempt_id == expected_id)
-            .context("submit a reviewed plan for the current failed attempt first")?;
-        let failed_commit = attempt
-            .target_commit
-            .as_deref()
-            .context("attempt lacks Target identity")?;
         match receipt {
             Receipt::Fixes { attempt_id, fixes } => {
-                ensure!(attempt_id == expected_id, "fixes refer to a stale attempt");
-                if repair.fixes.as_ref() == Some(&fixes) {
-                    return Ok(());
-                }
-                ensure!(
-                    head == failed_commit,
-                    "record accepted fixes before changing the canonical branch"
-                );
-                ensure!(
-                    repair.fixes.is_none() && repair.candidate.is_none(),
-                    "integration batch is already recorded"
-                );
-                ensure!(
-                    !fixes.is_empty(),
-                    "fixes receipt must include an accepted repair"
-                );
-                let mut causes = BTreeSet::new();
-                for fix in &fixes {
-                    ensure!(
-                        repair
-                            .plan
-                            .implementers
-                            .iter()
-                            .any(|finding| finding.root_cause == fix.root_cause),
-                        "{} was not assigned for implementation",
-                        fix.root_cause
-                    );
-                    ensure!(
-                        causes.insert(&fix.root_cause),
-                        "duplicate accepted root cause {}",
-                        fix.root_cause
-                    );
-                    validate_checks(&fix.checks)?;
-                    validate_commit(root, &fix.commit)?;
-                }
-                repair.fixes = Some(fixes);
+                self.accept_fixes(root, attempt_id, fixes)?;
+                self.refresh_assignments(attempt);
+            }
+            Receipt::EngineGap {
+                attempt_id,
+                root_cause,
+                evidence,
+            } => {
+                self.accept_engine_gap(
+                    attempt_id,
+                    &root_cause,
+                    evidence,
+                    attempt.attempt_id.parse()?,
+                )?;
+                self.refresh_assignments(attempt);
             }
             Receipt::Candidate {
                 attempt_id,
@@ -148,8 +260,15 @@ impl Workflow {
                     included_fixes,
                     checks,
                 };
+                let repair = self
+                    .current(attempt)
+                    .context("submit a reviewed plan for the current failed attempt first")?;
+                let failed_commit = attempt
+                    .target_commit
+                    .as_deref()
+                    .context("attempt lacks Target identity")?;
                 ensure!(
-                    attempt_id == expected_id,
+                    attempt_id == repair.attempt_id,
                     "candidate refers to a stale attempt"
                 );
                 ensure!(
@@ -159,38 +278,26 @@ impl Workflow {
                 if repair.candidate.as_ref() == Some(&candidate) {
                     return Ok(());
                 }
+                let first = repair
+                    .first_unmatched
+                    .as_deref()
+                    .context("submit a first_unmatched group before publishing a candidate")?;
+                let accepted = self.accepted_fix(first)
+                    .context("record the accepted fix for the first unmatched group before publishing a candidate")?;
                 ensure!(
-                    repair.fixes.is_some() || repair.plan.implementers.is_empty(),
-                    "record the accepted implementation fixes before publishing a candidate"
-                );
-                let accepted = repair
-                    .fixes
-                    .iter()
-                    .flatten()
-                    .map(|fix| fix.commit.clone())
-                    .collect();
-                ensure!(
-                    candidate.included_fixes == accepted,
-                    "candidate must cover exactly the accepted fix commits"
+                    candidate.included_fixes == BTreeSet::from([accepted.commit.to_owned()]),
+                    "candidate must include exactly the accepted first unmatched fix"
                 );
                 validate_checks(&candidate.checks)?;
-                if repair.fixes.is_some() {
-                    ensure!(
-                        head != failed_commit,
-                        "candidate must advance the failed revision after integration"
-                    );
-                }
                 ensure!(
-                    Command::new("git")
-                        .arg("-C")
-                        .arg(root)
-                        .args(["merge-base", "--is-ancestor", failed_commit, head])
-                        .status()
-                        .context("compare candidate to the failed revision")?
-                        .success(),
+                    head != failed_commit,
+                    "candidate must advance the failed revision after integration"
+                );
+                ensure!(
+                    is_ancestor(root, failed_commit, head)?,
                     "candidate must descend from the failed revision {failed_commit}"
                 );
-                repair.candidate = Some(candidate);
+                self.repair.as_mut().expect("current plan").candidate = Some(candidate);
             }
         }
         Ok(())
@@ -198,27 +305,48 @@ impl Workflow {
 
     pub(super) fn next(&self, attempt: &E2eEventSessionResult, head: &str) -> Option<Value> {
         let repair = self.current(attempt)?;
-        let attempt_id = repair.attempt_id;
+        let attempt_id = repair.attempt_id.simple().to_string();
+        let base_commit = &attempt.target_commit;
         if let Some(candidate) = &repair.candidate {
             return Some(if candidate.commit == head {
-                json!({"action":"verify_candidate", "attempt_id":attempt_id, "candidate":candidate, "run":["run"]})
+                json!({
+                    "kind":"advance_required", "summary":"Verify the registered Target candidate.",
+                    "details":{"candidate_commit":candidate.commit},
+                    "commands":{"run":["run"]}
+                })
             } else {
                 json!({
-                    "action":"restore_candidate", "attempt_id":attempt_id, "candidate":candidate,
-                    "head":head, "report":["report", "--file", "<candidate.json>"]
+                    "kind":"setup_required", "summary":"Restore the registered Target candidate, then retry.",
+                    "details":{"candidate_commit":candidate.commit, "head":head},
+                    "commands":{"run":["run"]}
                 })
             });
         }
-        if let Some(fixes) = &repair.fixes {
+        let first = repair
+            .first_unmatched
+            .as_deref()
+            .filter(|cause| repair.finding(cause).is_some())?;
+        if let Some(gap) = self.engine_gap(repair, first) {
             return Some(json!({
-                "action":"integrate_candidate", "attempt_id":attempt_id, "base_commit":attempt.target_commit,
-                "fixes":fixes, "report":["report", "--file", "<candidate.json>"]
+                "kind":"setup_required", "summary":"Resolve the reported engine gap, then retry Replay.",
+                "details":gap, "commands":{"run":["run"]}
             }));
         }
+        if let Some(fix) = self.accepted_fix(first) {
+            return Some(json!({
+                "kind":"integration_required", "summary":"Integrate the accepted fix for the first unmatched group.",
+                "details":{"role":"code-integrator", "attempt_id":attempt_id, "base_commit":base_commit, "fixes":[fix]},
+                "commands":{"report":["report", "--file", "<candidate.json>"]}
+            }));
+        }
+        let assignments = self.current_assignments(first);
+        if assignments.is_empty() {
+            return None;
+        }
         Some(json!({
-            "action": if repair.plan.implementers.is_empty() { "review_findings" } else { "implement_fixes" },
-            "attempt_id":attempt_id, "base_commit":attempt.target_commit, "plan":repair.plan,
-            "report":["report", "--file", "<delivery.json>"]
+            "kind":"implementation_required", "summary":"Assign or follow the eligible Replay fixes.",
+            "details":{"role":"api-implementer", "first_unmatched":first, "assignments":assignments},
+            "commands":{"report":["report", "--file", "<delivery.json>"]}
         }))
     }
 
@@ -236,9 +364,9 @@ impl Workflow {
                 "restore the registered candidate {} before running Replay",
                 candidate.commit
             );
-        } else {
+        } else if let Some(first) = repair.first_unmatched.as_deref() {
             ensure!(
-                repair.fixes.is_none() && repair.plan.implementers.is_empty(),
+                self.engine_gap(repair, first).is_some(),
                 "register the integrated candidate before running Replay; inspect be-replay status"
             );
         }
@@ -250,6 +378,22 @@ impl Workflow {
         self.repair
             .as_ref()
             .filter(|repair| repair.attempt_id == attempt_id)
+    }
+
+    fn refresh_assignments(&mut self, attempt: &E2eEventSessionResult) {
+        if let Some(repair) = self
+            .current(attempt)
+            .filter(|repair| repair.candidate.is_none())
+        {
+            let Some(first) = repair.first_unmatched.as_deref() else {
+                return;
+            };
+            if self.accepted_fix(first).is_some() || self.engine_gap(repair, first).is_some() {
+                return;
+            }
+            let plan = self.schedule(repair, repair.findings().cloned().collect());
+            self.repair.as_mut().expect("current plan").plan = plan;
+        }
     }
 }
 
@@ -277,4 +421,14 @@ fn validate_commit(root: &Path, commit: &str) -> Result<()> {
         "unknown delivery commit {commit}"
     );
     Ok(())
+}
+
+fn is_ancestor(root: &Path, base: &str, commit: &str) -> Result<bool> {
+    Ok(Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["merge-base", "--is-ancestor", base, commit])
+        .status()
+        .context("compare delivery and base commits")?
+        .success())
 }

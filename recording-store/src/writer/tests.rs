@@ -554,6 +554,11 @@ async fn session_uses_one_sealed_journal_and_resolves_dependency_cells() -> Resu
     assert!(observations.next()?.is_none());
     let summary = crate::session_summary::read(root)?;
     assert_eq!(summary.physical_events, 4);
+    assert_eq!(summary.last_sequence, Some(6));
+    assert_eq!(
+        crate::session_summary::recording_end_sequence(root)?,
+        Some(6)
+    );
     assert!(summary.routes.is_empty());
     assert_eq!(
         crate::session_records::dependency(root, 3)?["response"],

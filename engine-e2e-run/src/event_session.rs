@@ -6,7 +6,7 @@ mod http;
 mod state;
 mod target;
 
-pub use state::status_e2e_event_session;
+pub use state::{event_session_report, status_e2e_event_session};
 
 use std::{
     collections::BTreeMap,
