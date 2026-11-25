@@ -4,8 +4,9 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
+    time::Instant,
 };
 
 use crate::replay::native::{LoadedResponse, ResponsePreparation};
@@ -15,7 +16,7 @@ use tokio::{sync::Notify, task::JoinSet};
 const WINDOW: usize = 256;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const READ_BATCH: usize = 32;
-const PARALLEL_BATCHES: usize = 2;
+const PARALLEL_BATCHES: usize = 3;
 
 type ScheduledResponse = (usize, ResponsePreparation);
 
@@ -30,6 +31,7 @@ pub(in crate::replay) struct CloseOnDrop(Arc<Shared>);
 struct Shared {
     state: Mutex<Window>,
     refill: Notify,
+    wait_micros: AtomicU64,
     packets_used: AtomicUsize,
     packet_batches: AtomicUsize,
     packet_batch_frames: AtomicUsize,
@@ -127,7 +129,13 @@ impl Responses {
             };
             self.shared.notify_advance(head, refill);
             match available {
-                Some(available) => available.await,
+                Some(available) => {
+                    let started = Instant::now();
+                    available.await;
+                    self.shared
+                        .wait_micros
+                        .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+                }
                 None => return Ok(response),
             }
         }
@@ -400,6 +408,8 @@ impl Drop for Responses {
             packet_batch_writes = self.shared.packet_batch_writes.load(Ordering::Relaxed),
             misses,
             waits,
+            wait_micros = self.shared.wait_micros.load(Ordering::Relaxed),
+            parallel_batches = PARALLEL_BATCHES,
             peak_bytes,
             "Session response prefetch"
         );
