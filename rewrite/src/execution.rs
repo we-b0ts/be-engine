@@ -46,7 +46,7 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
         return Ok(envelope);
     }
     let target_root = fs::canonicalize(&options.target_root)?;
-    let execution_mode = super::next::mode(&options)?;
+    let execution_mode = RewriteExecutionMode::Single;
     let current = if let Some(api) = options.api.as_ref() {
         super::status_rewrite_for_selector(
             RewriteContext {
@@ -273,25 +273,6 @@ pub(super) fn retire_finished(target_root: &Path) -> Result<()> {
         fs::remove_file(path(target_root))?;
     }
     Ok(())
-}
-
-/// Called only after validating an explicitly selected replacement batch.
-/// Old markers without a recording identity belong to the replaced snapshot.
-pub(super) fn reconcile_recording_change(target_root: &Path, selected: &str) -> Result<bool> {
-    let Some(execution) = load(target_root)? else {
-        return Ok(true);
-    };
-    if !execution.finished {
-        return Ok(execution.pid == std::process::id()
-            && execution
-                .recording_run_id
-                .as_deref()
-                .is_none_or(|id| id == selected));
-    }
-    if execution.recording_run_id.as_deref() != Some(selected) {
-        fs::remove_file(path(target_root))?;
-    }
-    Ok(true)
 }
 
 pub(super) fn busy(target_root: &Path) -> Result<bool> {

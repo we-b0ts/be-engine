@@ -131,7 +131,6 @@ pub(super) fn verify(
 
     match route.kind.as_str() {
         "recorder_capability_gap" => {
-            super::regression_scope::ensure_fresh_allowed(target_root, state)?;
             recording::reset_for_fresh_recording(
                 target_root,
                 state,

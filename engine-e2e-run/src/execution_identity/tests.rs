@@ -9,43 +9,6 @@ fn ids_are_stable_and_framed() {
 }
 
 #[test]
-fn replay_timing_binds_execution_without_changing_target_or_code_identity() {
-    let target = crate::test_support::configured_target();
-    let root = target.path();
-    let baseline = replay_identity(root).unwrap();
-    let target_identity = repository_fingerprint(root).unwrap();
-    let code_identity = code_fingerprint(root).unwrap();
-    let regression = root.join(crate::config::regression::PATH);
-    fs::write(
-        &regression,
-        "retry_failed_only: true\nreplay_interval_cap_ms: 100\n",
-    )
-    .unwrap();
-    assert_eq!(replay_identity(root).unwrap(), baseline);
-    fs::write(&regression, "replay_timing: fast\n").unwrap();
-    let fast = replay_identity(root).unwrap();
-    assert_ne!(fast, baseline);
-    fs::write(
-        &regression,
-        "replay_timing: fast\nreplay_interval_cap_ms: 0\n",
-    )
-    .unwrap();
-    assert_ne!(replay_identity(root).unwrap(), fast);
-    fs::write(&regression, "replay_timing: recorded\n").unwrap();
-    let recorded = replay_identity(root).unwrap();
-    assert_ne!(recorded, fast);
-    assert_ne!(recorded, baseline);
-    fs::write(
-        &regression,
-        "replay_timing: recorded\nreplay_interval_cap_ms: 0\n",
-    )
-    .unwrap();
-    assert_eq!(replay_identity(root).unwrap(), recorded);
-    assert_eq!(repository_fingerprint(root).unwrap(), target_identity);
-    assert_eq!(code_fingerprint(root).unwrap(), code_identity);
-}
-
-#[test]
 fn repository_fingerprint_ignores_runner_progress_but_tracks_policy_and_source() {
     let repository = tempfile::tempdir().unwrap();
     fs::create_dir_all(repository.path().join(".traffic-e2e")).unwrap();
@@ -80,24 +43,6 @@ fn repository_fingerprint_ignores_runner_progress_but_tracks_policy_and_source()
     git_ok(repository.path(), &["commit", "-m", "baseline"]);
 
     let baseline = repository_fingerprint(repository.path()).unwrap();
-    let regression = repository.path().join(crate::config::regression::PATH);
-    fs::write(&regression, "").unwrap();
-    assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
-    let code = code_fingerprint(repository.path()).unwrap();
-    git_ok(repository.path(), &["add", crate::config::regression::PATH]);
-    git_ok(
-        repository.path(),
-        &["commit", "-m", "track local regression policy"],
-    );
-    fs::write(
-        &regression,
-        "recording_run_id: \"20260911093000\"\nskip: [/a]\n",
-    )
-    .unwrap();
-    assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
-    assert_eq!(code_fingerprint(repository.path()).unwrap(), code);
-    fs::remove_file(&regression).unwrap();
-    assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
     for name in ["progress.yaml", "replay-progress.yaml", "e2e-progress.yaml"] {
         fs::write(
             repository.path().join(".traffic-e2e").join(name),

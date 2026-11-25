@@ -62,24 +62,6 @@ pub(super) fn identify_after_finalized_recording(
     Ok(true)
 }
 
-/// Canonicalize an adopted recording's observation snapshot without reopening cases.
-pub(super) fn canonical_observed_apis(
-    target_root: &Path,
-    observed: &[String],
-) -> Result<BTreeSet<String>> {
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    let config = crate::config::AppConfig::load(&project.recorder_config)?;
-    observed
-        .iter()
-        .map(|api| {
-            Ok(canonical_api(
-                &api.parse()?,
-                &config.http_gateway.case_path_patterns,
-            ))
-        })
-        .collect()
-}
-
 /// Reproject when a coordinator changes capture patterns while analysis is pending.
 pub(super) fn pending_routes(
     root: &Path,

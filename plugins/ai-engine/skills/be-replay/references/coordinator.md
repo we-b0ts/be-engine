@@ -8,10 +8,12 @@ The integrator combines their exact commits.
 
 ## Run and inspect
 
-Select the sealed recording and use `be-replay run` in the canonical
-Target. On resume, use `status` for the same recording and run key. Use the
-reported attempt, failure, and evidence commands. Keep at most one active
-Replay for a Target.
+Start or resume with `be-replay status` in the canonical Target. Select the
+sealed recording. On `project.delivery.pr_base`, use the caller's explicit
+authorization for this round before executing the returned command with
+`--user-confirm`. Use bare `status` on the work branch to resume the bound
+round. Follow the reported attempt and evidence commands. Keep at most one
+active Replay for a Target.
 
 - For a missing or incomplete recording, coordinate with the external owner.
   See [recording handoff](coordinator-recording.md).
@@ -26,19 +28,23 @@ Replay for a Target.
 
 ## Implement and verify
 
-Submit a single set of reviewed findings to `plan`. Dispatch independent work
-from `implementers` with the finding, canonical root, frozen base, and absolute
+Submit reviewed findings to `plan`. Dispatch independent work from
+`implementers` with the finding, canonical root, frozen base, and absolute
 worktree. Review findings returned under `coordinator`. Reconsider `waiting`
-when prerequisites clear or an implementation slot opens. Keep overlapping
+when prerequisites clear or an implementation slot opens. Set
+`--max-implementers` to the slots available to this round. Keep overlapping
 paths under one active owner.
 
 Check the actual task runtime for outstanding assignments before waiting and
 again when it returns. Reuse known active assignments during recovery. Retain
 each handoff's exact commit, Source references, focused checks, and outstanding
-inputs. Require a committed candidate from the [code integrator](code-integrator.md)
-and publish that exact candidate. Apply any supported coordinator-owned inputs.
+inputs. Submit a ready batch of fix commits with `report --file FILE` using the
+failed attempt ID. When status requests integration, give the
+[code integrator](code-integrator.md) the batch and canonical base. Publish the
+exact candidate commit after checking that the canonical base still matches.
+Register the published candidate with `report --file FILE` and apply any
+supported coordinator-owned inputs.
 
-Run the same sealed recording again after publication. A failed attempt is
-evidence for the next repair. A complete passing attempt and its API counts
-describe the verified scope. Report the recording ID, passing attempt, and
-candidate commit. Keep whole-session verification tied to that one execution.
+Follow status to verify the published candidate against the bound recording.
+A failed attempt is evidence for the next repair. Report the recording ID,
+passing attempt, candidate commit, and API counts from the passing execution.

@@ -158,12 +158,12 @@ fn untouched_group_preempts_pending_refreshes_with_previous_attempts() {
 #[test]
 fn skipped_unattempted_api_does_not_delay_group_integration() {
     let (target, mut workflow) = setup(Activity::HandoffReady);
-    fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "skip: [/untouched]\n",
-    )
-    .unwrap();
-    crate::regression_scope::apply(target.path(), &mut workflow).unwrap();
+    workflow
+        .api_inventory
+        .iter_mut()
+        .find(|item| item.api == "GET /untouched")
+        .unwrap()
+        .status = RewriteApiStatus::Skipped;
     save(target.path(), &workflow);
 
     assert!(matches!(

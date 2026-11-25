@@ -16,5 +16,6 @@ integrating and checking the candidate.
    sequences, conflict resolutions, and check results. Flag any outstanding
    code, rule, or startup input.
 
-The coordinator publishes the exact candidate and runs
-[full Source Session verification](session-regression.md#plan-implement-and-verify).
+The coordinator publishes the exact candidate and registers its commit,
+included fixes, and check results before running full Replay.
+See [Source Session verification](session-regression.md#plan-implement-and-verify).

@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod event_session;
+mod handoff;
 mod project_init;
+mod round;
 mod startup;
 
 #[derive(Debug, Parser)]
@@ -35,7 +37,7 @@ struct Cli {
     /// Target repository root.
     #[arg(long, default_value = ".")]
     target_root: PathBuf,
-    /// Override the Source recording selected in .traffic-e2e/regression.yaml.
+    /// Select a sealed Source recording when starting a round or inspecting history.
     #[arg(long, global = true)]
     recording_run_id: Option<String>,
     #[command(subcommand)]

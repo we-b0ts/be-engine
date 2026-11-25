@@ -24,7 +24,7 @@ pub enum Basis {
     Hypothesis,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Finding {
     pub root_cause: String,
@@ -38,7 +38,7 @@ pub struct Finding {
     pub blocked_by: BTreeSet<String>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchPlan {
     pub implementers: Vec<Finding>,
     pub coordinator: Vec<Finding>,

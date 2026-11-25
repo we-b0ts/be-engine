@@ -266,12 +266,6 @@ fn retry_scope_tracks_the_current_auto_next_step_without_losing_the_mode() {
 fn external_status_reports_the_running_invocation_mode_even_between_apis() {
     for execution_mode in [RewriteExecutionMode::Single, RewriteExecutionMode::AutoNext] {
         let target = configured_target();
-        // Configuration alone must not relabel an explicitly scoped operation.
-        fs::write(
-            target.path().join(crate::config::regression::PATH),
-            "auto_next: true\n",
-        )
-        .unwrap();
         let mut state = implementation_state_with_inventory(false);
         state.phase = super::super::RewritePhase::ApiPending;
         state.active_issue = None;

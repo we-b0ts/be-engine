@@ -96,14 +96,10 @@ mod inventory {
         pub use traffic_rewrite::testing::api_in_revalidation_round as contains;
         pub use traffic_rewrite::testing::finish_revalidation_api as finish;
     }
-    pub use traffic_rewrite::testing::{
-        activate_api as activate_requested,
-        defer_completed_apis as defer_completed_for_target_change,
-    };
+    pub use traffic_rewrite::testing::defer_completed_apis as defer_completed_for_target_change;
 }
 mod regression_scope {
     pub use traffic_rewrite::testing::api_is_skipped as is_skipped;
-    pub use traffic_rewrite::testing::apply_regression_scope as apply;
 }
 mod review {
     pub use traffic_rewrite::check_rewrite_review as check;

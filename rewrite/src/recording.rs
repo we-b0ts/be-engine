@@ -67,7 +67,6 @@ pub(super) fn begin_pending_capture_refresh(
     if inventory::has_runnable_work(state) {
         return Ok(false);
     }
-    super::regression_scope::ensure_fresh_allowed(target_root, state)?;
     ensure!(
         super::fingerprint::project_config_revision(target_root)?
             == refresh.project_config_revision,

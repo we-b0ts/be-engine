@@ -32,7 +32,7 @@ fn recording_dir(target: &Path) -> PathBuf {
         .join(RECORDING_ID)
 }
 
-fn git(target: &Path, args: &[&str]) {
+fn git(target: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
         .arg(target)
@@ -44,6 +44,7 @@ fn git(target: &Path, args: &[&str]) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
 fn configure(target: &Path) {
@@ -65,6 +66,9 @@ fn configure(target: &Path) {
     fs::write(traffic.join("Dockerfile.target"), "FROM scratch\n").unwrap();
     fs::write(target.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
     git(target, &["init", "-q", "-b", "dev-migration"]);
+    git(target, &["config", "user.name", "Test"]);
+    git(target, &["config", "user.email", "test@example.com"]);
+    git(target, &["add", "."]);
     git(
         target,
         &[
@@ -80,28 +84,36 @@ fn configure(target: &Path) {
     );
 }
 
-#[test]
-fn status_is_read_only_and_selects_the_latest_or_exact_failed_attempt() {
+#[tokio::test]
+async fn status_starts_a_new_round_on_approval_and_preserves_attempt_history() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();
-    fs::create_dir_all(recording_dir(root)).unwrap();
-    fs::write(
-        root.join(".traffic-e2e/regression.yaml"),
-        format!("recording_run_id: '{RECORDING_ID}'\n"),
-    )
-    .unwrap();
-    let not_started = successful(command(root, &["status"]));
-    assert_eq!(
-        not_started,
-        json!({"recording_id": RECORDING_ID, "state": "not_started", "session": null, "next": null})
-    );
-    assert!(!traffic_e2e::internal_runtime::root(root).exists());
-
     configure(root);
-    let run = || {
-        // The directory has no sealed manifest. Launch must record a setup
-        // failure without trying to run Docker, even if API counts also fail.
-        let output = command(root, &["run", "--run-key", "custom"]);
+    let recording = recording_dir(root);
+    seal_events(&recording).await;
+    let not_started = successful(command(root, &["status"]));
+    assert_eq!(not_started["next"]["action"], "select_recording");
+    assert_eq!(not_started["next"]["recording_ids"], json!([RECORDING_ID]));
+    let confirm = successful(command(
+        root,
+        &["status", "--recording-run-id", RECORDING_ID],
+    ));
+    assert_eq!(confirm["next"]["action"], "confirm_regression");
+    assert_eq!(confirm["branch"], "dev-migration");
+    assert_eq!(confirm["next"]["requires_user_confirmation"], true);
+    assert!(!traffic_e2e::internal_runtime::root(root).exists());
+    assert!(
+        !command(root, &["run", "--recording-run-id", RECORDING_ID])
+            .status
+            .success()
+    );
+    assert_eq!(git(root, &["branch", "--show-current"]), "dev-migration");
+
+    // Fail authentication before Docker while retaining sealed metadata, so the
+    // real CLI exercises attempt publication and failure routing.
+    fs::write(recording.join("events.tsv"), b"broken\n").unwrap();
+    let failed_run = |args: &[&str]| -> Value {
+        let output = command(root, args);
         assert!(!output.status.success());
         let result: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
             panic!(
@@ -110,47 +122,42 @@ fn status_is_read_only_and_selects_the_latest_or_exact_failed_attempt() {
             );
         });
         assert_eq!(result["session"]["passed"], false);
-        assert!(result["session"]["error"].is_string());
         assert_eq!(result["next"]["action"], "inspect_session_setup");
-        assert!(result["next"]["report"].is_null());
-        assert!(result["api_counts_error"].is_string());
         result
     };
-    let first = run();
-    let second = run();
-    let first_attempt = first["session"]["attempt_id"].as_str().unwrap();
+    let first = failed_run(&["run", "--user-confirm", "--recording-run-id", RECORDING_ID]);
+    let branch = git(root, &["branch", "--show-current"]);
+    assert!(branch.starts_with("codex/replay/"));
+    let second = failed_run(&["run"]);
+    let first_id = first["session"]["attempt_id"].as_str().unwrap();
     assert_ne!(
         first["session"]["attempt_id"],
         second["session"]["attempt_id"]
     );
-
-    // Status continues to expose the saved attempt even if current launch
-    // configuration has been removed.
-    fs::remove_file(root.join(".traffic-e2e/policy.yaml")).unwrap();
-    let latest = successful(command(root, &["status", "--run-key", "custom"]));
+    assert_eq!(first["session"]["run_key"], second["session"]["run_key"]);
+    assert_eq!(
+        first["session"]["target_commit"],
+        git(root, &["rev-parse", "HEAD"])
+    );
+    let latest = successful(command(root, &["status"]));
     assert_eq!(latest["state"], "failed");
     assert_eq!(latest["session"], second["session"]);
     assert_eq!(latest["next"], second["next"]);
+    let historical = successful(command(root, &["status", "--attempt-id", first_id]));
+    assert_eq!(historical["session"], first["session"]);
+    assert!(historical["next"].is_null());
 
-    let history = successful(command(
+    git(root, &["switch", "dev-migration"]);
+    let fresh = successful(command(
         root,
-        &[
-            "--recording-run-id",
-            RECORDING_ID,
-            "status",
-            "--run-key",
-            "custom",
-            "--attempt-id",
-            first_attempt,
-        ],
+        &["status", "--recording-run-id", RECORDING_ID],
     ));
-    assert_eq!(history["recording_id"], RECORDING_ID);
-    assert_eq!(history["state"], "failed");
-    assert_eq!(history["session"], first["session"]);
-    assert_eq!(history["next"], first["next"]);
+    assert_eq!(fresh["next"]["action"], "confirm_regression");
+    assert!(fresh["session"].is_null());
+    git(root, &["switch", &branch]);
     assert_eq!(
-        successful(command(root, &["status"]))["state"],
-        "not_started"
+        successful(command(root, &["status"]))["session"],
+        second["session"]
     );
 }
 
@@ -231,7 +238,114 @@ async fn seal_events(recording: &Path) {
 }
 
 #[tokio::test]
-async fn flat_events_and_plan_query_the_recording_without_starting_replay() {
+async fn reviewed_fixes_and_candidate_receipts_advance_status() {
+    let target = tempfile::tempdir().unwrap();
+    let root = target.path();
+    configure(root);
+    let recording = recording_dir(root);
+    seal_events(&recording).await;
+    fs::write(recording.join("events.tsv"), b"broken\n").unwrap();
+    let output = command(
+        root,
+        &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
+    );
+    assert!(!output.status.success());
+    let initial: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "missing run result: {error}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    });
+    let mut failed = initial["session"].clone();
+    // Simulate the matching engine's persisted mismatch without invoking Docker.
+    failed["events"] = json!({"total":9, "matched":4, "complete":false, "last_sequence":4,
+        "expected":{"sequence":5}, "failure":{"reason":"fixture mismatch"}});
+    let attempt_file =
+        Path::new(failed["progress"].as_str().unwrap()).with_file_name("event-result.json");
+    fs::write(&attempt_file, serde_json::to_vec(&failed).unwrap()).unwrap();
+    let attempt_id = failed["attempt_id"].as_str().unwrap();
+    let status = || successful(command(root, &["status"]));
+    assert_eq!(status()["next"]["expected_sequence"], 5);
+
+    let findings = recording.join("findings.json");
+    fs::write(
+        &findings,
+        serde_json::to_vec(&json!([{
+            "root_cause":"fixture", "summary":"Source dependency path",
+            "kind":"target", "basis":"reproduced", "sequences":[5], "code_paths":["target.txt"]
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    let plan = successful(command(
+        root,
+        &[
+            "plan",
+            "--attempt-id",
+            attempt_id,
+            "--findings",
+            findings.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(plan["implementers"][0]["root_cause"], "fixture");
+    assert_eq!(status()["next"]["action"], "implement_fixes");
+
+    let branch = git(root, &["branch", "--show-current"]);
+    git(root, &["switch", "-c", "implementer"]);
+    fs::write(root.join("target.txt"), "fixed").unwrap();
+    git(root, &["add", "target.txt"]);
+    git(root, &["commit", "-qm", "fixture fix"]);
+    let commit = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["switch", &branch]);
+
+    let receipt = recording.join("receipt.json");
+    let report = |receipt_value: Value| {
+        fs::write(&receipt, serde_json::to_vec(&receipt_value).unwrap()).unwrap();
+        command(root, &["report", "--file", receipt.to_str().unwrap()])
+    };
+    let fixes = successful(report(
+        json!({"kind":"fixes", "attempt_id":attempt_id, "fixes":[{
+            "root_cause":"fixture", "commit":commit, "checks":["focused checks passed"]
+        }]}),
+    ));
+    assert_eq!(fixes["next"]["action"], "integrate_candidate");
+    assert_eq!(status()["next"], fixes["next"]);
+    let candidate = json!({"kind":"candidate", "attempt_id":attempt_id, "commit":commit,
+        "included_fixes":[commit], "checks":["integration checks passed"]});
+    assert!(!report(candidate.clone()).status.success());
+    git(root, &["merge", "--ff-only", &commit]);
+    let mut stale = candidate.clone();
+    stale["attempt_id"] = json!(uuid::Uuid::new_v4());
+    assert!(!report(stale).status.success());
+    let registered = successful(report(candidate));
+    assert_eq!(registered["next"]["action"], "verify_candidate");
+    assert_eq!(status()["next"], registered["next"]);
+
+    let rerun = command(root, &["run"]);
+    assert!(!rerun.status.success());
+    let new_attempt: Value = serde_json::from_slice(&rerun.stdout).unwrap();
+    assert_eq!(new_attempt["session"]["target_commit"], commit);
+    assert_ne!(new_attempt["session"]["attempt_id"], attempt_id);
+    assert_eq!(status()["next"]["action"], "inspect_session_setup");
+
+    let mut passed = new_attempt["session"].clone();
+    passed["passed"] = json!(true);
+    passed["error"] = Value::Null;
+    passed["events"] = json!({"complete":true,"total":9,"matched":9,"last_sequence":9});
+    let result =
+        Path::new(passed["progress"].as_str().unwrap()).with_file_name("event-result.json");
+    fs::write(result, serde_json::to_vec(&passed).unwrap()).unwrap();
+    let verified = status();
+    assert_eq!(verified["state"], "passed");
+    assert!(verified["next"].is_null());
+    fs::write(root.join("target.txt"), "new unverified input").unwrap();
+    let changed = status();
+    assert_eq!(changed["state"], "candidate_changed");
+    assert_eq!(changed["next"]["action"], "run_regression");
+}
+
+#[tokio::test]
+async fn flat_events_queries_the_recording_without_starting_replay() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();
     let recording = recording_dir(root);
@@ -265,25 +379,5 @@ async fn flat_events_and_plan_query_the_recording_without_starting_replay() {
     let exact = query_events(&["--seq", "3", "--seq", "4", "--seq", "6"]);
     assert_eq!(sequences(&exact), [3, 4, 6]);
 
-    let findings = root.join("findings.json");
-    fs::write(
-        &findings,
-        r#"[{"root_cause":"fixture","summary":"Source startup path",
-             "kind":"target","basis":"source_proven","sequences":[2],
-             "code_paths":["src/main.rs"]}]"#,
-    )
-    .unwrap();
-    let plan = successful(command(
-        root,
-        &[
-            "plan",
-            "--findings",
-            findings.to_str().unwrap(),
-            "--recording-run-id",
-            RECORDING_ID,
-        ],
-    ));
-    assert_eq!(plan["implementers"][0]["root_cause"], "fixture");
-    assert_eq!(plan["waiting"], json!([]));
     assert!(!traffic_e2e::internal_runtime::root(root).exists());
 }

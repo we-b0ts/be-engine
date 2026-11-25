@@ -220,7 +220,12 @@ fn restored_round_archives_excluded_next_api_and_can_resume_remaining_routes() {
     after_replay(root, &mut state, "/a").unwrap();
     let mut restored: RewriteState =
         serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    std::fs::write(root.join(".traffic-e2e/regression.yaml"), "skip: [/b]\n").unwrap();
+    restored
+        .api_inventory
+        .iter_mut()
+        .find(|item| item.api == "GET /b")
+        .unwrap()
+        .status = RewriteApiStatus::Skipped;
     crate::regression_scope::apply(root, &mut restored).unwrap();
     assert!(refresh(&mut restored));
     assert!(restored.group_replay.is_none());

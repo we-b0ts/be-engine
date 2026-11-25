@@ -29,8 +29,7 @@ pub use crate::evidence::{
     query_dynamic_capture_candidates, query_e2e_case_response_differences,
     query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
     query_e2e_target_runtime_diagnostics, query_execution_context, query_execution_failure_page,
-    query_http_cross_case_candidates, query_http_unordered_candidates,
-    query_redis_unordered_candidates, query_rule_policy_freshness,
+    query_http_cross_case_candidates, query_http_unordered_candidates, query_rule_policy_freshness,
 };
 pub use crate::evidence_admission::{
     E2eResponseRuleEvidence, OptionalResponseRuleEvidence, ensure_response_rule_evidence_inactive,

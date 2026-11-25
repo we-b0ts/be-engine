@@ -15,19 +15,22 @@ Preserve the manifest, `events.tsv`, dependency data, and payload segments
 together. Follow the
 [recording handoff](coordinator-recording.md) for missing or incomplete evidence.
 
-Set `recording_run_id` and optionally `max_implementers` in the canonical
-Target's local `.traffic-e2e/regression.yaml`. The run ID is the existing
-14-digit directory name under `.traffic-e2e/local/artifacts/recordings/`.
-The implementer limit is 1 to 16 and defaults to 16. These are the two
-accepted Session settings. The command-line `--recording-run-id` can select
-the recording explicitly and overrides the configured ID.
+From the canonical Target, use `status` to locate the round or start one from
+the configured `project.delivery.pr_base`. Select the sealed recording by its
+14-digit directory name under `.traffic-e2e/local/artifacts/recordings/`. Obtain
+explicit caller approval before supplying `--user-confirm`.
 
 ```sh
-be-replay --target-root /absolute/target run
+be-replay --target-root /absolute/target status
+be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 ```
 
-Use `run --run-key KEY` when the attempt needs a named runtime scope. Every
-attempt launches an isolated Target and exercises the entire recording.
+The confirmed command creates a `codex/replay/YYYYMMDD-N` work branch, binds
+the recording to that branch, and starts Replay. To start on an existing
+named work branch with no round, pass `--recording-run-id ID` to `run`.
+Subsequent `status` and `run` reuse the bound recording. Every attempt
+launches an isolated Target against the current committed code and exercises
+the entire recording.
 One Source timeline interleaves startup, readiness, concurrent ingress,
 dependency admissions and deliveries, notifications, and shutdown. Replay
 advances by sequence when the matching Target request or delivery receipt is
@@ -45,12 +48,11 @@ are verified on the same timeline.
 
 ```sh
 be-replay --target-root /absolute/target status
-be-replay --target-root /absolute/target status --run-key KEY --attempt-id UUID
+be-replay --target-root /absolute/target status --recording-run-id ID --run-key KEY --attempt-id UUID
 ```
 
-`status` reads the current attempt for the selected recording and run key.
-Use the same `--run-key` as the run when one was specified. Use the exact
-`--attempt-id` from a previous result to read that attempt. Status exposes
+`status` reports the current round and attempt. For an earlier attempt, pass
+its exact `--attempt-id`, recording ID and run key. Status includes
 `recording_id`, `state`, selected `session` progress, and `next` when available.
 
 | State | Meaning and action |
@@ -60,6 +62,17 @@ Use the same `--run-key` as the run when one was specified. Use the exact
 | `interrupted` | The attempt ended without a terminal result. Use the returned `run` command to start a fresh full attempt. |
 | `failed` | Inspect the terminal error and available evidence queries. |
 | `passed` | The selected attempt completed full Replay verification. |
+| `candidate_changed` | The latest result covers earlier Target code or inputs. Follow the current action to verify again. |
+
+`next` identifies the workflow step. On the pull-request base, use
+`select_recording` and `confirm_regression` to select the input and obtain
+approval. A round ready for its initial attempt uses `run_regression`. After a
+failed attempt, follow the evidence query and `review_findings` for work the
+coordinator must resolve. Use `implement_fixes`, `integrate_candidate` and
+`verify_candidate` as their evidence is registered. If the canonical `HEAD`
+has moved since candidate registration, `restore_candidate` gives the exact
+published commit. Restore that commit or register a newly reviewed candidate
+covering the same accepted deliveries.
 
 ## Diagnose the first failure
 
@@ -105,9 +118,10 @@ See [dependency diagnosis](api-implementer-dependency-diagnosis.md),
 ## Plan, implement, and verify
 
 Collect reviewed findings from analysis and pass a JSON array to
-`plan --findings /absolute/findings.json` for the same recording.
-Use the returned `next.plan` argument template when available. Each finding
-contains:
+`plan --findings /absolute/findings.json` for the failed attempt. The current
+eligible failure is selected by default. Use `--attempt-id` to require its
+exact identity. Use the returned `next.plan` template when available. Each
+finding has these fields.
 
 | Field | Contract |
 | --- | --- |
@@ -120,22 +134,63 @@ contains:
 
 The planner merges matching causes and rejects conflicting dispositions.
 It prioritizes reproduced and Source-proven findings by sequence within each
-basis. Results in `implementers` fit the configured cap and have independent
-paths. `waiting` covers prerequisites, path overlap, or capacity. Findings in
-`coordinator` need further analysis, an engine change, or specific repair
-paths. The coordinator reviews and redispatches remaining work as its
-prerequisites resolve. `plan` emits a work plan. Actual dispatch,
-runtime reconciliation, and integration remain coordinator responsibilities.
+basis. Results in `implementers` fit the `--max-implementers` limit of 1 to 16,
+which defaults to 16, and have independent paths. `waiting` covers
+prerequisites, path overlap, or capacity. Findings in `coordinator` need further
+analysis, an engine change, or specific repair paths. The coordinator reviews
+remaining work as its prerequisites resolve and owns dispatch and runtime
+reconciliation.
 
 Give each implementer its reviewed finding, sequence-based evidence, frozen
 base, and absolute worktree. Require a Source citation, focused checks, the
 exact committed fix, and any outstanding inputs in the handoff. Preserve
 normal Target behavior and keep recording data, expected outputs, and Replay
-internals out of product code. Integrate the exact commits into one canonical
-candidate, then rerun the same full session. For a `rule` finding, use the
+internals out of product code. For a `rule` finding, use the
 [Session rule contract](rule-policy.md) for time, id, and token changes.
 For proven environment or mount requirements, use the
 [startup input interface](coordinator-startup-inputs.md).
+
+Keep findings and receipt files under the ignored Target runtime directory or
+outside the Target checkout. Submit a ready integration batch with
+`be-replay report --file /absolute/fixes.json`.
+The report uses the failed attempt's UUID. For each fix, use the reviewed
+`root_cause`, full commit SHA, and the checks from the delivery.
+
+```json
+{
+  "kind": "fixes",
+  "attempt_id": "11111111-1111-4111-8111-111111111111",
+  "fixes": [
+    {
+      "root_cause": "route decoding loses a trailing slash",
+      "commit": "1111111111111111111111111111111111111111",
+      "checks": ["route decoding regression passed"]
+    }
+  ]
+}
+```
+
+Register the fix batch while the canonical branch remains at the failed
+revision. Use `integrate_candidate` to hand the batch to the integrator. After
+validation, publish the exact candidate to the canonical work branch. Submit
+it with `be-replay report --file /absolute/candidate.json`. `commit` must be the
+canonical branch's current `HEAD`. `included_fixes` names the full SHAs from
+the batch. Use the same failed attempt UUID.
+
+```json
+{
+  "kind": "candidate",
+  "attempt_id": "11111111-1111-4111-8111-111111111111",
+  "commit": "2222222222222222222222222222222222222222",
+  "included_fixes": ["1111111111111111111111111111111111111111"],
+  "checks": ["repository validation passed"]
+}
+```
+
+Follow `verify_candidate` to run the same complete recording against the
+published candidate.
+For coordinator-owned work with an empty `implementers` list, register the
+candidate with `included_fixes: []` after reviewing any code or startup inputs.
 
 Complete verification when `session.passed` is true. The engine requires the
 complete event sequence and strict finalization. `apis` shows recorded and

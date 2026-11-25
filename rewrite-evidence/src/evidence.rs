@@ -19,7 +19,6 @@ pub mod execution;
 pub mod http_requests;
 pub mod implementer;
 pub mod query_catalog;
-pub mod redis_stream_progress;
 use query_catalog::query_kinds;
 pub mod diagnosis;
 pub mod policy_freshness;
@@ -197,15 +196,6 @@ pub fn report_for_id(
     })
 }
 
-pub fn has_redis_bootstrap_traffic(facts: &Value) -> bool {
-    facts
-        .pointer("/bootstrap/protocols")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|protocol| protocol.as_str() == Some("redis"))
-}
-
 pub fn source_process_next_step(kind: RewriteIssueKind) -> &'static str {
     match kind {
         RewriteIssueKind::Dependency | RewriteIssueKind::Replay => {
@@ -346,7 +336,6 @@ pub fn facts(
                 facts["http_request_differences_command"] = serde_json::to_value(super::action::command(target_root,
                     vec!["evidence-detail".into(), query_id(state, issue, QUERY_HTTP_REQUESTS)], Vec::new()))?;
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
-                facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["cross_case_candidates"] = crate::e2e_run::query_http_cross_case_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             }
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }

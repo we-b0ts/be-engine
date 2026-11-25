@@ -8,6 +8,7 @@ pub struct E2eEventSessionOptions {
     pub target_root: PathBuf,
     pub recording_root: PathBuf,
     pub run_key: Option<String>,
+    pub expected_target_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -27,6 +28,12 @@ pub struct E2eEventSessionResult {
     pub run_key: String,
     pub attempt_id: String,
     pub recording_root: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_inputs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_image_id: Option<String>,
     pub passed: bool,
     pub events: E2eEventSessionProgress,
     #[serde(skip_serializing_if = "Option::is_none")]

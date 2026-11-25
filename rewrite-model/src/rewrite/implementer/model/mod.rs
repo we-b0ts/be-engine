@@ -82,6 +82,8 @@ pub struct ImplementerSlotView {
 }
 
 impl ImplementerPool {
+    pub const DEFAULT_CAPACITY: usize = 16;
+
     pub fn new(max_implementers: usize) -> Self {
         Self {
             effective_max_implementers: max_implementers,

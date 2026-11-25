@@ -18,12 +18,7 @@ fn monorepo() -> (tempfile::TempDir, PathBuf) {
     fs::write(shared.join("lib.rs"), "pub fn shared() {}\n").unwrap();
     fs::write(
         repository.path().join(".gitignore"),
-        "/service/.traffic-e2e/local/\n/service/.traffic-e2e/regression.yaml\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join(crate::config::regression::PATH),
-        "skip: [/skipped]\n",
+        "/service/.traffic-e2e/local/\n",
     )
     .unwrap();
     fs::create_dir(repository.path().join(".cargo")).unwrap();

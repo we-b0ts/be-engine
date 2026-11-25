@@ -385,10 +385,11 @@ Cargo builds use the configured package registry.
 ## CLI Boundaries
 
 Use `be-replay init` for one-time Target setup and `be-replay startup`
-for Target startup inputs. `be-replay run` verifies the selected sealed
-Source event recording. `status` reads attempt progress. `events`, `dependency`
-and `target` expose bounded Source evidence and protected observations. `plan`
-groups reviewed findings and selects independent implementation work.
+for Target startup inputs. `status` guides round entry, attempt inspection,
+and verification of the integrated candidate. `run` verifies the bound Source
+recording. `events`, `dependency` and `target` expose bounded evidence and
+protected observations. `plan` records reviewed findings and selects independent
+work. `report` registers fix commits and the published candidate.
 [Source session regression](session-regression.md)
 
 Use `traffic-e2e` for direct traffic operations. `config init` initializes a
@@ -1118,25 +1119,27 @@ failures, not product behavior evidence.
 ## Migration E2E Runner
 
 The deployment caller supplies a finalized Source event recording under
-`.traffic-e2e/local/artifacts/recordings/<run-id>/`. Select it in the canonical
-Target's `.traffic-e2e/regression.yaml` with `recording_run_id`, or pass a global
-`--recording-run-id` explicitly.
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`. Use `status` on the
+configured pull-request base, then start the round with the exact recording
+ID once the caller approves.
 
 ```bash
-be-replay --target-root /absolute/target run
+be-replay --target-root /absolute/target status
+be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 be-replay --target-root /absolute/target status
 be-replay --target-root /absolute/target events --from-seq 182 --window-seconds 60
 ```
 
-Use `status --attempt-id <uuid>` for a specific attempt. When a run uses an
-explicit `--run-key`, repeat it on `status`. On an event failure, `next.event`
+The work branch keeps the recording for retries. Use `status --attempt-id UUID`
+to inspect a specific attempt with its recording ID and run key when needed.
+On an event failure, `next.event`
 selects the expected Source sequence and `next.events` queries the timeline
 context. Use `events --with-push-event` to include server notification
 lifecycle rows in a page. Inspect the exact dependency admission with
 `dependency <seq>` and the attempt's retained Target observation with
-`target --report <absolute-report> <id>` when supplied. The coordinator reviews
-findings and runs `plan --findings <absolute-json-file>` to divide independent
-work, integrates fixes, and reruns the whole recording.
+`target --report <absolute-report> <id>` when supplied. The coordinator submits
+reviewed findings with `plan --findings FILE`. Use `report --file FILE` to
+register the tested fix commits and the published candidate before full Replay.
 [Source session regression](session-regression.md)
 
 <details>
@@ -1305,12 +1308,10 @@ issues. The coordinator does not scan `unverified` to choose work. `inventory`
 expands the English `details.ready` and `details.waiting` breakdown and dedicated
 worker bindings; ready counts sum to `pending`.
 
-New workflows use a bounded, reusable implementer pool. Local
-`.traffic-e2e/regression.yaml` accepts `max_implementers: 16` (default 16, positive
-integer). The workflow freezes this value at creation; editing it affects the
-next workflow, not active slot count or group mapping. `inventory.implementers`
-exposes the effective limit, stable slots/handles, group mappings, queued tasks,
-current API and counts. An API’s recorded methods remain one implementation unit.
+Historical workflows used a bounded, reusable implementer pool. Its capacity
+was frozen at workflow creation. `inventory.implementers` recorded the limit,
+stable slots and handles, group mappings, queued tasks, current API and counts.
+An API's recorded methods remained one implementation unit.
 Action schema 38 adds `repository_analysis_required` and
 `implementer_dispatch_required`; `inventory` also exposes the adopted analysis,
 active group round and last partial/completed group summary. Existing workflows
@@ -1619,112 +1620,21 @@ After status returns
 adopted external run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next validation action.
 
-Regression settings are local to the target repository in
-`.traffic-e2e/regression.yaml`. Initialization generates this file and adds it to `.gitignore` and `.dockerignore`.
-It does not need a commit and is explicitly excluded from code and target
-fingerprints, even if manually tracked. Existing projects without the file use
-all recorded APIs in Case workflows. [Session Replay](session-regression.md)
-uses a fixed zero interval and verifies the full recording on each attempt.
+Historical Case settings selected API filters, replay timing, failed-only
+retries, automatic continuation, and implementer capacity. Existing reports
+may include `diagnosis.case_selection` with available, selected and skipped
+counts. Skipped passes describe scheduling history. Attempt counts describe
+the cases that executed, and partially selected reports carry partial coverage.
 
-```yaml
-# Optional: directly reuse this completed standard recording.
-# recording_run_id: "20260911093000"
-# Fixed implementation slots captured when the next workflow starts.
-max_implementers: 16
-# Optional: continue passing Replay beyond a completed group when selected.
-auto_next: false
-# Skip previously passed cases during repair Replay; final revalidation stays full.
-retry_failed_only: false
-# Optional: cap successful stream input intervals; omitted preserves Source timing.
-# replay_timing: fast
-# Per-interval cap in fast mode, in milliseconds (0 removes artificial waits).
-replay_interval_cap_ms: 5
-# Omitted or empty only selects every API in the recorded inventory.
-only:
-  - "/api/users/*"
-  - "/api/users"
-skip:
-  - "/api/users"
-```
+Standalone managed Case Replay uses recorded stream timing. The direct
+`traffic-e2e replay` command accepts `--stream-timing` and
+`--stream-interval-cap-ms` for stream timing diagnostics. The current managed
+Source workflow verifies the full recording for every attempt.
+[Source session regression](session-regression.md)
 
-Set `retry_failed_only: true` to skip previously passed cases during repair Replay.
-The caller continues using `next`; the engine selects APIs as usual and filters
-their cases internally. The first attempt runs every case. Later attempts retain
-failed, incomplete and unexecuted cases, including cases left by the per-API
-failure limit, and accumulate passed-case skips within the same workflow and
-unchanged Source/API inventory. Final revalidation and standalone `run`/`run-api`
-always execute the full selected API inventory. Only the latest attempt is read:
-if it ran two cases and one passed cleanly, the next repair selects only the
-remaining case. Cases already omitted by that latest selection stay omitted.
-Independently completed clean cases remain eligible even when later session
-cleanup fails. A latest full result without selection metadata
-can supply those outcomes when its complete Source/API inventory matches.
-There is no scan, restoration or separate ledger for older attempts. Missing
-latest evidence starts a full baseline. The setting defaults to false and can be changed
-between attempts without changing target fingerprints.
-
-Set `replay_timing: fast` to shorten artificial input waits for ordinary Case
-Redis Pub/Sub messages and complete successful HTTP dependency streams. Each
-recorded interval becomes `min(recorded interval, replay_interval_cap_ms)`;
-the cap defaults to 5 ms and accepts 0. Pub/Sub includes subscription-to-first-push
-and adjacent push intervals. HTTP includes request-to-headers, headers-to-first-chunk,
-adjacent chunks and final-chunk-to-EOF. Compressed offsets accumulate those
-individual gaps, preserving shorter gaps, payload order, framing and trailers.
-Target processing and dependency calls initiated by Target retain their real
-execution time. Process-owned Pub/Sub and abnormal or interrupted HTTP streams
-retain their existing lifecycle timing.
-
-The same fast setting and interval cap accelerate supported
-[Socket.IO input gaps and completed quiet tails](interaction-recording.md#completion-profiles).
-Managed fast replay caps each Case's execution and dependency wait at 120
-seconds from Case activation. Cleanup retains its own budget after a failure.
-
-`replay_timing: recorded` preserves Source stream timing; omitting it has the same
-behavior. The low-level equivalents are
-`traffic-e2e replay --stream-timing fast --stream-interval-cap-ms 5`.
-These settings reuse existing recordings. Mode and active fast-mode cap are
-bound to executed Replay identity, and changing either requires fresh passing
-evidence and resets previously passed repair-case skips. They remain excluded
-from target and code fingerprints.
-
-Skipped passes are scheduling history, never fresh response or dependency
-evidence. `diagnosis.case_selection` reports available, selected and skipped
-counts; other attempt counts describe only selected cases.
-Backend-rewrite API evidence includes Case counts for the retained method
-attempts. The runner's `case_selection` and the low-level Replay report's
-`mode` describe distinct facts. Missing selection metadata leaves skips
-unknown.
-Existing explicit localcache and cross-case dependency rules still load from the
-complete recording.
-Logical progress keeps the recorded case totals and cannot mark a partially
-selected API fully verified, even when that repair attempt passes.
-Skipping requests can nevertheless change application-local cache warmup or other
-state established by earlier requests. Use full Replay when cases depend on those
-side effects; the engine does not infer or synthesize cache contents.
-
-Set `auto_next: true` to let an unscoped `next` continue after fresh passing
-Replay when the next globally scheduled action is also Replay. During an active
-revalidation round, terminal failures also continue to its remaining members.
-Each step saves its result and releases its workflow lock and Replay lease before
-merging new feedback. A started round drains before worker dispatch, integration,
-repair acceptance or a new round. Outside a round, first-pass discovery and ready
-handoffs retain their existing priorities. Stale Replay, resource recovery,
-review, rule/input handling, waiting and final publication retain their gates.
-Changing `auto_next` to false stops continuation beyond the current group; a
-started group round still drains. Legacy workflows stop after the current step.
-The omitted field defaults to false; its value must be a boolean. Explicit API
-or source-route inputs use single entry selection; pooled group rounds still
-complete before returning to the coordinator. These local settings do not
-invalidate evidence or require a commit.
-
-While an operation runs, ordinary `status` returns `wait_required` unless a
-higher-priority independently executable worker/expert action is ready. Both wait
-and those independent actions expose `details.execution_mode` as `single` or
-`auto_next`; auto-next summaries say `automatically advancing Replay`, and wait
-summaries also include the current Replay phase and progress. The operation remains busy between APIs,
-so another command cannot start a competing Replay or admit an integration.
-Retries retain the mode and the last selected scope, rather than restarting the
-first API in the chain. Legacy operation markers default to single execution.
+Historical operation reports include `details.execution_mode`, Replay phase,
+and progress. A grouped operation retains its lease between APIs and retries
+from the last selected scope. Standalone Case invocations use single execution.
 
 When a route has several methods, selection prefers a pending first attempt or
 a method with precise rule/system-repair Replay admission over an active sibling
@@ -3337,16 +3247,6 @@ For historical Case reports, global-format plan failures distinguish Source
 self-validation from independent Target validation. The report identifies the
 response or dependency surface, original Case or trace, and protected witness
 and field references. A clock identifies observation timing.
-
-For historical reports containing APPEND stream audits, `append_stream_progress`
-summarizes up to sixteen Source key fingerprint groups in that Case, with each
-group's last retained APPEND admission cursor and up to eight original Source
-connection/sequence fragments. Grouping by key fingerprint leaves physical
-resources and state epochs unspecified. Omitted groups, fragments and
-report-wide audit omissions remain explicit. These audits contain fingerprints and byte
-offsets, never stream contents. Admission does not prove transport delivery or
-Source consumption, and an omitted audit can advance a cursor beyond the last
-retained row. The selected unmatched call gains no inferred Source counterpart.
 
 Dependency-primary and Replay issues with a response representative also expose
 the existing bounded `case-response-differences` query. Dirty dependencies remain

@@ -38,29 +38,49 @@ corresponding recorded exchanges from the required sequence.
 
 Place the complete recording under
 `.traffic-e2e/local/artifacts/recordings/<run-id>/` in the Target repository.
-Set `recording_run_id` to its 14-digit directory name in
-`.traffic-e2e/regression.yaml`, or pass the global `--recording-run-id` option.
-Initialize the Target once with `be-replay init` and run:
+Initialize the Target once with `be-replay init`. Start with `status` on
+`project.delivery.pr_base`, usually `dev-migration`. After the caller approves
+a new round, pass the exact 14-digit recording ID to the confirmed command.
 
 ```sh
-be-replay --target-root /absolute/target run
+be-replay --target-root /absolute/target status --recording-run-id 20261123161021
+be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 be-replay --target-root /absolute/target status
 ```
 
-The session starts the isolated Target and verifies from process launch.
-Session regression settings are limited to `recording_run_id` and
-`max_implementers`. The latter configures 1 to 16 implementation slots and
-defaults to 16.
+The confirmed `run` creates a `codex/replay/YYYYMMDD-N` work branch, binds
+the recording to it, and verifies the isolated Target from process launch.
+Further `run` and `status` commands on that branch use the same round and
+recording. An existing named work branch with no round can start by passing
+`--recording-run-id ID` to `run`.
 
-`status` reads the latest attempt for the selected recording and run key. Use
-the same `--run-key` on `run` and `status` when you select one explicitly.
-Pass `status --attempt-id <uuid>` to inspect a particular attempt.
-The response includes `recording_id`, `state`, `session` and `next`. State
-is `not_started`, `running`, `interrupted`, `failed` or `passed`.
-When an attempt exists, `session` provides its identity, event progress,
-report path and any error. Follow the returned status command while the attempt
-is running. For an interrupted attempt, use the returned run command to start
-a fresh full Replay of the same recording.
+`status` reads the current round and latest attempt. To inspect an earlier
+attempt, supply `status --attempt-id UUID` with its recording ID and run key
+when needed to select the history.
+The response includes `recording_id`, `state`, `session` and `next`. Attempt
+states are `not_started`, `running`, `interrupted`, `failed` and `passed`.
+Current-round status uses `candidate_changed` when a pass covers older Target
+code or inputs or when a different commit supersedes a failure without a
+reviewed repair. A managed attempt records the Target commit and input
+fingerprint and adds the image ID when a build succeeds. `session` also
+provides the attempt identity, event progress, report path and any error.
+`next` gives the coordinator the current action.
+
+| `next.action` | Coordinator action |
+| --- | --- |
+| `checkout_target_branch` | Use a named Target branch to enter the workflow. |
+| `select_recording` | Obtain the exact ID of a sealed recording. |
+| `confirm_regression` | Obtain caller approval and use the confirmed `run` command. |
+| `run_regression` | Start or rerun Replay on the round's work branch. |
+| `wait_for_session` | Follow the returned status command while Replay is active. |
+| `rerun_interrupted_session` | Start a fresh full attempt with the bound recording. |
+| `inspect_session_setup` | Investigate the attempt's setup error and available report. |
+| `analyze_session_failure` | Inspect the first divergence and submit reviewed findings. |
+| `review_findings` | Resolve findings that stay with the coordinator. |
+| `implement_fixes` | Dispatch the plan, collect tested commits, and submit a fixes report. |
+| `integrate_candidate` | Integrate the reported fix commits, validate and publish the candidate, and submit its report. |
+| `verify_candidate` | Replay the bound recording on the published candidate. |
+| `restore_candidate` | Restore the registered candidate or register a newly reviewed candidate covering the same accepted deliveries. |
 
 An event failure stops delivery and returns the expected Source sequence.
 `next.event` selects that exact event. `next.events` queries Source context
@@ -82,16 +102,23 @@ Use `be-replay dependency <seq>` for the protected request and result
 associated with a dependency admission. Use
 `be-replay target --report <absolute-report> <id>` for the authenticated
 Target observation identified by that attempt.
-Use `be-replay plan --findings <absolute-json-file>`
-to deduplicate reviewed findings and select independent implementations with
-`max_implementers`. Findings include the shared cause, summary, disposition,
-evidence basis, Source sequences, and proposed code paths. Findings that
-require additional analysis or an engine change return to the coordinator.
-The coordinator can give an analyzer the evidence query from the failed run,
-adjust the window, and assign each implementer the sequences for one reviewed
-finding. Implementers can also query the full Source timeline. Events after
-the failure provide context for investigation and receive no verification
-credit until the next replay reaches them.
+Use `be-replay plan --findings FILE` to register reviewed findings against the
+latest eligible failure. Supply `--attempt-id` to require its exact identity.
+The planner deduplicates findings by cause and selects independent work with
+`--max-implementers N` (1 to 16, default 16). Findings include the shared cause,
+summary, disposition, evidence basis, Source sequences, and proposed code
+paths. Findings that require additional analysis or an engine change return to
+the coordinator. Events after the failure provide context for investigation
+and receive no verification credit until a later Replay reaches them.
+
+Submit ready fixes with `be-replay report --file FILE`. A report of kind
+`fixes` binds the failed attempt ID to each reviewed cause, exact fix commit,
+and checks. Have the integrator validate the combined candidate and publish
+its exact commit to the canonical work branch. A report of kind `candidate`
+binds the same failed attempt ID to the published commit, the included fix
+commits, and the candidate checks. The candidate commit must be the work
+branch's current `HEAD`. Follow `status` to verify it against the full
+recording. [Finding and report formats](../plugins/ai-engine/skills/be-replay/references/session-regression.md#plan-implement-and-verify)
 
 Session Replay advances recorded I/O on the shared timeline as soon as its
 matching request, delivery receipt, or timer gate allows it. Recorded intervals

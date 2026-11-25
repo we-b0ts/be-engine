@@ -21,7 +21,8 @@ fn exposes_the_flat_source_commands() {
             "events",
             "dependency",
             "target",
-            "plan"
+            "plan",
+            "report"
         ]
     );
     for old in [
@@ -92,7 +93,7 @@ fn source_command_options_bind_the_selected_recording_and_attempt() {
     assert_eq!(cli.recording_run_id.as_deref(), Some(recording));
     assert!(matches!(
         cli.command,
-        RewriteCommand::Source(event_session::SourceCommand::Run { run_key })
+        RewriteCommand::Source(event_session::SourceCommand::Run { run_key, user_confirm: false })
             if run_key.as_deref() == Some("target-main")
     ));
     assert!(Cli::try_parse_from(["test", "status", "--attempt-id", "not-a-uuid"]).is_err());

@@ -54,11 +54,7 @@ pub(super) fn complete_replay_if_ready(
     let replay_changed = state
         .replay_identity
         .as_ref()
-        .is_some_and(|executed| executed != &replay_identity)
-        || state.replay_identity.is_none()
-            && crate::config::regression::RegressionScope::load(target_root)?
-                .replay_timing
-                .is_some();
+        .is_some_and(|executed| executed != &replay_identity);
     if !state.e2e_current
         || state.target_fingerprint.as_deref() != Some(current.as_str())
         || replay_changed
@@ -82,7 +78,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn changed_replay_timing_cannot_complete_a_passing_slice() {
+    fn changed_replay_identity_cannot_complete_a_passing_slice() {
         let target = crate::worker::tests::configured_target();
         let root = target.path();
         let mut state = crate::test_state();
@@ -90,12 +86,7 @@ mod tests {
         state.phase = RewritePhase::SliceComplete;
         state.e2e_current = true;
         state.target_fingerprint = Some(fingerprint::repository_fingerprint(root).unwrap());
-        state.replay_identity = Some(fingerprint::replay_identity(root).unwrap());
-        std::fs::write(
-            root.join(crate::config::regression::PATH),
-            "replay_timing: fast\n",
-        )
-        .unwrap();
+        state.replay_identity = Some("stale-replay-identity".into());
         assert!(complete_replay_if_ready(root, &mut state).unwrap());
         assert_eq!(state.phase, RewritePhase::ApiPending);
         assert!(!state.e2e_current);

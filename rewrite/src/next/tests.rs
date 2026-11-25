@@ -16,16 +16,7 @@ fn options(root: &Path) -> RewriteNextOptions {
     }
 }
 
-fn enable(root: &Path) {
-    fs::write(
-        root.join(crate::config::regression::PATH),
-        "auto_next: true\n",
-    )
-    .unwrap();
-}
-
 fn pending(root: &Path, apis: &[&str]) {
-    enable(root);
     let mut state = test_state();
     inventory::install(&mut state, apis.iter().map(|api| (*api).into()).collect()).unwrap();
     RewriteStore::new(root).unwrap().save(&state).unwrap();
@@ -193,25 +184,6 @@ async fn single_mode_finishes_group_after_failure_and_returns_before_other_group
     assert_eq!(state.api_inventory[1].attempts, 0);
 }
 
-#[test]
-fn mode_uses_invocation_intent_instead_of_the_internal_selection() {
-    let target = configured_target();
-    let mut invocation = options(target.path());
-    assert_eq!(mode(&invocation).unwrap(), RewriteExecutionMode::Single);
-    let fingerprint = crate::fingerprint::repository_fingerprint(target.path()).unwrap();
-    enable(target.path());
-    assert_eq!(
-        crate::fingerprint::repository_fingerprint(target.path()).unwrap(),
-        fingerprint
-    );
-    assert_eq!(mode(&invocation).unwrap(), RewriteExecutionMode::AutoNext);
-    invocation.api = Some("/api".parse().unwrap());
-    assert_eq!(mode(&invocation).unwrap(), RewriteExecutionMode::Single);
-    invocation.api = None;
-    invocation.source_route = Some("/api".into());
-    assert_eq!(mode(&invocation).unwrap(), RewriteExecutionMode::Single);
-}
-
 #[tokio::test]
 async fn passing_pending_apis_continue_until_the_original_workflow_gate() {
     let target = configured_target();
@@ -295,12 +267,12 @@ async fn failure_stops_before_the_next_pending_api() {
 }
 
 #[tokio::test]
-async fn explicit_api_executes_one_scope_even_when_auto_next_is_configured() {
+async fn explicit_api_executes_one_scope() {
     let target = configured_target();
     pending(target.path(), &["GET /a", "GET /b"]);
     let mut invocation = options(target.path());
     invocation.api = Some("/a".parse().unwrap());
-    let mode = mode(&invocation).unwrap();
+    let mode = RewriteExecutionMode::Single;
     let mut calls = 0;
     let output = run_steps(invocation, mode, |options| {
         calls += 1;
@@ -317,7 +289,6 @@ async fn explicit_api_executes_one_scope_even_when_auto_next_is_configured() {
 #[tokio::test]
 async fn ready_handoff_keeps_first_pass_priority_then_takes_over() {
     let target = configured_target();
-    enable(target.path());
     let mut state = implementation_state_with_inventory(true);
     worker::confirm_current_for_test(&mut state);
     ready(&mut state);
@@ -347,9 +318,37 @@ async fn ready_handoff_keeps_first_pass_priority_then_takes_over() {
 }
 
 #[tokio::test]
+async fn configuration_changes_stop_auto_next_at_the_boundary() {
+    let target = configured_target();
+    pending(target.path(), &["GET /a", "GET /b"]);
+    let mut calls = 0;
+    let output = run_steps(
+        options(target.path()),
+        RewriteExecutionMode::AutoNext,
+        |options| {
+            calls += 1;
+            let result = replay(options, true, |_| {});
+            let policy = target.path().join(".traffic-e2e/policy.yaml");
+            let original = fs::read_to_string(&policy).unwrap();
+            fs::write(policy, format!("{original}\n# changed during Replay\n")).unwrap();
+            std::future::ready(Ok(result))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls, 1);
+    assert!(matches!(
+        output.action,
+        RewriteAction::InputRequired {
+            reason: RewriteInputRequiredReason::ConfigurationCommitRequired,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
 async fn running_implementation_defers_revalidation_and_preserves_its_binding() {
     let target = configured_target();
-    enable(target.path());
     let mut state = implementation_state_with_inventory(false);
     worker::confirm_current_for_test(&mut state);
     add_revalidation(&mut state, "GET /stale-a");
@@ -370,7 +369,6 @@ async fn running_implementation_defers_revalidation_and_preserves_its_binding() 
 #[tokio::test]
 async fn one_batch_publishes_all_failed_members_before_dispatching_a_ready_handoff() {
     let target = configured_target();
-    enable(target.path());
     let mut state = test_state();
     inventory::install(&mut state, vec!["GET /api".into()]).unwrap();
     state.api_inventory[0].status = RewriteApiStatus::RevalidationPending;
@@ -563,61 +561,6 @@ async fn a_new_dispatch_required_at_the_boundary_stops_continuation() {
         output.action,
         RewriteAction::ImplementationRequired { .. }
     ));
-}
-
-#[tokio::test]
-async fn configuration_changes_and_disabling_auto_next_stop_at_the_boundary() {
-    for change_configuration in [false, true] {
-        let target = configured_target();
-        pending(target.path(), &["GET /a", "GET /b"]);
-        let mut calls = 0;
-        let output = run_steps(
-            options(target.path()),
-            RewriteExecutionMode::AutoNext,
-            |options| {
-                calls += 1;
-                let result = replay(options, true, |_| {});
-                if change_configuration {
-                    let path = target.path().join(".traffic-e2e/policy.yaml");
-                    fs::write(
-                        &path,
-                        format!(
-                            "{}\n# changed during Replay\n",
-                            fs::read_to_string(&path).unwrap()
-                        ),
-                    )
-                    .unwrap();
-                } else {
-                    fs::write(
-                        target.path().join(crate::config::regression::PATH),
-                        "auto_next: false\n",
-                    )
-                    .unwrap();
-                }
-                std::future::ready(Ok(result))
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(calls, 1);
-        if change_configuration {
-            assert!(matches!(
-                output.action,
-                RewriteAction::InputRequired {
-                    reason: RewriteInputRequiredReason::ConfigurationCommitRequired,
-                    ..
-                }
-            ));
-        } else {
-            assert!(matches!(
-                output.action,
-                RewriteAction::AdvanceRequired {
-                    kind: RewriteAdvanceKind::Replay,
-                    ..
-                }
-            ));
-        }
-    }
 }
 
 #[tokio::test]

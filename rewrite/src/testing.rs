@@ -157,9 +157,6 @@ pub fn resume_api_index(state: &mut RewriteState, index: usize) -> Result<()> {
 pub fn api_in_revalidation_round(state: &RewriteState, api: &str) -> bool {
     crate::inventory::revalidation_round::contains(state, api)
 }
-pub fn apply_regression_scope(root: &Path, state: &mut RewriteState) -> Result<bool> {
-    crate::regression_scope::apply(root, state)
-}
 pub fn complete_replay_if_ready(root: &Path, state: &mut RewriteState) -> Result<bool> {
     crate::transition::complete_replay_if_ready(root, state)
 }

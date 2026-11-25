@@ -16,6 +16,7 @@ pub(super) struct RunSessionArgs {
 
 pub(super) async fn run(args: RunSessionArgs) -> Result<()> {
     let result = run_e2e_event_session(E2eEventSessionOptions {
+        expected_target_commit: None,
         target_root: args.target_root,
         recording_root: args.recording_root,
         run_key: args.run_key,

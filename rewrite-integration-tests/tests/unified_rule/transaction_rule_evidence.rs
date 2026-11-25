@@ -128,11 +128,7 @@ fn rule_evidence_resolution_ignores_excluded_retained_issues_without_panicking()
         item.api = retained.api.clone();
         item.source_route = Some(retained.source_route.clone());
         if skipped {
-            fs::write(
-                fixture.root().join(".traffic-e2e/regression.yaml"),
-                "skip:\n  - /retained\n",
-            )
-            .unwrap();
+            item.status = RewriteApiStatus::Skipped;
         } else {
             retained.phase = RewritePhase::SystemRepairRequired;
             item.status = RewriteApiStatus::SystemRepairRequired;

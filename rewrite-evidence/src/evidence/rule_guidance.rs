@@ -118,36 +118,15 @@ pub fn try_rule_hints(root: &Path, query: &str, facts: &Value) -> Result<Vec<Rew
         );
         return Ok(hints);
     }
-    if query == QUERY_SOURCE_PROCESS_TRAFFIC && has_redis_bootstrap_traffic(facts) {
-        add(
-            "redis_bootstrap",
-            "process_ownership",
-            "Trace the named Source startup task and complete initialization inventory before proposing process_dependencies. Inspect existing lifetime declarations; unused calls alone do not prove process ownership.",
-        );
-        return Ok(hints);
-    }
     if query != QUERY_DIRTY_CLUSTERS {
         return Ok(hints);
     }
-    if cluster(facts, "redis", "unused_recorded") || cluster(facts, "mysql", "unused_recorded") {
+    if cluster(facts, "http", "unmatched_target") {
         add(
-            "api_triggered_process_traffic",
-            "process_ownership",
-            "Unused dependency calls are not evidence of process ownership and can be detached API work. Prove the unique API origin, typed request-body predicates and captured SQL identity; linked scripts, transaction members and resource calls retain their own proof. process_owned is an ownership effect and cannot be inferred from a value codec or a shared task ID. Target failures and finite consumption stay required.",
+            "http_cross_case",
+            "cross-case",
+            "A matching exchange in another case is only a sharing candidate. Trace Source initialization, refresh and side effects before proposing localcache.requests. A value format cannot authorize reuse or manufacture a response.",
         );
-    }
-    for protocol in ["http", "redis"] {
-        if cluster(facts, protocol, "unmatched_target") {
-            add(
-                if protocol == "http" {
-                    "http_cross_case"
-                } else {
-                    "redis_cross_case"
-                },
-                "cross-case",
-                "A matching exchange in another case is only a sharing candidate. Trace Source initialization, refresh and side effects before proposing localcache.requests. A value format cannot authorize reuse or manufacture a response.",
-            );
-        }
     }
     if facts["clusters"]
         .as_array()
@@ -229,12 +208,6 @@ pub fn applicable_rule_planners(
     {
         add("recorder_capture", "http_response_url");
     }
-    if query == QUERY_SOURCE_PROCESS_TRAFFIC
-        && issue == RewriteIssueKind::Response
-        && has_redis_bootstrap_traffic(facts)
-    {
-        add("dependency_ownership", "redis_bootstrap");
-    }
     if query != QUERY_DIRTY_CLUSTERS
         || !matches!(
             issue,
@@ -243,13 +216,8 @@ pub fn applicable_rule_planners(
     {
         return planners;
     }
-    for (name, capability) in [
-        ("http_unordered_candidates", "resource_field_contract"),
-        ("redis_unordered_candidates", "resource_field_contract"),
-    ] {
-        if complete_candidates(facts, name) {
-            add("dependency_value", capability);
-        }
+    if complete_candidates(facts, "http_unordered_candidates") {
+        add("dependency_value", "resource_field_contract");
     }
     if facts["cross_case_candidates"]["candidates"]
         .as_array()
@@ -432,60 +400,6 @@ mod http_unordered_tests {
             assert!(planner.command.argv.contains(&"ev".into()));
         }
         facts["http_unordered_candidates"]["omitted_candidates"] = serde_json::json!(1);
-        assert!(
-            !applicable_rule_planners(
-                root,
-                RewriteIssueKind::Dependency,
-                QUERY_DIRTY_CLUSTERS,
-                &facts,
-                "ev"
-            )
-            .iter()
-            .any(|p| p.capability == "resource_field_contract")
-        );
-    }
-}
-
-#[cfg(test)]
-mod redis_unordered_tests {
-    use super::*;
-    #[test]
-    fn unordered_is_discoverable_before_responses_pass_but_planning_requires_candidates() {
-        let root = Path::new("/target");
-        let mut facts =
-            serde_json::json!({"clusters":[{"protocol":"redis","reason":"unmatched_target"}]});
-        assert!(
-            rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
-                .iter()
-                .any(|h| h.rule == "unordered")
-        );
-        for kind in [
-            RewriteIssueKind::Response,
-            RewriteIssueKind::Dependency,
-            RewriteIssueKind::Replay,
-        ] {
-            assert!(
-                !applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev")
-                    .iter()
-                    .any(|p| p.capability == "resource_field_contract")
-            );
-        }
-        facts["redis_unordered_candidates"] = serde_json::json!({"candidates":[{"selector":{"field":{"codec":"json","pointer":"/ids"}}}],"omitted_candidates":0});
-        for kind in [
-            RewriteIssueKind::Response,
-            RewriteIssueKind::Dependency,
-            RewriteIssueKind::Replay,
-        ] {
-            let planners = applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev");
-            let planner = planners
-                .iter()
-                .find(|p| p.capability == "resource_field_contract")
-                .unwrap();
-            assert_eq!(planner.kind, "dependency_value");
-            assert!(planner.command.argv.contains(&"--file".into()));
-            assert!(planner.command.argv.contains(&"ev".into()));
-        }
-        facts["redis_unordered_candidates"]["omitted_candidates"] = serde_json::json!(1);
         assert!(
             !applicable_rule_planners(
                 root,

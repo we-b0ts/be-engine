@@ -8,21 +8,10 @@ use super::super::{
     model::{ActiveRunState, ResolvedProjectConfig},
 };
 
-fn validate_timing(
-    config: &ResolvedProjectConfig,
-    root: &Path,
-    state: &ActiveRunState,
-) -> Result<()> {
+fn validate_timing(config: &ResolvedProjectConfig, state: &ActiveRunState) -> Result<()> {
     if let Some(selection) = &state.case_selection {
         selection.validate_stream_timing(config)?;
     }
-    let current = crate::config::regression::RegressionScope::load(root)?;
-    ensure!(
-        current.replay_timing == config.replay_stream_timing
-            && (current.replay_timing != Some(crate::replay::ReplayStreamTiming::Fast)
-                || current.replay_interval_cap_ms == config.replay_stream_interval_cap_ms),
-        "Replay stream timing changed after runtime resolution; start a fresh attempt"
-    );
     Ok(())
 }
 
@@ -30,19 +19,14 @@ pub(crate) fn freeze(
     config: &ResolvedProjectConfig,
     root: &Path,
     state: &mut ActiveRunState,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<()> {
     ensure!(
         state.executed_replay_identity.is_none(),
         "Replay already has a frozen execution identity; start a fresh attempt"
     );
-    validate_timing(config, root, state)?;
-    let (identity, timer_plan) =
-        crate::execution_identity::fresh_replay_identity_with_timer_plan(root)?;
-    // Fingerprinting reads Source and runtime metadata synchronously. A local
-    // timing edit during that work must not certify different launch arguments.
-    validate_timing(config, root, state)?;
-    state.executed_replay_identity = Some(identity);
-    Ok(timer_plan)
+    validate_timing(config, state)?;
+    state.executed_replay_identity = Some(crate::execution_identity::fresh_replay_identity(root)?);
+    Ok(())
 }
 
 pub(crate) fn before_spawn(
@@ -50,7 +34,7 @@ pub(crate) fn before_spawn(
     root: &Path,
     state: &ActiveRunState,
 ) -> Result<()> {
-    validate_timing(config, root, state)?;
+    validate_timing(config, state)?;
     // Index preparation and the Target image build can await for a long time.
     // Validate against the original identity rather than replacing it with a
     // new fingerprint of inputs that this attempt never resolved or selected.

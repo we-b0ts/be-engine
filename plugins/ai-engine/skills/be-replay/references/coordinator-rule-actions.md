@@ -11,7 +11,7 @@ proof, exact selectors, and the smallest supported declaration. See
 2. Submit the finding to `plan` as `kind: rule` with its repository-relative
    policy path. Have the assigned owner edit the policy, and review the exact
    diff against the observed value carrier.
-3. Integrate the candidate and rerun `be-replay run` on the same sealed
-   recording. Verify the full timeline from launch through shutdown.
+3. Register the policy fix and integrated candidate with `report`. Follow
+   `status` to verify the candidate on the same sealed recording.
 
 See [shared rule evidence](rule-policy.md) and [Session regression](session-regression.md).

@@ -10,7 +10,6 @@ use super::model::{
 };
 use super::project_validation::validate_project_config;
 use super::{E2eRunInitOptions, E2eRunInitResult, branch};
-use crate::config::regression::{RegressionScope, SessionRegression};
 use crate::policy::runtime::validate_replay_policy;
 use crate::replay::{ReplayLifecycleConfig, ReplayStreamTiming};
 use anyhow::{Context, Result, bail, ensure};
@@ -88,7 +87,6 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         crate::config::edit::create_many_atomic(&[(config_path.clone(), payload)])?;
     }
     let persisted = load_project_config(&target_root, &config_path)?;
-    crate::config::regression::initialize(&target_root)?;
 
     Ok(E2eRunInitResult {
         config: config_path,
@@ -163,7 +161,6 @@ pub(super) fn resolve_session_layout(
     explicit_run_key: Option<&str>,
 ) -> Result<(ResolvedProjectConfig, RunLayout)> {
     let target_root = canonical_target_root(target_root)?;
-    SessionRegression::load(&target_root)?;
     let resolved = resolve_project_config(
         &target_root,
         Some(ReplayLifecycleConfig::EVENT_SESSION_STREAM_TIMING),
@@ -221,11 +218,10 @@ pub fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedProjectCo
     if let Some(project) = cache::get(&target_root) {
         return Ok((target_root, project));
     }
-    let regression = RegressionScope::load(&target_root)?;
     let project = resolve_project_config(
         &target_root,
-        regression.replay_timing,
-        regression.replay_interval_cap_ms,
+        None,
+        crate::replay::DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS,
     )?;
     cache::insert(target_root.clone(), project.clone());
     Ok((target_root, project))

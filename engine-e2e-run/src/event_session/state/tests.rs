@@ -20,6 +20,9 @@ fn status_tracks_the_registered_attempt_and_selects_history() -> Result<()> {
     let first_dir = attempts.join(first.simple().to_string());
     fs::create_dir_all(&first_dir)?;
     let mut result = E2eEventSessionResult {
+        target_commit: None,
+        target_inputs: None,
+        target_image_id: None,
         run_key: run_key.into(),
         attempt_id: first.simple().to_string(),
         recording_root: recording.clone(),

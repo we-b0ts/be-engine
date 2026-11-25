@@ -22,7 +22,7 @@ implementation-independent kernels and contracts. `traffic-e2e` exposes
 recording, replay, configuration, and diagnostics. Standalone Case workflows
 retain `prepare`, `run-api`, `run`, `status`, `recover`, and `abort`.
 `be-replay` owns the managed Source session commands `run`, `status`,
-`events`, `dependency`, `target`, and `plan` alongside `init` and `startup`.
+`events`, `dependency`, `target`, `plan`, and `report` alongside `init` and `startup`.
 `backend-rewrite-admin` owns explicit administrator repair. Recorder
 configuration starts from `config/project.example.yaml`. Repository scripts are
 development or manual host-trust tools only.

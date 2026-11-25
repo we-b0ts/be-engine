@@ -428,14 +428,6 @@ pub fn query_http_cross_case_candidates(context: E2eRunContext, api: &str) -> Re
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "unavailable": "cross-case source evidence could not be inspected; existing dirty evidence remains authoritative"})))
 }
 
-pub fn query_redis_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
-    finalized_focused_state(context, api)?;
-    Ok(serde_json::json!({
-        "candidates": [], "omitted_candidates": 0,
-        "unavailable": "Redis-specific unordered discovery is unavailable in the native provider"
-    }))
-}
-
 pub fn query_execution_context(context: E2eRunContext, api: &str, attempt: u64) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
     let mut context = execution_context(&state, attempt)?;

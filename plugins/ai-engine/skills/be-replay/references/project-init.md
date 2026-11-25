@@ -7,8 +7,8 @@ rewrite work and resumed sessions must not rerun it.
 ## Initialize
 
 Choose one source provider: a running, ready Kubernetes Pod or a local Docker
-container (running, exited, or created). Run from the target repository, or bind
-it with global `--target-root`. For Kubernetes:
+container (running, exited, or created). Run from the Target repository or put
+`--target-root` before the subcommand.
 
 ```bash
 be-replay init \
@@ -72,11 +72,11 @@ variable.
 Initialization creates local `dev-migration` from the current `HEAD` when it is
 missing without switching branches. It writes version 18
 `.traffic-e2e/project.yaml` with verification settings, the unified
-`traffic-policy/v3` document at `.traffic-e2e/policy.yaml`, an empty
-`.traffic-e2e/apis.yaml` catalog, and a local `.traffic-e2e/regression.yaml` if
-absent. It creates an empty startup mount snapshot, missing Dockerfile
-scaffolds, a target bootstrap when target files are absent, and required
-ignore rules. Existing complete target files and Dockerfiles are preserved.
+`traffic-policy/v3` document at `.traffic-e2e/policy.yaml` and an empty
+`.traffic-e2e/apis.yaml` catalog. It creates an empty startup mount snapshot,
+missing Dockerfile scaffolds, a target bootstrap when target files are absent,
+and required ignore rules. Existing complete target files and Dockerfiles are
+preserved.
 Partial or conflicting initialization state is rejected.
 
 Do not scan source or target code before this command merely to enumerate
@@ -136,13 +136,10 @@ readiness recording and Replay probes. For business verification, use a
 separate sealed Source recording from the deployment caller as described in
 [external recording evidence](coordinator-recording.md).
 
-When starting Source Session verification, set `recording_run_id` in local
-`.traffic-e2e/regression.yaml` or pass the global `--recording-run-id`
-option to `be-replay run`. The settings are `recording_run_id` and
-`max_implementers` (1–16, default 16). The API catalog in
-`.traffic-e2e/apis.yaml` labels per-method counts, and the sealed recording
-determines Replay scope. See
-[Source session regression](session-regression.md).
+For business verification, start with `be-replay status` on the configured
+pull-request base, then start the approved round with the exact sealed
+recording ID. The API catalog in `.traffic-e2e/apis.yaml` labels per-method
+counts. See [Source session regression](session-regression.md).
 
 For a missing managed startup input during preflight, use
 [coordinator-startup-inputs.md](coordinator-startup-inputs.md). Use `startup env`

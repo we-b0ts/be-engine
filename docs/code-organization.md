@@ -1081,10 +1081,6 @@ the same responsibility and 1000-line requirements as the root `src/`.
   finalized session and exact request fingerprint without inventing a Source pair.
   Selected independent observation clocks stay authenticated and bounded with
   their IDs; they describe actual admission, not inferred business task origin.
-  `rewrite/evidence/redis_stream_progress` projects bounded Case-local APPEND
-  admission cursors and original Source fragments from historical audits. It owns
-  omission reporting, exposes no payload and does not infer delivery, pair a
-  rejected request or change protocol matching.
   `control/case_cleanup` owns failure-phase deadlines and the shared actual-I/O
   barrier. Its final empty-I/O observation stays locked through Case ownership
   release, preventing a new delivery from entering between the check and release.
@@ -2202,8 +2198,6 @@ explicit repository-wide audit.
   expose the first-write-through-end semantic revision without relabeling older
   reports. Global projection caches bind that revision independently of Source
   proof facts; Source-only prewarming cannot provide a Target witness.
-  `rewrite/evidence/mysql_diagnosis` projects targeted Source/Target transaction
-  guidance without asserting ownership or a capability gap from unused counts.
   `protocols/replay/mysql/cleanup_selection` owns immutable scope/end/predecessor indexes
   and gives a required transaction end precedence over identical optional cleanup
   only after its immediately preceding recorded exchange has been consumed.
@@ -2260,9 +2254,6 @@ explicit repository-wide audit.
   facts, including captured before/after server-status flags, for diagnosis;
   it does not infer process ownership or implement rule
   planning. The shared summary/detail command flow also serves Redis and Memcached.
-  `rewrite/evidence/mysql_diagnosis` owns investigation guidance for unconsumed
-  MySQL calls. It distinguishes call-consumption facts from unresolved source
-  ownership and rule discovery; matching and omission decisions remain with Replay.
 
 - `policy/runtime/matcher/mysql_values` owns explicit scalar and exact nested-JSON
   SQL time-location validation across text and prepared calls. It shares the fixed

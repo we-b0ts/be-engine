@@ -14,7 +14,6 @@ use super::{
     apply_submission, catalog,
     model::{AnalysisSubmission, CasePatternContext, RepositoryAnalysisContext, SCHEMA_VERSION},
 };
-use crate::config::regression::RegressionScope;
 use crate::{
     RecordingApi,
     config::{AppConfig, SourceTrafficPolicyConfig},
@@ -35,7 +34,6 @@ pub(super) fn context(
         return Ok(publication.context.clone());
     }
     let (_, project) = crate::e2e_run::resolve_project(root)?;
-    let scope = RegressionScope::load(root)?;
     let config = AppConfig::load(&project.recorder_config)?;
     let (candidates, canonical) =
         case_patterns::pending_routes(root, state, pending, &config, groups.apis.is_some())?;
@@ -43,7 +41,6 @@ pub(super) fn context(
     let grouping_enabled = groups.apis.is_some() || state.implementers.is_some();
     let pending_apis = if grouping_enabled {
         missing_groups(
-            &scope,
             canonical.iter().filter(|api| !unresolved.contains(api)),
             groups,
         )
@@ -60,10 +57,10 @@ pub(super) fn context(
         case_patterns: Some(CasePatternContext {
             candidates,
             grouping_enabled,
-            only_apis: scope.only_apis().to_vec(),
-            skipped_apis: scope.skipped_apis().to_vec(),
+            only_apis: Vec::new(),
+            skipped_apis: Vec::new(),
             policy_revision: catalog::digest(&fs::read(&project.source_traffic_policy)?),
-            project_revision: project_revision(root, &project)?,
+            project_revision: project_revision(&project)?,
         }),
         batch_id: String::new(),
         catalog_path: groups.path.clone(),
@@ -120,7 +117,7 @@ pub(super) fn apply(
     );
     ensure!(
         context.source_revision == crate::source_snapshot::source_runtime_revision(root)?
-            && pattern_context.project_revision == project_revision(root, &project)?,
+            && pattern_context.project_revision == project_revision(&project)?,
         "Source or project scope changed during case pattern analysis"
     );
     artifacts::validate_standard_recording(root, state)?;
@@ -178,7 +175,7 @@ pub(super) fn apply(
                 &config,
             )?;
             let pending_groups = if pattern_context.grouping_enabled {
-                missing_groups(&RegressionScope::load(root)?, apis.iter(), &groups)
+                missing_groups(apis.iter(), &groups)
             } else {
                 Vec::new()
             };
@@ -358,7 +355,7 @@ fn plan_managed_catalog(
         inventory::recording_scope(state),
         &config,
     )?;
-    let pending_groups = missing_groups(&RegressionScope::load(root)?, canonical.iter(), groups)
+    let pending_groups = missing_groups(canonical.iter(), groups)
         .into_iter()
         .chain(
             confirmed
@@ -375,26 +372,15 @@ fn plan_managed_catalog(
     Ok((config, updated))
 }
 
-fn project_revision(root: &Path, project: &ResolvedProjectConfig) -> Result<String> {
-    let recorder = fs::read(&project.recorder_config)?;
-    let scope = match fs::read(root.join(super::super::regression_scope::PATH)) {
-        Ok(bytes) => Some(catalog::digest(&bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error).context("read regression scope"),
-    };
-    Ok(catalog::digest(&serde_json::to_vec(&(
-        catalog::digest(&recorder),
-        scope,
-    ))?))
+fn project_revision(project: &ResolvedProjectConfig) -> Result<String> {
+    Ok(catalog::digest(&fs::read(&project.recorder_config)?))
 }
 
 fn missing_groups<'a>(
-    scope: &RegressionScope,
     apis: impl Iterator<Item = &'a String>,
     groups: &catalog::LoadedCatalog,
 ) -> Vec<String> {
-    apis.filter(|api| scope.includes(api))
-        .map(|api| api_selector::public_api(api))
+    apis.map(|api| api_selector::public_api(api))
         .filter(|api| !groups.document.api_groups.contains_key(*api))
         .collect::<BTreeSet<_>>()
         .into_iter()

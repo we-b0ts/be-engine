@@ -609,10 +609,8 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
             {
                 let summary = inventory::view(state);
                 format!(
-                    "regression scope complete: {} API(s) verified, {} skipped by {}",
-                    summary.completed,
-                    summary.skipped,
-                    super::regression_scope::PATH
+                    "regression scope complete: {} API(s) verified, {} skipped",
+                    summary.completed, summary.skipped
                 )
             } else if state
                 .api_inventory

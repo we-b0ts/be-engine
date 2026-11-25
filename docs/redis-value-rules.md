@@ -36,10 +36,8 @@ establish a schema, enable a decoder or authorize reordering. Known logical
 protocol projections use the common content kernel; unsupported formats stay
 exact until explicitly supported by the engine.
 
-The coordinator exposes bounded `facts.redis_unordered_candidates` with endpoint,
-key, logical path and fingerprints. It does not expose value contents. These
-observations guide a global `json.fields` proposal through the ordinary unified
-`rule plan --file … --evidence …` transaction. Source proof and immutable evidence
-belong to the plan; the published policy contains only runtime declarations.
-Apply still requires fresh Replay, and diagnostics never alter dependency
-ownership or consumption.
+Use the Source admission sequence and corresponding authenticated Target
+observation to trace Redis differences. Review the original command, complete
+value and Source field semantics before changing a global `json.fields`
+declaration. Verify the integrated change against the same sealed recording.
+[Source session evidence](session-regression.md)

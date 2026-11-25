@@ -99,8 +99,7 @@ key privately available at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`;
 preserve restrictive permissions and do not replace a different existing key.
 Replay does not need the recording CA private key. No import command is needed.
 
-Select `recording_run_id` in local `.traffic-e2e/regression.yaml` or pass the
-global `--recording-run-id`, then run `be-replay run` for the initialized
-Target. Use the same sealed input for Target repairs and obtain a fresh run
-when Source workload or capture needs change. See
-[Source Session regression](../../be-replay/references/session-regression.md).
+Hand the exact recording ID to the Target coordinator. The coordinator uses it
+with `be-replay run --user-confirm --recording-run-id ID` after approval to
+begin a new round. Obtain a fresh recording when Source workload or capture
+needs change. See [Source Session regression](../../be-replay/references/session-regression.md).

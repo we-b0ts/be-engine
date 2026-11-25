@@ -10,12 +10,14 @@ Target is the service being rewritten. The deployment caller owns
 `traffic-e2e record` and hands over the sealed recording under
 `.traffic-e2e/local/artifacts/recordings/<run-id>/`.
 
-The coordinator runs `be-replay run` against the selected recording.
-Replay drives the complete Source session by event sequence from launch through
-shutdown and reports the first failure. Use `status` to inspect an attempt,
-then use the returned `events`, `dependency`, and `target` queries as needed.
-`plan` groups reviewed findings for implementation. A fresh passing `run`
-verifies the integrated candidate. See [Source Session regression](references/session-regression.md).
+The coordinator starts with `be-replay status`. On the configured pull-request
+base, obtain the caller's approval before starting a round with
+`run --user-confirm --recording-run-id ID`. The new work branch keeps that
+recording for subsequent attempts. Replay verifies the complete Source timeline
+and reports the first failure. `plan` records reviewed findings and `report`
+registers fixes and the integrated candidate. Follow `status` through
+implementation, integration and Replay of the published candidate.
+See [Source Session regression](references/session-regression.md).
 
 ## Roles
 

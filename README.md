@@ -57,23 +57,25 @@ Initialize the Target once and place the complete sealed Source recording under
 `.traffic-e2e/local/artifacts/recordings/<run-id>/` in that repository. The
 initializer snapshots the selected Kubernetes or Docker Source runtime and
 sets up `.traffic-e2e/local/` for recordings, boot inputs, worktrees and runtime
-state. Use `.traffic-e2e/regression.yaml` to select `recording_run_id`, or set
-`--recording-run-id` explicitly for an invocation.
+state. Use `status` on the configured pull-request base to enter the workflow.
+After approval, supply the exact recording ID to start the round.
 
 ```bash
 be-replay --target-root /absolute/target init --source-pod <pod> --namespace <namespace>
-be-replay --target-root /absolute/target run
+be-replay --target-root /absolute/target status
+be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 be-replay --target-root /absolute/target status
 ```
 
 Each `run` verifies the whole Source timeline in an isolated Target, starting
 with startup and including concurrent HTTP, dependencies and shutdown. Use
-`status` to inspect the matching attempt. A failed run includes a Source `seq`
+`status` to inspect the bound round and its attempt. A failed run includes a Source `seq`
 and follow-up evidence queries. Use `events` for the timeline, `dependency` for
 a protected Source exchange, `target` for a retained Target observation, and
 `plan` to group reviewed findings. Use `events --with-push-event` to include
-server notifications in a timeline page. Rerun the same recording after
-integrating fixes. Use `--pretty` to display the JSON interactively.
+server notifications in a timeline page. Submit fix and candidate receipts
+with `report`, then use the bound recording to verify the integrated commit.
+Use `--pretty` to display the JSON interactively.
 [Source session regression](docs/session-regression.md)
 
 `traffic-e2e` owns direct recording, replay, configuration and diagnostics.

@@ -143,18 +143,28 @@ pub fn read(root: &Path, state: &RewriteState, query: RedisArgumentQuery<'_>) ->
     }
     let args = observed.context("exact independent Target request payload is unavailable")?;
     let value = select_argument(args.get(argument_index).map(Vec::as_slice), pointer);
-    let mut facts = json!({"attempt":issue.attempt,"recording_run_id":state.recording_run_id,"case_id":case_id,
-        "target_event_index":event_index,"command":selected["command"],"request_fingerprint":fingerprint,
-        "report_sha256":crate::policy_evidence::digest(&bytes),"target_role":"independent_target_observation",
-        "argument_index":argument_index,"argument_count":args.len(),"argument_bytes":args.get(argument_index).map(Vec::len),
-        "argument_sha256":args.get(argument_index).map(|bytes|crate::policy_evidence::digest(bytes)),"pointer":pointer,"target":value,
-        "observation_count":observation_ids.len(),"target_observation_ids":observation_ids.iter().take(16).collect::<Vec<_>>(),
-        "target_observations":observation_clocks,
-        "omitted_observation_ids":observation_ids.len().saturating_sub(16),
-        "association":"exact_native_request_fingerprint; identical requests may have multiple observations",
-        "source_counterpart":"not_assumed"});
-    facts["append_stream_progress"] = super::redis_stream_progress::facts(&replay, case_id);
-    Ok(facts)
+    Ok(json!({
+        "attempt": issue.attempt,
+        "recording_run_id": state.recording_run_id,
+        "case_id": case_id,
+        "target_event_index": event_index,
+        "command": selected["command"],
+        "request_fingerprint": fingerprint,
+        "report_sha256": crate::policy_evidence::digest(&bytes),
+        "target_role": "independent_target_observation",
+        "argument_index": argument_index,
+        "argument_count": args.len(),
+        "argument_bytes": args.get(argument_index).map(Vec::len),
+        "argument_sha256": args.get(argument_index).map(|bytes| crate::policy_evidence::digest(bytes)),
+        "pointer": pointer,
+        "target": value,
+        "observation_count": observation_ids.len(),
+        "target_observation_ids": observation_ids.iter().take(16).collect::<Vec<_>>(),
+        "target_observations": observation_clocks,
+        "omitted_observation_ids": observation_ids.len().saturating_sub(16),
+        "association": "exact_native_request_fingerprint; identical requests may have multiple observations",
+        "source_counterpart": "not_assumed"
+    }))
 }
 
 fn select_argument(raw: Option<&[u8]>, pointer: Option<&str>) -> Value {

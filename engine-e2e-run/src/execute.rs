@@ -164,7 +164,7 @@ pub async fn run_e2e_apis(
                 .cloned()
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut focused_inventory = CaseGroupInventory {
+    let focused_inventory = CaseGroupInventory {
         case_source: inventory.case_source.clone(),
         source_revision: inventory.source_revision.clone(),
         case_inventory_id: inventory.case_inventory_id.clone(),
@@ -253,8 +253,7 @@ pub async fn run_e2e_apis(
         .max()
         .unwrap_or(0)
         + 1;
-    let selection =
-        super::case_selection::prepare(&global_layout, &mut focused_inventory, iteration)?;
+    let selection = super::case_selection::prepare(&global_layout, &focused_inventory, iteration)?;
     let mut state = ActiveRunState::new(
         layout.run_key.clone(),
         attempt,

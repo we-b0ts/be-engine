@@ -69,12 +69,11 @@ using the library lifecycle API retain strict defaults unless they opt in.
 
 ## Streaming dependency timing
 
-Managed Replay defaults to recorded timing. For time-insensitive streams, set
-these local `.traffic-e2e/regression.yaml` options:
+Standalone managed Case Replay uses recorded timing for dependency streams.
+Use the low-level command to exercise time-insensitive streams with a cap.
 
-```yaml
-replay_timing: fast
-replay_interval_cap_ms: 5
+```sh
+traffic-e2e replay /absolute/case-dir --stream-timing fast --stream-interval-cap-ms 5
 ```
 
 Fast Replay replaces each complete successful HTTP stream interval with the
@@ -93,10 +92,8 @@ prefix. Keep `recorded` for elapsed-time checks, debounced persistence, heartbea
 cancellation races and timeout behavior. Compressing arrival gaps can change the
 number and order of native dependency calls; such mismatches remain failures or
 dirty evidence and cannot be waived as an expected consequence of acceleration.
-Low-level replay accepts `--stream-timing fast|recorded` and
-`--stream-interval-cap-ms 5`, retaining recorded timing by default. The removed
-HTTP-only timing key and flag are rejected. Existing recordings remain usable;
-changing mode or the active fast cap requires new passing execution evidence.
+Low-level Replay accepts `fast` and `recorded`, with recorded timing by
+default. Changing the timing mode or cap requires fresh verification evidence.
 
 ## Exact Source dependency references
 

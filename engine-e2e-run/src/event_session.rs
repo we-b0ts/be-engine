@@ -10,6 +10,7 @@ pub use state::status_e2e_event_session;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     time::Duration,
 };
 
@@ -45,6 +46,11 @@ pub async fn run_e2e_event_session(
         "the recording already has an active Case Replay attempt"
     );
     let attempt_id = Uuid::new_v4();
+    let target_inputs = options
+        .expected_target_commit
+        .as_deref()
+        .map(|commit| candidate_inputs(&layout.target_root, commit))
+        .transpose()?;
     let attempts = state::attempts_root(&layout.run_root, &layout.case_source);
     layout.run_root = attempts.join(attempt_id.simple().to_string());
     layout.active_dir = layout.run_root.join(".active");
@@ -59,6 +65,9 @@ pub async fn run_e2e_event_session(
         run_key: layout.run_key.clone(),
         attempt_id: attempt_id.simple().to_string(),
         recording_root: layout.case_source.clone(),
+        target_commit: options.expected_target_commit,
+        target_inputs,
+        target_image_id: None,
         passed: false,
         events: E2eEventSessionProgress::default(),
         error: None,
@@ -75,7 +84,14 @@ pub async fn run_e2e_event_session(
         })
         .await
         .context("session recording reader task failed")??;
-        run(&config, &layout, state, tape, &mut result).await
+        run(&config, &layout, state, tape, &mut result).await?;
+        if let (Some(commit), Some(inputs)) = (&result.target_commit, &result.target_inputs) {
+            ensure!(
+                &candidate_inputs(&layout.target_root, commit)? == inputs,
+                "Target inputs changed during Replay; verify the candidate again"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
     }
     .await;
     if let Err(error) = outcome {
@@ -95,6 +111,24 @@ pub async fn run_e2e_event_session(
     result.passed = result.error.is_none() && result.events.complete;
     state::finish(&layout.run_root, &result)?;
     Ok(result)
+}
+
+fn candidate_inputs(root: &Path, commit: &str) -> Result<String> {
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .context("read Target HEAD for event Replay")?;
+    ensure!(
+        head.status.success() && std::str::from_utf8(&head.stdout)?.trim() == commit,
+        "Target HEAD does not match the Replay candidate {commit}"
+    );
+    ensure!(
+        crate::execution_identity::matches_revision(root, commit)?,
+        "Target code differs from the Replay candidate {commit}; commit the intended changes first"
+    );
+    crate::execution_identity::repository_fingerprint(root)
 }
 
 fn lock(root: &Path) -> Result<state::ReplayLock> {
@@ -145,6 +179,7 @@ async fn run(
             return Err(error);
         }
     };
+    result.target_image_id = Some(image.id.clone());
     let mut target = Target::new(state, config, layout, image, timer.as_ref(), &ca);
     let mut outcome = drive(config, layout, &control, &mut target, tape, result).await;
     if let Ok(progress) = control.status().await {

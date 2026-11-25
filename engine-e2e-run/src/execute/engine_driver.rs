@@ -1,5 +1,4 @@
 use super::*;
-use crate::replay_timer::ManagedTimer;
 use crate::{CleanupFuture, ExecutionDriver, ExecutionFuture};
 
 pub(super) struct ApplicationDriver<'a> {
@@ -11,7 +10,6 @@ pub(super) struct ApplicationDriver<'a> {
     target_image: Option<crate::TargetImage>,
     replay: Option<Child>,
     replay_ca: Option<PathBuf>,
-    replay_timer: Option<ManagedTimer>,
     intentionally_incomplete: bool,
 }
 
@@ -32,7 +30,6 @@ impl<'a> ApplicationDriver<'a> {
             target_image: None,
             replay: None,
             replay_ca: None,
-            replay_timer: None,
             intentionally_incomplete: false,
         }
     }
@@ -44,8 +41,7 @@ impl ExecutionDriver for ApplicationDriver<'_> {
             let config = self.config;
             let layout = self.layout;
             let state = &mut *self.state;
-            let timer_plan = timing_guard::freeze(config, &layout.target_root, state)?;
-            self.replay_timer = timer_plan.as_deref().map(ManagedTimer::stage).transpose()?;
+            timing_guard::freeze(config, &layout.target_root, state)?;
             store::write_active(layout, state)?;
             let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingIndex);
             let index_deadline = tokio::time::Instant::now()
@@ -79,14 +75,8 @@ impl ExecutionDriver for ApplicationDriver<'_> {
     }
 
     fn spawn_replay(&mut self) -> Result<()> {
-        let replay = spawn_replay(
-            self.config,
-            self.layout,
-            self.inventory,
-            self.state,
-            self.replay_timer.as_ref(),
-        )
-        .context("Replay startup failed")?;
+        let replay = spawn_replay(self.config, self.layout, self.inventory, self.state)
+            .context("Replay startup failed")?;
         self.state.replay_pid = replay.id();
         self.replay = Some(replay);
         Ok(())
@@ -149,11 +139,11 @@ impl ExecutionDriver for ApplicationDriver<'_> {
                 self.replay_ca
                     .as_ref()
                     .context("Replay CA was not prepared")?,
-                self.replay_timer.as_ref(),
+                None,
             )
             .await?;
             super::super::primary_driver::wait_until_ready(config).await?;
-            verify_target_runtime_contract(config, layout, state, self.replay_timer.is_some())
+            verify_target_runtime_contract(config, layout, state, false)
                 .await
                 .context("target Replay runtime contract failed")?;
 

@@ -301,9 +301,8 @@ the source caller; supported alias/projection adaptation does not remove the
 finite-consumption requirement.
 
 Dirty-cluster evidence labels `unused_recorded` as an unconsumed recorded call,
-with source ownership unresolved. Its `mysql_unused_diagnosis` directs the
-source trace through request dependencies, helper commits, expiration and
-refresh. MySQL dependency details expose captured `server_status_before` and
+with source ownership unresolved. Trace request dependencies, helper commits,
+expiration and refresh. MySQL dependency details expose captured `server_status_before` and
 `server_status_after` alongside connection/query locators; bit `0x0001` is
 IN_TRANS, zero is known and an absent field is unknown. Representative details
 remain bounded and may omit other calls. These facts do not identify a source
@@ -549,9 +548,8 @@ equivalence. New reports identify the default with
 preserve it when present and do not relabel historical reports. Remaining setup
 summaries expose
 `diagnostic.kind: mysql_autocommit_transaction_coverage`, a precise rejection
-or pending reason, and covered/total transaction counts. The coordinator's
-`mysql_autocommit_diagnosis` guides Source lifecycle and Target SQLx transaction
-investigation. Resolve `source_proof_status: incomplete` using its failure and
+or pending reason, and covered/total transaction counts. Resolve
+`source_proof_status: incomplete` using its failure and
 missing query sequences before deciding whether Target needs a transaction.
 An unregistered end or absent historical witness does not prove the write count
 or Target status. Once Source proof is complete, compare its required members

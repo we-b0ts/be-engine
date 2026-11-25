@@ -21,8 +21,8 @@ separators. A recorded 404 is normal assertion evidence. Selected ingress
 HTTP upgrades, CONNECT, and request trailers fail Session capture. Ordinary
 response streams and response trailers have recorded events.
 
-Select the exact 14-digit recording through `.traffic-e2e/regression.yaml` or
-the global `--recording-run-id` option. For missing or incomplete evidence,
-obtain a sealed external recording. Reuse the same sealed input for Target
-repairs. Obtain a new recording when Source workload or capture needs change.
-See [Source Session regression](session-regression.md).
+Use the exact 14-digit recording ID when starting the approved round with
+`be-replay run --user-confirm --recording-run-id ID`. For missing or incomplete
+evidence, obtain a sealed external recording. The work branch retains its
+recording across Target repairs. Start a new round when Source workload or
+capture needs change. See [Source Session regression](session-regression.md).

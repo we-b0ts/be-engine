@@ -137,11 +137,6 @@ async fn parked_rule_replay_prepares_without_the_review_gate() {
 #[tokio::test]
 async fn parked_method_rule_replay_does_not_loop_on_the_other_method_after_skips() {
     let target = configured_target();
-    std::fs::write(
-        target.path().join(crate::config::regression::PATH),
-        "auto_next: true\nskip: [/completed-a, /completed-b]\n",
-    )
-    .unwrap();
     let mut state = implementation_state_with_inventory(false);
     let api = "POST /api";
     let mut item = state.api_inventory[0].clone();
@@ -157,10 +152,9 @@ async fn parked_method_rule_replay_does_not_loop_on_the_other_method_after_skips
         let mut completed = item.clone();
         completed.api = api.into();
         completed.source_route = Some(crate::api_selector::route(api).into());
-        completed.status = rewrite::model::RewriteApiStatus::Complete;
+        completed.status = rewrite::model::RewriteApiStatus::Skipped;
         state.api_inventory.push(completed);
     }
-    crate::regression_scope::apply(target.path(), &mut state).unwrap();
     worker::confirm_current_for_test(&mut state);
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();

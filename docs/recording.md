@@ -742,14 +742,15 @@ privately at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec` when encryption is
 used. Do not expose secrets or expected responses to Target. Replay does not
 need the recording CA private key.
 
-Select the recorded run with `recording_run_id` in the Target's local
-`.traffic-e2e/regression.yaml`, or pass the global `--recording-run-id` option to
-`be-replay`. Run verification against the finalized tree:
+Use `status` on the Target's configured pull-request base. After approval,
+start the round with the exact recorded run ID.
 
 ```sh
-be-replay --target-root /absolute/target run
+be-replay --target-root /absolute/target status
+be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 ```
 
 When the workload or capture configuration changes, have the recording owner
-seal a new run and select its new identity. Keep earlier recordings immutable.
+seal a new run and use its identity for a new round. Keep earlier recordings
+immutable.
 [Source session regression](session-regression.md)

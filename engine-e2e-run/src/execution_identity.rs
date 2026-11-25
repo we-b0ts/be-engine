@@ -34,28 +34,9 @@ pub fn review_fingerprint(target_root: &Path) -> Result<String> {
 /// Identity of executed behavior. Only process-owned traffic classification may
 /// change when reusing responses from a finalized Replay.
 pub fn replay_identity(target_root: &Path) -> Result<String> {
-    replay_identity_with_timer_plan(target_root).map(|(identity, _)| identity)
-}
-
-fn replay_identity_with_timer_plan(target_root: &Path) -> Result<(String, Option<Vec<u8>>)> {
     let mut hash = Fnv1a::default();
     hash.update(b"rewrite-replay-identity-v1");
     hash.update(review_fingerprint(target_root)?.as_bytes());
-    let regression = crate::config::regression::RegressionScope::load(target_root)?;
-    if let Some(timing) = regression.replay_timing {
-        hash.update(b"regression-replay-timing-v1");
-        hash.update(&serde_json::to_vec(&timing)?);
-        if timing == crate::replay::ReplayStreamTiming::Fast {
-            hash.update(&regression.replay_interval_cap_ms.to_le_bytes());
-        }
-    }
-    let timer_plan = crate::replay_timer::read_plan(target_root, regression.replay_timing)?;
-    if let Some(timer_plan) = &timer_plan {
-        use sha2::Digest as _;
-
-        hash.update(b"replay-timer-plan-v1");
-        hash.update(&sha2::Sha256::digest(timer_plan));
-    }
     let policy = policy_file(target_root)?;
     match fs::read(&policy) {
         Ok(bytes) => {
@@ -70,7 +51,7 @@ fn replay_identity_with_timer_plan(target_root: &Path) -> Result<(String, Option
             return Err(error).context("failed to fingerprint Replay verification policy");
         }
     }
-    Ok((hash.finish(), timer_plan))
+    Ok(hash.finish())
 }
 
 fn runtime_inputs_fingerprint(target_root: &Path, mut hash: Fnv1a) -> Result<String> {
@@ -128,12 +109,6 @@ pub fn fresh_replay_identity(root: &Path) -> Result<String> {
     cache::fresh(|| replay_identity(root))
 }
 
-pub(crate) fn fresh_replay_identity_with_timer_plan(
-    root: &Path,
-) -> Result<(String, Option<Vec<u8>>)> {
-    cache::fresh(|| replay_identity_with_timer_plan(root))
-}
-
 fn directory_files_hash(target_root: &Path, review: bool, policy: &Path) -> Result<Fnv1a> {
     let mut paths_args = vec![
         "ls-files",
@@ -146,7 +121,6 @@ fn directory_files_hash(target_root: &Path, review: bool, policy: &Path) -> Resu
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
     ];
     paths_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
-    paths_args.push(crate::config::regression::GIT_PATHSPEC);
     let listed = git_bytes(target_root, &paths_args)?;
     let mut paths = listed
         .split(|byte| *byte == 0)
@@ -196,7 +170,6 @@ fn directory_matches_revision(target_root: &Path, revision: &str, policy: &Path)
         "--",
         ".",
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
-        crate::config::regression::GIT_PATHSPEC,
     ];
     diff.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     if git_bytes(target_root, &diff)?
@@ -216,7 +189,6 @@ fn directory_matches_revision(target_root: &Path, revision: &str, policy: &Path)
         "--",
         ".",
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
-        crate::config::regression::GIT_PATHSPEC,
     ];
     untracked.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     Ok(!git_bytes(target_root, &untracked)?

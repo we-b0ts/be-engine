@@ -34,7 +34,7 @@ fn fixture(root: &Path) -> Fixture {
     }
     let selection = case_selection::prepare(
         &layout,
-        &mut inventory,
+        &inventory,
         Some(&ReplayIteration {
             workflow_id: "workflow-current".into(),
             final_round: true,

@@ -64,13 +64,12 @@ pub(super) fn spawn_replay(
     layout: &RunLayout,
     inventory: &CaseGroupInventory,
     state: &ActiveRunState,
-    timer: Option<&ManagedTimer>,
 ) -> Result<Child> {
     spawn_replay_command(
         config,
         layout,
         state,
-        timer,
+        None,
         replay_case_args(inventory, state),
         false,
     )

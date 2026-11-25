@@ -205,8 +205,7 @@ retains the original SET and reports covered setup separately in
 `transaction_equivalent_mysql_autocommit_exchanges`; reports identify the
 default as `mysql_transaction_semantics: first_write_through_end_v1`.
 Unconsumed setup/end summaries and transaction violations carry bounded
-`mysql_autocommit_transaction_coverage` diagnostics. Follow
-`mysql_autocommit_diagnosis`: resolve an incomplete Source proof using its
+`mysql_autocommit_transaction_coverage` diagnostics. Resolve an incomplete Source proof using its
 failure/missing query sequences first, then compare the proven write interval,
 actual Target status and missing members. An unproven interval or absent
 historical witness does not establish a write count or missing Target BEGIN.

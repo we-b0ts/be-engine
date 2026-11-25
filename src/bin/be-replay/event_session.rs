@@ -1,19 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
 use clap::Subcommand;
 use serde_json::{Value, json};
-use traffic_e2e::{
-    E2eEventSessionOptions, E2eEventSessionResult, E2eEventSessionState, E2eEventSessionStatus,
-    config::regression::SessionRegression, repository::LOCAL_ARTIFACTS_ROOT, run_e2e_event_session,
-    session, status_e2e_event_session,
-};
+use traffic_e2e::{E2eEventSessionResult, session};
+
+mod workflow;
 
 #[derive(Debug, Subcommand)]
 pub(super) enum SourceCommand {
     /// Replay all events and publish API counts after successful verification.
     Run {
-        /// Override the run key derived from the recording directory.
+        /// Confirm that the user approved starting a new regression from pr_base.
+        #[arg(long)]
+        user_confirm: bool,
+        /// Name the runtime scope when starting a round.
         #[arg(long)]
         run_key: Option<String>,
     },
@@ -60,6 +61,18 @@ pub(super) enum SourceCommand {
         /// JSON array of findings returned by the analysis workers.
         #[arg(long)]
         findings: PathBuf,
+        /// Maximum implementers to assign in this plan.
+        #[arg(long, default_value_t = 16)]
+        max_implementers: usize,
+        /// Require the latest failed attempt to have this identity.
+        #[arg(long)]
+        attempt_id: Option<uuid::Uuid>,
+    },
+    /// Register accepted implementation fixes or the published integration candidate.
+    Report {
+        /// JSON delivery receipt.
+        #[arg(long)]
+        file: PathBuf,
     },
 }
 
@@ -69,65 +82,29 @@ pub(super) async fn run(
     command: SourceCommand,
     pretty: bool,
 ) -> Result<()> {
-    let target_root = target_root.canonicalize()?;
-    let scope = SessionRegression::load(&target_root)?;
-    let id = recording_run_id
-        .or(scope.recording_run_id)
-        .context("set recording_run_id in .traffic-e2e/regression.yaml")?;
-    let recording_root = resolve_recording(&target_root, &id)?;
+    let id = recording_run_id.as_deref();
     match command {
-        SourceCommand::Run { run_key } => {
-            let result = run_e2e_event_session(E2eEventSessionOptions {
-                target_root: target_root.clone(),
-                recording_root: recording_root.clone(),
-                run_key,
-            })
-            .await?;
-            let apis =
-                session::api_counts(&target_root, &recording_root, result.events.last_sequence);
-            let progress = match &apis {
-                Ok(apis) if result.passed => {
-                    session::publish_passed_progress(&target_root, &recording_root, apis)
-                }
-                _ => Ok(false),
-            };
-            let next =
-                (!result.passed).then(|| failure_action(&id, &result, scope.max_implementers));
-            let mut report = json!({
-                "recording_id": id, "session": result, "apis": apis.as_ref().ok(),
-                "progress_published": progress.as_ref().copied().unwrap_or(false), "next": next,
-            });
-            if let Err(error) = &apis {
-                report["api_counts_error"] = json!(format!("{error:#}"));
-            }
-            if let Err(error) = &progress {
-                report["progress_publication_error"] = json!(format!("{error:#}"));
-            }
-            super::print_json(&report, pretty)?;
-            ensure!(result.passed, "Source session Replay failed");
-            apis?;
-            progress?;
-            Ok(())
-        }
+        SourceCommand::Run {
+            user_confirm,
+            run_key,
+        } => workflow::replay(&target_root, id, user_confirm, run_key, pretty).await,
         SourceCommand::Status {
             run_key,
             attempt_id,
-        } => {
-            let status = status_e2e_event_session(
-                &target_root,
-                &recording_root,
-                run_key.as_deref(),
-                attempt_id,
-            )?;
-            let next = status_action(&id, &status, scope.max_implementers);
-            super::print_json(
-                &json!({
-                    "recording_id": id, "state": status.state,
-                    "session": status.attempt, "next": next,
-                }),
-                pretty,
-            )
-        }
+        } => workflow::status(&target_root, id, run_key.as_deref(), attempt_id, pretty),
+        SourceCommand::Plan {
+            findings,
+            max_implementers,
+            attempt_id,
+        } => workflow::plan(
+            &target_root,
+            id,
+            &findings,
+            max_implementers,
+            attempt_id,
+            pretty,
+        ),
+        SourceCommand::Report { file } => workflow::report(&target_root, id, &file, pretty),
         SourceCommand::Events {
             from_seq,
             after_seq,
@@ -137,8 +114,9 @@ pub(super) async fn run(
             with_push_event,
             sequences,
         } => {
+            let recording = workflow::evidence_recording(&target_root, id)?;
             let page = session::events(
-                &recording_root,
+                &recording.root,
                 session::SessionEventQuery {
                     from_sequence: from_seq,
                     after_sequence: after_seq,
@@ -152,52 +130,29 @@ pub(super) async fn run(
             super::print_json(&page, pretty)
         }
         SourceCommand::Dependency { sequence } => {
-            super::print_json(&session::dependency(&recording_root, sequence)?, pretty)
+            let recording = workflow::evidence_recording(&target_root, id)?;
+            super::print_json(&session::dependency(&recording.root, sequence)?, pretty)
         }
         SourceCommand::Target {
             report,
             observation_id,
-        } => super::print_json(
-            &session::target_observation(&recording_root, &report, observation_id)?,
-            pretty,
-        ),
-        SourceCommand::Plan { findings } => {
-            let findings: Vec<traffic_e2e::event_work::Finding> =
-                serde_json::from_slice(&std::fs::read(&findings)?)
-                    .context("parse event findings")?;
-            let dispatch = traffic_e2e::event_work::plan(findings, scope.max_implementers)?;
-            super::print_json(&dispatch, pretty)
+        } => {
+            let recording = workflow::evidence_recording(&target_root, id)?;
+            super::print_json(
+                &session::target_observation(&recording.root, &report, observation_id)?,
+                pretty,
+            )
         }
     }
 }
 
-fn status_action(
-    id: &str,
-    status: &E2eEventSessionStatus,
-    max_implementers: usize,
-) -> Option<Value> {
-    let attempt = status.attempt.as_ref()?;
-    match status.state {
-        E2eEventSessionState::Running => Some(json!({
-            "action": "wait_for_session",
-            "status": ["status", "--recording-run-id", id, "--run-key", attempt.run_key,
-                "--attempt-id", attempt.attempt_id],
-        })),
-        E2eEventSessionState::Interrupted => Some(json!({
-            "action": "rerun_interrupted_session",
-            "run": ["run", "--recording-run-id", id, "--run-key", attempt.run_key],
-        })),
-        E2eEventSessionState::Failed => Some(failure_action(id, attempt, max_implementers)),
-        E2eEventSessionState::NotStarted | E2eEventSessionState::Passed => None,
-    }
-}
-
-fn failure_action(id: &str, result: &E2eEventSessionResult, max_implementers: usize) -> Value {
-    if result.events.total == 0 {
+fn failure_action(id: &str, result: &E2eEventSessionResult) -> Value {
+    if result.events.failure.is_none() || result.events.complete {
         return json!({
             "action": "inspect_session_setup",
             "description": result.error,
             "report": result.report.is_file().then_some(&result.report),
+            "run": ["run"],
         });
     }
     let expected = result.events.expected.as_ref();
@@ -228,32 +183,14 @@ fn failure_action(id: &str, result: &E2eEventSessionResult, max_implementers: us
         "action": "analyze_session_failure",
         "description": result.error,
         "expected_sequence": sequence,
-        "max_implementers": max_implementers,
         "event": (sequence > 0).then(|| json!(["events", "--recording-run-id", id,
             "--seq", sequence.to_string()])),
         "events": ["events", "--recording-run-id", id,
             "--from-seq", sequence.to_string(), "--window-seconds", "60"],
         "dependency": dependency,
         "target": observed,
-        "plan": ["plan", "--recording-run-id", id, "--findings", "<findings.json>"],
+        "plan": ["plan", "--recording-run-id", id, "--attempt-id", result.attempt_id, "--findings", "<findings.json>"],
     })
-}
-
-fn resolve_recording(target: &Path, id: &str) -> Result<PathBuf> {
-    ensure!(
-        id.len() == 14 && id.bytes().all(|byte| byte.is_ascii_digit()),
-        "recording run ID must contain 14 digits"
-    );
-    let root = target
-        .join(LOCAL_ARTIFACTS_ROOT)
-        .join("recordings")
-        .join(id);
-    ensure!(
-        root.is_dir(),
-        "recording directory missing: {}",
-        root.display()
-    );
-    Ok(root)
 }
 
 #[cfg(test)]
@@ -270,6 +207,9 @@ mod tests {
             run_key: "custom".into(),
             attempt_id: Uuid::from_u128(1).simple().to_string(),
             recording_root: "/recording".into(),
+            target_commit: None,
+            target_inputs: None,
+            target_image_id: None,
             passed: false,
             events: E2eEventSessionProgress {
                 total: 20,
@@ -295,13 +235,8 @@ mod tests {
 
     #[test]
     fn failed_attempt_emits_flat_evidence_commands() {
-        let status = E2eEventSessionStatus {
-            state: E2eEventSessionState::Failed,
-            attempt: Some(attempt()),
-        };
-        let action = status_action(RECORDING, &status, 4).unwrap();
+        let action = failure_action(RECORDING, &attempt());
         assert_eq!(action["expected_sequence"], 10);
-        assert_eq!(action["max_implementers"], 4);
         for command in ["events", "dependency", "target", "plan"] {
             check_command(&action, command, command);
         }
@@ -313,23 +248,12 @@ mod tests {
     }
 
     #[test]
-    fn status_commands_bind_the_running_attempt_and_interrupted_run_key() {
-        let mut status = E2eEventSessionStatus {
-            state: E2eEventSessionState::Running,
-            attempt: Some(attempt()),
-        };
-        let running = status_action(RECORDING, &status, 4).unwrap();
-        check_command(&running, "status", "status");
-        assert_eq!(running["status"][4], "custom");
+    fn a_setup_error_with_a_compiled_plan_does_not_dispatch_analysis() {
+        let mut failed = attempt();
+        failed.events.failure = None;
         assert_eq!(
-            running["status"][6],
-            status.attempt.as_ref().unwrap().attempt_id
+            failure_action(RECORDING, &failed)["action"],
+            "inspect_session_setup"
         );
-        status.state = E2eEventSessionState::Interrupted;
-        let interrupted = status_action(RECORDING, &status, 4).unwrap();
-        check_command(&interrupted, "run", "run");
-        assert_eq!(interrupted["run"][4], "custom");
-        status.state = E2eEventSessionState::Passed;
-        assert!(status_action(RECORDING, &status, 4).is_none());
     }
 }
