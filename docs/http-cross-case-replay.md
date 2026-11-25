@@ -1,5 +1,9 @@
 # Cross-case HTTP dependency replay
 
+This reference covers Case HTTP initialization sharing. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
 > syntax. Use the self-contained `traffic-policy/v3` rules, `project.policy`,

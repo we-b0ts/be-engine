@@ -1,11 +1,17 @@
 //! Read-only queries and public progress derived from the sealed Source timeline.
 
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeSet, HashSet},
+    path::Path,
+};
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
-use traffic_model::{session::SessionEvent, trace::RecordedEvent};
+use traffic_model::{
+    session::SessionEvent,
+    trace::{CaptureEvent, OutputKind, RecordedEvent},
+};
 use traffic_recording_store::{session, source::recording};
 
 mod progress;
@@ -18,16 +24,28 @@ pub struct SessionEventPage {
     pub next_after_sequence: Option<u64>,
 }
 
+#[derive(Debug)]
+pub struct SessionEventQuery {
+    pub from_sequence: u64,
+    pub after_sequence: u64,
+    pub window_ms: Option<u64>,
+    pub limit: usize,
+    pub payload: bool,
+    pub with_push_event: bool,
+    pub selected: BTreeSet<u64>,
+}
+
 /// Return a bounded evidence page in original Source sequence.
-pub fn events(
-    root: &Path,
-    from_sequence: u64,
-    after_sequence: u64,
-    window_ms: Option<u64>,
-    limit: usize,
-    payload: bool,
-    selected: &BTreeSet<u64>,
-) -> Result<SessionEventPage> {
+pub fn events(root: &Path, query: SessionEventQuery) -> Result<SessionEventPage> {
+    let SessionEventQuery {
+        from_sequence,
+        after_sequence,
+        window_ms,
+        limit,
+        payload,
+        with_push_event,
+        selected,
+    } = query;
     ensure!(
         (1..=200).contains(&limit),
         "event page limit must be between 1 and 200"
@@ -40,6 +58,7 @@ pub fn events(
     let mut end = None;
     let mut previous_sequence = 0;
     let mut events = Vec::new();
+    let mut hidden_pushes = (!with_push_event && selected.is_empty()).then(HashSet::<u64>::new);
     loop {
         if next_primary.is_none() {
             next_primary = primary.next().transpose()?;
@@ -55,11 +74,18 @@ pub fn events(
         };
         let (sequence, offset, value) = if take_primary {
             let event = next_primary.take().expect("primary head exists");
-            let value = primary_value(&event, payload)?;
+            let value = Some(primary_value(&event, payload)?);
             (event.sequence, event.offset_micros, value)
         } else {
             let event = next_dependency.take().expect("dependency head exists");
-            let value = serde_json::to_value(&event)?;
+            // A delivery inside the window can belong to a notification that
+            // started before it. Update the filter before applying the cursor.
+            let hidden = hidden_pushes
+                .as_mut()
+                .is_some_and(|pushes| is_push_event(pushes, &event.event));
+            let value = (!hidden)
+                .then(|| serde_json::to_value(&event))
+                .transpose()?;
             (event.sequence, event.offset_micros, value)
         };
         ensure!(
@@ -79,6 +105,9 @@ pub fn events(
         if sequence <= after_sequence || (!selected.is_empty() && !selected.contains(&sequence)) {
             continue;
         }
+        let Some(value) = value else {
+            continue;
+        };
         if events.len() == limit {
             let next_after_sequence = events
                 .last()
@@ -96,6 +125,25 @@ pub fn events(
         events,
         next_after_sequence: None,
     })
+}
+
+fn is_push_event(pushes: &mut HashSet<u64>, event: &CaptureEvent) -> bool {
+    let Some(sequence) = event.dependency_sequence() else {
+        return false;
+    };
+    match event {
+        CaptureEvent::MessageStarted { .. } => {
+            pushes.insert(sequence);
+            true
+        }
+        // A sealed stream can omit capture termination after a wire terminal.
+        CaptureEvent::Terminal { .. }
+        | CaptureEvent::Output {
+            output: OutputKind::End | OutputKind::Terminated { .. },
+            ..
+        } => pushes.remove(&sequence),
+        _ => pushes.contains(&sequence),
+    }
 }
 
 fn primary_value(row: &RecordedEvent<SessionEvent>, payload: bool) -> Result<Value> {

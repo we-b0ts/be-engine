@@ -22,18 +22,18 @@ ownership.
 ## Package Shape
 
 Use a Rust workspace with the root `traffic-e2e` application composing the
-`traffic-e2e`, `backend-rewrite`, and `backend-rewrite-admin` binaries.
+`traffic-e2e`, `be-replay`, and `backend-rewrite-admin` binaries.
 The root `src/` owns the three CLI entrypoints and the public API facade.
 Workspace members use short directory names beside `src/`. For example,
 `engine-replay/` contains the `traffic-engine-replay` package. Version
 requirements and shared paths live in `[workspace.dependencies]`. Each member
 declares the features it uses.
-`traffic-e2e-app` owns default composition and compatibility wrappers. Its
-entrypoints bind the rewrite coordinator before calling independent services.
-`traffic-rewrite` owns the complete rewrite workflow, assignment and attempt
-coordination, policy transactions, authorization of protected evidence queries,
-and snapshot persistence. Its public API is usable directly as a
-library. `traffic-rewrite-core` owns typed workflow state, attempt transitions,
+`traffic-e2e-app` owns default composition and compatibility wrappers.
+`be-replay` calls the managed Source session and evidence services
+through the shared application facade. `traffic-rewrite` retains the Case
+workflow library, including assignment coordination, policy transactions,
+authorization of protected evidence queries and snapshot persistence.
+`traffic-rewrite-core` owns typed workflow state, attempt transitions,
 atomic snapshots and process locks. `WorkflowData` supplies the coordinator's
 serializable records. `model` binds those records to the core and
 `store` applies coordinator overlays around core storage.
@@ -88,9 +88,11 @@ claims, candidate indexes and delivery contracts.
 exports over independently owned engine services. Its concrete protocol, codec
 and policy bindings use the shared service packages.
 
-`traffic-engine-e2erun` owns managed E2E execution, selected Case lifecycles,
-assertion and session publication, Target OCI build/start/stop, runtime preflight
-assets and execution input identities. `traffic-engine-e2e-contract` supplies
+`traffic-engine-e2e-run` in `engine-e2e-run/` owns managed E2E execution,
+selected Case lifecycles, assertion and session publication, Target OCI
+build/start/stop, runtime preflight assets, and execution input identities.
+Modules live directly under `engine-e2e-run/src/`. The `e2e_run` module
+exposes public managed-run services. `traffic-engine-e2e-contract` supplies
 run inputs and published result types to execution and their consumers.
 Project configuration comes from `traffic-engine-config`. The `execution`
 module owns lifecycle ordering and
@@ -645,7 +647,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
 
 - `protocol_contract` owns closed protocol, role and native-version identities.
   `primary_protocol` adapts immutable HTTP/Motan inputs to genuine native
-  execution and independent observations; `e2e_run/primary_driver` owns caller
+  execution and independent observations; `engine-e2e-run/src/primary_driver` owns caller
   lifecycle and assertion inputs. The executor never reads expected outputs.
   `replay/adapters` resolves original finite dependency references and delegates
   real delivery state to native owners. It cannot manufacture consumption.
@@ -1026,12 +1028,12 @@ the same responsibility and 1000-line requirements as the root `src/`.
   `control/server` owns bounded control connections; mutations stay serialized
   while read-only observations remain available during dependency waits.
   `control/case_execution` exposes actual dependency rejection separately from unused inventory;
-  `e2e_run/request_feedback` interrupts one primary request across HTTP, streams and Motan.
-  `e2e_run/case_sequence` owns chronological input admission on that same Target.
-  `e2e_run/batch_evidence` binds final verification to one latest complete-round
+  `engine-e2e-run/src/request_feedback` interrupts one primary request across HTTP, streams and Motan.
+  `engine-e2e-run/src/case_sequence` owns chronological input admission on that same Target.
+  `engine-e2e-run/src/batch_evidence` binds final verification to one latest complete-round
   execution, its immutable Source manifest, whole input inventory, current owner
   snapshot and actual session receipt. It never joins focused method attempts.
-  `e2e_run/workflow_evidence` independently authenticates one final session for
+  `engine-e2e-run/src/workflow_evidence` independently authenticates one final session for
   every current workflow method and its complete Case inventory. Its validation
   child checks original response, dependency and Target-stop evidence without
   certifying startup or process consumption. `rewrite/dependency_review/workflow_verification`
@@ -1060,7 +1062,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   without creating business slots or ordinary-pool socket bindings; recorded
   session failures and actual stateful operations keep their native contracts.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
-  `e2e_run/execution_failure` retains the incomplete execution cause and independent
+  `engine-e2e-run/src/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.
   `rewrite/evidence/witness` owns bounded, assignment-bound access to authenticated
   dependency witness values and recorded input header names. It reuses native
@@ -1098,7 +1100,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   runner response assertions retain the primary failure independently of cleanup.
   Normal interaction closure keeps Source and Target running;
   process shutdown remains with the ordinary recording and run supervisors.
-  `e2e_run/evidence/interaction` owns on-demand authenticated SSE response
+  `engine-e2e-run/src/evidence/interaction` owns on-demand authenticated SSE response
   diagnostics, with bounded payload previews and raw JSON differences. It does
   not persist plaintext, apply value rules or change assertion outcomes.
 
@@ -1386,7 +1388,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   coordinator snapshots. Validation stays with `rewrite/unified_rule`; policy
   application keeps its existing coordinator transaction. Replay reservation
   shares only the short publication lock, never a plan's expensive preflight.
-  `e2e_run/evidence_admission` permits completed focused evidence for unrelated
+  `engine-e2e-run/src/evidence_admission` permits completed focused evidence for unrelated
   APIs while preserving active route/session isolation. See
   [concurrent rule planning](concurrent-rule-planning.md).
 
@@ -1403,8 +1405,8 @@ the same responsibility and 1000-line requirements as the root `src/`.
   retain exact trailing/repeated separators without aliasing; wildcard matching
   and dynamic source-route grammar stay strict. Unrelated valid noncanonical
   requests cannot block inventory discovery or finalized recording adoption.
-  `e2e_run/case_selection` validates selected/skipped input partitions.
-  `e2e_run/batch_evidence` validates one current full session against the sealed
+  `engine-e2e-run/src/case_selection` validates selected/skipped input partitions.
+  `engine-e2e-run/src/batch_evidence` validates one current full session against the sealed
   manifest, engine, Target execution identity and frozen attribution. It never
   stitches focused snapshots or treats attribution receipts as actual delivery.
   `rewrite/case_patterns` canonicalizes persisted recording observations while
@@ -1414,8 +1416,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
 - `traffic-protocol-mysql::table_selector` owns shared bounded physical-table selection for
   process-owned reads, SQL-time rules and dynamic identity captures. `policy/runtime/sql_template/table`
   binds whole table identifiers and qualifiers and checks template intersections; matcher and
-  evidence planning retain source/target physical-table equality. CLI table
-  bounds live in `bin/backend-rewrite/dependency_rule/mysql_tables`.
+  evidence planning retain source/target physical-table equality.
   Runtime table-series matching keeps numeric bounds and canonical zero-padding
   without expanding physical names. `policy/runtime/matcher/mysql_selectors`
   owns immutable per-policy SQL selector compilation shared by observation,
@@ -1545,14 +1546,14 @@ the same responsibility and 1000-line requirements as the root `src/`.
   atomic policy transaction, using protected whole-request evidence owned by
   `request_contract/evidence`. CLI and coordinator adapters retain their ordinary
   plan, apply, recovery and fresh-Replay lifecycle.
-- `e2e_run/assertion_publication` owns staging-time retargeting of assertion
+- `engine-e2e-run/src/assertion_publication` owns staging-time retargeting of assertion
   details, summary references and their fingerprints for both ordinary terminal
   publication and focused method projections. Store owns atomic directory
   replacement; published consumers never need the transient active directory.
   `evidence_admission` distinguishes an unfinished foreign execution from a
   malformed complete execution; resource preflight freezes the former's state
   while retaining complete Source proof and a fresh-Replay obligation.
-  `e2e_run/replay_publication` stages the original Replay report and dependency
+  `engine-e2e-run/src/replay_publication` stages the original Replay report and dependency
   sidecar into that same snapshot and retargets aggregate report references.
   `replay/report/unused_source` projects original MySQL and Redis capture facts
   for the actual unused Case rows from in-memory preparation metadata at
@@ -1560,7 +1561,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   carries it inside the session report.
   `protocols/replay/report/aggregate/runner` validates runner-selected report locations,
   session identity and complete shared-session coverage while preserving the
-  public recording report discovery boundary. `e2e_run/final_evidence` selects
+  public recording report discovery boundary. `engine-e2e-run/src/final_evidence` selects
   the prepared recording witnesses for every case in that session before
   deriving method evidence. Original reports, Case outcomes and errors remain
   immutable. `rewrite/dependency_review` owns independently proved attribution,
@@ -1596,7 +1597,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   resolution with the full Source loader, without constructing discovery graphs
   or retaining SQL and payload selectors. Actual attribution proof still uses
   the full Source snapshot.
-  `e2e_run/diagnostic_report` resolves published reports by exact session, either
+  `engine-e2e-run/src/diagnostic_report` resolves published reports by exact session, either
   an archived actual batch or the current finalized focused API attempt. It
   retains Source, attempt, inventory and publication guards; malformed archives
   never fall back to another report. `dependency_review/target_query` owns
@@ -1649,7 +1650,14 @@ the same responsibility and 1000-line requirements as the root `src/`.
   retaining physical packets for forwarding and debug capture. Replay response
   delivery advances sequence IDs by the physical packets actually written.
 - `main.rs` owns the `traffic-e2e` engine CLI bootstrap only.
-- `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
+- `src/bin/be-replay/` adapts Source event regression, evidence queries,
+  finding planning and project startup inputs to the CLI.
+  `engine-e2e-run/src/event_session.rs` owns managed attempt execution.
+  Its `state` child registers attempts and reads status from attempt locks
+  and snapshots. `engine-evidence::session` owns sealed Source evidence,
+  protected Target observations, and timeline push filtering for display.
+  The Replay sequence uses the complete sealed recording. `rewrite::event_work`
+  owns finding grouping for dispatch.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
 - `record_service` owns the standalone Source/Recorder supervision and recording
@@ -1660,8 +1668,8 @@ the same responsibility and 1000-line requirements as the root `src/`.
   best-effort address refresh independently of Source and request supervision;
   `api_policy` loads and validates the gateway's startup JSON using SDK route
   validation, separately from Recorder capture configuration. `coordination`
-  publishes that policy (defaulting to all paths) and resets counts once after readiness and
-  before opening admission; address heartbeats never repeat these writes.
+  publishes that policy (defaulting to all paths) and resets counts once before
+  opening admission. Address heartbeats do not repeat these writes.
   `proxy` owns direct or reservation-aware request forwarding and completion;
   `source` owns fixed-identity process startup, trust, isolation and cleanup.
   Its `shutdown` child owns the standalone normal-stop 60-second case wait and
@@ -1745,7 +1753,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
 - `policy/runtime/evidence_policy` owns the shared policy fingerprint check for
-  rule evidence. `e2e_run/evidence` reads runner-selected Replay report identity;
+  rule evidence. `engine-e2e-run/src/evidence` reads runner-selected Replay report identity;
   `rewrite/evidence/policy_freshness` projects read-only diagnostics and routes
   refresh through the existing coordinator command and gates.
 - `policy/runtime/config/document.rs` owns the common dependency rule list codec;
@@ -1764,9 +1772,8 @@ the same responsibility and 1000-line requirements as the root `src/`.
   `primary_protocol/assertion/headers/date` owns parameter/date comparison and candidates.
   `policy/runtime/feedback/generated_values` owns immutable witness checks and
   policy edits, with separate identity and header evidence children.
-  `rewrite/rule/generated_values` owns coordinator plan/apply adaptation,
-  `rewrite/evidence/rule_guidance/generated_values` owns diagnostic hints, and
-  `bin/backend-rewrite/rule_args` owns the corresponding CLI inputs.
+  `rewrite/rule/generated_values` owns Case library plan/apply adaptation.
+  `rewrite/evidence/rule_guidance/generated_values` owns its diagnostic hints.
 - `protocols/replay/redis/snapshot_seed` owns marked Global seed admission against current
   process-owned request selectors, including historical revision-bound names.
   `snapshot_overlay` reuses that name compatibility with complete immutable
@@ -1790,7 +1797,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   required.
 - `local_interception/egress_counters` owns read-only firewall command parsing.
   `replay/egress_counter` owns bounded sampling and per-case counter differences;
-  `e2e_run/result/egress` projects this evidence only for failed verification.
+  `engine-e2e-run/src/result/egress` projects this evidence only for failed verification.
   Counter observations never become dependency mismatches or gate inputs.
 - `local_interception/dns` owns fixed-UID DNS redirects and the corresponding
   conntrack-zone rule lifecycle. Its `conntrack` child owns bounded native
@@ -1823,22 +1830,22 @@ the same responsibility and 1000-line requirements as the root `src/`.
   atomically, and validates content integrity. Target container and Platform
   runtimes consume these contracts; they do not rediscover startup inputs.
   `platform/startup.rs` owns the shell-runtime projection of that snapshot.
-- `e2e_run/config.rs` remains the cohesive strict project-schema lifecycle:
+- `engine-e2e-run/src/run_config.rs` remains the cohesive strict project-schema lifecycle:
   initialization rendering, load/validation, and runtime path resolution must
-  agree on one contract. `e2e_run/admin_startup.rs` projects the validated
+  agree on one contract. `engine-e2e-run/src/admin_startup.rs` projects the validated
   project startup declaration into the administrator-owned snapshot recapture
   operation without adding mutation to the ordinary coordinator CLI.
-  `e2e_run/admin_source.rs` coordinates an administrator-confirmed source image
+  `engine-e2e-run/src/admin_source.rs` coordinates an administrator-confirmed source image
   upgrade with the existing project declaration and derived startup snapshot;
   it does not rerun initialization or rewrite tracked configuration.
-  `e2e_run/delivery.rs` resolves target-relative managed delivery directories
+  `engine-e2e-run/src/delivery.rs` resolves target-relative managed delivery directories
   and their opt-in named build contexts without moving runtime ownership away
   from the target.
-- `e2e_run/source_response` resolves the immutable primary-response artifact
+- `engine-e2e-run/src/source_response` resolves the immutable primary-response artifact
   and exposes only its recorded elapsed time for the HTTP execution budget.
   The driver adds its ordinary execution allowance to that duration; response
   status, headers and body remain with assertions and never become Target inputs.
-- `e2e_run/case_selection` owns repair-attempt case selection, workflow and
+- `engine-e2e-run/src/case_selection` owns repair-attempt case selection, workflow and
   immutable API-inventory boundaries, and historical passed-case skips. It reads
   the opt-in local regression setting, preserves failed and unexecuted inputs,
   and always selects every case for final revalidation. Protocol loading and
@@ -1867,7 +1874,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   completion gate. It consumes public traffic operations and must not move
   rewrite state or completion semantics into Recorder, Replay, or
   `e2e_run`.
-- `e2e_run/result.rs` owns the one terminal E2E result contract: verification
+- `engine-e2e-run/src/result.rs` owns the one terminal E2E result contract: verification
   gates, response-difference clustering, representative selection, and bounded
   lifecycle diagnosis are derived together from the finalized run state. It
   remains one cohesive module near the 1000-line hard limit so callers cannot
@@ -1942,7 +1949,7 @@ the same responsibility and 1000-line requirements as the root `src/`.
   identity shared by coordinator commands and local regression configuration. `api_selector`
   owns executable route-to-method inventory selection and worker scope projection.
   `api_batch` owns grouped preparation
-  and method-slice transitions for one route acceptance. `e2e_run/focused_batch`
+  and method-slice transitions for one route acceptance. `engine-e2e-run/src/focused_batch`
   owns terminal method evidence publication from a shared Replay session; it
   never alters recorded cases or moves rewrite scheduling into E2E execution.
   `inventory.rs` owns the API inventory state machine: stable installation,
@@ -1976,19 +1983,19 @@ the same responsibility and 1000-line requirements as the root `src/`.
   an actual current-coordinator runtime query declaring zero active child sessions;
   this is independent of engine bindings and historical sessions. Old-worker
   cleanup is not an entry prerequisite. Each API can bind once in the new workflow;
-  subsequent worker transfer retains its separate authorization contract. `e2e_run/branch` requires a work branch.
+  subsequent worker transfer retains its separate authorization contract. `engine-e2e-run/src/branch` requires a work branch.
   `regression_scope` owns selected recording adoption and reversible API exclusion
   at coordinator load/advance boundaries.
   Its `recording` child validates explicit recording selection and resets batch
   state; `artifacts` retains ownership of manifest and recorded-case validation.
   `config/regression` owns the separate ignored YAML schema, route-level matching
   and defaults, using the shared scope grammar without depending on rewrite state.
-  Its optional stream timing mode and interval cap flow through `e2e_run/config`
-  and `e2e_run/runtime` into Replay lifecycle state. Protocol delivery owns gap
+  Its optional stream timing mode and interval cap flow through `engine-e2e-run/src/run_config`
+  and `engine-e2e-run/src/runtime` into Replay lifecycle state. Protocol delivery owns gap
   compression; configuration resolution does not rewrite recorded evidence.
   `rewrite/fingerprint` binds the mode and effective fast cap to execution
-  identity, and `e2e_run/case_selection` keeps passed-case history within that timing.
-  `e2e_run/execute/timing_guard` checks resolved and selected timing before
+  identity, and `engine-e2e-run/src/case_selection` keeps passed-case history within that timing.
+  `engine-e2e-run/src/execute/timing_guard` checks resolved and selected timing before
   freezing execution identity and launching Replay after asynchronous preparation.
   `transition.rs` classifies Replay results and leaves parked-slice completion
   scheduling to the root coordinator. `progress_publication.rs` owns
@@ -2002,9 +2009,8 @@ the same responsibility and 1000-line requirements as the root `src/`.
   `evidence/query_catalog` owns issue-specific query availability and purposes;
   method issues reference a single shared command catalog by identity.
   `evidence/access` owns read-only assignment/opaque-query resolution and
-  worker-confirmation checks; `evidence` owns bounded API diagnostic queries.
-  `bin/backend-rewrite/evidence` owns CLI selector parsing for that read-only
-  contract. Action serialization retains scheduling facts and coordinator
+  worker-confirmation checks. `evidence` owns bounded Case library API
+  diagnostic queries. Action serialization retains scheduling facts and coordinator
   commands; diagnostic payloads and detail queries stay in evidence reports.
   Persisted issue payloads retain their evidence contract.
   `configuration_commit` owns the separate persistent-configuration Git commit
@@ -2099,7 +2105,7 @@ After the final Rust product-code edit and before commit, run the bundled
 checker:
 
 ```bash
-plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
+plugins/ai-engine/skills/be-replay/scripts/check-code-organization
 ```
 
 Before an MR, set `CODE_ORG_BASE` to the target branch. Use `--all` only for an
@@ -2313,7 +2319,7 @@ explicit repository-wide audit.
   adapter freezes the same private key witnesses before unified rule apply.
   `keys` resolves private references to
   target startup inputs, and `policy` projects/edits only `request_rules`.
-  `request_headers` remains encryption-only. `e2e_run/jwt_evidence` projects
+  `request_headers` remains encryption-only. `engine-e2e-run/src/jwt_evidence` projects
   bounded historical request-time facts; `rewrite/jwt_rule` owns their
   coordinator plan/apply transaction and global revalidation. Its `discovery`
   child projects existing startup inspection contracts without secret values.
@@ -2431,7 +2437,7 @@ explicit repository-wide audit.
   with independent Source and Target ordering evidence.
   `redis_fields/response` owns bulk boundaries and exact surrounding RESP bytes.
 
-- `e2e_run/execution_failure` owns bounded per-Case rejection summaries and pages;
+- `engine-e2e-run/src/execution_failure` owns bounded per-Case rejection summaries and pages;
   `rewrite/evidence/execution` binds their continuation commands to the same API,
   issue, immutable inventory and attempt. Omitted overview rows cannot establish
   absence of a failure or borrow another Case's rejection.
@@ -2440,7 +2446,7 @@ explicit repository-wide audit.
   to the existing global JSON kernel at its own root. It keeps packet metadata,
   event names, argument order and binary attachment declarations strict. Source
   preflight, independent Target proof and final assertions share this adapter.
-  `e2e_run/evidence/interaction/socketio` projects authenticated argument values
+  `engine-e2e-run/src/evidence/interaction/socketio` projects authenticated argument values
   for on-demand diagnosis within the existing private interaction evidence
   bounds; persisted reports retain no decrypted message bodies.
 

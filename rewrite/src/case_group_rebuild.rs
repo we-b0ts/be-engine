@@ -232,7 +232,7 @@ fn ensure_admin_idle(target_root: &Path) -> Result<()> {
             active.operation_id
         ),
         traffic_operation::TrafficOperationState::Stale(active) => anyhow::bail!(
-            "cannot rebuild case grouping while stale traffic operation {} requires `backend-rewrite recover`",
+            "cannot rebuild case grouping while stale Case Replay operation {} is registered",
             active.operation_id
         ),
     }

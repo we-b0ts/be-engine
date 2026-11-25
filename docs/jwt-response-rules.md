@@ -1,5 +1,9 @@
 # Signed JWT response rules
 
+This reference covers JWT response contracts and historical rule authoring. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 Current authoring uses one self-contained `response_jwt` effect in
 `traffic-policy/v3`. The same signature, stable-claim, nonce and time contract
 supports a JSON body pointer or one HTTP response header. For a signed OIDC

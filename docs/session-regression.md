@@ -36,30 +36,53 @@ Protocol adapters handle canonical transport maintenance locally. Replay
 validates the evidence for driver setup or cleanup before omitting the
 corresponding recorded exchanges from the required sequence.
 
-Set `recording_run_id` in `.traffic-e2e/regression.yaml` to the new recording
-directory name and run:
+Place the complete recording under
+`.traffic-e2e/local/artifacts/recordings/<run-id>/` in the Target repository.
+Set `recording_run_id` to its 14-digit directory name in
+`.traffic-e2e/regression.yaml`, or pass the global `--recording-run-id` option.
+Initialize the Target once with `be-replay init` and run:
 
 ```sh
-backend-rewrite --target-root /absolute/target session run
+be-replay --target-root /absolute/target run
+be-replay --target-root /absolute/target status
 ```
 
 The session starts the isolated Target and verifies from process launch.
 Session regression settings are limited to `recording_run_id` and
-`max_implementers`. The latter configures 1 to 16 implementation slots.
-The runner reports matched and total events. A failure stops event delivery and
-publishes the failed sequence and an evidence query. The following query pages
-through the original Source minute starting at sequence 182:
+`max_implementers`. The latter configures 1 to 16 implementation slots and
+defaults to 16.
+
+`status` reads the latest attempt for the selected recording and run key. Use
+the same `--run-key` on `run` and `status` when you select one explicitly.
+Pass `status --attempt-id <uuid>` to inspect a particular attempt.
+The response includes `recording_id`, `state`, `session` and `next`. State
+is `not_started`, `running`, `interrupted`, `failed` or `passed`.
+When an attempt exists, `session` provides its identity, event progress,
+report path and any error. Follow the returned status command while the attempt
+is running. For an interrupted attempt, use the returned run command to start
+a fresh full Replay of the same recording.
+
+An event failure stops delivery and returns the expected Source sequence.
+`next.event` selects that exact event. `next.events` queries Source context
+starting there. For example, page through the original Source minute starting
+at sequence 182:
 
 ```sh
-backend-rewrite --target-root /absolute/target session events --from-seq 182 --window-seconds 60
+be-replay --target-root /absolute/target events --from-seq 182 --window-seconds 60
 ```
 
 Use `--after-seq` with the same `--from-seq` and window to continue a page series.
-Repeat `--seq` to inspect the events referenced by one finding.
-Use `session dependency <seq>` for the protected request and result associated
-with a dependency admission. Use `session target --report <absolute-report> <id>`
-for the authenticated Target observation identified by that attempt.
-Use `session plan --findings <absolute-json-file>`
+Lower `--from-seq` when the related request precedes the failure. The default
+page hides server push notification lifecycle rows and includes client
+commands such as Redis `PUBLISH` and `SUBSCRIBE`. Add `--with-push-event` to
+show the push rows in a page. Repeat `--seq` to select exact events, including
+push rows. Replay still verifies the full recorded sequence. Use
+`events --payload` when analysis needs the protected primary HTTP payload.
+Use `be-replay dependency <seq>` for the protected request and result
+associated with a dependency admission. Use
+`be-replay target --report <absolute-report> <id>` for the authenticated
+Target observation identified by that attempt.
+Use `be-replay plan --findings <absolute-json-file>`
 to deduplicate reviewed findings and select independent implementations with
 `max_implementers`. Findings include the shared cause, summary, disposition,
 evidence basis, Source sequences, and proposed code paths. Findings that
@@ -95,9 +118,11 @@ The catalog labels the report. The replay workload is determined by the
 recording, including all selected ingress, startup, and background events.
 Each Session attempt starts at Source launch and matches the entire timeline.
 
-The session command reports recorded and verified counts per API. After all
+`be-replay run` reports recorded and verified counts per API. After all
 events pass in a session with API cases, it adds one regression to
 `.traffic-e2e/progress.yaml` and retains existing API history. A sealed recording
 contributes once across retries. The route labels used by the first successful
 publication remain in the history if the catalog changes later. Failed attempts
-and sessions without API cases retain their event reports.
+and sessions without API cases retain their event reports. Check
+`session.passed` for the Replay verdict and `progress_published` for publication.
+The run result reports API-count and progress-publication errors separately.

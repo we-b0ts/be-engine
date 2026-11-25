@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
-const REWRITE_BINARY_NAME: &str = "backend-rewrite";
+const REPLAY_BINARY_NAME: &str = "be-replay";
 const ENGINE_BINARY_NAME: &str = "traffic-e2e";
 
 pub fn executable() -> Result<PathBuf> {
@@ -59,7 +59,7 @@ fn companion_or_self(installed: PathBuf) -> Result<PathBuf> {
     };
     ensure!(
         engine.is_file(),
-        "backend-rewrite requires the sibling traffic-e2e binary at {}",
+        "{REPLAY_BINARY_NAME} requires the sibling {ENGINE_BINARY_NAME} binary at {}",
         engine.display()
     );
     Ok(engine)
@@ -71,7 +71,7 @@ fn installed_executable_path(current: &Path) -> PathBuf {
         .file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_suffix(" (deleted)"))
-        .filter(|name| matches!(*name, REWRITE_BINARY_NAME | ENGINE_BINARY_NAME))
+        .filter(|name| matches!(*name, REPLAY_BINARY_NAME | ENGINE_BINARY_NAME))
     {
         return current.with_file_name(name);
     }
@@ -79,7 +79,7 @@ fn installed_executable_path(current: &Path) -> PathBuf {
 }
 
 fn companion_engine_path(current: &Path) -> Option<PathBuf> {
-    (current.file_stem()?.to_str()? == REWRITE_BINARY_NAME).then(|| {
+    (current.file_stem()?.to_str()? == REPLAY_BINARY_NAME).then(|| {
         let mut file_name = ENGINE_BINARY_NAME.to_string();
         if let Some(extension) = current.extension().and_then(|value| value.to_str()) {
             file_name.push('.');
@@ -94,13 +94,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_rewrite_resolves_the_sibling_engine_binary() {
+    fn be_replay_resolves_the_sibling_engine_binary() {
         assert_eq!(
-            companion_engine_path(Path::new("/opt/bin/backend-rewrite")),
+            companion_engine_path(Path::new("/opt/bin/be-replay")),
             Some(PathBuf::from("/opt/bin/traffic-e2e"))
         );
         assert_eq!(
-            companion_engine_path(Path::new("C:/bin/backend-rewrite.exe")),
+            companion_engine_path(Path::new("C:/bin/be-replay.exe")),
             Some(PathBuf::from("C:/bin/traffic-e2e.exe"))
         );
     }
@@ -113,14 +113,14 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn replaced_coordinator_still_resolves_its_installed_companion() {
+    fn replaced_be_replay_still_resolves_its_installed_companion() {
         let root = tempfile::tempdir().unwrap();
         let engine = root.path().join(ENGINE_BINARY_NAME);
-        let coordinator = root.path().join("backend-rewrite (deleted)");
-        assert!(resolve_executable(&coordinator, std::process::id()).is_err());
+        let replay = root.path().join("be-replay (deleted)");
+        assert!(resolve_executable(&replay, std::process::id()).is_err());
         std::fs::write(&engine, "installed engine").unwrap();
         assert_eq!(
-            resolve_executable(&coordinator, std::process::id()).unwrap(),
+            resolve_executable(&replay, std::process::id()).unwrap(),
             engine
         );
     }

@@ -3054,7 +3054,7 @@ dependencies = [
  "tracing",
  "traffic-contract",
  "traffic-engine-config",
- "traffic-engine-e2erun",
+ "traffic-engine-e2e-run",
  "traffic-engine-environment",
  "traffic-engine-evidence",
  "traffic-engine-policy",
@@ -3135,7 +3135,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "traffic-engine-e2erun"
+name = "traffic-engine-e2e-run"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -4096,7 +4096,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "traffic-engine-config",
- "traffic-engine-e2erun",
+ "traffic-engine-e2e-run",
  "traffic-engine-environment",
  "traffic-engine-evidence",
  "traffic-engine-replay",

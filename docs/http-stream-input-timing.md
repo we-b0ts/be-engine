@@ -43,8 +43,8 @@ sequence. See [Replay timers](replay-timers.md).
 
 Standalone `traffic-e2e prepare`, `run-api` and `run` validate the current
 checkout, including the configured delivery base branch. Their execution does
-not edit Target implementation or enter a rewrite workflow. Managed
-backend-rewrite preparation and Replay retain their feature-branch checks.
+not edit Target implementation or enter a rewrite workflow. The historical
+Case coordinator enforced a work branch for preparation and Replay.
 
 An opt-in ignored engine regression can replay a real recording against an
 existing immutable production image when the current Target checkout has moved

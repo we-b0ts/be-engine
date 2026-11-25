@@ -1,5 +1,9 @@
 # Implementer evidence
 
+This reference covers Case implementer evidence and its historical coordinator interface. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 `backend-rewrite evidence --api /route` reads the assigned API's current
 failure evidence. Run it against the canonical Target root. It reads the saved
 Replay attempt and leaves the workflow at its current step.

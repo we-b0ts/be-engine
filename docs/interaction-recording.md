@@ -167,8 +167,9 @@ changing its meaning. WebSocket protocol-level ping/pong and upgrade probes keep
 their existing transport handling; this program controls Engine.IO text PONGs.
 `expected-response.json.interaction` contains Source output events and closure.
 The runner independently writes `actual-response-*.json.interaction`. HTTP method
-and route identity preserve existing grouping, `prepare`, `run-api`, `run` and
-backend-rewrite orchestration. Semantic dependencies remain in
+and route identity preserve existing grouping and the Case commands
+`traffic-e2e prepare`, `traffic-e2e run-api`, and `traffic-e2e run`.
+Semantic dependencies remain in
 `dependencies.jsonl`; debug wire data never substitutes for them.
 
 The input driver never reads expected outputs. It opens a fresh Target session,

@@ -1,5 +1,9 @@
 # MySQL driver interoperability
 
+This reference covers MySQL protocol behavior and historical Case diagnostics and rule authoring. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 SQL value matching supports one statement up to 8 MiB and 32,768 tokens,
 including recorded inline image/text values versus prepared parameters plus a
 bound identity. Configured templates retain their separate 64 KiB bound.

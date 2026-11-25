@@ -18,6 +18,19 @@ format: traffic-policy/v3
 rules: []
 ```
 
+For managed Source session regression, review the evidence for the generated
+time, ID, or token, update the applicable typed policy declaration, and verify
+by rerunning the selected recording with `backend-rewrite run`.
+`backend-rewrite plan --findings <file>` groups reviewed findings for repair.
+[Source session regression](session-regression.md)
+
+<details>
+<summary>Case policy contracts and historical coordinator authoring</summary>
+
+This reference describes policy-library capabilities and the former Case
+coordinator workflow. Its old plan/apply command examples identify historical
+interfaces.
+
 Declare decoded content once under `json.fields`. The same pointers cover
 HTTP requests/responses, SSE data and complete JSON values in MySQL, Redis and
 other supported carriers. Unknown encodings compare exact bytes. Native SQL
@@ -141,3 +154,5 @@ raw policy edits still invalidate a planned transaction. Protocol identity,
 finite inventory, lane/transaction order, claims, response delivery and termination
 remain owned by the existing replay adapters. Payload equality never creates
 permission to share, classify, renew or consume another exchange.
+
+</details>

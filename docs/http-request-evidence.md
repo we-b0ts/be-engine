@@ -1,5 +1,9 @@
 # HTTP dependency request evidence
 
+This reference covers Case HTTP dependency evidence. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 When an outbound HTTP or HTTPS request fails matching, begin with the grouped
 failure and representative evidence:
 

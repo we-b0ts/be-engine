@@ -1,5 +1,9 @@
 # Generated dependency request fields
 
+This reference covers dependency request contracts and historical Case rule authoring. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 Current JSON fields use the single global `json.fields` strategy. Scalar Redis
 values, bounded key formats, ordered commands and supported state permissions
 use `redis.keys` without resource/database declarations. Finite initialization

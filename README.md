@@ -2,7 +2,7 @@
 
 Rust binaries for traffic-based E2E contracts and backend rewrite
 orchestration. `traffic-e2e` owns recording, replay, and
-diagnostics; `backend-rewrite` owns the AI-facing migration workflow and uses
+diagnostics; `be-replay` owns the AI-facing migration workflow and uses
 the same `traffic_e2e` crate; `backend-rewrite-admin` owns explicit
 administrator repair outside ordinary AI workflows.
 
@@ -47,101 +47,39 @@ sparse registry.
 cargo build --release --bins
 ```
 
-This produces sibling `traffic-e2e`, `backend-rewrite`, and
-`backend-rewrite-admin` executables. Keep them together when installing or
-packaging them: detached rewrite verification actions delegate engine work to the
-sibling `traffic-e2e` binary.
+This produces sibling `traffic-e2e`, `be-replay`, and
+`backend-rewrite-admin` executables. Install them together so managed Replay can
+launch the companion `traffic-e2e` binary.
 
 ## Command Model
 
-Use `traffic-e2e` for direct traffic operations and `backend-rewrite` for
-migration orchestration:
+Initialize the Target once and place the complete sealed Source recording under
+`.traffic-e2e/local/artifacts/recordings/<run-id>/` in that repository. The
+initializer snapshots the selected Kubernetes or Docker Source runtime and
+sets up `.traffic-e2e/local/` for recordings, boot inputs, worktrees and runtime
+state. Use `.traffic-e2e/regression.yaml` to select `recording_run_id`, or set
+`--recording-run-id` explicitly for an invocation.
 
 ```bash
-traffic-e2e config init --source-pod <pod> --namespace <namespace>
-traffic-e2e record --source-workdir /app --data-root /data/traffic-e2e -- ./source
-traffic-e2e prepare --help
-traffic-e2e run-api --help
-backend-rewrite next
+be-replay --target-root /absolute/target init --source-pod <pod> --namespace <namespace>
+be-replay --target-root /absolute/target run
+be-replay --target-root /absolute/target status
 ```
 
-From a target repository root, the conventional initialization is simply
-`traffic-e2e config init --source-pod <pod> --namespace <namespace>`.
-Initialization snapshots the selected Kubernetes runtime once and adds
-`/.traffic-e2e/local/` to the target `.gitignore`; all non-versioned runtime
-data, including recordings, boot inputs, internal state, and rewrite
-worktrees, lives below that root.
+Each `run` verifies the whole Source timeline in an isolated Target, starting
+with startup and including concurrent HTTP, dependencies and shutdown. Use
+`status` to inspect the matching attempt. A failed run includes a Source `seq`
+and follow-up evidence queries. Use `events` for the timeline, `dependency` for
+a protected Source exchange, `target` for a retained Target observation, and
+`plan` to group reviewed findings. Use `events --with-push-event` to include
+server notifications in a timeline page. Rerun the same recording after
+integrating fixes. Use `--pretty` to display the JSON interactively.
+[Source session regression](docs/session-regression.md)
 
-For a backend migration, `backend-rewrite next` is the normal facade. It
-returns one argv-based action, automatically owns Prepare/E2E
-transitions, and exposes only bounded evidence queries. Direct `prepare`,
-`run-api` and report-oriented commands remain available to traffic
-operators and system maintainers.
-
-Workers build and run relevant tests as needed; ordinary worker/integration
-review checks Source rules, Replay isolation and delivery identity. Before the
-final full revalidation, the engine returns `pre_revalidation_review_required`.
-The integrator executes the supplied `review check --pre-revalidation
---worktree ...` once for the final candidate, including full format/tests/Clippy,
-then the coordinator publishes and admits that exact report. The skill does not
-require a duplicate Cargo suite. Ordinary review receipts cannot replace this
-final proof; relevant changes invalidate it, while progress-only publication can
-reuse matching admitted proof.
-
-Nonpassing focused E2E attempts reuse the active immutable standard cases.
-Recording is external to rewrite. Place completed batches in
-`.traffic-e2e/local/artifacts/recordings/<run-id>/`; use `recording_run_id` in
-`.traffic-e2e/regression.yaml` to pin a batch.
-Missing evidence returns an input requirement, never a recording executor.
-
-All rule effects use one source-controlled `traffic-policy/v2` document, named
-by `project.policy` (normally `.traffic-e2e/policy.yaml`). Bounded evidence
-returns available capabilities and a rule-discovery query. Inspect the Source
-facts, write a self-contained proposal, then use `backend-rewrite rule plan
---file RULES.yaml --evidence EVIDENCE_ID` and `rule apply PLAN_ID`. The plan
-expands the complete rules and reports whether they require fresh Replay,
-reclassification, or recording. Process-owned classification preserves the
-immutable recording; selectors that change bootstrap snapshots require fresh
-recording. See [unified rules](docs/unified-rule-contracts.md).
-
-Declare named resources and their physical field contracts once under `resources`,
-and API output fields under `responses`. New supported SQL shapes and Redis
-commands inherit those field contracts. Contextual and stateful effects remain
-in `rules`, referencing resources and field strategies where appropriate.
-Proof can inherit within its resource/response subtree or rule; plan/evidence
-contain fully expanded effective rules. See [resource fields](docs/resource-field-contracts.md).
-
-`backend-rewrite` emits one compact JSON object per command by default; use
-global `--pretty` for interactive inspection. Normal `next` and `status`
-responses contain only the bounded API-inventory summary. Query the full
-ordered per-API list explicitly with the read-only `backend-rewrite inventory`
-command.
-
-Representative evidence returns the exact immutable standard
-case directory and a structured response difference. Use that case as the
-efficient starting point for diagnosis; all generated files under
-`.traffic-e2e/local/artifacts/` remain available for read-only inspection when
-additional cases are useful.
-
-Dependency evidence is case-scoped. Replay publishes a bounded sidecar with
-dirty events clustered by protocol and endpoint, an exact representative case,
-and a compact expected/actual dependency difference. Source traffic observed
-before readiness is returned separately as reference context. Unused global
-traffic and target activity outside a case do not make a case dirty.
-
-Use `backend-rewrite case dependencies <case-dir>` to summarize one returned
-case by dependency target. Each target includes an exact `detail_command` that
-expands only bounded representative exchanges for that target. Redis key,
-argument, and response association is preserved; response previews are capped
-at 256 bytes with length and truncation metadata, and complete small Redis
-scalars also expose a decoded `response_value`. Memcached flags are not
-interpreted or returned.
-
-API path discovery retains `traffic-e2e config recorder ... plan|apply`.
-Managed policy changes use the unified `backend-rewrite rule` transaction;
-low-level grouping and report commands live
-under `traffic-e2e diagnose`. Standalone recording and replay, fixed-user target
-isolation, and host interception are implemented by the same Rust binary.
+`traffic-e2e` owns direct recording, replay, configuration and diagnostics.
+`be-replay startup` manages Target startup inputs.
+`backend-rewrite-admin` owns explicit administrator repair and Source snapshot
+replacement. [Development guide](docs/development.md)
 
 ## Run
 
@@ -168,15 +106,17 @@ automatically generated ID. Stop the container normally to finalize evidence.
 See [the recording guide](docs/recording.md) for container setup, persistent
 storage, rules and rewrite handoff.
 
-For dependency replay, install the binary and pass the case directory directly:
+Use the low-level Replay listener for standalone dependency diagnosis. Pass a
+sealed Source session to `--session-events`, or pass a prepared Case recording
+for Case diagnostics:
 
 ```bash
 cargo install --path .
 traffic-e2e --help
 traffic-e2e diagnose --help
+traffic-e2e replay --session-events path/to/recordings/<run-id>
 traffic-e2e replay path/to/case-dir
-traffic-e2e replay path/to/recordings/<run-id>
-traffic-e2e replay --api 'GET /api/widgets/*' path/to/recordings/<run-id>
+traffic-e2e replay --api 'GET /api/widgets/*' path/to/case-recording
 ```
 
 `--api` selects every published case whose recorded method and path belong to
@@ -184,13 +124,9 @@ the canonical API, including dynamic APIs whose cases span multiple member
 directories. Use repeatable `--case-id` only for an explicit diagnostic subset;
 the two selector forms are mutually exclusive.
 
-For runtime-generated UUIDs, timestamps, signed query fields, and reviewed
-response-comparison exemptions, keep a
-source-controlled `.traffic-e2e/policy.yaml` in the target project and pass it with
-`--policy`. Initialize it with `traffic-e2e config init --source-pod <pod>
---namespace <namespace>` from the target root; initialization, strategy application, and replay each
-validate the policy. See
-[Unified Rule Contracts](docs/unified-rule-contracts.md).
+For runtime-generated times, IDs and tokens, use the source-controlled
+`traffic-policy/v3` policy named by `project.policy`. To select it in direct
+`traffic-e2e replay`, pass `--policy`. [Traffic policy](docs/replay-policy.md)
 
 `traffic-e2e replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
@@ -285,31 +221,6 @@ recorder:
         headers: { x-record: "yes" }
 ```
 
-Acquisition, process ownership and value comparison share the policy named by
-`.traffic-e2e/project.yaml`:
-
-```yaml
-project:
-  policy: .traffic-e2e/policy.yaml
-```
-
-The initialized policy starts empty; each justified rule carries its own Source
-proof. For example, a source-proven route pattern is a capture effect:
-
-```yaml
-format: traffic-policy/v2
-rules:
-  - id: user-route
-    match: {}
-    effect:
-      kind: capture_http
-      source_revision: sha256:<64-hex-digits>
-      case_paths: [/api/users/*/xxx]
-    proof:
-      source: src/routes.rs:users
-      fact: The route registration has one dynamic user segment.
-```
-
 `recorder.http_gateway.exclude_rules` uses the same host, method, path-prefix, and
 exact-header conditions as ordinary rules. Exclusions are evaluated first;
 matching traffic uses the configured fallback and does not create a case. If
@@ -324,75 +235,13 @@ Select Source recording traffic at ingress. `record` preserves configured
 include/exclude rules and has no per-invocation API selector. The default rule
 matches every method and path.
 
-`[http_gateway.ready]` is an optional active readiness probe against
-`matched_upstream`. When enabled, the recorder sends `GET path` every
-`interval_ms` milliseconds, defaulting to once per second. When the response
-status equals `success_status`, the recorder waits
-`recording.post_ready_settle_ms` milliseconds before closing the shared
-bootstrap dependency window and admitting the first case. The default is
-10 seconds. Dependencies observed during this fixed settle interval remain
-bootstrap dependencies, and matching requests continue to use the configured
-fallback. Before case admission opens, Recorder waits for accepted bootstrap
-events to finish and flushes their JSONL files; the potentially large bootstrap
-summary is generated only when the run finishes. The probe itself is not
-recorded as a case. If this section is disabled, the settle interval does not
-apply and the bootstrap window still closes when the first matched gateway
-case is reserved.
-
-Each recorder process creates one run directory under
-`artifacts.root_dir/recordings` named `YYYYMMDDHHMMSS`. Matched gateway requests
-publish case directories inside the run after the case is complete and valid:
-
-```text
-<run-id>/traffic.jsonl
-<run-id>/recording-run.json
-<run-id>/errors.jsonl
-<run-id>/bootstrap-dependencies.jsonl
-<run-id>/bootstrap-dependencies-summary.json
-<run-id>/bootstrap-dependencies-debug.jsonl
-<run-id>/apis/<api-directory>/<case-id>/request.json
-<run-id>/apis/<api-directory>/<case-id>/expected-response.json
-<run-id>/apis/<api-directory>/<case-id>/dependencies.jsonl
-<run-id>/apis/<api-directory>/<case-id>/dependencies-summary.json
-<run-id>/apis/<api-directory>/<case-id>/dependencies-debug.jsonl
-<run-id>/failed/<api-directory>/<case-id>/
-```
-
-`uri-group` is built from the full request URI path joined by hyphens, so
-`/api/users/list` is recorded under `api-users-list`. To group dynamic paths,
-configure `case_path_patterns`. `*` matches exactly one non-empty path segment.
-A final `**` is a catch-all matching one or more remaining path segments. For
-example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
-`api-users-wildcard-xxx` when the global HTTP policy has
-`case_path_patterns = ["/api/users/*/xxx"]`.
-
-For replay-time AI feedback, keep `capture_http` effects in the unified policy. Use
-`traffic-e2e config recorder apply case-path-patterns`; the command plans and
-validates against current evidence before atomically updating that policy while preserving other rules and proofs. Feedback is add-only even for a
-collection-wide case source; an existing pattern is never deleted merely
-because current cases omit it. Correct a specifically proven-invalid
-AI-managed pattern only through the explicit correction flags described in
-[docs/development.md](docs/development.md). Use
-`traffic-e2e diagnose case-group ensure` to persist exact static or dynamic API
-membership before migration; it writes a
-manifest outside the recording source and never moves or edits published
-cases.
-
-`request.json` stores the matched gateway request. `expected-response.json`
-stores the matched upstream response; if the response body has
-`Content-Encoding: gzip` or `deflate`, it is decoded before being written.
-Incomplete cases, including truncated request or expected response bodies, are
-not published into `apis/<api-directory>/<case-id>`. They are moved under
-`<run-id>/failed/...` with `recording-error.json`. A cleanly finalized run
-remains `completed`; `failed_cases` and `errors` describe the rejected
-individual cases, while run-level `failed` is reserved for Recorder failure.
-Fix the recording limit or recorder behavior and record again; do not consume
-failed cases as replay fixtures.
-When `block_known_writes` rejects a dependency during an active case, the
-payload-free `readonly_rejection` is retained in the failed case's
-`dependencies.jsonl` and the complete case is moved under `failed/`. The
-rejected request never reaches its upstream and the invalid case is not
-published for replay.
+With `traffic-e2e record`, the readiness probe opens ingress once Source
+returns the configured status. The recorder seals `events.tsv`,
+`dependency-manifest.json`, dependency line and location data, and payload
+segments together under `artifacts.root_dir/recordings/<run-id>/`. The
+`apis.yaml` catalog labels Session Replay results by method and route. HTTP
+Gateway rules select the captured ingress workload.
+[Recording artifacts](docs/recording.md) · [Source session regression](docs/session-regression.md)
 
 MySQL writes can be allowed narrowly under `block_known_writes` with an exact
 recording access rule:

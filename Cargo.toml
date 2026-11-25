@@ -10,7 +10,7 @@ members = [
     "engine",
     "engine-config",
     "engine-e2e-contract",
-    "engine-e2erun",
+    "engine-e2e-run",
     "engine-environment",
     "engine-evidence",
     "engine-policy",
@@ -67,7 +67,7 @@ default-members = [
     "engine",
     "engine-config",
     "engine-e2e-contract",
-    "engine-e2erun",
+    "engine-e2e-run",
     "engine-environment",
     "engine-evidence",
     "engine-policy",
@@ -130,7 +130,7 @@ traffic-e2e-app = { path = "e2e-app" }
 traffic-engine = { path = "engine" }
 traffic-engine-config = { path = "engine-config" }
 traffic-engine-e2e-contract = { path = "engine-e2e-contract" }
-traffic-engine-e2erun = { path = "engine-e2erun" }
+traffic-engine-e2e-run = { path = "engine-e2e-run" }
 traffic-engine-environment = { path = "engine-environment" }
 traffic-engine-evidence = { path = "engine-evidence" }
 traffic-engine-policy = { path = "engine-policy" }

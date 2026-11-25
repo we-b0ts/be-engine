@@ -1,5 +1,9 @@
 # Redis response time-shift rules
 
+This reference covers historical Case Redis rule behavior. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
 > syntax. Use the self-contained `traffic-policy/v3` rules, `project.policy`,
@@ -18,9 +22,7 @@ JWT inbound request transformation and from assertion comparison rules.
 
 There is deliberately no automatic hint or candidate detector. A field name,
 integer magnitude, elapsed time or unmatched GET/HGET does not establish expiry.
-Workers consult the scenario index in
-[API implementer diagnosis](../plugins/ai-software-engineering/skills/backend-rewrite/references/api-implementer-diagnosis.md#rule-discovery-from-source-diagnosis)
-and trace cache initialization, expiry, refresh and downstream consumers.
+Trace cache initialization, expiry, refresh and downstream consumers.
 For example, case 1 reads a token, case 2 reuses it during recording, but the
 same code refetches during Replay because the recorded timestamp is now stale.
 The field to transform is in case 1's already matched response.

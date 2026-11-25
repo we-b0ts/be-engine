@@ -33,7 +33,7 @@ const PRODUCTION_FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[
         rule: "traffic_e2e_environment",
         marker: "traffic_e2e_",
         reason: "code depends on a traffic-e2e-owned environment variable",
-        required_change: "manage the application-owned value through backend-rewrite startup env",
+        required_change: "manage the application-owned value through be-replay startup env",
     },
     ForbiddenMarker {
         rule: "fake_ip_range",

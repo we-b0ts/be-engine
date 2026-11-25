@@ -12,7 +12,7 @@ pub fn load_project_config(target_root: &Path, config_path: &Path) -> Result<Pro
     }
     if !config_path.exists() {
         bail!(
-            "{} is missing; from the target repository run `backend-rewrite init \
+            "{} is missing; from the target repository run `be-replay init \
              --source-pod <pod> --namespace <namespace>`",
             config_path.display()
         );

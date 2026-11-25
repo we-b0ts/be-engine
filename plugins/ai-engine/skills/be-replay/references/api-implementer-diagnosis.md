@@ -1,0 +1,40 @@
+# API Implementer Diagnosis
+
+Start from the assigned finding, recording ID, expected sequence, and Target
+attempt. Inspect the exact Source event, dependency admission, and
+authenticated Target observation when available. Use the earlier events for
+startup, background work, and concurrent inputs that affect this event. Later
+Source events provide context for investigation and receive verification credit
+when a Replay reaches them. See [evidence queries](session-regression.md#diagnose-the-first-failure).
+
+## Diagnose the failure
+
+| Evidence | Reference |
+| --- | --- |
+| Dependency mismatch, missing traffic, or protocol compatibility | [Dependency diagnosis](api-implementer-dependency-diagnosis.md) |
+| Startup, local cache, rejected egress, or incomplete Replay | [Runtime diagnosis](api-implementer-runtime-diagnosis.md) |
+| Generated time, ID, or token | [Rule diagnosis](api-implementer-rule-diagnosis.md) |
+
+An observed rejection may interrupt a response and prevent later dependency
+calls. Trace the earliest event that explains the failure. For a response
+status mismatch, start with authentication, preconditions, configuration, and
+error mapping. Trace the response body through its construction, application
+state or cache, and the dependency behind it. Distinguish JSON null, absent
+fields, unavailable payloads, and non-JSON responses. For array order, check
+the Source ordering contract and the Target producer.
+
+If required data is unavailable, give the coordinator the precise missing
+observation and the Source code that needs it. For a known engine gap, include
+the unsupported behavior, exact evidence, and change required. Keep Target
+behavior compatible with production.
+
+## Rule Discovery From Source Diagnosis
+
+Trace a suspected dynamic value to the Source generator or validator. Return
+the exact field or argument, observed sequences, and Source reference. Check
+applicability in the [rule evidence contract](rule-policy.md) and
+[rule diagnosis](api-implementer-rule-diagnosis.md).
+
+For a code repair, return the proven cause, Source citations, related sequences,
+affected paths, focused checks, and exact commit. See
+[implementation delivery](api-implementer-delivery.md).

@@ -34,3 +34,19 @@ pub struct E2eEventSessionResult {
     pub progress: PathBuf,
     pub report: PathBuf,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eEventSessionState {
+    NotStarted,
+    Running,
+    Interrupted,
+    Failed,
+    Passed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct E2eEventSessionStatus {
+    pub state: E2eEventSessionState,
+    pub attempt: Option<E2eEventSessionResult>,
+}

@@ -1,5 +1,9 @@
 # Rule candidate pre-matching
 
+This reference covers Case Replay pre-matching and evidence. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 Managed Replay defaults to `project.replay.pre_match: true`. A supported
 dependency request difference can use a temporary rule hypothesis to continue
 the Case and collect later differences. The policy and recording remain

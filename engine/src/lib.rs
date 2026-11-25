@@ -1,10 +1,10 @@
-pub use traffic_engine_e2erun::{CleanupFuture, ExecutionDriver, ExecutionFuture, execute};
+pub use traffic_engine_e2e_run::{CleanupFuture, ExecutionDriver, ExecutionFuture, execute};
 pub use traffic_engine_evidence::coordination;
 mod replay_exports;
 pub use replay_exports::*;
 pub use traffic_engine_config::access_policy;
 pub use traffic_engine_config::breeze;
-pub use traffic_engine_e2erun::build_info;
+pub use traffic_engine_e2e_run::build_info;
 pub use traffic_engine_environment::command_output;
 pub use traffic_engine_evidence::api_trigger;
 pub use traffic_engine_evidence::artifact_owner;
@@ -29,12 +29,13 @@ pub fn prepare_dependency_index(source: &std::path::Path) -> anyhow::Result<Depe
 }
 pub use crate::replay::GlobalDependencyPage;
 pub use e2e_run::{
-    E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, run_e2e_event_session,
+    E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, E2eEventSessionState,
+    E2eEventSessionStatus, run_e2e_event_session, status_e2e_event_session,
 };
 pub use protocols::replay::report::artifacts::read_global_dependency_page;
 pub use traffic_engine_config::json_value;
-pub use traffic_engine_e2erun::e2e_run;
-pub use traffic_engine_e2erun::execution_identity;
+pub use traffic_engine_e2e_run::e2e_run;
+pub use traffic_engine_e2e_run::execution_identity;
 pub use traffic_engine_environment::engine_binary;
 pub use traffic_engine_environment::internal_runtime;
 pub use traffic_engine_evidence::attribution_defaults;
@@ -46,7 +47,7 @@ pub use traffic_engine_recording::interaction;
 
 pub use traffic_engine_config::mysql;
 pub use traffic_engine_config::path_pattern;
-pub use traffic_engine_e2erun::platform;
+pub use traffic_engine_e2e_run::platform;
 pub use traffic_engine_recording::local_interception;
 pub use traffic_engine_recording::network_probe;
 pub mod policy;
@@ -206,7 +207,7 @@ pub use startup::{
     startup_environment_exists, validate_startup_environment,
 };
 pub use tls::MitmCa;
-pub use traffic_engine_e2erun::TargetImage;
+pub use traffic_engine_e2e_run::TargetImage;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use traffic_engine_recording::test_support;

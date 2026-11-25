@@ -264,7 +264,7 @@ pub(crate) fn lock_admin_source_upgrade(target_root: &Path) -> Result<AdminSourc
             active.operation_id
         ),
         traffic_operation::TrafficOperationState::Stale(active) => anyhow::bail!(
-            "cannot upgrade the source snapshot while stale traffic operation {} requires `backend-rewrite recover`",
+            "cannot upgrade the source snapshot while stale Case Replay operation {} is registered",
             active.operation_id
         ),
     }

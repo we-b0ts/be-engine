@@ -113,7 +113,7 @@ fn cached_build_script_uses_runtime_checkout_for_revision_and_git_watches() {
         "{output}"
     );
 
-    let member = current.join("engine-e2erun");
+    let member = current.join("engine-e2e-run");
     std::fs::create_dir_all(member.join("src")).unwrap();
     let engine = current.join("engine");
     std::fs::create_dir(&engine).unwrap();
@@ -121,12 +121,12 @@ fn cached_build_script_uses_runtime_checkout_for_revision_and_git_watches() {
         "Cargo.toml",
         "Cargo.lock",
         "build.rs",
-        "engine-e2erun/Cargo.toml",
+        "engine-e2e-run/Cargo.toml",
     ] {
         std::fs::write(current.join(name), "").unwrap();
     }
     let output = run_build_script(&mut cli);
-    for name in ["Cargo.toml", "Cargo.lock", "build.rs", "engine-e2erun/src"] {
+    for name in ["Cargo.toml", "Cargo.lock", "build.rs", "engine-e2e-run/src"] {
         assert!(
             output
                 .lines()
@@ -135,7 +135,7 @@ fn cached_build_script_uses_runtime_checkout_for_revision_and_git_watches() {
             "{output}"
         );
     }
-    let mut runner = build_script(&binary, &member, &compiled, "traffic-engine-e2erun");
+    let mut runner = build_script(&binary, &member, &compiled, "traffic-engine-e2e-run");
     let output = run_build_script(&mut runner);
     assert_eq!(watched_workspace_paths(&output, &current), ["build.rs"]);
     assert!(

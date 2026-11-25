@@ -82,7 +82,7 @@ fi
 binary_dir="${ENGINE_BIN_DIR:-$cargo_target_dir/release}"
 staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/traffic-e2e-engine.XXXXXX")"
 trap 'rm -rf -- "$staging_dir"' EXIT
-for binary in traffic-e2e backend-rewrite backend-rewrite-admin; do
+for binary in traffic-e2e be-replay backend-rewrite-admin; do
   executable="$binary_dir/$binary"
   [[ -x "$executable" ]] || fail "Release executable not found: $executable"
   version="$("$executable" --version)"
