@@ -1,5 +1,6 @@
 //! Bounded payload decoding with typed values and lossless protocol remainders.
 mod projection;
+pub(crate) use projection::project as project_value;
 pub use projection::restore as restore_projection;
 mod providers;
 mod view;

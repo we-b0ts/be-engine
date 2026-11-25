@@ -59,6 +59,13 @@ pub trait DocumentPolicy: Send + Sync {
     ) -> Result<DocumentPolicyPreparation> {
         self.prepare_source(source.logical())
     }
+    /// Both views of a JSON document expose the same concrete field paths.
+    fn prepare_json_source(
+        &self,
+        source: &LogicalProjection<'_>,
+    ) -> Result<DocumentPolicyPreparation> {
+        self.prepare_projected_source(source)
+    }
     fn compare(
         &self,
         source: &traffic_value::Value,
@@ -90,6 +97,14 @@ pub trait PreparedDocumentComparison: Send + Sync {
     /// All selected comparison rules are independent of the live Target clocks.
     fn clock_independent(&self) -> bool {
         false
+    }
+
+    fn prepare_delivery(
+        &self,
+        source: &Value,
+        policy: &dyn DocumentPolicy,
+    ) -> Result<Option<Box<dyn PreparedDocumentDelivery>>> {
+        policy.prepare_delivery(source)
     }
 
     fn compare(
@@ -260,7 +275,7 @@ impl PreparedMessage {
                     }
                     _ => decode(&plan, &codec, value)?,
                 };
-                let prepared = policy.prepare_projected_source(&source.projection())?;
+                let prepared = prepare_document(policy.as_ref(), &codec, &source)?;
                 if prepared.paths.is_empty() {
                     continue;
                 }
@@ -279,7 +294,7 @@ impl PreparedMessage {
                 );
             }
             for value in values.values_mut().filter(|value| !value.fields.is_empty()) {
-                let prepared = policy.prepare_projected_source(&value.source.projection())?;
+                let prepared = prepare_document(policy.as_ref(), &value.codec, &value.source)?;
                 value.pointers.extend(prepared.paths);
                 value.prepared_comparison = prepared.comparison;
             }
@@ -544,6 +559,19 @@ impl PreparedMessage {
             "derived native values violate their field contracts"
         );
         Ok((rendered, comparison))
+    }
+}
+
+fn prepare_document(
+    policy: &dyn DocumentPolicy,
+    codec: &Codec,
+    source: &DecodedDocument,
+) -> Result<DocumentPolicyPreparation> {
+    let projected = source.projection();
+    if *codec == Codec::Json {
+        policy.prepare_json_source(&projected)
+    } else {
+        policy.prepare_projected_source(&projected)
     }
 }
 

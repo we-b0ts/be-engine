@@ -12,7 +12,7 @@ impl<'a> LogicalProjection<'a> {
     pub fn new(logical: &'a traffic_value::Value) -> serde_json::Result<Self> {
         Ok(Self {
             logical,
-            json: Cow::Owned(serde_json::to_value(logical)?),
+            json: Cow::Owned(crate::codec::project_value(logical)?),
         })
     }
 
@@ -64,7 +64,7 @@ pub fn compare_projected_logical_all(
     metadata: &dyn RuleMetadata,
 ) -> Comparison {
     let target_projection = (!std::ptr::eq(source.logical, target))
-        .then(|| serde_json::to_value(target))
+        .then(|| crate::codec::project_value(target))
         .transpose();
     let Ok(target_projection) = target_projection else {
         return invalid_projection();

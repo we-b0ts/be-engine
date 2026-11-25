@@ -6,7 +6,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Map, Value};
 
 use super::FormatHost;
-use crate::fields::{GlobalField, GlobalIdentityFormat, GlobalTemplateFormat};
+use crate::fields::{GlobalField, GlobalIdentityFormat, GlobalTemplateFormat, MatchedFormatField};
 use traffic_contract::{
     compare::{LeafContext, LeafObservations},
     identity::IdentityPair,
@@ -132,6 +132,26 @@ pub fn selected<'a>(
             if let Some(document) = Document::select(value, formats, plan.policies())? {
                 selected.push((pointer, document));
             }
+        }
+    }
+    Ok(selected)
+}
+
+pub fn selected_at_matches<'a>(
+    plan: &'a dyn FormatHost,
+    source: &Value,
+    matched: &[MatchedFormatField],
+) -> Result<Vec<(String, Document<'a>)>> {
+    let mut selected = Vec::new();
+    for field in matched {
+        let GlobalField::Template { formats } = &plan.fields()[&field.pattern] else {
+            continue;
+        };
+        let value = source
+            .pointer(&field.pointer)
+            .context("template field disappeared")?;
+        if let Some(document) = Document::select(value, formats, plan.policies())? {
+            selected.push((field.pointer.clone(), document));
         }
     }
     Ok(selected)

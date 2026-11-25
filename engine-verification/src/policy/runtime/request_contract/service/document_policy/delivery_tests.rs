@@ -184,3 +184,46 @@ fn prefetch_defers_clock_sensitive_document_rules() {
         );
     }
 }
+
+#[test]
+fn prepared_json_reuses_native_matches_with_the_same_comparison_results() {
+    let document = GlobalDocumentPolicy::new(owner(), clock(1000));
+    let source = serde_json::from_value(json!({
+        "session_id": "id-aaaa",
+        "created_at": 1010,
+        "link": "wss://example.test/session/id-aaaa",
+        "url": "https://example.test/path?session_id=id-aaaa"
+    }))
+    .unwrap();
+    let projection = LogicalProjection::new(&source).unwrap();
+    let scanned = document.prepare_projected_source(&projection).unwrap();
+    let matched = document.prepare_json_source(&projection).unwrap();
+    assert_eq!(scanned.paths, matched.paths);
+    let scanned = scanned.comparison.unwrap();
+    let matched = matched.comparison.unwrap();
+    assert_eq!(scanned.clock_independent(), matched.clock_independent());
+    for (link, passes) in [
+        ("wss://example.test/session/id-bbbb", true),
+        ("wss://example.test/session/corrupt", false),
+    ] {
+        let target = serde_json::from_value(json!({
+            "session_id": "id-bbbb",
+            "created_at": 2010,
+            "link": link,
+            "url": "https://example.test/path?session_id=id-bbbb"
+        }))
+        .unwrap();
+        let expected = scanned
+            .compare_projected(&projection, &target, &[], clock(2000))
+            .unwrap();
+        let actual = matched
+            .compare_projected(&projection, &target, &[], clock(2000))
+            .unwrap();
+        assert_eq!(actual.passed(), passes, "{:?}", actual.differences);
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        assert_eq!(actual.identity_pairs(), expected.identity_pairs());
+    }
+}

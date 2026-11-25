@@ -1,11 +1,16 @@
 //! Retain Source delivery field selection for the live identity owner.
 use super::super::super::global_value::ResolvedRootIdentities;
-use super::{GlobalDocumentPolicy, RequestContracts, policy, retained_fields};
+use super::{
+    GlobalDocumentPolicy, PreparedJson, RequestContracts, policy, retained_fields,
+    retained_native_matches,
+};
 use anyhow::Result;
 use serde_json::Value;
 use std::{borrow::Cow, mem::size_of, sync::Arc};
 use traffic_contract::{compare::AnchorClocks, identity::IdentityDecision, rule::FieldContract};
 use traffic_policy_execution::global;
+use traffic_policy_value::fields::{FieldOrigin, MatchedFormatField, SelectedGlobalField};
+use traffic_policy_value::formats::FormatHost;
 use traffic_policy_value::{PreparedDeliveryGuard, PreparedDocumentDelivery};
 
 pub(super) fn prepare(
@@ -16,6 +21,65 @@ pub(super) fn prepare(
     let context = crate::value_contract::execution_context();
     let time_fields =
         global::time_delivery_fields(&context, source, global_policy, document.clocks)?;
+    let identities = global_policy.identity_fields(source)?;
+    finish_preparation(
+        document.owner.clone(),
+        document.clocks,
+        source,
+        time_fields,
+        identities,
+        None,
+    )
+}
+
+pub(super) fn prepare_matched(
+    owner: Arc<RequestContracts>,
+    clocks: AnchorClocks,
+    source: &Value,
+    selected: &[SelectedGlobalField],
+    json: &PreparedJson,
+) -> Result<Option<Box<dyn PreparedDocumentDelivery>>> {
+    let global_policy = policy(&owner);
+    let time_fields = if global_policy.fields.is_empty() {
+        None
+    } else {
+        global::prepared_time_delivery_fields(
+            &crate::value_contract::execution_context(),
+            source,
+            clocks,
+            json.delivery_times.clone(),
+        )
+    };
+    let paths = selected
+        .iter()
+        .filter(|field| field.origin == FieldOrigin::Declared)
+        .map(|field| (field.pattern.as_str(), field.pointer.as_str()))
+        .chain(
+            json.native
+                .iter()
+                .map(|field| (field.pattern.as_str(), field.pointer.as_str())),
+        );
+    let identities = global_policy
+        .field_plan()
+        .identity_fields_at_matches(source, paths)?;
+    finish_preparation(
+        owner,
+        clocks,
+        source,
+        time_fields,
+        identities,
+        Some(json.native.clone()),
+    )
+}
+
+fn finish_preparation(
+    owner: Arc<RequestContracts>,
+    clocks: AnchorClocks,
+    source: &Value,
+    time_fields: Option<Vec<SelectedGlobalField>>,
+    identities: Vec<(String, FieldContract)>,
+    native: Option<Vec<MatchedFormatField>>,
+) -> Result<Option<Box<dyn PreparedDocumentDelivery>>> {
     let time_bytes = match &time_fields {
         Some(fields) => {
             let Some(bytes) = retained_fields(fields, fields.capacity()) else {
@@ -25,20 +89,17 @@ pub(super) fn prepare(
         }
         None => 0,
     };
-    let identities = global_policy.identity_fields(source)?;
-    let identities = match document
-        .owner
-        .prefetch_root_identities(source, &identities)?
-    {
+    let identities = match owner.prefetch_root_identities(source, &identities)? {
         Some(committed) => DeliveryIdentities::Committed(committed),
         None => DeliveryIdentities::Selected(identities),
     };
     Ok(Some(Box::new(DeliveryFields {
-        owner: document.owner.clone(),
-        clocks: document.clocks,
+        owner,
+        clocks,
         time_fields,
         time_bytes,
         identities,
+        native,
     })))
 }
 
@@ -48,6 +109,7 @@ struct DeliveryFields {
     time_fields: Option<Vec<traffic_policy_value::fields::SelectedGlobalField>>,
     time_bytes: usize,
     identities: DeliveryIdentities,
+    native: Option<Vec<MatchedFormatField>>,
 }
 
 enum DeliveryIdentities {
@@ -78,7 +140,10 @@ impl DeliveryIdentities {
 
 impl PreparedDocumentDelivery for DeliveryFields {
     fn retained_bytes(&self) -> usize {
-        size_of::<Self>() + self.identities.retained_bytes() + self.time_bytes
+        size_of::<Self>()
+            + self.identities.retained_bytes()
+            + self.time_bytes
+            + self.native.as_ref().map_or(0, retained_native_matches)
     }
 
     fn clock_independent(&self) -> bool {
@@ -143,17 +208,25 @@ impl DeliveryFields {
         let global = policy(&self.owner);
         let (identity, _) = match &self.identities {
             DeliveryIdentities::Committed(committed) => {
-                self.owner.translate_resolved_identities_cow(
+                self.owner.translate_resolved_identities_at_matches(
                     scope,
                     source,
                     delivered,
                     global,
                     committed.clone(),
+                    self.native.as_deref(),
                 )?
             }
-            DeliveryIdentities::Selected(selected) => self
-                .owner
-                .translate_selected_identities_cow(scope, source, delivered, global, selected)?,
+            DeliveryIdentities::Selected(selected) => {
+                self.owner.translate_selected_identities_at_matches(
+                    scope,
+                    source,
+                    delivered,
+                    global,
+                    selected,
+                    self.native.as_deref(),
+                )?
+            }
         };
         Ok(Some(identity))
     }

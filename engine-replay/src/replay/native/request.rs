@@ -102,6 +102,16 @@ pub struct ResponsePlan {
     pub identity: IdentityDecision,
 }
 
+impl ResponsePlan {
+    fn from_packet(packet: stored::PacketDelivery) -> Self {
+        Self {
+            output: Box::new(traffic_protocol::output::SingleOutput::new(packet.bytes)),
+            comparison: packet.comparison,
+            identity: packet.identity,
+        }
+    }
+}
+
 impl Inventory {
     pub fn render_response(
         &self,
@@ -120,34 +130,44 @@ impl Inventory {
         loaded: &mut LoadedResponse,
         storage: &super::StorageDelivery,
     ) -> Result<(ResponsePlan, bool)> {
-        if let Some(source) = &mut loaded.source {
-            self.contracts.observe_source_comparison(&Comparison {
-                evaluated: std::mem::take(&mut source.observed_rules),
-                ..Comparison::default()
-            });
-            if let Some(packet) = source.packet.take()
-                && self.event_session
-                && storage.is_empty()
-                && packet.is_current(self.contracts.as_ref(), Self::EVENT_SESSION_VALUE_SCOPE)
-            {
-                return Ok((
-                    ResponsePlan {
-                        output: Box::new(traffic_protocol::output::SingleOutput::new(packet.bytes)),
-                        comparison: packet.comparison,
-                        identity: packet.identity,
-                    },
-                    true,
-                ));
+        match &mut loaded.kind {
+            stored::LoadedResponseKind::Stable(source) => {
+                if self.owns_stable_source(index, source)
+                    && storage.is_empty()
+                    && let Some(packet) = source.packet.take()
+                {
+                    self.observe_prepared_rules(std::mem::take(&mut source.observed_rules));
+                    return Ok((ResponsePlan::from_packet(packet), true));
+                }
+                // A compact packet belongs to one response in one Session.
+                // The normal path still works if a caller cannot reuse it.
+                let response = &self.core.exchanges[index].native.response;
+                let decoded = response.stored().map(|stored| stored.load()).transpose()?;
+                self.render_response(index, observed, decoded.as_deref(), storage)
+                    .map(|plan| (plan, false))
+            }
+            stored::LoadedResponseKind::Decoded { encoder, source } => {
+                if let Some(source) = source {
+                    self.observe_prepared_rules(std::mem::take(&mut source.observed_rules));
+                    if let Some(packet) = source.packet.take()
+                        && self.event_session
+                        && storage.is_empty()
+                        && packet
+                            .is_current(self.contracts.as_ref(), Self::EVENT_SESSION_VALUE_SCOPE)
+                    {
+                        return Ok((ResponsePlan::from_packet(packet.delivery), true));
+                    }
+                }
+                self.render_loaded_response(
+                    index,
+                    observed,
+                    Some(encoder.as_ref()),
+                    source.as_ref(),
+                    storage,
+                )
+                .map(|plan| (plan, false))
             }
         }
-        self.render_loaded_response(
-            index,
-            observed,
-            Some(loaded.encoder.as_ref()),
-            loaded.source.as_ref(),
-            storage,
-        )
-        .map(|plan| (plan, false))
     }
 
     fn render_loaded_response(

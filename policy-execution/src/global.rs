@@ -240,6 +240,13 @@ pub fn prepare_projected_fields(
 ) -> Result<PreparedGlobalFields> {
     let selected = plan.field_plan().select_projected_fields(source, clocks)?;
     let native = traffic_policy_value::formats::checks(plan, source.json())?;
+    Ok(bind_prepared_fields(selected, &native))
+}
+
+pub fn bind_prepared_fields(
+    selected: Vec<SelectedGlobalField>,
+    native: &traffic_policy_value::formats::FormatChecks<'_>,
+) -> PreparedGlobalFields {
     let paths = selected
         .iter()
         .map(|field| field.pointer.clone())
@@ -255,11 +262,11 @@ pub fn prepare_projected_fields(
                     | FieldContract::Unordered
             )
         });
-    Ok(PreparedGlobalFields {
+    PreparedGlobalFields {
         paths,
         selected,
         clock_independent,
-    })
+    }
 }
 
 pub fn compare_fields(
@@ -319,6 +326,21 @@ pub fn compare_projected_fields(
         }
     };
     let native = traffic_policy_value::formats::checks(plan, source.json())?;
+    Ok(compare_selected_fields(
+        context, source, target, fields, selected, &native, clocks,
+    ))
+}
+
+/// Reuse both ordinary contracts and native verifiers bound to the immutable Source.
+pub fn compare_selected_fields(
+    context: &ExecutionContext<'_>,
+    source: &LogicalProjection<'_>,
+    target: &traffic_value::Value,
+    fields: &[Field<'_>],
+    selected: &[SelectedGlobalField],
+    native: &traffic_policy_value::formats::FormatChecks<'_>,
+    clocks: AnchorClocks,
+) -> Comparison {
     let fields = field_composition::append(source.json(), fields.to_vec(), selected);
     let mut compared = traffic_contract::compare::compare_projected_logical_all(
         source,
@@ -333,7 +355,7 @@ pub fn compare_projected_fields(
     compared
         .evaluated
         .extend(selected.iter().map(|field| field.rule_id.into()));
-    Ok(compared)
+    compared
 }
 
 /// Reuse the ordinary strict remainder and authored owners with independently
@@ -557,6 +579,17 @@ pub fn time_delivery_fields(
         .field_plan()
         .selected_delivery_fields_with_clocks(source, clocks)?;
     selected.retain(|field| field.contract.time().is_some());
+    Ok(prepared_time_delivery_fields(
+        context, source, clocks, selected,
+    ))
+}
+
+pub fn prepared_time_delivery_fields(
+    context: &ExecutionContext<'_>,
+    source: &Value,
+    clocks: AnchorClocks,
+    selected: Vec<SelectedGlobalField>,
+) -> Option<Vec<SelectedGlobalField>> {
     if selected.is_empty()
         && traffic_contract::compare::compare_all(
             source,
@@ -570,9 +603,9 @@ pub fn time_delivery_fields(
         )
         .passed()
     {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(selected))
+    Some(selected)
 }
 
 fn materialize_selected<R: ValueRule + ?Sized>(

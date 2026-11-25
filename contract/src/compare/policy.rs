@@ -3,6 +3,7 @@ use std::borrow::Cow;
 
 use super::*;
 use anyhow::{Context, Result, ensure};
+use serde::Deserialize;
 use traffic_policy::{Evaluation, EvaluationHost, ValuePair};
 
 struct PolicyHost<'a, 'rules> {
@@ -10,6 +11,8 @@ struct PolicyHost<'a, 'rules> {
     decisions: &'a mut Decisions,
     pointer: &'a str,
     target_pointer: &'a str,
+    projected_source: &'a Value,
+    projected_target: &'a Value,
     rule_id: &'a str,
     pattern: &'a str,
     descriptor: traffic_policy::PolicyDescriptor,
@@ -24,8 +27,8 @@ impl Comparator<'_> {
         &mut self,
         definition: &traffic_policy::PolicyDefinition,
         field: &Field<'_>,
-        source: &Value,
-        target: &Value,
+        source: Node<'_>,
+        target: Node<'_>,
         pointer: &str,
         target_pointer: &str,
         decisions: &mut Decisions,
@@ -36,29 +39,30 @@ impl Comparator<'_> {
             .policies()
             .prepare_definition(definition)
             .map_err(|error| difference(pointer, &error.to_string()))?;
-        let (source, target) = match self.logical_roots {
-            Some((source, target)) => (
+        let (logical_source, logical_target) = if self.logical_roots.is_some() {
+            (
                 source
-                    .pointer(pointer)
+                    .logical
                     .map(Cow::Borrowed)
                     .ok_or_else(|| difference(pointer, "logical Source value is absent"))?,
                 target
-                    .pointer(target_pointer)
+                    .logical
                     .map(Cow::Borrowed)
                     .ok_or_else(|| difference(target_pointer, "logical Target value is absent"))?,
-            ),
-            None => (
-                serde_json::from_value(source.clone())
+            )
+        } else {
+            (
+                traffic_value::Value::deserialize(source.projected)
                     .map(Cow::Owned)
                     .map_err(|error| difference(pointer, &error.to_string()))?,
-                serde_json::from_value(target.clone())
+                traffic_value::Value::deserialize(target.projected)
                     .map(Cow::Owned)
                     .map_err(|error| difference(pointer, &error.to_string()))?,
-            ),
+            )
         };
         let pair = ValuePair {
-            source: &source,
-            target: &target,
+            source: &logical_source,
+            target: &logical_target,
             source_path: pointer,
             target_path: target_pointer,
         };
@@ -68,6 +72,8 @@ impl Comparator<'_> {
             decisions: &mut staged,
             pointer,
             target_pointer,
+            projected_source: source.projected,
+            projected_target: target.projected,
             rule_id: field.rule_id,
             pattern: field.pointer,
             descriptor: policy.descriptor().clone(),
@@ -121,12 +127,15 @@ impl PolicyHost<'_, '_> {
 
 impl EvaluationHost for PolicyHost<'_, '_> {
     fn relate(&mut self, pair: &ValuePair<'_>) -> Result<()> {
+        let source = crate::codec::project_value(pair.source)?;
+        let target = if std::ptr::eq(pair.source, pair.target) {
+            Cow::Borrowed(&source)
+        } else {
+            Cow::Owned(crate::codec::project_value(pair.target)?)
+        };
         self.decisions
             .identities
-            .observe(
-                &serde_json::to_value(pair.source)?,
-                &serde_json::to_value(pair.target)?,
-            )
+            .observe(&source, &target)
             .map_err(|reason| anyhow::anyhow!(reason))
     }
     fn observe(&mut self, state: Box<dyn traffic_policy::ObservationState>) -> Result<()> {
@@ -144,16 +153,6 @@ impl EvaluationHost for PolicyHost<'_, '_> {
         .map_err(|error| anyhow::anyhow!(error.reason))
     }
     fn permits_copy(&self, requirement: &traffic_value::Value) -> Result<bool> {
-        let source = self
-            .comparator
-            .source_root
-            .pointer(self.pointer)
-            .context("policy Source value disappeared")?;
-        let target = self
-            .comparator
-            .target_root
-            .pointer(self.target_pointer)
-            .context("policy Target value disappeared")?;
         Ok(self
             .comparator
             .time_copies
@@ -165,8 +164,8 @@ impl EvaluationHost for PolicyHost<'_, '_> {
                     self.rule_id,
                     self.pointer,
                     self.target_pointer,
-                    source,
-                    target,
+                    self.projected_source,
+                    self.projected_target,
                     requirement,
                 )
             }))

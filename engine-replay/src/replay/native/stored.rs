@@ -23,6 +23,7 @@ pub struct ResponsePreparation {
 }
 
 struct FrozenSource {
+    index: usize,
     providers: Arc<crate::protocols::DependencyProviders>,
     contracts: Arc<dyn policy::ValueRuleHost>,
     protocol: ProtocolId,
@@ -32,9 +33,16 @@ struct FrozenSource {
 }
 
 pub struct LoadedResponse {
-    pub(super) encoder: Arc<dyn MessageEncoder>,
-    pub(super) source: Option<PreparedSource>,
+    pub(super) kind: LoadedResponseKind,
     bytes: usize,
+}
+
+pub(super) enum LoadedResponseKind {
+    Decoded {
+        encoder: Arc<dyn MessageEncoder>,
+        source: Option<PreparedSource>,
+    },
+    Stable(StableSource),
 }
 
 pub(super) struct PreparedSource {
@@ -44,12 +52,29 @@ pub(super) struct PreparedSource {
 }
 
 pub(super) struct PreparedPacket {
-    pub(super) revision: u64,
+    revision: u64,
+    pub(super) delivery: PacketDelivery,
+    guards: Vec<Box<dyn PreparedDeliveryGuard>>,
+}
+
+pub(super) struct PacketDelivery {
     pub(super) bytes: Bytes,
     pub(super) comparison: Comparison,
     pub(super) identity: IdentityDecision,
-    batchable: bool,
-    guards: Vec<Box<dyn PreparedDeliveryGuard>>,
+}
+
+pub(super) struct StableSource {
+    index: usize,
+    response: Arc<dyn MessageEncoder>,
+    contracts: Arc<dyn policy::ValueRuleHost>,
+    pub(super) observed_rules: BTreeSet<String>,
+    pub(super) packet: Option<PacketDelivery>,
+    had_prepared_delivery: bool,
+}
+
+enum PacketPreparation {
+    Guarded(PreparedPacket, usize),
+    Stable(PacketDelivery, usize),
 }
 
 impl PreparedPacket {
@@ -59,7 +84,7 @@ impl PreparedPacket {
         };
         revision == self.revision
             || self.guards.iter().all(|guard| guard.is_current())
-                && contracts.prefetched_identity_is_current(&self.identity)
+                && contracts.prefetched_identity_is_current(&self.delivery.identity)
                 && contracts.prefetch_delivery_revision(scope) == Some(revision)
     }
 }
@@ -81,6 +106,7 @@ impl Inventory {
                 exchange.native.response_delay,
             );
             preparation.source = Some(FrozenSource {
+                index,
                 providers: self.providers.clone(),
                 contracts: self.contracts.clone(),
                 protocol: exchange.protocol,
@@ -108,12 +134,13 @@ impl ResponsePreparation {
             .stored()
             .context("response is already decoded")?
             .load()?;
-        let Some(mut bytes) = encoder
+        let Some(encoder_bytes) = encoder
             .prefetch_retained_bytes()
             .filter(|bytes| *bytes <= max_bytes)
         else {
             return Ok(None);
         };
+        let mut bytes = encoder_bytes;
         let mut source = None;
         if let Some(frozen) = &self.source {
             let rules = frozen
@@ -141,24 +168,49 @@ impl ResponsePreparation {
                     "Source projected value contract failed: response={:?}",
                     comparison.differences
                 );
-                let mut prepared_bytes = prepared_bytes;
-                for rule in &comparison.evaluated {
-                    prepared_bytes = prepared_bytes.saturating_add(rule.capacity() + 64);
-                }
+                let observed_bytes = comparison.evaluated.iter().fold(0usize, |bytes, rule| {
+                    bytes.saturating_add(rule.capacity() + 64)
+                });
+                let prepared_bytes = prepared_bytes.saturating_add(observed_bytes);
                 if prepared_bytes <= max_bytes - bytes {
                     bytes += prepared_bytes;
                     let observed_rules = comparison.evaluated.clone();
                     // Speculative work can only save a later computation.
                     // Report validation errors from the ordered live path.
-                    let packet = frozen
+                    let packet = match frozen
                         .prepare_packet(&message, &mut comparison, encoder.as_ref(), clocks)
                         .ok()
                         .flatten()
-                        .filter(|(_, retained)| *retained <= max_bytes - bytes)
-                        .map(|(packet, retained)| {
+                    {
+                        Some(PacketPreparation::Stable(packet, retained)) => {
+                            // An unchanged frame may retain the encoder's original bytes.
+                            let stable_bytes = std::mem::size_of::<LoadedResponse>()
+                                .saturating_add(encoder_bytes)
+                                .saturating_add(observed_bytes)
+                                .saturating_add(retained);
+                            if stable_bytes <= max_bytes {
+                                return Ok(Some(LoadedResponse {
+                                    kind: LoadedResponseKind::Stable(StableSource {
+                                        index: frozen.index,
+                                        response: self.response.clone(),
+                                        contracts: frozen.contracts.clone(),
+                                        observed_rules,
+                                        packet: Some(packet),
+                                        had_prepared_delivery: message.has_prepared_delivery(),
+                                    }),
+                                    bytes: stable_bytes,
+                                }));
+                            }
+                            None
+                        }
+                        Some(PacketPreparation::Guarded(packet, retained))
+                            if retained <= max_bytes - bytes =>
+                        {
                             bytes += retained;
-                            packet
-                        });
+                            Some(packet)
+                        }
+                        _ => None,
+                    };
                     source = Some(PreparedSource {
                         message,
                         observed_rules,
@@ -168,8 +220,7 @@ impl ResponsePreparation {
             }
         }
         Ok(Some(LoadedResponse {
-            encoder,
-            source,
+            kind: LoadedResponseKind::Decoded { encoder, source },
             bytes,
         }))
     }
@@ -182,7 +233,7 @@ impl FrozenSource {
         source_comparison: &mut Comparison,
         encoder: &dyn MessageEncoder,
         clocks: AnchorClocks,
-    ) -> Result<Option<(PreparedPacket, usize)>> {
+    ) -> Result<Option<PacketPreparation>> {
         let Some(scope) = self.packet_scope else {
             return Ok(None);
         };
@@ -214,13 +265,22 @@ impl FrozenSource {
         let Some((bytes, wire_bytes)) = encoder.prefetch_packet(&rendered.values)? else {
             return Ok(None);
         };
-        let batchable = self.contracts.prefetched_identity_is_committed(&identity)
+        let stable = self.contracts.prefetched_identity_is_committed(&identity)
             && rendered.comparison.passed()
             && guards.iter().all(|guard| guard.is_state_independent());
-        let retained = std::mem::size_of::<PreparedPacket>()
-            .saturating_add(wire_bytes)
+        let retained = wire_bytes
             .saturating_add(comparison_bytes)
-            .saturating_add(identity.retained_bytes())
+            .saturating_add(identity.retained_bytes());
+        let delivery = PacketDelivery {
+            bytes,
+            comparison: rendered.comparison,
+            identity,
+        };
+        if stable {
+            return Ok(Some(PacketPreparation::Stable(delivery, retained)));
+        }
+        let retained = retained
+            .saturating_add(std::mem::size_of::<PreparedPacket>())
             .saturating_add(
                 guards.capacity() * std::mem::size_of::<Box<dyn PreparedDeliveryGuard>>(),
             )
@@ -230,13 +290,10 @@ impl FrozenSource {
                     .map(|guard| guard.retained_bytes())
                     .sum::<usize>(),
             );
-        Ok(Some((
+        Ok(Some(PacketPreparation::Guarded(
             PreparedPacket {
                 revision,
-                bytes,
-                comparison: rendered.comparison,
-                identity,
-                batchable,
+                delivery,
                 guards,
             },
             retained,
@@ -245,10 +302,8 @@ impl FrozenSource {
 }
 
 impl LoadedResponse {
-    /// A prepared packet that neither reads nor writes live delivery state.
-    pub fn batchable_message_packet(&self) -> Option<&Bytes> {
-        let packet = self.source.as_ref()?.packet.as_ref()?;
-        packet.batchable.then_some(&packet.bytes)
+    pub fn has_compact_packet(&self) -> bool {
+        matches!(&self.kind, LoadedResponseKind::Stable(source) if source.packet.is_some())
     }
 
     pub fn prefetch_retained_bytes(&self) -> usize {
@@ -256,35 +311,76 @@ impl LoadedResponse {
     }
 
     pub fn has_source_preparation(&self) -> bool {
-        self.source.is_some()
+        match &self.kind {
+            LoadedResponseKind::Decoded { source, .. } => source.is_some(),
+            LoadedResponseKind::Stable(_) => true,
+        }
     }
 
     pub fn has_prepared_delivery(&self) -> bool {
-        self.source
-            .as_ref()
-            .is_some_and(|source| source.message.has_prepared_delivery())
+        match &self.kind {
+            LoadedResponseKind::Decoded { source, .. } => source
+                .as_ref()
+                .is_some_and(|source| source.message.has_prepared_delivery()),
+            LoadedResponseKind::Stable(source) => source.had_prepared_delivery,
+        }
     }
 
     pub fn has_prefetched_packet(&self) -> bool {
-        self.source
-            .as_ref()
-            .is_some_and(|source| source.packet.is_some())
+        match &self.kind {
+            LoadedResponseKind::Decoded { source, .. } => source
+                .as_ref()
+                .is_some_and(|source| source.packet.is_some()),
+            LoadedResponseKind::Stable(source) => source.packet.is_some(),
+        }
     }
 }
 
 impl Inventory {
-    pub fn commit_batched_message(&self, loaded: LoadedResponse) -> Result<()> {
-        let prepared = loaded
-            .source
-            .context("message batch has no Source comparison")?;
-        let packet = prepared
-            .packet
-            .filter(|packet| packet.batchable)
-            .context("message batch has no independent prepared packet")?;
+    pub(super) fn owns_stable_source(&self, index: usize, source: &StableSource) -> bool {
+        self.event_session
+            && index == source.index
+            && Arc::ptr_eq(&self.contracts, &source.contracts)
+            && Arc::ptr_eq(
+                &self.core.exchanges[index].native.response,
+                &source.response,
+            )
+    }
+
+    /// Read a fixed frame only in the Session that established its identity proof.
+    pub fn batchable_message_packet<'a>(
+        &self,
+        index: usize,
+        loaded: &'a LoadedResponse,
+    ) -> Option<&'a Bytes> {
+        let LoadedResponseKind::Stable(source) = &loaded.kind else {
+            return None;
+        };
+        if !self.owns_stable_source(index, source) {
+            return None;
+        }
+        source.packet.as_ref().map(|packet| &packet.bytes)
+    }
+
+    pub(super) fn observe_prepared_rules(&self, evaluated: BTreeSet<String>) {
         self.contracts.observe_source_comparison(&Comparison {
-            evaluated: prepared.observed_rules,
+            evaluated,
             ..Comparison::default()
         });
+    }
+
+    pub fn commit_batched_message(&self, loaded: LoadedResponse) -> Result<()> {
+        let LoadedResponseKind::Stable(source) = loaded.kind else {
+            anyhow::bail!("message batch has no stable Source packet");
+        };
+        ensure!(
+            self.event_session && Arc::ptr_eq(&self.contracts, &source.contracts),
+            "message batch belongs to a different Session"
+        );
+        let packet = source
+            .packet
+            .context("message batch has no independent prepared packet")?;
+        self.observe_prepared_rules(source.observed_rules);
         self.contracts
             .commit_comparison(packet.comparison, packet.identity)
     }
@@ -370,3 +466,6 @@ impl MessageEncoder for Response {
         self.load()?.encode(values)
     }
 }
+
+#[cfg(test)]
+mod tests;

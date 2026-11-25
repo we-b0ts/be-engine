@@ -7,6 +7,7 @@ use crate::value_contract::{
     json::{AnchorClocks, Comparison},
 };
 use std::borrow::Cow;
+use traffic_policy_value::fields::{GlobalField, GlobalUrlFormat, MatchedFormatField};
 #[cfg(test)]
 mod signature_tests;
 #[cfg(test)]
@@ -180,25 +181,29 @@ impl RequestContracts {
         global: &CompiledJsonPolicy,
     ) -> Result<(IdentityDecision, Vec<String>)> {
         let selected = global.identity_fields(source)?;
-        self.translate_selected_identities_cow(case, source, logical, global, &selected)
+        self.translate_selected_identities_at_matches(
+            case, source, logical, global, &selected, None,
+        )
     }
 
-    pub(super) fn translate_selected_identities_cow(
+    pub(super) fn translate_selected_identities_at_matches(
         &self,
         case: &str,
         source: &Value,
         logical: &mut Cow<'_, Value>,
         global: &CompiledJsonPolicy,
         selected: &[(String, FieldContract)],
+        native: Option<&[MatchedFormatField]>,
     ) -> Result<(IdentityDecision, Vec<String>)> {
         let fields = RootIdentityFields::select(source, selected)?;
         let (values, decision) = self.identity_deliveries(case, &fields.entries)?;
-        self.translate_resolved_identities_cow(
+        self.translate_resolved_identities_at_matches(
             case,
             source,
             logical,
             global,
             fields.resolve(values, decision),
+            native,
         )
     }
 
@@ -217,6 +222,7 @@ impl RequestContracts {
         Ok(Some(fields.resolve(values, decision)))
     }
 
+    #[cfg(test)]
     pub(super) fn translate_resolved_identities_cow(
         &self,
         case: &str,
@@ -224,6 +230,18 @@ impl RequestContracts {
         logical: &mut Cow<'_, Value>,
         global: &CompiledJsonPolicy,
         resolved: ResolvedRootIdentities,
+    ) -> Result<(IdentityDecision, Vec<String>)> {
+        self.translate_resolved_identities_at_matches(case, source, logical, global, resolved, None)
+    }
+
+    pub(super) fn translate_resolved_identities_at_matches(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+        resolved: ResolvedRootIdentities,
+        native: Option<&[MatchedFormatField]>,
     ) -> Result<(IdentityDecision, Vec<String>)> {
         let ResolvedRootIdentities {
             mut pointers,
@@ -250,7 +268,14 @@ impl RequestContracts {
             }
         }
         let mut query_plan = None;
-        for pointer in url::selected(global, source)? {
+        let url_fields = match native {
+            Some(native) => native.iter().filter_map(|field| {
+                matches!(&global.fields[&field.pattern], GlobalField::Url { formats } if formats == &[GlobalUrlFormat::Url])
+                    .then(|| field.pointer.clone())
+            }).collect(),
+            None => url::selected(global, source)?,
+        };
+        for pointer in url_fields {
             let Some(value) = source.pointer(&pointer) else {
                 continue;
             };
@@ -272,9 +297,12 @@ impl RequestContracts {
                 pointers.push(pointer);
             }
         }
-        for (pointer, document) in
-            crate::value_contract::global_protocol::template::selected(global, source)?
-        {
+        use crate::value_contract::global_protocol::template;
+        let templates = match native {
+            Some(native) => template::selected_at_matches(global, source, native)?,
+            None => template::selected(global, source)?,
+        };
+        for (pointer, document) in templates {
             let mut tokens = document.logical.clone();
             let entries = document
                 .fields()

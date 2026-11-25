@@ -11,6 +11,14 @@ pub(super) struct Node<'a> {
 }
 
 impl<'a> Node<'a> {
+    pub fn shares_logical_with(self, other: Self) -> bool {
+        match (self.logical, other.logical) {
+            (Some(source), Some(target)) => std::ptr::eq(source, target),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     pub fn object_child(self, projected: &'a Value, key: &str) -> Self {
         Self {
             projected,

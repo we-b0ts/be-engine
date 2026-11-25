@@ -58,7 +58,7 @@ impl<P: ReplayProtocolSet> Host<P> {
             });
             let mut bytes = 0;
             let ready = prefetch.take_ready_batch(indices, |index, loaded| {
-                let packet = loaded.batchable_message_packet()?;
+                let packet = state.native.batchable_message_packet(index, loaded)?;
                 if bytes + packet.len() > MAX_BATCH_BYTES {
                     return None;
                 }

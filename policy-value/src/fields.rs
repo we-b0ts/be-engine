@@ -11,7 +11,7 @@ use traffic_policy::PolicyRegistry;
 mod plan;
 mod prepared;
 mod selectors;
-pub use plan::{FieldPlan, FieldSelectors, pointer_pattern};
+pub use plan::{FieldPlan, FieldSelectors, PreparedJsonFields, pointer_pattern};
 mod template;
 pub use template::GlobalTemplateFormat;
 mod time;
@@ -39,6 +39,12 @@ pub struct SelectedGlobalField {
 pub enum FieldOrigin {
     Declared,
     Inferred,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchedFormatField {
+    pub pattern: String,
+    pub pointer: String,
 }
 
 /// A physical carrier supplies a value while the selected format chooses its contract.

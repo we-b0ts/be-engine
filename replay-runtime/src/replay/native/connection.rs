@@ -757,8 +757,10 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                 let mut output = traffic_protocol::output::FramedOutput::new(response, framer);
                 traffic_replay::output::deliver(io, &mut output, matched.ticket.sequence()).await?;
                 let completed_at = tokio::time::Instant::now();
-                matched.ticket.try_publish_wire()?;
                 let mut state = self.state.lock().await;
+                // Keep terminal sequence progress and its admission-visible receipt
+                // under the same lock a waiting request uses to select its event.
+                matched.ticket.try_publish_wire()?;
                 let contracts = state.native.contracts.clone();
                 match state
                     .native

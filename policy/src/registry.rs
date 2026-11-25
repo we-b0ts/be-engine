@@ -4,6 +4,7 @@ use crate::{
     TransformPlan, TransformPolicy, ValuePair,
 };
 use anyhow::{Context, Result, ensure};
+use serde::Deserialize;
 use std::{collections::BTreeMap, sync::Arc};
 use traffic_value::Value;
 
@@ -66,7 +67,7 @@ impl PolicyRegistry {
             return Ok(false);
         }
         let left = self.prepare_definition(left)?;
-        let options = serde_json::from_value(right.options.clone())?;
+        let options = Value::deserialize(&right.options)?;
         left.implementation.compatible(&options)
     }
     pub fn register(&mut self, provider: Arc<dyn PolicyProvider>) -> Result<()> {
@@ -113,7 +114,7 @@ impl PolicyRegistry {
     }
     pub fn prepare_definition(&self, definition: &PolicyDefinition) -> Result<PreparedPolicy> {
         definition.validate()?;
-        let options = serde_json::from_value(definition.options.clone())?;
+        let options = Value::deserialize(&definition.options)?;
         let prepared = self.prepare(&definition.id, &options)?;
         ensure!(
             prepared.descriptor().version == definition.version,

@@ -53,6 +53,7 @@ struct Window {
     prepared_hits: usize,
     delivery_prepared_hits: usize,
     packet_prepared_hits: usize,
+    compact_packet_hits: usize,
     misses: usize,
     waits: usize,
     producer_finished: bool,
@@ -219,6 +220,7 @@ impl Window {
         self.prepared_hits += usize::from(response.has_source_preparation());
         self.delivery_prepared_hits += usize::from(response.has_prepared_delivery());
         self.packet_prepared_hits += usize::from(response.has_prefetched_packet());
+        self.compact_packet_hits += usize::from(response.has_compact_packet());
     }
 
     fn remove(&mut self, ordinal: usize) -> Option<Option<LoadedResponse>> {
@@ -381,6 +383,7 @@ impl Drop for Responses {
             prepared_hits,
             delivery_prepared_hits,
             packet_prepared_hits,
+            compact_packet_hits,
             misses,
             waits,
             peak_bytes,
@@ -390,6 +393,7 @@ impl Drop for Responses {
             prepared_hits,
             delivery_prepared_hits,
             packet_prepared_hits,
+            compact_packet_hits,
             packets_used = self.shared.packets_used.load(Ordering::Relaxed),
             packet_batches = self.shared.packet_batches.load(Ordering::Relaxed),
             packet_batch_frames = self.shared.packet_batch_frames.load(Ordering::Relaxed),
@@ -418,7 +422,7 @@ impl Shared {
         }
     }
 
-    fn close(&self) -> (usize, usize, usize, usize, usize, usize, usize) {
+    fn close(&self) -> (usize, usize, usize, usize, usize, usize, usize, usize) {
         let mut state = self.state.lock().expect("response prefetch poisoned");
         state.closed = true;
         state.completed.clear();
@@ -429,6 +433,7 @@ impl Shared {
             state.prepared_hits,
             state.delivery_prepared_hits,
             state.packet_prepared_hits,
+            state.compact_packet_hits,
             state.misses,
             state.waits,
             state.peak_bytes,

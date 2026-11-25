@@ -106,7 +106,7 @@ impl CodecPlan {
     }
 
     fn decoded(&self, document: Arc<dyn ValueDocument>) -> Result<DecodedDocument> {
-        let logical = serde_json::to_value(document.value())?;
+        let logical = super::project_value(document.value())?;
         Ok(DecodedDocument {
             logical,
             document,
@@ -121,7 +121,9 @@ impl ValueCodec for CodecPlan {
         if std::ptr::eq(view.as_ref(), document.document.value()) {
             Cow::Borrowed(&document.logical)
         } else {
-            Cow::Owned(serde_json::to_value(view).expect("decoded content is serializable"))
+            Cow::Owned(
+                super::project_value(view.as_ref()).expect("decoded content is serializable"),
+            )
         }
     }
     fn encode(document: &DecodedDocument, patch: &AuthorizedPatch<'_>) -> Result<Vec<u8>> {

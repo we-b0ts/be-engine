@@ -61,10 +61,17 @@ impl Bijection {
         if std::mem::discriminant(source) != std::mem::discriminant(target) {
             return Err("identity scalar representation changed");
         }
+        let shared = std::ptr::eq(source, target);
         let source = key(source, "").map_err(|_| "identity scalar representation is invalid")?;
-        let target = key(target, "").map_err(|_| "identity scalar representation is invalid")?;
         let source_hash = Sha256::digest(source.as_bytes()).into();
-        let target_hash = Sha256::digest(target.as_bytes()).into();
+        let (target, target_hash) = if shared {
+            (source.clone(), source_hash)
+        } else {
+            let target =
+                key(target, "").map_err(|_| "identity scalar representation is invalid")?;
+            let hash = Sha256::digest(target.as_bytes()).into();
+            (target, hash)
+        };
         self.bind(source_hash, target_hash)?;
         self.store_tokens(source_hash, source, target)?;
         Ok(())

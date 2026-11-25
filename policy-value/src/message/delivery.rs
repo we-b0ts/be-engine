@@ -90,7 +90,11 @@ impl PreparedMessage {
     pub fn prepare_delivery(&mut self) -> Result<()> {
         if let Some(policy) = &self.policy {
             for bound in self.values.values_mut() {
-                bound.prepared_delivery = policy.prepare_delivery(bound.source.view().logical())?;
+                let source = bound.source.view().logical();
+                bound.prepared_delivery = match &bound.prepared_comparison {
+                    Some(prepared) => prepared.prepare_delivery(source, policy.as_ref())?,
+                    None => policy.prepare_delivery(source)?,
+                };
             }
         }
         Ok(())

@@ -15,7 +15,7 @@ use traffic_policy::PolicyRegistry;
 use traffic_value::Value as LogicalValue;
 
 use super::{
-    FieldOrigin, GLOBAL_JSON_ID, GlobalField, SelectedGlobalField, TimePolicy,
+    FieldOrigin, GLOBAL_JSON_ID, GlobalField, MatchedFormatField, SelectedGlobalField, TimePolicy,
     prepared::{PreparedFieldFormats, selection_facts},
     selectors::{self, SelectorTree, SelectorValue},
 };
@@ -88,6 +88,12 @@ pub struct FieldPlan<'a> {
     selectors: Option<&'a FieldSelectors>,
 }
 
+pub struct PreparedJsonFields {
+    pub comparison: Vec<SelectedGlobalField>,
+    pub delivery_times: Vec<SelectedGlobalField>,
+    pub native: Vec<MatchedFormatField>,
+}
+
 impl<'a> FieldPlan<'a> {
     pub fn new(
         fields: &'a BTreeMap<String, GlobalField>,
@@ -134,7 +140,7 @@ impl<'a> FieldPlan<'a> {
 
     pub fn identity_fields(&self, source: &Value) -> Result<Vec<(String, FieldContract)>> {
         Ok(self
-            .select_authored_fields(source, None, Selection::Identity, None)?
+            .select_authored_fields(source, None, Selection::Identity, |_, _| {})?
             .into_iter()
             .map(|field| (field.pointer, field.contract))
             .collect())
@@ -175,7 +181,7 @@ impl<'a> FieldPlan<'a> {
             source,
             clocks.observation().source,
             Selection::Delivery,
-            None,
+            |_, _| {},
         )
     }
 
@@ -226,6 +232,88 @@ impl<'a> FieldPlan<'a> {
         self.select_value_fields(source.logical(), clocks)
     }
 
+    /// JSON's logical and compatibility views have the same selector paths.
+    /// Resolve authored selections once and retain timing before inference merges.
+    pub fn prepare_json_fields(
+        &self,
+        source: &LogicalValue,
+        clocks: AnchorClocks,
+    ) -> Result<PreparedJsonFields> {
+        let mut native = Vec::new();
+        let authored = self.select_authored_fields(
+            source,
+            clocks.observation().source,
+            Selection::Comparison,
+            |pattern, pointer| {
+                native.push(MatchedFormatField {
+                    pattern: pattern.to_owned(),
+                    pointer: pointer.to_owned(),
+                });
+            },
+        )?;
+        native.sort_by(|left, right| left.pattern.cmp(&right.pattern));
+        let delivery_times = authored
+            .iter()
+            .filter(|field| matches!(field.contract, FieldContract::Time { .. }))
+            .cloned()
+            .collect();
+        let protocol_owned = native.iter().map(|field| field.pointer.as_str()).collect();
+        let protocol_owned: BTreeSet<&str> = protocol_owned;
+        let comparison =
+            self.merge_inference(source, authored, |pointer| protocol_owned.contains(pointer))?;
+        Ok(PreparedJsonFields {
+            comparison,
+            delivery_times,
+            native,
+        })
+    }
+
+    /// Reuse paths from prepared JSON while selecting delivery identities without a clock.
+    pub fn identity_fields_at_matches<'matches>(
+        &self,
+        source: &Value,
+        matches: impl Iterator<Item = (&'matches str, &'matches str)>,
+    ) -> Result<Vec<(String, FieldContract)>> {
+        let mut matches = matches
+            .filter(|(pattern, _)| self.fields[*pattern].is_identity())
+            .collect::<Vec<_>>();
+        // Comparison fields are sorted by concrete pointer. Delivery retains
+        // declaration order and numeric position within each wildcard array.
+        matches.sort_by(|(left_pattern, left), (right_pattern, right)| {
+            left_pattern.cmp(right_pattern).then_with(|| {
+                left_pattern
+                    .split('/')
+                    .zip(left.split('/').zip(right.split('/')))
+                    .filter(|(pattern, _)| *pattern == "*")
+                    .find_map(|(_, (left, right))| {
+                        let order = left.len().cmp(&right.len()).then_with(|| left.cmp(right));
+                        (!order.is_eq()).then_some(order)
+                    })
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+        let mut facts = None;
+        let mut fields = Vec::with_capacity(matches.len());
+        for (pattern, pointer) in matches {
+            let Some(value) = source.pointer(pointer) else {
+                continue;
+            };
+            let field = &self.fields[pattern];
+            let contract = if matches!(field, GlobalField::Jwt { .. }) {
+                value.jwt_identity()
+            } else {
+                Some(self.select_field(pattern, field, pointer, value, None, &mut facts)?)
+            };
+            if let Some(
+                contract @ (FieldContract::Identity { .. } | FieldContract::IdentityAnchor),
+            ) = contract
+            {
+                fields.push((pointer.to_owned(), contract));
+            }
+        }
+        Ok(fields)
+    }
+
     fn inference_facts(&self) -> Result<LogicalValue> {
         Ok(serde_json::from_value(
             serde_json::json!({"settings":{"time":self.time}}),
@@ -238,20 +326,31 @@ impl<'a> FieldPlan<'a> {
         clocks: AnchorClocks,
     ) -> Result<Vec<SelectedGlobalField>> {
         let mut protocol_owned = BTreeSet::new();
-        let mut selected = self
-            .select_authored_fields(
-                source,
-                clocks.observation().source,
-                Selection::Comparison,
-                Some(&mut protocol_owned),
-            )?
+        let authored = self.select_authored_fields(
+            source,
+            clocks.observation().source,
+            Selection::Comparison,
+            |_, pointer| {
+                protocol_owned.insert(pointer.to_owned());
+            },
+        )?;
+        self.merge_inference(source, authored, |pointer| protocol_owned.contains(pointer))
+    }
+
+    fn merge_inference(
+        &self,
+        source: &LogicalValue,
+        authored: Vec<SelectedGlobalField>,
+        protocol_owned: impl Fn(&str) -> bool,
+    ) -> Result<Vec<SelectedGlobalField>> {
+        let mut selected = authored
             .into_iter()
             .map(|field| (field.pointer.clone(), field))
             .collect::<BTreeMap<_, _>>();
         for inferred in crate::inference::fields(self.policies, source, &self.inference_facts()?)? {
             let pointer = inferred.pointer;
             let mut contract = inferred.contract;
-            if protocol_owned.contains(&pointer) {
+            if protocol_owned(&pointer) {
                 continue;
             }
             if let Some(authored) = selected.get(&pointer) {
@@ -280,7 +379,7 @@ impl<'a> FieldPlan<'a> {
         source: &V,
         source_clock: Option<chrono::DateTime<chrono::Utc>>,
         selection: Selection,
-        mut protocol_owned: Option<&mut BTreeSet<String>>,
+        mut protocol_owned: impl FnMut(&str, &str),
     ) -> Result<Vec<SelectedGlobalField>> {
         let mut facts = None;
         let mut fields = Vec::new();
@@ -293,26 +392,10 @@ impl<'a> FieldPlan<'a> {
                 };
                 contract
             } else if Selection::protocol_owned(field) {
-                if let Some(protocol_owned) = protocol_owned.as_mut() {
-                    protocol_owned.insert(pointer.to_owned());
-                }
+                protocol_owned(pattern, pointer);
                 return Ok(());
             } else {
-                let facts = match &facts {
-                    Some(facts) => facts,
-                    None => facts.insert(selection_facts(source_clock)?),
-                };
-                let prepared = self
-                    .selectors
-                    .and_then(|selectors| selectors.formats.get(pattern, field));
-                field
-                    .select_prepared_value_contract(
-                        value.logical()?.as_ref(),
-                        facts,
-                        self.policies,
-                        prepared,
-                    )
-                    .with_context(|| format!("global JSON field {pointer:?}"))?
+                self.select_field(pattern, field, pointer, value, source_clock, &mut facts)?
             };
             if matches!(selection, Selection::Identity)
                 && !matches!(
@@ -336,6 +419,32 @@ impl<'a> FieldPlan<'a> {
         // Preserve declaration order and the original order within each path.
         fields.sort_by(|left, right| left.pattern.cmp(&right.pattern));
         Ok(fields)
+    }
+
+    fn select_field<V: FieldValue>(
+        &self,
+        pattern: &str,
+        field: &GlobalField,
+        pointer: &str,
+        value: &V,
+        source_clock: Option<chrono::DateTime<chrono::Utc>>,
+        facts: &mut Option<LogicalValue>,
+    ) -> Result<FieldContract> {
+        let facts = match facts {
+            Some(facts) => facts,
+            None => facts.insert(selection_facts(source_clock)?),
+        };
+        let prepared = self
+            .selectors
+            .and_then(|selectors| selectors.formats.get(pattern, field));
+        field
+            .select_prepared_value_contract(
+                value.logical()?.as_ref(),
+                facts,
+                self.policies,
+                prepared,
+            )
+            .with_context(|| format!("global JSON field {pointer:?}"))
     }
 
     fn visit_authored<'source, V: SelectorValue>(
