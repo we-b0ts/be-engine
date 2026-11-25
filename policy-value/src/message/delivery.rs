@@ -1,6 +1,6 @@
 //! Shared identity delivery and explicitly authorized time translation.
 use crate::identity::IdentityDelivery;
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 use traffic_contract::{
     delivery::{self, TimeField},
@@ -12,6 +12,65 @@ use super::*;
 pub struct RenderedMessage {
     pub values: BTreeMap<String, bytes::Bytes>,
     pub comparison: Comparison,
+}
+
+pub struct PrefetchedMessage {
+    pub rendered: RenderedMessage,
+    pub guards: Vec<Box<dyn PreparedDeliveryGuard>>,
+}
+
+/// The runtime facts read to prepare one document's delivery.
+pub trait PreparedDeliveryGuard: Send + Sync {
+    fn retained_bytes(&self) -> usize;
+    fn is_current(&self) -> bool;
+    /// Whether subsequent Session state changes can affect this prepared result.
+    fn is_state_independent(&self) -> bool {
+        false
+    }
+}
+
+impl RenderedMessage {
+    fn from_projection(projection: ProjectedMessage, comparison: Comparison) -> Self {
+        Self {
+            values: projection
+                .values
+                .into_iter()
+                .map(|(location, value)| (location, value.bytes))
+                .collect(),
+            comparison,
+        }
+    }
+}
+
+/// Source-only delivery selection. The owner applies it with live state.
+pub trait PreparedDocumentDelivery: Send + Sync {
+    fn retained_bytes(&self) -> usize;
+
+    /// The plan can run on a tentative state read before the live Target clocks
+    /// are known. The caller still checks that the state read is current.
+    fn clock_independent(&self) -> bool {
+        false
+    }
+
+    /// Return false without editing when the plan is inapplicable.
+    fn apply(
+        &self,
+        scope: &str,
+        source: &Value,
+        delivered: &mut Cow<'_, Value>,
+        clocks: AnchorClocks,
+    ) -> Result<bool>;
+
+    /// Apply the plan and retain the runtime facts needed to reuse its output.
+    fn prefetch_apply(
+        &self,
+        _scope: &str,
+        _source: &Value,
+        _delivered: &mut Cow<'_, Value>,
+        _clocks: AnchorClocks,
+    ) -> Result<Option<Box<dyn PreparedDeliveryGuard>>> {
+        Ok(None)
+    }
 }
 
 /// Original bytes of a write that the native owner verified and delivered.
@@ -27,6 +86,99 @@ impl StoredValue {
 }
 
 impl PreparedMessage {
+    /// Resolve selectors against the immutable Source before live delivery.
+    pub fn prepare_delivery(&mut self) -> Result<()> {
+        if let Some(policy) = &self.policy {
+            for bound in self.values.values_mut() {
+                let source = bound.source.view().logical();
+                bound.prepared_delivery = match &bound.prepared_comparison {
+                    Some(prepared) => prepared.prepare_delivery(source, policy.as_ref())?,
+                    None => policy.prepare_delivery(source)?,
+                };
+            }
+        }
+        Ok(())
+    }
+
+    pub fn has_prepared_delivery(&self) -> bool {
+        self.values
+            .values()
+            .any(|bound| bound.prepared_delivery.is_some())
+    }
+
+    /// Render a response without scoped bindings or live native storage overrides.
+    /// Reuse the matching Source comparison for unchanged output. The caller
+    /// validates the retained guards before using the result.
+    pub fn prefetch_delivery(
+        &self,
+        scope: &str,
+        clocks: AnchorClocks,
+        metadata: &dyn RuleMetadata,
+        source_comparison: &mut Comparison,
+    ) -> Result<Option<PrefetchedMessage>> {
+        if !source_comparison.passed() {
+            return Ok(None);
+        }
+        let mut updates = Vec::new();
+        let mut guards = Vec::with_capacity(self.values.len());
+        for (location, bound) in &self.values {
+            if bound.codec != Codec::Json
+                || !bound.fields.is_empty()
+                || !bound
+                    .prepared_comparison
+                    .as_ref()
+                    .is_some_and(|comparison| {
+                        comparison.clock_independent() && comparison.applies_at(clocks)
+                    })
+                || !matches!(
+                    bound.source.logical_comparison_view(&bound.pointers),
+                    Cow::Borrowed(value) if std::ptr::eq(value, bound.source.value())
+                )
+            {
+                return Ok(None);
+            }
+            let Some(plan) = &bound.prepared_delivery else {
+                return Ok(None);
+            };
+            if !plan.clock_independent() {
+                return Ok(None);
+            }
+            let source = bound.source.view().logical();
+            let mut delivered = Cow::Borrowed(source);
+            let Some(guard) = plan.prefetch_apply(scope, source, &mut delivered, clocks)? else {
+                return Ok(None);
+            };
+            guards.push(guard);
+            if let Cow::Owned(document) = delivered {
+                updates.push((location, document));
+            }
+        }
+        let rendered = if updates.is_empty() {
+            self.unchanged_delivery(std::mem::take(source_comparison))
+        } else {
+            let (output, comparison) = self.render_projection(
+                updates.iter().map(|(location, value)| (*location, value)),
+                clocks,
+                metadata,
+                &BTreeMap::new(),
+            )?;
+            RenderedMessage::from_projection(output, comparison)
+        };
+        Ok(Some(PrefetchedMessage { rendered, guards }))
+    }
+
+    fn unchanged_delivery(&self, comparison: Comparison) -> RenderedMessage {
+        RenderedMessage {
+            values: self
+                .projection
+                .values
+                .iter()
+                .map(|(location, value)| (location.clone(), value.bytes.clone()))
+                .collect(),
+            comparison,
+        }
+    }
+
     pub fn render_delivery(
         &self,
         clocks: AnchorClocks,
@@ -34,10 +186,11 @@ impl PreparedMessage {
         rebase_time: &BTreeSet<String>,
         resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
     ) -> Result<RenderedMessage> {
-        self.render_delivery_with_documents(
+        self.render_delivery_with_lazy_documents(
             clocks,
             metadata,
             rebase_time,
+            &BTreeMap::new(),
             resolve_identities,
             |_, _| Ok(()),
         )
@@ -72,6 +225,50 @@ impl PreparedMessage {
         delivered_by_protocol: &BTreeMap<String, StoredValue>,
         resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
         translate_document: impl Fn(&Value, &mut Value) -> Result<()>,
+    ) -> Result<RenderedMessage> {
+        self.render_delivery_with_lazy_documents(
+            clocks,
+            metadata,
+            rebase_time,
+            delivered_by_protocol,
+            resolve_identities,
+            |source, delivered| translate_document(source, delivered.to_mut()),
+        )
+    }
+
+    /// Translate a delivery document while borrowing the original JSON until
+    /// a translation needs an owned value.
+    pub fn render_delivery_with_lazy_documents(
+        &self,
+        clocks: AnchorClocks,
+        metadata: &dyn RuleMetadata,
+        rebase_time: &BTreeSet<String>,
+        delivered_by_protocol: &BTreeMap<String, StoredValue>,
+        resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
+        translate_document: impl Fn(&Value, &mut Cow<'_, Value>) -> Result<()>,
+    ) -> Result<RenderedMessage> {
+        self.render_delivery_with_prepared_documents(
+            clocks,
+            metadata,
+            rebase_time,
+            delivered_by_protocol,
+            resolve_identities,
+            |source, delivered, _| translate_document(source, delivered),
+        )
+    }
+
+    pub fn render_delivery_with_prepared_documents(
+        &self,
+        clocks: AnchorClocks,
+        metadata: &dyn RuleMetadata,
+        rebase_time: &BTreeSet<String>,
+        delivered_by_protocol: &BTreeMap<String, StoredValue>,
+        resolve_identities: impl FnOnce(&[IdentityDelivery<'_>]) -> Result<Vec<Value>>,
+        translate_document: impl Fn(
+            &Value,
+            &mut Cow<'_, Value>,
+            Option<&dyn PreparedDocumentDelivery>,
+        ) -> Result<()>,
     ) -> Result<RenderedMessage> {
         let mut updates = BTreeMap::new();
         let mut identity_fields = Vec::new();
@@ -126,10 +323,12 @@ impl PreparedMessage {
                     contract,
                 })
                 .collect::<Vec<_>>();
-            updates.insert(
-                location.clone(),
-                delivery::materialize(original, &fields, clocks, metadata)?,
-            );
+            let mut delivered = delivery::materialize_cow(original, &fields, clocks, metadata)?;
+            if bound.codec != Codec::Json {
+                // Other codecs still own their own delivery serialization.
+                delivered = Cow::Owned(delivered.into_owned());
+            }
+            updates.insert(location.clone(), (bound, delivered));
         }
         let values = resolve_identities(&identities)?;
         ensure!(
@@ -137,23 +336,45 @@ impl PreparedMessage {
             "identity resolver changed field cardinality"
         );
         for ((location, pointer), value) in identity_fields.into_iter().zip(values) {
-            *updates
+            let (_, document) = updates
                 .get_mut(&location)
-                .and_then(|logical| logical.pointer_mut(&pointer))
-                .context("derived identity field disappeared")? = value;
+                .context("derived identity field disappeared")?;
+            if document.pointer(&pointer) != Some(&value) {
+                *document
+                    .to_mut()
+                    .pointer_mut(&pointer)
+                    .context("derived identity field disappeared")? = value;
+            }
         }
-        for (location, update) in &mut updates {
-            translate_document(self.values[location].source.view().logical(), update)?;
+        for (bound, document) in updates.values_mut() {
+            translate_document(
+                bound.source.view().logical(),
+                document,
+                bound.prepared_delivery.as_deref(),
+            )?;
+        }
+        let mut edited = updates
+            .iter()
+            .filter_map(|(location, (bound, document))| {
+                if bound.codec == Codec::Json
+                    && std::ptr::eq(bound.source.view().logical(), document.as_ref())
+                {
+                    None
+                } else {
+                    Some((location, document.as_ref()))
+                }
+            })
+            .peekable();
+        if delivered_by_protocol.is_empty() && edited.peek().is_none() {
+            let comparison = self.compare_source(clocks, metadata);
+            ensure!(
+                comparison.passed(),
+                "derived native values violate their field contracts"
+            );
+            return Ok(self.unchanged_delivery(comparison));
         }
         let (projection, comparison) =
-            self.render_projection(&updates, clocks, metadata, delivered_by_protocol)?;
-        Ok(RenderedMessage {
-            values: projection
-                .values
-                .into_iter()
-                .map(|(location, value)| (location, value.bytes))
-                .collect(),
-            comparison,
-        })
+            self.render_projection(edited, clocks, metadata, delivered_by_protocol)?;
+        Ok(RenderedMessage::from_projection(projection, comparison))
     }
 }

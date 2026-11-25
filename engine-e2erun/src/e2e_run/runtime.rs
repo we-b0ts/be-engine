@@ -66,6 +66,40 @@ pub(super) fn spawn_replay(
     state: &ActiveRunState,
     timer: Option<&ManagedTimer>,
 ) -> Result<Child> {
+    spawn_replay_command(
+        config,
+        layout,
+        state,
+        timer,
+        replay_case_args(inventory, state),
+        false,
+    )
+}
+
+pub(super) fn spawn_event_replay(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    state: &ActiveRunState,
+    timer: Option<&ManagedTimer>,
+) -> Result<Child> {
+    spawn_replay_command(
+        config,
+        layout,
+        state,
+        timer,
+        vec!["--session-events".into()],
+        true,
+    )
+}
+
+fn spawn_replay_command(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    state: &ActiveRunState,
+    timer: Option<&ManagedTimer>,
+    selection: Vec<OsString>,
+    session_events: bool,
+) -> Result<Child> {
     let replay_override = std::env::var_os("TRAFFIC_E2E_TRAFFIC_REPLAY").map(PathBuf::from);
     let replay_command = match replay_override.as_ref() {
         Some(command) => command.clone(),
@@ -101,14 +135,14 @@ pub(super) fn spawn_replay(
                 .as_millis()
                 .to_string(),
         );
-    if config.replay_pre_match {
+    if config.replay_pre_match && !session_events {
         command.arg("--pre-match");
     }
     command.args(replay_stream_timing_args(config));
     if let Some(timer) = timer {
         command.args(timer.replay_args());
     }
-    if config.replay_loading.lazy_cases {
+    if config.replay_loading.lazy_cases && !session_events {
         command.arg("--lazy-case-dependencies");
     }
     command
@@ -118,7 +152,7 @@ pub(super) fn spawn_replay(
         .arg("--case-prepare-timeout-seconds")
         .arg(config.replay_loading.case_timeout_seconds.to_string());
     command.args(recorder_config_args(config));
-    command.args(replay_case_args(inventory, state));
+    command.args(selection);
     command
         .arg(&layout.case_source)
         .stdout(Stdio::from(stdout))
@@ -186,6 +220,7 @@ pub(super) fn replay_case_args(
 pub(super) async fn build_target_image(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
+    replay_timer: bool,
 ) -> Result<crate::TargetImage> {
     #[cfg(test)]
     if let Some(id) = std::env::var_os("TRAFFIC_E2E_TEST_TARGET_IMAGE") {
@@ -212,7 +247,7 @@ pub(super) async fn build_target_image(
         layout.target_root.clone(),
         config,
     );
-    crate::target_container::build_image(&target)
+    crate::target_container::build_image_with_timer(&target, replay_timer)
         .await
         .context("target image build failed")
 }

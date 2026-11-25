@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 use traffic_policy::{
     ComparisonPolicy, Evaluation, EvaluationHost, PolicyAction, PolicyDescriptor, PolicyProvider,
     PolicyRegistry, ValuePair,

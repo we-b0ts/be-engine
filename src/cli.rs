@@ -10,6 +10,7 @@ mod output;
 mod record;
 mod recording;
 mod replay;
+mod session;
 mod signal;
 mod target;
 mod workflow;
@@ -55,6 +56,8 @@ enum Command {
     RunApi(workflow::RunApiArgs),
     /// Run one complete regression round.
     Run(workflow::ContextArgs),
+    /// Verify a sealed Source session from startup through the last event.
+    RunSession(session::RunSessionArgs),
     /// Show generated traffic E2E progress and active run state.
     Status(workflow::ContextArgs),
     /// Recover a previously interrupted traffic E2E run.
@@ -112,6 +115,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Prepare(args) => workflow::run(workflow::WorkflowCommand::Prepare(args)).await,
         Command::RunApi(args) => workflow::run(workflow::WorkflowCommand::RunApi(args)).await,
         Command::Run(args) => workflow::run(workflow::WorkflowCommand::Run(args)).await,
+        Command::RunSession(args) => session::run(args).await,
         Command::Status(args) => workflow::run(workflow::WorkflowCommand::Status(args)).await,
         Command::Recover(args) => workflow::run(workflow::WorkflowCommand::Recover(args)).await,
         Command::Abort(args) => workflow::run(workflow::WorkflowCommand::Abort(args)).await,
@@ -258,6 +262,7 @@ mod tests {
                 "prepare",
                 "run-api",
                 "run",
+                "run-session",
                 "status",
                 "recover",
                 "abort",

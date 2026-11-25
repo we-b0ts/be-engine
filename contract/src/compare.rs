@@ -1,6 +1,9 @@
 //! Pure, bounded comparison of a decoded value. Protocol admission and commits
 //! remain with the caller. Selected fields compose before the strict remainder.
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem::size_of,
+};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -10,14 +13,18 @@ use crate::rule::{FieldContract, TimeAnchor};
 mod composition;
 pub mod diagnosis;
 pub mod identity;
+mod logical;
 mod scope;
 pub use identity::key as identity_key;
+pub use logical::{LogicalProjection, compare_logical_all, compare_projected_logical_all};
 mod native;
 mod observations;
 mod pointers;
 mod policy;
+mod walk;
 pub use ValueCopyProof as TimeCopyProof;
 pub use capabilities::{ExplicitRules, RegisteredRules, RuleMetadata, ValueCopyProof};
+use walk::{Node, Paths};
 mod capabilities;
 pub use native::{
     LeafContext, LeafObservations, NativeContext, NativeField, NonceIdentity, VerifiedField,
@@ -26,7 +33,8 @@ pub use native::{
 const MAX_COMPARISONS: usize = 16_384;
 const MAX_DEPTH: usize = 128;
 
-type NonceRelationships = BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>;
+type NonceRelationship = ([u8; 32], [u8; 32]);
+type NonceRelationships = BTreeMap<(String, String), Vec<NonceRelationship>>;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AnchorClocks {
@@ -108,6 +116,38 @@ impl Comparison {
     pub fn passed(&self) -> bool {
         self.differences.is_empty()
     }
+
+    /// Conservative heap estimate for a successful comparison kept by Replay.
+    /// Opaque observations, diagnostics and nonce state use the live path.
+    pub fn prefetch_retained_bytes(&self) -> Option<usize> {
+        if !self.passed()
+            || !self.pre_matches.is_empty()
+            || !self.observations.is_empty()
+            || !self.nonce_relationships.is_empty()
+        {
+            return None;
+        }
+        let mut bytes = self
+            .identities
+            .prefetch_retained_bytes()
+            .saturating_add(self.pre_matches.capacity() * size_of::<crate::hypothesis::Candidate>())
+            .saturating_add(self.differences.capacity() * size_of::<Difference>())
+            .saturating_add(btree_retained_bytes::<String, ()>(self.evaluated.len()))
+            .saturating_add(string_map_retained_bytes(&self.time_validations))
+            .saturating_add(string_map_retained_bytes(&self.policy_counts))
+            .saturating_add(btree_retained_bytes::<
+                (String, String),
+                Vec<NonceRelationship>,
+            >(0));
+        for rule in &self.evaluated {
+            bytes = bytes.saturating_add(rule.capacity());
+        }
+        for counters in self.policy_counts.values() {
+            bytes = bytes.saturating_add(string_map_retained_bytes(counters));
+        }
+        Some(bytes)
+    }
+
     pub fn merge_and_validate(&mut self, other: Comparison) {
         self.pre_matches.extend(other.pre_matches);
         if let Err(reason) = self.identities.merge(other.identities) {
@@ -145,6 +185,21 @@ impl Comparison {
     }
 }
 
+fn string_map_retained_bytes<V>(map: &BTreeMap<String, V>) -> usize {
+    map.keys().fold(
+        btree_retained_bytes::<String, V>(map.len()),
+        |bytes, key| bytes.saturating_add(key.capacity()),
+    )
+}
+
+fn btree_retained_bytes<K, V>(len: usize) -> usize {
+    // Rust's B-tree nodes carry up to eleven entries and twelve edges. Charge
+    // every node as internal, including a possible retained empty root. All
+    // nodes below the root have at least five entries.
+    let nodes = 1 + len.saturating_sub(1) / 5;
+    nodes.saturating_mul(12 * size_of::<(K, V)>() + 128)
+}
+
 #[derive(Clone, Default)]
 struct Decisions {
     evaluated: BTreeSet<String>,
@@ -161,9 +216,9 @@ struct Comparator<'a> {
     fields: &'a [Field<'a>],
     native: &'a [NativeField<'a>],
     verified: &'a [VerifiedField<'a>],
-    field_pointers: pointers::Index<'a>,
-    native_pointers: pointers::Index<'a>,
-    verified_pointers: pointers::Index<'a>,
+    field_pointers: &'a pointers::Index<'a>,
+    native_pointers: &'a pointers::Index<'a>,
+    verified_pointers: &'a pointers::Index<'a>,
     rule_metadata: &'a dyn RuleMetadata,
     time_copies: BTreeMap<(&'a str, &'a str), Vec<&'a dyn TimeCopyProof>>,
     clocks: AnchorClocks,
@@ -275,41 +330,6 @@ pub fn compare_all(
     )
 }
 
-#[allow(clippy::too_many_arguments)] // Logical documents retain native verifiers and authenticated copy capabilities.
-pub fn compare_logical_all(
-    source: &traffic_value::Value,
-    target: &traffic_value::Value,
-    fields: &[Field<'_>],
-    native: &[NativeField<'_>],
-    verified: &[VerifiedField<'_>],
-    clocks: AnchorClocks,
-    copies: &[&dyn ValueCopyProof],
-    metadata: &dyn RuleMetadata,
-) -> Comparison {
-    let (Ok(source_projection), Ok(target_projection)) =
-        (serde_json::to_value(source), serde_json::to_value(target))
-    else {
-        return Comparison {
-            differences: vec![difference(
-                "",
-                "logical values cannot enter the compatibility projection",
-            )],
-            ..Default::default()
-        };
-    };
-    compare_inputs(
-        &source_projection,
-        &target_projection,
-        fields,
-        native,
-        verified,
-        clocks,
-        copies,
-        metadata,
-        Some((source, target)),
-    )
-}
-
 #[allow(clippy::too_many_arguments)] // The optional typed roots preserve codec scalar categories beside legacy adapters.
 fn compare_inputs(
     source: &Value,
@@ -322,14 +342,27 @@ fn compare_inputs(
     rule_metadata: &dyn RuleMetadata,
     logical_roots: Option<(&traffic_value::Value, &traffic_value::Value)>,
 ) -> Comparison {
+    let mut remaining = MAX_COMPARISONS;
+    if std::ptr::eq(source, target)
+        && fields.is_empty()
+        && native.is_empty()
+        && verified.is_empty()
+        && time_copies.is_empty()
+        && within_comparison_budget(source, &mut remaining, 0)
+    {
+        return Comparison::default();
+    }
+    let field_pointers = pointers::Index::new(fields.iter().map(|field| field.pointer));
+    let native_pointers = pointers::Index::new(native.iter().map(|field| field.pointer));
+    let verified_pointers = pointers::Index::new(verified.iter().map(|field| field.pointer));
     let mut comparator = Comparator {
         rule_metadata,
         fields,
         native,
         verified,
-        field_pointers: pointers::Index::new(fields.iter().map(|field| field.pointer)),
-        native_pointers: pointers::Index::new(native.iter().map(|field| field.pointer)),
-        verified_pointers: pointers::Index::new(verified.iter().map(|field| field.pointer)),
+        field_pointers: &field_pointers,
+        native_pointers: &native_pointers,
+        verified_pointers: &verified_pointers,
         time_copies: time_copies
             .iter()
             .fold(BTreeMap::new(), |mut index, proof| {
@@ -344,7 +377,19 @@ fn compare_inputs(
     };
     let mut decisions = Decisions::default();
     let result = comparator
-        .node(source, target, "", "", &mut decisions, 0)
+        .node(
+            Node {
+                projected: source,
+                logical: logical_roots.map(|(source, _)| source),
+            },
+            Node {
+                projected: target,
+                logical: logical_roots.map(|(_, target)| target),
+            },
+            &mut Paths::default(),
+            &mut decisions,
+            0,
+        )
         .and_then(|()| {
             if let Some(missing) = fields.iter().enumerate().find(|(index, field)| {
                 !decisions.selected.contains(index) && pointer_observed(source, field.pointer)
@@ -386,6 +431,22 @@ fn compare_inputs(
     }
 }
 
+fn within_comparison_budget(value: &Value, remaining: &mut usize, depth: usize) -> bool {
+    if depth > MAX_DEPTH || *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .all(|value| within_comparison_budget(value, remaining, depth + 1)),
+        Value::Object(fields) => fields
+            .values()
+            .all(|value| within_comparison_budget(value, remaining, depth + 1)),
+        _ => true,
+    }
+}
+
 fn difference(pointer: &str, reason: &str) -> Difference {
     Difference {
         pointer: pointer.into(),
@@ -395,19 +456,34 @@ fn difference(pointer: &str, reason: &str) -> Difference {
 
 /// A Source shape with no selected leaf leaves the entire value exact.
 pub fn pointer_observed(root: &Value, pattern: &str) -> bool {
-    fn visit(root: &Value, segments: &[&str]) -> bool {
-        let Some((segment, rest)) = segments.split_first() else {
+    fn visit<'a>(root: &Value, mut segments: impl Iterator<Item = &'a str> + Clone) -> bool {
+        let Some(segment) = segments.next() else {
             return true;
         };
-        if *segment == "*" {
+        if segment == "*" {
             root.as_array()
-                .is_some_and(|values| values.iter().any(|value| visit(value, rest)))
+                .is_some_and(|values| values.iter().any(|value| visit(value, segments.clone())))
         } else {
-            root.pointer(&format!("/{segment}"))
-                .is_some_and(|value| visit(value, rest))
+            pointer_child(root, segment).is_some_and(|value| visit(value, segments))
         }
     }
-    visit(root, &pattern.split('/').skip(1).collect::<Vec<_>>())
+    visit(root, pattern.split('/').skip(1))
+}
+
+fn pointer_child<'a>(root: &'a Value, segment: &str) -> Option<&'a Value> {
+    match root {
+        Value::Object(fields) if segment.contains('~') => {
+            fields.get(&segment.replace("~1", "/").replace("~0", "~"))
+        }
+        Value::Object(fields) => fields.get(segment),
+        Value::Array(values) if !segment.starts_with('+') => {
+            if segment.len() > 1 && segment.starts_with('0') {
+                return None;
+            }
+            values.get(segment.parse::<usize>().ok()?)
+        }
+        _ => None,
+    }
 }
 
 fn pointer_matches(pattern: &str, pointer: &str, root: &Value) -> bool {
@@ -430,7 +506,7 @@ fn pointer_matches(pattern: &str, pointer: &str, root: &Value) -> bool {
         {
             return false;
         }
-        parent = parent.and_then(|parent| parent.pointer(&format!("/{b}")));
+        parent = parent.and_then(|parent| pointer_child(parent, b));
     }
     true
 }
@@ -440,71 +516,53 @@ fn escape(value: &str) -> String {
 }
 
 impl Comparator<'_> {
-    fn equal_values(
-        &self,
-        source: &Value,
-        target: &Value,
-        source_path: &str,
-        target_path: &str,
-    ) -> bool {
-        match self.logical_roots {
-            Some((left, right)) => {
-                left.pointer(source_path).is_some()
-                    && left.pointer(source_path) == right.pointer(target_path)
-            }
-            None => source == target,
+    fn equal_values(&self, source: Node<'_>, target: Node<'_>) -> bool {
+        if self.logical_roots.is_some() {
+            source.logical.is_some() && source.logical == target.logical
+        } else {
+            source.projected == target.projected
         }
     }
 
     fn node(
         &mut self,
-        source: &Value,
-        target: &Value,
-        pointer: &str,
-        target_pointer: &str,
+        source_node: Node<'_>,
+        target_node: Node<'_>,
+        paths: &mut Paths,
         decisions: &mut Decisions,
         depth: usize,
     ) -> Result<(), Difference> {
+        let (pointer, target_pointer) = paths.pair();
+        let (source, target) = (source_node.projected, target_node.projected);
         if depth > MAX_DEPTH || self.remaining == 0 {
             return Err(difference(pointer, "contract comparison limit exceeded"));
         }
         self.remaining -= 1;
-        let selected = self
-            .field_pointers
-            .matching(pointer, self.source_root)
-            .into_iter()
-            .map(|index| (index, &self.fields[index]))
-            .collect::<Vec<_>>();
-        let native = self
-            .native_pointers
-            .matching(pointer, self.source_root)
-            .into_iter()
-            .map(|index| (index, &self.native[index]))
-            .collect::<Vec<_>>();
-        let verified = self
-            .verified_pointers
-            .matching(pointer, self.source_root)
-            .into_iter()
-            .map(|index| (index, &self.verified[index]))
-            .collect::<Vec<_>>();
+        let selected = self.field_pointers.matching(pointer, self.source_root);
+        let native = self.native_pointers.matching(pointer, self.source_root);
+        let verified = self.verified_pointers.matching(pointer, self.source_root);
         if selected.len() + native.len() + verified.len() > 1 {
             if selected.is_empty()
                 && native.is_empty()
                 && !source.is_array()
                 && !source.is_object()
+                && verified.iter().any(|&index| {
+                    self.rule_metadata
+                        .permits_scalar_composition(self.verified[index].rule_id)
+                })
                 && verified
                     .iter()
-                    .any(|(_, field)| self.rule_metadata.permits_scalar_composition(field.rule_id))
-                && verified
-                    .iter()
-                    .filter(|(_, field)| {
-                        !self.rule_metadata.permits_scalar_composition(field.rule_id)
+                    .filter(|&&index| {
+                        !self
+                            .rule_metadata
+                            .permits_scalar_composition(self.verified[index].rule_id)
                     })
                     .count()
                     <= 1
             {
                 let mut staged = decisions.clone();
-                for (index, field) in &verified {
+                for &index in verified.iter() {
+                    let field = &self.verified[index];
                     native::verify(
                         field,
                         LeafContext {
@@ -518,7 +576,7 @@ impl Comparator<'_> {
                         },
                         &mut staged,
                     )?;
-                    staged.selected_native.insert(self.native.len() + *index);
+                    staged.selected_native.insert(self.native.len() + index);
                     staged.evaluated.insert(field.rule_id.into());
                 }
                 *decisions = staged;
@@ -527,7 +585,7 @@ impl Comparator<'_> {
             if selected.len() == 1
                 && self
                     .rule_metadata
-                    .permits_scalar_composition(selected[0].1.rule_id)
+                    .permits_scalar_composition(self.fields[selected[0]].rule_id)
                 && !source.is_array()
                 && !source.is_object()
                 && (!native.is_empty() || !verified.is_empty())
@@ -542,6 +600,7 @@ impl Comparator<'_> {
                         target_root: self.target_root,
                         clocks: self.clocks,
                     },
+                    (source_node, target_node),
                     selected[0],
                     &native,
                     &verified,
@@ -550,17 +609,17 @@ impl Comparator<'_> {
             }
             if native.is_empty()
                 && verified.is_empty()
-                && selected.iter().all(|(_, field)| {
+                && selected.iter().all(|&index| {
                     policy::compatible(
-                        selected[0].1.contract,
-                        field.contract,
+                        self.fields[selected[0]].contract,
+                        self.fields[index].contract,
                         self.rule_metadata.policies(),
                     )
                 })
             {
                 let mut inactive = false;
-                for (_, field) in &selected {
-                    if let FieldContract::Conditional { when, .. } = field.contract {
+                for &index in selected.iter() {
+                    if let FieldContract::Conditional { when, .. } = self.fields[index].contract {
                         inactive |= !when
                             .matches_pair(
                                 self.source_root,
@@ -574,19 +633,22 @@ impl Comparator<'_> {
                     }
                 }
                 if inactive {
-                    if !self.equal_values(source, target, pointer, target_pointer) {
+                    if !self.equal_values(source_node, target_node) {
                         return Err(difference(
                             pointer,
                             "inactive field contract requires exact equality",
                         ));
                     }
-                    for (index, field) in selected {
+                    for &index in selected.iter() {
                         decisions.selected.insert(index);
-                        decisions.evaluated.insert(field.rule_id.into());
+                        decisions
+                            .evaluated
+                            .insert(self.fields[index].rule_id.into());
                     }
                     return Ok(());
                 }
-                for (index, field) in selected {
+                for &index in selected.iter() {
+                    let field = &self.fields[index];
                     decisions.selected.insert(index);
                     decisions.evaluated.insert(field.rule_id.into());
                     let definition = field
@@ -597,8 +659,8 @@ impl Comparator<'_> {
                     self.registered_policy(
                         &definition,
                         field,
-                        source,
-                        target,
+                        source_node,
+                        target_node,
                         pointer,
                         target_pointer,
                         decisions,
@@ -609,8 +671,9 @@ impl Comparator<'_> {
             }
             return Err(difference(pointer, "conflicting field contracts"));
         }
-        if let Some((index, field)) = verified.first() {
-            decisions.selected_native.insert(self.native.len() + *index);
+        if let Some(&index) = verified.first() {
+            let field = &self.verified[index];
+            decisions.selected_native.insert(self.native.len() + index);
             decisions.evaluated.insert(field.rule_id.into());
             return native::verify(
                 field,
@@ -626,13 +689,15 @@ impl Comparator<'_> {
                 decisions,
             );
         }
-        if let Some((index, field)) = native.first() {
-            decisions.selected_native.insert(*index);
+        if let Some(&index) = native.first() {
+            let field = &self.native[index];
+            decisions.selected_native.insert(index);
             decisions.evaluated.insert(field.rule_id.into());
             return native::compare(source, target, field, pointer, self.clocks, decisions);
         }
-        if let Some((index, field)) = selected.first() {
-            decisions.selected.insert(*index);
+        if let Some(&index) = selected.first() {
+            let field = &self.fields[index];
+            decisions.selected.insert(index);
             decisions.evaluated.insert(field.rule_id.into());
             let contract = if let FieldContract::Conditional { when, contract } = field.contract {
                 if !when
@@ -644,7 +709,7 @@ impl Comparator<'_> {
                         )
                     })?
                 {
-                    return if self.equal_values(source, target, pointer, target_pointer) {
+                    return if self.equal_values(source_node, target_node) {
                         Ok(())
                     } else {
                         Err(difference(
@@ -663,8 +728,8 @@ impl Comparator<'_> {
                 return self.registered_policy(
                     &definition,
                     field,
-                    source,
-                    target,
+                    source_node,
+                    target_node,
                     pointer,
                     target_pointer,
                     decisions,
@@ -673,7 +738,7 @@ impl Comparator<'_> {
             }
             match contract {
                 FieldContract::Exact => {
-                    return if self.equal_values(source, target, pointer, target_pointer) {
+                    return if self.equal_values(source_node, target_node) {
                         Ok(())
                     } else {
                         Err(difference(
@@ -683,7 +748,7 @@ impl Comparator<'_> {
                     };
                 }
                 FieldContract::IdentityAnchor => {
-                    if !self.equal_values(source, target, pointer, target_pointer) {
+                    if !self.equal_values(source_node, target_node) {
                         return Err(difference(pointer, "exact identity value changed"));
                     }
                     return decisions
@@ -706,9 +771,8 @@ impl Comparator<'_> {
                 }
             }
         }
-        if let Some((source, target)) = self.logical_roots {
-            let source = source.pointer(pointer);
-            let target = target.pointer(target_pointer);
+        if self.logical_roots.is_some() {
+            let (source, target) = (source_node.logical, target_node.logical);
             let scalar = |value: Option<&traffic_value::Value>| {
                 value.is_some_and(|value| {
                     !matches!(
@@ -727,46 +791,57 @@ impl Comparator<'_> {
         }
         match (source, target) {
             (Value::Object(source), Value::Object(target)) => {
-                if let Some(key) = source.keys().find(|key| !target.contains_key(*key)) {
-                    return Err(difference(
-                        &format!("{pointer}/{}", escape(key)),
-                        "field presence changed",
-                    ));
+                let shared_map = std::ptr::eq(source, target);
+                if !shared_map {
+                    if let Some(key) = source.keys().find(|key| !target.contains_key(*key)) {
+                        return Err(difference(
+                            &format!("{pointer}/{}", escape(key)),
+                            "field presence changed",
+                        ));
+                    }
+                    if let Some(key) = target.keys().find(|key| !source.contains_key(*key)) {
+                        return Err(difference(
+                            &format!("{pointer}/{}", escape(key)),
+                            "unexpected field",
+                        ));
+                    }
                 }
-                if let Some(key) = target.keys().find(|key| !source.contains_key(*key)) {
-                    return Err(difference(
-                        &format!("{pointer}/{}", escape(key)),
-                        "unexpected field",
-                    ));
-                }
-                for (key, source) in source {
-                    let child = format!("{pointer}/{}", escape(key));
-                    let target = target
-                        .get(key)
-                        .ok_or_else(|| difference(&child, "field presence changed"))?;
-                    self.node(
-                        source,
-                        target,
-                        &child,
-                        &format!("{target_pointer}/{}", escape(key)),
-                        decisions,
-                        depth + 1,
-                    )?;
+                let shared_node = shared_map && source_node.shares_logical_with(target_node);
+                for (key, value) in source {
+                    paths.at_key(key, |paths| {
+                        let source_child = source_node.object_child(value, key);
+                        let target_child = if shared_node {
+                            source_child
+                        } else {
+                            let projected = if shared_map {
+                                value
+                            } else {
+                                target.get(key).ok_or_else(|| {
+                                    difference(paths.pair().0, "field presence changed")
+                                })?
+                            };
+                            target_node.object_child(projected, key)
+                        };
+                        self.node(source_child, target_child, paths, decisions, depth + 1)
+                    })?;
                 }
             }
             (Value::Array(source), Value::Array(target)) => {
                 if source.len() != target.len() {
                     return Err(difference(pointer, "array cardinality changed"));
                 }
+                let shared_node =
+                    std::ptr::eq(source, target) && source_node.shares_logical_with(target_node);
                 for (index, (source, target)) in source.iter().zip(target).enumerate() {
-                    self.node(
-                        source,
-                        target,
-                        &format!("{pointer}/{index}"),
-                        &format!("{target_pointer}/{index}"),
-                        decisions,
-                        depth + 1,
-                    )?;
+                    paths.at_index(index, |paths| {
+                        let source_child = source_node.array_child(source, index);
+                        let target_child = if shared_node {
+                            source_child
+                        } else {
+                            target_node.array_child(target, index)
+                        };
+                        self.node(source_child, target_child, paths, decisions, depth + 1)
+                    })?;
                 }
             }
             _ if source == target && same_type(source, target) => (),
@@ -800,4 +875,38 @@ fn test_compare(
         &[],
         &RegisteredRules(traffic_extensions::policies()),
     )
+}
+
+#[cfg(test)]
+#[test]
+fn exact_same_reference_keeps_the_comparison_budget_and_diagnostic() {
+    let source = Value::Array(vec![Value::Null; MAX_COMPARISONS - 1]);
+    assert!(compare(&source, &source, &[], AnchorClocks::default()).passed());
+    let source = Value::Array(vec![Value::Null; MAX_COMPARISONS]);
+    let result = compare(&source, &source, &[], AnchorClocks::default());
+    assert_eq!(result.differences.len(), 1);
+    assert_eq!(
+        result.differences[0].pointer,
+        format!("/{}", MAX_COMPARISONS - 1)
+    );
+    assert_eq!(
+        result.differences[0].reason,
+        "contract comparison limit exceeded"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn prefetch_estimate_includes_identity_tokens_and_requires_success() {
+    let mut result = Comparison::default();
+    let before = result.prefetch_retained_bytes().unwrap();
+    let source = Value::String("recorded-token".repeat(16));
+    let target = Value::String("delivered-token".repeat(16));
+    result.identities.observe(&source, &target).unwrap();
+    assert!(
+        result.prefetch_retained_bytes().unwrap()
+            >= before + source.as_str().unwrap().len() + target.as_str().unwrap().len()
+    );
+    result.differences.push(difference("", "failed"));
+    assert!(result.prefetch_retained_bytes().is_none());
 }

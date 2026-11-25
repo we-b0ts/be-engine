@@ -14,6 +14,7 @@ fn expand(
     Ok((
         headers.map(|value| HttpPolicy {
             headers: value.headers,
+            request_metadata: value.request_metadata,
         }),
         rules,
     ))

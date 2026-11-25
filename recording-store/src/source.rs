@@ -7,6 +7,7 @@ pub mod reader;
 pub mod recording;
 pub mod reference;
 pub mod scoped;
+pub(crate) mod segment_window;
 pub mod store;
 pub mod stream;
 pub use model::{FileStamp, RecordLocation};

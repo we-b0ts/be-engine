@@ -10,12 +10,47 @@ use super::proxy::Relay;
 use crate::AppState;
 use crate::recorder::{CaseInvalidation, CaseInvalidationContext};
 
-pub(super) const CASE_DRAIN_BUDGET: Duration = Duration::from_secs(60);
+const DRAIN_BUDGET: Duration = Duration::from_secs(60);
+const SESSION_DRAIN_BUDGET: Duration = Duration::from_secs(15);
 
 pub(super) async fn drain<R: Redis + Clone + 'static>(
     state: &AppState,
     relay: &Relay<R>,
 ) -> Result<()> {
+    if state.session_events() {
+        drain_session(state, relay, SESSION_DRAIN_BUDGET).await
+    } else {
+        drain_cases(state, relay).await
+    }
+}
+
+pub(super) async fn drain_session<R: Redis + Clone + 'static>(
+    state: &AppState,
+    relay: &Relay<R>,
+    budget: Duration,
+) -> Result<()> {
+    info!(
+        timeout_ms = budget.as_millis(),
+        "normal recording shutdown waiting for admitted session ingress"
+    );
+    tokio::select! {
+        biased;
+        _ = state.wait_for_interaction_source_stop() => {},
+        _ = state.inner.active_cases.wait_for_quiescing() => {},
+        _ = relay.drain() => {},
+        _ = tokio::time::sleep(budget) => {
+            info!("closing remaining session ingress before Source shutdown");
+        }
+    }
+    state.inner.session_ingress.disconnect(state).await?;
+    relay.drain().await;
+    if let Some(error) = state.inner.recording_lifecycle.snapshot().error {
+        anyhow::bail!("session capture failed: {error}");
+    }
+    Ok(())
+}
+
+async fn drain_cases<R: Redis + Clone + 'static>(state: &AppState, relay: &Relay<R>) -> Result<()> {
     let started = Instant::now();
     let requested_at = chrono::Utc::now();
     state
@@ -26,11 +61,11 @@ pub(super) async fn drain<R: Redis + Clone + 'static>(
             "trigger": "shutdown_signal",
             "phase": "case_drain",
             "outcome": "waiting",
-            "case_drain_timeout_ms": CASE_DRAIN_BUDGET.as_millis(),
+            "case_drain_timeout_ms": DRAIN_BUDGET.as_millis(),
         }))
         .await?;
     info!(
-        timeout_ms = CASE_DRAIN_BUDGET.as_millis(),
+        timeout_ms = DRAIN_BUDGET.as_millis(),
         "normal recording shutdown waiting for admitted cases"
     );
     let completed = async {
@@ -39,7 +74,7 @@ pub(super) async fn drain<R: Redis + Clone + 'static>(
             state
                 .inner
                 .active_cases
-                .wait_for_no_active_case(CASE_DRAIN_BUDGET)
+                .wait_for_no_active_case(DRAIN_BUDGET)
         )
         .1
     };
@@ -48,12 +83,12 @@ pub(super) async fn drain<R: Redis + Clone + 'static>(
         _ = state.wait_for_interaction_source_stop() => "source_stop_required",
         _ = state.inner.active_cases.wait_for_quiescing() => "source_stop_required",
         completed = completed => if completed { "drained" } else { "case_drain_timeout" },
-        _ = tokio::time::sleep_until(tokio::time::Instant::from_std(started + CASE_DRAIN_BUDGET)) => "case_drain_timeout",
+        _ = tokio::time::sleep_until(tokio::time::Instant::from_std(started + DRAIN_BUDGET)) => "case_drain_timeout",
     };
     let cases = if outcome == "case_drain_timeout" {
         let failure = CaseInvalidation::new(
             "shutdown_case_drain_timeout",
-            format!("normal recording shutdown exceeded its {} ms case drain budget; Source will be stopped and this incomplete case cannot be published", CASE_DRAIN_BUDGET.as_millis()),
+            format!("normal recording shutdown exceeded its {} ms case drain budget; Source will be stopped and this incomplete case cannot be published", DRAIN_BUDGET.as_millis()),
         ).with_context(CaseInvalidationContext {
             category: "recording_shutdown".to_owned(),
             elapsed_ms: started.elapsed().as_millis(),
@@ -78,7 +113,7 @@ pub(super) async fn drain<R: Redis + Clone + 'static>(
             }));
         }
         warn!(
-            timeout_ms = CASE_DRAIN_BUDGET.as_millis(),
+            timeout_ms = DRAIN_BUDGET.as_millis(),
             "normal recording shutdown case drain timed out; preserving shutdown failure before stopping Source"
         );
         state.begin_case_quiescing();
@@ -95,9 +130,10 @@ pub(super) async fn drain<R: Redis + Clone + 'static>(
             "trigger": "shutdown_signal",
             "phase": "before_source_stop",
             "outcome": outcome,
-            "case_drain_timeout_ms": CASE_DRAIN_BUDGET.as_millis(),
+            "case_drain_timeout_ms": DRAIN_BUDGET.as_millis(),
             "elapsed_ms": started.elapsed().as_millis(),
             "cases": cases,
         }))
-        .await
+        .await?;
+    Ok(())
 }

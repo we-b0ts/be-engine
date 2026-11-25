@@ -13,6 +13,7 @@ use hyper_util::{
 };
 use std::{
     convert::Infallible,
+    num::NonZeroU32,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -29,6 +30,7 @@ use tracing::warn;
 mod interaction;
 mod listener;
 mod ordinary;
+mod session;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -46,19 +48,21 @@ pub(super) struct Relay<R> {
     reservations: Option<RedisAdmissionProvider<R>>,
     client: Client<HttpConnector, RelayBody>,
     origin: hyper::Uri,
-    scope: String,
+    scope: Option<String>,
     ready: Arc<AtomicBool>,
     slot: Arc<Semaphore>,
+    capacity: u32,
     timeout: Duration,
     max_body: usize,
     interactions: Option<InteractionRelay>,
+    session: Option<session::SessionRelay>,
 }
 
 impl<R: Redis + Clone + 'static> Relay<R> {
     pub(super) fn new(
         reservations: Option<RedisAdmissionProvider<R>>,
         origin: hyper::Uri,
-        scope: String,
+        scope: Option<String>,
         timeout: Duration,
         max_body: usize,
     ) -> Self {
@@ -71,10 +75,23 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             scope,
             ready: Arc::new(AtomicBool::new(false)),
             slot: Arc::new(Semaphore::new(1)),
+            capacity: 1,
             timeout,
             max_body,
             interactions: None,
+            session: None,
         }
+    }
+
+    pub(super) fn with_session_events(
+        mut self,
+        state: crate::AppState,
+        capacity: NonZeroU32,
+    ) -> Self {
+        self.capacity = capacity.get();
+        self.slot = Arc::new(Semaphore::new(self.capacity as usize));
+        self.session = Some(session::SessionRelay::new(state));
+        self
     }
 
     pub(super) fn with_interactions(
@@ -93,7 +110,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         self.ready.store(false, Ordering::SeqCst);
     }
     pub(super) async fn drain(&self) {
-        let _permit = self.slot.acquire().await;
+        let _permits = self.slot.acquire_many(self.capacity).await;
     }
 
     async fn release(&self, ticket: &Option<AdmissionTicket>) {
@@ -107,7 +124,9 @@ impl<R: Redis + Clone + 'static> Relay<R> {
 
     async fn handle(&self, mut request: Request<Incoming>) -> Response<RelayBody> {
         wire::strip_private(request.headers_mut());
-        if self.interactions.is_some() && wire::is_interaction(&request) {
+        if let Some(session) = &self.session {
+            self.handle_session(request, session).await
+        } else if self.interactions.is_some() && wire::is_interaction(&request) {
             self.handle_interaction(request).await
         } else {
             self.handle_ordinary(request).await

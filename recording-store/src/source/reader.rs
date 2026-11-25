@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, ensure};
+use bytes::Bytes;
 
 use super::compact;
 use super::digest;
@@ -14,6 +15,7 @@ use super::model::{FileStamp, RecordLocation};
 #[derive(Debug)]
 pub struct RecordReader {
     verify: bool,
+    map_payloads: bool,
     capacity: usize,
     bytes: usize,
     records: HashMap<RecordKey, CachedRecord>,
@@ -22,6 +24,7 @@ pub struct RecordReader {
     source: Option<(PathBuf, super::scoped::Source)>,
     partitions: Option<(PathBuf, FileStamp, crate::partitions::Reader)>,
     compact: Option<(PathBuf, FileStamp, compact::Reader)>,
+    response_cell: Vec<u8>,
     pub source_bytes: u64,
     pub hits: usize,
 }
@@ -33,6 +36,7 @@ impl RecordReader {
     pub fn new(capacity: usize) -> Self {
         Self {
             verify: true,
+            map_payloads: false,
             capacity,
             bytes: 0,
             records: HashMap::new(),
@@ -41,6 +45,7 @@ impl RecordReader {
             source: None,
             partitions: None,
             compact: None,
+            response_cell: Vec::new(),
             source_bytes: 0,
             hits: 0,
         }
@@ -52,6 +57,18 @@ impl RecordReader {
         Self {
             verify: false,
             ..Self::new(capacity)
+        }
+    }
+
+    /// Enable mapped payload slices for an immutable Session recording.
+    ///
+    /// # Safety
+    ///
+    /// Sealed segment files must remain unchanged while a returned slice is live.
+    pub unsafe fn for_session_replay(capacity: usize) -> Self {
+        Self {
+            map_payloads: true,
+            ..Self::for_replay(capacity)
         }
     }
 
@@ -96,6 +113,40 @@ impl RecordReader {
         Ok(metadata)
     }
 
+    pub(super) fn read_response_bytes(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+    ) -> Result<Option<Bytes>> {
+        if self.verify || !crate::partitions::is_directory(path) {
+            return Ok(None);
+        }
+        let mut cell = std::mem::take(&mut self.response_cell);
+        let result = self.read_response_cell(path, stamp, location, &mut cell);
+        self.response_cell = cell;
+        result
+    }
+
+    fn read_response_cell(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+        cell: &mut Vec<u8>,
+    ) -> Result<Option<Bytes>> {
+        let reader = self.partition_reader(path, stamp)?;
+        if !reader.read_response_cell(location.line, (location.offset, location.length), cell)? {
+            return Ok(None);
+        }
+        let recording_id = reader.recording_id;
+        let body = self
+            .compact_reader(path, stamp, recording_id)?
+            .read_response_bytes(cell)?;
+        self.source_bytes += cell.len() as u64 + body.as_ref().map_or(0, |body| body.len() as u64);
+        Ok(body)
+    }
+
     fn partition_reader(
         &mut self,
         path: &Path,
@@ -132,6 +183,10 @@ impl RecordReader {
         {
             let reader = if self.verify {
                 compact::Reader::open(path, recording_id)?
+            } else if self.map_payloads {
+                // SAFETY: `map_payloads` is only enabled by the Session
+                // constructor, which requires sealed immutable input.
+                unsafe { compact::Reader::open_for_session_replay(path, recording_id)? }
             } else {
                 compact::Reader::open_for_replay(path, recording_id)?
             };
@@ -146,7 +201,28 @@ impl RecordReader {
         stamp: &FileStamp,
         location: &RecordLocation,
     ) -> Result<Arc<Vec<u8>>> {
-        let source = match &self.source {
+        let source = self.resolve_source(path)?;
+        self.read_source(&source, stamp, location)
+    }
+
+    pub(super) fn read_value(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+    ) -> Result<serde_json::Value> {
+        let source = self.resolve_source(path)?;
+        self.read_record(
+            &source,
+            stamp,
+            location,
+            |bytes| Ok(serde_json::from_slice(&bytes)?),
+            |record, _| Ok(record),
+        )
+    }
+
+    fn resolve_source(&mut self, path: &Path) -> Result<super::scoped::Source> {
+        Ok(match &self.source {
             Some((original, source)) if original == path => source.clone(),
             _ => {
                 let mut source = super::scoped::resolve(path)?;
@@ -156,8 +232,7 @@ impl RecordReader {
                 self.source = Some((path.to_owned(), source.clone()));
                 source
             }
-        };
-        self.read_source(&source, stamp, location)
+        })
     }
 
     pub fn read_source(
@@ -166,6 +241,20 @@ impl RecordReader {
         stamp: &FileStamp,
         location: &RecordLocation,
     ) -> Result<Arc<Vec<u8>>> {
+        self.read_record(source, stamp, location, Ok, |record, mut bytes| {
+            compact::encode_materialized(&record, &mut bytes)?;
+            Ok(Arc::new(bytes))
+        })
+    }
+
+    fn read_record<T>(
+        &mut self,
+        source: &super::scoped::Source,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+        json: impl FnOnce(Arc<Vec<u8>>) -> Result<T>,
+        compact: impl FnOnce(serde_json::Value, Vec<u8>) -> Result<T>,
+    ) -> Result<T> {
         let path = &source.path;
         if self.verify {
             source.validate()?;
@@ -194,7 +283,7 @@ impl RecordReader {
             if self.verify {
                 source.validate()?;
             }
-            return Ok(bytes);
+            return json(bytes);
         }
         let mut bytes = Vec::new();
         let recording_id = if crate::partitions::is_directory(path) {
@@ -232,12 +321,11 @@ impl RecordReader {
         }
         self.source_bytes += location.length;
         if let Some(recording_id) = recording_id {
-            let compact = self.compact_reader(path, stamp, recording_id)?;
-            compact.validate()?;
-            let record = compact.read(&bytes)?;
-            compact::encode_materialized(&record, &mut bytes)?;
-            compact.validate()?;
-            return Ok(Arc::new(bytes));
+            let reader = self.compact_reader(path, stamp, recording_id)?;
+            reader.validate()?;
+            let record = compact(reader.read(&bytes)?, bytes)?;
+            reader.validate()?;
+            return Ok(record);
         }
         let bytes = Arc::new(bytes);
         if bytes.len() <= self.capacity {
@@ -260,13 +348,92 @@ impl RecordReader {
             self.order.push_back((key.clone(), self.generation));
             self.records.insert(key, (bytes.clone(), self.generation));
         }
-        Ok(bytes)
+        json(bytes)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::RecordSource;
+    use crate::writer::{
+        JsonlBufferSettings, JsonlWriterPool, LedgerFiles, RecordKind, RowLayout, RowStamp,
+    };
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+    use traffic_model::attribution::DependencyOwner;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn compact_values_restore_payloads_using_indexed_read_checks() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let recording_id = Uuid::new_v4();
+        let process_epoch = Uuid::new_v4();
+        let mut ledger =
+            LedgerFiles::initialize_for_mode(root, recording_id, process_epoch, true).await?;
+        let mut files = JsonlWriterPool::new(JsonlBufferSettings {
+            capacity: 4096,
+            flush_interval: std::time::Duration::from_secs(30),
+        });
+        let event = json!({
+            "recording_id": recording_id,
+            "capture": {"sequence":1,"process_epoch":process_epoch},
+            "outcome": {"kind":"response"},
+            "capture_complete": true,
+            "response": {"value":"x".repeat(5000)},
+        });
+        let row_stamp = |sequence| RowStamp {
+            sequence,
+            offset_micros: sequence,
+        };
+        let location = ledger
+            .append_dependency(
+                &mut files,
+                event.clone(),
+                &DependencyOwner::Startup {
+                    process_epoch,
+                    initialization_unit: "test".into(),
+                },
+                RecordKind::Exchange,
+                &RowLayout::default(),
+                Some(row_stamp(1)),
+                row_stamp(2),
+            )
+            .await?;
+        ledger.seal(&mut files).await?;
+        assert!(root.join("payload").is_dir());
+
+        let path = crate::source::recording::dependency_path(root);
+        let stamp = FileStamp::read(&path)?;
+        let source = RecordSource::new(
+            &path,
+            stamp.clone(),
+            Arc::new(Mutex::new(RecordReader::new(0))),
+        );
+        let reference = source.reference(location.clone());
+        let value = reference.load_value()?;
+        assert_eq!(value, reference.load::<Value>()?);
+        assert_eq!(value["response"], event["response"]);
+        let bad_digest = RecordLocation {
+            sha256: String::new(),
+            ..location.clone()
+        };
+        assert!(source.reference(bad_digest).load_value().is_err());
+
+        let replay = RecordSource::new(
+            &path,
+            stamp,
+            Arc::new(Mutex::new(RecordReader::for_replay(0))),
+        );
+        assert_eq!(replay.reference(location.clone()).load_value()?, value);
+        let bad_range = RecordLocation {
+            length: location.length + 1,
+            ..location
+        };
+        assert!(replay.reference(bad_range).load_value().is_err());
+        Ok(())
+    }
 
     #[test]
     fn replay_reads_indexed_ranges_without_rechecking_the_file_or_record_digest() -> Result<()> {

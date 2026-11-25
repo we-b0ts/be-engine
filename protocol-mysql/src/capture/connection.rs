@@ -271,6 +271,7 @@ pub(crate) async fn run_io(
                         connection_id: c2s_connection_id,
                         sequence,
                         command: &command,
+                        payload_len: packet.payload.len(),
                         prepared_sql: prepared_sql.as_deref(),
                         database: current_database.as_deref(),
                         username: c2s_username.as_deref(),

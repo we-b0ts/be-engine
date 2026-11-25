@@ -31,9 +31,9 @@ impl Value {
             return Some(value);
         }
         for segment in pointer.strip_prefix('/')?.split('/') {
-            let key = segment.replace("~1", "/").replace("~0", "~");
+            let key = crate::path::unescape(segment);
             value = match value {
-                Self::Object(fields) => fields.get(&key)?,
+                Self::Object(fields) => fields.get(key.as_ref())?,
                 Self::Array(values) => values.get(array_index(&key)?)?,
                 _ => return None,
             };
@@ -54,9 +54,9 @@ impl Value {
             return Some(value);
         }
         for segment in pointer.strip_prefix('/')?.split('/') {
-            let key = segment.replace("~1", "/").replace("~0", "~");
+            let key = crate::path::unescape(segment);
             value = match value {
-                Self::Object(fields) => fields.get_mut(&key)?,
+                Self::Object(fields) => fields.get_mut(key.as_ref())?,
                 Self::Array(values) => values.get_mut(array_index(&key)?)?,
                 _ => return None,
             };
@@ -159,5 +159,25 @@ impl<'de> Deserialize<'de> for Value {
             }
         }
         deserializer.deserialize_any(Visitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Value;
+
+    #[test]
+    fn pointers_share_lookup_semantics_for_plain_and_escaped_segments() {
+        let mut value: Value =
+            serde_json::from_str(r#"{"plain":[{"汉/~0":true}],"~2":false,"":null}"#).unwrap();
+        let mut pointer = "/plain/0".to_owned();
+        crate::path::push_segment(&mut pointer, "汉/~0");
+        assert_eq!(pointer, "/plain/0/汉~1~00");
+        assert_eq!(value.pointer(&pointer), Some(&Value::Bool(true)));
+        *value.pointer_mut(&pointer).unwrap() = Value::Null;
+        assert_eq!(value.pointer(&pointer), Some(&Value::Null));
+        assert_eq!(value.pointer("/~2"), Some(&Value::Bool(false)));
+        assert_eq!(value.pointer("/"), Some(&Value::Null));
+        assert_eq!(value.pointer("/plain/00"), None);
     }
 }

@@ -33,6 +33,7 @@ pub struct LedgerWriter {
     lifecycle: BTreeMap<u64, bool>,
     cases: BTreeMap<Uuid, Vec<ScopeRecordLocation>>,
     inputs: BTreeMap<Uuid, RecordedCase>,
+    session: Option<crate::session::SessionCapture>,
     capture_policy_identity: String,
     source_artifact: SourceArtifactIdentity,
     sealed: bool,
@@ -48,12 +49,19 @@ impl LedgerWriter {
         capture_policy_identity: String,
         clock: RecordingClock,
         evidence: std::sync::Arc<traffic_protocol::evidence::EvidenceRegistry>,
+        session_events: bool,
     ) -> Result<Self> {
         let run_epoch = clock.recording_id();
         Ok(Self {
             evidence,
             root: root.into(),
-            storage: LedgerFiles::initialize(root, run_epoch, process_epoch).await?,
+            storage: LedgerFiles::initialize_for_mode(
+                root,
+                run_epoch,
+                process_epoch,
+                session_events,
+            )
+            .await?,
             process_epoch,
             run_epoch,
             #[cfg(feature = "test-support")]
@@ -64,6 +72,7 @@ impl LedgerWriter {
             lifecycle: BTreeMap::new(),
             cases: BTreeMap::new(),
             inputs: BTreeMap::new(),
+            session: session_events.then(crate::session::SessionCapture::default),
             capture_policy_identity,
             source_artifact: SourceArtifactIdentity::Unavailable {
                 reason: "external_source_binary_identity_not_supplied".into(),
@@ -72,6 +81,22 @@ impl LedgerWriter {
             process_dependency_tasks: BTreeMap::new(),
             semantic_inventory: SemanticInventory::default(),
         })
+    }
+
+    pub(crate) async fn session_event(
+        &mut self,
+        files: &mut crate::jsonl::JsonlWriterPool,
+        record: &RecordedEvent<traffic_model::session::SessionEvent>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            !self.sealed,
+            "recording dependency ledger is already sealed"
+        );
+        self.session
+            .as_mut()
+            .context("session capture is disabled")?
+            .observe(&record.event)?;
+        self.storage.append_session_event(files, record).await
     }
 
     pub fn set_capture_policy_identity(
@@ -230,7 +255,8 @@ impl LedgerWriter {
                 .await;
         }
         let semantic_required = facts.semantic_required(
-            global.is_some_and(|attribution| attribution.reason == "preflight_probe"),
+            self.session.is_none()
+                && global.is_some_and(|attribution| attribution.reason == "preflight_probe"),
         );
         let terminal = facts.terminal;
         let complete = facts.complete;
@@ -321,6 +347,7 @@ impl LedgerWriter {
                     declaration: facts.recording_layout,
                     target: facts.recording_target,
                     upstream: facts.recording_upstream,
+                    response_literal: facts.recording_response_literal,
                 },
                 stamps.request,
                 stamps.response.context("dependency has no payload stamp")?,
@@ -339,6 +366,9 @@ impl LedgerWriter {
                 ),
             )
             .await?;
+        }
+        if self.session.is_some() {
+            return Ok(());
         }
         let location = ScopeRecordLocation {
             line: position.line,
@@ -373,6 +403,12 @@ impl LedgerWriter {
         targets: Option<&CaptureContext<'_>>,
         global: Option<&GlobalDependencyAttribution>,
     ) -> DependencyOwner {
+        if self.session.is_some() {
+            return DependencyOwner::Startup {
+                process_epoch: self.process_epoch,
+                initialization_unit: "session".into(),
+            };
+        }
         if let Some(probe) = global.filter(|a| a.reason == "preflight_probe") {
             return DependencyOwner::Startup {
                 process_epoch: self.process_epoch,
@@ -557,6 +593,10 @@ impl LedgerWriter {
                 && coverage.capture_failures == 0
                 && coverage.pending.is_empty()
                 && coverage.admitted == coverage.terminal
+                && self
+                    .session
+                    .as_ref()
+                    .is_none_or(crate::session::SessionCapture::complete)
                 && self.inputs.values().all(|input| input.complete),
             coverage,
             records: self.storage.records() as u64,

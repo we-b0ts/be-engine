@@ -25,6 +25,24 @@ impl std::fmt::Debug for Bijection {
 mod tests;
 
 impl Bijection {
+    pub(super) fn prefetch_retained_bytes(&self) -> usize {
+        if self.forward.is_empty() {
+            return 0;
+        }
+        let nodes = btree_retained_bytes::<[u8; 32], [u8; 32]>(self.forward.len())
+            .saturating_add(btree_retained_bytes::<[u8; 32], [u8; 32]>(
+                self.reverse.len(),
+            ))
+            .saturating_add(btree_retained_bytes::<[u8; 32], (String, String)>(
+                self.tokens.len(),
+            ));
+        self.tokens.values().fold(nodes, |bytes, (source, target)| {
+            bytes
+                .saturating_add(source.capacity())
+                .saturating_add(target.capacity())
+        })
+    }
+
     fn bind(&mut self, source: [u8; 32], target: [u8; 32]) -> Result<(), &'static str> {
         if self.forward.get(&source).is_some_and(|v| *v != target)
             || self.reverse.get(&target).is_some_and(|v| *v != source)
@@ -43,10 +61,17 @@ impl Bijection {
         if std::mem::discriminant(source) != std::mem::discriminant(target) {
             return Err("identity scalar representation changed");
         }
+        let shared = std::ptr::eq(source, target);
         let source = key(source, "").map_err(|_| "identity scalar representation is invalid")?;
-        let target = key(target, "").map_err(|_| "identity scalar representation is invalid")?;
         let source_hash = Sha256::digest(source.as_bytes()).into();
-        let target_hash = Sha256::digest(target.as_bytes()).into();
+        let (target, target_hash) = if shared {
+            (source.clone(), source_hash)
+        } else {
+            let target =
+                key(target, "").map_err(|_| "identity scalar representation is invalid")?;
+            let hash = Sha256::digest(target.as_bytes()).into();
+            (target, hash)
+        };
         self.bind(source_hash, target_hash)?;
         self.store_tokens(source_hash, source, target)?;
         Ok(())

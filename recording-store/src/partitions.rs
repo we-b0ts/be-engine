@@ -11,7 +11,10 @@ use uuid::Uuid;
 pub(crate) const DIRECTORY: &str = "dependency-locations.bin";
 pub(crate) const PUSH_DEPENDENCIES: &str = "dependencies-push.tsv";
 pub(crate) const ORDINARY: usize = 0;
+const PROCESS: usize = 1;
 pub(crate) const PUSH: usize = 2;
+const UNATTRIBUTED: usize = 3;
+const OBSERVATIONS: usize = 4;
 pub(crate) const FILES: [&str; 5] = [
     crate::format::DEPENDENCIES,
     "dependencies-process.tsv",
@@ -19,6 +22,8 @@ pub(crate) const FILES: [&str; 5] = [
     "dependencies-unattributed.tsv",
     "observations.tsv",
 ];
+pub(crate) const SESSION: usize = FILES.len();
+pub(crate) const PARTITION_COUNT: usize = SESSION + 1;
 const HEADER_BYTES: usize = 16;
 const ENTRY_BYTES: u64 = 49;
 
@@ -53,13 +58,36 @@ pub enum RecordKind {
     Observation,
 }
 
-pub(crate) fn partition(owner: &DependencyOwner, kind: RecordKind) -> usize {
+pub(crate) fn files(session: bool) -> impl Iterator<Item = (usize, &'static str)> {
+    FILES
+        .into_iter()
+        .enumerate()
+        .filter(move |(index, _)| !session || *index == OBSERVATIONS)
+        .chain(session.then_some((SESSION, crate::session::FILE)))
+}
+
+pub(crate) fn file(partition: usize) -> Option<&'static str> {
+    if partition == SESSION {
+        Some(crate::session::FILE)
+    } else {
+        FILES.get(partition).copied()
+    }
+}
+
+pub(crate) fn partition(owner: &DependencyOwner, kind: RecordKind, session: bool) -> usize {
+    if session {
+        return if matches!(kind, RecordKind::Observation) {
+            OBSERVATIONS
+        } else {
+            SESSION
+        };
+    }
     match (owner, kind) {
-        (_, RecordKind::Observation) => 4,
-        (DependencyOwner::Unattributed { .. }, _) => 3,
+        (_, RecordKind::Observation) => OBSERVATIONS,
+        (DependencyOwner::Unattributed { .. }, _) => UNATTRIBUTED,
         (_, RecordKind::Message) => PUSH,
         (DependencyOwner::Case { .. }, _) => ORDINARY,
-        _ => 1,
+        _ => PROCESS,
     }
 }
 
@@ -100,7 +128,7 @@ impl Span {
 
     fn decode(row: [u8; ENTRY_BYTES as usize]) -> Result<Self> {
         let partition = usize::from(row[48]);
-        ensure!(partition < FILES.len(), "unknown dependency partition");
+        ensure!(partition < PARTITION_COUNT, "unknown dependency partition");
         let header_length = u64::from_le_bytes(row[16..24].try_into()?);
         let response_length = u64::from_le_bytes(row[40..48].try_into()?);
         ensure!(
@@ -124,7 +152,7 @@ pub(crate) struct Reader {
     root: PathBuf,
     directory: BufReader<File>,
     pub(crate) recording_id: Uuid,
-    partitions: [Option<PartitionInput>; FILES.len()],
+    partitions: [Option<PartitionInput>; PARTITION_COUNT],
     next_line: usize,
 }
 
@@ -171,6 +199,27 @@ impl Reader {
         Ok(())
     }
 
+    /// Read a unified Session response cell without materializing its envelope.
+    pub(crate) fn read_response_cell(
+        &mut self,
+        line: usize,
+        expected: (u64, u64),
+        bytes: &mut Vec<u8>,
+    ) -> Result<bool> {
+        let span = self.span(line)?;
+        if span.partition != SESSION {
+            return Ok(false);
+        }
+        ensure!(
+            expected == (span.logical, span.length()?),
+            "dependency scope does not match its partition directory"
+        );
+        bytes.clear();
+        self.partition(span.partition)?
+            .read(span.response_offset, span.response_length, bytes)?;
+        Ok(true)
+    }
+
     pub(crate) fn span(&mut self, line: usize) -> Result<Span> {
         if line != self.next_line {
             let position = u64::try_from(line.checked_sub(1).context("invalid dependency line")?)?
@@ -198,17 +247,7 @@ impl Reader {
             expected.is_none_or(|expected| expected == (span.logical, length)),
             "dependency scope does not match its partition directory"
         );
-        let file = &mut self.partitions[span.partition];
-        if file.is_none() {
-            let path = self.root.join(FILES[span.partition]);
-            let length = crate::source::FileStamp::read_native(&path)?.size;
-            *file = Some(PartitionInput {
-                file: BufReader::with_capacity(64 * 1024, File::open(path)?),
-                length,
-                position: 0,
-            });
-        }
-        let file = file.as_mut().context("missing dependency partition")?;
+        let file = self.partition(span.partition)?;
         bytes.clear();
         let header_length = if !header_only && span.request_length > 0 {
             span.header_length
@@ -230,6 +269,22 @@ impl Reader {
             bytes.push(b'\n');
         }
         Ok(span)
+    }
+
+    fn partition(&mut self, index: usize) -> Result<&mut PartitionInput> {
+        let input = &mut self.partitions[index];
+        if input.is_none() {
+            let path = self
+                .root
+                .join(file(index).context("unknown dependency partition")?);
+            let length = crate::source::FileStamp::read_native(&path)?.size;
+            *input = Some(PartitionInput {
+                file: BufReader::with_capacity(64 * 1024, File::open(path)?),
+                length,
+                position: 0,
+            });
+        }
+        input.as_mut().context("missing dependency partition")
     }
 }
 

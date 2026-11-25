@@ -1,6 +1,9 @@
 //! Resolve explicit clock relationships on immutable JSON positions or identities.
+use std::borrow::Cow;
+
 use super::*;
 use crate::rule::ClockScope;
+use serde::Deserialize;
 #[cfg(test)]
 mod tests;
 
@@ -38,10 +41,10 @@ pub(super) fn resolve(
                     }
                     element = Some(path.clone());
                 }
-                source = source.pointer(&format!("/{a}")).ok_or_else(|| {
+                source = pointer_child(source, a).ok_or_else(|| {
                     difference(source_pointer, "clock scope Source field is absent")
                 })?;
-                target = target.pointer(&format!("/{b}")).ok_or_else(|| {
+                target = pointer_child(target, b).ok_or_else(|| {
                     difference(target_pointer, "clock scope Target field is absent")
                 })?;
             }
@@ -67,12 +70,27 @@ pub(super) fn resolve(
             let target = target_root
                 .pointer(&target_key)
                 .ok_or_else(|| difference(target_pointer, "entity scope Target value is absent"))?;
-            let logical_source = match comparator.logical_roots {
-                Some((root, _)) => root.pointer(&source_key).cloned().ok_or_else(|| {
+            let source_node = Node {
+                projected: source,
+                logical: comparator
+                    .logical_roots
+                    .and_then(|(root, _)| root.pointer(&source_key)),
+            };
+            let target_node = Node {
+                projected: target,
+                logical: comparator
+                    .logical_roots
+                    .and_then(|(_, root)| root.pointer(&target_key)),
+            };
+            let logical_source = if comparator.logical_roots.is_some() {
+                Cow::Borrowed(source_node.logical.ok_or_else(|| {
                     difference(source_pointer, "entity scope logical value is absent")
-                })?,
-                None => serde_json::from_value(source.clone())
-                    .map_err(|error| difference(source_pointer, &error.to_string()))?,
+                })?)
+            } else {
+                Cow::Owned(
+                    traffic_value::Value::deserialize(source)
+                        .map_err(|error| difference(source_pointer, &error.to_string()))?,
+                )
             };
             let mut selected = None;
             for candidate in comparator.fields {
@@ -125,8 +143,8 @@ pub(super) fn resolve(
             comparator.registered_policy(
                 &definition,
                 &identity,
-                source,
-                target,
+                source_node,
+                target_node,
                 &source_key,
                 &target_key,
                 decisions,

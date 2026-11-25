@@ -9,7 +9,7 @@ use traffic_e2e::{
     AppConfig, DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_LISTEN,
     DEFAULT_UDP_GATEWAY_PORT, RecordingApi, ReplayAllowedUnusedHttpConfig, ReplayConfig,
     ReplayLifecycleConfig, ReplayTimerConfig, resolve_recording_api_case_ids,
-    run_replay_with_timer_config,
+    run_replay_with_timer_config, run_session_replay,
 };
 use uuid::Uuid;
 
@@ -21,15 +21,18 @@ pub(super) struct ReplayArgs {
     /// Continue through supported tentative value rules while retaining dirty evidence.
     #[arg(long)]
     pre_match: bool,
-    /// Replay recorded stream timing or cap successful HTTP and ordinary Case Pub/Sub intervals.
+    /// Set stream timing for Case Replay. Session Replay always runs without recorded waits.
     #[arg(long, value_enum)]
     stream_timing: Option<traffic_e2e::ReplayStreamTiming>,
-    /// Maximum HTTP stream or ordinary Case Pub/Sub input gap in fast mode, in milliseconds (default: 5).
+    /// Maximum Case HTTP stream or Pub/Sub gap in fast mode, in milliseconds (default: 5).
     #[arg(long)]
     stream_interval_cap_ms: Option<u64>,
-    /// Published case or case-collection directory.
+    /// Published Case, collection, or sealed recording session directory.
     #[arg(value_name = "CASE_OR_COLLECTION_DIR")]
     case: Option<PathBuf>,
+    /// Replay the complete session event stream, starting at process launch.
+    #[arg(long, conflicts_with_all = ["apis", "case_ids", "pre_match"])]
+    session_events: bool,
     /// Optional replay launcher TOML configuration.
     #[arg(long)]
     config: Option<PathBuf>,
@@ -122,6 +125,7 @@ struct ReplayFileValues {
 }
 
 struct ResolvedReplay {
+    session_events: bool,
     pre_match: bool,
     stream_timing: Option<traffic_e2e::ReplayStreamTiming>,
     stream_interval_cap_ms: u64,
@@ -149,9 +153,14 @@ struct ResolvedReplay {
 
 pub(super) async fn run(args: ReplayArgs) -> Result<()> {
     let resolved = resolve(args)?;
-    let allowed_unused_http = load_allowed_unused_http(resolved.recorder_config.clone())?;
-    let process_owned_dependencies =
-        load_background_dependencies(resolved.recorder_config.as_deref())?;
+    let (allowed_unused_http, process_owned_dependencies) = if resolved.session_events {
+        (Default::default(), Default::default())
+    } else {
+        (
+            load_allowed_unused_http(resolved.recorder_config.clone())?,
+            load_background_dependencies(resolved.recorder_config.as_deref())?,
+        )
+    };
     let mut interception = if resolved.intercept {
         Some(Guard::enable_replay(
             DnsConfig {
@@ -182,30 +191,33 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
             resolved.case_dependency_post_response_window_ms,
         ),
     };
-    let replay = run_replay_with_timer_config(
-        ReplayConfig {
-            case_dir: resolved.case,
-            selected_case_ids: resolved.case_ids,
-            dns_listen: resolved.dns_listen,
-            tcp_listen: resolved.tcp_listen,
-            fake_cidr: resolved.fake_cidr,
-            report_path: Some(resolved.report),
-            session_path: Some(resolved.session),
-            control_socket_path: Some(resolved.control_socket),
-            ca_cert_path: resolved.ca_cert,
-            ca_key_path: resolved.ca_key,
-            policy_path: resolved.policy,
-            http_ignore_query_params: resolved.http_ignore_query_params,
-            process_owned_dependencies,
-            allowed_unused_http,
-        },
-        lifecycle,
-        resolved
-            .intercept
-            .then(super::interception::counter_reader)
-            .transpose()?,
-        resolved.timers,
-    );
+    let config = ReplayConfig {
+        case_dir: resolved.case,
+        selected_case_ids: resolved.case_ids,
+        dns_listen: resolved.dns_listen,
+        tcp_listen: resolved.tcp_listen,
+        fake_cidr: resolved.fake_cidr,
+        report_path: Some(resolved.report),
+        session_path: Some(resolved.session),
+        control_socket_path: Some(resolved.control_socket),
+        ca_cert_path: resolved.ca_cert,
+        ca_key_path: resolved.ca_key,
+        policy_path: resolved.policy,
+        http_ignore_query_params: resolved.http_ignore_query_params,
+        process_owned_dependencies,
+        allowed_unused_http,
+    };
+    let counters = resolved
+        .intercept
+        .then(super::interception::counter_reader)
+        .transpose()?;
+    let replay = async {
+        if resolved.session_events {
+            run_session_replay(config, lifecycle, counters, resolved.timers).await
+        } else {
+            run_replay_with_timer_config(config, lifecycle, counters, resolved.timers).await
+        }
+    };
     tokio::pin!(replay);
     let result = tokio::select! {
         result = &mut replay => result,
@@ -386,8 +398,14 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         case_no_progress_timeout_ms > 0,
         "case_no_progress_timeout_ms must be positive"
     );
+    let pre_match = args.pre_match || file.replay.pre_match.unwrap_or(false);
+    ensure!(
+        !args.session_events || !pre_match,
+        "session Replay requires strict matching"
+    );
     Ok(ResolvedReplay {
-        pre_match: args.pre_match || file.replay.pre_match.unwrap_or(false),
+        session_events: args.session_events,
+        pre_match,
         stream_timing: args.stream_timing.or(file.replay.stream_timing),
         stream_interval_cap_ms: args
             .stream_interval_cap_ms
@@ -787,6 +805,7 @@ mod tests {
 
     fn replay_args(case: Option<PathBuf>, config: Option<PathBuf>) -> ReplayArgs {
         ReplayArgs {
+            session_events: false,
             pre_match: false,
             stream_timing: None,
             stream_interval_cap_ms: None,

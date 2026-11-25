@@ -60,7 +60,29 @@ impl CaptureEvidence for RedisExchangeEvent {
         if !facts.case_dependency || self.command == "QUIT" {
             facts.semantic = SemanticRequirement::Observation;
         }
+        if complete
+            && self.outcome == DependencyExchangeOutcome::Response
+            && self.parse_warnings.is_empty()
+        {
+            facts.recording_response_literal = recording_response_literal(self);
+        }
         facts
+    }
+}
+
+fn recording_response_literal(exchange: &RedisExchangeEvent) -> Option<&'static str> {
+    let body = &exchange.response;
+    if exchange.resp_version != 2
+        || body.encoding != "base64"
+        || body.original_len != 5
+        || body.stored_len != 5
+    {
+        return None;
+    }
+    match (exchange.response_kind.as_str(), body.data.as_str()) {
+        ("simple_string", "K09LDQo=") => Some("redis_ok"), // +OK\r\n
+        ("null", "JC0xDQo=") => Some("redis_nil_bulk"),    // $-1\r\n
+        _ => None,
     }
 }
 

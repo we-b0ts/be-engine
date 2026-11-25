@@ -38,7 +38,24 @@ fn auto_selection_is_source_bound_and_keeps_independent_candidate_diagnostics() 
         assert_eq!(selected.descriptor().id, expected);
         let document = selected.decode(bytes).unwrap();
         assert_eq!(document.encode(document.value(), &[]).unwrap(), bytes);
+
+        let selected = registry
+            .try_recognize_source(bytes, &Value::Null)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.codec.descriptor().id, expected);
+        assert_eq!(selected.document.is_some(), expected == "json");
+        let document = selected
+            .document
+            .unwrap_or_else(|| selected.codec.decode(bytes).unwrap());
+        assert_eq!(document.encode(document.value(), &[]).unwrap(), bytes);
     }
+    let fallback = registry
+        .try_recognize_source(br#"{"id":1,"id":2}"#, &Value::Null)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fallback.codec.descriptor().id, "string");
+    assert!(fallback.document.is_none());
     let selected = registry.recognize(b"{\"id\":1}", &Value::Null).unwrap();
     assert!(selected.decode(b"broken target JSON").is_err());
     let probes = registry.inspect(b"ordinary text", &Value::Null).unwrap();
@@ -157,6 +174,12 @@ fn registered_protobuf_preserves_unselected_wire_and_owns_its_remainder() {
         "protobuf".into(),
         configuration.clone(),
     )]));
+    let selected = registry()
+        .try_recognize_source(br#"{"id":1}"#, &metadata)
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.codec.descriptor().id, "protobuf");
+    assert!(selected.document.is_none());
     let prepared = registry()
         .recognize(&[8, 0x81, 0, 16, 2], &metadata)
         .unwrap();

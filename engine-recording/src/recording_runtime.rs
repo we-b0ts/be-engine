@@ -47,6 +47,10 @@ impl AppState {
     where
         F: std::future::Future<Output = Result<()>>,
     {
+        anyhow::ensure!(
+            !self.session_events(),
+            "session event recording requires a managed Source process through traffic-e2e record"
+        );
         self.run_until_completion(control_socket, async {
             shutdown
                 .await

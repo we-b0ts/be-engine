@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
@@ -21,6 +21,22 @@ const MAX_TERMS: usize = 4096;
 const MAX_TERM_BYTES: usize = 1024;
 const MAX_TABLE_BYTES: usize = 256 * 1024;
 const LAYOUT: &[u8] = b"layout\t";
+const RESPONSE_LITERAL: &[u8] = b"literal\t";
+
+pub(crate) fn valid_response_literal_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponseLiteral {
+    event_type: String,
+    fields: Map<String, Value>,
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Layout {
@@ -51,6 +67,7 @@ pub(crate) struct WriteTerms {
     process_epoch: String,
     values: HashMap<Vec<u8>, usize>,
     layouts: BTreeMap<String, BTreeMap<String, Layout>>,
+    response_literals: HashMap<&'static str, ResponseLiteral>,
     bytes: usize,
     pending: Vec<u8>,
 }
@@ -65,6 +82,7 @@ impl WriteTerms {
             process_epoch,
             values: HashMap::new(),
             layouts: BTreeMap::new(),
+            response_literals: HashMap::new(),
             bytes: pending.len(),
             pending,
         }
@@ -115,7 +133,7 @@ impl WriteTerms {
         if let Some(&id) = self.values.get(value) {
             return Some(id);
         }
-        if self.values.len() >= MAX_TERMS
+        if self.values.len() + self.response_literals.len() >= MAX_TERMS
             || value.len() > MAX_TERM_BYTES
             || self.bytes + value.len() >= MAX_TABLE_BYTES
         {
@@ -127,6 +145,45 @@ impl WriteTerms {
         self.bytes += value.len() + 1;
         self.values.insert(value.to_vec(), id);
         Some(id)
+    }
+
+    pub(crate) fn declare_response_literal(
+        &mut self,
+        name: &'static str,
+        event_type: &str,
+        fields: &Map<String, Value>,
+    ) -> Result<bool> {
+        ensure!(
+            valid_response_literal_name(name),
+            "invalid response literal name"
+        );
+        ensure!(
+            !event_type.is_empty() && !fields.is_empty(),
+            "response literal requires an event type and response fields"
+        );
+        if let Some(literal) = self.response_literals.get(name) {
+            return Ok(literal.event_type == event_type && &literal.fields == fields);
+        }
+        let literal = ResponseLiteral {
+            event_type: event_type.into(),
+            fields: fields.clone(),
+        };
+        let bytes = serde_json::to_vec(&literal)?;
+        let row_len = RESPONSE_LITERAL.len() + name.len() + bytes.len() + 2;
+        if self.values.len() + self.response_literals.len() >= MAX_TERMS
+            || bytes.len() > MAX_TERM_BYTES
+            || self.bytes + row_len > MAX_TABLE_BYTES
+        {
+            return Ok(false);
+        }
+        self.pending.extend_from_slice(RESPONSE_LITERAL);
+        self.pending.extend_from_slice(name.as_bytes());
+        self.pending.push(b'\t');
+        self.pending.extend_from_slice(&bytes);
+        self.pending.push(b'\n');
+        self.bytes += row_len;
+        self.response_literals.insert(name, literal);
+        Ok(true)
     }
 
     pub(crate) fn relative(&self, key: &str, value: &Value) -> Option<i64> {
@@ -148,6 +205,7 @@ pub(crate) struct ReadTerms {
     process_epoch: String,
     values: Vec<Value>,
     layouts: BTreeMap<String, BTreeMap<String, Layout>>,
+    response_literals: HashMap<String, ResponseLiteral>,
 }
 
 #[derive(Debug)]
@@ -229,6 +287,10 @@ impl ReadTerms {
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+        ensure!(
+            bytes.len() <= MAX_TABLE_BYTES,
+            "dependency term table is too large"
+        );
         let mut rows = bytes
             .strip_suffix(b"\n")
             .context("incomplete dependency term table")?
@@ -239,6 +301,7 @@ impl ReadTerms {
                 .context("missing dependency process epoch")?;
         let mut values = Vec::new();
         let mut layouts = BTreeMap::<String, BTreeMap<String, Layout>>::new();
+        let mut response_literals = HashMap::new();
         for row in rows {
             if let Some(row) = row.strip_prefix(LAYOUT) {
                 ensure!(
@@ -251,9 +314,32 @@ impl ReadTerms {
                     variants.insert(layout.variant.clone(), layout).is_none(),
                     "duplicate dependency layout"
                 );
+            } else if let Some(row) = row.strip_prefix(RESPONSE_LITERAL) {
+                let (name, literal) = std::str::from_utf8(row)?
+                    .split_once('\t')
+                    .context("missing response literal value")?;
+                ensure!(
+                    valid_response_literal_name(name),
+                    "invalid response literal name"
+                );
+                ensure!(
+                    literal.len() <= MAX_TERM_BYTES
+                        && values.len() + response_literals.len() < MAX_TERMS,
+                    "dependency term table exceeds its bounds"
+                );
+                let literal: ResponseLiteral = serde_json::from_str(literal)?;
+                ensure!(
+                    !literal.event_type.is_empty() && !literal.fields.is_empty(),
+                    "response literal requires an event type and response fields"
+                );
+                ensure!(
+                    response_literals.insert(name.into(), literal).is_none(),
+                    "duplicate response literal"
+                );
             } else {
                 ensure!(
-                    row.len() <= MAX_TERM_BYTES && values.len() < MAX_TERMS,
+                    row.len() <= MAX_TERM_BYTES
+                        && values.len() + response_literals.len() < MAX_TERMS,
                     "dependency term table exceeds its bounds"
                 );
                 values.push(serde_json::from_slice(row)?);
@@ -264,6 +350,7 @@ impl ReadTerms {
             process_epoch: process_epoch.parse::<Uuid>()?.to_string(),
             values,
             layouts,
+            response_literals,
         })
     }
 
@@ -286,6 +373,22 @@ impl ReadTerms {
             .context("dependency term reference is out of range")
     }
 
+    pub(crate) fn response_literal(
+        &self,
+        name: &str,
+        event_type: &str,
+    ) -> Result<Map<String, Value>> {
+        let literal = self
+            .response_literals
+            .get(name)
+            .context("undeclared response literal")?;
+        ensure!(
+            literal.event_type == event_type,
+            "response literal belongs to a different event type"
+        );
+        Ok(literal.fields.clone())
+    }
+
     pub(crate) fn clock(&self, delta: i64) -> Result<Value> {
         let time = self
             .anchor
@@ -306,4 +409,50 @@ pub(crate) fn parse_id(kind: IdentityKind, recording_id: Uuid, text: &str) -> Re
 
 fn timestamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn named_response_terms_preserve_numbered_terms_and_event_type() -> Result<()> {
+        let mut write = WriteTerms::new(Utc::now(), Uuid::nil(), Uuid::nil());
+        let fields = Map::from_iter([("response".into(), json!({"status":"ok"}))]);
+        assert_eq!(write.intern(br#"["before"]"#), Some(1));
+        assert!(write.declare_response_literal("mysql.ok0", "mysql_exchange", &fields)?);
+        assert!(write.declare_response_literal("mysql.ok0", "mysql_exchange", &fields)?);
+        assert!(!write.declare_response_literal("mysql.ok0", "different_event", &fields)?);
+        let other = Map::from_iter([("response".into(), json!({"status":"error"}))]);
+        assert!(!write.declare_response_literal("mysql.ok0", "mysql_exchange", &other)?);
+        let too_long = Map::from_iter([("response".into(), json!("x".repeat(MAX_TERM_BYTES)))]);
+        assert!(!write.declare_response_literal("mysql.large", "mysql_exchange", &too_long)?);
+        assert_eq!(write.intern(br#"["after"]"#), Some(2));
+
+        let bytes = write.take_pending();
+        let read = ReadTerms::decode(&bytes)?;
+        assert_eq!(read.term(2)?, json!(["after"]));
+        assert_eq!(
+            read.response_literal("mysql.ok0", "mysql_exchange")?,
+            fields
+        );
+        assert!(
+            read.response_literal("mysql.ok0", "different_event")
+                .is_err()
+        );
+        assert!(
+            read.response_literal("mysql.large", "mysql_exchange")
+                .is_err()
+        );
+
+        let mut duplicate = bytes.clone();
+        let definition = bytes
+            .split_inclusive(|byte| *byte == b'\n')
+            .find(|row| row.starts_with(RESPONSE_LITERAL))
+            .context("missing test literal")?;
+        duplicate.extend_from_slice(definition);
+        assert!(ReadTerms::decode(&duplicate).is_err());
+        Ok(())
+    }
 }

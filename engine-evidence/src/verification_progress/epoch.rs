@@ -31,6 +31,7 @@ struct EpochBoundary {
 
 pub fn begin(target_root: &Path, recording_run_id: &str) -> Result<()> {
     validate_recording_run_id(recording_run_id)?;
+    let _lock = super::lock_publication(&target_root.join(".traffic-e2e/progress.yaml"))?;
     let progress_root = target_root
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(crate::repository::LOCAL_ARTIFACTS_RELATIVE_ROOT)
@@ -178,16 +179,25 @@ fn archive_file(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn reset_progress(target_root: &Path) -> Result<()> {
-    let traffic_e2e_root = target_root.join(crate::repository::TRAFFIC_E2E_ROOT);
-    super::write(
-        &traffic_e2e_root.join("progress.yaml"),
-        &ProgressReport::new(VerificationStage::Progress),
-    )
+    let path = target_root
+        .join(crate::repository::TRAFFIC_E2E_ROOT)
+        .join("progress.yaml");
+    let mut next = ProgressReport::new(VerificationStage::Progress);
+    if let Some(previous) = super::load(&path, VerificationStage::Progress)? {
+        // Archived aggregates retain these runs. Carry their identities so a
+        // retry cannot add the same recording to a later epoch.
+        next.counted_runs = previous
+            .counted_runs
+            .into_iter()
+            .filter(|(key, _)| key.starts_with(super::EVENT_SESSION_RUN_PREFIX))
+            .collect();
+    }
+    super::write(&path, &next)
 }
 
 fn synchronize_progress(target_root: &Path) -> Result<()> {
     let traffic_e2e_root = target_root.join(crate::repository::TRAFFIC_E2E_ROOT);
-    super::synchronize(
+    super::synchronize_unlocked(
         &traffic_e2e_root.join("progress.yaml"),
         VerificationStage::Progress,
     )?;

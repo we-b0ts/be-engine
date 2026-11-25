@@ -228,7 +228,7 @@ impl RenewalFixture {
         let relay = Relay::new(
             Some(provider),
             format!("http://{origin}").parse().unwrap(),
-            "all-apis".into(),
+            Some("all-apis".into()),
             BOUND,
             1024,
         )

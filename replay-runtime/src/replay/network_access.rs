@@ -126,6 +126,16 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
     }
 
     pub(super) fn record_unrecorded_target(&mut self, target: TargetKey) {
+        if let Some(session) = &mut self.session_events {
+            session.fail(
+                None,
+                None,
+                &format!(
+                    "unrecorded dependency endpoint {}:{}",
+                    target.host, target.port
+                ),
+            );
+        }
         let case_id = self.active_case_id.clone().or_else(|| {
             (self.cases.len() == 1)
                 .then(|| self.cases.keys().next().cloned())

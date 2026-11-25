@@ -3,6 +3,8 @@
 use super::*;
 use crate::record_service::coordination::Coordination;
 use crate::redis::{BufferedReader, RedisCommand, read_frame, redis_command};
+use sha1::{Digest, Sha1};
+use std::num::NonZeroU32;
 use tokio::task::JoinSet;
 
 const ADDRESS_KEY: &[u8] = b"registration-test:url";
@@ -14,6 +16,7 @@ const COUNTS_KEY: &[u8] = b"registration-test:api-counts";
 enum Fault {
     RejectPolicy,
     RejectCountReset,
+    RejectScriptLoad,
     RejectRegistration,
     RejectRenewal,
     LoseRegistrationReply,
@@ -24,7 +27,8 @@ enum Fault {
 struct AddressState {
     policy: Option<Vec<u8>>,
     count: usize,
-    startup_commands: Vec<&'static str>,
+    control_commands: Vec<&'static str>,
+    script_digest: Option<String>,
     value: Option<Vec<u8>>,
     fault: Option<Fault>,
     renewals: usize,
@@ -54,7 +58,7 @@ impl AddressState {
         if command.name == "SET" {
             if args[0] == POLICY_KEY {
                 assert_eq!(args.len(), 2);
-                self.startup_commands.push("policy");
+                self.control_commands.push("policy");
                 if self.fault == Some(Fault::RejectPolicy) {
                     return Some(b"-ERR policy unavailable\r\n".to_vec());
                 }
@@ -62,7 +66,7 @@ impl AddressState {
                 return Some(b"+OK\r\n".to_vec());
             }
             assert_eq!(args[0], ADDRESS_KEY);
-            self.startup_commands.push("url");
+            self.control_commands.push("url");
             assert_eq!(args[2], b"NX");
             assert_eq!(args[3], b"PX");
             assert_eq!(args[4], b"30000");
@@ -86,12 +90,38 @@ impl AddressState {
         }
         if command.name == "DEL" {
             assert_eq!(args, [COUNTS_KEY]);
-            self.startup_commands.push("counts");
+            self.control_commands.push("counts");
             if self.fault == Some(Fault::RejectCountReset) {
                 return Some(b"-ERR count reset unavailable\r\n".to_vec());
             }
             self.count = 0;
             return Some(b":1\r\n".to_vec());
+        }
+        if command.name == "SCRIPT" {
+            assert_eq!(args.len(), 2);
+            return Some(match args[0].as_slice() {
+                b"LOAD" => {
+                    self.control_commands.push("script-load");
+                    if self.fault == Some(Fault::RejectScriptLoad) {
+                        self.fault = None;
+                        return Some(b"-ERR script load unavailable\r\n".to_vec());
+                    }
+                    let digest = format!("{:x}", Sha1::digest(&args[1]));
+                    let response = format!("$40\r\n{digest}\r\n").into_bytes();
+                    self.script_digest = Some(digest);
+                    response
+                }
+                b"EXISTS" => {
+                    self.control_commands.push("script-exists");
+                    assert_eq!(args[1].len(), 40);
+                    let exists = self
+                        .script_digest
+                        .as_ref()
+                        .is_some_and(|digest| digest.as_bytes() == args[1]);
+                    format!("*1\r\n:{}\r\n", u8::from(exists)).into_bytes()
+                }
+                _ => panic!("unexpected Redis script command"),
+            });
         }
         assert_eq!(command.name, "EVAL");
         if args[2] == TICKET_KEY {
@@ -142,9 +172,12 @@ fn startup_publishes_gateway_policy_and_resets_counts_without_touching_heartbeat
             .unwrap();
         assert_eq!(fixture.state.lock().unwrap().count, 0);
         fixture.coordination.refresh_registration().await;
+        let address: serde_json::Value =
+            serde_json::from_slice(fixture.state.lock().unwrap().value.as_ref().unwrap()).unwrap();
+        assert_eq!(address["max_inflight"], 3);
         assert_eq!(
-            fixture.state.lock().unwrap().startup_commands,
-            ["policy", "counts", "url"]
+            fixture.state.lock().unwrap().control_commands,
+            ["policy", "counts", "script-load", "url"]
         );
         let published: serde_json::Value =
             serde_json::from_slice(fixture.state.lock().unwrap().policy.as_ref().unwrap()).unwrap();
@@ -161,6 +194,8 @@ fn startup_publishes_gateway_policy_and_resets_counts_without_touching_heartbeat
         fixture.state.lock().unwrap().policy = Some(b"{\"case-limit\":0}".to_vec());
         fixture.state.lock().unwrap().count = 7;
         fixture.coordination.refresh_registration().await;
+        fixture.state.lock().unwrap().script_digest = None;
+        fixture.coordination.refresh_registration().await;
         fixture.state.lock().unwrap().value = None;
         fixture.coordination.refresh_registration().await;
         fixture.coordination.unregister().await.unwrap();
@@ -170,7 +205,21 @@ fn startup_publishes_gateway_policy_and_resets_counts_without_touching_heartbeat
             state.policy.as_deref(),
             Some(b"{\"case-limit\":0}".as_slice())
         );
-        assert_eq!(state.startup_commands, ["policy", "counts", "url", "url"]);
+        assert_eq!(
+            state.control_commands,
+            [
+                "policy",
+                "counts",
+                "script-load",
+                "url",
+                "script-exists",
+                "script-exists",
+                "script-load",
+                "script-load",
+                "url",
+            ]
+        );
+        assert!(state.script_digest.is_some());
         assert!(state.value.is_none());
     });
 }
@@ -189,7 +238,7 @@ fn startup_without_policy_resets_counts_and_replaces_previous_selection_with_all
                 serde_json::from_slice(state.policy.as_ref().unwrap()).unwrap();
             assert_eq!(policy, serde_json::json!({"includes":[],"excludes":[]}));
             assert_eq!(state.count, 0);
-            assert_eq!(state.startup_commands, ["policy", "counts"]);
+            assert_eq!(state.control_commands, ["policy", "counts"]);
         }
     });
 }
@@ -216,7 +265,7 @@ fn startup_policy_or_count_failure_is_fatal_before_address_publication() {
             assert!(state.value.is_none());
             assert_eq!(state.count, 11);
             assert_eq!(
-                state.startup_commands,
+                state.control_commands,
                 if fault == Fault::RejectPolicy {
                     vec!["policy"]
                 } else {
@@ -227,7 +276,9 @@ fn startup_policy_or_count_failure_is_fatal_before_address_publication() {
         let options = OptionsCli::try_parse_from(["test", "--", "true"])
             .unwrap()
             .options;
-        let direct = Coordination::connect(&options).await.unwrap();
+        let direct = Coordination::connect(&options, NonZeroU32::MIN)
+            .await
+            .unwrap();
         direct.initialize_round(None).await.unwrap();
         assert!(direct.reservations.is_none());
     });
@@ -282,7 +333,9 @@ impl RegistrationFixture {
         ])
         .unwrap()
         .options;
-        let coordination = Coordination::connect(&options).await.unwrap();
+        let coordination = Coordination::connect(&options, NonZeroU32::new(3).unwrap())
+            .await
+            .unwrap();
         Self {
             coordination,
             state,
@@ -324,6 +377,13 @@ impl Drop for RegistrationFixture {
 fn failed_initial_registration_recovers_and_expired_address_is_recreated() {
     runtime().block_on(async {
         let fixture = RegistrationFixture::new().await;
+        fixture.fault(Fault::RejectScriptLoad);
+        fixture.coordination.refresh_registration().await;
+        assert!(fixture.value().is_none());
+        assert_eq!(
+            fixture.state.lock().unwrap().control_commands,
+            ["script-load"]
+        );
         fixture.fault(Fault::RejectRegistration);
         fixture.coordination.refresh_registration().await;
         assert!(fixture.value().is_none());
@@ -381,7 +441,7 @@ fn registration_errors_and_timeouts_preserve_in_flight_response_and_next_request
         let relay = proxy::Relay::new(
             fixture.coordination.reservations.clone(),
             format!("http://{}", source.local_addr().unwrap()).parse().unwrap(),
-            "all-apis".into(), Duration::from_secs(3), 1024,
+            Some("all-apis".into()), Duration::from_secs(3), 1024,
         );
         relay.open();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

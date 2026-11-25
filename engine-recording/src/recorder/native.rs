@@ -183,6 +183,18 @@ impl CaptureHost for Host {
         })
     }
 
+    fn omit_builtin_maintenance(&self, operation: Operation) -> bool {
+        self.state.session_events()
+            && self.state.access_decision(operation) == AccessDecision::Allow
+    }
+
+    fn builtin_maintenance_failed(&self, name: &'static str) {
+        self.state.fail_session_recording(format_args!(
+            "{} builtin {name} did not complete with a canonical reply",
+            self.protocol.as_str()
+        ));
+    }
+
     fn observe(&self, event: CaptureSnapshot) -> NativeFuture<'_, ()> {
         Box::pin(async move {
             self.validate(&event)?;

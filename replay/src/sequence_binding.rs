@@ -1,5 +1,5 @@
 //! Native inventory positions bound to protocol-independent event schedules.
-use crate::{EventKind, SequenceClaim, SequenceRuntime};
+use crate::{PublishedMessageBatch, SequenceClaim, SequenceRuntime};
 use anyhow::{Context, Result};
 use std::{collections::HashMap, sync::Arc};
 
@@ -70,10 +70,8 @@ impl SequenceBinding {
                 run.runtimes
                     .iter()
                     .filter_map(|runtime| {
-                        let event = runtime.expected()?;
-                        (event.kind == EventKind::Request)
-                            .then(|| run.positions.get(&event.dependency_sequence).copied())
-                            .flatten()
+                        let event = runtime.admissible_request()?;
+                        run.positions.get(&event.dependency_sequence).copied()
                     })
                     .collect::<Vec<_>>()
                     .into(),
@@ -82,28 +80,42 @@ impl SequenceBinding {
     }
 
     pub fn expected_messages(&self, source: crate::ReplaySource) -> Option<Vec<usize>> {
-        if source == crate::ReplaySource::Case {
-            self.runtime.as_ref().map(|runtime| {
-                runtime
-                    .expected()
-                    .filter(|event| event.kind == EventKind::Message)
-                    .and_then(|event| self.positions.get(&event.dependency_sequence).copied())
-                    .into_iter()
-                    .collect()
-            })
+        self.expected_message_indices(source).map(Iterator::collect)
+    }
+
+    pub(crate) fn expected_message_indices(
+        &self,
+        source: crate::ReplaySource,
+    ) -> Option<impl Iterator<Item = usize> + '_> {
+        let (binding, runtimes) = if source == crate::ReplaySource::Case {
+            (self, std::slice::from_ref(self.runtime.as_ref()?))
         } else {
-            self.run.as_ref().map(|run| {
-                run.runtimes
-                    .iter()
-                    .filter_map(|runtime| {
-                        let event = runtime.expected()?;
-                        (event.kind == EventKind::Message)
-                            .then(|| run.positions.get(&event.dependency_sequence).copied())
-                            .flatten()
-                    })
-                    .collect()
-            })
-        }
+            let run = self.run.as_deref()?;
+            (run, run.runtimes.as_slice())
+        };
+        Some(runtimes.iter().filter_map(move |runtime| {
+            let event = runtime.admissible_message()?;
+            binding.positions.get(&event.dependency_sequence).copied()
+        }))
+    }
+
+    pub(crate) fn session_position(&self, dependency: u64) -> Option<usize> {
+        self.session_run()?.0.positions.get(&dependency).copied()
+    }
+
+    pub(crate) fn matches_message_batch(&self, batch: &PublishedMessageBatch) -> bool {
+        self.session_run()
+            .is_some_and(|(_, runtime)| batch.belongs_to(runtime))
+    }
+
+    fn session_run(&self) -> Option<(&Self, &SequenceRuntime)> {
+        let run = self.run.as_deref()?;
+        let [runtime] = run.runtimes.as_slice() else {
+            return None;
+        };
+        runtime
+            .is_session_trace()
+            .then_some((run, runtime.as_ref()))
     }
 
     pub fn subscriptions(&self) -> Vec<tokio::sync::watch::Receiver<u64>> {
@@ -120,6 +132,14 @@ impl SequenceBinding {
 
     pub fn attach_run(&mut self, run: SequenceBinding) {
         self.run = Some(Box::new(run));
+    }
+
+    pub(crate) fn is_session_trace(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| {
+            run.runtimes
+                .iter()
+                .any(|runtime| runtime.is_session_trace())
+        })
     }
 
     pub fn claim(&self, index: usize) -> Result<Option<SequenceClaim>> {

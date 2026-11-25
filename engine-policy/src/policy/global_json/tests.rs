@@ -23,6 +23,49 @@ fn global_formats_roundtrip_without_location_declarations_or_expanded_rules() {
 }
 
 #[test]
+fn derived_fields_select_current_declarations_and_keep_paths_out_of_serialization() {
+    let compiled = compile_policy(&parse_policy(POLICY).unwrap()).unwrap();
+    let original = compiled.global_json.unwrap();
+    let derived = original.with_fields(BTreeMap::from([(
+        "/derived/*/array".into(),
+        original.fields["/array"].clone(),
+    )]));
+    let fields = derived
+        .fields(&serde_json::json!({"array": [1], "derived": [{"array": [2]}]}))
+        .unwrap();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].0, "/derived/0/array");
+    assert!(
+        !serde_json::to_value(original)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("selectors")
+    );
+}
+
+#[test]
+fn replacing_a_declaration_at_the_same_path_does_not_reuse_its_prepared_formats() {
+    let original = compile_policy(&parse_policy(POLICY).unwrap())
+        .unwrap()
+        .global_json
+        .unwrap();
+    let mut fields = original.fields.clone();
+    fields.insert(
+        "/item_id".into(),
+        serde_yaml::from_str("{kind: identity, formats: [{prefix: other_, hex: 4}]}").unwrap(),
+    );
+    let derived = original.with_fields(fields);
+    let source = serde_json::json!({"item_id": "other_1234"});
+    let fields = derived.identity_fields(&source).unwrap();
+    assert!(matches!(
+        &fields[..],
+        [(path, FieldContract::Identity { prefix, format: IdentityFormat::Hex(4) })]
+            if path == "/item_id" && prefix == "other_"
+    ));
+}
+
+#[test]
 fn global_format_changes_affect_full_and_runtime_but_not_capture() {
     let first = compile_policy(&parse_policy(POLICY).unwrap()).unwrap();
     let second = compile_policy(

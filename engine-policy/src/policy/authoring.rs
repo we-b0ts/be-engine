@@ -32,6 +32,7 @@ fn view(policy: &TrafficPolicy) -> document::TrafficPolicy {
         }),
         http: policy.http.as_ref().map(|value| document::HttpPolicy {
             headers: value.headers.clone(),
+            request_metadata: value.request_metadata.clone(),
         }),
         async_api: policy.async_api.clone(),
         signatures: policy.signatures.clone(),
@@ -53,6 +54,7 @@ fn from_document(value: document::TrafficPolicy) -> TrafficPolicy {
         redis: value.redis.map(|value| RedisPolicy { keys: value.keys }),
         http: value.http.map(|value| HttpPolicy {
             headers: value.headers,
+            request_metadata: value.request_metadata,
         }),
         async_api: value.async_api,
         signatures: value.signatures,

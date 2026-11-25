@@ -20,6 +20,7 @@ pub use api_trigger::plan::{
 pub use dependency_index::DependencyIndexReport;
 pub use traffic_engine_evidence::dependency;
 pub use traffic_engine_evidence::dependency_index;
+pub use traffic_engine_evidence::session;
 pub use traffic_engine_verification::dependency_provider;
 
 pub fn prepare_dependency_index(source: &std::path::Path) -> anyhow::Result<DependencyIndexReport> {
@@ -27,6 +28,9 @@ pub fn prepare_dependency_index(source: &std::path::Path) -> anyhow::Result<Depe
         .map(|(_, report)| report)
 }
 pub use crate::replay::GlobalDependencyPage;
+pub use e2e_run::{
+    E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult, run_e2e_event_session,
+};
 pub use protocols::replay::report::artifacts::read_global_dependency_page;
 pub use traffic_engine_config::json_value;
 pub use traffic_engine_e2erun::e2e_run;

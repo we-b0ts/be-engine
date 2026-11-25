@@ -13,6 +13,7 @@ mod jsonl {
     };
 }
 pub mod ledger;
+mod session;
 pub mod source_process;
 #[cfg(test)]
 mod tests;

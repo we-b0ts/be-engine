@@ -101,6 +101,37 @@ impl RecordRef {
             )
         })
     }
+
+    /// Load a semantic value directly from a compact record.
+    pub fn load_value(&self) -> Result<serde_json::Value> {
+        if !super::compact::is_compact(&self.source.path) {
+            return self.load();
+        }
+        self.source.validate()?;
+        self.source
+            .reader
+            .lock()
+            .map_err(|_| anyhow::anyhow!("dependency cache lock poisoned"))?
+            .read_value(&self.source.path, &self.source.stamp, &self.location)
+            .with_context(|| {
+                format!(
+                    "invalid indexed dependency {} line {}",
+                    self.source.path.display(),
+                    self.location.line
+                )
+            })
+    }
+
+    /// Read a whole raw response cell from an authenticated session recording.
+    /// Structured responses use the semantic record reader.
+    pub fn load_response_bytes(&self) -> Result<Option<bytes::Bytes>> {
+        self.source.validate()?;
+        self.source
+            .reader
+            .lock()
+            .map_err(|_| anyhow::anyhow!("dependency cache lock poisoned"))?
+            .read_response_bytes(&self.source.path, &self.source.stamp, &self.location)
+    }
 }
 impl traffic_protocol::evidence::RecordSource for RecordRef {
     fn load<T: serde::de::DeserializeOwned>(&self) -> anyhow::Result<T> {

@@ -1,6 +1,7 @@
 //! Default application composition for traffic execution and rewrite coordination.
 pub use traffic_engine::*;
 pub use traffic_replay_runtime::ReplayTimerConfig;
+pub use traffic_replay_runtime::run_session_replay;
 pub use traffic_rewrite::*;
 
 pub fn initialize_application() {
@@ -20,6 +21,13 @@ pub async fn run_e2e_api(context: E2eRunContext, api: &str) -> anyhow::Result<E2
 pub async fn run_e2e_round(context: E2eRunContext) -> anyhow::Result<E2eRunResult> {
     initialize_application();
     traffic_engine::run_e2e_round(context).await
+}
+
+pub async fn run_e2e_event_session(
+    options: E2eEventSessionOptions,
+) -> anyhow::Result<E2eEventSessionResult> {
+    initialize_application();
+    traffic_engine::run_e2e_event_session(options).await
 }
 
 pub fn upgrade_source_snapshot(

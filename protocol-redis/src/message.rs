@@ -124,6 +124,17 @@ impl MessageEncoder for RequestMessage {
 }
 
 impl RequestMessage {
+    /// Select an exact single-key EVAL envelope before binding any ARGV.
+    pub fn matches_single_key_eval(&self, key: &str, sha256: &str) -> bool {
+        self.command.eq_ignore_ascii_case("EVAL")
+            && crate::script::matches_eval(
+                self.args.len(),
+                |index| self.args.get(index).map(Bytes::as_ref),
+                sha256,
+                &[key],
+            )
+    }
+
     fn arguments(&self) -> Vec<Vec<u8>> {
         self.args.iter().map(|value| value.to_vec()).collect()
     }

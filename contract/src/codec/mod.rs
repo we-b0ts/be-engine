@@ -1,5 +1,6 @@
 //! Bounded payload decoding with typed values and lossless protocol remainders.
 mod projection;
+pub(crate) use projection::project as project_value;
 pub use projection::restore as restore_projection;
 mod providers;
 mod view;
@@ -69,6 +70,12 @@ impl DecodedDocument {
     pub fn logical_comparison_view(&self, paths: &[String]) -> Cow<'_, traffic_value::Value> {
         self.document.comparison_view(paths)
     }
+
+    /// Borrow the projection of the full decoded value.
+    pub fn projection(&self) -> crate::compare::LogicalProjection<'_> {
+        crate::compare::LogicalProjection::borrowed(self.value(), &self.logical)
+    }
+
     pub fn original_bytes(&self) -> &[u8] {
         self.document.original_bytes()
     }

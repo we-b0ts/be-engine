@@ -1,6 +1,6 @@
-//! Finite native HTTP sessions over the shared recording and Replay ports.
+//! Native HTTP sessions over the shared recording and Replay ports.
 use crate::{
-    message::{RequestMessage, ResponseMessage},
+    message::{RequestMessage, ResponseMessage, StreamResponse},
     recorded,
 };
 use anyhow::{Context, Result, ensure};
@@ -8,8 +8,11 @@ use bytes::Bytes;
 use serde_json::Value;
 use std::sync::Arc;
 use traffic_model::{DependencyExchangeOutcome, recording::ProtocolRef};
-use traffic_protocol::connection::{
-    CaptureSession, ConnectionInfo, Endpoint, NativeProtocol, RecordedExchange, ServerSession,
+use traffic_protocol::{
+    connection::{
+        CaptureSession, ConnectionInfo, Endpoint, NativeProtocol, RecordedExchange, ServerSession,
+    },
+    message::MessageEncoder,
 };
 
 mod evidence;
@@ -17,6 +20,7 @@ mod recording;
 mod server;
 #[cfg(test)]
 mod tests;
+mod websocket_refusal;
 mod wire;
 
 pub struct Native;
@@ -72,7 +76,15 @@ impl NativeProtocol for Native {
 }
 
 fn finite_response_headers(headers: &crate::headers::HeaderSnapshot) -> Result<()> {
-    let streaming = headers
+    ensure!(
+        !event_stream_headers(headers),
+        "HTTP event streams require an installed streaming capture capability"
+    );
+    Ok(())
+}
+
+fn event_stream_headers(headers: &crate::headers::HeaderSnapshot) -> bool {
+    headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
         .flat_map(|(_, values)| values)
@@ -87,12 +99,7 @@ fn finite_response_headers(headers: &crate::headers::HeaderSnapshot) -> Result<(
                     .as_str(),
                 "text/event-stream" | "application/x-ndjson" | "application/ndjson"
             )
-        });
-    ensure!(
-        !streaming,
-        "HTTP event streams require an installed streaming capability"
-    );
-    Ok(())
+        })
 }
 
 impl Native {
@@ -122,15 +129,24 @@ impl Native {
                 .all(|value| { !value.starts_with("traffic-e2e:enc:") && value != "<redacted>" }),
             "protected HTTP headers require an installed Source decryption capability"
         );
-        finite_response_headers(
-            record
-                .response_headers
-                .as_ref()
-                .context("HTTP response headers missing")?,
-        )?;
+        let response_headers = record
+            .response_headers
+            .take()
+            .context("HTTP response headers missing")?;
+        ensure!(
+            !event_stream_headers(&response_headers) || record.response_stream.is_some(),
+            "HTTP event stream is missing recorded stream evidence"
+        );
         ensure!(
             record.outcome == DependencyExchangeOutcome::Response && record.error.is_none(),
-            "finite HTTP serving requires a complete response"
+            "HTTP Replay requires a complete response"
+        );
+        let status = record
+            .response_status
+            .context("HTTP response status missing")?;
+        ensure!(
+            status != 101,
+            "HTTP upgrades require an installed streaming capability"
         );
         let (_, endpoint) = record.identity()?;
         let body = recorded::decode_body(
@@ -139,17 +155,6 @@ impl Native {
                 .as_ref()
                 .context("HTTP response body missing")?,
         )?;
-        if let Some(stream) = &record.response_stream {
-            ensure!(
-                stream.complete,
-                "finite HTTP serving requires complete stream evidence"
-            );
-            stream.validate(body.len())?;
-            ensure!(
-                stream.trailers.is_none(),
-                "HTTP trailers require a native streaming capability"
-            );
-        }
         let uri: hyper::Uri = record.uri.parse()?;
         let request = RequestMessage {
             method: record.method.to_ascii_uppercase(),
@@ -161,14 +166,20 @@ impl Native {
             body: recorded::decode_body(&record.request_body)?.into(),
         };
         let response = ResponseMessage {
-            status: record
-                .response_status
-                .context("HTTP response status missing")?,
-            headers: record
-                .response_headers
-                .context("HTTP response headers missing")?,
+            status,
+            headers: response_headers,
             body: body.into(),
             head_request: request.method == "HEAD",
+        };
+        let request = websocket_refusal::recorded_request(
+            request,
+            status,
+            &response.headers,
+            record.response_stream.is_some(),
+        );
+        let response: Arc<dyn MessageEncoder> = match record.response_stream {
+            Some(stream) => Arc::new(StreamResponse::new(response, stream)?),
+            None => Arc::new(response),
         };
         Ok(Some(RecordedExchange {
             reference: ProtocolRef::exchange(
@@ -187,8 +198,8 @@ impl Native {
                     .and_then(Value::as_u64)
                     .unwrap_or_default(),
             ),
-            input: traffic_protocol::connection::RecordedInput::Request(Arc::new(request)),
-            response: Arc::new(response),
+            input: traffic_protocol::connection::RecordedInput::Request(request),
+            response,
         }))
     }
 }

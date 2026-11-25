@@ -63,19 +63,55 @@ impl SequencePlan {
     ) -> Result<Arc<Self>> {
         Self::compile(project_events(events)?)
     }
+
+    pub fn compile_session(
+        events: impl IntoIterator<Item = Result<SessionPlanEvent>>,
+    ) -> Result<Arc<Self>> {
+        let events = project_timeline(events)?;
+        ensure!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].offset_micros <= pair[1].offset_micros),
+            "session Source event offsets are not monotonic"
+        );
+        Self::compile(events)
+    }
+}
+
+pub enum SessionPlanEvent {
+    Dependency(RecordedEvent<CaptureEvent>),
+    Driver(SourceEvent),
 }
 
 fn project_events(
     events: impl IntoIterator<Item = Result<RecordedEvent<CaptureEvent>>>,
 ) -> Result<Vec<SourceEvent>> {
+    let mut projected = project_timeline(
+        events
+            .into_iter()
+            .map(|event| event.map(SessionPlanEvent::Dependency)),
+    )?;
+    projected.sort_unstable_by_key(|event| event.sequence);
+    Ok(projected)
+}
+
+fn project_timeline(
+    events: impl IntoIterator<Item = Result<SessionPlanEvent>>,
+) -> Result<Vec<SourceEvent>> {
     let mut source = Vec::new();
     let mut sequences = HashSet::new();
     let mut wire_terminals = HashSet::new();
-    let mut capture_terminals = Vec::new();
+    let mut capture_terminals = HashSet::new();
     let mut output_starts = std::collections::HashMap::new();
     let mut cancelled = HashSet::new();
     for record in events {
-        let record = record?;
+        let record = match record? {
+            SessionPlanEvent::Dependency(record) => record,
+            SessionPlanEvent::Driver(event) => {
+                source.push(event);
+                continue;
+            }
+        };
         let started = matches!(&record.event, CaptureEvent::OutputStarted { .. });
         ensure!(
             record.sequence != 0 && sequences.insert(record.sequence),
@@ -144,13 +180,8 @@ fn project_events(
                     "no_response" => EventKind::NoResponse,
                     _ => EventKind::ResponseEnd,
                 };
-                capture_terminals.push(SourceEvent {
-                    sequence: record.sequence,
-                    dependency_sequence,
-                    offset_micros: record.offset_micros,
-                    kind,
-                });
-                continue;
+                capture_terminals.insert(record.sequence);
+                (dependency_sequence, kind)
             }
             CaptureEvent::Bound { .. }
             | CaptureEvent::Sealed
@@ -164,12 +195,10 @@ fn project_events(
             kind,
         });
     }
-    source.retain(|event| !cancelled.contains(&event.sequence));
-    source.extend(
-        capture_terminals
-            .into_iter()
-            .filter(|event| !wire_terminals.contains(&event.dependency_sequence)),
-    );
-    source.sort_unstable_by_key(|event| event.sequence);
+    source.retain(|event| {
+        !cancelled.contains(&event.sequence)
+            && !(capture_terminals.contains(&event.sequence)
+                && wire_terminals.contains(&event.dependency_sequence))
+    });
     Ok(source)
 }

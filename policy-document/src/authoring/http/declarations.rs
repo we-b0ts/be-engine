@@ -8,6 +8,8 @@ pub struct HttpDocument {
     #[serde(default, deserialize_with = "optional_headers")]
     pub headers: Option<BTreeMap<String, crate::GlobalField>>,
     #[serde(default)]
+    pub request_metadata: Vec<traffic_protocol_http::request_metadata::RequestMetadataRule>,
+    #[serde(default)]
     pub requests: Vec<PathRequest>,
     #[serde(default)]
     pub response_rewrite: Vec<ResponseRewrite>,

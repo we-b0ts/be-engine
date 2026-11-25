@@ -3,9 +3,38 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 
 pub const PATH: &str = ".traffic-e2e/regression.yaml";
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRegression {
+    pub recording_run_id: Option<String>,
+    #[serde(default = "default_max_implementers")]
+    pub max_implementers: usize,
+}
+
+impl Default for SessionRegression {
+    fn default() -> Self {
+        Self {
+            recording_run_id: None,
+            max_implementers: default_max_implementers(),
+        }
+    }
+}
+
+impl SessionRegression {
+    pub fn load(target_root: &Path) -> Result<Self> {
+        let mut policy: Self = load(target_root)?;
+        ensure!(
+            (1..=16).contains(&policy.max_implementers),
+            "{PATH}: Session max_implementers must be between 1 and 16"
+        );
+        policy.recording_run_id = normalize_recording_run_id(policy.recording_run_id)?;
+        Ok(policy)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,27 +79,12 @@ impl Default for RegressionScope {
 
 impl RegressionScope {
     pub fn load(target_root: &Path) -> Result<Self> {
-        let path = target_root.join(PATH);
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-        };
-        let mut policy: Self = serde_yaml::from_slice(&bytes)
-            .with_context(|| format!("invalid regression scope {}", path.display()))?;
+        let mut policy: Self = load(target_root)?;
         ensure!(
             policy.max_implementers > 0,
             "{PATH}: max_implementers must be a positive integer"
         );
-        policy.recording_run_id = policy.recording_run_id.filter(|run_id| !run_id.is_empty());
-        if let Some(run_id) = &policy.recording_run_id {
-            ensure!(
-                run_id.len() == 14 && run_id.bytes().all(|byte| byte.is_ascii_digit()),
-                "{PATH}: recording_run_id must be a 14-digit existing recording run ID"
-            );
-        }
+        policy.recording_run_id = normalize_recording_run_id(policy.recording_run_id)?;
         for list in policy.only.iter().chain(policy.skip.iter()) {
             let mut seen = BTreeSet::new();
             for api in list {
@@ -112,13 +126,45 @@ impl RegressionScope {
     }
 }
 
+fn load<T: Default + DeserializeOwned>(target_root: &Path) -> Result<T> {
+    let path = target_root.join(PATH);
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_yaml::from_slice(&bytes)
+            .with_context(|| format!("invalid regression scope {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+fn normalize_recording_run_id(recording_run_id: Option<String>) -> Result<Option<String>> {
+    let recording_run_id = recording_run_id.filter(|run_id| !run_id.is_empty());
+    if let Some(run_id) = &recording_run_id {
+        ensure!(
+            run_id.len() == 14 && run_id.bytes().all(|byte| byte.is_ascii_digit()),
+            "{PATH}: recording_run_id must be a 14-digit existing recording run ID"
+        );
+    }
+    Ok(recording_run_id)
+}
+
 pub const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\n# Skip previously passed cases during repair Replay; final revalidation always runs all cases.\nretry_failed_only: false\n# Optional stream timing override: fast caps each ordinary Case Pub/Sub and successful HTTP stream gap.\n# Omitting replay_timing preserves Source timing; recorded preserves Source stream intervals.\n# replay_timing: fast\n# Fast-mode interval cap in milliseconds, including the first push/header; 0 removes artificial waits.\nreplay_interval_cap_ms: 5\n# Fixed implementation slots; a running workflow retains its original capacity.\nmax_implementers: 16\nonly: []\nskip: []\n";
+pub const TEMPLATE: &str = r#"# Local regression settings are excluded from target fingerprints.
+# Set recording_run_id to reuse an existing completed recording.
+# recording_run_id: "20260911093000"
+max_implementers: 16
 
-/// Low-level project initialization also installs the local policy without
-/// replacing user choices. Full repository initialization creates it atomically
-/// alongside its other generated files.
+# Optional settings for Case workflows.
+# only and skip select canonical API inventory routes without HTTP methods.
+# only:
+#   - "/api/users/*"
+# skip: []
+# auto_next: false
+# retry_failed_only: false
+# replay_timing: fast
+# replay_interval_cap_ms: 5
+"#;
+
 pub fn initialize(target_root: &Path) -> Result<()> {
     for name in [".gitignore", ".dockerignore"] {
         let path = target_root.join(name);
@@ -150,6 +196,48 @@ pub fn initialize(target_root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_regression_accepts_the_generated_template_and_session_settings() {
+        let root = tempfile::tempdir().unwrap();
+        initialize(root.path()).unwrap();
+        let defaults = SessionRegression::load(root.path()).unwrap();
+        assert_eq!(defaults.recording_run_id, None);
+        assert_eq!(defaults.max_implementers, 16);
+
+        std::fs::write(
+            root.path().join(PATH),
+            "recording_run_id: \"20261123161021\"\nmax_implementers: 8\n",
+        )
+        .unwrap();
+        let configured = SessionRegression::load(root.path()).unwrap();
+        assert_eq!(
+            configured.recording_run_id.as_deref(),
+            Some("20261123161021")
+        );
+        assert_eq!(configured.max_implementers, 8);
+    }
+
+    #[test]
+    fn session_regression_rejects_case_settings_and_out_of_range_capacity() {
+        let root = tempfile::tempdir().unwrap();
+        initialize(root.path()).unwrap();
+        for setting in [
+            "only: []",
+            "skip: []",
+            "auto_next: true",
+            "retry_failed_only: true",
+            "replay_timing: fast",
+            "replay_interval_cap_ms: 0",
+            "max_implementers: 0",
+            "max_implementers: 17",
+        ] {
+            std::fs::write(root.path().join(PATH), setting).unwrap();
+            let error = SessionRegression::load(root.path()).unwrap_err();
+            let (key, _) = setting.split_once(':').unwrap();
+            assert!(format!("{error:#}").contains(key), "{setting}: {error:#}");
+        }
+    }
 
     #[test]
     fn replay_timing_is_optional_and_accepts_only_supported_modes() {

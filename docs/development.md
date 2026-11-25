@@ -3,6 +3,9 @@
 Use this file for local commands, runtime behavior, recording, replay, and
 testing details. Keep `AGENTS.md` as the short navigation map.
 
+[Source session regression](session-regression.md) covers concurrent recording,
+event-based replay, failure evidence, and publication of API progress.
+
 Author resource and API output fields once with the current
 [resource-owned field contracts](resource-field-contracts.md). Contextual clock
 relationships and stateful protocol effects retain explicit rules.
@@ -1690,7 +1693,8 @@ Regression settings are local to the target repository in
 `.traffic-e2e/regression.yaml`. Initialization generates this file and adds it to `.gitignore` and `.dockerignore`.
 It does not need a commit and is explicitly excluded from code and target
 fingerprints, even if manually tracked. Existing projects without the file use
-all recorded APIs.
+all recorded APIs in Case workflows. [Session Replay](session-regression.md)
+uses a fixed zero interval and verifies the full recording on each attempt.
 
 ```yaml
 # Optional: directly reuse this completed standard recording.

@@ -11,7 +11,7 @@ use crate::case_group::CaseGroupInventory;
 use crate::verification_progress::{
     ApiCounts, ApiObservation, ApiTotals, LatestCounts, LatestRun, ProgressApi,
     ProgressObservation, ProgressReport, ProgressTotals, SuccessCounts, SuccessStreak,
-    VerificationStage, fingerprint, load, write,
+    VerificationStage, fingerprint, load, lock_publication, write,
 };
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +147,7 @@ pub(super) fn write_replay_progress(
     index: &RunIndex,
     state: &ActiveRunState,
 ) -> Result<()> {
+    let _lock = lock_publication(progress_path)?;
     let mut migrated = false;
     let mut report = match load(progress_path, VerificationStage::Progress)? {
         Some(report) => report,

@@ -1,6 +1,7 @@
 //! Validate and translate native Pub/Sub subjects without changing payload bytes.
-use crate::{RedisSubscriptionKind, parse_pubsub_push};
+use crate::{RedisSubscriptionKind, pubsub::frame};
 use anyhow::{Context, Result, ensure};
+use bytes::Bytes;
 
 pub fn translate(
     bytes: &[u8],
@@ -8,21 +9,31 @@ pub fn translate(
     source: &[u8],
     target: &[u8],
 ) -> Result<Vec<u8>> {
-    // Generated key contracts currently select SUBSCRIBE, not patterns. A
-    // changed pattern does not prove the concrete publication channel changed.
-    let tag: &[u8] = match kind {
-        RedisSubscriptionKind::Channel => b"message",
-        RedisSubscriptionKind::ShardChannel => b"smessage",
-        RedisSubscriptionKind::Pattern => {
-            anyhow::bail!("generated pattern subscriptions require a concrete channel contract")
-        }
-    };
-    let frame = parse_pubsub_push(bytes)?.context("notification frame is unavailable")?;
+    let tag = translated_tag(kind)?;
+    let frame = frame::decode(&Bytes::copy_from_slice(bytes))?
+        .context("notification frame is unavailable")?;
     ensure!(
-        frame.subscription_kind == kind && frame.subject == source,
+        frame.kind == kind && frame.subject.as_ref() == source,
         "notification subject differs from its Source subscription"
     );
     Ok(crate::encode_array(&[tag, target, &frame.payload]))
+}
+
+pub(crate) fn translate_frame(frame: &frame::Push, target: &[u8]) -> Result<Vec<u8>> {
+    let tag = translated_tag(frame.kind)?;
+    Ok(crate::encode_array(&[tag, target, &frame.payload]))
+}
+
+fn translated_tag(kind: RedisSubscriptionKind) -> Result<&'static [u8]> {
+    // Generated key contracts currently select SUBSCRIBE, not patterns. A
+    // changed pattern does not prove the concrete publication channel changed.
+    match kind {
+        RedisSubscriptionKind::Channel => Ok(b"message"),
+        RedisSubscriptionKind::ShardChannel => Ok(b"smessage"),
+        RedisSubscriptionKind::Pattern => {
+            anyhow::bail!("generated pattern subscriptions require a concrete channel contract")
+        }
+    }
 }
 
 #[cfg(test)]

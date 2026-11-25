@@ -80,7 +80,11 @@ fn scan(sql: &str, mut span: impl FnMut(std::ops::Range<usize>)) -> Option<Vec<T
                 i = end;
                 if quote == b'`' {
                     let name = String::from_utf8(value).ok()?;
-                    if name.bytes().all(word_byte) && !name.is_empty() && !keyword(&name) {
+                    if name.bytes().all(word_byte)
+                        && !name.is_empty()
+                        && !keyword(&name)
+                        && !now_call(&name, &bytes[i..], &out)
+                    {
                         out.push(Token::Word(name));
                     } else {
                         out.push(Token::Identifier(name));
@@ -176,11 +180,13 @@ fn scan(sql: &str, mut span: impl FnMut(std::ops::Range<usize>)) -> Option<Vec<T
                 } else if word.eq_ignore_ascii_case("false") {
                     out.push(Token::Number("0".into()));
                 } else {
-                    out.push(Token::Word(if keyword(word) {
-                        word.to_ascii_lowercase()
-                    } else {
-                        word.to_owned()
-                    }));
+                    out.push(Token::Word(
+                        if keyword(word) || now_call(word, &bytes[i..], &out) {
+                            word.to_ascii_lowercase()
+                        } else {
+                            word.to_owned()
+                        },
+                    ));
                 }
             }
             _ => {
@@ -312,6 +318,12 @@ fn expects_value(tokens: &[Token]) -> bool {
         .iter()
         .any(|s| t.is(s))
     })
+}
+
+fn now_call(word: &str, suffix: &[u8], preceding: &[Token]) -> bool {
+    // An adjacent unqualified call in a value position names the native NOW
+    // function. A qualified name, or NOW used as a table or column, is separate.
+    word.eq_ignore_ascii_case("now") && suffix.starts_with(b"()") && expects_value(preceding)
 }
 
 fn line_end(bytes: &[u8], mut i: usize) -> usize {
@@ -543,5 +555,23 @@ mod tests {
             tokens("active IS /* comment */ NOT FALSE"),
             tokens("active IS NOT false")
         );
+    }
+
+    #[test]
+    fn normalizes_native_now_calls_without_folding_identifiers_or_stored_routines() {
+        assert_eq!(
+            tokens("UPDATE kinds SET updated_at=NOW()"),
+            tokens("UPDATE kinds SET updated_at=now()")
+        );
+        assert_eq!(tokens("SELECT NOW()"), tokens("SELECT now()"));
+        assert_ne!(tokens("SELECT NOW"), tokens("SELECT now"));
+        assert_ne!(tokens("SELECT NOW()"), tokens("SELECT `now`()"));
+        assert_ne!(tokens("SELECT app.NOW()"), tokens("SELECT app.now()"));
+        assert_ne!(
+            tokens("INSERT INTO NOW() VALUES ()"),
+            tokens("INSERT INTO now() VALUES ()")
+        );
+        assert_ne!(tokens("SELECT NOW ()"), tokens("SELECT now ()"));
+        assert_ne!(tokens("SELECT NOW(3)"), tokens("SELECT now(3)"));
     }
 }

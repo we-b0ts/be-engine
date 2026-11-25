@@ -46,8 +46,9 @@ pub fn project_native(rules: &[CompiledNativeRule]) -> Result<NativeRuntimeProje
         let rule = &compiled.rule;
         native_admission::validate(rule)?;
         match &rule.effect {
+            // Finite scalar EVAL request bindings are prepared by RequestContracts.
+            n::NativeEffect::RedisSequence(_) => (),
             n::NativeEffect::Identity(_)
-            | n::NativeEffect::RedisSequence(_)
             | n::NativeEffect::HttpRequest(_)
             | n::NativeEffect::MysqlValues(_)
             | n::NativeEffect::FiniteSharing(_) => {

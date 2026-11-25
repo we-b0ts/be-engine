@@ -26,6 +26,7 @@ mod policy;
 mod project;
 mod quiescing;
 mod readiness;
+mod session;
 mod shutdown;
 mod socketio;
 mod sse;
@@ -297,7 +298,7 @@ impl Fixture {
         let relay = proxy::Relay::new(
             Some(provider),
             origin,
-            "all-apis".to_owned(),
+            Some("all-apis".to_owned()),
             timeout,
             max_body,
         );

@@ -28,9 +28,12 @@ mod admission;
 pub use admission::{Barrier, ClaimKind, ClaimTicket, DeliveryGuard, Finish, Lifecycle};
 
 mod catalog;
-pub use catalog::SequenceCatalog;
+pub use catalog::{SequenceCatalog, SessionPlanEvent};
 mod runtime;
-pub use runtime::{PendingRequest, SequenceClaim, SequenceRuntime};
+pub use runtime::{
+    FrontierWait, MessageBatch, PendingRequest, PublishedMessageBatch, SequenceClaim,
+    SequenceProgress, SequenceRuntime,
+};
 mod ingress;
 pub use ingress::AdmissionQueue;
 
@@ -53,9 +56,42 @@ pub enum EventKind {
     ServerTerminationStarted,
     NoResponseStarted,
     TargetStopStarted,
+    SessionSourceStart,
+    SessionReady,
+    SessionStop,
+    SessionSourceExit,
+    PrimaryRequest,
+    PrimaryResponseHeaders,
+    PrimaryResponsePart,
+    PrimaryResponseTrailers,
+    PrimaryResponseEnd,
+    PrimaryCancel,
 }
 
 impl EventKind {
+    pub fn is_session_driver_event(self) -> bool {
+        matches!(
+            self,
+            Self::SessionSourceStart
+                | Self::SessionReady
+                | Self::SessionStop
+                | Self::SessionSourceExit
+                | Self::PrimaryRequest
+                | Self::PrimaryResponseHeaders
+                | Self::PrimaryResponsePart
+                | Self::PrimaryResponseTrailers
+                | Self::PrimaryResponseEnd
+                | Self::PrimaryCancel
+        )
+    }
+
+    fn is_scheduled_driver_input(self) -> bool {
+        matches!(
+            self,
+            Self::PrimaryRequest | Self::PrimaryCancel | Self::SessionStop
+        )
+    }
+
     fn is_admission(self) -> bool {
         matches!(self, Self::Request | Self::Message)
     }
@@ -133,11 +169,23 @@ impl SequencePlan {
                 source.sequence > previous,
                 "Source event order is not strictly increasing"
             );
+            previous = source.sequence;
+            if source.kind.is_session_driver_event() {
+                ensure!(
+                    source.dependency_sequence == 0,
+                    "driver event owns a dependency"
+                );
+                prepared.push(PreparedEvent {
+                    source,
+                    slot: usize::MAX,
+                    receipt_cursor: prepared.len(),
+                });
+                continue;
+            }
             ensure!(
                 source.dependency_sequence != 0,
                 "Source dependency sequence is zero"
             );
-            previous = source.sequence;
             let slot = if source.kind.is_admission() {
                 let slot = slots.len();
                 ensure!(
@@ -191,6 +239,10 @@ impl SequencePlan {
         self.events.len()
     }
 
+    pub fn events(&self) -> impl Iterator<Item = SourceEvent> + '_ {
+        self.events.iter().map(|event| event.source)
+    }
+
     pub fn dependency_count(&self) -> usize {
         self.slots.len()
     }
@@ -200,10 +252,15 @@ impl SequencePlan {
     }
 
     pub fn is_request_sequence(&self, sequence: u64) -> bool {
+        self.event(sequence)
+            .is_some_and(|event| event.kind == EventKind::Request)
+    }
+
+    pub fn event(&self, sequence: u64) -> Option<SourceEvent> {
         self.events
             .binary_search_by_key(&sequence, |event| event.source.sequence)
             .ok()
-            .is_some_and(|index| self.events[index].source.kind == EventKind::Request)
+            .map(|index| self.events[index].source)
     }
 }
 
@@ -237,7 +294,7 @@ pub struct SequenceScheduler {
     slots: Vec<SlotState>,
     generation: u64,
     pending_delivery: HashMap<usize, (DeliveryTicket, bool)>,
-    request_gates: std::collections::BTreeSet<u64>,
+    event_gates: std::collections::BTreeSet<u64>,
     diagnosis: Option<(usize, u64)>,
     failed: bool,
 }
@@ -283,7 +340,7 @@ impl SequenceScheduler {
             cursor: 0,
             generation: 0,
             pending_delivery: HashMap::new(),
-            request_gates: Default::default(),
+            event_gates: Default::default(),
             diagnosis: None,
             failed: false,
         }
@@ -293,8 +350,25 @@ impl SequenceScheduler {
         self.plan.events.get(self.cursor).map(|event| event.source)
     }
 
-    fn request_is_gated(&self, sequence: u64) -> bool {
-        self.request_gates.contains(&sequence)
+    fn commit_driver(&mut self, sequence: u64) -> Result<()> {
+        ensure!(!self.failed, "Replay sequence has failed");
+        ensure!(
+            self.expected().is_some_and(|event| {
+                event.sequence == sequence && event.kind.is_session_driver_event()
+            }),
+            "driver event {sequence} is not the current Replay event"
+        );
+        ensure!(
+            !self.event_is_gated(sequence),
+            "driver event {sequence} is waiting for a Replay prerequisite"
+        );
+        self.cursor += 1;
+        self.drain_receipts();
+        Ok(())
+    }
+
+    fn event_is_gated(&self, sequence: u64) -> bool {
+        self.event_gates.contains(&sequence)
     }
 
     fn previous(&self) -> Option<SourceEvent> {
@@ -319,7 +393,7 @@ impl SequenceScheduler {
         };
         if !next.source.kind.is_admission()
             || next.source.dependency_sequence != dependency_sequence
-            || self.request_is_gated(next.source.sequence)
+            || self.event_is_gated(next.source.sequence)
         {
             return Ok(Admission::Waiting(next.source));
         }

@@ -3,6 +3,11 @@ use bytes::Bytes;
 use serde_json::json;
 use traffic_protocol::message::ProtocolMessage;
 
+mod driver_prelude;
+mod prepared_execution;
+mod session_recording;
+mod tuple_membership;
+
 fn event() -> Value {
     json!({"event_type":"mysql_exchange", "connection_id":uuid::Uuid::nil(), "query_sequence":1,
         "target_host":"db.test", "target_port":3306, "database":"app", "username":"user",
@@ -148,5 +153,201 @@ fn ownership_projection_preserves_ordinary_reads_and_blocks_unproven_ends() {
             (1, ReplaySessionStep::Unverified)
         ]
         .into()
+    );
+}
+
+#[test]
+fn event_session_keeps_recorded_controls_and_read_only_transaction_receipts() {
+    use traffic_model::attribution::DependencyScope;
+    use traffic_protocol::connection::ReplaySessionStep;
+
+    let control = |sequence, sql, before, after| {
+        let mut record = event();
+        record["query_sequence"] = json!(sequence);
+        record["sql"] = json!(sql);
+        record["server_status_before"] = json!(before);
+        record["response"] = json!({
+            "status":"ok", "server_status":after, "affected_rows":0, "last_insert_id":0
+        });
+        record
+    };
+    let begin = control(1, "BEGIN", 2, 3);
+    let mut read = event();
+    read["query_sequence"] = json!(2);
+    read["server_status_before"] = json!(3);
+    read["response"]["server_status"] = json!(3);
+    let rollback = control(3, "ROLLBACK", 3, 2);
+    let inactive_end = control(4, "ROLLBACK", 2, 2);
+    let records = [(0, &begin), (1, &read), (2, &rollback), (3, &inactive_end)];
+    let legacy = Native
+        .prepare_replay_scope(DependencyScope::Startup, &records)
+        .unwrap();
+    assert_eq!(legacy[&0], ReplaySessionStep::Optional);
+    assert_eq!(legacy[&2], ReplaySessionStep::Optional);
+    assert_eq!(legacy[&3], ReplaySessionStep::Optional);
+
+    let strict = Native.prepare_event_session(&records).unwrap().steps;
+    assert_eq!(strict[&0], ReplaySessionStep::Start);
+    assert_eq!(
+        strict[&1],
+        ReplaySessionStep::Continue {
+            after: ProtocolRef::connection("mysql", uuid::Uuid::nil(), 1),
+            end: false,
+        }
+    );
+    assert_eq!(
+        strict[&2],
+        ReplaySessionStep::ReadOnlyEnd {
+            after: ProtocolRef::connection("mysql", uuid::Uuid::nil(), 2),
+        }
+    );
+    assert!(!strict.contains_key(&3));
+}
+
+#[test]
+fn event_session_proves_implicit_starts_and_keeps_write_ends_exact() {
+    use traffic_protocol::connection::ReplaySessionStep;
+
+    let read = |sequence, before| {
+        let mut record = event();
+        record["query_sequence"] = json!(sequence);
+        record["server_status_before"] = json!(before);
+        record["response"]["server_status"] = json!(1);
+        record
+    };
+    let control = |sequence, sql, after, affected_rows| {
+        let mut record = read(sequence, 1);
+        record["sql"] = json!(sql);
+        record["response"] = json!({
+            "status":"ok", "server_status":after, "affected_rows":affected_rows, "last_insert_id":0
+        });
+        record
+    };
+    let mut records = [
+        read(1, 0),
+        control(2, "UPDATE items SET id=8 WHERE id=7", 1, 0),
+        control(3, "COMMIT", 0, 0),
+        read(4, 0),
+        control(5, "ROLLBACK", 0, 0),
+    ];
+    let prepare = |records: &[Value]| {
+        Native
+            .prepare_event_session(&records.iter().enumerate().collect::<Vec<_>>())
+            .unwrap()
+            .steps
+    };
+    let steps = prepare(&records);
+    assert_eq!(steps[&0], ReplaySessionStep::ImplicitStart);
+    assert_eq!(
+        steps[&2],
+        ReplaySessionStep::Continue {
+            after: ProtocolRef::connection("mysql", uuid::Uuid::nil(), 2),
+            end: true,
+        }
+    );
+    assert_eq!(steps[&3], ReplaySessionStep::ImplicitStart);
+    assert_eq!(
+        steps[&4],
+        ReplaySessionStep::ReadOnlyEnd {
+            after: ProtocolRef::connection("mysql", uuid::Uuid::nil(), 4),
+        }
+    );
+    records[4]["query_sequence"] = json!(6);
+    let steps = prepare(&records);
+    assert_ne!(steps.get(&3), Some(&ReplaySessionStep::ImplicitStart));
+    assert_eq!(steps[&4], ReplaySessionStep::Unverified);
+
+    let mut snapshot = control(
+        1,
+        "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        0,
+        0,
+    );
+    snapshot["server_status_before"] = json!(0);
+    let steps = prepare(&[snapshot, read(2, 0), control(3, "ROLLBACK", 0, 0)]);
+    assert_eq!(steps[&1], ReplaySessionStep::Start);
+    assert!(matches!(
+        steps[&2],
+        ReplaySessionStep::Continue { end: true, .. }
+    ));
+}
+
+pub(super) fn locked_rollback_source() -> [Value; 2] {
+    let mut locked = event();
+    locked["query_sequence"] = json!(28);
+    locked["sql"] = json!(
+        "SELECT system_configs.id AS system_configs_id FROM system_configs WHERE system_configs.config_key='mode' LIMIT 1 FOR UPDATE"
+    );
+    locked["server_status_before"] = json!(0);
+    locked["response"]["server_status"] = json!(1);
+    let mut rollback = locked.clone();
+    rollback["query_sequence"] = json!(29);
+    rollback["sql"] = json!("ROLLBACK");
+    rollback["server_status_before"] = json!(1);
+    rollback["response"] =
+        json!({"status":"ok", "server_status":0, "affected_rows":0, "last_insert_id":0});
+    [locked, rollback]
+}
+
+#[test]
+fn implicit_locked_read_can_open_only_a_complete_exact_rollback_span() {
+    use traffic_protocol::connection::ReplaySessionStep;
+
+    let [locked, rollback] = locked_rollback_source();
+    let prepare = |records: &[Value]| {
+        Native
+            .prepare_event_session(&records.iter().enumerate().collect::<Vec<_>>())
+            .unwrap()
+            .steps
+    };
+
+    let steps = prepare(&[locked.clone(), rollback.clone()]);
+    assert_eq!(steps[&0], ReplaySessionStep::ImplicitStart);
+    assert_eq!(
+        steps[&1],
+        ReplaySessionStep::Continue {
+            after: ProtocolRef::connection("mysql", uuid::Uuid::nil(), 28),
+            end: true,
+        }
+    );
+    assert_eq!(
+        prepare(std::slice::from_ref(&locked))[&0],
+        ReplaySessionStep::Unverified
+    );
+
+    let mut commit = rollback.clone();
+    commit["sql"] = json!("COMMIT");
+    assert_eq!(
+        prepare(&[locked.clone(), commit])[&0],
+        ReplaySessionStep::Start
+    );
+    let mut other_lane = rollback.clone();
+    other_lane["connection_id"] = json!(uuid::Uuid::from_u128(1));
+    assert_eq!(
+        prepare(&[locked.clone(), other_lane])[&0],
+        ReplaySessionStep::Unverified
+    );
+    let mut gap = rollback.clone();
+    gap["query_sequence"] = json!(30);
+    assert_eq!(
+        prepare(&[locked.clone(), gap])[&0],
+        ReplaySessionStep::Unverified
+    );
+
+    let mut udf = locked.clone();
+    udf["sql"] = json!(
+        "SELECT custom_function(id) FROM system_configs WHERE config_key='mode' LIMIT 1 FOR UPDATE"
+    );
+    assert_eq!(
+        prepare(&[udf, rollback.clone()])[&0],
+        ReplaySessionStep::Start
+    );
+    let mut setup = rollback.clone();
+    setup["query_sequence"] = json!(27);
+    setup["sql"] = json!("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+    setup["server_status_before"] = json!(0);
+    assert_eq!(
+        prepare(&[setup, locked, rollback])[&1],
+        ReplaySessionStep::Start
     );
 }

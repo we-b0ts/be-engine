@@ -2,9 +2,12 @@
 use super::*;
 use crate::policy::{CompiledJsonPolicy, CompiledRule, FieldContract};
 use crate::value_contract::{
+    global_protocol::url,
     identities::{IdentityDecision, IdentityDelivery},
     json::{AnchorClocks, Comparison},
 };
+use std::borrow::Cow;
+use traffic_policy_value::fields::{GlobalField, GlobalUrlFormat, MatchedFormatField};
 #[cfg(test)]
 mod signature_tests;
 #[cfg(test)]
@@ -34,12 +37,7 @@ impl RequestContracts {
                 "run-owned global value contract failed at {} fields",
                 comparison.differences.len()
             );
-            let identity = IdentityDecision::prepare(scope, comparison.identity_pairs())?;
-            self.values
-                .identities
-                .lock()
-                .expect("identity contracts")
-                .validate(&identity)?;
+            let identity = self.preview_run_identity_pairs(scope, &comparison.identity_pairs())?;
             let mut decision = Decision::from_value_comparison(comparison);
             decision.identity = Some(identity);
             Ok(decision)
@@ -49,14 +47,8 @@ impl RequestContracts {
     pub fn global_json(&self) -> Option<&CompiledJsonPolicy> {
         self.compiled.as_ref()?.global_json.as_ref().or_else(|| {
             static EMPTY: std::sync::OnceLock<CompiledJsonPolicy> = std::sync::OnceLock::new();
-            self.pre_match_enabled.then(|| {
-                EMPTY.get_or_init(|| CompiledJsonPolicy {
-                    time: Default::default(),
-                    signatures: Default::default(),
-                    fields: Default::default(),
-                    fingerprint: String::new(),
-                })
-            })
+            self.pre_match_enabled
+                .then(|| EMPTY.get_or_init(CompiledJsonPolicy::default))
         })
     }
 
@@ -163,7 +155,7 @@ impl RequestContracts {
         logical: &mut Value,
     ) -> Result<(IdentityDecision, Vec<String>)> {
         let Some(global) = self.global_json() else {
-            return Ok((IdentityDecision::prepare(case, vec![])?, vec![]));
+            return Ok((self.values.preview(case, &[])?, vec![]));
         };
         self.translate_identity_plan(case, source, logical, global)
     }
@@ -175,29 +167,88 @@ impl RequestContracts {
         logical: &mut Value,
         global: &CompiledJsonPolicy,
     ) -> Result<(IdentityDecision, Vec<String>)> {
+        let mut delivered = Cow::Owned(std::mem::take(logical));
+        let result = self.translate_identity_plan_cow(case, source, &mut delivered, global);
+        *logical = delivered.into_owned();
+        result
+    }
+
+    pub(super) fn translate_identity_plan_cow(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+    ) -> Result<(IdentityDecision, Vec<String>)> {
         let selected = global.identity_fields(source)?;
-        let mut pointers = Vec::new();
-        let mut entries = Vec::new();
-        let mut anchors = Vec::new();
-        for (pointer, contract) in &selected {
-            if let Some(value) = source.pointer(pointer) {
-                if let FieldContract::Identity { prefix, format } = contract {
-                    pointers.push(pointer.clone());
-                    entries.push(IdentityDelivery {
-                        prefix,
-                        format: *format,
-                        value,
-                    });
-                } else if matches!(contract, FieldContract::IdentityAnchor) {
-                    let encoded = serde_json::to_string(value)?;
-                    anchors.push(crate::value_contract::identities::IdentityPair {
-                        source: encoded.clone(),
-                        target: encoded,
-                    });
-                }
-            }
-        }
-        let (values, decision) = self.identity_deliveries(case, &entries)?;
+        self.translate_selected_identities_at_matches(
+            case, source, logical, global, &selected, None,
+        )
+    }
+
+    pub(super) fn translate_selected_identities_at_matches(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+        selected: &[(String, FieldContract)],
+        native: Option<&[MatchedFormatField]>,
+    ) -> Result<(IdentityDecision, Vec<String>)> {
+        let fields = RootIdentityFields::select(source, selected)?;
+        let (values, decision) = self.identity_deliveries(case, &fields.entries)?;
+        self.translate_resolved_identities_at_matches(
+            case,
+            source,
+            logical,
+            global,
+            fields.resolve(values, decision),
+            native,
+        )
+    }
+
+    pub(super) fn prefetch_root_identities(
+        &self,
+        source: &Value,
+        selected: &[(String, FieldContract)],
+    ) -> Result<Option<ResolvedRootIdentities>> {
+        let fields = RootIdentityFields::select(source, selected)?;
+        let Some((values, decision)) = self
+            .values
+            .prefetch_session_identity_deliveries(&fields.entries)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(fields.resolve(values, decision)))
+    }
+
+    #[cfg(test)]
+    pub(super) fn translate_resolved_identities_cow(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+        resolved: ResolvedRootIdentities,
+    ) -> Result<(IdentityDecision, Vec<String>)> {
+        self.translate_resolved_identities_at_matches(case, source, logical, global, resolved, None)
+    }
+
+    pub(super) fn translate_resolved_identities_at_matches(
+        &self,
+        case: &str,
+        source: &Value,
+        logical: &mut Cow<'_, Value>,
+        global: &CompiledJsonPolicy,
+        resolved: ResolvedRootIdentities,
+        native: Option<&[MatchedFormatField]>,
+    ) -> Result<(IdentityDecision, Vec<String>)> {
+        let ResolvedRootIdentities {
+            mut pointers,
+            values,
+            decision,
+            anchors,
+        } = resolved;
         let mut combined = Decision {
             identity: Some(decision),
             ..Default::default()
@@ -209,39 +260,49 @@ impl RequestContracts {
             )?;
         }
         for (pointer, value) in pointers.iter().zip(values) {
-            *logical
-                .pointer_mut(pointer)
-                .context("global identity delivery field disappeared")? = value;
+            if matches!(logical, Cow::Owned(_)) || logical.pointer(pointer) != Some(&value) {
+                *logical
+                    .to_mut()
+                    .pointer_mut(pointer)
+                    .context("global identity delivery field disappeared")? = value;
+            }
         }
-        let query_plan = crate::value_contract::global_protocol::url::query_plan(global);
-        for pointer in crate::value_contract::global_protocol::url::selected(global, source)? {
+        let mut query_plan = None;
+        let url_fields = match native {
+            Some(native) => native.iter().filter_map(|field| {
+                matches!(&global.fields[&field.pattern], GlobalField::Url { formats } if formats == &[GlobalUrlFormat::Url])
+                    .then(|| field.pointer.clone())
+            }).collect(),
+            None => url::selected(global, source)?,
+        };
+        for pointer in url_fields {
             let Some(value) = source.pointer(&pointer) else {
                 continue;
             };
-            let Ok(document) = crate::value_contract::global_protocol::url::Document::parse(value)
-            else {
+            let Ok(document) = url::Document::parse(value) else {
                 continue;
             };
+            let plan = query_plan.get_or_insert_with(|| url::query_plan(global));
             let mut query = document.logical.clone();
             let preview = self.with_identity_proposals(combined.identity.iter())?;
-            let (nested, _) = preview.translate_identity_plan(
-                case,
-                &document.logical,
-                &mut query,
-                &query_plan,
-            )?;
+            let (nested, _) =
+                preview.translate_identity_plan(case, &document.logical, &mut query, plan)?;
             self.merge_identity_decision(&mut combined, nested)?;
             let rebuilt = Value::String(document.rebuild(&query)?);
             if logical.pointer(&pointer) != Some(&rebuilt) {
                 *logical
+                    .to_mut()
                     .pointer_mut(&pointer)
                     .context("global URL delivery field disappeared")? = rebuilt;
                 pointers.push(pointer);
             }
         }
-        for (pointer, document) in
-            crate::value_contract::global_protocol::template::selected(global, source)?
-        {
+        use crate::value_contract::global_protocol::template;
+        let templates = match native {
+            Some(native) => template::selected_at_matches(global, source, native)?,
+            None => template::selected(global, source)?,
+        };
+        for (pointer, document) in templates {
             let mut tokens = document.logical.clone();
             let entries = document
                 .fields()
@@ -266,6 +327,7 @@ impl RequestContracts {
             let rebuilt = Value::String(document.rebuild(&tokens)?);
             if logical.pointer(&pointer) != Some(&rebuilt) {
                 *logical
+                    .to_mut()
                     .pointer_mut(&pointer)
                     .context("global template delivery field disappeared")? = rebuilt;
                 pointers.push(pointer);
@@ -275,5 +337,83 @@ impl RequestContracts {
             combined.identity.expect("identity delivery proposal"),
             pointers,
         ))
+    }
+}
+
+struct RootIdentityFields<'a> {
+    pointers: Vec<String>,
+    entries: Vec<IdentityDelivery<'a>>,
+    anchors: Vec<crate::value_contract::identities::IdentityPair>,
+}
+
+impl<'a> RootIdentityFields<'a> {
+    fn select(source: &'a Value, selected: &'a [(String, FieldContract)]) -> Result<Self> {
+        let mut fields = Self {
+            pointers: Vec::new(),
+            entries: Vec::new(),
+            anchors: Vec::new(),
+        };
+        for (pointer, contract) in selected {
+            if let Some(value) = source.pointer(pointer) {
+                if let FieldContract::Identity { prefix, format } = contract {
+                    fields.pointers.push(pointer.clone());
+                    fields.entries.push(IdentityDelivery {
+                        prefix,
+                        format: *format,
+                        value,
+                    });
+                } else if matches!(contract, FieldContract::IdentityAnchor) {
+                    let encoded = serde_json::to_string(value)?;
+                    fields
+                        .anchors
+                        .push(crate::value_contract::identities::IdentityPair {
+                            source: encoded.clone(),
+                            target: encoded,
+                        });
+                }
+            }
+        }
+        Ok(fields)
+    }
+
+    fn resolve(self, values: Vec<Value>, decision: IdentityDecision) -> ResolvedRootIdentities {
+        ResolvedRootIdentities {
+            pointers: self.pointers,
+            values,
+            decision,
+            anchors: self.anchors,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ResolvedRootIdentities {
+    pointers: Vec<String>,
+    values: Vec<Value>,
+    decision: IdentityDecision,
+    anchors: Vec<crate::value_contract::identities::IdentityPair>,
+}
+
+impl ResolvedRootIdentities {
+    pub(super) fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        self.decision.retained_bytes()
+            + self.pointers.capacity() * size_of::<String>()
+            + self.pointers.iter().map(String::capacity).sum::<usize>()
+            + self.values.capacity() * size_of::<Value>()
+            + self
+                .values
+                .iter()
+                .map(|value| match value {
+                    Value::String(text) => text.capacity(),
+                    _ => 0,
+                })
+                .sum::<usize>()
+            + self.anchors.capacity() * size_of::<crate::value_contract::identities::IdentityPair>()
+            + self
+                .anchors
+                .iter()
+                .map(|pair| pair.source.capacity() + pair.target.capacity())
+                .sum::<usize>()
     }
 }

@@ -10,6 +10,9 @@ use traffic_policy_content::model::{
 };
 use traffic_policy_schema::response::ResponseBodyCodec;
 
+mod event_session;
+pub use event_session::{E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult};
+
 #[derive(Debug, Clone)]
 pub struct E2eRunContext {
     pub target_root: PathBuf,

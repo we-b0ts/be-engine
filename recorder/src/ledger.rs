@@ -126,6 +126,17 @@ impl std::fmt::Debug for CaptureReservation {
 }
 
 impl CaptureRegistry {
+    pub fn session_event(
+        &self,
+        event: traffic_model::session::SessionEvent,
+    ) -> anyhow::Result<u64> {
+        let result = self.0.writer.try_record_session_event(event);
+        if result.is_err() {
+            self.mark_inventory_gap();
+        }
+        result
+    }
+
     pub fn primary_boundary(&self, case_id: Uuid, boundary: traffic_model::trace::PrimaryBoundary) {
         if self
             .0

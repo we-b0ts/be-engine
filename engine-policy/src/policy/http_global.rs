@@ -10,6 +10,8 @@ pub use traffic_protocol_http::header_values::GLOBAL_HTTP_ID;
 pub struct HttpPolicy {
     #[serde(default, deserialize_with = "header_formats")]
     pub headers: BTreeMap<String, GlobalField>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_metadata: Vec<traffic_protocol_http::request_metadata::RequestMetadataRule>,
 }
 fn header_formats<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -18,21 +20,49 @@ fn header_formats<'de, D: Deserializer<'de>>(
     normalize(raw).map_err(serde::de::Error::custom)
 }
 fn normalize(headers: BTreeMap<String, GlobalField>) -> Result<BTreeMap<String, GlobalField>> {
-    Ok(traffic_policy_document::HttpPolicy { headers }
-        .compile(&super::authoring::context())?
-        .headers)
+    Ok(traffic_policy_document::HttpPolicy {
+        headers,
+        request_metadata: Vec::new(),
+    }
+    .compile(&super::authoring::context())?
+    .headers)
 }
 
 impl HttpPolicy {
     pub fn compile(&self) -> Result<Self> {
+        traffic_protocol_http::request_metadata::validate_rules(&self.request_metadata)?;
         Ok(Self {
             headers: normalize(self.headers.clone())?,
+            request_metadata: self.request_metadata.clone(),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_metadata_is_exactly_scoped_and_round_trips() {
+        let raw = r#"format: traffic-policy/v3
+http:
+  request_metadata:
+    - host: gateway.example
+      method: POST
+      path: /stream/connect
+      json_ipv4: [/localAddress]
+      traceparent: true
+      accept_encoding: gzip
+"#;
+        let policy = crate::policy::parse_policy(raw).unwrap();
+        let compiled = crate::policy::compile_policy(&policy).unwrap();
+        assert_eq!(compiled.http.as_ref().unwrap().request_metadata.len(), 1);
+        let rendered = crate::policy::render_policy(&policy).unwrap();
+        assert_eq!(
+            crate::policy::parse_and_compile_policy(&rendered).unwrap(),
+            compiled
+        );
+        assert!(crate::policy::parse_policy(&raw.replace("/stream/connect", "/stream/*")).is_err());
+    }
+
     #[test]
     fn header_formats_roundtrip_normalize_names_and_reject_ambiguous_or_non_scalar_declarations() {
         let raw = "format: traffic-policy/v3\nhttp:\n  headers:\n    X-Amz-Date: {kind: time, formats: [amz_date]}\n";

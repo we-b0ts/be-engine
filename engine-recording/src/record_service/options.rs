@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use clap::{Args, ValueEnum};
-use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
+use std::{ffi::OsString, net::SocketAddr, num::NonZeroU32, path::PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CoordinationBackend {
@@ -23,6 +23,8 @@ pub struct RecordOptions {
         value_name = "PATH"
     )]
     pub config_path: Option<PathBuf>,
+    #[arg(skip)]
+    pub(super) session_events: bool,
     #[arg(
         long,
         env = "TRAFFIC_E2E_RECORD_LISTEN",
@@ -54,8 +56,6 @@ pub struct RecordOptions {
     pub prefix: String,
     #[arg(long, env = "TRAFFIC_E2E_RECORDING_URL_KEY")]
     pub url_key: Option<String>,
-    #[arg(long, env = "TRAFFIC_E2E_RECORDING_SCOPE", default_value = "all-apis")]
-    pub scope: String,
     #[arg(
         long,
         env = "TRAFFIC_E2E_RECORDER_LISTEN",
@@ -101,6 +101,9 @@ pub struct RecordOptions {
     /// Override the project case limit; without project configuration it is unlimited.
     #[arg(long, env = "TRAFFIC_E2E_CASE_LIMIT")]
     pub case_limit: Option<std::num::NonZeroUsize>,
+    /// Maximum in-flight ingress requests, including open streaming responses (default: 8).
+    #[arg(long, env = "TRAFFIC_E2E_RECORDING_MAX_INFLIGHT_REQUESTS")]
+    pub max_inflight_requests: Option<NonZeroU32>,
     /// Development only: disable fixed-identity DNS/fake-IP interception.
     #[arg(long)]
     pub no_interception: bool,
@@ -157,6 +160,12 @@ impl RecordOptions {
             .transpose()
     }
 
+    pub(super) fn ingress_capacity(&self, config: &AppConfig) -> NonZeroU32 {
+        self.max_inflight_requests
+            .or(config.recording.max_inflight_requests)
+            .unwrap_or(NonZeroU32::new(8).unwrap())
+    }
+
     pub(super) fn config(&self) -> Result<AppConfig> {
         ensure!(
             !self.source_command.is_empty(),
@@ -175,11 +184,11 @@ impl RecordOptions {
         if let Some(run_id) = &self.run_id {
             parse_run_id(run_id).map_err(anyhow::Error::msg)?;
         }
-        brz_http_gateway::AdmissionTicket::new(&self.scope, "validation")?;
         ensure!(
             self.discovery_key() != format!("{}:max-gateways", self.prefix)
                 && self.discovery_key() != format!("{}:api-policy", self.prefix)
                 && self.discovery_key() != format!("{}:api-counts", self.prefix)
+                && self.discovery_key() != format!("{}:inflight", self.prefix)
                 && !self
                     .discovery_key()
                     .starts_with(&format!("{}:gateway:", self.prefix))
@@ -219,7 +228,7 @@ impl RecordOptions {
                     "--policy must name the same file as project.policy when --config is supplied"
                 );
             }
-            AppConfig::load(path)?
+            AppConfig::load_for_recording(path, self.session_events)?
         } else {
             let mut config = AppConfig::default();
             config.http_gateway.per_api_case_limits.default = usize::MAX;
@@ -237,7 +246,9 @@ impl RecordOptions {
                     SourceTrafficPolicyConfig::load_with_fingerprints(path)?;
                 rules.apply_to(&mut config)?;
                 use crate::config::api_catalog::{ApiCatalog, FILE_NAME};
-                if let Some(catalog) = ApiCatalog::load(&path.with_file_name(FILE_NAME))? {
+                if !self.session_events
+                    && let Some(catalog) = ApiCatalog::load(&path.with_file_name(FILE_NAME))?
+                {
                     config.http_gateway.case_path_patterns = catalog.case_paths();
                 }
                 config.global_projection_policy = Some(fingerprints.full);
@@ -266,7 +277,10 @@ impl RecordOptions {
         if let Some(path) = &self.ready_path {
             config.http_gateway.ready.path = path.clone();
         }
-        if let Some(limit) = self.case_limit {
+        config.recording.session_events = self.session_events;
+        if config.recording.session_events {
+            config.clear_case_capture_settings();
+        } else if let Some(limit) = self.case_limit {
             config.http_gateway.per_api_case_limits.default = limit.get();
         }
         let recorder_data = self.data_root.join(crate::repository::LOCAL_DATA_ROOT);
@@ -328,6 +342,7 @@ impl std::fmt::Debug for RecordOptions {
             .field("coordination", &self.coordination)
             .field("listen", &self.listen)
             .field("run_id", &self.run_id)
+            .field("session_events", &self.session_events)
             .field("data_root", &self.data_root)
             .finish_non_exhaustive()
     }

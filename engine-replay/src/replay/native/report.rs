@@ -133,13 +133,13 @@ impl Inventory {
         protocol: ProtocolId,
         endpoint: &Endpoint,
         case_id: Option<String>,
-        target_event_index: Option<usize>,
-        target_observation_id: Option<Uuid>,
+        observation: (Option<usize>, Option<Uuid>),
         reason: &str,
         diagnostics: diagnosis::CandidateDiagnostics,
     ) {
         // Each physical request or failed delivery keeps a bounded diagnostic.
         // The count remains independent of diagnostic retention.
+        let (target_event_index, target_observation_id) = observation;
         self.failure_counts
             .entry((protocol.as_str().into(), case_id.clone()))
             .and_modify(|count| *count += 1)

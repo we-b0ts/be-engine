@@ -4,6 +4,7 @@ use crate::{
     TransformPlan, TransformPolicy, ValuePair,
 };
 use anyhow::{Context, Result, ensure};
+use serde::Deserialize;
 use std::{collections::BTreeMap, sync::Arc};
 use traffic_value::Value;
 
@@ -19,33 +20,25 @@ impl PolicyRegistry {
         source: &Value,
         facts: &Value,
     ) -> Result<Option<usize>> {
-        let mut selected = None;
-        let mut rank = 0;
-        let mut ambiguous = false;
-        let mut candidates = 0;
-        let mut unranked = false;
-        for (index, definition) in definitions.iter().enumerate() {
-            let policy = self.prepare_definition(definition)?;
-            match policy.implementation.source_match(source, facts)? {
-                crate::SourceMatch::Inapplicable => (),
-                crate::SourceMatch::Applicable => return Ok(Some(index)),
-                crate::SourceMatch::Ranked(score) => {
-                    candidates += 1;
-                    unranked |= score.is_none();
-                    let score = score.unwrap_or(0);
-                    if selected.is_none() || score > rank {
-                        selected = Some(index);
-                        rank = score;
-                        ambiguous = false;
-                    } else if score == rank
-                        && selected.is_some_and(|previous| definitions[previous] != *definition)
-                    {
-                        ambiguous = true;
-                    }
-                }
-            }
-        }
-        Ok(selected.filter(|_| !ambiguous && (!unranked || candidates == 1)))
+        select_source(definitions, |index| {
+            self.prepare_definition(&definitions[index])?
+                .implementation
+                .source_match(source, facts)
+        })
+    }
+
+    pub fn prepare_selection(
+        &self,
+        definitions: Vec<PolicyDefinition>,
+    ) -> Result<PreparedPolicySelection> {
+        let policies = definitions
+            .iter()
+            .map(|definition| self.prepare_definition(definition))
+            .collect::<Result<_>>()?;
+        Ok(PreparedPolicySelection {
+            definitions,
+            policies,
+        })
     }
     pub fn infer(&self, source: &Value, facts: &Value) -> Result<Option<crate::PolicyInference>> {
         let mut selected = None;
@@ -74,7 +67,7 @@ impl PolicyRegistry {
             return Ok(false);
         }
         let left = self.prepare_definition(left)?;
-        let options = serde_json::from_value(right.options.clone())?;
+        let options = Value::deserialize(&right.options)?;
         left.implementation.compatible(&options)
     }
     pub fn register(&mut self, provider: Arc<dyn PolicyProvider>) -> Result<()> {
@@ -121,7 +114,7 @@ impl PolicyRegistry {
     }
     pub fn prepare_definition(&self, definition: &PolicyDefinition) -> Result<PreparedPolicy> {
         definition.validate()?;
-        let options = serde_json::from_value(definition.options.clone())?;
+        let options = Value::deserialize(&definition.options)?;
         let prepared = self.prepare(&definition.id, &options)?;
         ensure!(
             prepared.descriptor().version == definition.version,
@@ -189,6 +182,54 @@ impl PolicyRegistry {
             findings.extend(found);
         }
         Ok(findings)
+    }
+}
+
+fn select_source(
+    definitions: &[PolicyDefinition],
+    mut source_match: impl FnMut(usize) -> Result<crate::SourceMatch>,
+) -> Result<Option<usize>> {
+    let mut selected = None;
+    let mut rank = 0;
+    let mut ambiguous = false;
+    let mut candidates = 0;
+    let mut unranked = false;
+    for (index, definition) in definitions.iter().enumerate() {
+        match source_match(index)? {
+            crate::SourceMatch::Inapplicable => (),
+            crate::SourceMatch::Applicable => return Ok(Some(index)),
+            crate::SourceMatch::Ranked(score) => {
+                candidates += 1;
+                unranked |= score.is_none();
+                let score = score.unwrap_or(0);
+                if selected.is_none() || score > rank {
+                    selected = Some(index);
+                    rank = score;
+                    ambiguous = false;
+                } else if score == rank
+                    && selected.is_some_and(|previous| definitions[previous] != *definition)
+                {
+                    ambiguous = true;
+                }
+            }
+        }
+    }
+    Ok(selected.filter(|_| !ambiguous && (!unranked || candidates == 1)))
+}
+
+/// Installed comparison policies in declaration order for Source applicability.
+pub struct PreparedPolicySelection {
+    definitions: Vec<PolicyDefinition>,
+    policies: Vec<PreparedPolicy>,
+}
+
+impl PreparedPolicySelection {
+    pub fn select(&self, source: &Value, facts: &Value) -> Result<Option<usize>> {
+        select_source(&self.definitions, |index| {
+            self.policies[index]
+                .implementation
+                .source_match(source, facts)
+        })
     }
 }
 

@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::warn;
+use traffic_model::session::SessionEvent;
 use traffic_model::trace::RecordedEvent;
 use uuid::Uuid;
 
@@ -32,6 +33,7 @@ pub struct CaptureOptions {
     pub process_epoch: Uuid,
     pub policy_identity: String,
     pub evidence: Arc<traffic_protocol::evidence::EvidenceRegistry>,
+    pub session_events: bool,
 }
 
 pub struct RecordEnvelope {
@@ -86,6 +88,7 @@ enum WriterCommand {
         ack: WriterAck,
     },
     Lifecycle(RecordedEvent<super::ledger::LifecycleRecord>),
+    SessionEvent(RecordedEvent<SessionEvent>),
     RegisterInput {
         case_id: Uuid,
         path: String,
@@ -144,7 +147,7 @@ struct WriterState {
     dependency_files: JsonlWriterPool,
     run_dir: Arc<PathBuf>,
     finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
-    source_process_traffic: SourceProcessTrafficSummaryBuilder,
+    source_process_traffic: Option<SourceProcessTrafficSummaryBuilder>,
     ledger: super::ledger::persistence::LedgerWriter,
 }
 
@@ -165,23 +168,24 @@ impl RecorderWriter {
         let (sender, receiver) = mpsc::channel(queue_capacity);
         let failure = Arc::new(StdMutex::new(None));
         let clock = RecordingClock::default();
+        let ledger = super::ledger::persistence::LedgerWriter::new(
+            &run_dir,
+            capture.process_epoch,
+            capture.policy_identity,
+            clock.clone(),
+            capture.evidence.clone(),
+            capture.session_events,
+        )
+        .await?;
         let state = WriterState {
             traffic_jsonl,
             traffic_file,
             dependency_files: JsonlWriterPool::new(settings),
             run_dir: run_dir.clone(),
             finalized_cases,
-            source_process_traffic: SourceProcessTrafficSummaryBuilder::new(
-                capture.evidence.clone(),
-            ),
-            ledger: super::ledger::persistence::LedgerWriter::new(
-                &run_dir,
-                capture.process_epoch,
-                capture.policy_identity,
-                clock.clone(),
-                capture.evidence,
-            )
-            .await?,
+            source_process_traffic: (!capture.session_events)
+                .then(|| SourceProcessTrafficSummaryBuilder::new(capture.evidence.clone())),
+            ledger,
         };
         #[cfg(any(test, feature = "test-support"))]
         let completion = Arc::new(tokio::sync::Notify::new());
@@ -244,6 +248,17 @@ impl RecorderWriter {
 
     pub fn try_record_lifecycle(&self, record: super::ledger::LifecycleRecord) -> Result<()> {
         self.try_publish_lifecycle(|_| record).map(|_| ())
+    }
+
+    pub(crate) fn try_record_session_event(&self, event: SessionEvent) -> Result<u64> {
+        let permit = self.try_reserve("recording session event queue is full")?;
+        self.clock.publish(|batch| {
+            let stamp = batch.next()?;
+            permit.send(Box::new(WriterCommand::SessionEvent(recorded(
+                &stamp, event,
+            ))));
+            Ok(stamp.sequence)
+        })
     }
 
     pub(crate) fn try_publish_lifecycle(
@@ -483,6 +498,16 @@ async fn process_command(
                 warn!(%error,"failed to persist request capture lifecycle");
             }
         }
+        WriterCommand::SessionEvent(record) => {
+            if let Err(error) = state
+                .ledger
+                .session_event(&mut state.dependency_files, &record)
+                .await
+            {
+                record_failure(failure, error.to_string());
+                warn!(%error, seq = record.sequence, "failed to persist Source session event");
+            }
+        }
         WriterCommand::CapturePolicyIdentity {
             identity,
             process_dependency_tasks,
@@ -621,26 +646,24 @@ impl WriterState {
                 stamps,
             )
             .await?;
+        let Some(summary) = &mut self.source_process_traffic else {
+            return Ok(());
+        };
         if !event.facts().case_dependency {
             if let Some(attribution) = global_attribution.as_ref() {
-                self.source_process_traffic.observe(
+                summary.observe(
                     &event,
                     attribution.reason,
                     attribution.phase,
                     &attribution.matched_by,
                 )?;
             } else if targets.bootstrap_open && !suppress_default_global {
-                self.source_process_traffic.observe(
-                    &event,
-                    "bootstrap_window",
-                    "bootstrap",
-                    "bootstrap_window",
-                )?;
+                summary.observe(&event, "bootstrap_window", "bootstrap", "bootstrap_window")?;
             }
             return Ok(());
         }
         if let Some(attribution) = global_attribution {
-            self.source_process_traffic.observe(
+            summary.observe(
                 &event,
                 attribution.reason,
                 attribution.phase,
@@ -649,12 +672,7 @@ impl WriterState {
             return Ok(());
         }
         if targets.bootstrap_open && !suppress_default_global {
-            self.source_process_traffic.observe(
-                &event,
-                "bootstrap_window",
-                "bootstrap",
-                "bootstrap_window",
-            )?;
+            summary.observe(&event, "bootstrap_window", "bootstrap", "bootstrap_window")?;
         }
         if targets.ambiguous_active_cases > 0 {
             warn!(
@@ -711,8 +729,9 @@ impl WriterState {
         matched_by: &str,
         stamps: RecordStamps,
     ) -> Result<()> {
-        self.source_process_traffic
-            .observe(&event, reason, phase, matched_by)?;
+        if let Some(summary) = &mut self.source_process_traffic {
+            summary.observe(&event, reason, phase, matched_by)?;
+        }
         self.ledger
             .append_stamped(
                 &mut self.dependency_files,
@@ -750,7 +769,10 @@ impl WriterState {
 
     async fn flush_global(&mut self) -> Result<()> {
         self.dependency_files.flush_all().await?;
-        self.source_process_traffic.write(&self.run_dir).await
+        if let Some(summary) = &self.source_process_traffic {
+            summary.write(&self.run_dir).await?;
+        }
+        Ok(())
     }
 
     async fn flush_open(&mut self) -> Result<()> {
@@ -760,7 +782,6 @@ impl WriterState {
 
     async fn flush_all(&mut self) -> Result<()> {
         self.flush_traffic().await?;
-        self.dependency_files.flush_all().await?;
-        self.source_process_traffic.write(&self.run_dir).await
+        self.flush_global().await
     }
 }

@@ -24,10 +24,11 @@ use tokio::{
     sync::{oneshot, watch},
 };
 use tracing::{info, warn};
+use traffic_model::session::SessionEvent;
 
 /// Initializes Recorder and Source, advertises after readiness, and serves
 /// independently of best-effort address registration.
-pub async fn run(options: RecordOptions) -> Result<()> {
+pub async fn run(mut options: RecordOptions) -> Result<()> {
     ensure!(
         crate::local_interception::effective_uid() != crate::TRAFFIC_PROCESS_UID,
         "recording service controller cannot use the reserved Source UID"
@@ -37,6 +38,7 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         "recording service with interception requires a root controller"
     );
     process::prepare_fixed_identity()?;
+    options.session_events = true;
     let config = options.config()?;
     let api_policy = options.load_api_policy()?;
     if let Some(path) = &options.config_path {
@@ -85,7 +87,12 @@ async fn run_prepared(
     forwards: &mut kubernetes::PortForwards,
     mut shutdown: Pin<&mut impl Future<Output = Result<()>>>,
 ) -> Result<()> {
-    let coordination = coordination::Coordination::connect(&options).await?;
+    let capacity = options.ingress_capacity(&config);
+    ensure!(
+        capacity.get() as usize <= tokio::sync::Semaphore::MAX_PERMITS,
+        "max-inflight-requests exceeds the supported semaphore capacity"
+    );
+    let coordination = coordination::Coordination::connect(&options, capacity).await?;
     let program =
         process::resolve_source_program(&options.source_command[0], &options.source_workdir)?;
     process::verify_fixed_identity_access(&options.source_workdir, &program)?;
@@ -128,18 +135,22 @@ async fn run_prepared(
     let relay = proxy::Relay::new(
         coordination.reservations.clone(),
         format!("http://{}", options.recorder_listen).parse()?,
-        options.scope.clone(),
+        None,
         Duration::from_millis(config.http_gateway.request_timeout_ms),
         config.recording.max_body_bytes,
-    )
-    .with_interactions(
-        state.clone(),
-        options
-            .advertise_url
-            .as_deref()
-            .unwrap_or("http://127.0.0.1:4080")
-            .parse()?,
     );
+    let relay = if state.session_events() {
+        relay.with_session_events(state.clone(), capacity)
+    } else {
+        relay.with_interactions(
+            state.clone(),
+            options
+                .advertise_url
+                .as_deref()
+                .unwrap_or("http://127.0.0.1:4080")
+                .parse()?,
+        )
+    };
     let (stop_adapter, adapter_stopped) = watch::channel(false);
     let mut source = None;
     let mut adapter = None;
@@ -155,21 +166,36 @@ async fn run_prepared(
         source::verify_sensitive_state_isolated(&options.data_root, &options.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings"), &config.tls.ca_key_path)?;
         let trust = process::prepare_source_trust(&runtime.path, &config.tls.ca_cert_path, &options.source_workdir, &program)?;
         identity::register(&state, &program, &options.source_workdir).await?;
+        if state.session_events() {
+            let listener = TcpListener::bind(options.listen).await?;
+            coordination.initialize_round(api_policy.as_ref()).await?;
+            adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped.clone())));
+            state.session_event(SessionEvent::SourceStart)?;
+        }
         source = Some(process::spawn_source(&program, &options.source_command[1..], &options.source_workdir, &trust)?);
+        state.inner.source_started.send_replace(true);
         let source = source.as_mut().unwrap();
         tokio::select! {
             ready = wait_startup(&control, options.startup_timeout_seconds, true, &mut recorder, &mut recorder_finished) => ready?,
             error = forwards.failure() => return Err(error),
             status = source.wait() => bail!("Source exited during startup: {}", status?),
+            result = async { adapter.as_mut().expect("running session relay").await }, if adapter.is_some() => {
+                adapter_finished = true;
+                result.context("adapter task failed")??;
+                bail!("adapter stopped unexpectedly");
+            }
             signal = &mut shutdown => { signal?; normal_shutdown = true; return Ok(()); }
         }
-        let listener = TcpListener::bind(options.listen).await?;
-        coordination.initialize_round(api_policy.as_ref()).await?;
-        adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
+        if adapter.is_none() {
+            let listener = TcpListener::bind(options.listen).await?;
+            coordination.initialize_round(api_policy.as_ref()).await?;
+            adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
+        }
         relay.open();
         info!(listen = %options.listen, run_id = %state.recorder().run_dir.file_name().unwrap().to_string_lossy(),
             manifest = %state.recorder().run_dir.join("recording-run.json").display(),
-            coordination = ?options.coordination, "recording ready; waiting for requests");
+            coordination = ?options.coordination, max_inflight_requests = capacity.get(),
+            "recording ready; waiting for requests");
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -181,6 +207,11 @@ async fn run_prepared(
                 }
                 _ = state.inner.active_cases.wait_for_quiescing() => {
                     warn!("recording admission closed; stopping Source and finalizing recording");
+                    if state.session_events()
+                        && let Some(error) = state.inner.recording_lifecycle.snapshot().error
+                    {
+                        bail!("session capture failed: {error}");
+                    }
                     break Ok(());
                 }
                 status = source.wait() => break Err(anyhow::anyhow!("Source exited: {}", status?)),
@@ -200,7 +231,7 @@ async fn run_prepared(
         && let Err(error) = shutdown::drain(&state, &relay).await
         && result.is_ok()
     {
-        result = Err(error.context("failed to persist recording shutdown diagnostics"));
+        result = Err(error.context("normal recording shutdown failed"));
     }
     state.close_interactions();
     state.begin_case_quiescing();
@@ -208,7 +239,32 @@ async fn run_prepared(
     // Source exit can emit disconnect dependencies. Keep Recorder and active
     // ownership alive until the process has exited, before draining relay/cases.
     let source_cleanup = if let Some(source) = &mut source {
-        process::stop_source(source).await
+        let stop_receipt = if state.session_events() {
+            state.session_event(SessionEvent::Stop)
+        } else {
+            Ok(())
+        };
+        let cleanup = process::stop_source(source).await;
+        cleanup.and_then(|()| {
+            if state.session_events() {
+                use std::os::unix::process::ExitStatusExt;
+                let status = source.try_wait()?.and_then(|status| {
+                    status
+                        .code()
+                        .or_else(|| status.signal().map(|signal| 128 + signal))
+                });
+                state.session_event(SessionEvent::SourceExit { status })?;
+                if status == Some(128 + libc::SIGKILL) {
+                    let error =
+                        anyhow::anyhow!("Source was killed before session shutdown completed");
+                    state.fail_session_recording(&error);
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            stop_receipt
+        })
     } else {
         Ok(())
     };
@@ -289,6 +345,15 @@ async fn run_prepared(
         "recording finalized with errors; inspect {}",
         manifest.display()
     );
+    if state.session_events() {
+        let ledger = state.recorder().run_dir.join("dependency-manifest.json");
+        let document: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&ledger).await?)?;
+        ensure!(
+            document["capture_complete"] == true,
+            "Source session capture is incomplete; inspect {}",
+            ledger.display()
+        );
+    }
     crate::command_output::stdout_line(format_args!(
         "{}",
         serde_json::json!({

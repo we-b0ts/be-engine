@@ -26,10 +26,14 @@ pub(in crate::record_service) async fn serve<R: Redis + Clone + 'static>(
                     let transports = TransportTasks::default();
                     let mut case_cancel = transports.cancellation();
                     let request_transports = transports.clone();
+                    let session = relay.session.clone();
                     let service = service_fn(move |mut request: Request<Incoming>| {
                         request.extensions_mut().insert(request_transports.clone());
                         let relay = relay.clone();
                         async move {
+                            if relay.session.is_some() {
+                                return Ok::<_, Infallible>(relay.handle(request).await);
+                            }
                             // Preserve ordinary request completion on downstream disconnect.
                             let result = tokio::spawn(async move { relay.handle(request).await }).await;
                             Ok::<_, Infallible>(result.unwrap_or_else(|_| response(StatusCode::BAD_GATEWAY, "recording request task failed")))
@@ -38,6 +42,7 @@ pub(in crate::record_service) async fn serve<R: Redis + Clone + 'static>(
                     let connection = hyper::server::conn::http1::Builder::new().half_close(true).serve_connection(TokioIo::new(stream), service).with_upgrades();
                     tokio::pin!(connection);
                     tokio::select! {
+                        _ = async { session.as_ref().unwrap().wait_for_disconnect().await }, if session.is_some() => {}
                         result = &mut connection => { if let Err(error) = result { warn!(%error, "recording service HTTP connection ended"); } }
                         _ = stopping.changed() => { connection.as_mut().graceful_shutdown(); let _ = connection.await; }
                         _ = transport::cancelled(&mut case_cancel) => {}

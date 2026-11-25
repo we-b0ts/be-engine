@@ -1,9 +1,12 @@
 //! Explicit time translation within a derived logical value.
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
+
+mod selector;
+pub use selector::{CompiledSelector, select, visit_uncompiled};
 
 use crate::{
     compare::{self, AnchorClocks, Field, RuleMetadata},
@@ -23,7 +26,16 @@ pub fn materialize(
     clocks: AnchorClocks,
     metadata: &dyn RuleMetadata,
 ) -> Result<Value> {
-    let mut result = source.clone();
+    Ok(materialize_cow(source, fields, clocks, metadata)?.into_owned())
+}
+
+pub fn materialize_cow<'a>(
+    source: &'a Value,
+    fields: &[TimeField<'_>],
+    clocks: AnchorClocks,
+    metadata: &dyn RuleMetadata,
+) -> Result<Cow<'a, Value>> {
+    let mut result = Cow::Borrowed(source);
     // A field declaration applies only to leaves present in this Source value.
     // Resolve them before requiring clocks or choosing shared clock precision.
     let mut selected = Vec::new();
@@ -53,6 +65,7 @@ pub fn materialize(
     for (contract, pointers) in selected {
         for pointer in pointers {
             let value = result
+                .to_mut()
                 .pointer_mut(&pointer)
                 .context("delivery field disappeared")?;
             *value = if contract.format == TimestampFormat::CalendarDate {
@@ -254,29 +267,54 @@ fn append_fraction(output: &mut String, nanos: u32, width: usize) {
     }
 }
 
-pub fn select(pattern: &str, value: &Value) -> Result<Vec<String>> {
-    fn walk(parts: &[&str], value: &Value, path: String, out: &mut Vec<String>) {
-        let Some((part, rest)) = parts.split_first() else {
-            out.push(path);
-            return;
-        };
-        if *part == "*" {
-            if let Some(values) = value.as_array() {
-                for (i, child) in values.iter().enumerate() {
-                    walk(rest, child, format!("{path}/{i}"), out);
-                }
-            }
-        } else if let Some(child) = value.pointer(&format!("/{part}")) {
-            walk(rest, child, format!("{path}/{part}"), out);
+#[cfg(test)]
+mod tests {
+    use super::select;
+    use serde_json::json;
+
+    #[test]
+    fn exact_selectors_match_json_pointer_keys_and_canonical_array_indices() {
+        let value = json!({
+            "": {"a~/中": [7], "~1": null},
+            "object": {"01": 1, "+1": 2, "x*y": 3}
+        });
+        for pointer in [
+            "",
+            "/",
+            "//a~0~1中/0",
+            "//~01",
+            "/object/01",
+            "/object/+1",
+            "/object/x*y",
+        ] {
+            assert!(value.pointer(pointer).is_some(), "{pointer}");
+            assert_eq!(select(pointer, &value).unwrap(), [pointer]);
+        }
+        for pointer in [
+            "//a~0~1中/01",
+            "//a~0~1中/+0",
+            "//a~0~1中/-0",
+            "//a~0~1中/1",
+            "//a~0~1中/~1",
+            "//a~0~1中/",
+        ] {
+            assert!(value.pointer(pointer).is_none(), "{pointer}");
+            assert!(select(pointer, &value).unwrap().is_empty(), "{pointer}");
         }
     }
-    crate::path::validate_pointer(pattern, true)?;
-    let mut out = Vec::new();
-    walk(
-        &pattern.split('/').skip(1).collect::<Vec<_>>(),
-        value,
-        String::new(),
-        &mut out,
-    );
-    Ok(out)
+
+    #[test]
+    fn wildcard_selectors_expand_only_array_indices_and_validate_the_entire_pattern() {
+        let value = json!({
+            "a/b": [[{"~": 1}, {}], [{"~": 2}, {"~": 3}], {"*": {"~": 4}}]
+        });
+        assert_eq!(
+            select("/a~1b/*/*/~0", &value).unwrap(),
+            ["/a~1b/0/0/~0", "/a~1b/1/0/~0", "/a~1b/1/1/~0"]
+        );
+        assert!(select("/a~1b/2/*/~0", &value).unwrap().is_empty());
+        for pointer in ["a/b", "/missing/~2", "/missing/~", "/a\nb"] {
+            assert!(select(pointer, &value).is_err(), "{pointer}");
+        }
+    }
 }

@@ -6,6 +6,7 @@ description = "Standalone recording and Source runtime"
 
 [features]
 test-support = ["dep:tempfile", "traffic-engine-config/test-support", "traffic-recorder/test-support"]
+gateway-integration-tests = ["brz-http-gateway/http-gateway"]
 
 [dependencies]
 traffic-engine-replay = { workspace = true }
@@ -21,7 +22,7 @@ traffic-replay = { workspace = true }
 traffic-protocol-mysql = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
-brz-http-gateway = { workspace = true, features = ["redis-recording"] }
+brz-http-gateway = { workspace = true, features = ["redis-recording", "route-config"] }
 brz-redis = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -56,4 +57,6 @@ tempfile = { workspace = true, optional = true }
 traffic-engine-config = { workspace = true, features = ["test-support"] }
 traffic-engine-verification = { workspace = true, features = ["test-support"] }
 traffic-recorder = { workspace = true, features = ["test-support"] }
+traffic-recording-store = { workspace = true }
+sha1 = "0.10"
 tempfile = { workspace = true }

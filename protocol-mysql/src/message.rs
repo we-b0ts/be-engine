@@ -9,6 +9,7 @@ use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessag
 
 use crate::{model::MysqlValue, sql::Token};
 
+#[derive(Clone)]
 pub struct RequestMessage {
     pub command: String,
     pub sql: Option<String>,
@@ -35,6 +36,56 @@ pub enum RequestLocation {
 }
 
 impl ProtocolMessage for RequestMessage {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn same_session_identity(&self, other: &dyn ProtocolMessage) -> bool {
+        other
+            .as_any()
+            .and_then(|other| other.downcast_ref::<Self>())
+            .is_some_and(|other| self.database == other.database && self.username == other.username)
+    }
+
+    fn matches_statement_template(&self, source: &dyn ProtocolMessage) -> bool {
+        self.command == "COM_STMT_PREPARE"
+            && source
+                .as_any()
+                .and_then(|source| source.downcast_ref::<Self>())
+                .is_some_and(|source| {
+                    source.command == "COM_QUERY"
+                        && source.params.is_none()
+                        && self.same_session_identity(source)
+                        && self.sql.as_deref().zip(source.sql.as_deref()).is_some_and(
+                            |(template, sql)| {
+                                crate::sql::bounds::statement_shared(sql).is_some()
+                                    && crate::sql_match::metadata_matches(template, sql)
+                            },
+                        )
+                })
+    }
+
+    fn exact_request_reordering_of(&self, source: &dyn ProtocolMessage) -> bool {
+        let Some(source) = source
+            .as_any()
+            .and_then(|source| source.downcast_ref::<Self>())
+        else {
+            return false;
+        };
+        self.command == "COM_QUERY"
+            && source.command == self.command
+            && self.params.is_none()
+            && source.params.is_none()
+            && self.same_session_identity(source)
+            && source
+                .sql
+                .as_deref()
+                .zip(self.sql.as_deref())
+                .is_some_and(|(source, target)| {
+                    crate::sql_match::exact_tuple_membership_reordering(source, target)
+                })
+    }
+
     fn command_name(&self) -> Option<&str> {
         Some(&self.command)
     }
@@ -171,7 +222,15 @@ impl ProtocolMessage for RequestMessage {
                 json!({"location":location, "capture":capture})
             })
             .collect::<Vec<_>>();
-        Ok(json!({"command":self.command, "database":self.database, "values":values}))
+        let mut evidence =
+            json!({"command":self.command, "database":self.database, "values":values});
+        if query["kind"] == "request"
+            && let Some(shape) = projection.structure["sql"].as_array()
+            && shape.len() <= 512
+        {
+            evidence["sql_shape"] = json!(shape);
+        }
+        Ok(evidence)
     }
 }
 
@@ -179,6 +238,13 @@ fn project_sql(sql: &str, values: &mut BTreeMap<String, ProjectedValue>) -> Resu
     let Some(tokens) = crate::sql::tokens_shared(sql) else {
         return Ok(json!({"opaque_sql":sql}));
     };
+    Ok(project_sql_tokens(&tokens, values))
+}
+
+pub(crate) fn project_sql_tokens(
+    tokens: &[Token],
+    values: &mut BTreeMap<String, ProjectedValue>,
+) -> Value {
     let mut literal = 0;
     let mut structure = Vec::new();
     for token in tokens.iter() {
@@ -225,7 +291,7 @@ fn project_sql(sql: &str, values: &mut BTreeMap<String, ProjectedValue>) -> Resu
         };
         structure.push(shape);
     }
-    Ok(Value::Array(structure))
+    Value::Array(structure)
 }
 
 fn parameter_location(index: usize) -> String {
@@ -255,4 +321,29 @@ pub(crate) fn project_value(value: &MysqlValue) -> Result<ProjectedValue> {
     Ok(ProjectedValue::json(serde_json::to_vec(
         value.value.as_ref().unwrap_or(&Value::Null),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protected_request_evidence_includes_sql_shape_without_inlining_literals() {
+        let request = RequestMessage {
+            command: "COM_QUERY".into(),
+            sql: Some("SELECT id FROM items WHERE name = 'private value'".into()),
+            params: None,
+            database: None,
+            username: None,
+        };
+        let evidence = request.evidence(&json!({"kind":"request"})).unwrap();
+        assert_eq!(
+            evidence["sql_shape"],
+            request.project().unwrap().structure["sql"]
+        );
+        let shape = evidence["sql_shape"].to_string();
+        assert!(shape.contains("items"));
+        assert!(shape.contains("/literals/0"));
+        assert!(!shape.contains("private value"));
+    }
 }

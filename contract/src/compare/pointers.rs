@@ -1,5 +1,5 @@
 //! Resolve concrete field pointers once; wildcard matching retains Source shape guards.
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use serde_json::Value;
 
@@ -22,17 +22,21 @@ impl<'a> Index<'a> {
         Self { exact, wildcard }
     }
 
-    pub(super) fn matching(&self, pointer: &str, source: &Value) -> Vec<usize> {
-        let mut selected = self.exact.get(pointer).cloned().unwrap_or_default();
-        for &(index, pattern) in &self.wildcard {
-            if super::pointer_matches(pattern, pointer, source) {
-                selected.push(index);
-            }
-        }
+    pub(super) fn matching(&self, pointer: &str, source: &Value) -> Cow<'_, [usize]> {
+        let exact = self.exact.get(pointer).map_or(&[][..], Vec::as_slice);
+        let mut wildcard = self.wildcard.iter().filter_map(|&(index, pattern)| {
+            super::pointer_matches(pattern, pointer, source).then_some(index)
+        });
+        let Some(first) = wildcard.next() else {
+            return Cow::Borrowed(exact);
+        };
         // Conflicting and composed fields retain their authored order, even
         // when concrete pointers and wildcard patterns select the same node.
+        let mut selected = exact.to_vec();
+        selected.push(first);
+        selected.extend(wildcard);
         selected.sort_unstable();
-        selected
+        Cow::Owned(selected)
     }
 }
 
@@ -54,12 +58,15 @@ mod tests {
             "",
         ];
         let index = Index::new(pointers.into_iter());
-        assert_eq!(index.matching("/items/0/id", &source), [0, 1, 3]);
+        assert_eq!(&*index.matching("/items/0/id", &source), [0, 1, 3]);
         assert!(index.matching("/items/00/id", &source).is_empty());
         assert!(index.matching("/object/0/id", &source).is_empty());
-        assert_eq!(index.matching("/*", &source), [4]);
-        assert_eq!(index.matching("/a~1b/~0", &source), [5]);
-        assert_eq!(index.matching("", &source), [6]);
+        assert_eq!(&*index.matching("/*", &source), [4]);
+        assert!(matches!(
+            index.matching("/a~1b/~0", &source),
+            Cow::Borrowed([5])
+        ));
+        assert_eq!(&*index.matching("", &source), [6]);
         assert!(index.matching("/missing", &source).is_empty());
     }
 

@@ -29,10 +29,9 @@ impl RequestContracts {
         case: &str,
         pairs: &[IdentityPair],
     ) -> Result<IdentityDecision> {
-        if pairs.is_empty() {
-            return IdentityDecision::prepare(case, vec![]);
+        if !pairs.is_empty() {
+            self.validate_identity_input_anchors(case, pairs)?;
         }
-        self.validate_identity_input_anchors(case, pairs)?;
         self.values.preview(case, pairs)
     }
 
@@ -47,10 +46,7 @@ impl RequestContracts {
             decision.identity = Some(identity);
         }
         self.values
-            .identities
-            .lock()
-            .expect("identity contracts")
-            .validate(decision.identity.as_ref().expect("identity decision"))
+            .validate_identity(decision.identity.as_ref().expect("identity decision"))
     }
 
     #[allow(dead_code)]
@@ -77,11 +73,7 @@ impl RequestContracts {
             source: serde_json::to_string(source)?,
             target: serde_json::to_string(target)?,
         };
-        self.values
-            .identities
-            .lock()
-            .expect("identity contracts")
-            .contains_pair(case, pair)
+        self.values.knows_identity(case, pair)
     }
 
     #[allow(dead_code)]
@@ -152,13 +144,7 @@ impl RequestContracts {
         }
         let mut preview = self.clone();
         if let Some(identity) = combined.identity {
-            preview.values.identities = Arc::new(Mutex::new(
-                self.values
-                    .identities
-                    .lock()
-                    .expect("identity contracts")
-                    .preview(identity)?,
-            ));
+            preview.values = self.values.with_identity_preview(identity)?;
         }
         Ok(preview)
     }

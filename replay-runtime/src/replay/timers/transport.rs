@@ -133,14 +133,14 @@ async fn serve_wait<P: ReplayProtocolSet>(
     let lease = {
         let mut state = state.lock().await;
         ensure!(
-            state.active_case_id.as_deref() == Some(request.case_id.as_str())
+            timer_sequence(&state, &request.case_id).is_some()
                 && state.finalized_at.is_none()
                 && !state.target_session_stopped
                 && !state.async_case_quiescing(),
             "Replay timer requires a live active Case"
         );
         let epoch = state.admission_epoch;
-        let sequence = state.active_sequence.clone();
+        let sequence = timer_sequence(&state, &request.case_id);
         state.timers.register(&request, epoch, sequence)?
     };
     let Some(mut lease) = lease else {
@@ -166,18 +166,25 @@ async fn drive<P: ReplayProtocolSet>(
     write: &mut (impl AsyncWrite + Unpin),
     state: &Arc<Mutex<RuntimeState<P>>>,
 ) -> Result<()> {
-    let mut progress = lease.sequence.subscribe();
     loop {
-        {
+        let frontier = {
             let mut state = state.lock().await;
             ensure_live(&state, lease)?;
-            if lease.at_frontier()? {
+            let Some(frontier) = lease
+                .sequence
+                .wait_for_frontier(lease.step.anchor.sequence())
+            else {
+                ensure!(
+                    lease.at_frontier()?,
+                    "Replay timer anchor has an unexpected event kind"
+                );
                 state.timers.record(lease, TimerEventKind::Wake)?;
                 break;
-            }
-        }
+            };
+            frontier
+        };
         tokio::select! {
-            result = progress.changed() => { result?; }
+            _ = frontier.changed() => {}
             result = lease.scope_changed.changed() => { result?; }
             result = read.fill_buf() => {
                 ensure!(result?.is_empty(), "unexpected Replay timer frame before wake");
@@ -197,7 +204,7 @@ async fn drive<P: ReplayProtocolSet>(
             ensure_live(&state, lease)?;
             lease
                 .sequence
-                .release_request_gate(lease.step.before_request)?;
+                .release_event_gate(lease.step.anchor.sequence())?;
             state.timers.record(lease, TimerEventKind::End)
         }
     }
@@ -206,17 +213,26 @@ async fn drive<P: ReplayProtocolSet>(
 fn ensure_live<P: ReplayProtocolSet>(state: &RuntimeState<P>, lease: &Lease) -> Result<()> {
     ensure!(
         state.admission_epoch == lease.epoch
-            && state.active_case_id.as_deref() == Some(lease.case_id.as_str())
-            && state
-                .active_sequence
-                .as_ref()
-                .is_some_and(|sequence| Arc::ptr_eq(sequence, &lease.sequence))
+            && timer_sequence(state, &lease.case_id)
+                .is_some_and(|sequence| Arc::ptr_eq(&sequence, &lease.sequence))
             && state.finalized_at.is_none()
             && !state.target_session_stopped
             && !state.async_case_quiescing(),
         "Replay timer Case ended or changed"
     );
     Ok(())
+}
+
+fn timer_sequence<P: ReplayProtocolSet>(
+    state: &RuntimeState<P>,
+    scope: &str,
+) -> Option<Arc<traffic_replay::SequenceRuntime>> {
+    if let Some(session) = &state.session_events {
+        return (scope == super::super::session::TIMER_SCOPE).then(|| session.runtime.clone());
+    }
+    (state.active_case_id.as_deref() == Some(scope))
+        .then(|| state.active_sequence.clone())
+        .flatten()
 }
 
 pub(super) async fn read_frame<T: DeserializeOwned>(

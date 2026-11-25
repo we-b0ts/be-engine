@@ -322,11 +322,13 @@ pub fn expand(
         "HTTP requests and response rewrites exceed 4096 entries"
     );
     let http = if document.headers.is_some()
+        || !document.request_metadata.is_empty()
         || document.requests.is_empty() && document.response_rewrite.is_empty()
     {
         Some(
             HttpPolicy {
                 headers: document.headers.unwrap_or_default(),
+                request_metadata: document.request_metadata,
             }
             .compile(context)?,
         )

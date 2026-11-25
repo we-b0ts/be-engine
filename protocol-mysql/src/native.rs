@@ -11,6 +11,7 @@ use traffic_protocol::connection::{
 use crate::{message::RequestMessage, recorded::RecordedMysqlExchange};
 
 mod evidence;
+mod prepared;
 mod recording;
 mod response;
 mod server;
@@ -31,7 +32,14 @@ impl NativeProtocol for Native {
         records: &[(usize, &Value)],
     ) -> Result<std::collections::BTreeMap<usize, traffic_protocol::connection::ReplaySessionStep>>
     {
-        source_scope::prepare(scope, records)
+        source_scope::prepare(scope, records, false)
+    }
+
+    fn prepare_event_session(
+        &self,
+        records: &[(usize, &Value)],
+    ) -> Result<traffic_protocol::connection::EventSessionPreparation> {
+        source_scope::prepare_event_session(records)
     }
 
     fn decode_evidence(

@@ -57,11 +57,43 @@ pub fn parse(bytes: &[u8]) -> Option<Value> {
     parse_with_limit(bytes, crate::MAX_VALUE_BYTES)
 }
 pub fn parse_with_limit(bytes: &[u8], limit: usize) -> Option<Value> {
+    decode::<Strict>(bytes, limit).map(|value| value.0)
+}
+
+pub(super) fn parse_logical(bytes: &[u8]) -> Option<traffic_value::Value> {
+    // The logical value's visitor also rejects duplicate object members.
+    decode(bytes, crate::MAX_VALUE_BYTES)
+}
+
+fn decode<T: de::DeserializeOwned>(bytes: &[u8], limit: usize) -> Option<T> {
     if bytes.len() > limit {
         return None;
     }
     if !numbers::preserves_decimal_tokens(bytes) {
         return None;
     }
-    serde_json::from_slice::<Strict>(bytes).ok().map(|v| v.0)
+    serde_json::from_slice(bytes).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_logical_decode_matches_the_serde_projection() {
+        let bytes = br#"{"values":[-9223372036854775808,18446744073709551615,1.00,-0,-0.0,1e3,null,"\u0061"]}"#;
+        let expected: traffic_value::Value = serde_json::from_value(parse(bytes).unwrap()).unwrap();
+        let translated = parse_logical(bytes).unwrap();
+        assert_eq!(translated, expected);
+        for index in [3, 4] {
+            let path = format!("/values/{index}");
+            assert!(matches!(
+                translated.pointer(&path),
+                Some(traffic_value::Value::Number(traffic_value::Number::Float(value)))
+                    if value.is_sign_negative()
+            ));
+        }
+        assert!(parse_logical(br#"{"k":1,"\u006b":2}"#).is_none());
+        assert!(parse_logical(b"9007199254740993.0").is_none());
+    }
 }

@@ -21,6 +21,7 @@ use traffic_e2e::{
 };
 
 mod dependency_attribution;
+mod event_session;
 mod evidence;
 mod expert;
 mod implementer;
@@ -117,6 +118,8 @@ enum RewriteCommand {
     /// Start a user-authorized regression round from the configured pr_base branch.
     #[command(hide = true)]
     Regression(regression::RegressionArgs),
+    /// Verify or inspect a complete Source event recording.
+    Session(event_session::SessionArgs),
     /// Confirm starting a regression from pr_base.
     Purpose(purpose::PurposeArgs),
     /// Inspect bounded dependency evidence from one published case.
@@ -454,6 +457,7 @@ async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         RewriteCommand::Purpose(args) => purpose::run(target_root, args, pretty),
         RewriteCommand::Regression(args) => regression::run(target_root, args, pretty),
+        RewriteCommand::Session(args) => event_session::run(target_root, args, pretty).await,
         RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
         RewriteCommand::Startup(args) => startup::run(target_root, args, pretty),
         RewriteCommand::Next(args) => print_json(

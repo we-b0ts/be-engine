@@ -1,7 +1,7 @@
 //! Native requests enter the common observe/select/wait/commit execution loop.
 use super::*;
 use traffic_contract::{compare::Comparison, identity::IdentityDecision};
-use traffic_protocol::message::ProtocolMessage;
+use traffic_protocol::message::{MessageEncoder, ProtocolMessage};
 
 pub struct Request {
     pub protocol: ProtocolId,
@@ -11,10 +11,23 @@ pub struct Request {
     pub lane: Option<String>,
     pub request_session: Option<traffic_protocol::connection::RequestSession>,
     pub session_owner: Option<SessionOwner>,
-    pub optional_control: bool,
+    pub admission: RequestAdmission,
     pub observed: DateTime<Utc>,
     pub bytes: usize,
     pub diagnostics: diagnosis::CandidateDiagnostics,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RequestAdmission {
+    Required,
+    LegacyControl,
+    DriverObservation,
+}
+
+impl RequestAdmission {
+    pub fn allows_local_response(self) -> bool {
+        self != Self::Required
+    }
 }
 
 #[derive(Clone)]
@@ -89,17 +102,87 @@ pub struct ResponsePlan {
     pub identity: IdentityDecision,
 }
 
+impl ResponsePlan {
+    fn from_packet(packet: stored::PacketDelivery) -> Self {
+        Self {
+            output: Box::new(traffic_protocol::output::SingleOutput::new(packet.bytes)),
+            comparison: packet.comparison,
+            identity: packet.identity,
+        }
+    }
+}
+
 impl Inventory {
     pub fn render_response(
         &self,
         index: usize,
         observed: DateTime<Utc>,
-        loaded: Option<&dyn traffic_protocol::message::MessageEncoder>,
+        loaded: Option<&dyn MessageEncoder>,
+        storage: &super::StorageDelivery,
+    ) -> Result<ResponsePlan> {
+        self.render_loaded_response(index, observed, loaded, None, storage)
+    }
+
+    pub fn render_prefetched_response(
+        &self,
+        index: usize,
+        observed: DateTime<Utc>,
+        loaded: &mut LoadedResponse,
+        storage: &super::StorageDelivery,
+    ) -> Result<(ResponsePlan, bool)> {
+        match &mut loaded.kind {
+            stored::LoadedResponseKind::Stable(source) => {
+                if self.owns_stable_source(index, source)
+                    && storage.is_empty()
+                    && let Some(packet) = source.packet.take()
+                {
+                    self.observe_prepared_rules(std::mem::take(&mut source.observed_rules));
+                    return Ok((ResponsePlan::from_packet(packet), true));
+                }
+                // A compact packet belongs to one response in one Session.
+                // The normal path still works if a caller cannot reuse it.
+                let response = &self.core.exchanges[index].native.response;
+                let decoded = response.stored().map(|stored| stored.load()).transpose()?;
+                self.render_response(index, observed, decoded.as_deref(), storage)
+                    .map(|plan| (plan, false))
+            }
+            stored::LoadedResponseKind::Decoded { encoder, source } => {
+                if let Some(source) = source {
+                    self.observe_prepared_rules(std::mem::take(&mut source.observed_rules));
+                    if let Some(packet) = source.packet.take()
+                        && self.event_session
+                        && storage.is_empty()
+                        && packet
+                            .is_current(self.contracts.as_ref(), Self::EVENT_SESSION_VALUE_SCOPE)
+                    {
+                        return Ok((ResponsePlan::from_packet(packet.delivery), true));
+                    }
+                }
+                self.render_loaded_response(
+                    index,
+                    observed,
+                    Some(encoder.as_ref()),
+                    source.as_ref(),
+                    storage,
+                )
+                .map(|plan| (plan, false))
+            }
+        }
+    }
+
+    fn render_loaded_response(
+        &self,
+        index: usize,
+        observed: DateTime<Utc>,
+        loaded: Option<&dyn MessageEncoder>,
+        source: Option<&stored::PreparedSource>,
         storage: &super::StorageDelivery,
     ) -> Result<ResponsePlan> {
         let exchange = &self.core.exchanges[index];
         let prepared;
-        let (response, encoder) = if let Some(encoder) = loaded {
+        let (response, encoder) = if let (Some(source), Some(encoder)) = (source, loaded) {
+            (&source.message, encoder)
+        } else if let Some(encoder) = loaded {
             prepared = self
                 .prepared_messages(
                     &exchange.native,
@@ -123,7 +206,7 @@ impl Inventory {
         let scope = self.scope(index);
         let clocks = self.clocks(index, observed, true);
         let storage_values = self.storage_values(index, storage, response)?;
-        let rendered = response.render_delivery_with_storage(
+        let rendered = response.render_delivery_with_prepared_documents(
             clocks,
             self.contracts.metadata(),
             &exchange.delivery,
@@ -133,9 +216,14 @@ impl Inventory {
                     .identity_deliveries(&scope, selected)
                     .map(|(values, _)| values)
             },
-            |source, delivered| {
+            |source, delivered, prepared| {
+                if let Some(prepared) = prepared
+                    && prepared.apply(&scope, source, delivered, clocks)?
+                {
+                    return Ok(());
+                }
                 self.contracts
-                    .translate_document(&scope, source, delivered, clocks)
+                    .translate_delivery_document(&scope, source, delivered, clocks)
             },
         )?;
         let proposed = identity(self.contracts.as_ref(), self, index, &rendered.comparison)?;

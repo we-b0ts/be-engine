@@ -82,14 +82,22 @@ impl CodecProvider for JsonCodec {
     }
 
     fn recognize(&self, source: &[u8], _metadata: &Value) -> Result<Recognition> {
-        Ok(if parse(source).is_some() {
-            Recognition::Recognized {
-                confidence: 100,
-                configuration: Value::Null,
-            }
+        Ok(if parse::parse_logical(source).is_some() {
+            json_recognition()
         } else {
             Recognition::Unrecognized
         })
+    }
+
+    fn recognize_source(
+        &self,
+        source: &[u8],
+        _metadata: &Value,
+    ) -> Result<(Recognition, Option<Arc<dyn ValueDocument>>)> {
+        let Some(logical) = parse::parse_logical(source) else {
+            return Ok((Recognition::Unrecognized, None));
+        };
+        Ok((json_recognition(), Some(json_document(source, logical))))
     }
 
     fn prepare(&self, configuration: &Value) -> Result<Arc<dyn ValueCodec>> {
@@ -103,13 +111,24 @@ impl CodecProvider for JsonCodec {
 
 impl ValueCodec for JsonCodec {
     fn decode(&self, bytes: &[u8]) -> Result<Arc<dyn ValueDocument>> {
-        let logical =
-            parse(bytes).context("payload requires complete JSON without duplicate members")?;
-        Ok(Arc::new(JsonDocument {
-            value: serde_json::from_value(logical)?,
-            original: bytes.to_vec(),
-        }))
+        let logical = parse::parse_logical(bytes)
+            .context("payload requires complete JSON without duplicate members")?;
+        Ok(json_document(bytes, logical))
     }
+}
+
+fn json_recognition() -> Recognition {
+    Recognition::Recognized {
+        confidence: 100,
+        configuration: Value::Null,
+    }
+}
+
+fn json_document(bytes: &[u8], value: Value) -> Arc<dyn ValueDocument> {
+    Arc::new(JsonDocument {
+        value,
+        original: bytes.to_vec(),
+    })
 }
 
 struct JsonDocument {

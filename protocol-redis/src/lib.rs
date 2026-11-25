@@ -334,64 +334,11 @@ pub fn validate_subscription_confirmation(command: &RedisCommand, raw: &[u8]) ->
 
 pub fn parse_pubsub_push(raw: &[u8]) -> Result<Option<RedisPubSubPush>> {
     let raw = Bytes::copy_from_slice(raw);
-    let Some((frame, consumed)) =
-        redis_protocol::resp2::decode::decode_bytes(&raw).map_err(|err| anyhow!(err))?
-    else {
-        return Err(anyhow!("incomplete Redis Pub/Sub push"));
-    };
-    if consumed != raw.len() {
-        return Err(anyhow!("Redis Pub/Sub push contains trailing bytes"));
-    }
-    let Resp2Frame::Array(values) = frame else {
-        return Ok(None);
-    };
-    let Some(kind) = values.first().and_then(resp2_bytes_ref) else {
-        return Ok(None);
-    };
-    let (subscription_kind, subject_index, expected_len) = if kind.eq_ignore_ascii_case(b"message")
-    {
-        (RedisSubscriptionKind::Channel, 1, 3)
-    } else if kind.eq_ignore_ascii_case(b"pmessage") {
-        (RedisSubscriptionKind::Pattern, 1, 4)
-    } else if kind.eq_ignore_ascii_case(b"smessage") {
-        (RedisSubscriptionKind::ShardChannel, 1, 3)
-    } else {
-        return Ok(None);
-    };
-    if values.len() != expected_len {
-        return Err(anyhow!(
-            "Redis Pub/Sub push must contain {expected_len} elements"
-        ));
-    }
-    let Some(subject) = values.get(subject_index).and_then(resp2_bytes_ref) else {
-        return Err(anyhow!(
-            "Redis Pub/Sub push subscription subject must be a string"
-        ));
-    };
-    let channel_index = if subscription_kind == RedisSubscriptionKind::Pattern {
-        2
-    } else {
-        1
-    };
-    if values
-        .get(channel_index)
-        .and_then(resp2_bytes_ref)
-        .is_none()
-        || values.last().and_then(resp2_bytes_ref).is_none()
-    {
-        return Err(anyhow!(
-            "Redis Pub/Sub push channel and payload must be strings"
-        ));
-    }
-    Ok(Some(RedisPubSubPush {
-        subscription_kind,
-        subject: subject.to_vec(),
-        channel: resp2_bytes_ref(&values[channel_index])
-            .expect("validated channel")
-            .to_vec(),
-        payload: resp2_bytes_ref(values.last().expect("validated length"))
-            .expect("validated payload")
-            .to_vec(),
+    Ok(pubsub::frame::decode(&raw)?.map(|push| RedisPubSubPush {
+        subscription_kind: push.kind,
+        subject: push.subject.to_vec(),
+        channel: push.channel.to_vec(),
+        payload: push.payload.to_vec(),
     }))
 }
 

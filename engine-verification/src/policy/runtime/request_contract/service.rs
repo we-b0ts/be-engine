@@ -3,14 +3,21 @@ use super::*;
 use crate::replay::policy::RequestRuleRuntime;
 use crate::replay::policy::ValueRuleHost;
 use crate::value_contract::response_delivery::IdentityDeliveryHost;
+use std::borrow::Cow;
 use traffic_contract::{
     compare::{AnchorClocks, Comparison},
     identity::{IdentityDecision, IdentityPair},
     time::ClockPair,
 };
 use traffic_policy_value::identity::IdentityDelivery;
-use traffic_protocol::connection::NativeFuture;
+use traffic_protocol::{
+    ProtocolId,
+    connection::{Endpoint, NativeFuture},
+    message::ProtocolMessage,
+};
 
+mod document_policy;
+mod redis_eval_time;
 mod response_constraints;
 mod response_identities;
 
@@ -26,46 +33,34 @@ impl IdentityDeliveryHost for RequestContracts {
     }
 }
 
-struct GlobalDocumentPolicy {
-    owner: RequestContracts,
-    clocks: AnchorClocks,
-}
-impl traffic_policy_value::DocumentPolicy for GlobalDocumentPolicy {
-    fn paths(&self, source: &traffic_value::Value) -> Result<Vec<String>> {
-        crate::value_contract::global::policy_paths(
-            source,
-            self.owner
-                .global_json()
-                .expect("prepared global document policy"),
-            self.clocks,
-        )
-    }
-    fn compare(
-        &self,
-        source: &traffic_value::Value,
-        target: &traffic_value::Value,
-        fields: &[traffic_contract::compare::Field<'_>],
-        clocks: AnchorClocks,
-    ) -> Result<Comparison> {
-        crate::value_contract::global::compare_fields(
-            source,
-            target,
-            self.owner
-                .global_json()
-                .expect("prepared global document policy"),
-            fields,
-            clocks,
-        )
-    }
-}
-
 impl ValueRuleHost for RequestContracts {
     fn metadata(&self) -> &(dyn traffic_contract::compare::RuleMetadata + 'static) {
         &crate::value_contract::json::PolicyMetadata
     }
 
+    fn configure_session_identities(&self, scope: &str, dependency_count: usize) -> Result<()> {
+        self.values
+            .configure_session_identities(scope, dependency_count)
+    }
+
     fn observe_source_comparison(&self, comparison: &Comparison) {
         self.observe_value_slot_applicable(comparison.evaluated.iter().cloned());
+    }
+
+    fn prefetch_source_response(&self) -> bool {
+        true
+    }
+
+    fn prefetch_delivery_revision(&self, scope: &str) -> Option<u64> {
+        self.values.prefetch_delivery_revision(scope)
+    }
+
+    fn prefetched_identity_is_current(&self, proposed: &IdentityDecision) -> bool {
+        self.values.prefetched_identity_is_current(proposed)
+    }
+
+    fn prefetched_identity_is_committed(&self, proposed: &IdentityDecision) -> bool {
+        self.values.prefetched_identity_is_committed(proposed)
     }
 
     fn translate_document(
@@ -75,23 +70,21 @@ impl ValueRuleHost for RequestContracts {
         delivered: &mut Value,
         clocks: AnchorClocks,
     ) -> Result<()> {
+        let mut document = Cow::Owned(std::mem::take(delivered));
+        let result = self.translate_delivery_document(scope, source, &mut document, clocks);
+        *delivered = document.into_owned();
+        result
+    }
+    fn translate_delivery_document(
+        &self,
+        scope: &str,
+        source: &Value,
+        delivered: &mut Cow<'_, Value>,
+        clocks: AnchorClocks,
+    ) -> Result<()> {
         if let Some(global) = self.global_json() {
-            let timed =
-                crate::value_contract::global::materialize_logical(source, global, &[], clocks)?;
-            for field in global.selected_delivery_fields_with_clocks(source, clocks)? {
-                let pointer = field.pointer;
-                if field.contract.time().is_some()
-                    && source.pointer(&pointer) == delivered.pointer(&pointer)
-                {
-                    *delivered
-                        .pointer_mut(&pointer)
-                        .context("global time delivery field disappeared")? = timed
-                        .pointer(&pointer)
-                        .context("global time delivery value disappeared")?
-                        .clone();
-                }
-            }
-            self.translate_identity_plan(scope, source, delivered, global)?;
+            crate::value_contract::global::translate_times_cow(source, delivered, global, clocks)?;
+            self.translate_identity_plan_cow(scope, source, delivered, global)?;
         }
         Ok(())
     }
@@ -100,11 +93,44 @@ impl ValueRuleHost for RequestContracts {
         clocks: AnchorClocks,
     ) -> Option<Arc<dyn traffic_policy_value::DocumentPolicy>> {
         self.global_json().map(|_| {
-            Arc::new(GlobalDocumentPolicy {
-                owner: self.clone(),
+            Arc::new(document_policy::GlobalDocumentPolicy::new(
+                self.clone(),
                 clocks,
-            }) as Arc<dyn traffic_policy_value::DocumentPolicy>
+            )) as Arc<dyn traffic_policy_value::DocumentPolicy>
         })
+    }
+    fn native_request_bindings(
+        &self,
+        exchange: &traffic_protocol::connection::RecordedExchange,
+    ) -> Result<Option<Vec<traffic_policy_value::RuleBinding>>> {
+        match self.compiled.as_deref() {
+            Some(policy) => redis_eval_time::bindings(policy, exchange),
+            None => Ok(None),
+        }
+    }
+    fn native_request_projection(
+        &self,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        request: Arc<dyn ProtocolMessage>,
+        source: Option<&Value>,
+    ) -> Result<Arc<dyn ProtocolMessage>> {
+        let http = self
+            .compiled
+            .as_ref()
+            .and_then(|compiled| compiled.http.as_ref());
+        if let Some(http) = http
+            && matches!(protocol.as_str(), "http" | "https")
+        {
+            traffic_protocol_http::request_metadata::request(
+                &http.request_metadata,
+                endpoint,
+                request,
+                source,
+            )
+        } else {
+            Ok(request)
+        }
     }
     fn may_bind_native_documents(&self) -> bool {
         self.global_json()

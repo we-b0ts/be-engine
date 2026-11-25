@@ -130,6 +130,44 @@ async fn subscription_proof_preserves_the_complete_confirmation() {
 }
 
 #[tokio::test]
+async fn response_literals_require_exact_complete_resp2_binary_frames() {
+    use traffic_protocol::capture::CaptureEvidence;
+
+    for (response, kind, version, expected) in [
+        (
+            b"+OK\r\n".as_slice(),
+            RedisFrameKind::SimpleString,
+            2,
+            Some("redis_ok"),
+        ),
+        (b"$-1\r\n", RedisFrameKind::Null, 2, Some("redis_nil_bulk")),
+        (b"*-1\r\n", RedisFrameKind::Null, 2, None),
+        (b"$-1\r\n", RedisFrameKind::Null, 3, None),
+        (b"+ok\r\n", RedisFrameKind::SimpleString, 2, None),
+    ] {
+        let observations = Arc::new(Observations::default());
+        let mut exchange = pending(&observations, "GET");
+        exchange.session.resp_version = version;
+        record_exchange(
+            Uuid::new_v4(),
+            &context(),
+            exchange,
+            kind,
+            response,
+            DependencyExchangeOutcome::Response,
+        )
+        .await
+        .unwrap();
+
+        let mut event = observations.exchanges.lock().unwrap().pop().unwrap().0;
+        assert_eq!(event.capture_facts().recording_response_literal, expected);
+        event.response.encoding = "utf8";
+        event.response.data = String::from_utf8(response.to_vec()).unwrap();
+        assert_eq!(event.capture_facts().recording_response_literal, None);
+    }
+}
+
+#[tokio::test]
 async fn disconnected_client_close_does_not_invent_peer_completion() {
     for (engine_stop, pending_request) in
         [(false, false), (true, false), (false, true), (true, true)]

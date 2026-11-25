@@ -7,7 +7,7 @@ mod startup_mounts;
 
 use crate::TRAFFIC_PROCESS_USER;
 
-pub(crate) use build::{build_image, image_tag};
+pub(crate) use build::{build_image, build_image_with_timer, image_tag};
 pub use model::TargetImage;
 pub(crate) use model::{TargetContainerConfig, TargetStartOptions};
 pub(crate) use runtime::{

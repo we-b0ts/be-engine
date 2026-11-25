@@ -168,19 +168,22 @@ fn direct(
     native: &mut native::Inventory,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
 ) -> Result<()> {
-    use anyhow::Context;
     if scope == ReplaySource::Unattributed {
         return Ok(());
     }
-    let locations = resolved
-        .locations
-        .context("compact Global stream has no scope")?;
+    ensure!(
+        native.event_session || resolved.locations.is_some(),
+        "compact Global stream has no scope"
+    );
+    let locations = resolved.replay_locations()?;
     let stamp = crate::dependency_index::FileStamp::read_native(&resolved.path)?;
     let source = RecordSource::new(&resolved.path, stamp, reader);
     let secrets = crate::request_headers::SourceSecrets::new(path);
     let mut scoped = Vec::new();
-    for location in locations.iter() {
-        let reference = source.reference(location.clone());
+    for location in locations {
+        let location = location?;
+        let line = location.line;
+        let reference = source.reference(location);
         let metadata = reference.load_metadata()?;
         if native.register_stored_emission(
             &metadata,
@@ -193,12 +196,12 @@ fn direct(
         }
         let record: DependencyRecord = reference.load()?;
         if needs_replay_scope(&record, &native.providers) {
-            scoped.push((location.line, record));
+            scoped.push((line, record));
             continue;
         }
         register_dependency_records(
             path,
-            vec![(location.line, record)],
+            vec![(line, record)],
             &BTreeSet::new(),
             scope,
             None,

@@ -47,6 +47,8 @@ pub struct CaptureFacts {
     pub case_dependency: bool,
     pub traffic_error: bool,
     pub recording_layout: Option<RecordingLayout>,
+    /// Stable name for an exact semantic response shape, eligible for storage reuse.
+    pub recording_response_literal: Option<&'static str>,
     pub recording_target: Option<String>,
     pub recording_upstream: Option<String>,
 }
@@ -63,6 +65,7 @@ impl CaptureFacts {
             case_dependency: true,
             traffic_error: false,
             recording_layout: None,
+            recording_response_literal: None,
             recording_target: None,
             recording_upstream: None,
         }

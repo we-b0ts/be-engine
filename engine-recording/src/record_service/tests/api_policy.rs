@@ -82,13 +82,13 @@ fn missing_or_invalid_gateway_policy_fails_before_connecting() {
 }
 
 #[test]
-fn gateway_policy_requires_coordination_and_reserves_both_redis_keys() {
+fn coordination_reserves_policy_and_reservation_keys() {
     assert!(
         OptionsCli::try_parse_from(["test", "--api-policy", "policy.json", "--", "true"]).is_err()
     );
     let direct = OptionsCli::try_parse_from(["test", "--", "true"]).unwrap();
     assert!(direct.options.load_api_policy().unwrap().is_none());
-    for suffix in ["api-policy", "api-counts"] {
+    for suffix in ["api-policy", "api-counts", "inflight", "inflight:legacy"] {
         let mut options = options(Path::new("policy.json"));
         options.url_key = Some(format!("{}:{suffix}", options.prefix));
         assert!(options.config().is_err());

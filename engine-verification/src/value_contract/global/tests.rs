@@ -531,6 +531,19 @@ fn numeric_epoch_units_are_selected_from_source_clock_and_target_cannot_switch_u
 }
 
 #[test]
+fn native_time_translation_keeps_fields_changed_by_earlier_delivery() {
+    let policy = plan(
+        "  /first: {kind: time, formats: [unix_seconds]}\n  /second: {kind: time, formats: [unix_seconds]}\n",
+    );
+    let source = json!({"first":1010,"second":1020,"unchanged":0});
+    let mut delivered = json!({"first":3010,"second":1020,"unchanged":0});
+
+    translate_times(&source, &mut delivered, &policy, clocks()).unwrap();
+
+    assert_eq!(delivered, json!({"first":3010,"second":2020,"unchanged":0}));
+}
+
+#[test]
 fn implicit_null_is_exact_without_clocks_and_remains_distinct_from_missing() {
     let policy = plan(
         "  /created_at: {kind: time, formats: [unix_seconds]}\n  /id: {kind: identity, formats: [uuid]}\n",

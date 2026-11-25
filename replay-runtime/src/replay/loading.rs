@@ -5,16 +5,22 @@ use protocol_runtime::loading::{ProtocolSourceLoader, SourcePreparation, SourceR
 impl<P: ReplayProtocolSet> Runtime<P> {
     pub(crate) async fn from_source(
         config: RuntimeConfig,
-        dns_listen: SocketAddr,
-        tcp_listen: SocketAddr,
+        listeners: (SocketAddr, SocketAddr),
         lifecycle: ReplayLifecycleConfig,
         providers: Arc<crate::protocols::DependencyProviders>,
         loader: P::SourceLoader,
         timers: timers::Timers,
+        session_events: bool,
     ) -> Result<Self> {
         // Keep the injected loader and Source preparation state on the heap across startup.
         let loaded = Box::pin(load_state(
-            config, dns_listen, tcp_listen, lifecycle, providers, loader, timers,
+            config,
+            listeners,
+            lifecycle,
+            providers,
+            loader,
+            timers,
+            session_events,
         ))
         .await?;
         let runtime = Self {
@@ -48,19 +54,19 @@ struct LoadedRuntime<P: ReplayProtocolSet> {
 
 async fn load_state<P: ReplayProtocolSet>(
     config: RuntimeConfig,
-    dns_listen: SocketAddr,
-    tcp_listen: SocketAddr,
+    (dns_listen, tcp_listen): (SocketAddr, SocketAddr),
     lifecycle: ReplayLifecycleConfig,
     providers: Arc<crate::protocols::DependencyProviders>,
     mut loader: P::SourceLoader,
     timers: timers::Timers,
+    session_events: bool,
 ) -> Result<LoadedRuntime<P>> {
     lifecycle.dependency_loading.validate()?;
     ensure!(
         !lifecycle.case_no_progress_timeout.is_zero(),
         "Replay case no-progress timeout must be positive"
     );
-    let lazy = lifecycle.dependency_loading.lazy_cases;
+    let lazy = !session_events && lifecycle.dependency_loading.lazy_cases;
     clear_report_artifacts(config.report_path.as_deref()).await?;
     let root_dir = config.case_dir;
     let source_inventory_id =
@@ -77,11 +83,21 @@ async fn load_state<P: ReplayProtocolSet>(
         } else {
             None
         };
-    let process_owned_dependencies = &config.process_owned_dependencies;
+    let process_owned_dependencies = if session_events {
+        &[][..]
+    } else {
+        &config.process_owned_dependencies
+    };
     let event_source = root_dir.clone();
-    let sequence_catalog = tokio::task::spawn_blocking(move || sequence::load(&event_source))
-        .await
-        .context("Source event preparation task failed")??;
+    let sequence_catalog = tokio::task::spawn_blocking(move || {
+        if session_events {
+            Ok(None)
+        } else {
+            sequence::load(&event_source)
+        }
+    })
+    .await
+    .context("Source event preparation task failed")??;
     let replay_artifact_dir = config
         .report_path
         .as_ref()
@@ -98,13 +114,20 @@ async fn load_state<P: ReplayProtocolSet>(
         .selected_case_ids
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let (mode, mut cases, active_case_id) =
-        discover_replay_cases(&root_dir, &selected_case_ids).await?;
+    let (mode, mut cases, active_case_id) = if session_events {
+        (ReplayMode::Session, BTreeMap::new(), None)
+    } else {
+        discover_replay_cases(&root_dir, &selected_case_ids).await?
+    };
     let source = root_dir.clone();
     let output = replay_artifact_dir.clone();
     let evidence = providers.evidence().clone();
     let (prepared_cases, attribution) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let frozen = attribution::freeze(&source, &output, &mut cases, &evidence)?;
+        let frozen = if session_events {
+            session::source_scope(&source)?
+        } else {
+            attribution::freeze(&source, &output, &mut cases, &evidence)?
+        };
         Ok((cases, frozen))
     })
     .await
@@ -131,18 +154,28 @@ async fn load_state<P: ReplayProtocolSet>(
     loader.install_run_scopes(attribution.run_value_scopes);
     let mut connect_failures = connect_failure::Inventory::default();
     let mut native = native::Inventory::new(providers.clone());
+    if session_events {
+        native.prepare_event_session();
+    }
     let native_policy = replay_policy
         .as_ref()
         .map(|policy| policy.contracts().native_rules());
+    if session_events {
+        native.configure_event_session_request_projection(native_policy.clone());
+    }
     native.configure_storage_preparation(native_policy.as_deref());
+    let capacity = lifecycle.dependency_loading.cache_bytes;
+    let reader = if session_events {
+        // SAFETY: Session Replay admits only completed, sealed recordings.
+        // Source payload segments are required to remain unchanged through delivery.
+        unsafe { crate::dependency_index::RecordReader::for_session_replay(capacity) }
+    } else {
+        crate::dependency_index::RecordReader::for_replay(capacity)
+    };
     let mut resources = SourceResources {
         native,
         targets: BTreeMap::new(),
-        reader: Arc::new(std::sync::Mutex::new(
-            crate::dependency_index::RecordReader::for_replay(
-                lifecycle.dependency_loading.cache_bytes,
-            ),
-        )),
+        reader: Arc::new(std::sync::Mutex::new(reader)),
     };
     let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
     let total_cases = cases.len();
@@ -336,7 +369,7 @@ async fn load_state<P: ReplayProtocolSet>(
     if let Some(policy) = &mut replay_policy {
         policy
             .contracts_mut()
-            .configure_pre_match(lifecycle.pre_match);
+            .configure_pre_match(!session_events && lifecycle.pre_match);
         loader.register_policy_sources(policy)?;
         policy
             .contracts_mut()
@@ -380,6 +413,7 @@ async fn load_state<P: ReplayProtocolSet>(
         sequence_catalog,
         active_sequence: None,
         run_sequence: None,
+        session_events: None,
         sequence_missing: Vec::new(),
         batch_scope: attribution.batch_scope,
         startup_phase: Default::default(),
@@ -437,22 +471,32 @@ async fn load_state<P: ReplayProtocolSet>(
     };
     // Run-owned inventories are ready before Target startup, including lazy sessions.
     state.prepare_native_candidates();
-    state.prepare_run_sequence()?;
+    if session_events {
+        state
+            .prepare_session_sequence(lifecycle.case_no_progress_timeout)
+            .await?;
+    } else {
+        state.prepare_run_sequence()?;
+    }
     state.attach_run_sequence();
     for (case, source) in prepared_scopes {
         state.install_case_execution_plan(&case, source)?;
     }
 
-    state.initialize_startup_phase();
+    if !session_events {
+        state.initialize_startup_phase();
+    }
     state
         .protocols
         .initialize_connections(state.active_case_id.as_deref());
     let state = tokio::task::spawn_blocking(move || -> Result<_> {
-        report::global_evidence::regular::initialize(
-            &mut state,
-            &regular_report,
-            &regular_policy_identity,
-        )?;
+        if !session_events {
+            report::global_evidence::regular::initialize(
+                &mut state,
+                &regular_report,
+                &regular_policy_identity,
+            )?;
+        }
         Ok(state)
     })
     .await

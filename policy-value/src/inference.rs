@@ -1,8 +1,10 @@
 //! Bounded Source selection using registered policy-owned inference.
+use std::fmt::Write;
+
 use anyhow::{Result, ensure};
 use traffic_contract::rule::FieldContract;
 use traffic_policy::{PolicyInference, PolicyRegistry};
-use traffic_value::Value;
+use traffic_value::{Value, path};
 
 const MAX_NODES: usize = 16_384;
 const MAX_DEPTH: usize = 128;
@@ -33,7 +35,16 @@ pub fn fields(
 ) -> Result<Vec<InferredField>> {
     let mut output = Vec::new();
     let mut remaining = MAX_NODES;
-    let complete = visit(registry, source, facts, "", 0, &mut remaining, &mut output)?;
+    let mut pointer = String::new();
+    let complete = visit(
+        registry,
+        source,
+        facts,
+        &mut pointer,
+        0,
+        &mut remaining,
+        &mut output,
+    )?;
     ensure!(
         complete || output.is_empty(),
         "policy inference exceeds its bounded Source inventory"
@@ -45,7 +56,7 @@ fn visit(
     registry: &PolicyRegistry,
     source: &Value,
     facts: &Value,
-    pointer: &str,
+    pointer: &mut String,
     depth: usize,
     remaining: &mut usize,
     output: &mut Vec<InferredField>,
@@ -65,43 +76,49 @@ fn visit(
         );
         let rule_id = inferred.rule_id;
         output.push(InferredField {
-            pointer: pointer.into(),
+            pointer: pointer.clone(),
             rule_id,
             contract: contract(inferred)?,
         });
         return Ok(true);
     }
+    let prefix_len = pointer.len();
     match source {
         Value::Object(values) => {
             for (key, value) in values {
                 if key == "\0protobuf" {
                     continue;
                 }
-                let key = traffic_value::path::escape(key);
-                if !visit(
+                path::push_segment(pointer, key);
+                let complete = visit(
                     registry,
                     value,
                     facts,
-                    &format!("{pointer}/{key}"),
+                    pointer,
                     depth + 1,
                     remaining,
                     output,
-                )? {
+                )?;
+                pointer.truncate(prefix_len);
+                if !complete {
                     return Ok(false);
                 }
             }
         }
         Value::Array(values) => {
             for (index, value) in values.iter().enumerate() {
-                if !visit(
+                write!(pointer, "/{index}").expect("writing to a String cannot fail");
+                let complete = visit(
                     registry,
                     value,
                     facts,
-                    &format!("{pointer}/{index}"),
+                    pointer,
                     depth + 1,
                     remaining,
                     output,
-                )? {
+                )?;
+                pointer.truncate(prefix_len);
+                if !complete {
                     return Ok(false);
                 }
             }
@@ -109,4 +126,23 @@ fn visit(
         _ => (),
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inferred_pointers_preserve_escaped_keys_and_sibling_paths() {
+        let source: Value = serde_json::from_str(
+            r#"{"a/~":[{"time":"2026-01-01"},"2026-01-02"],"z":"2026-01-03"}"#,
+        )
+        .unwrap();
+        let selected = fields(traffic_extensions::policies(), &source, &Value::Null).unwrap();
+        let pointers = selected
+            .iter()
+            .map(|field| field.pointer.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(pointers, ["/a~1~0/0/time", "/a~1~0/1", "/z"]);
+    }
 }

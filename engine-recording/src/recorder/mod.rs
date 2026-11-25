@@ -48,6 +48,7 @@ pub use summary::{
 
 pub struct RecorderOptions {
     pub access_policy: RecordingAccessPolicy,
+    pub session_events: bool,
     pub traffic_jsonl: TrafficJsonlMode,
     pub buffer_settings: jsonl::JsonlBufferSettings,
     pub writer_queue_capacity: usize,
@@ -67,6 +68,7 @@ pub struct Recorder {
     pub extensions: traffic_recorder::RecordingExtensions,
     artifact_owner: Option<ArtifactOwner>,
     traffic_jsonl: TrafficJsonlMode,
+    session_events: bool,
     writer: writer::RecorderWriter,
     pub capture: ledger::CaptureRegistry,
     pub run_dir: Arc<PathBuf>,
@@ -91,6 +93,7 @@ impl Recorder {
         let RecorderOptions {
             evidence,
             access_policy,
+            session_events,
             traffic_jsonl,
             buffer_settings,
             writer_queue_capacity,
@@ -119,6 +122,7 @@ impl Recorder {
                 process_epoch,
                 policy_identity: capture_policy_identity.clone(),
                 evidence: evidence.clone(),
+                session_events,
             },
         )
         .await?;
@@ -132,6 +136,7 @@ impl Recorder {
             extensions,
             artifact_owner,
             traffic_jsonl,
+            session_events,
             capture: ledger::CaptureRegistry::new(writer.clone(), process_epoch),
             writer,
             run_dir,

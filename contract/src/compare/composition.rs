@@ -6,13 +6,14 @@ impl Comparator<'_> {
     pub(super) fn global_native_leaf(
         &mut self,
         context: LeafContext<'_>,
-        selected: (usize, &Field<'_>),
-        native_fields: &[(usize, &NativeField<'_>)],
-        verified_fields: &[(usize, &VerifiedField<'_>)],
+        nodes: (Node<'_>, Node<'_>),
+        selected: usize,
+        native_indices: &[usize],
+        verified_indices: &[usize],
         decisions: &mut Decisions,
     ) -> Result<(), Difference> {
         let mut staged = decisions.clone();
-        let (index, field) = selected;
+        let field = &self.fields[selected];
         let contract = if let FieldContract::Conditional { when, contract } = field.contract {
             let active = when
                 .matches_pair(
@@ -59,15 +60,18 @@ impl Comparator<'_> {
                     .observe(context.source, context.target)
                     .map_err(|reason| difference(context.source_pointer, reason))?;
             }
-            Some(contract) if contract.registered_definition(true).is_some() => {
-                let definition = contract
-                    .registered_definition(true)
-                    .expect("registered scalar contract");
+            Some(contract) => {
+                let definition = contract.registered_definition(true).ok_or_else(|| {
+                    difference(
+                        context.source_pointer,
+                        "global/native composition requires a scalar format",
+                    )
+                })?;
                 self.registered_policy(
                     &definition,
                     field,
-                    context.source,
-                    context.target,
+                    nodes.0,
+                    nodes.1,
                     context.source_pointer,
                     context.target_pointer,
                     &mut staged,
@@ -75,16 +79,11 @@ impl Comparator<'_> {
                 )?;
             }
             None => {}
-            _ => {
-                return Err(difference(
-                    context.source_pointer,
-                    "global/native composition requires a scalar format",
-                ));
-            }
         }
-        staged.selected.insert(index);
+        staged.selected.insert(selected);
         staged.evaluated.insert(field.rule_id.into());
-        for (index, field) in native_fields {
+        for &index in native_indices {
+            let field = &self.native[index];
             native::compare(
                 context.source,
                 context.target,
@@ -93,12 +92,13 @@ impl Comparator<'_> {
                 context.clocks,
                 &mut staged,
             )?;
-            staged.selected_native.insert(*index);
+            staged.selected_native.insert(index);
             staged.evaluated.insert(field.rule_id.into());
         }
-        for (index, field) in verified_fields {
+        for &index in verified_indices {
+            let field = &self.verified[index];
             native::verify(field, context, &mut staged)?;
-            staged.selected_native.insert(self.native.len() + *index);
+            staged.selected_native.insert(self.native.len() + index);
             staged.evaluated.insert(field.rule_id.into());
         }
         *decisions = staged;

@@ -298,6 +298,26 @@ impl RecordedHttpClient {
     }
 }
 
+/// Prepare one primary request from protected Source evidence without opening a Case.
+pub fn prepare_session_request(
+    origin: &str,
+    protected: &serde_json::Value,
+    source: &Path,
+    rules: &crate::request_rules::RequestRuleRuntime,
+    sent_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Request<Full<Bytes>>> {
+    let raw = serde_json::to_vec(protected)?;
+    let decrypted = crate::request_headers::decrypt_request_bytes(&raw, source)?;
+    let mut value = serde_json::from_slice(decrypted.as_deref().unwrap_or(&raw))?;
+    rules.apply(&mut value, sent_at)?;
+    let recorded: RecordedRequest = serde_json::from_value(value)?;
+    ensure!(
+        recorded.sse_observation.is_none() && recorded.interaction.is_none(),
+        "session primary request requires a wire event stream"
+    );
+    build_request(origin, &recorded)
+}
+
 fn build_request(origin: &str, recorded: &RecordedRequest) -> Result<Request<Full<Bytes>>> {
     let method = Method::from_bytes(recorded.method.as_bytes())
         .with_context(|| format!("invalid recorded HTTP method {:?}", recorded.method))?;

@@ -456,8 +456,7 @@ async fn explicit_dependency_failure_finishes_dirty_after_actual_cleanup() {
             port: 3306,
         },
         Some("case-a".into()),
-        None,
-        None,
+        (None, None),
         "explicit dependency failure",
         Default::default(),
     );

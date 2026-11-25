@@ -50,6 +50,7 @@ impl Drafts {
                     serde_json::from_value(json!({"kind":"time","formats":[format]}))?;
                 let policy = crate::policy::HttpPolicy {
                     headers: BTreeMap::from([(name.clone(), field)]),
+                    ..Default::default()
                 };
                 let observed =
                     http_headers::compare(&source, target.as_ref().unwrap(), &policy, clocks)?;

@@ -35,6 +35,9 @@ impl traffic_policy_value::formats::FormatHost for crate::policy::CompiledJsonPo
     fn policies(&self) -> &traffic_policy::PolicyRegistry {
         traffic_extensions::policies()
     }
+    fn selectors(&self) -> Option<&traffic_policy_value::fields::FieldSelectors> {
+        Some(self.compiled_selectors())
+    }
     fn signing_key(&self, signature: &str) -> anyhow::Result<(traffic_jwt::Algorithm, &[u8])> {
         use crate::policy::native::SignatureAlgorithm;
         let (algorithm, key) = self.signatures.get(signature)?;
@@ -55,10 +58,7 @@ impl traffic_policy_value::formats::FormatHost for crate::policy::CompiledJsonPo
         fields: &std::collections::BTreeMap<String, crate::policy::GlobalField>,
         clocks: traffic_contract::compare::AnchorClocks,
     ) -> anyhow::Result<traffic_contract::compare::Comparison> {
-        let plan = crate::policy::CompiledJsonPolicy {
-            fields: fields.clone(),
-            ..self.clone()
-        };
+        let plan = self.with_fields(fields.clone());
         traffic_policy_execution::global::compare_logical_with_time_copies::<
             crate::policy::CompiledRule,
         >(

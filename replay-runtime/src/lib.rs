@@ -23,7 +23,7 @@ mod replay;
 
 pub use adapters::runtime::{
     run_mysql_replay, run_replay, run_replay_with_counters, run_replay_with_lifecycle,
-    run_replay_with_providers, run_replay_with_timer_config,
+    run_replay_with_providers, run_replay_with_timer_config, run_session_replay,
 };
 pub use replay::ReplayTimerConfig;
 pub use traffic_engine_replay::protocols::replay::runtime::{

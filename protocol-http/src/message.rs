@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessage};
 mod response;
 pub use response::ResponseMessage;
+pub(crate) use response::{CHUNKED_HEADER, StreamResponse};
 
 pub struct RequestMessage {
     pub method: String,
@@ -27,6 +28,10 @@ pub enum RequestLocation {
 }
 
 impl ProtocolMessage for RequestMessage {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn project(&self) -> Result<ProjectedMessage> {
         let mut headers = crate::headers::normalized(&self.headers);
         headers.retain(|name, _| !is_framing_header(name) && !name.starts_with("x-recorder-"));
@@ -127,49 +132,6 @@ fn is_framing_header(name: &str) -> bool {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recorder_transport_metadata_is_excluded_while_sdk_headers_remain_strict() {
-        let mut request = RequestMessage {
-            method: "GET".into(),
-            uri: "/value".into(),
-            headers: BTreeMap::from([
-                ("host".into(), vec!["api.test".into()]),
-                ("x-sdk-signature".into(), vec!["business-value".into()]),
-                ("X-Recorder-Fake-Ip".into(), vec!["198.19.0.1:80".into()]),
-                ("x-recorder-original-domain".into(), vec!["api.test".into()]),
-                (
-                    "x-recorder-upstream-addr".into(),
-                    vec!["127.0.0.1:80".into()],
-                ),
-            ]),
-            body: Bytes::new(),
-        };
-        let source = request.project().unwrap();
-        assert!(
-            request
-                .locate(&json!({"kind":"header", "name":"x-recorder-fake-ip"}))
-                .is_err()
-        );
-        request
-            .headers
-            .retain(|name, _| !name.to_ascii_lowercase().starts_with("x-recorder-"));
-        let target = request.project().unwrap();
-        assert_eq!(source.structure, target.structure);
-        assert!(
-            source
-                .values
-                .iter()
-                .all(|(path, value)| value.bytes == target.values[path].bytes)
-        );
-        request.headers.remove("x-sdk-signature");
-        assert_ne!(source.structure, request.project().unwrap().structure);
-    }
-}
-
 fn header_location(name: &str, index: usize) -> String {
     format!(
         "/headers/{}/{index}",
@@ -213,4 +175,47 @@ fn uri_projection(target: &str) -> Result<(Value, BTreeMap<String, ProjectedValu
         "absolute_path":uri.path().starts_with('/'), "segments":segments, "query":query}),
         values,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recorder_transport_metadata_is_excluded_while_sdk_headers_remain_strict() {
+        let mut request = RequestMessage {
+            method: "GET".into(),
+            uri: "/value".into(),
+            headers: BTreeMap::from([
+                ("host".into(), vec!["api.test".into()]),
+                ("x-sdk-signature".into(), vec!["business-value".into()]),
+                ("X-Recorder-Fake-Ip".into(), vec!["198.19.0.1:80".into()]),
+                ("x-recorder-original-domain".into(), vec!["api.test".into()]),
+                (
+                    "x-recorder-upstream-addr".into(),
+                    vec!["127.0.0.1:80".into()],
+                ),
+            ]),
+            body: Bytes::new(),
+        };
+        let source = request.project().unwrap();
+        assert!(
+            request
+                .locate(&json!({"kind":"header", "name":"x-recorder-fake-ip"}))
+                .is_err()
+        );
+        request
+            .headers
+            .retain(|name, _| !name.to_ascii_lowercase().starts_with("x-recorder-"));
+        let target = request.project().unwrap();
+        assert_eq!(source.structure, target.structure);
+        assert!(
+            source
+                .values
+                .iter()
+                .all(|(path, value)| value.bytes == target.values[path].bytes)
+        );
+        request.headers.remove("x-sdk-signature");
+        assert_ne!(source.structure, request.project().unwrap().structure);
+    }
 }

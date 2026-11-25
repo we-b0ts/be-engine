@@ -251,11 +251,21 @@ pub struct TlsConfig {
 
 impl AppConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Self::load_for_recording(path, false)
+    }
+
+    /// Load effective settings for the requested managed recording mode.
+    pub fn load_for_recording(path: impl AsRef<Path>, session_events: bool) -> Result<Self> {
         let path = path.as_ref();
-        let config = Self::read_static(path)?;
+        let mut config = Self::read_static(path)?;
+        config.recording.session_events = session_events;
         let rules_path = resolve_unified_policy_path(path)?;
         let (rules, fingerprints) = SourceTrafficPolicyConfig::load_with_fingerprints(&rules_path)?;
-        let catalog = api_catalog::ApiCatalog::load(&path.with_file_name(api_catalog::FILE_NAME))?;
+        let catalog = if config.recording.session_events {
+            None
+        } else {
+            api_catalog::ApiCatalog::load(&path.with_file_name(api_catalog::FILE_NAME))?
+        };
         let mut config = config.with_source_policy(path, &rules, catalog.as_ref())?;
         config.global_projection_policy = Some(fingerprints.full);
         Ok(config)
@@ -288,12 +298,22 @@ impl AppConfig {
         catalog: Option<&api_catalog::ApiCatalog>,
     ) -> Result<Self> {
         rules.apply_to(&mut self)?;
-        if let Some(catalog) = catalog {
+        if self.recording.session_events {
+            self.clear_case_capture_settings();
+        } else if let Some(catalog) = catalog {
             self.http_gateway.case_path_patterns = catalog.case_paths();
         }
         self.validate()
             .with_context(|| format!("invalid config {}", path.display()))?;
         Ok(self)
+    }
+
+    pub fn clear_case_capture_settings(&mut self) {
+        self.http_gateway.case_path_patterns.clear();
+        self.http_gateway.per_api_case_limits.overrides.clear();
+        self.process_owned_dependencies.clear();
+        self.process_dependency_tasks.clear();
+        self.async_api.clear();
     }
 
     fn parse_static(path: &Path, raw: &str) -> Result<Self> {

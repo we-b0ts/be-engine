@@ -3,6 +3,7 @@ use crate::dependency_columns::{FILE, ReadTerms, TermsStamp};
 use crate::format::{PayloadRef, PendingDependency};
 use crate::partitions;
 use anyhow::{Context, Result, ensure};
+use bytes::Bytes;
 use std::{
     cell::{Cell, RefCell},
     fs::{self, File, OpenOptions},
@@ -11,6 +12,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
+
+use super::segment_window::SegmentWindow;
 
 pub(super) fn is_compact(path: &Path) -> bool {
     partitions::is_directory(path)
@@ -35,6 +38,7 @@ pub(super) struct Reader {
     stamp: Option<TermsStamp>,
     payload_dir_opened: Cell<bool>,
     segment: RefCell<Option<Segment>>,
+    replay_segments: Option<RefCell<SegmentWindow>>,
 }
 
 #[derive(Debug)]
@@ -46,14 +50,24 @@ struct Segment {
 
 impl Reader {
     pub(super) fn open(path: &Path, recording_id: Uuid) -> Result<Self> {
-        Self::open_with(path, recording_id, false)
+        Self::open_with(path, recording_id, false, false)
     }
 
     pub(super) fn open_for_replay(path: &Path, recording_id: Uuid) -> Result<Self> {
-        Self::open_with(path, recording_id, true)
+        Self::open_with(path, recording_id, true, false)
     }
 
-    fn open_with(path: &Path, recording_id: Uuid, replay: bool) -> Result<Self> {
+    /// The recording must remain immutable while any mapped slice is live.
+    pub(super) unsafe fn open_for_session_replay(path: &Path, recording_id: Uuid) -> Result<Self> {
+        Self::open_with(path, recording_id, true, true)
+    }
+
+    fn open_with(
+        path: &Path,
+        recording_id: Uuid,
+        replay: bool,
+        map_payloads: bool,
+    ) -> Result<Self> {
         let root = path
             .parent()
             .context("compact dependency has no recording root")?
@@ -64,6 +78,14 @@ impl Reader {
             let (terms, stamp) = ReadTerms::open(&root)?;
             (terms, Some(stamp))
         };
+        let replay_segments = replay.then(|| {
+            RefCell::new(if map_payloads {
+                // SAFETY: only the immutable Session Replay constructor enables mappings.
+                unsafe { SegmentWindow::new(root.clone()) }
+            } else {
+                SegmentWindow::new_copying(root.clone())
+            })
+        });
         Ok(Self {
             root,
             recording_id,
@@ -71,6 +93,7 @@ impl Reader {
             stamp,
             payload_dir_opened: Cell::new(false),
             segment: RefCell::new(None),
+            replay_segments,
         })
     }
 
@@ -89,6 +112,16 @@ impl Reader {
 
     pub(super) fn read_header(&self, row: &[u8]) -> Result<serde_json::Value> {
         PendingDependency::materialize_header(row, self.recording_id, &self.terms)
+    }
+
+    pub(super) fn read_response_bytes(&self, cell: &[u8]) -> Result<Option<Bytes>> {
+        let Some(window) = &self.replay_segments else {
+            return Ok(None);
+        };
+        let Some(reference) = crate::format::response_payload_ref(cell)? else {
+            return Ok(None);
+        };
+        window.borrow_mut().read(&reference).map(Some)
     }
 
     fn read_payload(&self, reference: &PayloadRef) -> Result<Vec<u8>> {

@@ -51,6 +51,26 @@ pub trait ProtocolMessage: Send + Sync {
         None
     }
 
+    fn same_session_identity(&self, _other: &dyn ProtocolMessage) -> bool {
+        false
+    }
+
+    /// A protocol may provide an equivalent wire representation for exact matching.
+    fn exact_request_alternative(&self) -> Option<&dyn ProtocolMessage> {
+        None
+    }
+
+    /// Prove that the Target request can be placed in the Source's original
+    /// value positions without changing any values or other request semantics.
+    fn exact_request_reordering_of(&self, _source: &dyn ProtocolMessage) -> bool {
+        false
+    }
+
+    /// A metadata probe may describe a template for a complete Source request.
+    fn matches_statement_template(&self, _source: &dyn ProtocolMessage) -> bool {
+        false
+    }
+
     fn project(&self) -> Result<ProjectedMessage>;
     fn locate(&self, selector: &Value) -> Result<Vec<String>>;
     fn evidence(&self, query: &Value) -> Result<Value>;
@@ -59,6 +79,17 @@ pub trait ProtocolMessage: Send + Sync {
 pub trait MessageEncoder: ProtocolMessage {
     fn stored(&self) -> Option<&dyn StoredMessage> {
         None
+    }
+
+    /// Estimated retained memory for an immutable decoded response.
+    fn prefetch_retained_bytes(&self) -> Option<usize> {
+        None
+    }
+
+    /// Encode an immutable single-frame response for read-ahead. The byte
+    /// estimate covers only heap allocations beyond the retained encoder.
+    fn prefetch_packet(&self, _values: &BTreeMap<String, Bytes>) -> Result<Option<(Bytes, usize)>> {
+        Ok(None)
     }
 
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes>;

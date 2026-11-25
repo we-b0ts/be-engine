@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
-use traffic_replay::SequencePlan;
+use traffic_replay::{EventKind, SequencePlan};
 
 const MAX_PLAN_BYTES: usize = 1_048_576;
 
@@ -15,13 +15,69 @@ pub(super) struct Plan {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "CheckpointFields")]
 pub(super) struct Checkpoint {
     pub(super) site: String,
     pub(super) stream: String,
     pub(super) occurrence: u64,
     pub(super) consumed_through: u64,
-    pub(super) before_request: u64,
+    pub(super) anchor: Anchor,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckpointFields {
+    site: String,
+    stream: String,
+    occurrence: u64,
+    consumed_through: u64,
+    before_request: Option<u64>,
+    before_event: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Anchor {
+    BeforeRequest(u64),
+    BeforeEvent(u64),
+}
+
+impl TryFrom<CheckpointFields> for Checkpoint {
+    type Error = &'static str;
+
+    fn try_from(fields: CheckpointFields) -> Result<Self, Self::Error> {
+        let anchor = match (fields.before_request, fields.before_event) {
+            (Some(sequence), None) => Anchor::BeforeRequest(sequence),
+            (None, Some(sequence)) => Anchor::BeforeEvent(sequence),
+            _ => {
+                return Err(
+                    "a Replay timer needs exactly one before_request or before_event anchor",
+                );
+            }
+        };
+        Ok(Self {
+            site: fields.site,
+            stream: fields.stream,
+            occurrence: fields.occurrence,
+            consumed_through: fields.consumed_through,
+            anchor,
+        })
+    }
+}
+
+impl Anchor {
+    pub(super) fn sequence(self) -> u64 {
+        match self {
+            Self::BeforeRequest(sequence) | Self::BeforeEvent(sequence) => sequence,
+        }
+    }
+
+    pub(super) fn kind(self) -> EventKind {
+        match self {
+            Self::BeforeRequest(_) => EventKind::Request,
+            Self::BeforeEvent(_) => EventKind::SessionSourceExit,
+        }
+    }
 }
 
 impl Plan {
@@ -44,24 +100,24 @@ impl Plan {
                 valid_name(case) && !checkpoints.is_empty(),
                 "invalid Case entry in Replay timer plan"
             );
-            let mut requests = BTreeSet::new();
+            let mut anchors = BTreeSet::new();
             let mut timers = BTreeSet::new();
             for checkpoint in checkpoints {
                 ensure!(
                     valid_name(&checkpoint.site)
                         && valid_name(&checkpoint.stream)
                         && checkpoint.occurrence != 0
-                        && checkpoint.before_request != 0,
+                        && checkpoint.anchor.sequence() != 0,
                     "invalid Replay timer checkpoint for Case {case}"
                 );
                 ensure!(
-                    requests.insert(checkpoint.before_request)
+                    anchors.insert(checkpoint.anchor.sequence())
                         && timers.insert((
                             &checkpoint.site,
                             &checkpoint.stream,
                             checkpoint.occurrence
                         )),
-                    "duplicate Replay timer identity or request anchor for Case {case}"
+                    "duplicate Replay timer identity or anchor for Case {case}"
                 );
             }
         }
@@ -75,9 +131,32 @@ impl Plan {
     pub(super) fn validate_case(&self, case: &str, sequence: Option<&SequencePlan>) -> Result<()> {
         for checkpoint in self.checkpoints(case) {
             ensure!(
-                sequence.is_some_and(|plan| plan.is_request_sequence(checkpoint.before_request)),
+                matches!(checkpoint.anchor, Anchor::BeforeRequest(_)),
+                "before_event Replay timer anchors require session Replay"
+            );
+            ensure!(
+                sequence.is_some_and(|plan| plan.is_request_sequence(checkpoint.anchor.sequence())),
                 "Replay timer anchor {} is not a request in the Source sequence for Case {case}",
-                checkpoint.before_request
+                checkpoint.anchor.sequence()
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_session(&self, scope: &str, sequence: &SequencePlan) -> Result<()> {
+        ensure!(
+            self.cases.keys().all(|case| case == scope),
+            "session Replay timer plan must use the {scope:?} scope"
+        );
+        for checkpoint in self.checkpoints(scope) {
+            let anchor = checkpoint.anchor;
+            ensure!(
+                sequence
+                    .event(anchor.sequence())
+                    .is_some_and(|event| event.kind == anchor.kind()),
+                "Replay timer anchor {} does not identify a {:?} in the Source session",
+                anchor.sequence(),
+                anchor.kind()
             );
         }
         Ok(())

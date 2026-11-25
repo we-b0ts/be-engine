@@ -1,15 +1,26 @@
 //! Protocol-shaped leaves share JSON pairing without carrier-specific scopes.
-use crate::fields::{GLOBAL_JSON_ID, GlobalField, GlobalUrlFormat};
+use crate::fields::{GLOBAL_JSON_ID, GlobalField, GlobalUrlFormat, MatchedFormatField};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use traffic_contract::compare::{LeafContext, LeafObservations, VerifiedField};
 pub mod jwt;
 pub mod template;
 pub mod url;
-type Check<'a> = Box<dyn Fn(LeafContext<'_>) -> Result<LeafObservations, String> + 'a>;
+type Check<'a> =
+    Box<dyn Fn(LeafContext<'_>) -> Result<LeafObservations, String> + Send + Sync + 'a>;
 pub struct FormatChecks<'a> {
     checks: Vec<(String, Check<'a>)>,
+    clock_independent: bool,
+    captured_bytes: usize,
 }
 impl FormatChecks<'_> {
+    pub fn clock_independent(&self) -> bool {
+        self.clock_independent
+    }
+
+    pub fn pointers(&self) -> impl Iterator<Item = &str> {
+        self.checks.iter().map(|(pointer, _)| pointer.as_str())
+    }
+
     pub fn fields(&self) -> Vec<VerifiedField<'_>> {
         self.checks
             .iter()
@@ -20,15 +31,69 @@ impl FormatChecks<'_> {
             })
             .collect()
     }
+
+    pub fn retained_bytes(&self) -> usize {
+        self.captured_bytes
+            + self.checks.capacity() * std::mem::size_of::<(String, Check<'_>)>()
+            + self
+                .checks
+                .iter()
+                .map(|(pointer, _)| pointer.capacity() + 128)
+                .sum::<usize>()
+    }
 }
+
+/// Build reusable verifiers from paths already resolved against a prepared Source.
+pub fn checks_at_matches<'a, Owner>(
+    owner: Owner,
+    host: for<'host> fn(&'host Owner) -> &'host dyn FormatHost,
+    source: &serde_json::Value,
+    matched: &[MatchedFormatField],
+) -> Result<FormatChecks<'a>>
+where
+    Owner: Clone + Send + Sync + 'a,
+{
+    let mut checks = Vec::with_capacity(matched.len());
+    let mut clock_independent = true;
+    let mut captured_bytes = 0;
+    for field in matched {
+        let declaration = &host(&owner).fields()[&field.pattern];
+        if matches!(declaration, GlobalField::Url { .. }) {
+            require_url_scalar(source, &field.pointer)?;
+        }
+        clock_independent &= matches!(declaration, GlobalField::Template { .. });
+        let pattern = field.pattern.clone();
+        captured_bytes += pattern.capacity() + std::mem::size_of::<Owner>();
+        let owner = owner.clone();
+        let verify: Check<'a> = Box::new(move |context| {
+            let plan = host(&owner);
+            match &plan.fields()[&pattern] {
+                GlobalField::Template { formats } => {
+                    template::compare(context, formats, plan.policies())
+                }
+                GlobalField::Jwt { signature } => jwt::compare(context, plan, signature),
+                GlobalField::Url { formats } => compare_url(context, plan, formats),
+                _ => unreachable!("matched protocol field changed kind"),
+            }
+        });
+        checks.push((field.pointer.clone(), verify));
+    }
+    Ok(FormatChecks {
+        checks,
+        clock_independent,
+        captured_bytes,
+    })
+}
+
 pub fn checks<'a>(
     plan: &'a dyn FormatHost,
     source: &serde_json::Value,
 ) -> anyhow::Result<FormatChecks<'a>> {
     let mut checks: Vec<(String, Check<'a>)> = Vec::new();
+    let mut clock_independent = true;
     for (pattern, field) in plan.fields() {
         if let GlobalField::Template { formats } = field {
-            for pointer in traffic_contract::delivery::select(pattern, source)? {
+            for pointer in plan.select_paths(pattern, source)? {
                 checks.push((
                     pointer,
                     Box::new(move |context| template::compare(context, formats, plan.policies())),
@@ -37,7 +102,8 @@ pub fn checks<'a>(
             continue;
         }
         if let GlobalField::Jwt { signature } = field {
-            for pointer in traffic_contract::delivery::select(pattern, source)? {
+            for pointer in plan.select_paths(pattern, source)? {
+                clock_independent = false;
                 checks.push((
                     pointer,
                     Box::new(move |context| jwt::compare(context, plan, signature)),
@@ -48,31 +114,45 @@ pub fn checks<'a>(
         let GlobalField::Url { formats } = field else {
             continue;
         };
-        for pointer in traffic_contract::delivery::select(pattern, source)? {
-            anyhow::ensure!(
-                source
-                    .pointer(&pointer)
-                    .is_some_and(|value| !value.is_array() && !value.is_object()),
-                "URL format requires a scalar JSON leaf"
-            );
+        for pointer in plan.select_paths(pattern, source)? {
+            clock_independent = false;
+            require_url_scalar(source, &pointer)?;
             checks.push((
                 pointer,
-                Box::new(move |context| {
-                    if context.source == context.target
-                        && formats.first() != Some(&GlobalUrlFormat::Url)
-                    {
-                        return Ok(LeafObservations::default());
-                    }
-                    match formats.first() {
-                        Some(GlobalUrlFormat::AwsSigv4) => aws_sigv4(context),
-                        Some(GlobalUrlFormat::Url) => url::compare(context, plan),
-                        None => Err("URL format unavailable".into()),
-                    }
-                }),
+                Box::new(move |context| compare_url(context, plan, formats)),
             ));
         }
     }
-    Ok(FormatChecks { checks })
+    Ok(FormatChecks {
+        checks,
+        clock_independent,
+        captured_bytes: 0,
+    })
+}
+
+fn require_url_scalar(source: &serde_json::Value, pointer: &str) -> Result<()> {
+    anyhow::ensure!(
+        source
+            .pointer(pointer)
+            .is_some_and(|value| !value.is_array() && !value.is_object()),
+        "URL format requires a scalar JSON leaf"
+    );
+    Ok(())
+}
+
+fn compare_url(
+    context: LeafContext<'_>,
+    plan: &dyn FormatHost,
+    formats: &[GlobalUrlFormat],
+) -> Result<LeafObservations, String> {
+    if context.source == context.target && formats.first() != Some(&GlobalUrlFormat::Url) {
+        return Ok(LeafObservations::default());
+    }
+    match formats.first() {
+        Some(GlobalUrlFormat::AwsSigv4) => aws_sigv4(context),
+        Some(GlobalUrlFormat::Url) => url::compare(context, plan),
+        None => Err("URL format unavailable".into()),
+    }
 }
 /// Compact JWT syntax only. Claims and signatures remain opaque token content;
 /// correspondence uses the complete typed string, never a decoded field.
@@ -180,8 +260,15 @@ pub trait FormatHost: Send + Sync {
         fields: &BTreeMap<String, GlobalField>,
         clocks: AnchorClocks,
     ) -> Result<Comparison>;
+    fn selectors(&self) -> Option<&crate::fields::FieldSelectors> {
+        None
+    }
     fn field_plan(&self) -> crate::fields::FieldPlan<'_> {
         crate::fields::FieldPlan::new(self.fields(), self.time(), self.policies())
+            .with_selectors(self.selectors())
+    }
+    fn select_paths(&self, pattern: &str, source: &serde_json::Value) -> Result<Vec<String>> {
+        self.field_plan().select_paths(pattern, source)
     }
 }
 
@@ -198,6 +285,9 @@ impl FormatHost for FilteredHost<'_> {
     }
     fn policies(&self) -> &PolicyRegistry {
         self.parent.policies()
+    }
+    fn selectors(&self) -> Option<&crate::fields::FieldSelectors> {
+        self.parent.selectors()
     }
     fn signing_key(&self, signature: &str) -> Result<(traffic_jwt::Algorithm, &[u8])> {
         self.parent.signing_key(signature)

@@ -66,6 +66,7 @@ use policy::{ReplayPolicy, RequestRuleRuntime};
 use protocol_runtime::{InFlightScope, ReplayProtocolSet};
 pub mod report;
 pub(crate) mod sequence;
+mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod test_support;
 
@@ -91,12 +92,18 @@ pub use traffic_engine_replay::replay::{
 };
 pub(crate) async fn run<P: ReplayProtocolSet>(
     config: RuntimeConfig,
-    lifecycle: ReplayLifecycleConfig,
+    mut lifecycle: ReplayLifecycleConfig,
     counter_reader: Option<ReplayEgressCounterReader>,
     providers: Arc<crate::protocols::DependencyProviders>,
     loader: P::SourceLoader,
     timer_config: Option<ReplayTimerConfig>,
+    session_events: bool,
 ) -> Result<()> {
+    if session_events {
+        lifecycle.stream_timing = Some(ReplayLifecycleConfig::EVENT_SESSION_STREAM_TIMING);
+        lifecycle.stream_interval_cap_ms =
+            ReplayLifecycleConfig::EVENT_SESSION_STREAM_INTERVAL_CAP_MS;
+    }
     let timer_state = if let Some(timer) = &timer_config {
         ensure!(
             lifecycle.stream_timing == Some(ReplayStreamTiming::Fast),
@@ -110,7 +117,18 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
     } else {
         timers::Timers::default()
     };
-    validate_replay_request_headers(&config).await?;
+    if session_events {
+        ensure!(
+            config.control_socket_path.is_some(),
+            "session Replay requires a control socket"
+        );
+        ensure!(
+            config.selected_case_ids.is_empty(),
+            "session Replay cannot select Cases"
+        );
+    } else {
+        validate_replay_request_headers(&config).await?;
+    }
     let tcp_listener = TcpListener::bind(config.tcp_listen)
         .await
         .with_context(|| {
@@ -130,28 +148,33 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
         .context("failed to read dependency replay DNS listen address")?;
     let runtime = Runtime::<P>::from_source(
         config,
-        dns_listen,
-        tcp_listen,
+        (dns_listen, tcp_listen),
         lifecycle,
         providers,
         loader,
         timer_state,
+        session_events,
     )
     .await?;
     let timer_listener = timer_config
         .as_ref()
         .map(|timer| timers::Listener::bind(&timer.socket_path))
         .transpose()?;
-    {
+    let _prefetch_guard = {
         let mut state = runtime.state.lock().await;
         state.egress_counter_reader = counter_reader;
-    }
+        state
+            .session_events
+            .as_ref()
+            .and_then(|session| session.prefetch.as_ref())
+            .map(|responses| responses.close_on_drop())
+    };
     info!(
         dns_listen = %dns_listen,
         tcp_listen = %tcp_listen,
         "dependency replay intercept listening"
     );
-    tokio::select! {
+    let outcome = tokio::select! {
         result = runtime.run_dns(dns_socket) => result,
         result = runtime.run_tcp(tcp_listener) => result,
         result = runtime.run_control() => result,
@@ -162,7 +185,11 @@ pub(crate) async fn run<P: ReplayProtocolSet>(
             }
         } => result,
         result = deferred::prefetch::run(runtime.state.clone()) => result,
+    };
+    if let Some(session) = &mut runtime.state.lock().await.session_events {
+        session.stop_prefetch();
     }
+    outcome
 }
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use crate::adapters::runtime::{MysqlReplayConfig, ReplayAllowedUnusedHttpConfig};
@@ -283,6 +310,7 @@ pub(crate) struct RuntimeState<P: ReplayProtocolSet> {
     sequence_catalog: Option<sequence::Source>,
     pub(crate) active_sequence: Option<Arc<traffic_replay::SequenceRuntime>>,
     pub(crate) run_sequence: Option<sequence::RunBindings>,
+    session_events: Option<session::Session>,
     sequence_missing: Vec<sequence::MissingDependency>,
     batch_scope: Option<reconciliation::BatchScope>,
     pub(crate) startup_phase: startup::StartupPhase,

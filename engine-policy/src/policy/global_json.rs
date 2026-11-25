@@ -1,5 +1,5 @@
 //! One format declaration for every decoded JSON payload, independent of carrier.
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -22,14 +22,27 @@ pub struct JsonPolicy {
     pub fields: BTreeMap<String, GlobalField>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct CompiledJsonPolicy {
     pub fields: BTreeMap<String, GlobalField>,
     pub time: super::TimePolicy,
     pub fingerprint: String,
     #[serde(skip)]
     pub signatures: super::signatures::SignatureRegistry,
+    #[serde(skip)]
+    selectors: Arc<traffic_policy_value::fields::FieldSelectors>,
 }
+
+impl PartialEq for CompiledJsonPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields
+            && self.time == other.time
+            && self.fingerprint == other.fingerprint
+            && self.signatures == other.signatures
+    }
+}
+
+impl Eq for CompiledJsonPolicy {}
 
 impl JsonPolicy {
     pub fn compile(&self) -> Result<CompiledJsonPolicy> {
@@ -55,6 +68,12 @@ impl JsonPolicy {
         )?;
         Ok(CompiledJsonPolicy {
             fields: self.fields.clone(),
+            selectors: Arc::new(
+                traffic_policy_value::fields::FieldSelectors::compile_with_registry(
+                    &self.fields,
+                    traffic_extensions::policies(),
+                )?,
+            ),
             time: time.clone(),
             fingerprint: super::digest(
                 "traffic-policy/global-json/v2",
@@ -101,12 +120,28 @@ impl GlobalFieldRuntime for GlobalField {
 }
 
 impl CompiledJsonPolicy {
+    /// Derived views can share compiled paths for any retained declarations.
+    pub fn with_fields(&self, fields: BTreeMap<String, GlobalField>) -> Self {
+        Self {
+            fields,
+            time: self.time.clone(),
+            fingerprint: self.fingerprint.clone(),
+            signatures: self.signatures.clone(),
+            selectors: self.selectors.clone(),
+        }
+    }
+
+    pub(crate) fn compiled_selectors(&self) -> &traffic_policy_value::fields::FieldSelectors {
+        &self.selectors
+    }
+
     fn plan(&self) -> traffic_policy_value::fields::FieldPlan<'_> {
         traffic_policy_value::fields::FieldPlan::new(
             &self.fields,
             &self.time,
             traffic_extensions::policies(),
         )
+        .with_selectors(Some(self.compiled_selectors()))
     }
     #[cfg(any(test, feature = "test-support"))]
     pub fn fields(&self, source: &Value) -> Result<Vec<(String, FieldContract)>> {

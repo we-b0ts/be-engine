@@ -9,7 +9,7 @@ mod registry;
 mod scope;
 pub use definition::PolicyDefinition;
 pub use observations::{ObservationState, Observations};
-pub use registry::{PolicyRegistry, PreparedPolicy, PreparedTransform};
+pub use registry::{PolicyRegistry, PreparedPolicy, PreparedPolicySelection, PreparedTransform};
 pub use scope::{ScopeKey, ValueScope};
 mod transform;
 pub use transform::{

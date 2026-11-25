@@ -5,12 +5,12 @@ use std::{
 };
 
 use anyhow::{Context, ensure};
-use traffic_model::recording::ProtocolRef;
+use traffic_model::{DependencyExchangeOutcome, recording::ProtocolRef};
 use traffic_protocol::{
     capture::CaptureSnapshot,
     connection::{
-        CaptureExchange, CaptureHost, CaptureOutput, CaptureSession, ConnectionInfo, ConnectionIo,
-        NativeFuture,
+        BuiltinMaintenance, CaptureExchange, CaptureHost, CaptureOutput, CaptureSession,
+        ConnectionInfo, ConnectionIo, NativeFuture,
     },
 };
 
@@ -58,7 +58,7 @@ impl CaptureSession for Capture {
                 transport,
                 Arc::new(Host {
                     shared: host,
-                    pending: Mutex::default(),
+                    requests: Mutex::default(),
                 }),
             )
             .await
@@ -68,7 +68,21 @@ impl CaptureSession for Capture {
 
 struct Host {
     shared: Arc<dyn CaptureHost>,
-    pending: Mutex<BTreeMap<u64, Box<dyn CaptureExchange>>>,
+    requests: Mutex<Requests>,
+}
+
+#[derive(Default)]
+struct Requests {
+    omitted: u64,
+    pending: BTreeMap<u64, Pending>,
+}
+
+enum Pending {
+    Captured {
+        permit: Box<dyn CaptureExchange>,
+        sequence: u64,
+    },
+    Maintenance(BuiltinMaintenance),
 }
 
 struct RejectedOutput;
@@ -98,18 +112,34 @@ impl connection::CaptureHost for Host {
             if !request.command.expects_server_response() {
                 return Ok(CaptureDecision::Admitted);
             }
-            let reference =
-                ProtocolRef::connection("mysql", request.connection_id, request.sequence);
             let operation =
                 crate::access::analyze_command(request.command, request.prepared_sql).class;
-            let Some(exchange) = self.shared.begin(reference, operation).await? else {
-                return Ok(CaptureDecision::Rejected(Box::new(RejectedOutput)));
+            let maintenance = (request.command.command_name == "COM_PING"
+                && request.payload_len == 1)
+                .then(|| BuiltinMaintenance::begin(&self.shared, operation, "COM_PING"))
+                .flatten();
+            let pending = if let Some(maintenance) = maintenance {
+                let mut requests = self.requests.lock().expect("MySQL capture permits");
+                requests.omitted += 1;
+                Pending::Maintenance(maintenance)
+            } else {
+                let sequence =
+                    request.sequence - self.requests.lock().expect("MySQL capture permits").omitted;
+                let reference = ProtocolRef::connection("mysql", request.connection_id, sequence);
+                let Some(exchange) = self.shared.begin(reference, operation).await? else {
+                    return Ok(CaptureDecision::Rejected(Box::new(RejectedOutput)));
+                };
+                Pending::Captured {
+                    permit: exchange,
+                    sequence,
+                }
             };
             let previous = self
-                .pending
+                .requests
                 .lock()
                 .expect("MySQL capture permits")
-                .insert(request.sequence, exchange);
+                .pending
+                .insert(request.sequence, pending);
             ensure!(previous.is_none(), "duplicate MySQL capture sequence");
             Ok(CaptureDecision::Admitted)
         })
@@ -119,7 +149,17 @@ impl connection::CaptureHost for Host {
         Box::pin(async move {
             let snapshot = match event {
                 CaptureObservation::Connection(event) => CaptureSnapshot::capture(&event)?,
-                CaptureObservation::Query(event) => CaptureSnapshot::capture(&event)?,
+                CaptureObservation::Query(mut event) => {
+                    let requests = self.requests.lock().expect("MySQL capture permits");
+                    if matches!(
+                        requests.pending.get(&event.sequence),
+                        Some(Pending::Maintenance(_))
+                    ) {
+                        return Ok(());
+                    }
+                    event.sequence -= requests.omitted;
+                    CaptureSnapshot::capture(&event)?
+                }
             };
             self.shared.observe(snapshot).await
         })
@@ -134,13 +174,13 @@ impl connection::CaptureHost for Host {
                     || response_sequence == exchange_sequence,
                 "MySQL response and exchange sequences differ"
             );
-            let (response, exchange) = completion.into_parts();
-            if let Some(response) = &response {
-                self.shared
-                    .observe(CaptureSnapshot::capture(response)?)
-                    .await?;
-            }
-            let Some(event) = exchange else {
+            let (mut response, exchange) = completion.into_parts();
+            let Some(mut event) = exchange else {
+                if let Some(response) = &response {
+                    self.shared
+                        .observe(CaptureSnapshot::capture(response)?)
+                        .await?;
+                }
                 ensure!(
                     response.is_none(),
                     "MySQL response has no semantic exchange"
@@ -148,12 +188,28 @@ impl connection::CaptureHost for Host {
                 return Ok(());
             };
             let permit = self
-                .pending
+                .requests
                 .lock()
                 .expect("MySQL capture permits")
+                .pending
                 .remove(&event.query_sequence)
                 .context("MySQL completion has no admitted capture")?;
-            permit.complete(CaptureSnapshot::capture(&event)?).await
+            match permit {
+                Pending::Captured { permit, sequence } => {
+                    event.query_sequence = sequence;
+                    if let Some(response) = &mut response {
+                        response.query_sequence = sequence;
+                        self.shared
+                            .observe(CaptureSnapshot::capture(response)?)
+                            .await?;
+                    }
+                    permit.complete(CaptureSnapshot::capture(&event)?).await
+                }
+                Pending::Maintenance(maintenance) => {
+                    maintenance.finish(canonical_ping(&event));
+                    Ok(())
+                }
+            }
         })
     }
 
@@ -162,15 +218,35 @@ impl connection::CaptureHost for Host {
         sequence: u64,
         output: traffic_model::trace::OutputKind,
     ) -> Option<Box<dyn CaptureOutput>> {
-        self.pending
+        match self
+            .requests
             .lock()
             .expect("MySQL capture permits")
+            .pending
             .get(&sequence)?
-            .prepare_output(output)
-            .ok()
+        {
+            Pending::Captured { permit, .. } => permit.prepare_output(output).ok(),
+            Pending::Maintenance(_) => None,
+        }
     }
 
     fn take_no_response(&self, _sequence: u64) -> Option<Box<dyn CaptureOutput>> {
         None
     }
+}
+
+fn canonical_ping(event: &crate::events::MysqlExchangeEvent) -> bool {
+    // Preserve all transaction and autocommit state bits that Replay tracks.
+    const SESSION_STATUS: u16 = 0x200b;
+    let before = event
+        .server_status_before
+        .unwrap_or(crate::types::SERVER_STATUS_AUTOCOMMIT);
+    event.outcome == DependencyExchangeOutcome::Response
+        && event.response.status == "ok"
+        && event.response.error_code.is_none()
+        && event.parse_warnings.is_empty()
+        && event
+            .response
+            .server_status
+            .is_some_and(|after| after & SESSION_STATUS == before & SESSION_STATUS)
 }

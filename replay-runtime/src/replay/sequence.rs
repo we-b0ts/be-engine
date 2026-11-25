@@ -21,6 +21,13 @@ impl<P: super::ReplayProtocolSet> traffic_replay::request::ExecutionState
         observation.cancel_reason(self)
     }
     fn sequence_wait(&self, bytes: usize) -> Option<traffic_replay::request_wait::RequestWait> {
+        if let Some(session) = &self.session_events {
+            return traffic_replay::request_wait::RequestWait::with_grace(
+                [(false, session.runtime.clone())],
+                bytes,
+                session.no_progress_timeout,
+            );
+        }
         let scopes =
             self.active_sequence
                 .clone()
@@ -73,7 +80,7 @@ impl<P: super::ReplayProtocolSet> super::RuntimeState<P> {
             Some(SequenceRuntime::with_request_gates(
                 plan,
                 cap,
-                self.timers.request_gates(case),
+                self.timers.event_gates(case),
             ))
         });
         let run = self

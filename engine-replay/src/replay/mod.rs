@@ -78,6 +78,12 @@ pub struct ReplayLifecycleConfig {
     pub dependency_loading: ReplayDependencyLoading,
 }
 
+impl ReplayLifecycleConfig {
+    /// Session Replay preserves event order without waiting for recorded intervals.
+    pub const EVENT_SESSION_STREAM_TIMING: ReplayStreamTiming = ReplayStreamTiming::Fast;
+    pub const EVENT_SESSION_STREAM_INTERVAL_CAP_MS: u64 = 0;
+}
+
 impl Default for ReplayLifecycleConfig {
     fn default() -> Self {
         Self {

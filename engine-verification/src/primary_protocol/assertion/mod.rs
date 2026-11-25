@@ -79,8 +79,34 @@ impl ResponseAssertionRuntime {
             actual_bytes,
             &self.policy,
             time_copies,
+            ResponseExtent::Complete,
         )
     }
+
+    /// Verify an observed primary response head before its body events arrive.
+    pub fn assert_recorded_response_headers(
+        &self,
+        options: ResponseAssertionOptions,
+        request_bytes: &[u8],
+        expected_bytes: &[u8],
+        actual_bytes: &[u8],
+    ) -> Result<ResponseAssertionCaseReport> {
+        assert_recorded_response_with_policy_and_time_copies(
+            options,
+            request_bytes,
+            expected_bytes,
+            actual_bytes,
+            &self.policy,
+            &Default::default(),
+            ResponseExtent::Headers,
+        )
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResponseExtent {
+    Headers,
+    Complete,
 }
 
 pub fn diagnose_response_body(
@@ -121,6 +147,7 @@ fn assert_recorded_response_with_policy(
         actual_bytes,
         policy,
         &Default::default(),
+        ResponseExtent::Complete,
     )
 }
 
@@ -131,6 +158,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
     actual_bytes: &[u8],
     policy: &LoadedReplayPolicy,
     time_copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
+    extent: ResponseExtent,
 ) -> Result<ResponseAssertionCaseReport> {
     policy.prepare_signatures()?;
     let decrypted_request =
@@ -195,13 +223,14 @@ fn assert_recorded_response_with_policy_and_time_copies(
         None if oneway => 204,
         None => anyhow::bail!("expected response has no status"),
     };
+    let headers_only = extent == ResponseExtent::Headers;
     let expected_body = match expected.body.as_ref().or(expected.frame.as_ref()) {
-        _ if expected_interaction.is_some() => Vec::new(),
+        _ if headers_only || expected_interaction.is_some() => Vec::new(),
         Some(body) => decode_body(body, "expected response")?,
         None if oneway => Vec::new(),
         None => anyhow::bail!("expected response has no body or frame"),
     };
-    let actual_body = if actual_interaction.is_some() {
+    let actual_body = if headers_only || actual_interaction.is_some() {
         Vec::new()
     } else {
         decode_body(&actual.body, "actual response")?
@@ -244,7 +273,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
             actual_headers: actual.headers,
             actual_sse_observation: actual.sse_observation,
             actual_body,
-            body_available: expected_interaction.is_none(),
+            body_available: !headers_only && expected_interaction.is_none(),
             actual_path: options.actual_response,
             actual_fingerprint: fingerprint(actual_bytes),
         },

@@ -9,6 +9,8 @@ use traffic_protocol::{
     message::ProtocolMessage,
 };
 
+mod message_batch;
+
 pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
     stream: TcpStream,
     peer: SocketAddr,
@@ -20,7 +22,7 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
         host: target.host,
         port: target.port,
     };
-    let (protocol, session) = {
+    let (protocol, session, event_session, request_projection) = {
         let state = state.lock().await;
         let entry = state.providers.connection_provider(connection_protocol)?;
         let session = entry
@@ -33,13 +35,20 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
                 upstream_addr: None,
                 max_frame_bytes: traffic_contract::MAX_VALUE_BYTES,
             })?;
-        (entry.kind.id(), session)
+        (
+            entry.kind.id(),
+            session,
+            state.session_events.is_some(),
+            state.native.event_session_request_projection(),
+        )
     };
     let state_bindings = state.lock().await.native.core.sessions.clone();
     let host = Arc::new(Host {
         state,
         protocol,
         endpoint,
+        event_session,
+        request_projection,
         reported: Arc::new(AtomicBool::new(false)),
         delivered: Default::default(),
         session: Uuid::new_v4(),
@@ -51,13 +60,15 @@ pub(crate) async fn handle_connection<P: ReplayProtocolSet>(
     {
         let mut state = host.state.lock().await;
         if state.finalized_at.is_none() {
+            if let Some(session) = &mut state.session_events {
+                session.fail(None, None, &error.to_string());
+            }
             let case = state.active_case_id.clone();
             state.native.record_failure(
                 protocol,
                 &host.endpoint,
                 case,
-                None,
-                None,
+                (None, None),
                 &error.to_string(),
                 Default::default(),
             );
@@ -79,6 +90,8 @@ pub(super) struct Host<P: ReplayProtocolSet> {
     bindings: traffic_replay::exchange::SessionBindings,
     protocol: ProtocolId,
     endpoint: Endpoint,
+    event_session: bool,
+    request_projection: Option<Arc<dyn crate::replay::policy::ValueRuleHost>>,
     reported: Arc<AtomicBool>,
     delivered: Arc<
         std::sync::Mutex<
@@ -98,6 +111,15 @@ impl<P: ReplayProtocolSet> Drop for Host<P> {
 impl<P: ReplayProtocolSet> RequestHost for Host<P> {
     fn release_session(&self) {
         self.bindings.release(self.session);
+    }
+
+    fn try_write_message_batch<'a>(
+        &'a self,
+        anchors: &'a [traffic_model::recording::ProtocolRef],
+        io: &'a mut dyn traffic_protocol::connection::OutputIo,
+        framer: &'a mut dyn traffic_protocol::connection::MessageBatchFramer,
+    ) -> NativeFuture<'a, bool> {
+        Box::pin(self.write_message_batch(anchors, io, framer))
     }
 
     fn reject_command<'a>(
@@ -153,12 +175,14 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                 &command.observation,
             );
             let observation = state.target_observations.retained(&retention).then_some(id);
+            if let Some(session) = &mut state.session_events {
+                session.fail(None, observation, &reason);
+            }
             state.native.record_failure(
                 self.protocol,
                 &self.endpoint,
                 case,
-                Some(event),
-                observation,
+                (Some(event), observation),
                 &reason,
                 diagnostics,
             );
@@ -186,7 +210,80 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
         message: Arc<dyn ProtocolMessage>,
         session: RequestSession,
     ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
-        Box::pin(self.execute_request(message, None, Some(session), true))
+        let admission = if self.event_session {
+            request::RequestAdmission::Required
+        } else {
+            request::RequestAdmission::LegacyControl
+        };
+        Box::pin(self.execute_request(message, None, Some(session), admission))
+    }
+
+    fn event_session(&self) -> bool {
+        self.event_session
+    }
+
+    fn can_defer_transaction_start<'a>(
+        &'a self,
+        request: &'a dyn ProtocolMessage,
+    ) -> NativeFuture<'a, bool> {
+        Box::pin(async move {
+            let state = self.state.lock().await;
+            let head = state
+                .session_events
+                .as_ref()
+                .and_then(|session| session.runtime.expected());
+            Ok(head.is_some_and(|head| {
+                state.native.core.can_defer_transaction_start(
+                    self.protocol,
+                    &self.endpoint,
+                    request,
+                    head,
+                )
+            }))
+        })
+    }
+
+    fn statement_metadata<'a>(
+        &'a self,
+        template: &'a dyn ProtocolMessage,
+        session: &'a RequestSession,
+    ) -> NativeFuture<'a, Option<Arc<dyn traffic_protocol::message::MessageEncoder>>> {
+        Box::pin(async move {
+            let owner = self.session_owner(Some(session))?;
+            let state = self.state.lock().await;
+            let head = state
+                .session_events
+                .as_ref()
+                .and_then(|session| session.runtime.expected());
+            if owner
+                .as_ref()
+                .is_some_and(|owner| !owner.scope.is_run_owned())
+            {
+                return Ok(None);
+            }
+            Ok(head.and_then(|head| {
+                state.native.core.statement_metadata(
+                    self.protocol,
+                    &self.endpoint,
+                    template,
+                    session,
+                    head,
+                )
+            }))
+        })
+    }
+
+    fn try_execute_driver_observation(
+        &self,
+        message: Arc<dyn ProtocolMessage>,
+        session: RequestSession,
+    ) -> NativeFuture<'_, Option<Box<dyn ResponseDelivery>>> {
+        Box::pin(self.execute_request(
+            message,
+            None,
+            Some(session),
+            request::RequestAdmission::DriverObservation,
+        ))
     }
     fn forget_anchor(&self, reference: &traffic_model::recording::ProtocolRef) {
         self.delivered
@@ -203,6 +300,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                 !anchors.is_empty() && anchors.len() <= 256,
                 "native message anchor budget exceeded"
             );
+            let mut messages = None;
             loop {
                 let (changed, mut sequence) = {
                     let mut state = self.state.lock().await;
@@ -210,21 +308,41 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                         state.finalized_at.is_none() && !state.target_session_stopped,
                         "Replay session stopped before native message delivery"
                     );
-                    let changed = state.native.core.lifecycle.subscribe();
-                    let sequence = state.native.core.lifecycle.sequence.subscriptions();
+                    let session = state.session_events.as_ref();
+                    let fallback = session.is_none().then(|| {
+                        let lifecycle = &state.native.core.lifecycle;
+                        (lifecycle.subscribe(), lifecycle.sequence.subscriptions())
+                    });
                     let delivered = self.delivered.lock().expect("native delivery anchors");
                     ensure!(
                         anchors.iter().all(|anchor| delivered.contains_key(anchor)),
                         "native emission anchor has no successful delivery on this connection"
                     );
-                    if !state.async_case_quiescing()
-                        && let Some(index) = state.native.core.select_message(
+                    let select = || {
+                        if state.async_case_quiescing() {
+                            return None;
+                        }
+                        state.native.core.select_message(
                             self.protocol,
                             &self.endpoint,
                             state.active_case_id.as_deref(),
                             &anchors,
                         )
+                    };
+                    let mut selected = select();
+                    if selected.is_none()
+                        && let Some(session) = session
                     {
+                        let runtime = &session.runtime;
+                        if messages.is_none() {
+                            messages = Some(runtime.subscribe_messages());
+                            // A wire receipt can advance the sequence without holding
+                            // ReplayState. Recheck once the message watch is attached.
+                            selected = select();
+                        }
+                        ensure!(!runtime.failed(), "Replay sequence was aborted");
+                    }
+                    if let Some(index) = selected {
                         let traffic_protocol::connection::RecordedInput::Emission { after, offset } =
                             &state.native.core.exchanges[index].native.input
                         else {
@@ -252,6 +370,7 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                             storage: Default::default(),
                         };
                         return Ok(Box::new(Delivery {
+                            ready_to_write: false,
                             retain_anchor: false,
                             session_step: None,
                             reference: state.native.core.exchanges[index].native.reference.clone(),
@@ -265,8 +384,17 @@ impl<P: ReplayProtocolSet> RequestHost for Host<P> {
                             delivered: self.delivered.clone(),
                         }) as Box<dyn ResponseDelivery>);
                     }
-                    (changed, sequence)
+                    fallback.unwrap_or_else(|| {
+                        (state.native.core.lifecycle.subscribe_control(), Vec::new())
+                    })
                 };
+                if let Some(messages) = &mut messages {
+                    tokio::select! {
+                        _ = changed.changed() => {},
+                        result = messages.changed() => { result?; }
+                    }
+                    continue;
+                }
                 use futures_util::{StreamExt, stream::FuturesUnordered};
                 let mut changes: FuturesUnordered<_> = sequence
                     .iter_mut()
@@ -343,9 +471,14 @@ impl<P: ReplayProtocolSet> Host<P> {
         request_session: Option<RequestSession>,
     ) -> NativeFuture<'_, Box<dyn ResponseDelivery>> {
         Box::pin(async move {
-            self.execute_request(message, binding, request_session, false)
-                .await?
-                .context("required native delivery missing")
+            self.execute_request(
+                message,
+                binding,
+                request_session,
+                request::RequestAdmission::Required,
+            )
+            .await?
+            .context("required native delivery missing")
         })
     }
 
@@ -354,10 +487,15 @@ impl<P: ReplayProtocolSet> Host<P> {
         message: Arc<dyn ProtocolMessage>,
         binding: Option<Option<traffic_model::recording::ProtocolRef>>,
         request_session: Option<RequestSession>,
-        optional_control: bool,
+        admission: request::RequestAdmission,
     ) -> Result<Option<Box<dyn ResponseDelivery>>> {
         let started = tokio::time::Instant::now();
         let observed = Utc::now();
+        let message = if let Some(policy) = &self.request_projection {
+            policy.native_request_projection(self.protocol, &self.endpoint, message, None)?
+        } else {
+            message
+        };
         let bytes = message
             .project()?
             .values
@@ -393,7 +531,7 @@ impl<P: ReplayProtocolSet> Host<P> {
             lane,
             request_session,
             session_owner,
-            optional_control,
+            admission,
             observed,
             bytes,
             diagnostics: Default::default(),
@@ -406,7 +544,10 @@ impl<P: ReplayProtocolSet> Host<P> {
         .await;
         let matched = match matched {
             Ok(matched) => matched,
-            Err(error) if optional_control && error.kind == request::RejectionKind::NoMatch => {
+            Err(error)
+                if admission.allows_local_response()
+                    && error.kind == request::RejectionKind::NoMatch =>
+            {
                 return Ok(None);
             }
             Err(error) => {
@@ -424,6 +565,7 @@ impl<P: ReplayProtocolSet> Host<P> {
             )
         };
         Ok(Some(Box::new(Delivery {
+            ready_to_write: false,
             retain_anchor: false,
             session_step,
             reference,
@@ -440,6 +582,7 @@ impl<P: ReplayProtocolSet> Host<P> {
 }
 
 struct Delivery<P: ReplayProtocolSet> {
+    ready_to_write: bool,
     retain_anchor: bool,
     session_step: Option<ReplaySessionStep>,
     reference: traffic_model::recording::ProtocolRef,
@@ -458,35 +601,41 @@ struct Delivery<P: ReplayProtocolSet> {
 }
 
 impl<P: ReplayProtocolSet> Delivery<P> {
+    fn ensure_owner_active(&self, state: &RuntimeState<P>) -> Result<()> {
+        let matched = &self.matched;
+        ensure!(
+            state.finalized_at.is_none()
+                && !state.target_session_stopped
+                && (matched.run_owned
+                    || state.admission_epoch == matched.epoch
+                        && state.active_case_id == matched.case
+                        && !state.async_case_quiescing()
+                        && matched
+                            .case
+                            .as_ref()
+                            .is_none_or(|case| !state.target_stop_prepared.contains(case))),
+            "native response owner stopped before delivery"
+        );
+        Ok(())
+    }
+
     async fn wait_ready(&self) -> Result<()> {
         self.matched.ticket.wait_sequence_delivery().await?;
         loop {
-            let (changed, due, fast) =
+            let (changed, due) = {
+                let state = self.state.lock().await;
+                self.ensure_owner_active(&state)?;
+                let due = self
+                    .started
+                    .checked_add(self.matched.delay)
+                    .context("native delivery clock overflow")?;
+                if state.stream_timing == Some(ReplayStreamTiming::Fast)
+                    || tokio::time::Instant::now() >= due
                 {
-                    let state = self.state.lock().await;
-                    ensure!(
-                        state.finalized_at.is_none()
-                            && !state.target_session_stopped
-                            && (self.matched.run_owned
-                                || state.admission_epoch == self.matched.epoch
-                                    && state.active_case_id == self.matched.case
-                                    && !state.async_case_quiescing()
-                                    && self.matched.case.as_ref().is_none_or(|case| !state
-                                        .target_stop_prepared
-                                        .contains(case))),
-                        "native response owner stopped before delivery"
-                    );
-                    (
-                        state.native.core.lifecycle.subscribe(),
-                        self.started
-                            .checked_add(self.matched.delay)
-                            .context("native delivery clock overflow")?,
-                        state.stream_timing == Some(ReplayStreamTiming::Fast),
-                    )
-                };
-            if fast || tokio::time::Instant::now() >= due {
-                return Ok(());
-            }
+                    return Ok(());
+                }
+                (state.native.core.lifecycle.subscribe(), due)
+            };
             tokio::select! {
                 _ = tokio::time::sleep_until(due) => {},
                 _ = changed.changed() => {},
@@ -497,7 +646,11 @@ impl<P: ReplayProtocolSet> Delivery<P> {
 
 impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
     fn ready(&mut self) -> NativeFuture<'_, ()> {
-        Box::pin(self.wait_ready())
+        Box::pin(async move {
+            self.wait_ready().await?;
+            self.ready_to_write = true;
+            Ok(())
+        })
     }
     fn retain_as_anchor(&mut self) {
         self.retain_anchor = true;
@@ -517,12 +670,37 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
         Box::pin(async move {
             let matched = &self.matched;
             let result = async {
-                self.wait_ready().await?;
-                let response = self.state.lock().await.native.core.exchanges[matched.index]
-                    .native
-                    .response
-                    .clone();
-                let loaded = if response.stored().is_some() {
+                if self.ready_to_write {
+                    // The writer already reserved the first boundary. Check
+                    // for abort before reading or applying response rules.
+                    ensure!(
+                        matched
+                            .ticket
+                            .sequence()
+                            .is_none_or(|sequence| !sequence.sequence_failed()),
+                        "sequence delivery is already finished or failed"
+                    );
+                } else {
+                    self.wait_ready().await?;
+                }
+                let (response, prefetch) = {
+                    let state = self.state.lock().await;
+                    self.ensure_owner_active(&state)?;
+                    let response = state.native.core.exchanges[matched.index]
+                        .native
+                        .response
+                        .clone();
+                    let prefetch = state
+                        .session_events
+                        .as_ref()
+                        .and_then(|session| session.prefetch.clone());
+                    (response, prefetch)
+                };
+                let mut prefetched = match &prefetch {
+                    Some(prefetch) => prefetch.take(matched.index).await?,
+                    None => None,
+                };
+                let loaded = if prefetched.is_none() && response.stored().is_some() {
                     Some(
                         tokio::task::spawn_blocking(move || {
                             response.stored().expect("stored response").load()
@@ -534,20 +712,9 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                     None
                 };
                 let mut deadline = None;
-                let response = loop {
+                let (response, used_prefetched_packet) = loop {
                     let state = self.state.lock().await;
-                    ensure!(
-                        state.finalized_at.is_none()
-                            && !state.target_session_stopped
-                            && (matched.run_owned
-                                || state.admission_epoch == matched.epoch
-                                    && state.active_case_id == matched.case
-                                    && !state.async_case_quiescing()
-                                    && matched.case.as_ref().is_none_or(|case| !state
-                                        .target_stop_prepared
-                                        .contains(case))),
-                        "native response owner stopped before delivery"
-                    );
+                    self.ensure_owner_active(&state)?;
                     if let Some(wait) = state.native.wait_for_storage_delivery(&matched.storage)? {
                         drop(state);
                         let deadline = *deadline.get_or_insert_with(|| {
@@ -559,13 +726,28 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                         );
                         continue;
                     }
-                    break state.native.render_response(
-                        matched.index,
-                        matched.observed,
-                        loaded.as_deref(),
-                        &matched.storage,
-                    )?;
+                    let rendered = match &mut prefetched {
+                        Some(prefetched) => state.native.render_prefetched_response(
+                            matched.index,
+                            matched.observed,
+                            prefetched,
+                            &matched.storage,
+                        ),
+                        None => state
+                            .native
+                            .render_response(
+                                matched.index,
+                                matched.observed,
+                                loaded.as_deref(),
+                                &matched.storage,
+                            )
+                            .map(|plan| (plan, false)),
+                    };
+                    break rendered?;
                 };
+                if used_prefetched_packet && let Some(prefetch) = &prefetch {
+                    prefetch.record_prefetched_packet_use();
+                }
                 let request::ResponsePlan {
                     output: response,
                     comparison,
@@ -575,11 +757,10 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
                 let mut output = traffic_protocol::output::FramedOutput::new(response, framer);
                 traffic_replay::output::deliver(io, &mut output, matched.ticket.sequence()).await?;
                 let completed_at = tokio::time::Instant::now();
-                ensure!(
-                    matched.ticket.publish_wire(),
-                    "native response delivery receipt was cancelled"
-                );
                 let mut state = self.state.lock().await;
+                // Keep terminal sequence progress and its admission-visible receipt
+                // under the same lock a waiting request uses to select its event.
+                matched.ticket.try_publish_wire()?;
                 let contracts = state.native.contracts.clone();
                 match state
                     .native
@@ -632,16 +813,20 @@ impl<P: ReplayProtocolSet> ResponseDelivery for Delivery<P> {
             .await;
             if let Err(error) = &result {
                 self.reported.store(true, Ordering::Release);
+                let reason = error.to_string();
                 let mut state = self.state.lock().await;
                 if state.finalized_at.is_none() {
+                    let source_sequence = state.native.recorded_sequence(matched.index);
+                    if let Some(session) = &mut state.session_events {
+                        session.fail(source_sequence, None, &reason);
+                    }
                     state.native.core.fail(matched.index, &matched.ticket);
                     state.native.record_failure(
                         self.protocol,
                         &self.endpoint,
                         matched.case.clone(),
-                        None,
-                        None,
-                        &error.to_string(),
+                        (None, None),
+                        &reason,
                         Default::default(),
                     );
                 }

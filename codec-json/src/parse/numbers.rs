@@ -32,6 +32,9 @@ pub(super) fn preserves_decimal_tokens(bytes: &[u8]) -> bool {
             let Ok(token) = std::str::from_utf8(&bytes[start..index]) else {
                 return false;
             };
+            if exact_integer(token) {
+                continue;
+            }
             let Ok(number) = token.parse::<serde_json::Number>() else {
                 return false;
             };
@@ -46,6 +49,18 @@ pub(super) fn preserves_decimal_tokens(bytes: &[u8]) -> bool {
         index += 1;
     }
     true
+}
+
+fn exact_integer(token: &str) -> bool {
+    let digits = token.strip_prefix('-').unwrap_or(token);
+    if digits.len() > 1 && digits.starts_with('0') {
+        return false;
+    }
+    if token.starts_with('-') {
+        token.parse::<i64>().is_ok()
+    } else {
+        token.parse::<u64>().is_ok()
+    }
 }
 
 fn decimal(value: &str) -> Option<(bool, String, i64)> {
@@ -79,6 +94,14 @@ fn decimal(value: &str) -> Option<(bool, String, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_point_epoch_seconds_round_trip_without_rounding_to_a_neighbor() {
+        let payload = br#"{"timestamp":1800000000.0000021}"#;
+        let parsed = crate::parse(payload).expect("valid shortest float representation");
+        assert_eq!(parsed["timestamp"].to_string(), "1800000000.0000021");
+    }
+
     #[test]
     fn exact_integer_and_decimal_identity_survive_or_are_rejected() {
         for value in [
@@ -103,5 +126,34 @@ mod tests {
             assert!(crate::parse(format!("{{\"id\":{value}}}").as_bytes()).is_none());
         }
         assert!(preserves_decimal_tokens(br#"{"text":"number 1.10000000000000001 and escaped \"18446744073709551616\"","n":1.1}"#));
+    }
+
+    #[test]
+    fn integer_fast_path_retains_signed_bounds_and_negative_zero() {
+        assert!(exact_integer("-9223372036854775808"));
+        assert!(exact_integer("18446744073709551615"));
+        assert!(!exact_integer("-9223372036854775809"));
+        assert!(!exact_integer("18446744073709551616"));
+        assert!(!exact_integer("-01"));
+        assert!(!exact_integer("01"));
+        assert!(!exact_integer("1e0"));
+        assert!(!exact_integer("1.0"));
+        assert_eq!(
+            crate::parse(b"-9223372036854775808").unwrap().as_i64(),
+            Some(i64::MIN)
+        );
+        assert_eq!(
+            crate::parse(b"18446744073709551615").unwrap().as_u64(),
+            Some(u64::MAX)
+        );
+        assert!(
+            crate::parse(b"-0")
+                .unwrap()
+                .as_f64()
+                .unwrap()
+                .is_sign_negative()
+        );
+        assert!(crate::parse(b"-9223372036854775809").is_none());
+        assert!(crate::parse(b"01").is_none());
     }
 }
