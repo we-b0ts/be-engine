@@ -78,6 +78,83 @@ fn driver_proof_covers_only_the_complete_prefix_before_application_sql() {
     assert!(proven(&business_read).is_empty());
 }
 
+fn pooled_connection() -> Vec<Value> {
+    let mut rows = startup();
+    rows.truncate(7);
+    for (row, sequence) in rows
+        .iter_mut()
+        .zip([4920, 4935, 4956, 4966, 4982, 4998, 5014])
+    {
+        row["capture_complete"] = json!(true);
+        row["capture"]["sequence"] = json!(sequence);
+    }
+    rows[6]["sql"] = json!("SELECT id FROM users WHERE id=7");
+    rows[6]["response"]["server_status"] = json!(1);
+    rows
+}
+
+#[test]
+fn recording_seals_pooled_connection_prelude_before_the_first_business_read() {
+    use crate::native::source_scope::ScopeFacts;
+    use traffic_protocol::evidence::SessionScopeFacts;
+
+    let rows = pooled_connection();
+    let mut other_autocommit = rows[2].clone();
+    let other_connection = Uuid::from_u128(1);
+    other_autocommit["connection_id"] = json!(other_connection);
+    other_autocommit["capture"]["sequence"] = json!(4958);
+    other_autocommit["capture"]["protocol_ref"] =
+        json!(ProtocolRef::connection("mysql", other_connection, 3));
+
+    let mut facts = Box::<ScopeFacts>::default();
+    for row in rows[..3]
+        .iter()
+        .chain([&other_autocommit])
+        .chain(&rows[3..])
+    {
+        facts.observe(row).unwrap();
+    }
+    let exclusions = facts
+        .finish()
+        .unwrap()
+        .into_iter()
+        .filter_map(|decision| {
+            decision
+                .driver_prelude
+                .map(|proof| (decision.sequence, proof))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        exclusions,
+        [4956, 4982, 4998].map(|sequence| (sequence, DriverPrelude::MysqlSqlalchemyPymysql))
+    );
+}
+
+#[test]
+fn pooled_connection_requires_complete_idle_setup_and_an_ordinary_read() {
+    let rows = pooled_connection();
+    assert!(proven(&rows[..6]).is_empty());
+
+    for (position, field, value) in [
+        (2, "capture_complete", json!(false)),
+        (
+            4,
+            "sql",
+            json!("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"),
+        ),
+        (5, "server_status_before", json!(1)),
+        (6, "sql", json!("SELECT @@transaction_isolation")),
+        (6, "server_status_before", json!(1)),
+    ] {
+        let mut changed = rows.clone();
+        changed[position][field] = value;
+        assert!(
+            proven(&changed).is_empty(),
+            "unexpected proof with changed {field}"
+        );
+    }
+}
+
 #[test]
 fn event_session_keeps_a_missing_table_error_as_a_matchable_application_event() {
     use traffic_protocol::connection::ReplaySessionStep;

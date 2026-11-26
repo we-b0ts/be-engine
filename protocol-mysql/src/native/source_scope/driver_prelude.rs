@@ -1,4 +1,4 @@
-//! The complete SQLAlchemy/PyMySQL connection prelude is a driver recipe, not application I/O.
+//! Prove the SQLAlchemy/PyMySQL prelude on each physical connection.
 use std::collections::BTreeMap;
 
 use traffic_model::recording::ProtocolRef;
@@ -7,8 +7,9 @@ use uuid::Uuid;
 
 use crate::{recorded::RecordedMysqlExchange, session_control, session_identity};
 
-use super::{ScopeRecord, missing_table_metadata_read};
+use super::{ScopeRecord, missing_table_metadata_read, opens_implicit_read_transaction};
 
+const CONNECTION_COMMAND_COUNT: usize = 6;
 const STARTUP_COMMANDS: [&str; 12] = [
     "set names",
     "set time_zone",
@@ -24,8 +25,10 @@ const STARTUP_COMMANDS: [&str; 12] = [
     "rollback",
 ];
 
+type PrefixEntry<'a> = (u64, usize, &'a ScopeRecord);
+
 pub(super) fn prove(records: &BTreeMap<usize, ScopeRecord>) -> BTreeMap<usize, DriverPrelude> {
-    let mut prefixes = BTreeMap::<Uuid, Vec<(u64, usize, &RecordedMysqlExchange)>>::new();
+    let mut prefixes = BTreeMap::<Uuid, Vec<PrefixEntry<'_>>>::new();
     for (&position, record) in records {
         let event = &record.exchange;
         let (Some(connection), Some(sequence)) = (event.connection_id, event.query_sequence) else {
@@ -35,20 +38,22 @@ pub(super) fn prove(records: &BTreeMap<usize, ScopeRecord>) -> BTreeMap<usize, D
             prefixes
                 .entry(connection)
                 .or_default()
-                .push((sequence, position, event));
+                .push((sequence, position, record));
         }
     }
     let mut excluded = BTreeMap::new();
     for mut prefix in prefixes.into_values() {
         prefix.sort_unstable_by_key(|(sequence, _, _)| *sequence);
-        let Some(prelude_and_probe) = prefix.get(..STARTUP_COMMANDS.len() + 1) else {
+        let command_count = if valid(&prefix, STARTUP_COMMANDS.len()) {
+            STARTUP_COMMANDS.len()
+        } else if valid_pooled_connection(&prefix) {
+            CONNECTION_COMMAND_COUNT
+        } else {
             continue;
         };
-        if !valid(prelude_and_probe) {
-            continue;
-        }
-        for &(_, position, event) in &prefix[..STARTUP_COMMANDS.len()] {
-            if event
+        for &(_, position, record) in &prefix[..command_count] {
+            if record
+                .exchange
                 .capture
                 .as_ref()
                 .is_some_and(|capture| capture.semantic_required)
@@ -56,12 +61,13 @@ pub(super) fn prove(records: &BTreeMap<usize, ScopeRecord>) -> BTreeMap<usize, D
                 excluded.insert(position, DriverPrelude::MysqlSqlalchemyPymysql);
             }
         }
-        if prefix.len() == STARTUP_COMMANDS.len() + 2
-            && let Some(&(sequence, position, event)) = prefix.get(STARTUP_COMMANDS.len() + 1)
-            && sequence == STARTUP_COMMANDS.len() as u64 + 2
-            && idle_metadata_rollback(prelude_and_probe[STARTUP_COMMANDS.len()].2, event)
+        if command_count == STARTUP_COMMANDS.len()
+            && prefix.len() == command_count + 2
+            && let [.., (_, _, probe), (sequence, position, cleanup)] = prefix.as_slice()
+            && *sequence == command_count as u64 + 2
+            && idle_metadata_rollback(&probe.exchange, &cleanup.exchange)
         {
-            excluded.insert(position, DriverPrelude::MysqlIdleMetadataRollback);
+            excluded.insert(*position, DriverPrelude::MysqlIdleMetadataRollback);
         }
     }
     excluded
@@ -77,16 +83,33 @@ fn idle_metadata_rollback(probe: &RecordedMysqlExchange, cleanup: &RecordedMysql
         && matches_command(cleanup, 11, "rollback", None)
 }
 
-fn valid(prefix: &[(u64, usize, &RecordedMysqlExchange)]) -> bool {
-    if prefix.len() != STARTUP_COMMANDS.len() + 1
-        || prefix
-            .iter()
-            .zip(1..)
-            .any(|((sequence, _, _), expected)| *sequence != expected)
+fn valid_pooled_connection(prefix: &[PrefixEntry<'_>]) -> bool {
+    let Some(prefix) = prefix.get(..=CONNECTION_COMMAND_COUNT) else {
+        return false;
+    };
+    // Later connections can omit the dialect probes. A complete ordinary
+    // read that opens a transaction marks the end of their initialization.
+    let first_app = &prefix[CONNECTION_COMMAND_COUNT].2.exchange;
+    prefix.iter().all(|(_, _, record)| record.complete)
+        && opens_implicit_read_transaction(first_app)
+        && valid(prefix, CONNECTION_COMMAND_COUNT)
+        && first_app.sql.as_deref().is_some_and(|sql| {
+            session_control::read::classify(sql) == session_control::read::Effect::ReadOnly
+        })
+}
+
+fn valid(prefix: &[PrefixEntry<'_>], command_count: usize) -> bool {
+    let Some(prefix) = prefix.get(..=command_count) else {
+        return false;
+    };
+    if prefix
+        .iter()
+        .zip(1..)
+        .any(|((sequence, _, _), expected)| *sequence != expected)
     {
         return false;
     }
-    let first_app = prefix[STARTUP_COMMANDS.len()].2;
+    let first_app = &prefix[command_count].2.exchange;
     let Some(identity) = session_identity::identity_from_exchange(first_app) else {
         return false;
     };
@@ -98,8 +121,12 @@ fn valid(prefix: &[(u64, usize, &RecordedMysqlExchange)]) -> bool {
     {
         return false;
     }
-    for (index, ((_, _, event), expected)) in prefix.iter().zip(STARTUP_COMMANDS).enumerate() {
-        let record = *event;
+    for (index, ((_, _, event), expected)) in prefix[..command_count]
+        .iter()
+        .zip(STARTUP_COMMANDS)
+        .enumerate()
+    {
+        let record = &event.exchange;
         let expected_before = match index {
             0 if record.server_status_before.is_none() => None,
             0..=2 => Some(2),
