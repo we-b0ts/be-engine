@@ -7,10 +7,10 @@ task and agent identities. [Task and delivery receipts](session-regression.md#di
 
 ## New API grouping
 
-For `api_grouping_required`, run the task's `input_query` against the canonical
-Target with the assigned recording ID.
-Use `be-replay --recording-run-id ID apis --ungrouped` and consult the Source
-router and existing catalog for the canonical `case_pattern` and `group`.
+For `api_grouping_required`, query the assigned recording from the canonical
+Target with `be-replay --recording-run-id ID apis --ungrouped`.
+Consult the Source router and existing catalog for the canonical
+`case_pattern` and `group`.
 Return one row with `api`, `case_pattern`, and `group` per ungrouped
 label under `apis`. Distinct literal labels can share the same pattern and
 group when they represent the same Source route.

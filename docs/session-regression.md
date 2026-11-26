@@ -167,14 +167,16 @@ The engine checks that `.traffic-e2e/project.yaml`, `.traffic-e2e/apis.yaml`,
 and the effective policy are committed before `run`, `plan`, and candidate
 publication. Paths in `action.details.files` are relative to the Target root.
 
-Delegated actions carry the task ID, role, requirement, and skill-relative
-role reference in `action.details.task`. The requirement is
+Delegated actions carry the task ID, role, requirement, and task-specific
+context in `action.details.task`. The requirement is
 `api_grouping_required`, `ownership_required`, or `integration_required`.
-The coordinator registers the actual handle via `task.register_command`.
-After registration, `await_delivery` supplies `task.agent_handle` and
-`task.submit_command`. The coordinator submits the returned artifact bound
-to that task and handle. An exit receipt makes dispatch available again
-when the agent stops without delivering.
+At `dispatch_task`, the coordinator starts the named role in the agent runtime
+and asks it to load the `be-replay` skill for its assignment. The coordinator
+registers the returned handle with `be-replay report --file FILE`. The engine
+then exposes that handle as `task.agent_handle` in `await_delivery`. The
+coordinator follows the agent and submits its returned artifact bound to that
+task and handle. An exit receipt makes dispatch available again when the agent
+stops without delivering.
 [Delegated task and receipt contract](../plugins/ai-engine/skills/be-replay/references/session-regression.md#dispatch-and-monitor-delegated-tasks)
 
 After a mismatch, an eligible new committed engine revision can trigger
@@ -241,11 +243,10 @@ Explicit `--report` remains available for reading a specific report file.
 
 ## Plan, implement, and verify
 
-For a delegated `api_grouping_required` task, the analyst uses
-`be-replay apis --ungrouped` to find the API labels that need a case pattern
-and group, then determines them from the Source router. The coordinator
-submits the returned rows with `be-replay plan --findings FILE` and the
-registered task and handle. The engine writes the catalog and registers API
+For a delegated `api_grouping_required` task, the analyst returns a case
+pattern and group for each uncatalogued API label. The coordinator submits
+those rows with `be-replay plan --findings FILE` and the registered task and
+handle. The engine writes the catalog and registers API
 implementation work. Commit the catalog before implementer dispatch. A path
 that matches an existing pattern inherits that group.
 The engine treats previously catalogued APIs as having an implementation and

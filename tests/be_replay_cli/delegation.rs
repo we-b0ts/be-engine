@@ -8,9 +8,8 @@ pub(super) fn assert_dispatch(state: &Value, requirement: &str, role: &str) {
     assert_eq!(task["requirement"], requirement);
     assert_eq!(task["role"], role);
     assert!(task["task_id"].is_string());
-    assert!(task["register_command"].is_array());
     assert!(task.get("agent_handle").is_none());
-    assert!(task.get("submit_command").is_none());
+    assert_coordinator_task(task);
 }
 
 pub(super) fn register_task(root: &Path, dispatch: &Value, handle: &str) -> Value {
@@ -19,13 +18,22 @@ pub(super) fn register_task(root: &Path, dispatch: &Value, handle: &str) -> Valu
     assert_eq!(action["kind"], "await_delivery");
     assert!(action.get("command").is_none());
     let task = &action["details"]["task"];
-    assert_eq!(
-        task["task_id"],
-        dispatch["action"]["details"]["task"]["task_id"]
-    );
-    assert_eq!(task["agent_handle"], handle);
-    assert!(task["submit_command"].is_array());
+    assert_coordinator_task(task);
+    let mut dispatched_task = dispatch["action"]["details"]["task"].clone();
+    dispatched_task["agent_handle"] = json!(handle);
+    assert_eq!(*task, dispatched_task);
     reported
+}
+
+fn assert_coordinator_task(task: &Value) {
+    for field in [
+        "input_query",
+        "role_reference",
+        "register_command",
+        "submit_command",
+    ] {
+        assert!(task.get(field).is_none(), "unexpected task field {field}");
+    }
 }
 
 pub(super) fn bind_delivery(mut delivery: Value, state: &Value) -> Value {
@@ -74,10 +82,17 @@ async fn new_api_grouping_gates_first_replay_but_implementation_runs_in_parallel
     let preflight = confirm_recording(root);
     assert_dispatch(&preflight, "api_grouping_required", "issue-analyst");
     let task = &preflight["action"]["details"]["task"];
-    assert_eq!(task["ungrouped_apis"], 1);
-    assert_eq!(task["input_query"], json!(["apis", "--ungrouped"]));
+    assert_eq!(
+        *task,
+        json!({"task_id":task["task_id"],"requirement":"api_grouping_required",
+            "role":"issue-analyst","ungrouped_apis":1})
+    );
     assert!(preflight["action"].get("query").is_none());
     assert!(preflight["session"].is_null());
+    assert_eq!(
+        successful(command(root, &["status"]))["action"],
+        preflight["action"]
+    );
     let missing = successful(command(root, &["apis", "--ungrouped"]));
     assert_eq!(missing["apis"].as_array().unwrap().len(), 1);
     assert_eq!(missing["apis"][0]["api"], "POST /new");
@@ -92,6 +107,10 @@ async fn new_api_grouping_gates_first_replay_but_implementation_runs_in_parallel
     stale["task_id"] = json!("stale-task-id");
     assert!(!report(root, stale).status.success());
     let first = register_task(root, &preflight, "fixture-analyst");
+    assert_eq!(
+        successful(command(root, &["status"]))["action"],
+        first["action"]
+    );
     assert_eq!(bind_delivery(json!({"apis":[new]}), &first), early);
     let repeated = register_task(root, &preflight, "fixture-analyst");
     assert_eq!(repeated["action"], first["action"]);

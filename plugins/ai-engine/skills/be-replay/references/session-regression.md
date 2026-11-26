@@ -129,17 +129,15 @@ uses the existing identity.
 
 ## Dispatch and monitor delegated tasks
 
-`dispatch_task` and `await_delivery` use `action.details.task`. The task
-identifies its `task_id`, `role`, `requirement`, and `role_reference` relative
-to the loaded `be-replay` skill. The requirement describes what the agent
-delivers. It is `api_grouping_required` for new API groupings,
-`ownership_required` for an unowned failed sequence, or
-`integration_required` for a candidate. Pass any task-specific inputs to
-the delegated role. For grouping, `input_query` gives the analyst its
-inventory lookup.
+`dispatch_task` and `await_delivery` use `action.details.task` for the
+`task_id`, `role`, `requirement`, and task-specific context. The requirement
+is `api_grouping_required` for new API groupings, `ownership_required` for
+an unowned failed sequence, or `integration_required` for a candidate.
 
-Start the named role through the agent runtime for `dispatch_task`. Use
-`task.register_command` to submit the task ID and the actual runtime handle.
+At `dispatch_task`, launch the named role through the agent runtime and pass
+its task context. Ask the agent to load `be-replay` for its assigned role.
+When the runtime returns the handle, register it with
+`be-replay report --file FILE`.
 
 ```json
 {
@@ -150,13 +148,13 @@ Start the named role through the agent runtime for `dispatch_task`. Use
 }
 ```
 
-The engine then returns `await_delivery` with the registered `agent_handle`
-and `task.submit_command`. Follow that handle through the runtime. Submit the
-agent's artifact when ready, using the current task and handle in the receipt.
-When the runtime confirms an agent exited without delivering, use
-`report --file FILE` with the same `task_dispatch` receipt and
-`state: exited` to make dispatch available again. Grouping and ownership use
-`plan --findings FILE`. Candidates use `report --file FILE`.
+The engine then returns `await_delivery` with the registered `agent_handle`.
+Follow that handle through the runtime. Submit the agent's returned artifact
+with the current task and handle. Grouping and ownership use
+`be-replay plan --findings FILE`. Candidates use `be-replay report --file FILE`.
+When the runtime confirms an agent exited without delivering, submit
+the same `task_dispatch` receipt with `state: exited` to make dispatch
+available again.
 [Delivery formats](#plan-implement-and-verify)
 
 ## Diagnose the first failure
@@ -210,10 +208,10 @@ See [dependency diagnosis](api-implementer-dependency-diagnosis.md),
 
 ## Plan, implement, and verify
 
-For the `api_grouping_required` task, the Issue Analyst reads the ungrouped
-paths from `be-replay apis --ungrouped` and supplies a complete list based
-on Source routes. The coordinator adds the registered task and agent
-identities to those rows and submits them with `be-replay plan --findings FILE`.
+For the `api_grouping_required` task, the Issue Analyst supplies a complete
+list of groupings for the recorded uncatalogued APIs. The coordinator submits
+those rows with `be-replay plan --findings FILE` and the registered task and
+agent identities.
 The proposed pattern must match the recorded path. Static routes use literal
 paths. Several literal paths for a dynamic route can share a pattern and
 group.

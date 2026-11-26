@@ -193,6 +193,7 @@ async fn status_waits_for_every_dispatched_worker_before_first_replay() {
     assert_eq!(workers.len(), 16);
     let compact = successful(command(root, &["status"]));
     assert_eq!(compact["action"]["kind"], "dispatch_required");
+    assert!(compact["action"].get("command").is_none());
     assert_eq!(
         compact["action"]["query"],
         json!(["status", "--with-assignments"])
@@ -212,6 +213,7 @@ async fn status_waits_for_every_dispatched_worker_before_first_replay() {
     assert_eq!(first["action"]["details"]["pending_worker_status"], 1);
     let check = launch_implementers(root);
     assert_eq!(check["action"]["kind"], "worker_status_required");
+    assert!(check["action"].get("command").is_none());
     assert_eq!(check["action"]["details"]["pending_worker_status"], 16);
     assert!(check["action"]["details"]["assignments"].is_null());
     let blocked = successful(command(root, &["run"]));
@@ -219,6 +221,7 @@ async fn status_waits_for_every_dispatched_worker_before_first_replay() {
     assert!(blocked["session"].is_null());
     let waiting = confirm_running(root);
     assert_eq!(waiting["action"]["kind"], "implementation_required");
+    assert!(waiting["action"].get("command").is_none());
     assert_eq!(waiting["action"]["details"]["queued_api_groups"], 1);
     let blocked = successful(command(root, &["run"]));
     assert_eq!(blocked["action"]["kind"], "implementation_required");

@@ -324,9 +324,8 @@ impl Workflow {
         let queued = self.groups.queued_api_groups();
         (queued > 0).then(|| json!({
             "kind":"implementation_required",
-            "summary":"Report a finished API group to free a slot for the remaining groups before Replay.",
-            "details":{"role":"api-implementer", "queued_api_groups":queued},
-            "command":["report", "--file", "<delivery.json>"]
+            "summary":"Follow active implementers and report a finished delivery to free a slot for the remaining API groups.",
+            "details":{"role":"api-implementer", "queued_api_groups":queued}
         }))
     }
 
@@ -351,16 +350,14 @@ impl Workflow {
         if needs_workers && pending_dispatch > 0 {
             action = json!({
                 "kind":"dispatch_required",
-                "summary":"Start the unregistered implementers in parallel and report their runtime handles.",
-                "details":{"role":"api-implementer"},
-                "command":["report", "--file", "<implementers.json>"]
+                "summary":"Start the unregistered implementers in parallel. Register each handle after the runtime returns it.",
+                "details":{"role":"api-implementer"}
             });
         } else if needs_workers && pending_worker_status > 0 {
             action = json!({
                 "kind":"worker_status_required",
-                "summary":"Query the agent runtime and report the current implementer states.",
-                "details":{"role":"api-implementer"},
-                "command":["report", "--file", "<implementers.json>"]
+                "summary":"Check the registered implementers in the agent runtime. Report the observed states.",
+                "details":{"role":"api-implementer"}
             });
         }
         if pending_dispatch > 0 {
@@ -402,7 +399,7 @@ impl Workflow {
         };
         json!({
             "kind":kind, "summary":summary,
-            "details":{"role":"api-implementer"}, "command":["report","--file","<delivery.json>"]
+            "details":{"role":"api-implementer"}
         })
     }
 

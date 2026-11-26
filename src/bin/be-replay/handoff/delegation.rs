@@ -92,26 +92,19 @@ impl Task {
     }
 
     pub fn action(&self, registration: Option<&Registration>) -> Value {
-        let (mut task, dispatch_summary, awaiting_summary, submit_command) = match &self.requirement
-        {
+        let (role, mut task) = match &self.requirement {
             Requirement::Grouping { ungrouped_apis } => (
+                "issue-analyst",
                 json!({
-                    "role":"issue-analyst", "requirement":"api_grouping_required",
-                    "role_reference":"references/issue-analyst.md",
-                    "ungrouped_apis":ungrouped_apis, "input_query":["apis", "--ungrouped"]
+                    "requirement":"api_grouping_required",
+                    "ungrouped_apis":ungrouped_apis
                 }),
-                "Dispatch the issue analyst with the recording, Source and Target roots and revisions, and API inventory query. Request the case pattern and group for each uncatalogued API.",
-                "Collect the API groupings from the registered issue analyst, then review and submit the plan.",
-                json!(["plan", "--findings", "<apis.json>"]),
             ),
             Requirement::Ownership { attempt_id, seq } => (
+                "issue-analyst",
                 json!({
-                    "role":"issue-analyst", "requirement":"ownership_required",
-                    "role_reference":"references/issue-analyst.md", "attempt_id":attempt_id, "seq":seq
+                    "requirement":"ownership_required", "attempt_id":attempt_id, "seq":seq
                 }),
-                "Dispatch the issue analyst with the failed sequence, recording, attempt, failure evidence, and Source and Target roots and revisions. Request the failed event's scope and group.",
-                "Collect the failed event's scope and group from the registered issue analyst, then review and submit the plan.",
-                json!(["plan", "--findings", "<ownership.json>"]),
             ),
             Requirement::Integration {
                 attempt_id,
@@ -119,29 +112,31 @@ impl Task {
                 seq,
             } => {
                 let mut task = json!({
-                    "role":"code-integrator", "requirement":"integration_required",
-                    "role_reference":"references/code-integrator.md", "attempt_id":attempt_id,
-                    "ready_fixes":ready_fixes
+                    "requirement":"integration_required", "attempt_id":attempt_id, "ready_fixes":ready_fixes
                 });
                 if let Some(seq) = seq {
                     task["seq"] = json!(seq);
                 }
-                (
-                    task,
-                    "Dispatch the code integrator with the selected fixes, canonical base, and Replay attempt. Request the exact candidate commit, included fixes, and validation results.",
-                    "Collect the candidate from the registered code integrator, then review and submit its receipt.",
-                    json!(["report", "--file", "<candidate.json>"]),
-                )
+                ("code-integrator", task)
             }
         };
+        task["role"] = json!(role);
         task["task_id"] = json!(self.id());
         let (kind, summary) = if let Some(registration) = self.matching(registration) {
             task["agent_handle"] = json!(registration.agent_handle);
-            task["submit_command"] = submit_command;
-            ("await_delivery", awaiting_summary)
+            (
+                "await_delivery",
+                format!(
+                    "Follow the registered {role} agent. Submit its reviewed delivery after it returns."
+                ),
+            )
         } else {
-            task["register_command"] = json!(["report", "--file", "<dispatch.json>"]);
-            ("dispatch_task", dispatch_summary)
+            (
+                "dispatch_task",
+                format!(
+                    "Launch a {role} agent with this task's context. Register the handle returned by the runtime."
+                ),
+            )
         };
         json!({"kind":kind, "summary":summary, "details":{"task":task}})
     }
