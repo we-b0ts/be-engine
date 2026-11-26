@@ -13,8 +13,6 @@ fn rule() -> RequestMetadataRule {
         method: "POST".into(),
         path: PATH.into(),
         json_ipv4: vec!["/address".into()],
-        traceparent: true,
-        accept_encoding: Some(ContentCoding::Gzip),
     }
 }
 
@@ -90,21 +88,10 @@ fn target_matches(source: &dyn ProtocolMessage, target: RequestMessage) -> bool 
 fn compares_only_declared_metadata_for_finite_compatible_http() {
     let source = source_message(&record());
     assert!(target_matches(source.as_ref(), message()));
-    let mut traced = message();
-    traced
-        .headers
-        .insert("traceparent".into(), vec![TRACE.into()]);
-    assert!(target_matches(source.as_ref(), traced));
 
     for (name, value) in [
         ("host", "elsewhere.example"),
-        ("accept-encoding", "gzip;q=0, br"),
-        ("accept-encoding", "gzip, gzip;q=0"),
         ("accept", "text/plain"),
-        (
-            "traceparent",
-            "00-00000000000000000000000000000000-0123456789abcdef-01",
-        ),
         ("content-type", "application/octet-stream"),
         ("content-digest", "sha-256=:value:"),
         ("x-business", "changed"),
@@ -135,6 +122,30 @@ fn compares_only_declared_metadata_for_finite_compatible_http() {
 }
 
 #[test]
+fn scoped_metadata_matching_uses_the_protocol_header_projection() {
+    for response_headers in [
+        json!({}),
+        json!({"content-encoding":["br"],"vary":["accept-encoding"]}),
+    ] {
+        let mut record = record();
+        record["response_headers"] = response_headers;
+        let source = source_message(&record);
+        let mut target = message();
+        target.headers.remove("accept-encoding");
+        assert!(target_matches(source.as_ref(), target));
+        let mut target = message();
+        target
+            .headers
+            .insert("accept-encoding".into(), vec!["gzip;q=0, br".into()]);
+        target.headers.insert(
+            "traceparent".into(),
+            vec!["00-0123456789abcdef0123456789abcdef-123456789abcdef0-01".into()],
+        );
+        assert!(target_matches(source.as_ref(), target));
+    }
+}
+
+#[test]
 fn retains_exact_comparison_without_finite_representation_evidence() {
     assert!(
         request(&[rule()], &endpoint(), Arc::new(message()), None)
@@ -142,15 +153,7 @@ fn retains_exact_comparison_without_finite_representation_evidence() {
             .exact_request_alternative()
             .is_none()
     );
-    for (path, value) in [
-        ("/response_headers/content-encoding", json!(["br"])),
-        (
-            "/response_headers",
-            json!({"vary":["accept-encoding"],"content-encoding":["gzip"]}),
-        ),
-        ("/response_status", json!(400)),
-        ("/scheme", json!("http")),
-    ] {
+    for (path, value) in [("/response_status", json!(400)), ("/scheme", json!("http"))] {
         let mut record = record();
         *record.pointer_mut(path).unwrap() = value;
         let source = source_message(&record);
@@ -173,6 +176,9 @@ fn validates_one_exact_scope_and_an_exact_pointer() {
     assert!(validate_rules(&[invalid]).is_err());
     let mut invalid = rule();
     invalid.json_ipv4 = vec!["/addresses/*".into()];
+    assert!(validate_rules(&[invalid]).is_err());
+    let mut invalid = rule();
+    invalid.json_ipv4.clear();
     assert!(validate_rules(&[invalid]).is_err());
 }
 

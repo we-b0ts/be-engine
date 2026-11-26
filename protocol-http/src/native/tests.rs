@@ -190,7 +190,9 @@ async fn replay_http(host: Arc<RecordedHost>, wire: &str) -> (String, Result<()>
 
 #[tokio::test]
 async fn native_replay_delivers_only_the_matching_recorded_websocket_refusal() {
-    let host = Arc::new(RecordedHost::new(&websocket_event(400)));
+    let mut event = websocket_event(400);
+    event["request_headers"]["Accept-Encoding"] = serde_json::json!(["gzip, deflate, br"]);
+    let host = Arc::new(RecordedHost::new(&event));
     let reqwest = WEBSOCKET_REQUEST.replace(
         "X-Sdk-Signature",
         "Accept: */*\r\nAccept-Encoding: gzip\r\nX-Sdk-Signature",
@@ -201,14 +203,14 @@ async fn native_replay_delivers_only_the_matching_recorded_websocket_refusal() {
         (reqwest.replace("*/*", "application/json"), false),
         (
             reqwest.replace("Accept-Encoding: gzip", "Accept-Encoding: gzip, br"),
-            false,
+            true,
         ),
         (
             reqwest.replace(
                 "Accept-Encoding: gzip",
                 "Accept-Encoding: gzip\r\nAccept-Encoding: gzip",
             ),
-            false,
+            true,
         ),
         (
             reqwest.replace(

@@ -49,8 +49,6 @@ http:
       method: POST
       path: /stream/connect
       json_ipv4: [/localAddress]
-      traceparent: true
-      accept_encoding: gzip
 "#;
         let policy = crate::policy::parse_policy(raw).unwrap();
         let compiled = crate::policy::compile_policy(&policy).unwrap();
@@ -61,6 +59,12 @@ http:
             compiled
         );
         assert!(crate::policy::parse_policy(&raw.replace("/stream/connect", "/stream/*")).is_err());
+        for retired_field in ["traceparent: true", "accept_encoding: gzip"] {
+            assert!(
+                crate::policy::parse_policy(&format!("{raw}      {retired_field}\n")).is_err(),
+                "accepted retired HTTP request metadata field {retired_field}"
+            );
+        }
     }
 
     #[test]

@@ -72,6 +72,10 @@ different decisions.
 
 ## Outbound HTTP
 
+Replay ignores `Accept-Encoding` and `traceparent` when matching outbound
+requests. Both headers remain available in captured evidence. Replay delivers
+the recorded response encoding.
+
 Use method, authority, path, query, bound headers, body, and completion from the
 same exchange. Follow any dependency response headers, parts, trailers, or
 terminal outcome that affect the expected next event. For a URL returned by a

@@ -4,6 +4,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::{BTreeMap, BTreeSet};
 pub type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 
+pub(crate) const ACCEPT_ENCODING: &str = "accept-encoding";
+pub(crate) const TRACEPARENT: &str = "traceparent";
+
 const TRANSPORT_HEADERS: &[&str] = &[
     "host",
     "connection",
@@ -18,8 +21,8 @@ const TRANSPORT_HEADERS: &[&str] = &[
 ];
 const IGNORED_HEADERS: &[&str] = &[
     "user-agent",
-    "accept-encoding",
-    "traceparent",
+    ACCEPT_ENCODING,
+    TRACEPARENT,
     "tracestate",
     "b3",
     "x-correlation-id",
