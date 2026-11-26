@@ -18,6 +18,10 @@ pub(super) struct RequestHead {
 }
 
 impl Reader {
+    pub(super) fn has_buffered_input(&self) -> bool {
+        !self.buffer.is_empty()
+    }
+
     pub fn new(io: Box<dyn ConnectionIo>) -> Self {
         Self {
             io,

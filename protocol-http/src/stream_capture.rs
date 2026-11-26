@@ -19,6 +19,9 @@ use std::{
 };
 use traffic_protocol::io::delivery::FlushTimestamp;
 
+#[cfg(test)]
+mod tests;
+
 pub trait StreamHost: Send + Sync {
     fn activity(&self);
     fn source_stop_requested(&self) -> bool;
@@ -239,7 +242,42 @@ impl Capture {
                 .is_none_or(|end| end.at > boundary)
     }
 
+    fn cancelled_prefix(&mut self) -> Option<traffic_protocol::transport::ObservedTermination> {
+        let (flushed_at, receipts) = self.recorded_stream.as_ref()?.0.progress()?;
+        let cancelled = self
+            .context
+            .termination
+            .stream_cancelled_since(self.context.started)?;
+        let parts = receipts.checked_sub(1)?;
+        if self.error.is_some()
+            || self.context.event.request_body.truncated
+            || self.stream.trailers.is_some()
+            || parts > self.stream.chunks.len()
+            || flushed_at > cancelled.at
+            || self
+                .upstream
+                .as_ref()
+                .and_then(|upstream| upstream.observed_since(self.context.started))
+                .is_some_and(|end| end.at <= cancelled.at)
+        {
+            return None;
+        }
+        self.stream.chunks.truncate(parts);
+        self.payload
+            .truncate(self.stream.chunks.last().map_or(0, |part| part.end));
+        Some(cancelled)
+    }
+
     pub fn finish(&mut self, eof: bool, error: Option<String>) {
+        self.finish_with_client_end(eof, error, None);
+    }
+
+    fn finish_with_client_end(
+        &mut self,
+        eof: bool,
+        error: Option<String>,
+        delivered_prefix_end: Option<traffic_protocol::transport::ObservedTermination>,
+    ) {
         if self.finished {
             return;
         }
@@ -250,9 +288,11 @@ impl Capture {
         let capture_error = self.error.take();
         // Body drop alone is not proof of cancellation. Only the independently
         // observed downstream termination can complete a cancelled capture.
-        let client = (!eof)
-            .then(|| self.context.termination.cancelled())
-            .flatten();
+        let client = delivered_prefix_end.or_else(|| {
+            (!eof)
+                .then(|| self.context.termination.cancelled())
+                .flatten()
+        });
         let server = (!eof && capture_error.is_none())
             .then(|| self.server_end())
             .flatten()
@@ -281,6 +321,7 @@ impl Capture {
         };
         if server.is_none()
             && client.is_some()
+            && delivered_prefix_end.is_none()
             && !self.prefix.is_complete()
             && self.error.is_none()
         {
@@ -350,6 +391,10 @@ impl Capture {
 impl Drop for Capture {
     fn drop(&mut self) {
         if self.finished {
+            return;
+        }
+        if let Some(cancelled) = self.cancelled_prefix() {
+            self.finish_with_client_end(false, None, Some(cancelled));
             return;
         }
         let error = if self.context.termination.cancelled_at().is_some() {

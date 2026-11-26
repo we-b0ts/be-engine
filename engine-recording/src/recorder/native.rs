@@ -229,6 +229,12 @@ impl CaptureOutput for StagedOutput {
             receipt.commit();
         }
     }
+
+    fn cancel_unwritten_notification(mut self: Box<Self>) -> Result<()> {
+        self.capture.cancel_unwritten_notification()?;
+        drop(self.receipt.take());
+        Ok(())
+    }
 }
 
 impl Drop for StagedOutput {

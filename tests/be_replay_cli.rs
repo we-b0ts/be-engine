@@ -5,6 +5,10 @@ use std::process::{Command, Output};
 use serde_json::{Value, json};
 use traffic_recording_store::writer::{JsonlBufferSettings, JsonlWriterPool, LedgerFiles};
 
+#[path = "be_replay_cli/worktrees.rs"]
+mod worktrees;
+use worktrees::{assignments, commit_catalog, register_implementers};
+
 const RECORDING_ID: &str = "20261125131020";
 const OTHER_RECORDING_ID: &str = "20261125141020";
 
@@ -463,10 +467,9 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     )
     .unwrap();
     let plan = ["plan", "--findings", findings.to_str().unwrap()];
-    assert_eq!(
-        successful(command(root, &plan))["action"]["kind"],
-        "implementation_required"
-    );
+    let assigned = successful(command(root, &plan));
+    assert_eq!(assigned["action"]["kind"], "dispatch_required");
+    register_implementers(root);
 
     // Store a prior engine fingerprint on a failed attempt while keeping its
     // real sequence, Target revision and pending repair.
@@ -599,7 +602,7 @@ fn candidate(attempt: &Value, head: &str, included: &[&str]) -> Value {
 }
 
 #[tokio::test]
-async fn api_confirmation_gates_first_replay_but_missing_api_work_runs_in_parallel() {
+async fn new_api_grouping_gates_first_replay_but_implementation_runs_in_parallel() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();
     configure(root);
@@ -624,34 +627,56 @@ async fn api_confirmation_gates_first_replay_but_missing_api_work_runs_in_parall
     assert!(inventory["apis"][1].get("case_pattern").is_none());
 
     let preflight = confirm_recording(root);
-    assert_eq!(preflight["action"]["kind"], "api_review_required");
+    assert_eq!(preflight["action"]["kind"], "api_grouping_required");
+    assert_eq!(preflight["action"]["details"]["ungrouped_apis"], 1);
+    assert_eq!(preflight["action"]["query"], json!(["apis", "--ungrouped"]));
     assert!(preflight["session"].is_null());
+    let missing = successful(command(root, &["apis", "--ungrouped"]));
+    assert_eq!(missing["apis"].as_array().unwrap().len(), 1);
+    assert_eq!(missing["apis"][0]["api"], "POST /new");
     assert_eq!(
         successful(command(root, &["run"]))["action"]["kind"],
-        "api_review_required"
+        "api_grouping_required"
     );
-    let known = json!({"api":"GET /users/*","implemented":true});
+    let known = json!({"api":"GET /users/*","case_pattern":"/users/*","group":"users"});
     assert!(!plan(root, json!({"apis":[known]})).status.success());
     assert!(
         !plan(
             root,
-            json!({"apis":[known,{"api":"POST /new","implemented":false}]})
+            json!({"apis":[known,{"api":"POST /new","case_pattern":"/new","group":"new-api"}]})
         )
         .status
         .success()
     );
+    assert_eq!(fs::read_to_string(&catalog).unwrap(), "users: [/users/*]\n");
     fs::create_dir_all(root.join(".traffic-e2e/local/rewrite-worktrees/api-implementer-0"))
         .unwrap();
     let reviewed = successful(plan(
         root,
-        json!({"apis":[known,{"api":"POST /new",
-        "implemented":false,"case_pattern":"/new","group":"new-api"}]}),
+        json!({"apis":[{"api":"POST /new","case_pattern":"/new","group":"new-api"}]}),
     ));
-    assert_eq!(reviewed["action"]["kind"], "advance_required");
-    let worker = group(&reviewed, "new-api");
+    assert_eq!(reviewed["action"]["kind"], "configuration_commit_required");
+    assert_eq!(
+        reviewed["action"]["details"]["files"],
+        json!([".traffic-e2e/apis.yaml"])
+    );
+    assert!(reviewed["action"]["details"]["assignments"].is_null());
+    assert!(!command(root, &["run"]).status.success());
+    assert_eq!(
+        successful(command(root, &["status"]))["action"],
+        reviewed["action"]
+    );
+    commit_catalog(root);
+    let assigned = assignments(root);
+    let worker = group(&assigned, "new-api");
     assert_eq!(worker["name"], "api-implementer-1");
+    assert_eq!(worker["base_commit"], git(root, &["rev-parse", "HEAD"]));
     assert_eq!(worker["items"][0]["scope"], "api:POST /new");
     assert_eq!(worker["items"][0]["apis"][0]["case_pattern"], "/new");
+    assert_eq!(
+        register_implementers(root)["action"]["kind"],
+        "advance_required"
+    );
 
     let attempt = run_attempt_with_invalid_source(root, &["run"]);
     publish_mismatch(attempt.clone(), 10);
@@ -666,14 +691,6 @@ async fn api_confirmation_gates_first_replay_but_missing_api_work_runs_in_parall
         "integration_required"
     );
     git(root, &["merge", "--ff-only", &fix]);
-    assert!(
-        !report(root, candidate(&attempt, &fix, &[&fix]))
-            .status
-            .success()
-    );
-    fs::write(&catalog, "users: [/users/*]\nnew-api: [/new]\n").unwrap();
-    git(root, &["add", ".traffic-e2e/apis.yaml"]);
-    git(root, &["commit", "-qm", "register new API"]);
     let head = git(root, &["rev-parse", "HEAD"]);
     assert_eq!(
         successful(report(root, candidate(&attempt, &head, &[&fix])))["action"]["kind"],
@@ -685,6 +702,13 @@ async fn api_confirmation_gates_first_replay_but_missing_api_work_runs_in_parall
     assert_eq!(status["state"], "passed");
     assert_status_attempt(&status, &json!({"session":verified}));
     assert_eq!(status["action"]["kind"], "complete");
+    seal_events_with_apis(
+        &recording.with_file_name(OTHER_RECORDING_ID),
+        &[(800, "POST", "/new")],
+    )
+    .await;
+    let switched = successful(command(root, &["switch-recording-id", OTHER_RECORDING_ID]));
+    assert_eq!(switched["action"]["kind"], "advance_required");
 }
 
 #[tokio::test]
@@ -710,25 +734,13 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
         ],
     )
     .await;
-    assert_eq!(
-        confirm_recording(root)["action"]["kind"],
-        "api_review_required"
-    );
-    assert_eq!(
-        successful(plan(
-            root,
-            json!({"apis":[
-                {"api":"GET /users/*","implemented":true},
-                {"api":"GET /users/me","implemented":true},
-                {"api":"GET /outside","implemented":true}
-            ]})
-        ))["action"]["kind"],
-        "advance_required"
-    );
+    git(root, &["switch", "-qc", "codex/replay/fixture"]);
+    let selected = successful(command(root, &["switch-recording-id", RECORDING_ID]));
+    assert_eq!(selected["action"]["kind"], "advance_required");
 
     let initial = run_attempt_with_invalid_source(root, &["run"]);
     publish_mismatch(initial.clone(), 5);
-    let status = || successful(command(root, &["status", "--with-assignments"]));
+    let status = || assignments(root);
     let failed = status();
     assert_eq!(failed["failure"]["seq"], 5);
     assert_eq!(failed["action"]["kind"], "ownership_required");
@@ -764,7 +776,8 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
         json!({"ownership":{"seq":5,
         "scope":"job:sync_users","group":"sync"}}),
     ));
-    assert_eq!(assigned["action"]["kind"], "implementation_required");
+    assert_eq!(assigned["action"]["kind"], "dispatch_required");
+    let assigned = status();
     assert_eq!(
         group(&assigned, "sync")["items"][0]["sequences"],
         json!([5])
@@ -772,6 +785,10 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
     assert_eq!(
         group(&assigned, "users")["worktree"],
         group(&failed, "users")["worktree"]
+    );
+    assert_eq!(
+        register_implementers(root)["action"]["kind"],
+        "implementation_required"
     );
 
     let branch = git(root, &["branch", "--show-current"]);
@@ -794,12 +811,27 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
         delivery(group(&assigned, "sync"), &job_fix, 5),
     ));
     assert_eq!(ready["action"]["kind"], "integration_required");
+    assert_eq!(ready["action"]["details"]["ready_fixes"], 2);
+    assert!(ready["action"]["details"]["fixes"].is_null());
+    assert!(ready["action"]["details"]["assignments"].is_null());
     assert_eq!(
-        ready["action"]["details"]["fixes"]
+        status()["action"]["details"]["fixes"]
             .as_array()
             .unwrap()
             .len(),
         2
+    );
+    let detail = status();
+    let batch_worker = group(&detail, "batch");
+    let other_worker_exited = successful(report(
+        root,
+        json!({"kind":"implementers",
+        "workers":[{"group":"batch", "assignment_id":batch_worker["assignment_id"],
+            "agent_handle":batch_worker["agent_handle"], "state":"exited"}]}),
+    ));
+    assert_eq!(
+        other_worker_exited["action"]["kind"],
+        "integration_required"
     );
     git(root, &["merge", "--ff-only", &job_fix]);
     assert!(
@@ -809,8 +841,9 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
     );
     let published = successful(report(root, candidate(&initial, &job_fix, &[&job_fix])));
     assert_eq!(published["action"]["kind"], "advance_required");
+    assert_eq!(published["action"]["details"]["pending_dispatch"], 1);
     assert_eq!(
-        group(&published, "batch")["worktree"],
+        group(&status(), "batch")["worktree"],
         group(&failed, "batch")["worktree"]
     );
 
@@ -836,6 +869,7 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
         .unwrap();
     run_lock.try_lock().unwrap();
     assert_eq!(status()["state"], "running");
+    register_implementers(root);
     successful(report(
         root,
         delivery(group(&assigned, "batch"), &batch_fix, 9),
@@ -868,7 +902,17 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
     let switched = successful(command(root, &["switch-recording-id", OTHER_RECORDING_ID]));
     assert_eq!(switched["state"], "not_started");
     let restored = successful(command(root, &["switch-recording-id", RECORDING_ID]));
-    assert_eq!(restored["action"], promoted["action"]);
+    assert_eq!(restored["action"]["kind"], "integration_required");
+    let restored = status();
+    assert_eq!(
+        restored["action"]["details"]["fixes"],
+        promoted["action"]["details"]["fixes"]
+    );
+    assert_eq!(restored["action"]["details"]["pending_dispatch"], 2);
+    assert_eq!(
+        group(&restored, "batch")["assignment_id"],
+        group(&promoted, "batch")["assignment_id"]
+    );
 }
 
 #[tokio::test]
@@ -890,20 +934,21 @@ async fn an_assigned_implementer_can_escalate_the_current_failed_sequence() {
             "ownership":{"seq":5,"scope":"startup","group":"startup"}
         }),
     ));
-    assert_eq!(assigned["action"]["kind"], "implementation_required");
-    assert_eq!(group(&assigned, "startup")["items"][0]["scope"], "startup");
+    assert_eq!(assigned["action"]["kind"], "dispatch_required");
+    let details = assignments(root);
+    assert_eq!(group(&details, "startup")["items"][0]["scope"], "startup");
 
     let reported = successful(report(
         root,
         json!({
             "kind":"engine_gap","group":"startup","sequences":[5],
-            "assignment_id":group(&assigned, "startup")["assignment_id"],
+            "assignment_id":group(&details, "startup")["assignment_id"],
             "evidence":"Source seq 5 and the Target observation show the same request."
         }),
     ));
     assert_eq!(reported["action"]["kind"], "setup_required");
     assert_eq!(
-        successful(command(root, &["status", "--with-assignments"]))["action"],
+        successful(command(root, &["status"]))["action"],
         reported["action"]
     );
 

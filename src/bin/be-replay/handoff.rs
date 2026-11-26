@@ -7,17 +7,22 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use traffic_e2e::{
-    E2eEventSessionResult, config::api_catalog, event_work::ApiConfirmation, session,
+    E2eEventSessionResult,
+    config::api_catalog::{self, ApiCatalog},
+    event_work::{ApiConfirmation, ApiGrouping},
+    session::{self, RecordedApi},
 };
 use uuid::Uuid;
 
-mod api_review;
+mod api_backlog;
+mod api_grouping;
 mod groups;
 #[cfg(test)]
 mod tests;
 
-use api_review::ApiReview;
-use groups::{Fix, Gap, Groups, WorkItem};
+pub(super) use api_backlog::ApiBacklog;
+pub(super) use api_grouping::CatalogUpdate;
+use groups::{Fix, Gap, Groups, ImplementerUpdate, WorkItem};
 
 const DEFAULT_IMPLEMENTERS: usize = 16;
 
@@ -30,8 +35,6 @@ pub(super) enum AssignmentDetail {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct Workflow {
-    api_review: Option<ApiReview>,
-    api_work_queued: bool,
     groups: Groups,
     max_implementers: usize,
     window: Option<Window>,
@@ -43,8 +46,6 @@ pub(super) struct Workflow {
 impl Default for Workflow {
     fn default() -> Self {
         Self {
-            api_review: None,
-            api_work_queued: false,
             groups: Groups::default(),
             max_implementers: DEFAULT_IMPLEMENTERS,
             window: None,
@@ -75,10 +76,29 @@ pub(super) struct Ownership {
     pub group: String,
 }
 
+impl Ownership {
+    pub fn resolve_api(&mut self, target: &Path) -> Result<()> {
+        let Some((method, path)) = self
+            .scope
+            .strip_prefix("api:")
+            .and_then(|api| api.split_once(' '))
+        else {
+            return Ok(());
+        };
+        let catalog = ApiCatalog::load(&target.join(api_catalog::PATH))?.unwrap_or_default();
+        if let Some(pattern) = api_catalog::matching_case_pattern(&catalog.case_paths(), path) {
+            let group = &catalog.routes()[pattern];
+            ensure!(self.group == *group, "use the catalog API group {group}");
+            self.scope = format!("api:{method} {pattern}");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Plan {
-    pub apis: Option<Vec<ApiConfirmation>>,
+    pub apis: Option<Vec<ApiGrouping>>,
     pub ownership: Option<Ownership>,
 }
 
@@ -93,6 +113,9 @@ struct Candidate {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Receipt {
+    Implementers {
+        workers: Vec<ImplementerUpdate>,
+    },
     Fixes {
         fixes: Vec<Fix>,
     },
@@ -101,6 +124,8 @@ pub(super) enum Receipt {
         assignment_id: Uuid,
         sequences: BTreeSet<u64>,
         checks: Vec<String>,
+        #[serde(default)]
+        confirms_apis: bool,
     },
     EngineGap {
         group: String,
@@ -123,49 +148,25 @@ impl Receipt {
 }
 
 impl Workflow {
-    pub fn needs_api_review(&self, target: &Path, recording: &Path) -> Result<bool> {
-        Ok(self.api_review.is_none() && !session::recorded_apis(target, recording)?.is_empty())
-    }
-
-    pub fn confirm_apis(
-        &mut self,
-        target: &Path,
-        recording: &Path,
-        rows: Vec<ApiConfirmation>,
-    ) -> Result<()> {
-        if let Some(review) = &self.api_review {
-            return review.check_resubmission(rows);
-        }
-        self.api_review = Some(ApiReview::load(target, recording, rows)?);
-        Ok(())
-    }
-
     pub fn set_max_implementers(&mut self, max: usize) -> Result<()> {
         traffic_e2e::event_work::validate_max_implementers(max)?;
         self.max_implementers = max;
         Ok(())
     }
 
-    pub fn needs_api_work_queue(&self) -> bool {
-        self.api_review.is_some() && !self.api_work_queued
+    pub fn restore_api_backlog(&self, backlog: &mut ApiBacklog) {
+        for api in self.groups.open_apis() {
+            backlog.restore_pending(api);
+        }
     }
 
-    pub fn queue_api_work(&mut self, base: &str) {
-        let Some(review) = self.api_review.as_ref().filter(|_| !self.api_work_queued) else {
-            return;
-        };
-        for task in review.tasks.values() {
-            self.groups.enqueue(
-                &task.assignment.group,
-                WorkItem {
-                    scope: task.assignment.scope.clone(),
-                    sequences: task.assignment.sequences.clone(),
-                    apis: task.apis.clone(),
-                },
-                base,
-            );
-        }
-        self.api_work_queued = true;
+    pub fn refresh_api_work(
+        &mut self,
+        inventory: &[RecordedApi],
+        backlog: &ApiBacklog,
+        base: &str,
+    ) {
+        self.groups.refresh_api_work(inventory, backlog, base);
     }
 
     pub fn failure_observed(&self, attempt: &E2eEventSessionResult, seq: u64) -> bool {
@@ -203,11 +204,11 @@ impl Workflow {
                 .map_or(0, |window| window.through_seq);
             let window = session::dispatch_window(target, recording, seq, after)?;
             for api in window.apis {
-                if let Some((scope, group)) = self.api_scope(&api.api, api.group.as_deref()) {
+                if let Some(group) = api.group {
                     self.groups.enqueue(
                         &group,
                         WorkItem {
-                            scope,
+                            scope: format!("api:{}", api.api),
                             sequences: api.sequences,
                             apis: Vec::new(),
                         },
@@ -230,32 +231,28 @@ impl Workflow {
                 self.groups.dismiss_gap(&owner.group, seq);
             }
             self.enqueue_owner(&owner, base);
-        } else if let Some(owner) = window_owner {
-            let resolved = if let Some(label) = owner.scope.strip_prefix("api:") {
-                self.api_scope(label, owner.group.as_deref())
-            } else {
-                owner.group.map(|group| (owner.scope, group))
-            };
-            if let Some((scope, group)) = resolved {
-                self.set_owner(Ownership { seq, scope, group }, base)?;
-            }
+        } else if let Some(owner) = window_owner
+            && let Some(group) = owner.group
+        {
+            self.set_owner(
+                Ownership {
+                    seq,
+                    scope: owner.scope,
+                    group,
+                },
+                base,
+            )?;
         }
         Ok(())
     }
 
-    pub fn set_owner(&mut self, mut owner: Ownership, base: &str) -> Result<()> {
+    pub fn set_owner(&mut self, owner: Ownership, base: &str) -> Result<()> {
         ensure!(
             self.failure
                 .as_ref()
                 .is_some_and(|failure| failure.seq == owner.seq),
             "ownership must describe the current failed sequence"
         );
-        if let Some(label) = owner.scope.strip_prefix("api:")
-            && let Some((scope, group)) = self.api_scope(label, None)
-        {
-            ensure!(owner.group == group, "use the confirmed API group {group}");
-            owner.scope = scope;
-        }
         api_catalog::validate_group(&owner.group)?;
         validate_scope(&owner.scope)?;
         let key = owner.seq.to_string();
@@ -266,13 +263,6 @@ impl Workflow {
         }
         self.enqueue_owner(&owner, base);
         Ok(())
-    }
-
-    fn api_scope(&self, label: &str, known_group: Option<&str>) -> Option<(String, String)> {
-        self.api_review
-            .as_ref()
-            .and_then(|review| review.api_scope(label))
-            .or_else(|| known_group.map(|group| (format!("api:{label}"), group.to_owned())))
     }
 
     fn enqueue_owner(&mut self, owner: &Ownership, base: &str) {
@@ -303,10 +293,69 @@ impl Workflow {
         self.groups.reserve(self.max_implementers, allocate)
     }
 
-    pub fn with_assignments(&self, mut action: Value, detail: AssignmentDetail) -> Value {
-        let assignments = self.groups.assignments(detail);
-        if assignments.as_array().is_some_and(|rows| !rows.is_empty()) {
-            action["details"]["assignments"] = assignments;
+    pub fn clear_worker_handles(&mut self) {
+        self.groups.clear_worker_handles();
+    }
+
+    pub fn first_run_action(&self) -> Option<Value> {
+        let queued = self.groups.queued_api_groups();
+        (queued > 0).then(|| json!({
+            "kind":"implementation_required",
+            "summary":"Report a finished API group to free a slot for the remaining groups before the first Replay.",
+            "details":{"role":"api-implementer", "queued_api_groups":queued},
+            "command":["report", "--file", "<delivery.json>"]
+        }))
+    }
+
+    pub fn with_assignments(
+        &self,
+        mut action: Value,
+        detail: AssignmentDetail,
+        first_run: bool,
+    ) -> Value {
+        let pending_dispatch = self.groups.pending_dispatch();
+        let pending_worker_status = self.groups.pending_worker_status();
+        let needs_workers = match action["kind"].as_str() {
+            Some("advance_required") => first_run,
+            Some("implementation_required" | "wait_required") => true,
+            _ => false,
+        };
+        if needs_workers && pending_dispatch > 0 {
+            action = json!({
+                "kind":"dispatch_required",
+                "summary":"Start the unregistered implementers in parallel and report their runtime handles.",
+                "details":{"role":"api-implementer"},
+                "command":["report", "--file", "<implementers.json>"]
+            });
+        } else if needs_workers && pending_worker_status > 0 {
+            action = json!({
+                "kind":"worker_status_required",
+                "summary":"Query the agent runtime and report the current implementer states.",
+                "details":{"role":"api-implementer"},
+                "command":["report", "--file", "<implementers.json>"]
+            });
+        }
+        if pending_dispatch > 0 {
+            action["details"]["pending_dispatch"] = json!(pending_dispatch);
+        }
+        if pending_worker_status > 0 {
+            action["details"]["pending_worker_status"] = json!(pending_worker_status);
+        }
+        let integration = action["kind"] == "integration_required";
+        if pending_dispatch > 0
+            || pending_worker_status > 0
+            || integration
+            || action["kind"] == "implementation_required"
+        {
+            action["query"] = json!(["status", "--with-assignments"]);
+        }
+        if matches!(detail, AssignmentDetail::Full) {
+            if self.groups.has_active_assignments() {
+                action["details"]["assignments"] = self.groups.assignments();
+            }
+            if integration {
+                action["details"]["fixes"] = json!(self.groups.ready_fixes().collect::<Vec<_>>());
+            }
         }
         action
     }
@@ -315,7 +364,7 @@ impl Workflow {
         let (kind, summary) = if self.groups.has_active_assignments() {
             (
                 "implementation_required",
-                "Dispatch or follow the assigned groups.",
+                "Follow the registered implementers and report ready deliveries.",
             )
         } else {
             (
@@ -368,14 +417,14 @@ impl Workflow {
     }
 
     pub fn integration_action(&self, owner: Option<&Ownership>) -> Option<Value> {
-        let fixes: Vec<_> = self.groups.ready_fixes().collect();
-        if fixes.is_empty() || !fixes.iter().any(|fix| covers(owner, fix)) {
+        if !self.groups.ready_fixes().any(|fix| covers(owner, fix)) {
             return None;
         }
+        let ready_fixes = self.groups.ready_fixes().count();
         Some(json!({
             "kind":"integration_required",
             "summary":"Integrate the accepted delivery and any compatible ready fixes.",
-            "details":{"role":"code-integrator", "fixes":fixes},
+            "details":{"role":"code-integrator", "ready_fixes":ready_fixes},
             "command":["report","--file","<candidate.json>"]
         }))
     }
@@ -399,32 +448,49 @@ impl Workflow {
         attempt: Option<&E2eEventSessionResult>,
         seq: Option<u64>,
         receipt: Receipt,
-    ) -> Result<()> {
+    ) -> Result<Vec<ApiConfirmation>> {
         match receipt {
-            Receipt::Fixes { fixes } => self.groups.accept_fixes(root, fixes),
+            Receipt::Implementers { workers } => {
+                self.groups.update_implementers(workers)?;
+                Ok(Vec::new())
+            }
+            Receipt::Fixes { fixes } => {
+                self.groups.accept_fixes(root, fixes)?;
+                Ok(Vec::new())
+            }
             Receipt::Review {
                 group,
                 assignment_id,
                 sequences,
                 checks,
+                confirms_apis,
             } => {
                 ensure!(
                     seq.is_none_or(|seq| !sequences.contains(&seq)),
                     "the current failed sequence requires a repair or an engine gap"
                 );
-                self.groups.review(&group, assignment_id, sequences, checks)
+                self.groups.review(
+                    &group,
+                    assignment_id,
+                    sequences,
+                    checks,
+                    confirms_apis.then_some(root),
+                )
             }
             Receipt::EngineGap {
                 group,
                 assignment_id,
                 sequences,
                 evidence,
-            } => self.groups.accept_gap(Gap {
-                group,
-                assignment_id,
-                sequences,
-                evidence,
-            }),
+            } => {
+                self.groups.accept_gap(Gap {
+                    group,
+                    assignment_id,
+                    sequences,
+                    evidence,
+                })?;
+                Ok(Vec::new())
+            }
             Receipt::Candidate {
                 attempt_id,
                 commit,
@@ -456,7 +522,7 @@ impl Workflow {
         attempt: &E2eEventSessionResult,
         seq: Option<u64>,
         candidate: Candidate,
-    ) -> Result<()> {
+    ) -> Result<Vec<ApiConfirmation>> {
         ensure!(
             candidate.attempt_id == attempt_uuid(attempt)?,
             "candidate refers to a stale attempt"
@@ -466,7 +532,7 @@ impl Workflow {
             "candidate commit must be the current branch HEAD"
         );
         if self.candidate.as_ref() == Some(&candidate) {
-            return Ok(());
+            return Ok(Vec::new());
         }
         ensure!(
             !self.has_candidate(attempt),
@@ -506,10 +572,13 @@ impl Workflow {
             ready.iter().any(|fix| covers(owner, fix)),
             "candidate must include an accepted delivery covering the current failure"
         );
-        ApiReview::validate_catalog(root, self.groups.api_work_for(&candidate.included_fixes))?;
-        self.groups.mark_integrated(&candidate.included_fixes);
+        api_grouping::validate_committed_catalog(
+            root,
+            self.groups.api_work_for(&candidate.included_fixes),
+        )?;
+        let completed = self.groups.mark_integrated(&candidate.included_fixes);
         self.candidate = Some(candidate);
-        Ok(())
+        Ok(completed)
     }
 }
 

@@ -1655,8 +1655,10 @@ the same responsibility and 1000-line requirements as the root `src/`.
   timeline push filtering for display.
   The Replay sequence uses the complete sealed recording. `rewrite::event_work`
   owns the finding schema and scope validation. CLI handoff modules own
-  API confirmation coverage, grouped dispatch, and candidate admission.
-  Round persistence owns reservation of fixed Target worktree slots.
+  API grouping coverage and catalog publication, grouped dispatch, runtime
+  reports, and candidate admission. Round persistence owns the branch API
+  backlog, per-recording assignments, and reservation of fixed Target
+  worktree slots.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
 - `record_service` owns the standalone Source/Recorder supervision and recording

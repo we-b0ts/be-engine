@@ -6,7 +6,7 @@ use crate::{RecordingClock, clock::recorded, writer::RecordStamps};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use traffic_model::trace::{RecordedDependency, RecordedEvent};
+use traffic_model::trace::{RecordedDependency, RecordedEvent, UNDELIVERED_NOTIFICATION};
 use uuid::Uuid;
 
 use crate::CaptureContext;
@@ -31,6 +31,7 @@ pub struct LedgerWriter {
     synthetic: u64,
     synthetic_failures: u64,
     pending_lifecycle: BTreeSet<u64>,
+    pending_notifications: BTreeMap<u64, NotificationInventory>,
     lifecycle_admitted: u64,
     lifecycle_terminal: u64,
     cases: BTreeMap<Uuid, Vec<ScopeRecordLocation>>,
@@ -43,6 +44,12 @@ pub struct LedgerWriter {
     process_dependency_tasks: BTreeMap<String, String>,
     semantic_inventory: SemanticInventory,
     evidence: std::sync::Arc<traffic_protocol::evidence::EvidenceRegistry>,
+}
+
+struct NotificationInventory {
+    owner: DependencyOwner,
+    protocol: String,
+    unsupported: Option<String>,
 }
 
 impl LedgerWriter {
@@ -78,6 +85,7 @@ impl LedgerWriter {
             synthetic: 0,
             synthetic_failures: 0,
             pending_lifecycle: BTreeSet::new(),
+            pending_notifications: BTreeMap::new(),
             lifecycle_admitted: 0,
             lifecycle_terminal: 0,
             cases: BTreeMap::new(),
@@ -165,13 +173,29 @@ impl LedgerWriter {
             }
             LifecycleRecord::Terminal {
                 dependency_sequence,
-                ..
+                outcome,
+                capture_complete,
             } => {
                 anyhow::ensure!(
                     self.pending_lifecycle.remove(dependency_sequence),
                     "terminal dependency has no active admission"
                 );
                 self.lifecycle_terminal += 1;
+                let notification = self.pending_notifications.remove(dependency_sequence);
+                if *capture_complete && outcome == UNDELIVERED_NOTIFICATION {
+                    anyhow::ensure!(
+                        notification.is_some(),
+                        "cancelled notification has no staged record"
+                    );
+                    self.storage
+                        .note_unscheduled_admission(*dependency_sequence);
+                } else if let Some(notification) = notification {
+                    self.semantic_inventory.observe_mandatory_outcome(
+                        &notification.owner,
+                        notification.unsupported.as_deref(),
+                    );
+                    self.storage.note_mandatory_protocol(&notification.protocol);
+                }
             }
             LifecycleRecord::OutputStarted {
                 dependency_sequence,
@@ -361,13 +385,6 @@ impl LedgerWriter {
             capture_complete: complete,
             payload: value,
         })?;
-        if metadata.semantic_required {
-            self.semantic_inventory.observe_mandatory(
-                &value,
-                &metadata.attribution,
-                crate::supports_replay(&value, &metadata.attribution, &self.evidence),
-            );
-        }
         if let Some(facts) = self
             .evidence
             .owner(&value)
@@ -388,6 +405,25 @@ impl LedgerWriter {
             _ if capture.is_some_and(|capture| capture.is_message()) => RecordKind::Message,
             _ => RecordKind::Exchange,
         };
+        let staged_notification = self.session.is_some() && matches!(kind, RecordKind::Message);
+        if metadata.semantic_required {
+            let supported = crate::supports_replay(&value, &metadata.attribution, &self.evidence);
+            if staged_notification {
+                let previous = self.pending_notifications.insert(
+                    metadata.sequence,
+                    NotificationInventory {
+                        owner: metadata.attribution.clone(),
+                        protocol: facts.reference.protocol().into(),
+                        unsupported: (!supported)
+                            .then(|| value["event_type"].as_str().unwrap_or("unknown").into()),
+                    },
+                );
+                anyhow::ensure!(previous.is_none(), "duplicate staged notification record");
+            } else {
+                self.semantic_inventory
+                    .observe_mandatory(&value, &metadata.attribution, supported);
+            }
+        }
         let position = self
             .storage
             .append_dependency(
@@ -405,10 +441,10 @@ impl LedgerWriter {
                 stamps.response.context("dependency has no payload stamp")?,
             )
             .await?;
-        if semantic_required {
+        if semantic_required && !staged_notification {
             self.storage
                 .note_mandatory_protocol(facts.reference.protocol());
-        } else if capture.is_some() && complete {
+        } else if !semantic_required && capture.is_some() && complete {
             self.storage.note_unscheduled_admission(metadata.sequence);
         }
         if let Some(stamp) = stamps.terminal.as_ref() {

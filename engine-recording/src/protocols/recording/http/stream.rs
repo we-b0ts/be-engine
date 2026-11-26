@@ -47,6 +47,11 @@ impl StreamHost for Host {
         if self.0.state.session_events()
             && let Some(capture) = &self.0.targets.capture
         {
+            tracing::warn!(
+                sequence = capture.dependency_id(),
+                evidence = %native,
+                "HTTP dependency stream capture incomplete"
+            );
             capture.note_terminal("http_stream_capture_incomplete".into(), false);
         }
         let context = CaseInvalidationContext {

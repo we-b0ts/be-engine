@@ -609,6 +609,167 @@ fn native_replay_requires_unchanged_sse_body_bytes() {
 }
 
 #[tokio::test]
+async fn cancelled_http_prefix_waits_for_target_disconnect() {
+    use EventKind::*;
+    use std::time::Duration;
+    use tokio::io::AsyncBufReadExt;
+
+    let mut event = stopped_sse_event();
+    event["outcome"] = serde_json::to_value(traffic_model::DependencyExchangeOutcome::Terminated(
+        traffic_model::DependencyTermination {
+            side: traffic_model::TerminationSide::Client,
+            kind: traffic_model::TerminationKind::Cancelled,
+            scope: traffic_model::TerminationScope::Stream,
+        },
+    ))
+    .unwrap();
+    event["response_stream"]["complete"] = true.into();
+    event["response_stream"]
+        .as_object_mut()
+        .unwrap()
+        .remove("stopped_at_source_exit");
+    event["response_stream"]["chunks"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    event["response_body"]["data"] = "data: a".into();
+
+    let runtime = SequenceRuntime::streaming_session(Some(Duration::ZERO), []);
+    runtime
+        .push_stream(
+            [
+                (1, 0, SessionSourceStart, None),
+                (2, 2, Request, None),
+                (3, 2, ResponseHeadersStarted, None),
+                (4, 2, ResponseHeaders, Some(3)),
+                (5, 2, ResponsePartStarted, None),
+                (6, 2, ResponsePart, Some(5)),
+                (7, 2, ClientTerminationStarted, None),
+                (8, 2, ClientTermination, Some(7)),
+            ]
+            .into_iter()
+            .map(
+                |(sequence, dependency_sequence, kind, receipt_start)| StreamEvent {
+                    source: SourceEvent {
+                        sequence,
+                        dependency_sequence,
+                        offset_micros: sequence,
+                        kind,
+                    },
+                    receipt_start,
+                },
+            )
+            .collect(),
+            true,
+        )
+        .unwrap();
+    runtime.commit_driver(1).unwrap();
+    let (client, io) = tokio::io::duplex(4096);
+    let host = Arc::new(RecordedHost::with_session(&event, Some(runtime.clone())));
+    let task = tokio::spawn(
+        Native
+            .server_session(info())
+            .unwrap()
+            .run(Box::new(io), host),
+    );
+    let mut client = tokio::io::BufReader::new(client);
+    client
+        .write_all(b"POST /messages HTTP/1.1\r\nHost: api.test\r\nContent-Length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        assert_ne!(client.read_line(&mut line).await.unwrap(), 0);
+        if line == "\r\n" {
+            break;
+        }
+    }
+    let mut chunk = [0; 12];
+    client.read_exact(&mut chunk).await.unwrap();
+    assert_eq!(&chunk, b"7\r\ndata: a\r\n");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), client.read_u8())
+            .await
+            .is_err()
+    );
+    assert!(!runtime.complete());
+    client.shutdown().await.unwrap();
+    assert_eq!(client.read(&mut [0; 1]).await.unwrap(), 0);
+    task.await.unwrap().unwrap();
+    assert!(runtime.complete());
+}
+
+#[tokio::test]
+async fn source_exit_before_headers_emits_no_http_response() {
+    use EventKind::*;
+    use std::time::Duration;
+
+    let mut event = stopped_sse_event();
+    for key in [
+        "response_status",
+        "response_headers",
+        "response_body",
+        "response_stream",
+    ] {
+        event.as_object_mut().unwrap().remove(key);
+    }
+    event["outcome"] = "no_response".into();
+    assert!(Native.recorded_exchange(&event).is_err());
+    let runtime = SequenceRuntime::streaming_session(Some(Duration::ZERO), []);
+    runtime
+        .push_stream(
+            [
+                (1, 0, SessionSourceStart, None),
+                (2, 2, Request, None),
+                (3, 0, SessionStop, None),
+                (4, 0, SessionSourceExit, None),
+                (5, 2, TargetStopStarted, None),
+                (6, 2, TargetStop, Some(5)),
+            ]
+            .into_iter()
+            .map(
+                |(sequence, dependency_sequence, kind, receipt_start)| StreamEvent {
+                    source: SourceEvent {
+                        sequence,
+                        dependency_sequence,
+                        offset_micros: sequence,
+                        kind,
+                    },
+                    receipt_start,
+                },
+            )
+            .collect(),
+            true,
+        )
+        .unwrap();
+    runtime.commit_driver(1).unwrap();
+    let (mut client, io) = tokio::io::duplex(4096);
+    let host = Arc::new(RecordedHost::with_session(&event, Some(runtime.clone())));
+    let task = tokio::spawn(
+        Native
+            .server_session(info())
+            .unwrap()
+            .run(Box::new(io), host),
+    );
+    client
+        .write_all(b"POST /messages HTTP/1.1\r\nHost: api.test\r\nContent-Length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), client.read_u8())
+            .await
+            .is_err()
+    );
+    assert_eq!(runtime.expected().unwrap().kind, SessionStop);
+    runtime.commit_driver(3).unwrap();
+    runtime.commit_driver(4).unwrap();
+    assert_eq!(client.read(&mut [0; 1]).await.unwrap(), 0);
+    task.await.unwrap().unwrap();
+    assert!(runtime.complete());
+}
+
+#[tokio::test]
 async fn native_capture_still_rejects_upgrades_before_forwarding() {
     let (mut client, io) = tokio::io::duplex(4096);
     client

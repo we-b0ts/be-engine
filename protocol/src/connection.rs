@@ -269,6 +269,10 @@ pub trait ResponseFramer: Send {
 
     /// Observe a recorded process-stop boundary in the response plan.
     fn target_stopped(&mut self) {}
+
+    fn wait_for_client_close(&mut self) -> NativeFuture<'_, ()> {
+        Box::pin(async { anyhow::bail!("native connection cannot observe client termination") })
+    }
 }
 
 /// The host retains response bytes, claims and delivery receipts. Native framing
@@ -392,6 +396,11 @@ pub trait CaptureExchange: Send {
 
 pub trait CaptureOutput: Send {
     fn commit(self: Box<Self>);
+
+    /// Cancel a staged notification when the closed peer accepted no bytes.
+    fn cancel_unwritten_notification(self: Box<Self>) -> Result<()> {
+        anyhow::bail!("capture output cannot cancel an unwritten notification")
+    }
 }
 
 #[derive(Clone, Default)]

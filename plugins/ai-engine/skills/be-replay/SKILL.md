@@ -13,10 +13,12 @@ Target is the service being rewritten. The deployment caller owns
 The coordinator starts with `be-replay status`. On the configured pull-request
 base, obtain the caller's approval before starting a round with
 `run --user-confirm --recording-run-id ID`. On a named work branch, use
-`switch-recording-id ID` to change the active recording. Use `be-replay apis`
-to confirm every recorded API before the first Replay. Submit the review
-with `plan` and dispatch the groups with missing implementations. Follow
-`status` to start Replay while those groups work.
+`switch-recording-id ID` to change the active recording. Follow
+`api_grouping_required` to group uncatalogued API paths. Submit the plan and
+commit the catalog written by the engine. Follow `dispatch_required` to
+launch the assigned groups in parallel and register their runtime handles.
+At `worker_status_required`, query the agent runtime and submit its status.
+Follow `advance_required` to start Replay while those groups work.
 
 Replay verifies the complete Source timeline and reports the first failure.
 The engine assigns API work in a rolling 60-second Source window.
@@ -25,8 +27,8 @@ failed sequence and submit it with `plan`. Use the worker names and worktrees
 in the engine's assignments. Include the engine's `assignment_id` when
 registering worker deliveries. Register the integrated candidate against the
 current attempt. Use `action.kind` to identify the next step,
-`action.command` for its arguments when present, and `failure` to scope
-evidence queries.
+`action.query` for supporting details, `action.command` for the next
+`be-replay` invocation when present, and `failure` to scope evidence queries.
 See [Source Session regression](references/session-regression.md).
 
 ## Roles
@@ -37,7 +39,7 @@ your role's entrypoint and the specialty references it routes to.
 | Role | Owns | Reference |
 | --- | --- | --- |
 | Coordinator | Runs Replay, routes failures, manages assignments, publishes integrated changes, and verifies the result | [Coordinator](references/coordinator.md) |
-| Issue Analyst | Confirms each recorded API and identifies the first failed event's owner when the engine asks, read-only | [Issue Analyst](references/issue-analyst.md) |
+| Issue Analyst | Finds case patterns and groups for uncatalogued APIs and identifies the first failed event's owner when asked, read-only | [Issue Analyst](references/issue-analyst.md) |
 | Implementer | Diagnoses the assigned group's events and delivers exact sequences with a tested repair, review, or demonstrated engine gap | [Implementer](references/api-implementer.md) |
 | Code integrator | Combines reviewed commits and returns the exact candidate | [Code integrator](references/code-integrator.md) |
 

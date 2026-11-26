@@ -2,7 +2,7 @@
 
 Use this workflow for the sealed event recording produced by `traffic-e2e
 record`. The coordinator owns Replay, evidence routing, and publication of
-integrated code. The Issue Analyst confirms the recorded API inventory and
+integrated code. The Issue Analyst groups uncatalogued API paths and
 identifies the owner of the failed event when the engine asks. Implementers
 diagnose and repair their assigned groups in dedicated worktrees. The
 integrator combines selected changes for the next full Replay.
@@ -26,13 +26,16 @@ be-replay --target-root /absolute/target run --user-confirm --recording-run-id 2
 ```
 
 The confirmed command creates a `codex/replay/YYYYMMDD-N` work branch and
-selects the recording. Confirm the complete recorded API inventory when
-`status` returns `api_review_required`. Once the review is registered, start
-Replay while implementers work on any missing APIs. On a named work branch, use
+selects the recording. Follow `api_grouping_required` for new API paths and
+commit the catalog produced by `plan`. Launch and register implementers at
+`dispatch_required`. At `worker_status_required`, query the agent runtime
+and report its status. Start Replay when the engine returns `advance_required`.
+On a named work branch, use
 `be-replay switch-recording-id ID` to change the active recording in the
 current checkout. Plain `status` and `run` use the active recording.
-Switching back restores that recording's run key, attempts and reviewed
-workflow for the branch. Every new attempt launches an isolated Target on
+Switching back restores that recording's run key, attempts and assignments.
+API implementation work follows the branch across recordings.
+Every new attempt launches an isolated Target on
 the current committed code and replays from Source launch.
 One Source timeline interleaves startup, readiness, concurrent ingress,
 dependency admissions and deliveries, notifications, and shutdown. Replay
@@ -81,7 +84,7 @@ An unavailable total appears as `?`.
 
 | State | Meaning and action |
 | --- | --- |
-| `not_started` | This recording and run key have no registered attempt. Follow the returned action to confirm APIs or start Replay. |
+| `not_started` | This recording and run key have no registered attempt. Follow the returned action to prepare or start Replay. |
 | `running` | Replay is active. Check the running process and use the returned status query to inspect progress. |
 | `interrupted` | The attempt ended without a terminal result. Start a fresh full attempt using `action.command`. |
 | `failed` | Read `failure` for the first divergence and follow `action` for the current workflow step. |
@@ -93,10 +96,10 @@ the step, and `action.details` carries any scheduling information. When
 present, `action.command` is the argument array for the next `be-replay`
 command, such as `["status"]`. Historical attempts have `action: null`.
 
-When assignments are available, `status` lists each `group`, its `pending`
-item count, and its reserved worker `name` and `worktree` under
-`action.details.assignments`. Use `status --with-assignments` for the
-`assignment_id` and full handoff.
+Default `status` shows counts and the current action. Use `action.query`
+when present to obtain supporting detail. `apis --ungrouped` lists the paths
+that need grouping. `status --with-assignments` gives the worktrees, worker
+states, full handoffs, and the ready fixes for an integration action.
 
 | `action.kind` | Coordinator responsibility |
 | --- | --- |
@@ -106,9 +109,11 @@ item count, and its reserved worker `name` and `worktree` under
 | `switch_recording` | Run `action.command` to select a different recording on the current branch. |
 | `configuration_commit_required` | Review the paths in `action.details.files`, commit the intended configuration, and check `status` again. |
 | `setup_required` | Resolve the setup error or route a confirmed engine issue to its owner. |
-| `api_review_required` | Submit the complete recorded API review before the first Replay. |
+| `api_grouping_required` | Have the Issue Analyst group the uncatalogued API paths and submit the plan. |
 | `ownership_required` | Identify the owner of `failure.seq` and submit its scope and group. Dispatch any available API assignments in parallel. |
-| `implementation_required` | Assign eligible groups and register ready deliveries. |
+| `dispatch_required` | Launch every assignment without an `agent_handle` in parallel and register the handles. |
+| `worker_status_required` | Query the agent runtime for the registered handles and report their actual state. |
+| `implementation_required` | Follow the registered implementers and register ready deliveries. |
 | `integration_required` | Integrate the selected deliveries, publish the candidate, and register its receipt. |
 | `advance_required` | Start a full Replay with `action.command`. |
 | `wait_required` | Follow the active Replay or outstanding assignments and refresh `status`. |
@@ -182,26 +187,26 @@ See [dependency diagnosis](api-implementer-dependency-diagnosis.md),
 
 ## Plan, implement, and verify
 
-Use `be-replay plan --findings FILE` for the active recording. Before the
-first Replay, use `be-replay apis` to read the sealed inventory with literal
-paths, recorded request counts, first sequences, case patterns, and groups.
-Submit one row for every returned API label. Set `implemented` after
-checking the Target handler and effective routes for every literal path.
-Supply `case_pattern` and `group` for each uncatalogued API. The proposed
-pattern must match all its recorded paths. This example covers a recording
-with two labels.
+Use `be-replay apis --ungrouped` for the recorded paths that need grouping.
+Use Source routes to supply `case_pattern` and `group` for each label and
+submit them with `be-replay plan --findings FILE`. The proposed pattern
+must match the recorded paths. Use the literal path for a static route.
+Several literal paths for a dynamic route can share the same pattern and
+group.
 
 ```json
 {
   "apis": [
-    {"api":"GET /users/*","implemented":true},
-    {"api":"POST /reports/42","implemented":false,"case_pattern":"/reports/*","group":"reports"}
+    {"api":"POST /reports/42","case_pattern":"/reports/*","group":"reports"}
   ]
 }
 ```
 
-The engine creates work for missing implementations and catalog entries.
-Start the first Replay after the full review while groups continue working.
+The engine writes `.traffic-e2e/apis.yaml` and records implementation work
+by method and pattern. Commit the updated catalog as requested by
+`configuration_commit_required`. Previously catalogued paths reuse their
+group. An HTTP method first seen in a later recording for a tracked route
+becomes an implementation task in its existing group.
 
 If `status` asks for the owner of a failed event, submit one record for that
 sequence.
@@ -227,7 +232,41 @@ group. `--max-implementers` accepts 1 to 16 and defaults to 16. Use
 and items, including their scopes, sequences, and applicable API work.
 Resolve the reserved `worktree` against the canonical Target root. It uses
 `.traffic-e2e/local/rewrite-worktrees/api-implementer-<n>`. Reuse the worker
-and worktree when the engine adds items to the same group.
+and worktree when the engine adds items to the same group. Different recordings
+can use the same slot. A recording switch restores that recording's own
+assignment IDs and paths.
+
+Use `status --with-assignments` to get the full handoffs. The engine counts
+reservations without a registered handle in `action.details.pending_dispatch`.
+Launch one worker for each of them. Use the actual ID returned by the agent
+runtime in `agent_handle`. Submit registrations in one batch or as the launches
+complete with `be-replay report --file /absolute/implementers.json`.
+
+```json
+{
+  "kind": "implementers",
+  "workers": [
+    {
+      "group": "cache-refresh",
+      "assignment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "agent_handle": "agent-a1b2c3",
+      "state": "started"
+    }
+  ]
+}
+```
+
+At `worker_status_required`, actually query the runtime for each registered
+handle with `worker_status: check_required` in the handoff. Submit the same
+receipt with `state: running` for each active implementer. Running reports
+expire after one hour. Report `state: exited` when a query confirms the worker
+stopped before delivering, then register the replacement or resumed worker
+on the same assignment. After a recording switch, check the agent runtime
+before reusing the slot and registering its handle for the selected recording.
+If API groups are still queued because all slots are in use, follow
+`implementation_required` and register completed deliveries to open slots.
+The first Replay starts after every selected API task has an accepted delivery
+or a worker confirmed running. Run when `status` returns `advance_required`.
 
 Give each implementer its items, evidence query context, frozen base, and
 absolute worktree. The implementer diagnoses assigned events and delivers
@@ -259,6 +298,10 @@ keep running while you register deliveries.
 For assigned lookahead sequences whose behavior already meets the Source
 contract, submit a review with the checks performed. The current failed
 sequence requires a repair or a confirmed engine gap.
+If an implementer verifies an assigned API is already implemented, use the
+same receipt with `"confirms_apis": true`, its exact assigned sequences, and
+the checks that verified the active route and handler. The catalog must
+already be committed for that API.
 
 ```json
 {
@@ -284,7 +327,8 @@ behavior and route the report to the engine owner.
 ```
 
 When a new delivery covers the failed sequence, follow
-`integration_required` and give the integrator the selected fixes and
+`integration_required` and query the ready fixes with `status --with-assignments`.
+Give the integrator the selected fixes and
 canonical base. A candidate can include other ready, compatible deliveries.
 Independent groups continue working. Publish the exact validated candidate
 to the canonical branch and submit it with
@@ -307,7 +351,8 @@ published candidate. For `setup_required`, use the offered retry command
 after resolving the execution error or confirmed engine issue.
 
 Full Replay closes outstanding lookahead work. Required API implementation
-and catalog tasks remain active until integrated. `status` reports `complete`
+tasks remain open until integrated or confirmed by a review of an existing
+implementation. `status` reports `complete`
 once the resulting revision passes and required API work is complete. The `run`
 result reports `session.passed` and requires the complete event sequence and
 strict finalization. Its `apis` field shows recorded and

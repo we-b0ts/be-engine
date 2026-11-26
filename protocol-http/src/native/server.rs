@@ -1,12 +1,15 @@
 //! Native HTTP request parsing delegates value matching and actual response writes.
 use super::*;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use std::io::ErrorKind;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, ReadHalf};
 use traffic_protocol::connection::{ConnectionIo, NativeFuture, RequestHost, ResponseFramer};
 
 pub(super) struct Server;
 struct Framer {
     check_http10_head: bool,
-    target_stopped: bool,
+    close_without_shutdown: bool,
+    reader: Option<ReadHalf<Box<dyn ConnectionIo>>>,
+    extra_input: bool,
 }
 
 impl ResponseFramer for Framer {
@@ -22,7 +25,33 @@ impl ResponseFramer for Framer {
     }
 
     fn target_stopped(&mut self) {
-        self.target_stopped = true;
+        self.close_without_shutdown = true;
+    }
+
+    fn wait_for_client_close(&mut self) -> NativeFuture<'_, ()> {
+        Box::pin(async move {
+            ensure!(
+                !self.extra_input,
+                "client sent another request instead of closing HTTP stream"
+            );
+            let reader = self.reader.as_mut().expect("HTTP response reader");
+            match reader.read(&mut [0_u8; 1]).await {
+                Ok(0) => (),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::UnexpectedEof
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::ConnectionAborted
+                    ) => {}
+                Ok(_) => {
+                    anyhow::bail!("client sent another request instead of closing HTTP stream")
+                }
+                Err(error) => return Err(error.into()),
+            }
+            self.close_without_shutdown = true;
+            Ok(())
+        })
     }
 }
 
@@ -57,15 +86,19 @@ impl ServerSession for Server {
                     request
                 };
                 let delivery = host.execute(request).await?;
+                let extra_input = reader.has_buffered_input();
+                let (read, mut write) = tokio::io::split(reader.io);
                 let mut framer = Framer {
                     check_http10_head: !http11,
-                    target_stopped: false,
+                    close_without_shutdown: false,
+                    reader: Some(read),
+                    extra_input,
                 };
-                delivery.write(&mut reader.io, &mut framer).await?;
-                if framer.target_stopped {
-                    // The Target process has exited. Drop the transport without a TLS close alert.
-                    return Ok(());
+                delivery.write(&mut write, &mut framer).await?;
+                if !framer.close_without_shutdown {
+                    write.shutdown().await?;
                 }
+                return Ok(());
             }
             reader.io.shutdown().await?;
             Ok(())
@@ -80,14 +113,18 @@ mod tests {
     fn http10_rejects_chunked_framing_only_in_the_response_head() {
         let mut framer = Framer {
             check_http10_head: true,
-            target_stopped: false,
+            close_without_shutdown: false,
+            reader: None,
+            extra_input: false,
         };
         let wire = Bytes::from_static(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n");
         assert!(framer.frame(wire).is_err());
 
         let mut framer = Framer {
             check_http10_head: true,
-            target_stopped: false,
+            close_without_shutdown: false,
+            reader: None,
+            extra_input: false,
         };
         let wire = Bytes::from_static(
             b"HTTP/1.1 200 OK\r\ncontent-length: 26\r\n\r\ntransfer-encoding: chunked",

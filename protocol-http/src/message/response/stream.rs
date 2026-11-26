@@ -10,14 +10,18 @@ pub(crate) const CHUNKED_HEADER: &[u8] = b"transfer-encoding: chunked";
 pub(crate) struct StreamResponse {
     response: ResponseMessage,
     chunks: Arc<[ResponseChunk]>,
-    stopped_at_source_exit: bool,
+    end: OutputBoundary,
 }
 
 impl StreamResponse {
-    pub(crate) fn new(response: ResponseMessage, stream: ResponseStream) -> Result<Self> {
+    pub(crate) fn new(
+        response: ResponseMessage,
+        stream: ResponseStream,
+        client_terminated: bool,
+    ) -> Result<Self> {
         if stream.stopped_at_source_exit {
             ensure!(
-                stream.version == 2 && !stream.complete,
+                stream.version == 2 && !stream.complete && !client_terminated,
                 "HTTP Source-stop response requires version-2 incomplete stream evidence"
             );
             stream.validate_prefix(response.body.len())?;
@@ -35,7 +39,13 @@ impl StreamResponse {
         Ok(Self {
             response,
             chunks: stream.chunks.into(),
-            stopped_at_source_exit: stream.stopped_at_source_exit,
+            end: if stream.stopped_at_source_exit {
+                OutputBoundary::TargetStop
+            } else if client_terminated {
+                OutputBoundary::ClientTermination
+            } else {
+                OutputBoundary::End
+            },
         })
     }
 }
@@ -57,8 +67,8 @@ impl ProtocolMessage for StreamResponse {
 impl MessageEncoder for StreamResponse {
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes> {
         ensure!(
-            !self.stopped_at_source_exit,
-            "HTTP Source-stop response prefix requires sequenced streaming output"
+            self.end == OutputBoundary::End,
+            "HTTP terminated response prefix requires sequenced streaming output"
         );
         let mut output = self.output(values)?;
         let mut wire = Vec::new();
@@ -82,11 +92,7 @@ impl MessageEncoder for StreamResponse {
             body: self.response.body.clone(),
             chunks: self.chunks.clone(),
             next_part: 0,
-            end: Some(if self.stopped_at_source_exit {
-                OutputBoundary::TargetStop
-            } else {
-                OutputBoundary::End
-            }),
+            end: Some(self.end),
         }))
     }
 }

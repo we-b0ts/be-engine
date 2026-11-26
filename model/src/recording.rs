@@ -194,6 +194,17 @@ impl SemanticInventory {
         owner: &DependencyOwner,
         replay_supported: bool,
     ) {
+        self.observe_mandatory_outcome(
+            owner,
+            (!replay_supported).then(|| event["event_type"].as_str().unwrap_or("unknown")),
+        );
+    }
+
+    pub fn observe_mandatory_outcome(
+        &mut self,
+        owner: &DependencyOwner,
+        unsupported: Option<&str>,
+    ) {
         let (kind, scope) = match owner {
             DependencyOwner::Case { origin_case_id, .. } => ("case", origin_case_id.to_string()),
             DependencyOwner::Startup { .. } => ("startup", "startup".into()),
@@ -204,13 +215,12 @@ impl SemanticInventory {
         self.total_mandatory += 1;
         *self.by_owner_kind.entry(kind.into()).or_default() += 1;
         self.unattributed_dependencies += u64::from(kind == "unattributed");
-        if !replay_supported {
-            let protocol = event["event_type"].as_str().unwrap_or("unknown");
+        if let Some(event_type) = unsupported {
             *self
                 .unsupported_by_scope
                 .entry(scope)
                 .or_default()
-                .entry(protocol.into())
+                .entry(event_type.into())
                 .or_default() += 1;
         }
     }

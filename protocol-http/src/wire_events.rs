@@ -215,7 +215,9 @@ impl Body for ObservedBody {
                 } else {
                     OutputKind::Part
                 };
-                if this.granular || this.finished {
+                let empty_part = matches!(&frame, Some(Ok(frame)) if frame.data_ref().is_some_and(Bytes::is_empty))
+                    && !this.finished;
+                if (this.granular || this.finished) && !empty_part {
                     this.observe_flush(kind);
                 }
             }

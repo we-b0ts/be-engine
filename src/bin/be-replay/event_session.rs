@@ -38,7 +38,11 @@ pub(super) enum SourceCommand {
         with_assignments: bool,
     },
     /// List the recorded APIs, case patterns, groups and first Source sequences.
-    Apis,
+    Apis {
+        /// Show only recorded labels without a case pattern and group.
+        #[arg(long)]
+        ungrouped: bool,
+    },
     /// Read a bounded page of the Source timeline.
     Events {
         #[arg(long, default_value_t = 0)]
@@ -72,18 +76,18 @@ pub(super) enum SourceCommand {
         report: Option<PathBuf>,
         observation_id: uuid::Uuid,
     },
-    /// Confirm recorded APIs or assign ownership to the current failed event.
+    /// Group new recorded APIs or assign ownership to the current failed event.
     Plan {
-        /// JSON file with the recorded API confirmations or the current event's ownership.
+        /// JSON file with new API groupings or the current event's ownership.
         #[arg(long)]
         findings: PathBuf,
         /// Set the maximum active implementers for this round (default 16).
         #[arg(long)]
         max_implementers: Option<usize>,
     },
-    /// Register accepted fixes, an engine gap, or the published integration candidate.
+    /// Register implementers, deliveries, or the published integration candidate.
     Report {
-        /// JSON delivery receipt.
+        /// JSON registration or delivery receipt.
         #[arg(long)]
         file: PathBuf,
     },
@@ -116,9 +120,12 @@ pub(super) async fn run(
             with_assignments,
             pretty,
         ),
-        SourceCommand::Apis => {
+        SourceCommand::Apis { ungrouped } => {
             let recording = workflow::evidence_recording(&target_root, id)?;
-            let apis = session::recorded_apis(&target_root, &recording.root)?;
+            let mut apis = session::recorded_apis(&target_root, &recording.root)?;
+            if ungrouped {
+                apis.retain(|api| api.group.is_none());
+            }
             super::print_json(
                 &serde_json::json!({"recording_id": recording.id, "apis": apis}),
                 pretty,

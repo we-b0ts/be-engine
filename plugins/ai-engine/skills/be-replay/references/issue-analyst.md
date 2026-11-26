@@ -2,18 +2,17 @@
 
 Use the assigned recording and Source and Target revisions. Work read-only.
 
-## Recorded API review
+## New API grouping
 
-At `api_review_required`, run `be-replay apis` from the canonical Target.
-Verify that each API has a handler and that the effective Target router sends
-every recorded literal path to it. Return one row per label under `apis` with
-`implemented: true` or `false`. For an uncatalogued API, propose its
-`case_pattern` and `group`. Distinct literal labels can share the same
-pattern and group when they represent the same route.
+At `api_grouping_required`, run `be-replay apis --ungrouped` from the
+canonical Target. Use the Source router and existing catalog to identify the
+canonical `case_pattern` and `group`. Return one row per ungrouped label
+under `apis`. Distinct literal labels can share the same pattern and group
+when they represent the same Source route.
 
-The coordinator submits the full inventory before the first Replay. The
-engine assigns missing implementations and catalog entries to the groups.
-[API review format](session-regression.md#plan-implement-and-verify)
+The coordinator submits those rows. The engine writes the catalog and assigns
+implementation to the groups once the catalog is committed.
+[Grouping format](session-regression.md#plan-implement-and-verify)
 
 ## Failed event ownership
 

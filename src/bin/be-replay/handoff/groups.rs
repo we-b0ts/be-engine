@@ -5,12 +5,17 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use traffic_e2e::{event_work::ApiConfirmation, repository::implementer_worktree};
+use traffic_e2e::{
+    event_work::ApiConfirmation, repository::implementer_worktree, session::RecordedApi,
+};
 use uuid::Uuid;
 
-use super::{AssignmentDetail, is_ancestor, validate_checks, validate_commit};
+use super::{ApiBacklog, api_backlog, api_grouping, is_ancestor, validate_checks, validate_commit};
+
+const WORKER_STATUS_TTL: TimeDelta = TimeDelta::hours(1);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(super) struct Groups {
@@ -37,6 +42,37 @@ struct Group {
 struct Assignment {
     id: Uuid,
     slot: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    running_reported_at: Option<DateTime<Utc>>,
+}
+
+impl Assignment {
+    fn needs_worker_status(&self, now: DateTime<Utc>) -> bool {
+        self.agent_handle.is_some()
+            && !self.running_reported_at.is_some_and(|reported| {
+                let age = now - reported;
+                age >= TimeDelta::zero() && age < WORKER_STATUS_TTL
+            })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ImplementerUpdate {
+    group: String,
+    assignment_id: Uuid,
+    agent_handle: String,
+    state: ImplementerState,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ImplementerState {
+    Started,
+    Running,
+    Exited,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +80,8 @@ struct Review {
     assignment_id: Uuid,
     sequences: BTreeSet<u64>,
     checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    confirms_apis: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +128,81 @@ struct ReportedGap {
 }
 
 impl Groups {
+    pub(super) fn open_apis(&self) -> impl Iterator<Item = &ApiConfirmation> {
+        self.work
+            .values()
+            .flat_map(|work| work.items.iter().flat_map(|item| &item.apis))
+            .chain(
+                self.fixes
+                    .iter()
+                    .filter(|fix| !fix.integrated)
+                    .flat_map(|fix| &fix.apis),
+            )
+    }
+
+    pub(super) fn refresh_api_work(
+        &mut self,
+        inventory: &[RecordedApi],
+        backlog: &ApiBacklog,
+        base: &str,
+    ) {
+        let pending: BTreeMap<_, _> = inventory
+            .iter()
+            .filter_map(|api| {
+                let group = api.group.as_deref()?;
+                backlog
+                    .pending(&api.api)
+                    .then_some(((group, api.api.as_str()), api))
+            })
+            .collect();
+        for (group, work) in &mut self.work {
+            work.items.retain(|item| {
+                item.apis.is_empty()
+                    || item
+                        .scope
+                        .strip_prefix("api:")
+                        .is_some_and(|label| pending.contains_key(&(group.as_str(), label)))
+            });
+            work.release_empty_assignment();
+        }
+        for fix in self.fixes.iter_mut().filter(|fix| !fix.integrated) {
+            fix.apis.retain(|api| backlog.pending_api(api));
+        }
+        for ((group, label), api) in pending {
+            let scope = format!("api:{label}");
+            let assigned = self.work.get(group).is_some_and(|work| {
+                work.items
+                    .iter()
+                    .any(|item| !item.apis.is_empty() && item.scope == scope)
+            });
+            let delivered = self.fixes.iter().any(|fix| {
+                !fix.integrated
+                    && fix.fix.group == group
+                    && fix.apis.iter().any(|row| {
+                        api_backlog::identity(row).is_some_and(|(method, pattern)| {
+                            api.method == method && api.case_pattern.as_deref() == Some(pattern)
+                        })
+                    })
+            });
+            if !assigned && !delivered {
+                self.enqueue(
+                    group,
+                    WorkItem {
+                        scope,
+                        sequences: [api.first_seq].into(),
+                        apis: vec![ApiConfirmation {
+                            api: api.api.clone(),
+                            implemented: false,
+                            case_pattern: api.case_pattern.clone(),
+                            group: api.group.clone(),
+                        }],
+                    },
+                    base,
+                );
+            }
+        }
+    }
+
     pub(super) fn enqueue(&mut self, group: &str, mut item: WorkItem, base: &str) {
         let work = self.work.entry(group.to_owned()).or_insert_with(|| Group {
             base_commit: base.to_owned(),
@@ -146,6 +259,8 @@ impl Groups {
             group.assignment = Some(Assignment {
                 id: Uuid::new_v4(),
                 slot: allocate()?,
+                agent_handle: None,
+                running_reported_at: None,
             });
         }
         Ok(())
@@ -161,13 +276,109 @@ impl Groups {
         self.active_slots().next().is_some()
     }
 
+    pub(super) fn pending_dispatch(&self) -> usize {
+        self.work
+            .values()
+            .filter_map(|group| group.assignment.as_ref())
+            .filter(|assignment| assignment.agent_handle.is_none())
+            .count()
+    }
+
+    pub(super) fn pending_worker_status(&self) -> usize {
+        let now = Utc::now();
+        self.work
+            .values()
+            .filter_map(|group| group.assignment.as_ref())
+            .filter(|assignment| assignment.needs_worker_status(now))
+            .count()
+    }
+
+    pub(super) fn queued_api_groups(&self) -> usize {
+        self.work
+            .values()
+            .filter(|group| {
+                group.assignment.is_none() && group.items.iter().any(|item| !item.apis.is_empty())
+            })
+            .count()
+    }
+
+    pub(super) fn clear_worker_handles(&mut self) {
+        for assignment in self
+            .work
+            .values_mut()
+            .filter_map(|group| group.assignment.as_mut())
+        {
+            assignment.agent_handle = None;
+            assignment.running_reported_at = None;
+        }
+    }
+
+    pub(super) fn update_implementers(&mut self, workers: Vec<ImplementerUpdate>) -> Result<()> {
+        ensure!(!workers.is_empty(), "report at least one implementer");
+        let mut groups = BTreeSet::new();
+        for worker in workers {
+            ensure!(
+                groups.insert(worker.group.clone()),
+                "duplicate implementer report for group {}",
+                worker.group
+            );
+            ensure!(
+                !worker.agent_handle.trim().is_empty()
+                    && worker.agent_handle.len() <= 4096
+                    && !worker.agent_handle.chars().any(char::is_control),
+                "invalid implementer agent_handle"
+            );
+            self.active(&worker.group, worker.assignment_id)?;
+            if worker.state == ImplementerState::Started {
+                ensure!(
+                    !self
+                        .work
+                        .values()
+                        .filter_map(|group| group.assignment.as_ref())
+                        .any(|assignment| assignment.id != worker.assignment_id
+                            && assignment.agent_handle.as_ref() == Some(&worker.agent_handle)),
+                    "implementer agent_handle already belongs to another assignment"
+                );
+            }
+            let assignment = self
+                .work
+                .get_mut(&worker.group)
+                .and_then(|group| group.assignment.as_mut())
+                .expect("validated assignment");
+            ensure!(
+                assignment
+                    .agent_handle
+                    .as_ref()
+                    .is_none_or(|handle| handle == &worker.agent_handle),
+                "report the current implementer handle exiting before replacing it for group {}",
+                worker.group
+            );
+            match worker.state {
+                ImplementerState::Started => assignment.agent_handle = Some(worker.agent_handle),
+                ImplementerState::Running => {
+                    ensure!(
+                        assignment.agent_handle.is_some(),
+                        "register the implementer handle before reporting it running"
+                    );
+                    assignment.running_reported_at = Some(Utc::now());
+                }
+                ImplementerState::Exited => {
+                    assignment.agent_handle = None;
+                    assignment.running_reported_at = None;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn pending(&self, group: &str, seq: u64) -> bool {
         self.work
             .get(group)
             .is_some_and(|work| work.items.iter().any(|item| item.sequences.contains(&seq)))
     }
 
-    pub(super) fn assignments(&self, detail: AssignmentDetail) -> Value {
+    pub(super) fn assignments(&self) -> Value {
+        let now = Utc::now();
         json!(
             self.work
                 .iter()
@@ -176,17 +387,20 @@ impl Groups {
                     let slot = assignment.slot;
                     let name = format!("api-implementer-{slot}");
                     let worktree = implementer_worktree(Path::new(""), slot);
-                    Some(match detail {
-                        AssignmentDetail::Full => json!({
-                            "group": group, "name": name, "worktree": worktree,
-                            "assignment_id": assignment.id.simple().to_string(),
-                            "base_commit": work.base_commit, "items": work.items,
-                        }),
-                        AssignmentDetail::Summary => json!({
-                            "group": group, "name": name, "worktree": worktree,
-                            "pending": work.items.len(),
-                        }),
-                    })
+                    let mut row = json!({
+                        "group": group, "name": name, "worktree": worktree,
+                        "assignment_id": assignment.id.simple().to_string(),
+                        "base_commit": work.base_commit, "items": work.items,
+                    });
+                    if let Some(handle) = &assignment.agent_handle {
+                        row["agent_handle"] = json!(handle);
+                        row["worker_status"] = json!(if assignment.needs_worker_status(now) {
+                            "check_required"
+                        } else {
+                            "running"
+                        });
+                    }
+                    Some(row)
                 })
                 .collect::<Vec<_>>()
         )
@@ -254,35 +468,46 @@ impl Groups {
         assignment_id: Uuid,
         sequences: BTreeSet<u64>,
         checks: Vec<String>,
-    ) -> Result<()> {
+        api_catalog_root: Option<&Path>,
+    ) -> Result<Vec<ApiConfirmation>> {
         validate_sequences(&sequences)?;
         validate_checks(&checks)?;
         let review = Review {
             assignment_id,
             sequences,
             checks,
+            confirms_apis: api_catalog_root.is_some(),
         };
         let work = self
             .work
             .get_mut(group)
             .with_context(|| format!("unknown implementation group {group}"))?;
         if work.reviews.contains(&review) {
-            return Ok(());
+            return Ok(Vec::new());
         }
         work.validate_assignment(group, assignment_id)?;
         ensure!(
             review.sequences.iter().all(|seq| {
                 work.reviewed.values().any(|prior| prior.contains(seq))
-                    || work
-                        .items
-                        .iter()
-                        .any(|item| item.apis.is_empty() && item.sequences.contains(seq))
+                    || work.items.iter().any(|item| {
+                        (api_catalog_root.is_some() || item.apis.is_empty())
+                            && item.sequences.contains(seq)
+                    })
             }),
-            "no-change review must refer to assigned lookahead sequences in {group}"
+            "no-change review must refer to assigned sequences in {group} and explicitly confirm any API work"
         );
-        work.consume(&review.sequences, false);
+        if let Some(root) = api_catalog_root {
+            api_grouping::validate_committed_catalog(
+                root,
+                work.items
+                    .iter()
+                    .filter(|item| !item.sequences.is_disjoint(&review.sequences))
+                    .flat_map(|item| &item.apis),
+            )?;
+        }
+        let completed = work.consume(&review.sequences, api_catalog_root.is_some());
         work.reviews.push(review);
-        Ok(())
+        Ok(completed)
     }
 
     pub(super) fn accept_gap(&mut self, gap: Gap) -> Result<()> {
@@ -339,12 +564,15 @@ impl Groups {
             .flat_map(|accepted| &accepted.apis)
     }
 
-    pub(super) fn mark_integrated(&mut self, commits: &BTreeSet<String>) {
+    pub(super) fn mark_integrated(&mut self, commits: &BTreeSet<String>) -> Vec<ApiConfirmation> {
+        let mut completed = Vec::new();
         for accepted in &mut self.fixes {
-            if commits.contains(&accepted.fix.commit) {
+            if !accepted.integrated && commits.contains(&accepted.fix.commit) {
                 accepted.integrated = true;
+                completed.extend(accepted.apis.iter().cloned());
             }
         }
+        completed
     }
 
     pub(super) fn has_pending_api_work(&self) -> bool {
@@ -417,10 +645,10 @@ impl Group {
         }
     }
 
-    fn consume(&mut self, sequences: &BTreeSet<u64>, fix: bool) -> Vec<ApiConfirmation> {
+    fn consume(&mut self, sequences: &BTreeSet<u64>, include_apis: bool) -> Vec<ApiConfirmation> {
         let mut apis = Vec::new();
         self.items.retain_mut(|item| {
-            if !fix && !item.apis.is_empty() {
+            if !include_apis && !item.apis.is_empty() {
                 return true;
             }
             let reviewed: Vec<_> = item.sequences.intersection(sequences).copied().collect();
@@ -464,6 +692,23 @@ mod tests {
     }
 
     #[test]
+    fn an_unconfirmed_or_expired_worker_requires_a_runtime_check() {
+        let now = Utc::now();
+        let mut assignment = Assignment {
+            id: Uuid::new_v4(),
+            slot: 0,
+            agent_handle: Some("actual-handle".into()),
+            running_reported_at: None,
+        };
+        assert!(assignment.needs_worker_status(now));
+        assignment.running_reported_at = Some(now);
+        assert!(!assignment.needs_worker_status(now));
+        assert!(assignment.needs_worker_status(now + WORKER_STATUS_TTL));
+        assignment.agent_handle = None;
+        assert!(!assignment.needs_worker_status(now));
+    }
+
+    #[test]
     fn overlapping_windows_keep_one_assignment_and_can_reopen_a_failed_sequence() {
         let mut groups = Groups::default();
         let scope = "api:GET /things";
@@ -476,14 +721,20 @@ mod tests {
             .reserve(1, || panic!("only one slot is available"))
             .unwrap();
 
-        let assigned = groups.assignments(AssignmentDetail::Full);
+        let assigned = groups.assignments();
         assert_eq!(assigned[0]["name"], "api-implementer-4");
         assert_eq!(assigned[0]["base_commit"], "base");
         assert_eq!(assigned[0]["assignment_id"], lease.simple().to_string());
         assert_eq!(assigned[0]["items"][0]["sequences"], json!([11, 13, 17]));
 
         groups
-            .review("things", lease, [11, 13].into(), vec!["checks".into()])
+            .review(
+                "things",
+                lease,
+                [11, 13].into(),
+                vec!["checks".into()],
+                None,
+            )
             .unwrap();
         groups.enqueue("things", item(scope, &[11, 13, 17]), "later");
         assert!(!groups.pending("things", 13));
@@ -491,13 +742,16 @@ mod tests {
         assert!(groups.pending("things", 13));
         assert_eq!(groups.active_slots().collect::<Vec<_>>(), [4]);
         groups
-            .review("things", lease, [13, 17].into(), vec!["checks".into()])
+            .review(
+                "things",
+                lease,
+                [13, 17].into(),
+                vec!["checks".into()],
+                None,
+            )
             .unwrap();
         groups.reserve(1, || Ok(5)).unwrap();
-        assert_eq!(
-            groups.assignments(AssignmentDetail::Full)[0]["group"],
-            "workers"
-        );
+        assert_eq!(groups.assignments()[0]["group"], "workers");
     }
 
     #[test]
@@ -516,9 +770,15 @@ mod tests {
         groups.reserve(1, || Ok(0)).unwrap();
         let lease = groups.work["things"].assignment.as_ref().unwrap().id;
         groups
-            .review("things", lease, [11, 13].into(), vec!["checks".into()])
+            .review(
+                "things",
+                lease,
+                [11, 13].into(),
+                vec!["checks".into()],
+                None,
+            )
             .unwrap();
-        let assigned = groups.assignments(AssignmentDetail::Full);
+        let assigned = groups.assignments();
         assert_eq!(assigned[0]["items"][0]["sequences"], json!([11]));
         assert_eq!(assigned[0]["items"].as_array().unwrap().len(), 1);
         assert!(groups.has_pending_api_work());
@@ -532,18 +792,18 @@ mod tests {
         groups.reserve(1, || Ok(4)).unwrap();
         let lease = groups.work["things"].assignment.as_ref().unwrap().id;
         groups
-            .review("things", lease, [11].into(), vec!["checks".into()])
+            .review("things", lease, [11].into(), vec!["checks".into()], None)
             .unwrap();
         groups.enqueue("things", item(scope, &[13]), "base");
         groups.reserve(1, || Ok(4)).unwrap();
         let new_lease = groups.work["things"].assignment.as_ref().unwrap().id;
         assert_ne!(new_lease, lease);
         groups
-            .review("things", lease, [11].into(), vec!["checks".into()])
+            .review("things", lease, [11].into(), vec!["checks".into()], None)
             .unwrap();
         assert!(
             groups
-                .review("things", lease, [13].into(), vec!["checks".into()])
+                .review("things", lease, [13].into(), vec!["checks".into()], None)
                 .is_err()
         );
         assert!(

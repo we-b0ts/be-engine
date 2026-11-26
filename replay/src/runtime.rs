@@ -561,6 +561,11 @@ impl SequenceClaim {
     pub async fn wait_delivery(&self, deadline: Instant) -> Result<()> {
         self.wait_output(Some(deadline), false, None).await
     }
+    pub(crate) async fn wait_initial_delivery(&self) -> Result<()> {
+        let deadline =
+            (!self.0.runtime.is_session_trace()).then(|| Instant::now() + Duration::from_secs(30));
+        self.wait_output(deadline, false, None).await
+    }
     pub(crate) async fn wait_target_stop(&self) -> Result<()> {
         ensure!(
             self.0.runtime.is_session_trace(),
@@ -584,6 +589,14 @@ impl SequenceClaim {
         ensure!(
             after_target_exit,
             "recorded native Target-stop output precedes the observed Target exit"
+        );
+        Ok(())
+    }
+    pub(crate) async fn wait_client_termination(&self) -> Result<()> {
+        self.wait_output(None, false, None).await?;
+        ensure!(
+            self.reserved_kind() == Some(EventKind::ClientTermination),
+            "native output differs from its recorded Client-termination boundary"
         );
         Ok(())
     }

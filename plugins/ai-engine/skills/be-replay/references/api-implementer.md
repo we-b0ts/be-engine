@@ -8,8 +8,8 @@ under the same reservation.
 
 1. Confirm the cause and repair boundary using the assigned sequences and
    Target observation. [Diagnosis](api-implementer-diagnosis.md)
-   For assigned `apis` rows, implement missing APIs and commit the assigned
-   case patterns and groups in `.traffic-e2e/apis.yaml`.
+   For assigned `apis` rows, implement the API using the case pattern and
+   group in the committed catalog.
 2. Read [target code rules](target-code-rules.md) before editing. Return any
    Source-proven [startup inputs](api-implementer-startup-inputs.md) to the
    coordinator.

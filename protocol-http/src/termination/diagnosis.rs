@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
+use traffic_model::{DependencyTermination, TerminationKind, TerminationScope, TerminationSide};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,6 +90,36 @@ pub fn observed_since(
 impl ClientTermination {
     pub fn has_transport_failure_since(&self, started: Instant) -> bool {
         self.io_diagnosis.has_transport_failure_since(started)
+    }
+
+    pub(crate) fn stream_cancelled_since(&self, started: Instant) -> Option<ObservedTermination> {
+        if let Some(closed) = self.cancelled().filter(|closed| closed.at >= started) {
+            return Some(closed);
+        }
+        let fin = self
+            .observed()
+            .filter(|fin| fin.at >= started && fin.termination.kind == TerminationKind::Eof)?;
+        let write_failure = self
+            .io_diagnosis
+            .0
+            .lock()
+            .expect("HTTP IO diagnosis poisoned")
+            .iter()
+            .filter(|((_, operation), failure)| {
+                matches!(operation, IoOperation::Write | IoOperation::Flush)
+                    && failure.at >= started
+                    && traffic_protocol::transport::is_connection_termination(failure.kind)
+            })
+            .map(|(_, failure)| failure.at)
+            .min()?;
+        Some(ObservedTermination {
+            termination: DependencyTermination {
+                side: TerminationSide::Client,
+                kind: TerminationKind::Cancelled,
+                scope: TerminationScope::Stream,
+            },
+            at: fin.at.max(write_failure),
+        })
     }
 
     pub(crate) fn has_failed_delivery_before(&self, started: Instant, boundary: Instant) -> bool {

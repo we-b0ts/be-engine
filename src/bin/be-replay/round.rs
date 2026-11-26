@@ -21,11 +21,12 @@ use traffic_e2e::{
     dependency_index::recording,
     execution_identity, internal_runtime, policy_evidence,
     repository::{LOCAL_ARTIFACTS_ROOT, TRAFFIC_E2E_ROOT},
+    session::RecordedApi,
     status_e2e_event_session,
 };
 use uuid::Uuid;
 
-use super::handoff::Workflow;
+use super::handoff::{ApiBacklog, Workflow};
 
 #[derive(Debug)]
 pub(super) struct Repository {
@@ -45,7 +46,17 @@ pub(super) struct Round {
     pub run_key: String,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     attempted_engines: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_inventory: Option<ApiInventoryState>,
+    #[serde(skip)]
+    pub api_backlog: ApiBacklog,
     pub workflow: Workflow,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ApiInventoryState {
+    target_commit: String,
+    ungrouped: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -54,6 +65,25 @@ struct BranchRounds {
     active: Round,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     inactive: BTreeMap<String, Round>,
+    #[serde(default)]
+    api_backlog: Option<ApiBacklog>,
+}
+
+impl BranchRounds {
+    fn take_api_backlog(&mut self) -> ApiBacklog {
+        self.api_backlog.take().unwrap_or_else(|| {
+            let mut backlog = ApiBacklog::default();
+            for round in std::iter::once(&self.active).chain(self.inactive.values()) {
+                round.workflow.restore_api_backlog(&mut backlog);
+            }
+            backlog
+        })
+    }
+
+    fn into_active(mut self) -> Round {
+        self.active.api_backlog = self.take_api_backlog();
+        self.active
+    }
 }
 
 #[derive(Debug)]
@@ -95,7 +125,7 @@ impl Repository {
     }
 
     pub fn read_round(&self) -> Result<Option<Round>> {
-        Ok(self.branch_rounds()?.map(|rounds| rounds.active))
+        Ok(self.branch_rounds()?.map(BranchRounds::into_active))
     }
 
     pub fn inspect_round(&self, id: Option<&str>) -> Result<(Option<Round>, bool)> {
@@ -105,7 +135,7 @@ impl Repository {
         if let Some(id) = id.filter(|&id| id != rounds.active.recording_id) {
             Ok((rounds.inactive.remove(id), true))
         } else {
-            Ok((Some(rounds.active), false))
+            Ok((Some(rounds.into_active()), false))
         }
     }
 
@@ -206,35 +236,39 @@ impl Repository {
             branch.to_string()
         };
         let path = self.round_path(&branch);
-        let mut inactive = if let Some(mut current) = self.branch_rounds()? {
+        let (mut inactive, api_backlog) = if let Some(mut current) = self.branch_rounds()? {
             if current.active.recording_id == recording.id {
                 current.active.validate_recording(&recording)?;
                 current.active.validate_run_key(run_key.as_deref())?;
-                return Ok(current.active);
+                return Ok(current.into_active());
             }
+            let api_backlog = current.take_api_backlog();
+            current.active.workflow.clear_worker_handles();
             current
                 .inactive
                 .insert(current.active.recording_id.clone(), current.active);
-            current.inactive
+            (current.inactive, api_backlog)
         } else {
-            BTreeMap::new()
+            (BTreeMap::new(), ApiBacklog::default())
         };
-        let round = if let Some(round) = inactive.remove(&recording.id) {
+        let mut round = if let Some(round) = inactive.remove(&recording.id) {
             round.validate_recording(&recording)?;
             round.validate_run_key(run_key.as_deref())?;
             round
         } else {
             self.new_round(branch, recording, run_key)?
         };
+        round.api_inventory = None;
         let rounds = BranchRounds {
             active: round,
             inactive,
+            api_backlog: Some(api_backlog),
         };
         // Publish the binding before switching so an interruption after Git changes HEAD
         // still leaves a resumable round on the new branch.
         self.check_checkout(lock)?;
         persist(&path, &rounds)?;
-        let round = rounds.active;
+        let round = rounds.into_active();
         if on_base {
             self.check_checkout(lock)?;
             if let Err(error) = git::switch(&self.root, &round.branch, &self.head) {
@@ -275,11 +309,13 @@ impl Repository {
             recording_identity: recording.identity,
             run_key,
             attempted_engines: BTreeSet::new(),
+            api_inventory: None,
+            api_backlog: ApiBacklog::default(),
             workflow: Workflow::default(),
         })
     }
 
-    pub fn save_round(&self, lock: &RoundLock, round: Round) -> Result<Round> {
+    pub fn save_round(&self, lock: &RoundLock, mut round: Round) -> Result<Round> {
         self.check_checkout(lock)?;
         ensure!(
             self.branch.as_deref() == Some(&round.branch)
@@ -299,9 +335,10 @@ impl Repository {
                 && current.run_key == round.run_key,
             "round identity changed during be-replay operation"
         );
+        rounds.api_backlog = Some(std::mem::take(&mut round.api_backlog));
         rounds.active = round;
         persist(&path, &rounds)?;
-        Ok(rounds.active)
+        Ok(rounds.into_active())
     }
 
     fn rounds_dir(&self) -> PathBuf {
@@ -337,6 +374,31 @@ impl Repository {
 }
 
 impl Round {
+    pub fn needs_api_inventory(&self, head: &str) -> bool {
+        self.api_inventory
+            .as_ref()
+            .is_none_or(|inventory| inventory.target_commit != head)
+    }
+
+    pub fn ungrouped_apis(&self) -> usize {
+        self.api_inventory
+            .as_ref()
+            .map_or(0, |inventory| inventory.ungrouped)
+    }
+
+    pub fn refresh_api_inventory(&mut self, inventory: &[RecordedApi], head: &str) {
+        let ungrouped = inventory.iter().filter(|api| api.group.is_none()).count();
+        self.api_backlog.observe(inventory);
+        if ungrouped == 0 {
+            self.workflow
+                .refresh_api_work(inventory, &self.api_backlog, head);
+        }
+        self.api_inventory = Some(ApiInventoryState {
+            target_commit: head.to_owned(),
+            ungrouped,
+        });
+    }
+
     pub fn engine_retry_available(
         &self,
         repo: &Repository,

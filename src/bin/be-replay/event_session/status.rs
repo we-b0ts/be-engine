@@ -69,40 +69,29 @@ pub(super) fn round_status(
     let mut round = round;
     let recording = round_recording(repo, &round, None)?;
     let mut status = current_attempt(repo, &round, &recording)?;
-    let configuration = if status.state == E2eEventSessionState::Running {
+    let mut configuration = if status.state == E2eEventSessionState::Running {
         None
     } else {
         configuration_action(&repo.root)?
     };
-    if !needs_switch
-        && configuration.is_none()
-        && needs_round_sync(&round, &status)
-        && !round
-            .workflow
-            .needs_api_review(&repo.root, &recording.root)?
-    {
+    if !needs_switch && configuration.is_none() && needs_round_sync(&round, &status, &repo.head) {
         let lock = repo.lock_round_for_update()?;
         round = require_round(repo)?;
         round_recording(repo, &round, Some(&recording.id))?;
         status = current_attempt(repo, &round, &recording)?;
-        round = sync_round(repo, &lock, round, &recording, &status)?;
+        if status.state != E2eEventSessionState::Running {
+            configuration = configuration_action(&repo.root)?;
+            if configuration.is_none() {
+                round = sync_round(repo, &lock, round, &recording, &status)?;
+            }
+        }
     }
     let (state, action) = if let Some(action) = configuration {
-        (
-            json!(status.state),
-            round.workflow.with_assignments(action, detail),
-        )
+        (json!(status.state), action)
     } else if needs_switch {
         (json!(status.state), switch_action(&recording.id))
     } else {
-        attempt_action(
-            repo,
-            &round,
-            &recording,
-            status.state,
-            status.attempt.as_ref(),
-            detail,
-        )?
+        attempt_action(repo, &round, status.state, status.attempt.as_ref(), detail)?
     };
     let mut output = attempt_fields(&status, &recording.root);
     output["recording_id"] = json!(recording.id);
@@ -115,7 +104,6 @@ pub(super) fn round_status(
 pub(super) fn attempt_action(
     repo: &Repository,
     round: &Round,
-    recording: &Recording,
     state: E2eEventSessionState,
     attempt: Option<&E2eEventSessionResult>,
     detail: AssignmentDetail,
@@ -123,73 +111,77 @@ pub(super) fn attempt_action(
     use E2eEventSessionState::{Failed, Interrupted, NotStarted, Passed, Running};
 
     let mut state_label = json!(state);
-    let action = if state != Running
-        && round
-            .workflow
-            .needs_api_review(&repo.root, &recording.root)?
-    {
-        json!({
-            "kind":"api_review_required",
-            "summary":"Confirm implementation and grouping for every recorded API.",
-            "details":{"role":"issue-analyst"},
-            "command":["plan", "--findings", "<apis.json>"]
-        })
-    } else {
-        match (state, attempt) {
-            (NotStarted, _) => run_action("Run the selected Source recording."),
-            (Running, Some(_)) => json!({
-                "kind":"wait_required", "summary":"Wait for Replay to finish.",
-                "command":["status"]
+    if state != Running && round.ungrouped_apis() > 0 {
+        return Ok((
+            state_label,
+            json!({
+                "kind":"api_grouping_required",
+                "summary":"Have the issue analyst group the new recorded APIs and submit the plan.",
+                "details":{"role":"issue-analyst", "ungrouped_apis":round.ungrouped_apis()},
+                "query":["apis", "--ungrouped"],
+                "command":["plan", "--findings", "<apis.json>"]
             }),
-            (Interrupted, Some(_)) => run_action("Restart the interrupted Replay."),
-            (Failed, Some(last)) => {
-                if let Some(commit) = round.workflow.candidate_commit(last) {
-                    candidate_action(commit, &repo.head)
-                } else if let Some(seq) = mismatch_sequence(last) {
-                    if round.engine_retry_available(repo, last)? {
-                        json!({
-                            "kind":"advance_required",
-                            "summary":"Replay once with the updated engine.",
-                            "details":{"reason":"engine_changed"},
-                            "command":["run"]
-                        })
-                    } else {
-                        round.workflow.failed_action(seq)
-                    }
-                } else {
+        ));
+    }
+    let action = match (state, attempt) {
+        (NotStarted, _) => round
+            .workflow
+            .first_run_action()
+            .unwrap_or_else(|| run_action("Run the selected Source recording.")),
+        (Running, Some(_)) => json!({
+            "kind":"wait_required", "summary":"Wait for Replay to finish.",
+            "command":["status"]
+        }),
+        (Interrupted, Some(_)) => run_action("Restart the interrupted Replay."),
+        (Failed, Some(last)) => {
+            if let Some(commit) = round.workflow.candidate_commit(last) {
+                candidate_action(commit, &repo.head)
+            } else if let Some(seq) = mismatch_sequence(last) {
+                if round.engine_retry_available(repo, last)? {
                     json!({
-                        "kind":"setup_required",
-                        "summary":"Resolve the Replay execution error, then retry.",
+                        "kind":"advance_required",
+                        "summary":"Replay once with the updated engine.",
+                        "details":{"reason":"engine_changed"},
                         "command":["run"]
                     })
-                }
-            }
-            (Passed, Some(last)) => {
-                if let Some(commit) = round.workflow.candidate_commit(last) {
-                    candidate_action(commit, &repo.head)
-                } else if let Some(action) = round.workflow.integration_action(None) {
-                    action
-                } else if last.target_commit.as_deref() != Some(&repo.head)
-                    || !last.target_inputs.as_deref().is_some_and(|inputs| {
-                        execution_identity::repository_fingerprint(&repo.root)
-                            .is_ok_and(|current| current == inputs)
-                    })
-                {
-                    state_label = json!("candidate_changed");
-                    run_action("Verify the current Target revision and inputs.")
-                } else if round.workflow.pending_api_work() {
-                    round.workflow.implementation_action()
                 } else {
-                    json!({"kind":"complete", "summary":"The current Target passed full Replay and API review."})
+                    round.workflow.failed_action(seq)
                 }
+            } else {
+                json!({
+                    "kind":"setup_required",
+                    "summary":"Resolve the Replay execution error, then retry.",
+                    "command":["run"]
+                })
             }
-            _ => unreachable!("only not_started has no attempt"),
         }
+        (Passed, Some(last)) => {
+            if let Some(commit) = round.workflow.candidate_commit(last) {
+                candidate_action(commit, &repo.head)
+            } else if let Some(action) = round.workflow.integration_action(None) {
+                action
+            } else if last.target_commit.as_deref() != Some(&repo.head)
+                || !last.target_inputs.as_deref().is_some_and(|inputs| {
+                    execution_identity::repository_fingerprint(&repo.root)
+                        .is_ok_and(|current| current == inputs)
+                })
+            {
+                state_label = json!("candidate_changed");
+                run_action("Verify the current Target revision and inputs.")
+            } else if round.workflow.pending_api_work() {
+                round.workflow.implementation_action()
+            } else {
+                json!({"kind":"complete", "summary":"The current Target passed full Replay and completed the required API work."})
+            }
+        }
+        _ => unreachable!("only not_started has no attempt"),
     };
     let action = if action["kind"] == "complete" {
         action
     } else {
-        round.workflow.with_assignments(action, detail)
+        round
+            .workflow
+            .with_assignments(action, detail, state == NotStarted)
     };
     Ok((state_label, action))
 }

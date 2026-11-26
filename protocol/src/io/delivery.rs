@@ -17,10 +17,14 @@ pub struct FlushReceipt {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct FlushTimestamp(Arc<Mutex<Option<Instant>>>);
+pub struct FlushTimestamp(Arc<Mutex<Option<(Instant, usize)>>>);
 
 impl FlushTimestamp {
     pub fn last(&self) -> Option<Instant> {
+        self.progress().map(|(at, _)| at)
+    }
+
+    pub fn progress(&self) -> Option<(Instant, usize)> {
         *self.0.lock().expect("flush timestamp poisoned")
     }
 }
@@ -55,7 +59,8 @@ impl FlushReceipt {
             delivered();
         }
         if let Some(timestamp) = &self.timestamp {
-            *timestamp.0.lock().expect("flush timestamp poisoned") = Some(Instant::now());
+            let mut progress = timestamp.0.lock().expect("flush timestamp poisoned");
+            *progress = Some((Instant::now(), progress.map_or(1, |(_, count)| count + 1)));
         }
     }
 }

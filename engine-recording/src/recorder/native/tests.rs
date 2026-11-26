@@ -126,6 +126,13 @@ async fn native_process_notification_does_not_hold_an_active_case_open() -> Resu
 
 #[tokio::test]
 async fn session_notification_is_available_before_its_wire_output_attempt() -> Result<()> {
+    for delivered in [true, false] {
+        verify_session_notification(delivered).await?;
+    }
+    Ok(())
+}
+
+async fn verify_session_notification(delivered: bool) -> Result<()> {
     use traffic_model::session::SessionEvent;
 
     let directory = tempfile::tempdir()?;
@@ -173,7 +180,12 @@ async fn session_notification_is_available_before_its_wire_output_attempt() -> R
     let sequence = pending
         .dependency_id()
         .context("missing notification sequence")?;
-    pending.stage_output(event, OutputKind::End).await?.commit();
+    let receipt = pending.stage_output(event, OutputKind::End).await?;
+    if delivered {
+        receipt.commit();
+    } else {
+        receipt.cancel_unwritten_notification()?;
+    }
     state.session_event(SessionEvent::Stop)?;
     state.session_event(SessionEvent::SourceExit {
         status: Some(0),
@@ -191,8 +203,30 @@ async fn session_notification_is_available_before_its_wire_output_attempt() -> R
             "message_started",
             "notification",
             "wire_output_started",
-            "wire_output"
+            if delivered {
+                "wire_output"
+            } else {
+                "wire_output_cancelled"
+            }
         ]));
+    let (_, manifest) = crate::dependency_index::recording::manifest(root)?;
+    assert_eq!(
+        manifest.semantic_inventory.total_mandatory,
+        u64::from(delivered)
+    );
+    let summary: Value =
+        serde_json::from_slice(&std::fs::read(root.join("session-summary.json"))?)?;
+    if delivered {
+        assert_eq!(summary["mandatory_by_protocol"]["redis"], 1);
+        assert_eq!(summary["unscheduled_admissions"], json!([]));
+    } else {
+        assert_eq!(summary["mandatory_by_protocol"], json!({}));
+        assert_eq!(summary["unscheduled_admissions"], json!([sequence]));
+        assert!(timeline.lines().any(|row| row.ends_with(&format!(
+            "\tcapture_terminated\t{sequence}\t{}\t1",
+            traffic_model::trace::UNDELIVERED_NOTIFICATION
+        ))));
+    }
     assert_eq!(
         traffic_recording_store::session_records::dependency(root, sequence)?["event_type"],
         "redis_pub_sub_push"

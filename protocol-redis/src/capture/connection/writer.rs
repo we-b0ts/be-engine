@@ -240,7 +240,7 @@ async fn write_response(
     write_payload(&mut *writer, payload).await
 }
 
-async fn write_payload<W: AsyncWrite + Unpin>(
+pub(crate) async fn write_payload<W: AsyncWrite + Unpin + ?Sized>(
     writer: &mut W,
     payload: &[u8],
 ) -> (usize, std::io::Result<()>) {

@@ -1,7 +1,7 @@
 # Rewrite Coordinator
 
 You own the canonical Target, publication, and Replay. The Issue Analyst
-confirms recorded APIs and identifies the owner of the failed event when the
+groups new APIs and identifies the owner of the failed event when the
 engine requests it. Implementers diagnose and repair their assigned groups.
 The integrator combines the selected commits. [Source Session regression](session-regression.md)
 
@@ -11,8 +11,9 @@ Start or resume with `be-replay status` in the canonical Target. Select the
 sealed recording. On `project.delivery.pr_base`, use the caller's explicit
 authorization for this round before executing the returned command with
 `--user-confirm`. Use bare `status` on the work branch to resume the bound
-round. Use `action.kind` to choose the workflow step and pass
-`action.command` to `be-replay` as arguments when present. Keep at most one
+round. Use `action.kind` to choose the workflow step. Pass `action.query`
+to `be-replay` to fetch the detail and `action.command` for the next
+invocation when present. Keep at most one
 active Replay for a Target.
 
 - For a missing or incomplete recording, coordinate with the external owner.
@@ -23,9 +24,16 @@ active Replay for a Target.
   before Replay, planning, and candidate publication.
 - For `setup_required`, investigate the reported setup error. Apply proven
   [startup inputs](coordinator-startup-inputs.md).
-- For `api_review_required`, obtain the complete API review and submit it
-  using `plan --findings FILE`. Dispatch the missing API implementations and
-  start the first Replay when `status` allows it.
+- For `api_grouping_required`, run `apis --ungrouped` and give the analyst
+  the recorded paths and the Source router. Submit the complete ungrouped
+  list with `plan --findings FILE`, then commit the updated catalog when
+  `status` requests it.
+- For `dispatch_required`, start one `api-implementer` for each assignment
+  without an `agent_handle`. Launch them in parallel and register the
+  runtime handles with `report --file FILE`.
+- For `worker_status_required`, query the agent runtime for the registered
+  handles. Report the observed states, then follow `status`.
+  [Worker report format](session-regression.md#plan-implement-and-verify)
 - For `ownership_required`, check for an active analyst for `failure.seq` or
   dispatch the read-only `issue-analyst` role. Pass the recording ID, failed
   attempt, sequence, evidence, and the Source and Target locations and
@@ -34,20 +42,24 @@ active Replay for a Target.
 
 ## Implement and verify
 
-Check that the API review covers the sealed inventory. For a requested
-ownership record, check that `seq` matches `failure.seq` and that its scope
+For a requested ownership record, check that `seq` matches `failure.seq` and that its scope
 and group follow the recorded evidence. [Plan format](session-regression.md#plan-implement-and-verify)
 
-Dispatch each entry in `action.details.assignments` to one `api-implementer`
-while you follow the action for the round. Use `status --with-assignments`
-for the full handoff. Resolve `worktree` against the canonical Target root
-and create it at `base_commit` if needed. Pass the group, `assignment_id`,
+Use `status --with-assignments` to get
+`action.details.assignments`. Resolve `worktree` against the canonical Target root
+and create it at `base_commit` if needed. Slots are shared by recordings.
+Before reusing a worktree for a different assignment, coordinate the previous
+worker's exit and preserve its changes. Prepare the worktree at the new
+assignment's `base_commit`. Pass the group, `assignment_id`,
 recording and attempt context when available, the assigned scopes and
 sequences, and any API work.
-Reuse the active worker and worktree for new items in the same group. The
-engine can assign other groups as slots open. Set `--max-implementers` to
-the slots available to this round. If a worker exits before delivering, resume
-or reassign its reservation using the same name and worktree.
+Reuse the active worker and worktree for new items in the same group. When
+`pending_dispatch` appears alongside another action, launch the assignments
+without handles in parallel with that action. Set `--max-implementers` to the
+slots available to this round. Query the runtime on resume and before waiting
+for workers. If a query confirms a worker has exited without delivering,
+report `state: exited` and resume or replace it using the same name and
+worktree. If it is running, report `state: running` with the actual handle.
 
 Register ready work with `report --file FILE` using the assigned group,
 `assignment_id`, exact sequences, and checks. Include the full commit ID for
@@ -61,7 +73,7 @@ Source sequence, observed behavior, and capability needed. If the gap
 accounts for the first unmatched event, use the `setup_required` retry after
 the engine is fixed. [Report format](session-regression.md#plan-implement-and-verify)
 
-For `integration_required`, give the
+For `integration_required`, fetch the ready fixes with `status --with-assignments` and give the
 [code integrator](code-integrator.md) the selected fixes and canonical base.
 Publish the exact candidate after checking that the canonical base
 still matches, then register it with `report --file FILE` for the current

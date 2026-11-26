@@ -15,17 +15,28 @@ pub async fn deliver(
     output: &mut (impl OutputStream + ?Sized),
     sequence: Option<&SequenceClaim>,
 ) -> Result<()> {
-    let sequence =
-        sequence.filter(|claim| claim.reserved_kind() == Some(EventKind::ResponseHeaders));
+    let sequence = sequence.filter(|claim| {
+        matches!(
+            claim.reserved_kind(),
+            Some(EventKind::ResponseHeaders | EventKind::TargetStop)
+        )
+    });
     let mut cursor = Cursor::new(output.part_count(), sequence);
     while let Some(chunk) = output.next()? {
-        let target_stop = chunk.boundary == OutputBoundary::TargetStop;
+        let no_bytes = matches!(
+            chunk.boundary,
+            OutputBoundary::TargetStop | OutputBoundary::ClientTermination
+        );
         ensure!(
-            !target_stop || chunk.bytes.is_empty() && chunk.complete,
-            "native Target-stop output must be a complete, zero-byte boundary"
+            !no_bytes || chunk.bytes.is_empty() && chunk.complete,
+            "native termination must be a complete, zero-byte boundary"
         );
         cursor.begin(chunk.boundary).await?;
-        if !target_stop {
+        if chunk.boundary == OutputBoundary::ClientTermination {
+            tokio::time::timeout(Duration::from_secs(30), output.wait_for_client_close())
+                .await
+                .context("client did not close the recorded native response")??;
+        } else if !no_bytes {
             let written = writer.write_all(&chunk.bytes).await;
             output.written(written.is_ok());
             written.context(output.write_context())?;
@@ -92,17 +103,25 @@ impl<'a> Cursor<'a> {
                     "native streamed output precedes its headers"
                 );
             }
-            OutputBoundary::End | OutputBoundary::TargetStop => {
+            OutputBoundary::End
+            | OutputBoundary::TargetStop
+            | OutputBoundary::ClientTermination => {
                 ensure!(
-                    boundary != OutputBoundary::TargetStop || self.sequence.is_some(),
-                    "native Target-stop output requires recorded headers and parts"
+                    boundary == OutputBoundary::End || self.sequence.is_some(),
+                    "native termination requires recorded headers and parts"
                 );
                 ensure!(
                     self.parts == self.part_count,
                     "native response omitted declared output parts"
                 );
                 ensure!(
-                    self.sequence.is_none() || self.headers,
+                    self.sequence.is_none()
+                        || self.headers
+                        || (boundary == OutputBoundary::TargetStop
+                            && self.part_count == 0
+                            && self.sequence.is_some_and(
+                                |claim| claim.reserved_kind() == Some(EventKind::TargetStop)
+                            )),
                     "native streamed response omitted its headers"
                 );
             }
@@ -123,6 +142,7 @@ impl<'a> Cursor<'a> {
             OutputBoundary::Part => EventKind::ResponsePart,
             OutputBoundary::End => EventKind::ResponseEnd,
             OutputBoundary::TargetStop => return sequence.wait_target_stop().await,
+            OutputBoundary::ClientTermination => return sequence.wait_client_termination().await,
         };
         sequence
             .wait_delivery(Instant::now() + Duration::from_secs(30))
@@ -167,7 +187,9 @@ impl<'a> Cursor<'a> {
                     }
                 }
             }
-            OutputBoundary::End | OutputBoundary::TargetStop => {
+            OutputBoundary::End
+            | OutputBoundary::TargetStop
+            | OutputBoundary::ClientTermination => {
                 if boundary == OutputBoundary::End {
                     flush(writer, output, boundary).await?;
                 }

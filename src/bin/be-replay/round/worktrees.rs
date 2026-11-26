@@ -9,22 +9,8 @@ use super::*;
 impl Repository {
     pub fn reserve_worktrees(&self, lock: &RoundLock, round: &mut Round) -> Result<()> {
         self.check_checkout(lock)?;
-        let mut occupied = self.registered_worktree_slots()?;
-        if let Some(entries) = optional_entries(&self.rounds_dir())? {
-            for entry in entries {
-                let path = entry?.path();
-                if path
-                    .extension()
-                    .is_some_and(|extension| extension == "json")
-                    && let Some(rounds) = read_rounds(&path)?
-                {
-                    for saved in std::iter::once(&rounds.active).chain(rounds.inactive.values()) {
-                        occupied.extend(saved.workflow.active_worktree_slots());
-                    }
-                }
-            }
-        }
-        occupied.extend(round.workflow.active_worktree_slots());
+        let registered = self.registered_worktree_slots()?;
+        let occupied: BTreeSet<_> = round.workflow.active_worktree_slots().collect();
         let mut options = 0..usize::MAX;
         round.workflow.reserve_worktrees(|| {
             for slot in &mut options {
@@ -33,8 +19,15 @@ impl Repository {
                 }
                 let path = implementer_worktree(&self.root, slot);
                 match fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.is_dir() && registered.contains(&slot) => {
+                        return Ok(slot);
+                    }
                     Ok(_) => continue,
-                    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(slot),
+                    Err(error) if error.kind() == ErrorKind::NotFound => {
+                        if !registered.contains(&slot) {
+                            return Ok(slot);
+                        }
+                    }
                     Err(error) => {
                         return Err(error).with_context(|| format!("inspect {}", path.display()));
                     }
@@ -62,11 +55,13 @@ impl Repository {
                 if path.parent() != Some(parent) {
                     return None;
                 }
-                path.file_name()?
+                let slot = path
+                    .file_name()?
                     .to_str()?
                     .strip_prefix("api-implementer-")?
                     .parse()
-                    .ok()
+                    .ok()?;
+                (path == implementer_worktree(&self.root, slot)).then_some(slot)
             })
             .collect())
     }

@@ -8,6 +8,7 @@ use crate::active_case::DependencyTargets;
 use crate::http::termination::ClientTermination;
 use crate::protocols::recording::events::{HttpExchangeEvent, RecorderEvent};
 use crate::{AppState, DependencyExchangeOutcome};
+use traffic_model::{TerminationSide, trace::OutputKind};
 
 #[cfg(test)]
 mod tests;
@@ -143,7 +144,27 @@ impl Drop for PendingHttpCapture {
             return;
         };
         event.timestamp = Utc::now();
-        if let Some(ended) = self.termination.cancelled() {
+        let transport = self.termination.connection_observation();
+        if self.state.session_events()
+            && !event.request_body.truncated
+            && let Some(boundary) = transport
+                .engine_stop_boundary()
+                .filter(|at| *at >= self.started)
+            && transport
+                .connection_end_before(TerminationSide::Client, boundary)
+                .is_none()
+            && let Some(capture) = self
+                .targets
+                .capture
+                .as_ref()
+                .filter(|capture| !capture.wire_terminal())
+        {
+            // The service future never returned a response to the HTTP writer.
+            event.timestamp = crate::dependency::termination::observed_wall_time(boundary);
+            event.outcome = DependencyExchangeOutcome::NoResponse;
+            event.duration_ms = boundary.duration_since(self.started).as_millis();
+            capture.output(OutputKind::TargetStop);
+        } else if let Some(ended) = self.termination.cancelled() {
             event.timestamp = crate::dependency::termination::observed_wall_time(ended.at);
             event.outcome = DependencyExchangeOutcome::Terminated(ended.termination);
             event.duration_ms = ended.at.saturating_duration_since(self.started).as_millis();

@@ -80,7 +80,7 @@ fn commit(root: &Path, name: &str) -> String {
 fn assignment_id(workflow: &Workflow, group: &str) -> Uuid {
     workflow
         .groups
-        .assignments(AssignmentDetail::Full)
+        .assignments()
         .as_array()
         .unwrap()
         .iter()
@@ -125,7 +125,8 @@ fn ownership_reuses_the_existing_group_and_only_accepts_the_current_sequence() {
         .enqueue("pipelines", item("api:POST /pipelines", &[11, 13]), BASE);
     workflow.reserve_worktrees(|| Ok(2)).unwrap();
 
-    let action = workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full);
+    let action =
+        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
     let lease = assignment_id(&workflow, "pipelines");
     assert_eq!(action["kind"], "ownership_required");
     assert_eq!(action["details"]["seq"], 9);
@@ -150,8 +151,9 @@ fn ownership_reuses_the_existing_group_and_only_accepts_the_current_sequence() {
     workflow
         .reserve_worktrees(|| panic!("reuse the assigned worktree"))
         .unwrap();
-    let action = workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full);
-    assert_eq!(action["kind"], "implementation_required");
+    let action =
+        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
+    assert_eq!(action["kind"], "dispatch_required");
     let assignments = action["details"]["assignments"].as_array().unwrap();
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0]["name"], "api-implementer-2");
@@ -246,7 +248,8 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             fix("refresh", refresh_id, &repair, &[9]),
         )
         .unwrap();
-    let action = workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full);
+    let action =
+        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
     assert_eq!(action["kind"], "integration_required");
     assert_eq!(action["details"]["fixes"].as_array().unwrap().len(), 3);
     assert_eq!(
@@ -302,7 +305,8 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
                     group: "startup".into(),
                     assignment_id: lease,
                     sequences: [9].into(),
-                    checks: vec!["checked".into()]
+                    checks: vec!["checked".into()],
+                    confirms_apis: false,
                 }
             )
             .is_err()
@@ -333,8 +337,9 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
     workflow
         .observe_failure(root, root, BASE, &retry, 9)
         .unwrap();
-    let action = workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full);
-    assert_eq!(action["kind"], "implementation_required");
+    let action =
+        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
+    assert_eq!(action["kind"], "dispatch_required");
     assert_eq!(
         action["details"]["assignments"][0]["name"],
         "api-implementer-1"

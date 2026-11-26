@@ -5,6 +5,8 @@ use uuid::Uuid;
 use crate::DependencyExchangeOutcome;
 use crate::recording::{CapturePhase, ProtocolRef};
 
+pub const UNDELIVERED_NOTIFICATION: &str = "notification_not_delivered";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutputKind {

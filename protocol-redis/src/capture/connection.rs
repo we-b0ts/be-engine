@@ -33,6 +33,7 @@ mod tests;
 mod writer;
 use events::{record_connection, record_exchange, record_termination};
 use writer::run_ordered_writer;
+pub(crate) use writer::write_payload;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionContext {

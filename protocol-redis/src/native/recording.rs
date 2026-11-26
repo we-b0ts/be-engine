@@ -269,12 +269,22 @@ impl Capture {
             .begin_message(&event)
             .await?
             .context("Redis notification capture admission is closed")?;
-        let (receipt, late_capture) = if permit.supports_staged_output() {
+        let staged = permit.supports_staged_output();
+        let (receipt, late_capture) = if staged {
             (permit.stage_output(event, OutputKind::End).await?, None)
         } else {
             (permit.prepare_output(OutputKind::End)?, Some(permit))
         };
-        client.write_all(&frame.raw).await?;
+        let (written, result) = crate::capture::connection::write_payload(client, &frame.raw).await;
+        if let Err(error) = result {
+            if staged
+                && written == 0
+                && traffic_protocol::transport::is_connection_termination(error.kind())
+            {
+                receipt.cancel_unwritten_notification()?;
+            }
+            return Err(error.into());
+        }
         client.flush().await?;
         receipt.commit();
         if let Some(permit) = late_capture {
