@@ -12,7 +12,9 @@ use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use traffic_model::{
-    recording::identity::IdentityKind, session::SessionEvent, trace::RecordedEvent,
+    recording::identity::IdentityKind,
+    session::{SIGKILL_EXIT_STATUS, SessionEvent},
+    trace::RecordedEvent,
 };
 use uuid::Uuid;
 
@@ -84,10 +86,20 @@ pub(crate) fn split(
     };
     let payload = match &event.event {
         SourceStart | Ready | Stop => None,
-        SourceExit { status } => {
+        SourceExit {
+            status,
+            forced_by_recorder,
+        } => {
             match status {
                 Some(status) => write!(row, "\t{status}")?,
                 None => row.extend_from_slice(b"\t-"),
+            }
+            if *forced_by_recorder {
+                ensure!(
+                    *status == Some(SIGKILL_EXIT_STATUS),
+                    "Recorder-forced Source exit requires SIGKILL status"
+                );
+                row.extend_from_slice(b"\trecorder_forced");
             }
             None
         }
@@ -370,12 +382,21 @@ fn decode(
         PrimaryEventKind::SourceStart => SessionEvent::SourceStart,
         PrimaryEventKind::Ready => SessionEvent::Ready,
         PrimaryEventKind::Stop => SessionEvent::Stop,
-        PrimaryEventKind::SourceExit => SessionEvent::SourceExit {
-            status: match field(&mut cells, "exit status")? {
+        PrimaryEventKind::SourceExit => {
+            let status = match field(&mut cells, "exit status")? {
                 b"-" => None,
                 status => Some(parse(status, "exit status")?),
-            },
-        },
+            };
+            let forced_by_recorder = match cells.next() {
+                None => false,
+                Some(b"recorder_forced") if status == Some(SIGKILL_EXIT_STATUS) => true,
+                Some(_) => anyhow::bail!("invalid Source exit disposition"),
+            };
+            SessionEvent::SourceExit {
+                status,
+                forced_by_recorder,
+            }
+        }
         PrimaryEventKind::PrimaryRequest => SessionEvent::PrimaryRequest {
             exchange: IdentityKind::Case.bridge(recording_id, sequence),
             request: decode_document(field(&mut cells, "primary request")?, segments)?,
@@ -457,6 +478,63 @@ fn parse_reference(cell: &[u8]) -> Result<PayloadRef> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn source_exit_preserves_the_verified_recorder_stop_disposition() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut segments = SegmentWindow::new_copying(root.path().to_owned());
+        let recording_id = Uuid::new_v4();
+        for (status, forced_by_recorder, expected_row) in [
+            (None, false, "12\t15\tsource_exit\t-\n"),
+            (Some(143), false, "12\t15\tsource_exit\t143\n"),
+            (
+                Some(SIGKILL_EXIT_STATUS),
+                false,
+                "12\t15\tsource_exit\t137\n",
+            ),
+            (
+                Some(SIGKILL_EXIT_STATUS),
+                true,
+                "12\t15\tsource_exit\t137\trecorder_forced\n",
+            ),
+        ] {
+            let (pending, payload) = split(
+                &RecordedEvent {
+                    sequence: 12,
+                    offset_micros: 15,
+                    event: SessionEvent::SourceExit {
+                        status,
+                        forced_by_recorder,
+                    },
+                },
+                None,
+            )?;
+            assert!(payload.is_none());
+            let row = pending.encode(None)?;
+            assert_eq!(row, expected_row.as_bytes());
+            let (sequence, _, kind, fields) = parse_prefix(&row)?;
+            assert!(matches!(
+                decode(primary_kind(kind).unwrap(), sequence, fields, recording_id, &mut segments)?,
+                ReplayEvent::Event(SessionEvent::SourceExit {
+                    status: read_status,
+                    forced_by_recorder: read_forced
+                }) if (read_status, read_forced) == (status, forced_by_recorder)
+            ));
+        }
+        for fields in [b"0\trecorder_forced".as_slice(), b"137\tunverified"] {
+            assert!(
+                decode(
+                    PrimaryEventKind::SourceExit,
+                    12,
+                    fields,
+                    recording_id,
+                    &mut segments
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn primary_parts_link_to_the_request_sequence_and_read_raw_payloads() -> Result<()> {

@@ -68,6 +68,8 @@ pub(crate) struct TargetStopEvidence {
     pub(crate) container_name: String,
     pub(crate) exit_code: i64,
     pub(crate) removed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) running_before_stop: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

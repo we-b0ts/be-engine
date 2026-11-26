@@ -125,7 +125,10 @@ mod tests {
         capture.observe(&SessionEvent::SourceStart).unwrap();
         capture.observe(&SessionEvent::Stop).unwrap();
         capture
-            .observe(&SessionEvent::SourceExit { status: Some(1) })
+            .observe(&SessionEvent::SourceExit {
+                status: Some(1),
+                forced_by_recorder: false,
+            })
             .unwrap();
         assert!(!capture.complete());
         assert!(capture.observe(&SessionEvent::Ready).is_err());

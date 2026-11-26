@@ -175,7 +175,10 @@ async fn session_notification_is_available_before_its_wire_output_attempt() -> R
         .context("missing notification sequence")?;
     pending.stage_output(event, OutputKind::End).await?.commit();
     state.session_event(SessionEvent::Stop)?;
-    state.session_event(SessionEvent::SourceExit { status: Some(0) })?;
+    state.session_event(SessionEvent::SourceExit {
+        status: Some(0),
+        forced_by_recorder: false,
+    })?;
     state.recorder().finish_run().await?;
     let root = &state.recorder().run_dir;
     let timeline = std::fs::read_to_string(root.join(traffic_recording_store::session::FILE))?;

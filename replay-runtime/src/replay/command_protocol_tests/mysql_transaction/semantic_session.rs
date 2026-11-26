@@ -182,7 +182,13 @@ async fn seal(root: &Path, statements: &[(&str, u16, u16)]) -> Result<u64> {
     let stop = sequence;
     for (sequence, event) in [
         (stop, SessionEvent::Stop),
-        (stop + 1, SessionEvent::SourceExit { status: Some(0) }),
+        (
+            stop + 1,
+            SessionEvent::SourceExit {
+                status: Some(0),
+                forced_by_recorder: false,
+            },
+        ),
     ] {
         ledger
             .append_session_event(&mut files, &recorded(sequence, event))

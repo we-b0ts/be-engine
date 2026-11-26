@@ -104,7 +104,10 @@ async fn verify_session() {
     gateway.abort();
     let _ = gateway.await;
     state
-        .session_event(SessionEvent::SourceExit { status: Some(0) })
+        .session_event(SessionEvent::SourceExit {
+            status: Some(0),
+            forced_by_recorder: false,
+        })
         .unwrap();
     state.recorder().finish_run().await.unwrap();
     let rows: Vec<SessionEvent> = traffic_recording_store::session::read(&state.recorder().run_dir)
@@ -128,7 +131,7 @@ async fn verify_session() {
             ..,
             SessionEvent::PrimaryCancel { exchange, reason },
             SessionEvent::Stop,
-            SessionEvent::SourceExit { status: Some(0) }
+            SessionEvent::SourceExit { status: Some(0), forced_by_recorder: false }
         ] if *exchange == long_id && reason == ENGINE_SHUTDOWN_CANCEL_REASON
     ));
     let run_dir = &state.recorder().run_dir;

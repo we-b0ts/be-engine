@@ -494,8 +494,11 @@ async fn apply(
             control.commit(sequence).await?;
             return target.stop().await;
         }
-        SessionEvent::SourceExit { status } => {
-            target.exited(status).await?;
+        SessionEvent::SourceExit {
+            status,
+            forced_by_recorder,
+        } => {
+            target.exited(status, forced_by_recorder).await?;
             None
         }
         SessionEvent::PrimaryRequest { exchange, request } => {

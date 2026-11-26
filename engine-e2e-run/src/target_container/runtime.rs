@@ -410,7 +410,10 @@ pub(crate) async fn verify_listen_address(container: &str, port: u16) -> Result<
     Ok(())
 }
 
-pub(crate) async fn capture_diagnostics(container: &str, reports_dir: &Path) -> Result<()> {
+pub(crate) async fn capture_diagnostics(
+    container: &str,
+    reports_dir: &Path,
+) -> Result<TargetRuntimeState> {
     validate_name(container)?;
     let output = docker_output(
         Command::new("docker").args([
@@ -453,7 +456,7 @@ pub(crate) async fn capture_diagnostics(container: &str, reports_dir: &Path) -> 
     tokio::fs::write(reports_dir.join("target-state.json"), payload)
         .await
         .context("failed to persist target runtime state")?;
-    Ok(())
+    Ok(state)
 }
 
 fn bounded_log(log: Vec<u8>) -> Vec<u8> {
@@ -509,6 +512,7 @@ pub(crate) async fn stop_target(target_root: &Path, container: &str) -> Result<T
         container_name: container.to_string(),
         exit_code: inspection.state.exit_code,
         removed: true,
+        running_before_stop: None,
     })
 }
 

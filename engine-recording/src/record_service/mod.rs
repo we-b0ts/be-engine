@@ -24,7 +24,7 @@ use tokio::{
     sync::{oneshot, watch},
 };
 use tracing::{info, warn};
-use traffic_model::session::SessionEvent;
+use traffic_model::session::{SIGKILL_EXIT_STATUS, SessionEvent};
 
 /// Initializes Recorder and Source, advertises after readiness, and serves
 /// independently of best-effort address registration.
@@ -156,6 +156,7 @@ async fn run_prepared(
     let mut adapter = None;
     let mut recorder_finished = false;
     let mut adapter_finished = false;
+    let mut source_ready = false;
     let mut normal_shutdown = false;
     let mut result = async {
         tokio::select! {
@@ -192,6 +193,7 @@ async fn run_prepared(
             adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
         }
         relay.open();
+        source_ready = true;
         info!(listen = %options.listen, run_id = %state.recorder().run_dir.file_name().unwrap().to_string_lossy(),
             manifest = %state.recorder().run_dir.join("recording-run.json").display(),
             coordination = ?options.coordination, max_inflight_requests = capacity.get(),
@@ -245,16 +247,18 @@ async fn run_prepared(
             Ok(())
         };
         let cleanup = process::stop_source(source).await;
-        cleanup.and_then(|()| {
+        cleanup.and_then(|stopped| {
             if state.session_events() {
-                use std::os::unix::process::ExitStatusExt;
-                let status = source.try_wait()?.and_then(|status| {
-                    status
-                        .code()
-                        .or_else(|| status.signal().map(|signal| 128 + signal))
-                });
-                state.session_event(SessionEvent::SourceExit { status })?;
-                if status == Some(128 + libc::SIGKILL) {
+                let forced_by_recorder = source_ready
+                    && normal_shutdown
+                    && result.is_ok()
+                    && stop_receipt.is_ok()
+                    && stopped.forced_by_recorder;
+                state.session_event(SessionEvent::SourceExit {
+                    status: stopped.status,
+                    forced_by_recorder,
+                })?;
+                if stopped.status == Some(SIGKILL_EXIT_STATUS) && !forced_by_recorder {
                     let error =
                         anyhow::anyhow!("Source was killed before session shutdown completed");
                     state.fail_session_recording(&error);

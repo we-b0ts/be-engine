@@ -43,6 +43,12 @@ During shutdown, the recorder closes admission and gives active ingress up to
 15 seconds to finish. It records `primary_cancel` with reason `engine_shutdown`
 for each remaining request and disconnects it before stopping Source. Replay
 disconnects the corresponding Target request at that event's sequence.
+If Recorder initiates a normal stop and the Source outlasts its SIGTERM
+deadline, Recorder can finish cleanup with SIGKILL. It records the raw exit
+status and the verified Recorder-forced disposition. Recording completeness
+still depends on the live capture ledger and the normal seal checks. Replay
+matches the recorded shutdown events through Source exit and accepts a Target
+that completes its requested stop with status 0 or 143.
 Protocol adapters handle canonical transport maintenance locally. Replay
 validates the evidence for driver setup or cleanup before omitting the
 corresponding recorded exchanges from the required sequence.

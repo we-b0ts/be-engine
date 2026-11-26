@@ -151,7 +151,13 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
         .await?;
     for (sequence, event) in [
         (13, SessionEvent::Stop),
-        (14, SessionEvent::SourceExit { status: Some(0) }),
+        (
+            14,
+            SessionEvent::SourceExit {
+                status: Some(0),
+                forced_by_recorder: false,
+            },
+        ),
     ] {
         ledger
             .append_session_event(&mut files, &recorded(sequence, event))
