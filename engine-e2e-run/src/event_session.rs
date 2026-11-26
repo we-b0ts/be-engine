@@ -19,7 +19,9 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::process::Child;
-use traffic_engine_e2e_contract::{E2eEventSessionApiProgress, E2eEventSessionPhase};
+use traffic_engine_e2e_contract::{
+    E2eEventSessionApiProgress, E2eEventSessionCaseProgress, E2eEventSessionPhase,
+};
 use traffic_engine_evidence::session::SessionApiCounts;
 use traffic_model::{
     session::{ENGINE_SHUTDOWN_CANCEL_REASON, SessionEvent},
@@ -79,11 +81,13 @@ pub async fn run_e2e_event_session_with_apis(
         recording_root: layout.case_source.clone(),
         target_commit: options.expected_target_commit,
         target_inputs,
+        engine_revision: Some(crate::build_info::ENGINE_FINGERPRINT.to_owned()),
         target_image_id: None,
         passed: false,
         events: E2eEventSessionProgress::default(),
         phase: E2eEventSessionPhase::PreparingReplay,
         apis: E2eEventSessionApiProgress::default(),
+        cases: E2eEventSessionCaseProgress::default(),
         error: None,
         progress: layout.run_root.join(state::PROGRESS),
         report: state.replay_report.clone(),
@@ -103,6 +107,7 @@ pub async fn run_e2e_event_session_with_apis(
         .await
         .context("session recording reader task failed")??;
         result.apis = apis.status();
+        result.cases = apis.case_status();
         state::publish_progress(&result)?;
         let replay = run(&config, &layout, state, tape, &mut result, &mut apis).await;
         api_counts = apis.into_counts();
@@ -198,6 +203,7 @@ async fn run(
             control.status().await?,
             E2eEventSessionPhase::Building,
             apis.status(),
+            apis.case_status(),
             result,
         )?;
         runtime::build_target_image(config, layout, timer.is_some()).await
@@ -223,11 +229,13 @@ async fn run(
             progress,
             phase,
             apis.status(),
+            apis.case_status(),
             result,
         ));
     } else {
         result.phase = phase;
         result.apis = apis.status();
+        result.cases = apis.case_status();
     }
     let complete = result.events.complete
         && result.events.failure.is_none()
@@ -248,7 +256,13 @@ async fn run(
         {
             let _ = control.fail(sequence, &short_error(error)).await;
             if let Ok(progress) = control.status().await {
-                let _ = publish_result_progress(progress, result.phase, apis.status(), result);
+                let _ = publish_result_progress(
+                    progress,
+                    result.phase,
+                    apis.status(),
+                    apis.case_status(),
+                    result,
+                );
             }
         }
         target.stop_after_failure().await;
@@ -338,11 +352,11 @@ async fn drive(
             _ = tick.tick() => {
                 let progress = control.status().await?;
                 let failed = progress.failure.is_some();
-                let (phase, apis) = {
+                let (phase, apis, cases) = {
                     let live = live.lock().expect("Replay driver progress");
-                    (live.phase, live.apis.status())
+                    (live.phase, live.apis.status(), live.apis.case_status())
                 };
-                publish_result_progress(progress, phase, apis, result)?;
+                publish_result_progress(progress, phase, apis, cases, result)?;
                 ensure!(!failed, "event regression stopped at its first mismatch");
             }
         }
@@ -546,9 +560,14 @@ fn publish_result_progress(
     progress: E2eEventSessionProgress,
     phase: E2eEventSessionPhase,
     apis: E2eEventSessionApiProgress,
+    cases: E2eEventSessionCaseProgress,
     result: &mut E2eEventSessionResult,
 ) -> Result<()> {
-    if result.events != progress || result.phase != phase || result.apis != apis {
+    if result.events != progress
+        || result.phase != phase
+        || result.apis != apis
+        || result.cases != cases
+    {
         tracing::info!(
             matched = progress.matched,
             total = ?progress.total,
@@ -556,11 +575,14 @@ fn publish_result_progress(
             ?phase,
             verified_apis = apis.verified,
             total_apis = ?apis.total,
+            completed_cases = cases.completed,
+            total_cases = ?cases.total,
             "event regression progress"
         );
         result.events = progress;
         result.phase = phase;
         result.apis = apis;
+        result.cases = cases;
         state::publish_progress(result)?;
     }
     Ok(())

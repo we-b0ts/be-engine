@@ -1127,19 +1127,23 @@ ID once the caller approves.
 be-replay --target-root /absolute/target status
 be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 be-replay --target-root /absolute/target status
+be-replay --target-root /absolute/target apis
 be-replay --target-root /absolute/target events --from-seq 182 --window-seconds 60
 ```
 
 The work branch keeps the recording for retries. Use `status --attempt-id UUID`
 to inspect a specific attempt with its recording ID and run key when needed.
 After an event failure, use `failure.seq` to query the Source timeline and
-`action.kind` to select the workflow step. The analyst can use `events --seq`,
-`dependency SEQ`, and `target --attempt UUID OBSERVATION_ID` to inspect
+`action.kind` to select the workflow step. When present, `action.command`
+provides the next `be-replay` arguments as an array. The analyst can use
+`events --seq`, `dependency SEQ`, and `target --attempt UUID OBSERVATION_ID` to inspect
 observations and group symptoms that likely share one repair. The coordinator
 submits the reviewed `first_unmatched` and optional `others` with
-`plan --attempt-id UUID --findings FILE`. Implementers confirm the cause and
-choose the repair. Use `report --file FILE` to register tested fixes, confirmed
-engine gaps, and the published candidate.
+`plan --attempt-id UUID --findings FILE`. The same command accepts the
+complete `apis` review while the first repair proceeds. Use the engine's
+group, worker name, worktree, and frozen base for every assignment.
+Implementers confirm the cause and choose the repair. Use `report --file FILE`
+to register tested fixes, confirmed engine gaps, and the published candidate.
 [Source session regression](session-regression.md)
 
 <details>

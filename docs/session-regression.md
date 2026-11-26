@@ -86,52 +86,81 @@ code or inputs or when a different commit supersedes a failure without a
 reviewed repair. `session.attempt_id` identifies the attempt. `session` can
 also include the Target commit for that attempt. `failure` can give `seq`,
 an `expected` event summary, a `reason`, and a `target_observation_id`.
-`action` contains a `kind`, a short `summary`, and any `details` and `commands`
-for the coordinator to act on. `commands` contains workflow argument lists,
-such as `action.commands.plan` or `action.commands.run`. Status for a historical
-attempt has `action: null`.
+`action` contains a `kind` and a short `summary`, with optional `details` and
+`command`. When present, `action.command` is an argument array for
+`be-replay`, such as `["status"]`. Historical attempts have `action: null`.
+
+When the action has assignments, `status` lists each `group`, its `pending`
+finding count, and any reserved worker `name` and `worktree` under
+`action.details.assignments`. Use `status --with-assignments` for the complete
+current assignment details, including the originating attempt, frozen base,
+findings, and any API work. `plan` and `report` return the full details when
+their actions include assignments.
 
 The top-level `phase` advances through `preparing_replay`, `building`,
 `starting_target`, `replaying`, and `finalizing`, then reaches `complete` after a
 pass. Before the first attempt, `phase` and `progress` are `null`.
 
 ```json
-{"phase":"replaying","progress":{"apis":"0/17","events":"17893/942000"}}
+{"phase":"replaying","progress":{"apis":"0/17","cases":"3/150","events":"17893/942000","previous_events":"4337/942000"}}
 ```
 
 `progress.events` shows the last reached Source sequence over the sealed
 recording's final Source sequence. Source sequence numbers can have gaps.
-Once Replay completes, both values show the final sequence.
+The numerator reaches the final sequence when Replay completes the timeline.
+`progress.previous_events` shows the preceding attempt's endpoint in the same
+format when its progress snapshot is available. Older rounds can populate
+this field when the next attempt starts.
+`progress.cases` counts completed ingress requests over recorded ingress
+requests, excluding readiness checks. Matching a recorded cancellation counts
+as completing the exchange.
 `progress.apis` shows verified API labels over the total from the sealed route
 inventory after applying `.traffic-e2e/apis.yaml`. An API label is verified
-once all its recorded primary exchanges have ended or been cancelled in the
-matched prefix. An unavailable total appears as `?`.
+once all its recorded primary exchanges have completed or matched their
+recorded cancellation. An unavailable total appears as `?`.
 
 | `action.kind` | Coordinator action |
 | --- | --- |
 | `checkout_target_branch` | Check out a named branch. |
 | `select_recording` | Obtain the exact ID of a sealed recording. |
-| `switch_recording` | Use the returned `switch` command to select the recording on the current work branch. |
+| `switch_recording` | Run `action.command` to select the recording on the current work branch. |
 | `confirm_regression` | Obtain caller approval and use the confirmed `run` command. |
+| `configuration_commit_required` | Review the paths in `action.details.files`, commit the intended configuration, and check `status` again. |
 | `setup_required` | Resolve the setup error or route a confirmed engine issue to its owner. |
-| `analysis_required` | Assign the first divergence to an Issue Analyst and review the findings. |
-| `implementation_required` | Dispatch the eligible findings and accept tested fixes as they arrive. |
+| `analysis_required` | Assign the first divergence to an Issue Analyst. Start the API review in parallel when requested in `action.details`. |
+| `api_review_required` | Submit a confirmation for every recorded API after a pass with outstanding review. |
+| `implementation_required` | Dispatch the engine's groups using their assigned worktree paths and accept tested fixes as they arrive. |
 | `integration_required` | Integrate the selected fixes, validate and publish the candidate, and submit its receipt. |
-| `advance_required` | Use `action.commands.run` to start a full Replay on the selected revision. |
+| `advance_required` | Run `action.command` to start a full Replay on the selected revision. |
 | `wait_required` | Check active Replay or outstanding assignments and use `status` to follow progress. |
-| `complete` | The selected revision has passed Replay. |
+| `complete` | The selected revision has passed Replay and required API work is complete. |
+
+The engine checks that `.traffic-e2e/project.yaml`, `.traffic-e2e/apis.yaml`,
+and the effective policy are committed before `run`, `plan`, and candidate
+publication. Paths in `action.details.files` are relative to the Target root.
+
+After a mismatch, an eligible new committed engine revision can trigger
+`advance_required` with `action.details.reason` set to `engine_changed`. This
+runs the same Target code again, including any configuration-only commits.
+The round grants one such retry for the new engine revision. Rebuilding the
+same revision or returning to an already tried revision uses the existing
+retry identity.
 
 ```mermaid
 flowchart LR
     replay[Full Replay] -->|first failed Source seq| analysis[Issue Analyst]
     replay -->|execution error| setup[Coordinator resolves setup]
     setup --> replay
-    analysis -->|reviewed first_unmatched and other findings| plan[Engine selects assignments]
-    plan -->|independent assignments| work[Implementers]
+    analysis -->|first_unmatched with scope and group| plan[Engine selects assignments]
+    analysis -->|recorded API inventory| review[API review]
+    replay -->|pass with review outstanding| review
+    review -->|findings.apis with work outstanding| plan
+    review -->|passing attempt and APIs confirmed| complete[Complete]
+    plan -->|group, worker name, worktree, and frozen base| work[Implementers]
     work -->|engine gap at first unmatched event| setup
-    work -->|tested fix for first unmatched event| integration[Integrator]
+    work -->|tested fix for current priority| integration[Integrator]
     integration -->|registered candidate commit| replay
-    replay -->|full pass on current revision| complete[Complete]
+    replay -->|full pass with review and repairs complete| complete
 ```
 
 ## Inspect evidence
@@ -142,8 +171,8 @@ event failure stops delivery at the first divergence. When `action.kind` is
 `analysis_required`, keep one active analyst per attempt. Pass the recording
 and attempt IDs, `failure.seq`, and the Source and Target repository locations
 and revisions. The analyst groups symptoms that appear to share one repair.
-The findings JSON names the first failure's group in `first_unmatched` and
-includes other groups under optional `others`.
+The findings JSON describes the first failure in `first_unmatched` and can
+include other findings under `others`.
 
 Read the exact Source event and page the surrounding timeline using the
 recording ID and sequence from status. Use `--from-seq` before the failure to
@@ -168,17 +197,26 @@ Explicit `--report` remains available for reading a specific report file.
 
 ## Plan, implement, and verify
 
-The coordinator reviews the findings JSON and runs `action.commands.plan`
-with the reviewed file. `--attempt-id` binds the findings to the exact
-attempt. The first submission must include `failure.seq` in
+The coordinator reviews the findings JSON and runs the `plan` in
+`action.command` with the reviewed file. `--attempt-id` binds the findings
+to the exact attempt. The first submission must include `failure.seq` in
 `first_unmatched.sequences`. Use `others` to add findings to the same attempt.
-Each finding contains a free-form `root_cause` string used as a stable group
-ID, a `summary`, and `sequences`. Optional `scope` identifies the owner or
-lifecycle, such as `startup`, `api:GET /users/{id}`, `job:sync_users`,
-`shutdown`, or `shared`. The planner deduplicates findings by group ID and
-prioritizes `first_unmatched`, then fills available slots up to
-`--max-implementers N` (1 to 16, default 16). The coordinator uses a separate
-worktree for each assignment and handles overlapping edits at integration.
+Each finding includes a stable `root_cause`, a `summary`, and `sequences`.
+Its required `scope` is `api:METHOD /path`, `job:NAME`, `startup`, or
+`shutdown`. Its required `group` identifies a set of findings one worker
+can implement together. The planner prioritizes `first_unmatched` and fills
+available slots by group up to `--max-implementers N` (1 to 16, default 16).
+The engine supplies each worker's name, base commit, and fixed Target-relative
+worktree under `.traffic-e2e/local/rewrite-worktrees/api-implementer-<n>`.
+
+The analyst can submit the first unmatched finding before finishing the
+API review. `be-replay apis` uses the sealed Session summary and Target catalog
+to list API labels and literal paths. The analyst confirms every label under
+`findings.apis`, marking whether it is implemented and providing a case
+pattern and group for uncatalogued labels. The engine dispatches missing
+implementations and mappings with the corresponding groups. A passing Replay
+can still require this review and subsequent implementation.
+
 Implementers confirm the cause and deliver a tested Target or time, ID, or
 token policy repair.
 Events after the failure provide context for investigation and receive
@@ -187,13 +225,13 @@ verification credit when a later Replay reaches them.
 Submit ready fixes with `be-replay report --file FILE`. Each `fixes` receipt
 binds the originating attempt to the causes, commits, and checks it delivers.
 When an implementer confirms a gap in Replay, the coordinator registers an
-`engine_gap` report with the originating attempt, group ID, and observed
+`engine_gap` report with the originating attempt, `root_cause`, and observed
 evidence. The coordinator routes it to the engine owner and follows
 `setup_required` to retry when the gap accounts for the first unmatched
 event. Once a fix for that event is ready, the coordinator can integrate
 it while independent work continues. The integrator
 checks the candidate, and the coordinator publishes and registers its exact
-commit. The `candidate` receipt names the current failed attempt, the
+commit. The `candidate` receipt names the current finished attempt, the
 published `HEAD`, the included fix commits, and the checks. Follow `status`
 to run full Replay against the candidate. [Finding and report formats](../plugins/ai-engine/skills/be-replay/references/session-regression.md#plan-implement-and-verify)
 

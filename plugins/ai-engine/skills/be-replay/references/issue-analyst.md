@@ -1,9 +1,8 @@
 # Issue Analyst
 
-The coordinator dispatches the read-only `issue-analyst` role when
-`action.kind` is `analysis_required`. Scope your investigation to the
-assigned Source and Target repository locations and revisions,
-`recording_id`, `session.attempt_id`, and `failure.seq`.
+The coordinator uses the read-only `issue-analyst` role for first-unmatched
+analysis and recorded API review. Use the assigned recording and Source
+and Target revisions. Submit the first finding as soon as it is ready.
 
 ## Source Session failure
 
@@ -21,11 +20,24 @@ trigger, or lifecycle and compare any available Target observation. Trace the
 code far enough to identify which symptoms likely share one repair.
 [Evidence commands](session-regression.md#diagnose-the-first-failure)
 
-Return one finding per likely shared repair. Choose a free-form, stable
-`root_cause` string as the group ID and include a short `summary` and the
-related `sequences`. Put the finding containing `failure.seq` in
-`first_unmatched` and use optional `others` for additional findings. Add
-`scope` to identify ownership or lifecycle.
-The coordinator reviews the findings and runs `action.commands.plan`.
-Implementers confirm the cause and choose the repair.
+Put the finding containing `failure.seq` in `first_unmatched`. Use optional
+`others` for separate problems ready for dispatch. Give each finding a stable
+`root_cause`, a short `summary`, and related `sequences`. Assign one owning
+`scope` and its dispatch `group`. Use `api:METHOD /path` for ingress-owned work,
+`job:NAME` for background jobs, and `startup` or `shutdown` for lifecycle work.
+Reuse the API catalog's group where available. Group jobs by the subsystem or
+shared implementation boundary that one worker can own. Implementers verify
+the cause and choose the repair.
 [Finding format](session-regression.md#plan-implement-and-verify)
+
+## Recorded API review
+
+Run `be-replay apis` from the canonical Target. For each returned `api`, verify
+implementation in the Target for every literal path in `paths`. Return one row
+per returned label with `implemented: true` or `false`. For an uncatalogued API,
+propose its `case_pattern` and `group`. Distinct literal API labels may share
+a single proposed pattern and group if they represent the same route.
+
+Return all rows together under `apis`. The coordinator submits this review
+alongside or after `first_unmatched`. The engine dispatches missing
+implementations and catalog entries by group.

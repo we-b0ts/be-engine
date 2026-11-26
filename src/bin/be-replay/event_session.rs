@@ -33,7 +33,12 @@ pub(super) enum SourceCommand {
         /// Read one attempt by its UUID.
         #[arg(long)]
         attempt_id: Option<uuid::Uuid>,
+        /// Include full findings and API work in the current assignments.
+        #[arg(long)]
+        with_assignments: bool,
     },
+    /// List the recorded APIs, case patterns, groups and first Source sequences.
+    Apis,
     /// Read a bounded page of the Source timeline.
     Events {
         #[arg(long, default_value_t = 0)]
@@ -105,7 +110,23 @@ pub(super) async fn run(
         SourceCommand::Status {
             run_key,
             attempt_id,
-        } => status::show(&target_root, id, run_key.as_deref(), attempt_id, pretty),
+            with_assignments,
+        } => status::show(
+            &target_root,
+            id,
+            run_key.as_deref(),
+            attempt_id,
+            with_assignments,
+            pretty,
+        ),
+        SourceCommand::Apis => {
+            let recording = workflow::evidence_recording(&target_root, id)?;
+            let apis = session::recorded_apis(&target_root, &recording.root)?;
+            super::print_json(
+                &serde_json::json!({"recording_id": recording.id, "apis": apis}),
+                pretty,
+            )
+        }
         SourceCommand::Plan {
             findings,
             max_implementers,

@@ -41,6 +41,12 @@ pub struct E2eEventSessionApiProgress {
     pub total: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct E2eEventSessionCaseProgress {
+    pub completed: u64,
+    pub total: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct E2eEventSessionCounts {
     pub matched: usize,
@@ -48,10 +54,18 @@ pub struct E2eEventSessionCounts {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct E2eEventSessionSequenceProgress {
+    pub last_sequence: Option<u64>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct E2eEventSessionStatusProgress {
     pub phase: E2eEventSessionPhase,
     pub events: E2eEventSessionCounts,
     pub apis: E2eEventSessionApiProgress,
+    #[serde(default)]
+    pub cases: E2eEventSessionCaseProgress,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +78,8 @@ pub struct E2eEventSessionResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_inputs: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_image_id: Option<String>,
     pub passed: bool,
     pub events: E2eEventSessionProgress,
@@ -71,6 +87,8 @@ pub struct E2eEventSessionResult {
     pub phase: E2eEventSessionPhase,
     #[serde(default)]
     pub apis: E2eEventSessionApiProgress,
+    #[serde(default)]
+    pub cases: E2eEventSessionCaseProgress,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub progress: PathBuf,
@@ -92,4 +110,6 @@ pub struct E2eEventSessionStatus {
     pub state: E2eEventSessionState,
     pub progress: Option<E2eEventSessionStatusProgress>,
     pub attempt: Option<E2eEventSessionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_events: Option<E2eEventSessionSequenceProgress>,
 }

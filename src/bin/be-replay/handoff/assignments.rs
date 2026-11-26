@@ -22,13 +22,51 @@ pub(super) struct EscalatedGap<'a> {
 
 #[derive(Serialize)]
 pub(super) struct Assignment<'a> {
+    group: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<std::path::PathBuf>,
     #[serde(with = "uuid::serde::simple")]
     attempt_id: Uuid,
     base_commit: Option<&'a str>,
-    finding: &'a Finding,
+    findings: Vec<&'a Finding>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    apis: Vec<&'a ApiConfirmation>,
+}
+
+#[derive(Serialize)]
+struct AssignmentSummary<'a> {
+    group: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<&'a Path>,
+    pending: usize,
+}
+
+pub(super) fn assignment_rows(assignments: &[Assignment<'_>], detail: AssignmentDetail) -> Value {
+    match detail {
+        AssignmentDetail::Full => json!(assignments),
+        AssignmentDetail::Summary => json!(
+            assignments
+                .iter()
+                .map(|assignment| AssignmentSummary {
+                    group: assignment.group,
+                    name: assignment.name.as_deref(),
+                    worktree: assignment.worktree.as_deref(),
+                    pending: assignment.findings.len(),
+                })
+                .collect::<Vec<_>>()
+        ),
+    }
 }
 
 impl Repair {
+    pub(super) fn priority(&self) -> Option<&str> {
+        self.first_unmatched.as_deref().or(self.api_work.as_deref())
+    }
+
     pub(super) fn findings(&self) -> impl Iterator<Item = &Finding> {
         self.plan.implementers.iter().chain(&self.plan.waiting)
     }
@@ -44,6 +82,11 @@ impl Repair {
             .find(|fix| fix.root_cause == cause)
     }
 
+    pub(super) fn fix_was_integrated(&self, workflow: &Workflow, cause: &str) -> bool {
+        self.fix(cause)
+            .is_some_and(|fix| workflow.fix_was_integrated(&fix.commit))
+    }
+
     fn is_assigned(&self, cause: &str) -> bool {
         self.plan
             .implementers
@@ -52,7 +95,11 @@ impl Repair {
     }
 
     fn is_active(&self, cause: &str) -> bool {
-        self.fix(cause).is_none() && !self.engine_gaps.contains_key(cause)
+        !self.has_delivery(cause)
+    }
+
+    pub(super) fn has_delivery(&self, cause: &str) -> bool {
+        self.fix(cause).is_some() || self.engine_gaps.contains_key(cause)
     }
 }
 
@@ -159,47 +206,109 @@ impl Workflow {
 
     pub(super) fn schedule(&self, repair: &Repair, mut findings: Vec<Finding>) -> DispatchPlan {
         let mut plan = DispatchPlan::default();
-        let mut active = self
+        let active = self
             .assignments()
             .filter(|(owner, finding)| owner.is_active(&finding.root_cause))
+            .collect::<Vec<_>>();
+        let mut causes = active
+            .iter()
             .map(|(_, finding)| finding.root_cause.as_str())
             .collect::<BTreeSet<_>>();
-        findings.sort_by_key(|finding| {
-            Some(finding.root_cause.as_str()) != repair.first_unmatched.as_deref()
-        });
+        let mut groups = active
+            .iter()
+            .map(|(owner, finding)| (finding.dispatch_group(), owner.attempt_id))
+            .collect::<BTreeMap<_, _>>();
+        findings.sort_by_key(|finding| Some(finding.root_cause.as_str()) != repair.priority());
         for finding in &findings {
             let cause = finding.root_cause.as_str();
+            let group = finding.dispatch_group();
+            let owner = groups.get(group);
             if repair.is_assigned(cause) {
                 plan.implementers.push(finding.clone());
-            } else if active.len() >= repair.max_implementers
-                || active.contains(cause)
+            } else if owner.map_or(groups.len() >= repair.max_implementers, |id| {
+                *id != repair.attempt_id
+            }) || causes.contains(cause)
                 || self.accepted_fix(cause).is_some()
                 || self.gap_for(repair.attempt_id, cause).is_some()
             {
                 plan.waiting.push(finding.clone());
             } else {
-                active.insert(cause);
+                causes.insert(cause);
+                groups.insert(group, repair.attempt_id);
                 plan.implementers.push(finding.clone());
             }
         }
         plan
     }
 
-    pub(super) fn current_assignments(&self, first_unmatched: &str) -> Vec<Assignment<'_>> {
-        let mut assignments: Vec<_> = self
+    pub(super) fn current_assignments(&self, priority: &str) -> Vec<Assignment<'_>> {
+        let mut grouped = BTreeMap::new();
+        for (owner, finding) in self
             .assignments()
             .filter(|(owner, finding)| owner.is_active(&finding.root_cause))
-            .map(|(owner, finding)| Assignment {
-                attempt_id: owner.attempt_id,
-                base_commit: owner.base_commit.as_deref(),
-                finding,
-            })
-            .collect();
-        assignments.sort_by_key(|assignment| assignment.finding.root_cause != first_unmatched);
+        {
+            let group = finding.dispatch_group();
+            let assignment = grouped.entry((owner.attempt_id, group)).or_insert_with(|| {
+                let slot = owner.worktrees.get(group).copied();
+                Assignment {
+                    group,
+                    name: slot.map(|slot| format!("api-implementer-{slot}")),
+                    worktree: slot.map(|slot| {
+                        traffic_e2e::repository::implementer_worktree(Path::new(""), slot)
+                    }),
+                    attempt_id: owner.attempt_id,
+                    base_commit: owner.base_commit.as_deref(),
+                    findings: Vec::new(),
+                    apis: Vec::new(),
+                }
+            });
+            assignment.findings.push(finding);
+            if let Some(api) = self
+                .api_review
+                .as_ref()
+                .and_then(|review| review.tasks.get(&finding.root_cause))
+            {
+                assignment.apis.extend(&api.apis);
+            }
+        }
+        let mut assignments: Vec<_> = grouped.into_values().collect();
+        assignments.sort_by_key(|assignment| {
+            !assignment
+                .findings
+                .iter()
+                .any(|finding| finding.root_cause == priority)
+        });
         assignments
     }
 
-    fn repairs(&self) -> impl Iterator<Item = &Repair> {
+    pub fn active_worktree_slots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.assignments()
+            .filter(|(owner, finding)| owner.is_active(&finding.root_cause))
+            .filter_map(|(owner, finding)| owner.worktrees.get(finding.dispatch_group()).copied())
+    }
+
+    pub fn reserve_worktrees(&mut self, mut allocate: impl FnMut() -> Result<usize>) -> Result<()> {
+        for repair in self.earlier.values_mut().chain(self.repair.iter_mut()) {
+            let groups: BTreeSet<_> = repair
+                .plan
+                .implementers
+                .iter()
+                .filter(|finding| finding.group.is_some() && repair.is_active(&finding.root_cause))
+                .map(|finding| finding.dispatch_group().to_owned())
+                .collect();
+            repair.worktrees.retain(|group, _| groups.contains(group));
+            for group in groups {
+                if let std::collections::btree_map::Entry::Vacant(entry) =
+                    repair.worktrees.entry(group)
+                {
+                    entry.insert(allocate()?);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn repairs(&self) -> impl Iterator<Item = &Repair> {
         self.repair.iter().chain(self.earlier.values())
     }
 
@@ -247,7 +356,7 @@ impl Workflow {
             return;
         };
         let prior_attempt = previous.attempt_id;
-        let Some(cause) = previous.first_unmatched.clone() else {
+        let Some(cause) = previous.priority().map(str::to_owned) else {
             return;
         };
         if let Some((owner, _)) = self.gap_for(prior_attempt, &cause)
@@ -263,17 +372,20 @@ impl Workflow {
     pub(super) fn accepted_fix(&self, cause: &str) -> Option<AcceptedFix<'_>> {
         self.repairs().find_map(|owner| {
             let fix = owner.fix(cause)?;
-            let integrated = self.repairs().any(|repair| {
-                repair
-                    .candidate
-                    .as_ref()
-                    .is_some_and(|candidate| candidate.included_fixes.contains(&fix.commit))
-            });
-            (!integrated).then_some(AcceptedFix {
+            (!self.fix_was_integrated(&fix.commit)).then_some(AcceptedFix {
                 attempt_id: owner.attempt_id,
                 root_cause: &fix.root_cause,
                 commit: &fix.commit,
             })
+        })
+    }
+
+    fn fix_was_integrated(&self, commit: &str) -> bool {
+        self.repairs().any(|repair| {
+            repair
+                .candidate
+                .as_ref()
+                .is_some_and(|candidate| candidate.included_fixes.contains(commit))
         })
     }
 }

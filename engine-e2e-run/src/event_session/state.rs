@@ -9,8 +9,8 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use traffic_engine_e2e_contract::{
-    E2eEventSessionApiProgress, E2eEventSessionCounts, E2eEventSessionPhase,
-    E2eEventSessionStatusProgress,
+    E2eEventSessionApiProgress, E2eEventSessionCaseProgress, E2eEventSessionCounts,
+    E2eEventSessionPhase, E2eEventSessionSequenceProgress, E2eEventSessionStatusProgress,
 };
 use uuid::Uuid;
 
@@ -25,6 +25,30 @@ const INITIAL_RESULT: &str = "event-attempt.json";
 const FINAL_RESULT: &str = "event-result.json";
 pub(super) const PROGRESS: &str = "event-progress.json";
 
+// A single pointer publishes both the new attempt and its previous baseline.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum LatestAttempt {
+    Registered {
+        id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_events: Option<E2eEventSessionSequenceProgress>,
+    },
+    Legacy(Uuid),
+}
+
+impl LatestAttempt {
+    fn into_parts(self) -> (Uuid, Option<E2eEventSessionSequenceProgress>) {
+        match self {
+            Self::Registered {
+                id,
+                previous_events,
+            } => (id, previous_events),
+            Self::Legacy(id) => (id, None),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct ProgressSnapshot<E = E2eEventSessionProgress> {
     #[serde(flatten)]
@@ -33,6 +57,15 @@ struct ProgressSnapshot<E = E2eEventSessionProgress> {
     phase: E2eEventSessionPhase,
     #[serde(default)]
     apis: E2eEventSessionApiProgress,
+    #[serde(default)]
+    cases: E2eEventSessionCaseProgress,
+}
+
+#[derive(Deserialize)]
+struct LegacyAttemptEngine {
+    engine_fingerprint: Option<String>,
+    run_key: String,
+    case_source: PathBuf,
 }
 
 pub(super) struct ReplayLock(pub(super) File);
@@ -55,6 +88,11 @@ pub(super) fn begin(
     attempt_id: Uuid,
     initial: &E2eEventSessionResult,
 ) -> Result<ReplayLock> {
+    let latest_path = attempts.join(LATEST_ATTEMPT);
+    let previous_events = match read_optional::<LatestAttempt>(&latest_path)? {
+        Some(latest) => previous_events(attempts, latest.into_parts().0)?,
+        None => None,
+    };
     let directory = attempts.join(attempt_id.simple().to_string());
     let lock = File::options()
         .write(true)
@@ -64,8 +102,25 @@ pub(super) fn begin(
     let lock = ReplayLock(lock);
     store::write_json(&directory.join(INITIAL_RESULT), initial)?;
     publish_progress(initial)?;
-    store::write_json(&attempts.join(LATEST_ATTEMPT), &attempt_id)?;
+    store::write_json(
+        &latest_path,
+        &LatestAttempt::Registered {
+            id: attempt_id,
+            previous_events,
+        },
+    )?;
     Ok(lock)
+}
+
+fn previous_events(attempts: &Path, id: Uuid) -> Result<Option<E2eEventSessionSequenceProgress>> {
+    let directory = attempts.join(id.simple().to_string());
+    if let Some(result) = read_optional::<E2eEventSessionResult>(&directory.join(FINAL_RESULT))? {
+        return Ok(Some(E2eEventSessionSequenceProgress {
+            last_sequence: result.events.last_sequence,
+            complete: result.events.complete,
+        }));
+    }
+    read_optional(&directory.join(PROGRESS))
 }
 
 pub(super) fn finish(directory: &Path, result: &E2eEventSessionResult) -> Result<()> {
@@ -80,6 +135,7 @@ pub(super) fn publish_progress(result: &E2eEventSessionResult) -> Result<()> {
             events: &result.events,
             phase: result.phase,
             apis: result.apis,
+            cases: result.cases,
         },
     )
 }
@@ -134,15 +190,17 @@ fn inspect_status(
     let run_root = crate::internal_runtime::root(&target_root).join(&run_key);
     let attempts = attempts_root(&run_root, &recording_root);
     let selected = match attempt_id {
-        Some(id) => Some(id),
-        None => read_optional(&attempts.join(LATEST_ATTEMPT))?,
+        Some(id) => Some((id, None)),
+        None => read_optional::<LatestAttempt>(&attempts.join(LATEST_ATTEMPT))?
+            .map(LatestAttempt::into_parts),
     };
-    let Some(id) = selected else {
+    let Some((id, previous_events)) = selected else {
         return Ok((
             E2eEventSessionStatus {
                 state: E2eEventSessionState::NotStarted,
                 progress: None,
                 attempt: None,
+                previous_events: None,
             },
             attempts,
         ));
@@ -158,7 +216,7 @@ fn inspect_status(
     };
     // A terminal result takes precedence even while the writer is releasing its lock.
     let terminal = read_optional::<E2eEventSessionResult>(&directory.join(FINAL_RESULT))?;
-    let (state, attempt) = if let Some(result) = terminal {
+    let (state, mut attempt) = if let Some(result) = terminal {
         let state = if result.passed {
             E2eEventSessionState::Passed
         } else {
@@ -171,6 +229,7 @@ fn inspect_status(
         snapshot.events = progress.events;
         snapshot.phase = progress.phase;
         snapshot.apis = progress.apis;
+        snapshot.cases = progress.cases;
         let state = if running {
             E2eEventSessionState::Running
         } else {
@@ -184,6 +243,9 @@ fn inspect_status(
             && attempt.recording_root == recording_root,
         "event attempt identity does not match the selected Source recording"
     );
+    if attempt.engine_revision.is_none() {
+        attempt.engine_revision = legacy_engine_revision(&directory, &attempt);
+    }
     Ok((
         E2eEventSessionStatus {
             state,
@@ -194,11 +256,23 @@ fn inspect_status(
                     total: attempt.events.total,
                 },
                 apis: attempt.apis,
+                cases: attempt.cases,
             }),
             attempt: Some(attempt),
+            previous_events,
         },
         attempts,
     ))
+}
+
+fn legacy_engine_revision(directory: &Path, attempt: &E2eEventSessionResult) -> Option<String> {
+    let saved: LegacyAttemptEngine =
+        store::read_yaml(&directory.join(".active/state.yaml")).ok()?;
+    if saved.run_key == attempt.run_key && saved.case_source == attempt.recording_root {
+        saved.engine_fingerprint
+    } else {
+        None
+    }
 }
 
 fn read_required<T: DeserializeOwned>(path: &Path) -> Result<T> {

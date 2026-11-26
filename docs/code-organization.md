@@ -1651,9 +1651,12 @@ the same responsibility and 1000-line requirements as the root `src/`.
   `engine-e2e-run/src/event_session.rs` owns managed attempt execution.
   Its `state` child registers attempts and reads status from attempt locks
   and snapshots. `engine-evidence::session` owns sealed Source evidence,
-  protected Target observations, and timeline push filtering for display.
+  protected Target observations, the sealed HTTP API inventory, and
+  timeline push filtering for display.
   The Replay sequence uses the complete sealed recording. `rewrite::event_work`
-  owns finding grouping for dispatch.
+  owns the finding schema and scope validation. CLI handoff modules own
+  API confirmation coverage, grouped dispatch, and candidate admission.
+  Round persistence owns reservation of fixed Target worktree slots.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
 - `record_service` owns the standalone Source/Recorder supervision and recording

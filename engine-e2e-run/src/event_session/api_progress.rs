@@ -7,11 +7,8 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
-use traffic_engine_config::{
-    config::api_catalog::{self, ApiCatalog},
-    path_pattern::matches_path_pattern,
-};
-use traffic_engine_e2e_contract::E2eEventSessionApiProgress;
+use traffic_engine_config::config::api_catalog::{self, ApiCatalog};
+use traffic_engine_e2e_contract::{E2eEventSessionApiProgress, E2eEventSessionCaseProgress};
 use traffic_engine_evidence::session::SessionApiCounts;
 use traffic_recording_store::session_summary::{self, SessionRouteSummary};
 use uuid::Uuid;
@@ -21,6 +18,8 @@ pub(super) struct ApiProgress {
     apis: Vec<(String, SessionApiCounts)>,
     in_flight: HashMap<Uuid, usize>,
     verified: usize,
+    cases_completed: u64,
+    cases_total: u64,
 }
 
 impl ApiProgress {
@@ -36,11 +35,10 @@ impl ApiProgress {
         let mut by_route = HashMap::<_, HashMap<_, _>>::new();
         let mut by_label = HashMap::new();
         let mut apis = Vec::new();
+        let mut cases_total = 0_u64;
         for route in routes {
-            let selector = patterns
-                .iter()
-                .find(|pattern| matches_path_pattern(pattern, &route.path))
-                .map_or(route.path.as_str(), String::as_str);
+            let selector =
+                api_catalog::matching_case_pattern(patterns, &route.path).unwrap_or(&route.path);
             let label = format!("{} {selector}", route.method);
             let index = *by_label.entry(label.clone()).or_insert_with(|| {
                 let index = apis.len();
@@ -48,6 +46,9 @@ impl ApiProgress {
                 index
             });
             ensure!(route.requests > 0, "recording route has no requests");
+            cases_total = cases_total
+                .checked_add(route.requests)
+                .context("recorded primary exchange count exceeds u64")?;
             apis[index].1.recorded += route.requests;
             ensure!(
                 by_route
@@ -63,6 +64,8 @@ impl ApiProgress {
             apis,
             in_flight: HashMap::new(),
             verified: 0,
+            cases_completed: 0,
+            cases_total,
         })
     }
 
@@ -100,6 +103,7 @@ impl ApiProgress {
                 "matched more primary exchanges than were recorded"
             );
             counts.verified += 1;
+            self.cases_completed += 1;
             if counts.verified == counts.recorded {
                 self.verified += 1;
             }
@@ -111,6 +115,13 @@ impl ApiProgress {
         E2eEventSessionApiProgress {
             verified: self.verified,
             total: Some(self.apis.len()),
+        }
+    }
+
+    pub(super) fn case_status(&self) -> E2eEventSessionCaseProgress {
+        E2eEventSessionCaseProgress {
+            completed: self.cases_completed,
+            total: Some(self.cases_total),
         }
     }
 
@@ -142,12 +153,15 @@ mod tests {
             &["/api/items/current".into(), "/api/items/*".into()],
         )?;
         assert_eq!(progress.status().total, Some(2));
+        assert_eq!(progress.case_status().total, Some(3));
+        assert_eq!(progress.case_status().completed, 0);
         let probe = Uuid::new_v4();
         let probe_id = progress
             .identify(&json!({"method":"GET", "uri":"/api/ready", "_session_probe":true}))?;
         progress.start(probe, probe_id);
         progress.finish(probe)?;
         assert_eq!(progress.status().verified, 0);
+        assert_eq!(progress.case_status().completed, 0);
 
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
@@ -162,8 +176,12 @@ mod tests {
         }
         progress.finish(second)?;
         assert_eq!(progress.status().verified, 0);
+        assert_eq!(progress.case_status().completed, 1);
+        progress.finish(second)?;
+        assert_eq!(progress.case_status().completed, 1);
         progress.finish(first)?;
         assert_eq!(progress.status().verified, 1);
+        assert_eq!(progress.case_status().completed, 2);
         let counts = progress.into_counts();
         assert_eq!(counts["GET /api/items/*"].recorded, 2);
         assert_eq!(counts["GET /api/items/*"].verified, 2);

@@ -19,6 +19,7 @@ fn exposes_the_flat_source_commands() {
             "run",
             "switch-recording-id",
             "status",
+            "apis",
             "events",
             "dependency",
             "target",
@@ -79,7 +80,7 @@ fn source_command_options_bind_the_selected_recording_and_attempt() {
     assert_eq!(cli.recording_run_id.as_deref(), Some(recording));
     assert!(matches!(
         cli.command,
-        RewriteCommand::Source(event_session::SourceCommand::Status { run_key, attempt_id })
+        RewriteCommand::Source(event_session::SourceCommand::Status { run_key, attempt_id, with_assignments: false })
             if run_key.as_deref() == Some("target-main") && attempt_id == Some(attempt)
     ));
     let cli = Cli::try_parse_from([

@@ -6,12 +6,13 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
 use traffic_e2e::{
-    E2eEventSessionPhase, E2eEventSessionResult, E2eEventSessionState, execution_identity, session,
-    status_e2e_event_session,
+    E2eEventSessionPhase, E2eEventSessionResult, E2eEventSessionState, E2eEventSessionStatus,
+    execution_identity, session, status_e2e_event_session,
 };
 use uuid::Uuid;
 
 use crate::{
+    handoff::AssignmentDetail,
     print_json,
     round::{self, Recording, Repository, Round},
 };
@@ -23,15 +24,35 @@ pub(super) fn show(
     id: Option<&str>,
     run_key: Option<&str>,
     attempt_id: Option<Uuid>,
+    with_assignments: bool,
     pretty: bool,
 ) -> Result<()> {
-    let repo = Repository::load(root)?;
+    let repo = match Repository::load(root) {
+        Ok(repo) => repo,
+        Err(error) => {
+            if run_key.is_none()
+                && attempt_id.is_none()
+                && let Some(action) = configuration_action(root)?
+            {
+                return print_json(
+                    &json!({"recording_id":id, "state":null, "phase":null, "progress":null, "session":null, "action":action}),
+                    pretty,
+                );
+            }
+            return Err(error);
+        }
+    };
     let (round, needs_switch) = repo.inspect_round(id)?;
     if run_key.is_some() || attempt_id.is_some() {
         return historical_status(&repo, round.as_ref(), id, run_key, attempt_id, pretty);
     }
+    let detail = if with_assignments {
+        AssignmentDetail::Full
+    } else {
+        AssignmentDetail::Summary
+    };
     match round {
-        Some(round) => round_status(&repo, round, needs_switch, pretty),
+        Some(round) => round_status(&repo, round, needs_switch, detail, pretty),
         None => entry_status(&repo, id, needs_switch, pretty),
     }
 }
@@ -40,16 +61,21 @@ pub(super) fn round_status(
     repo: &Repository,
     round: Round,
     needs_switch: bool,
+    detail: AssignmentDetail,
     pretty: bool,
 ) -> Result<()> {
     let recording = round_recording(repo, &round, None)?;
     let status = current_attempt(repo, &round, &recording)?;
-    let attempt = status.attempt.as_ref();
-    let (state, mut action) = attempt_action(repo, &round, status.state, attempt);
-    if needs_switch {
-        action = switch_action(&recording.id);
-    }
-    let mut output = attempt_fields(attempt, &recording.root);
+    let (state, action) = if status.state != E2eEventSessionState::Running
+        && let Some(action) = configuration_action(&repo.root)?
+    {
+        (json!(status.state), action)
+    } else if needs_switch {
+        (json!(status.state), switch_action(&recording.id))
+    } else {
+        attempt_action(repo, &round, status.state, status.attempt.as_ref(), detail)?
+    };
+    let mut output = attempt_fields(&status, &recording.root);
     output["recording_id"] = json!(recording.id);
     output["branch"] = json!(round.branch);
     output["state"] = state;
@@ -62,19 +88,33 @@ pub(super) fn attempt_action(
     round: &Round,
     state: E2eEventSessionState,
     attempt: Option<&E2eEventSessionResult>,
-) -> (Value, Value) {
+    detail: AssignmentDetail,
+) -> Result<(Value, Value)> {
     use E2eEventSessionState::{Failed, Interrupted, NotStarted, Passed, Running};
 
     let mut state_label = json!(state);
-    let action = match (state, attempt) {
+    let mut action = match (state, attempt) {
         (NotStarted, _) => run_action("Run the selected Source recording."),
         (Running, Some(_)) => json!({
             "kind":"wait_required", "summary":"Wait for Replay to finish.",
-            "commands":{"status":["status"]}
+            "command":["status"]
         }),
         (Interrupted, Some(_)) => run_action("Restart the interrupted Replay."),
         (Failed, Some(last)) => {
-            if let Some(action) = round.workflow.next(last, &repo.head) {
+            if mismatch_sequence(last).is_some() && round.engine_retry_available(repo, last)? {
+                round.workflow.with_parallel_assignments(
+                    json!({
+                        "kind":"advance_required",
+                        "summary":"Replay once with the updated engine.",
+                        "details":{"reason":"engine_changed"},
+                        "command":["run"]
+                    }),
+                    detail,
+                )
+            } else if let Some(action) = round
+                .workflow
+                .next_with_assignment_detail(last, &repo.head, detail)
+            {
                 action
             } else if last.target_commit.as_deref() != Some(&repo.head) {
                 state_label = json!("candidate_changed");
@@ -84,13 +124,26 @@ pub(super) fn attempt_action(
             }
         }
         (Passed, Some(last)) => {
-            if last.target_commit.as_deref() == Some(&repo.head)
+            if let Some(action) = round
+                .workflow
+                .next_with_assignment_detail(last, &repo.head, detail)
+            {
+                action
+            } else if last.target_commit.as_deref() == Some(&repo.head)
                 && last.target_inputs.as_deref().is_some_and(|inputs| {
                     execution_identity::repository_fingerprint(&repo.root)
                         .is_ok_and(|current| current == inputs)
                 })
             {
-                json!({"kind":"complete", "summary":"The current Target passed full Replay."})
+                if needs_api_confirmation(round, last) || round.workflow.has_pending_api_work() {
+                    json!({
+                        "kind":"api_review_required", "summary":"Review implementation of every recorded API.",
+                        "details":{"role":"issue-analyst"},
+                        "command":["plan", "--attempt-id", last.attempt_id, "--findings", "<findings.json>"]
+                    })
+                } else {
+                    json!({"kind":"complete", "summary":"The current Target passed full Replay and API review."})
+                }
             } else {
                 state_label = json!("candidate_changed");
                 run_action("Verify the current Target revision and inputs.")
@@ -98,7 +151,18 @@ pub(super) fn attempt_action(
         }
         _ => unreachable!("only not_started has no attempt"),
     };
-    (state_label, action)
+    if matches!(
+        action["kind"].as_str(),
+        Some("analysis_required" | "implementation_required")
+    ) && attempt.is_some_and(|attempt| needs_api_confirmation(round, attempt))
+    {
+        action["details"]["api_review_required"] = json!(true);
+    }
+    Ok((state_label, action))
+}
+
+fn needs_api_confirmation(round: &Round, attempt: &E2eEventSessionResult) -> bool {
+    !round.workflow.apis_reviewed() && attempt.apis.total.is_some_and(|total| total > 0)
 }
 
 fn entry_status(
@@ -110,24 +174,28 @@ fn entry_status(
     if let Some(id) = id {
         Recording::load(&repo.root, id)?;
     }
-    let action = match id {
-        _ if repo.branch.is_none() => json!({
-            "kind":"checkout_target_branch", "summary":"Check out a named Target branch."
-        }),
-        None => json!({
-            "kind":"select_recording", "summary":"Select a sealed Source recording.",
-            "details":{"recording_ids":round::recordings(&repo.root)?},
-            "commands":{"status":["status", "--recording-run-id", "<ID>"]}
-        }),
-        Some(id) if repo.on_base() => json!({
-            "kind":"confirm_regression", "summary":"Ask the user to approve a regression round.",
-            "commands":{"run":["run", "--user-confirm", "--recording-run-id", id]}
-        }),
-        Some(id) if needs_switch => switch_action(id),
-        Some(id) => json!({
-            "kind":"advance_required", "summary":"Run the selected Source recording.",
-            "commands":{"run":["run", "--recording-run-id", id]}
-        }),
+    let action = if let Some(action) = configuration_action(&repo.root)? {
+        action
+    } else {
+        match id {
+            _ if repo.branch.is_none() => json!({
+                "kind":"checkout_target_branch", "summary":"Check out a named Target branch."
+            }),
+            None => json!({
+                "kind":"select_recording", "summary":"Select a sealed Source recording.",
+                "details":{"recording_ids":round::recordings(&repo.root)?},
+                "command":["status", "--recording-run-id", "<ID>"]
+            }),
+            Some(id) if repo.on_base() => json!({
+                "kind":"confirm_regression", "summary":"Ask the user to approve a regression round.",
+                "command":["run", "--user-confirm", "--recording-run-id", id]
+            }),
+            Some(id) if needs_switch => switch_action(id),
+            Some(id) => json!({
+                "kind":"advance_required", "summary":"Run the selected Source recording.",
+                "command":["run", "--recording-run-id", id]
+            }),
+        }
     };
     print_json(
         &json!({
@@ -138,14 +206,24 @@ fn entry_status(
     )
 }
 
+pub(super) fn configuration_action(root: &Path) -> Result<Option<Value>> {
+    let changes = execution_identity::configuration_changes(root)?;
+    Ok((!changes.is_empty()).then(|| json!({
+        "kind":"configuration_commit_required",
+        "summary":"Review and commit the managed configuration, then check status.",
+        "details":{"files":changes.iter().map(|change| change.path.as_str()).collect::<Vec<_>>()},
+        "command":["status"]
+    })))
+}
+
 fn run_action(summary: &str) -> Value {
-    json!({"kind":"advance_required", "summary":summary, "commands":{"run":["run"]}})
+    json!({"kind":"advance_required", "summary":summary, "command":["run"]})
 }
 
 fn switch_action(id: &str) -> Value {
     json!({
         "kind":"switch_recording", "summary":"Switch the active Source recording.",
-        "commands":{"switch":["switch-recording-id", id]}
+        "command":["switch-recording-id", id]
     })
 }
 
@@ -166,7 +244,7 @@ fn historical_status(
     let recording = Recording::load(&repo.root, id)?;
     let status = status_e2e_event_session(&repo.root, &recording.root, key, attempt_id)?;
     let attempt = status.attempt.as_ref();
-    let mut output = attempt_fields(attempt, &recording.root);
+    let mut output = attempt_fields(&status, &recording.root);
     output["recording_id"] = json!(id);
     output["run_key"] = json!(attempt.map(|attempt| attempt.run_key.as_str()).or(key));
     output["state"] = json!(status.state);
@@ -174,10 +252,11 @@ fn historical_status(
     print_json(&output, pretty)
 }
 
-fn attempt_fields(attempt: Option<&E2eEventSessionResult>, root: &Path) -> Value {
+fn attempt_fields(status: &E2eEventSessionStatus, root: &Path) -> Value {
+    let attempt = status.attempt.as_ref();
     let mut fields = json!({
         "phase": attempt.map(|attempt| attempt.phase),
-        "progress": attempt.map(|attempt| status_progress(attempt, root)),
+        "progress": attempt.map(|attempt| status_progress(attempt, status, root)),
         "session": attempt.map(|attempt| {
             let mut identity = json!({"attempt_id":attempt.attempt_id});
             if let Some(commit) = &attempt.target_commit {
@@ -195,20 +274,43 @@ fn attempt_fields(attempt: Option<&E2eEventSessionResult>, root: &Path) -> Value
 #[derive(Serialize)]
 struct StatusProgress {
     apis: String,
+    cases: String,
     events: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_events: Option<String>,
 }
 
-fn status_progress(attempt: &E2eEventSessionResult, recording: &Path) -> StatusProgress {
+fn status_progress(
+    attempt: &E2eEventSessionResult,
+    status: &E2eEventSessionStatus,
+    recording: &Path,
+) -> StatusProgress {
     // A historical or damaged recording may have no readable end sequence.
     let end = session::recording_end_sequence(recording).ok().flatten();
-    let current = end
-        .filter(|_| attempt.events.complete)
-        .or(attempt.events.last_sequence)
-        .unwrap_or_default();
+    let cases = match attempt.cases.total {
+        Some(total) => ratio(attempt.cases.completed, Some(total)),
+        None => match session::recording_case_total(recording) {
+            Ok(total) => format!("?/{total}"),
+            Err(_) => "?/?".to_owned(),
+        },
+    };
     StatusProgress {
         apis: ratio(attempt.apis.verified, attempt.apis.total),
-        events: ratio(current, end),
+        cases,
+        events: event_ratio(attempt.events.last_sequence, attempt.events.complete, end),
+        previous_events: status
+            .previous_events
+            .map(|previous| event_ratio(previous.last_sequence, previous.complete, end)),
     }
+}
+
+fn event_ratio(last_sequence: Option<u64>, complete: bool, end: Option<u64>) -> String {
+    ratio(
+        end.filter(|_| complete)
+            .or(last_sequence)
+            .unwrap_or_default(),
+        end,
+    )
 }
 
 fn ratio<T: Display>(current: T, total: Option<T>) -> String {
@@ -299,14 +401,14 @@ fn failure_view(attempt: &E2eEventSessionResult) -> Option<Failure<'_>> {
 fn failure_action(attempt: &E2eEventSessionResult) -> Value {
     if mismatch_sequence(attempt).is_some() {
         json!({
-            "kind":"analysis_required", "summary":"Assign the first Replay mismatch for analysis.",
+            "kind":"analysis_required", "summary":"Assign a quick analysis of the first Replay mismatch.",
             "details":{"role":"issue-analyst"},
-            "commands":{"plan":["plan", "--attempt-id", attempt.attempt_id, "--findings", "<findings.json>"]}
+            "command":["plan", "--attempt-id", attempt.attempt_id, "--findings", "<findings.json>"]
         })
     } else {
         json!({
             "kind":"setup_required", "summary":"Resolve the Replay execution error, then retry.",
-            "commands":{"run":["run"]}
+            "command":["run"]
         })
     }
 }
@@ -324,6 +426,7 @@ mod tests {
             recording_root: "/recording".into(),
             target_commit: None,
             target_inputs: None,
+            engine_revision: None,
             target_image_id: None,
             passed: false,
             events: E2eEventSessionProgress {
@@ -334,6 +437,7 @@ mod tests {
             },
             phase,
             apis: Default::default(),
+            cases: Default::default(),
             error: None,
             progress: "/progress.json".into(),
             report: "/report.json".into(),

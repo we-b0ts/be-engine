@@ -10,11 +10,13 @@ fn failed_attempt(id: u128) -> E2eEventSessionResult {
         recording_root: "fixture".into(),
         target_commit: Some(TARGET.to_owned()),
         target_inputs: None,
+        engine_revision: None,
         target_image_id: None,
         passed: false,
         events: Default::default(),
         phase: traffic_e2e::E2eEventSessionPhase::Replaying,
         apis: Default::default(),
+        cases: Default::default(),
         error: None,
         progress: "fixture-progress".into(),
         report: "fixture-report".into(),
@@ -26,7 +28,8 @@ fn finding(cause: &str, seq: u64) -> Finding {
         root_cause: cause.to_owned(),
         summary: format!("Reviewed {cause}"),
         sequences: BTreeSet::from([seq]),
-        scope: None,
+        scope: Some("startup".to_owned()),
+        group: Some(cause.replace(' ', "-")),
     }
 }
 
@@ -34,7 +37,36 @@ fn groups(first_unmatched: Option<Finding>, others: Vec<Finding>) -> Findings {
     Findings {
         first_unmatched,
         others,
+        apis: None,
     }
+}
+
+#[test]
+fn a_job_group_uses_one_worker_slot() {
+    let mut workflow = Workflow::default();
+    let attempt = failed_attempt(1);
+    let mut first = finding("restart", 9);
+    first.scope = Some("job:recover-pipelines".into());
+    first.group = Some("pipelines".into());
+    let mut other = finding("rescan", 10);
+    other.scope = Some("job:refresh-schedules".into());
+    other.group = first.group.clone();
+    let plan = workflow
+        .set_plan(
+            &attempt,
+            9,
+            groups(Some(first), vec![other, finding("independent", 11)]),
+            1,
+        )
+        .unwrap();
+    assert_eq!(plan.implementers.len(), 2);
+    assert_eq!(plan.waiting.len(), 1);
+    workflow.reserve_worktrees(|| Ok(2)).unwrap();
+    let action = workflow.next(&attempt, TARGET).unwrap();
+    let assignments = action["details"]["assignments"].as_array().unwrap();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0]["name"], "api-implementer-2");
+    assert_eq!(assignments[0]["findings"].as_array().unwrap().len(), 2);
 }
 
 fn gap_receipt(origin: u128, cause: &str, evidence: &str) -> Receipt {
@@ -140,7 +172,7 @@ fn first_unmatched_is_assigned_and_accepts_engine_gap_only_with_evidence() {
     assert_eq!(action["details"]["root_cause"], "unsupported event");
     assert_eq!(action["details"]["scope"], "startup");
     assert_eq!(action["details"]["evidence"], evidence);
-    assert_eq!(action["commands"]["run"], json!(["run"]));
+    assert_eq!(action["command"], json!(["run"]));
     workflow.require_replay_candidate(&attempt, TARGET).unwrap();
 
     let latest = failed_attempt(2);
@@ -171,9 +203,9 @@ fn initial_filing_requires_explicit_first_unmatched_and_allows_follow_up_groups(
     workflow
         .set_plan(&attempt, 9, groups(Some(first.clone()), vec![]), 3)
         .unwrap();
-    unrelated.scope = Some("POST /routes".to_owned());
+    unrelated.scope = Some("api:POST /routes".to_owned());
     let mut third = finding("third", 10);
-    third.scope.clone_from(&unrelated.scope);
+    third.scope = Some("api:POST /other-routes".to_owned());
     let plan = workflow
         .set_plan(
             &attempt,

@@ -59,10 +59,10 @@ pub use crate::startup_inputs::{
 pub use crate::workflow_evidence::completed_workflow_evidence;
 pub use traffic_engine_e2e_contract::{
     BatchRuleEvidence, E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts,
-    E2eEventSessionApiProgress, E2eEventSessionCounts, E2eEventSessionOptions,
-    E2eEventSessionPhase, E2eEventSessionProgress, E2eEventSessionResult, E2eEventSessionState,
-    E2eEventSessionStatus, E2eEventSessionStatusProgress, E2eFailureCluster, E2eReplayGate,
-    E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
+    E2eEventSessionApiProgress, E2eEventSessionCaseProgress, E2eEventSessionCounts,
+    E2eEventSessionOptions, E2eEventSessionPhase, E2eEventSessionProgress, E2eEventSessionResult,
+    E2eEventSessionState, E2eEventSessionStatus, E2eEventSessionStatusProgress, E2eFailureCluster,
+    E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
     E2eResponseUnavailableReason, E2eRunContext, E2eRunResult, E2eValueObservation,
     E2eValuePresence, E2eVerificationGates,
 };

@@ -17,6 +17,20 @@ use traffic_recording_store::{session, source::recording};
 
 mod progress;
 pub use progress::{SessionApiCounts, publish_passed_progress};
+mod recorded_apis;
+pub use recorded_apis::{RecordedApi, recorded_apis};
+
+/// Return the recorded non-probe primary request count from the sealed summary.
+pub fn recording_case_total(root: &Path) -> Result<u64> {
+    traffic_recording_store::session_summary::read(root)?
+        .routes
+        .iter()
+        .try_fold(0_u64, |total, route| {
+            total
+                .checked_add(route.requests)
+                .context("recorded case count overflow")
+        })
+}
 
 #[derive(Debug, Serialize)]
 pub struct SessionEventPage {

@@ -2,9 +2,10 @@
 mod git;
 #[cfg(test)]
 mod tests;
+mod worktrees;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Write},
     os::unix::fs::OpenOptionsExt,
@@ -14,10 +15,10 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use traffic_e2e::{
-    E2eEventSessionState,
+    E2eEventSessionResult, E2eEventSessionState, build_info,
     config::project::config::{PROJECT_CONFIG_FILE, load_project_config},
     dependency_index::recording,
-    internal_runtime, policy_evidence,
+    execution_identity, internal_runtime, policy_evidence,
     repository::{LOCAL_ARTIFACTS_ROOT, TRAFFIC_E2E_ROOT},
     status_e2e_event_session,
 };
@@ -41,6 +42,8 @@ pub(super) struct Round {
     pub recording_id: String,
     pub recording_identity: String,
     pub run_key: String,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    attempted_engines: BTreeSet<String>,
     pub workflow: Workflow,
 }
 
@@ -254,11 +257,12 @@ impl Repository {
             recording_id: recording.id,
             recording_identity: recording.identity,
             run_key,
+            attempted_engines: BTreeSet::new(),
             workflow: Workflow::default(),
         })
     }
 
-    pub fn save_round(&self, lock: &RoundLock, round: Round) -> Result<()> {
+    pub fn save_round(&self, lock: &RoundLock, round: Round) -> Result<Round> {
         self.check_checkout(lock)?;
         ensure!(
             self.branch.as_deref() == Some(&round.branch)
@@ -279,7 +283,8 @@ impl Repository {
             "round identity changed during be-replay operation"
         );
         rounds.active = round;
-        persist(&path, &rounds)
+        persist(&path, &rounds)?;
+        Ok(rounds.active)
     }
 
     fn rounds_dir(&self) -> PathBuf {
@@ -315,6 +320,36 @@ impl Repository {
 }
 
 impl Round {
+    pub fn engine_retry_available(
+        &self,
+        repo: &Repository,
+        attempt: &E2eEventSessionResult,
+    ) -> Result<bool> {
+        let engine = build_info::ENGINE_FINGERPRINT;
+        let Some(previous) = attempt.engine_revision.as_deref() else {
+            return Ok(false);
+        };
+        let Some(commit) = attempt.target_commit.as_deref() else {
+            return Ok(false);
+        };
+        if previous == engine
+            || self.attempted_engines.contains(engine)
+            || self.workflow.has_candidate(attempt)
+        {
+            return Ok(false);
+        }
+        execution_identity::configuration_only_between(&repo.root, commit, &repo.head)
+    }
+
+    pub fn note_engine_attempt(&mut self, previous: Option<&E2eEventSessionResult>) -> bool {
+        let before = self.attempted_engines.len();
+        self.attempted_engines
+            .extend(previous.and_then(|attempt| attempt.engine_revision.clone()));
+        self.attempted_engines
+            .insert(build_info::ENGINE_FINGERPRINT.to_owned());
+        self.attempted_engines.len() != before
+    }
+
     pub fn validate_run_key(&self, key: Option<&str>) -> Result<()> {
         ensure!(
             key.is_none_or(|key| key == self.run_key),

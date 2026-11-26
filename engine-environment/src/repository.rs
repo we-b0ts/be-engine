@@ -23,6 +23,12 @@ pub const LOCAL_ENCRYPTION_KEY_PATH: &str = ".traffic-e2e/local/secrets/traffic-
 pub const LOCAL_ENCRYPTION_KEY_FROM_LOCAL: &str = "secrets/traffic-e2e-enc.sec";
 pub const LOCAL_RUNTIME_OUTPUTS_ROOT: &str = ".traffic-e2e/local/runtime-outputs";
 
+pub fn implementer_worktree(root: &Path, slot: usize) -> PathBuf {
+    root.join(LOCAL_ROOT)
+        .join("rewrite-worktrees")
+        .join(format!("api-implementer-{slot}"))
+}
+
 pub fn directory_name(target_root: &Path) -> Result<String> {
     let name = target_root
         .file_name()

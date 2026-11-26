@@ -6,9 +6,11 @@ use std::{fs, io::Read as _};
 use anyhow::{Context, Result, ensure};
 
 mod cache;
+mod configuration;
 mod engine;
 
 pub use crate::config::project_policy_path as policy_file;
+pub use configuration::{ConfigurationChange, configuration_changes, configuration_only_between};
 
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
     ":(exclude).traffic-e2e/progress.yaml",

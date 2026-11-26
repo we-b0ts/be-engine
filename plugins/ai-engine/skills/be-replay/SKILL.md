@@ -18,8 +18,12 @@ base, obtain the caller's approval before starting a round with
 verifies the complete Source timeline and reports the first failure. `plan`
 records reviewed findings and `report` registers fixes, engine gaps, and the
 integrated candidate. Follow `status` through implementation, integration and
-Replay of the published candidate. Use `action.kind` to decide which role or
-workflow command is needed and `failure` to scope evidence queries.
+Replay of the published candidate. Use `action.kind` to identify the next
+step, `action.command` for its arguments when present, and `failure` to
+scope evidence queries.
+Submit the first unmatched finding promptly. Use `be-replay apis` to review
+every recorded API while the first fix proceeds. Dispatch the groups, worker
+names, and worktrees in the engine's assignments.
 See [Source Session regression](references/session-regression.md).
 
 ## Roles
@@ -30,7 +34,7 @@ your role's entrypoint and the specialty references it routes to.
 | Role | Owns | Reference |
 | --- | --- | --- |
 | Coordinator | Runs Replay, routes failures, manages assignments, publishes integrated changes, and verifies the result | [Coordinator](references/coordinator.md) |
-| Issue Analyst | Groups related symptoms by likely cause and identifies their Source sequences, read-only | [Issue Analyst](references/issue-analyst.md) |
+| Issue Analyst | Classifies the first unmatched event and confirms every recorded API's implementation, read-only | [Issue Analyst](references/issue-analyst.md) |
 | Implementer | Diagnoses the assigned finding and returns a tested repair or a demonstrated engine gap | [Implementer](references/api-implementer.md) |
 | Code integrator | Combines reviewed commits and returns the exact candidate | [Code integrator](references/code-integrator.md) |
 

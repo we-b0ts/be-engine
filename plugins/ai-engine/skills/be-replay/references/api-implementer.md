@@ -1,11 +1,14 @@
 # Implementer
 
-Use the coordinator's reviewed finding, exact Source sequences, and Target
-attempt. Edit and test within the assigned worktree and keep the frozen base
-and finding identity through rework.
+Use the engine-assigned group, findings, Source sequences, and Target attempt.
+Edit and test within the assigned `.traffic-e2e/local/rewrite-worktrees/api-implementer-<n>`
+worktree under the canonical Target root. Keep its name, frozen base, and
+finding identities through rework.
 
 1. Confirm the cause and repair boundary using the assigned sequences and
    Target observation. [Diagnosis](api-implementer-diagnosis.md)
+   For assigned `apis` rows, implement missing APIs and commit the assigned
+   case patterns and groups in `.traffic-e2e/apis.yaml`.
 2. Read [target code rules](target-code-rules.md) before editing. Return any
    Source-proven [startup inputs](api-implementer-startup-inputs.md) to the
    coordinator.

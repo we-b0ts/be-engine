@@ -2,15 +2,9 @@
 use super::model::ImplementerPool;
 use crate::model::RewriteState;
 use anyhow::{Result, ensure};
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::collections::BTreeSet;
 
-pub fn worktree(root: &Path, slot: usize) -> PathBuf {
-    root.join(".traffic-e2e/local/rewrite-worktrees")
-        .join(format!("api-implementer-{slot}"))
-}
+pub use traffic_engine::repository::implementer_worktree as worktree;
 
 pub fn mapped_pool(state: &RewriteState) -> Result<Option<ImplementerPool>> {
     let Some(mut pool) = state.implementers.clone() else {
