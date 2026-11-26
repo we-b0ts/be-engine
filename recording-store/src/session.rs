@@ -25,10 +25,10 @@ use crate::{
 
 pub const FILE: &str = "events.tsv";
 
+mod request_lookup;
+pub use request_lookup::{PrimaryRequestLocation, PrimaryRoute, first_primary_request};
 mod window;
-pub use window::{
-    PrimaryDispatchWindow, PrimaryRoute, WindowFailureOwner, primary_dispatch_window,
-};
+pub use window::{PrimaryDispatchWindow, WindowFailureOwner, primary_dispatch_window};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimaryEventKind {

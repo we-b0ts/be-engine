@@ -16,6 +16,7 @@ pub mod manifest;
 pub mod preflight;
 pub mod proposal;
 pub mod proposal_context;
+pub mod session;
 
 pub fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
     let value: serde_yaml::Value = serde_yaml::from_str(input)

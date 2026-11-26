@@ -18,6 +18,9 @@ mod api_backlog;
 mod api_grouping;
 mod delegation;
 mod groups;
+mod lookahead;
+pub(crate) mod rule_plans;
+mod sequences;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +28,11 @@ pub(super) use api_backlog::ApiBacklog;
 pub(super) use api_grouping::CatalogUpdate;
 pub(super) use delegation::{DispatchState, Registration, Task};
 use groups::{Fix, Gap, Groups, ImplementerUpdate, WorkItem};
+pub(super) use lookahead::WindowFinding;
+use lookahead::{Claim, Window, api_scope_path};
+use rule_plans::RulePlans;
+pub(super) use sequences::read_receipt;
+pub(crate) use sequences::read_sequence_file;
 
 const DEFAULT_IMPLEMENTERS: usize = 16;
 
@@ -43,6 +51,8 @@ pub(super) struct Workflow {
     failure: Option<Failure>,
     owners: BTreeMap<String, Ownership>,
     candidate: Option<Candidate>,
+    #[serde(skip_serializing_if = "RulePlans::is_empty")]
+    rule_plans: RulePlans,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_registration: Option<Registration>,
 }
@@ -56,15 +66,10 @@ impl Default for Workflow {
             failure: None,
             owners: BTreeMap::new(),
             candidate: None,
+            rule_plans: RulePlans::default(),
             task_registration: None,
         }
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Window {
-    from_seq: u64,
-    through_seq: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,19 +88,20 @@ pub(super) struct Ownership {
 
 impl Ownership {
     pub fn resolve_api(&mut self, target: &Path) -> Result<()> {
-        let Some((method, path)) = self
-            .scope
-            .strip_prefix("api:")
-            .and_then(|api| api.split_once(' '))
-        else {
+        let Some(path) = api_scope_path(&self.scope) else {
             return Ok(());
         };
         let catalog = ApiCatalog::load(&target.join(api_catalog::PATH))?.unwrap_or_default();
-        if let Some(pattern) = api_catalog::matching_case_pattern(&catalog.case_paths(), path) {
-            let group = &catalog.routes()[pattern];
-            ensure!(self.group == *group, "use the catalog API group {group}");
-            self.scope = format!("api:{method} {pattern}");
-        }
+        let patterns = catalog.case_paths();
+        let pattern = catalog
+            .routes()
+            .contains_key(path)
+            .then_some(path)
+            .or_else(|| api_catalog::matching_case_pattern(&patterns, path))
+            .context("ownership API must match the committed case catalog")?;
+        let group = &catalog.routes()[pattern];
+        ensure!(self.group == *group, "use the catalog API group {group}");
+        self.scope = format!("api:{pattern}");
         Ok(())
     }
 }
@@ -107,6 +113,7 @@ pub(super) struct Plan {
     pub agent_handle: String,
     pub apis: Option<Vec<ApiGrouping>>,
     pub ownership: Option<Ownership>,
+    pub lookahead: Option<Vec<WindowFinding>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +121,8 @@ struct Candidate {
     attempt_id: Uuid,
     commit: String,
     included_fixes: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    included_rule_plans: BTreeSet<String>,
     checks: Vec<String>,
 }
 
@@ -128,6 +137,7 @@ pub(super) enum Receipt {
     Implementers {
         workers: Vec<ImplementerUpdate>,
     },
+    Claim(Claim),
     Fixes {
         fixes: Vec<Fix>,
     },
@@ -151,6 +161,9 @@ pub(super) enum Receipt {
         attempt_id: Uuid,
         commit: String,
         included_fixes: BTreeSet<String>,
+        #[serde(default)]
+        included_rule_plans: BTreeSet<String>,
+        #[serde(default)]
         checks: Vec<String>,
     },
 }
@@ -163,11 +176,19 @@ impl Receipt {
 
 impl Workflow {
     pub fn task_action(&self, task: &Task) -> Value {
-        task.action(self.task_registration.as_ref())
+        task.action(self.registration(task))
     }
 
     pub fn require_task_delivery(&self, task: &Task, binding: &Registration) -> Result<()> {
-        task.require_delivery(self.task_registration.as_ref(), binding)
+        task.require_delivery(self.registration(task), binding)
+    }
+
+    fn registration(&self, task: &Task) -> Option<&Registration> {
+        if task.is_lookahead() {
+            self.window.as_ref()?.registration.as_ref()
+        } else {
+            self.task_registration.as_ref()
+        }
     }
 
     pub fn set_max_implementers(&mut self, max: usize) -> Result<()> {
@@ -193,7 +214,12 @@ impl Workflow {
 
     pub fn failure_observed(&self, attempt: &E2eEventSessionResult, seq: u64) -> bool {
         self.failure.as_ref().is_some_and(|failure| {
-            failure.seq == seq && attempt_uuid(attempt).ok() == Some(failure.attempt_id)
+            failure.seq == seq
+                && attempt_uuid(attempt).ok() == Some(failure.attempt_id)
+                && self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.attempt_id == Some(failure.attempt_id))
         })
     }
 
@@ -208,64 +234,9 @@ impl Workflow {
         if self.failure_observed(attempt, seq) {
             return Ok(());
         }
-        let replayed_same_sequence = self
-            .failure
-            .as_ref()
-            .is_some_and(|failure| failure.seq == seq);
-        let window_owner = if self
-            .window
-            .as_ref()
-            .is_some_and(|window| window.from_seq == seq)
-        {
-            None
-        } else {
-            let after = self
-                .window
-                .as_ref()
-                .filter(|window| (window.from_seq..=window.through_seq).contains(&seq))
-                .map_or(0, |window| window.through_seq);
-            let window = session::dispatch_window(target, recording, seq, after)?;
-            for api in window.apis {
-                if let Some(group) = api.group {
-                    self.groups.enqueue(
-                        &group,
-                        WorkItem {
-                            scope: format!("api:{}", api.api),
-                            sequences: api.sequences,
-                            apis: Vec::new(),
-                        },
-                        base,
-                    );
-                }
-            }
-            self.window = Some(Window {
-                from_seq: window.from_seq,
-                through_seq: window.through_seq,
-            });
-            window.failure_owner
-        };
-        self.failure = Some(Failure {
-            attempt_id: attempt_uuid(attempt)?,
-            seq,
-        });
-        if let Some(owner) = self.owners.get(&seq.to_string()).cloned() {
-            if replayed_same_sequence {
-                self.groups.dismiss_gap(&owner.group, seq);
-            }
-            self.enqueue_owner(&owner, base);
-        } else if let Some(owner) = window_owner
-            && let Some(group) = owner.group
-        {
-            self.set_owner(
-                Ownership {
-                    seq,
-                    scope: owner.scope,
-                    group,
-                },
-                base,
-            )?;
-        }
-        Ok(())
+        self.rule_plans.retire_incompatible(target, base)?;
+        let window = session::dispatch_window(target, recording, seq, 0)?;
+        self.observe_window(base, attempt_uuid(attempt)?, seq, window)
     }
 
     pub fn set_owner(&mut self, owner: Ownership, base: &str) -> Result<()> {
@@ -290,6 +261,7 @@ impl Workflow {
     fn enqueue_owner(&mut self, owner: &Ownership, base: &str) {
         if self.groups.gap(&owner.group, owner.seq).is_none()
             && !self.groups.pending(&owner.group, owner.seq)
+            && !self.ready_rule_covers(&owner.group, owner.seq)
             && !self
                 .groups
                 .ready_fixes()
@@ -312,12 +284,21 @@ impl Workflow {
     }
 
     pub fn reserve_worktrees(&mut self, allocate: impl FnMut() -> Result<usize>) -> Result<()> {
-        self.groups.reserve(self.max_implementers, allocate)
+        let priority = self.failure.as_ref().and_then(|failure| {
+            self.owners
+                .get(&failure.seq.to_string())
+                .map(|owner| owner.group.as_str())
+        });
+        self.groups
+            .reserve(self.max_implementers, priority, allocate)
     }
 
     pub fn clear_runtime_handles(&mut self) {
         self.groups.clear_worker_handles();
         self.task_registration = None;
+        if let Some(window) = self.window.as_mut() {
+            window.registration = None;
+        }
     }
 
     pub fn first_run_action(&self) -> Option<Value> {
@@ -367,6 +348,13 @@ impl Workflow {
             action["details"]["pending_worker_status"] = json!(pending_worker_status);
         }
         let integration = action["details"]["task"]["requirement"] == "integration_required";
+        if integration {
+            action["details"]["task"]["ready_fixes"] = json!(self.groups.ready_fixes().count());
+            let plan_count = self.rule_plans.pending().count();
+            if plan_count > 0 {
+                action["details"]["task"]["ready_rule_plans"] = json!(plan_count);
+            }
+        }
         if pending_dispatch > 0
             || pending_worker_status > 0
             || integration
@@ -375,11 +363,23 @@ impl Workflow {
             action["query"] = json!(["status", "--with-assignments"]);
         }
         if matches!(detail, AssignmentDetail::Full) {
+            if let Some(window) = &self.window {
+                action["details"]["window"] = window.handoff();
+            }
             if self.groups.has_active_assignments() {
                 action["details"]["assignments"] = self.groups.assignments();
             }
             if integration {
-                action["details"]["fixes"] = json!(self.groups.ready_fixes().collect::<Vec<_>>());
+                action["details"]["fixes"] = json!(
+                    self.groups
+                        .ready_fixes()
+                        .map(fix_summary)
+                        .collect::<Vec<_>>()
+                );
+                let plans = self.rule_plans.summaries();
+                if !plans.is_empty() {
+                    action["details"]["rule_plans"] = json!(plans);
+                }
             }
         }
         action
@@ -427,18 +427,38 @@ impl Workflow {
     }
 
     pub fn has_lookahead_work(&self) -> bool {
-        self.groups.has_lookahead_work()
+        self.window.is_some()
+            || self.groups.has_lookahead_work()
+            || self.rule_plans.pending().next().is_some()
     }
 
     pub fn retire_lookahead_work(&mut self) {
+        self.window = None;
         self.groups.retire_lookahead_work();
+        self.rule_plans.retire_pending();
+    }
+
+    pub fn validate_delivery_sequences(
+        &self,
+        group: &str,
+        id: Uuid,
+        sequences: &BTreeSet<u64>,
+    ) -> Result<&str> {
+        self.groups
+            .validate_delivery_sequences(group, id, sequences)
+    }
+
+    pub fn consume_rule_sequences(&mut self, group: &str, sequences: &BTreeSet<u64>) {
+        self.groups.consume_lookahead(group, sequences);
     }
 
     pub fn ready_integration(&self, owner: Option<&Ownership>) -> Option<usize> {
-        if !self.groups.ready_fixes().any(|fix| covers(owner, fix)) {
+        if !self.groups.ready_fixes().any(|fix| covers(owner, fix))
+            && !self.rule_plans.ready_for(owner)
+        {
             return None;
         }
-        Some(self.groups.ready_fixes().count())
+        Some(self.groups.ready_fixes().count() + self.rule_plans.pending().count())
     }
 
     pub fn candidate_commit(&self, attempt: &E2eEventSessionResult) -> Option<&str> {
@@ -470,8 +490,17 @@ impl Workflow {
             } => {
                 let task = current_task
                     .context("no delegated task is currently required; inspect status")?;
+                let registration = if task.is_lookahead() {
+                    &mut self
+                        .window
+                        .as_mut()
+                        .context("no active lookahead window")?
+                        .registration
+                } else {
+                    &mut self.task_registration
+                };
                 task.register(
-                    &mut self.task_registration,
+                    registration,
                     Registration {
                         task_id,
                         agent_handle,
@@ -482,6 +511,10 @@ impl Workflow {
             }
             Receipt::Implementers { workers } => {
                 self.groups.update_implementers(workers)?;
+                Ok(Vec::new())
+            }
+            Receipt::Claim(claim) => {
+                self.claim(claim)?;
                 Ok(Vec::new())
             }
             Receipt::Fixes { fixes } => {
@@ -513,12 +546,18 @@ impl Workflow {
                 sequences,
                 evidence,
             } => {
+                let lookahead = sequences
+                    .iter()
+                    .copied()
+                    .filter(|&event| Some(event) != seq)
+                    .collect();
                 self.groups.accept_gap(Gap {
-                    group,
+                    group: group.clone(),
                     assignment_id,
                     sequences,
                     evidence,
                 })?;
+                self.groups.consume_lookahead(&group, &lookahead);
                 Ok(Vec::new())
             }
             Receipt::Candidate {
@@ -527,6 +566,7 @@ impl Workflow {
                 attempt_id,
                 commit,
                 included_fixes,
+                included_rule_plans,
                 checks,
             } => {
                 let attempt =
@@ -534,7 +574,7 @@ impl Workflow {
                 let task = Task::integration(
                     &attempt.run_key,
                     &attempt.attempt_id,
-                    self.groups.ready_fixes().count(),
+                    self.groups.ready_fixes().count() + self.rule_plans.pending().count(),
                     seq,
                 );
                 self.require_task_delivery(
@@ -553,6 +593,7 @@ impl Workflow {
                         attempt_id,
                         commit,
                         included_fixes,
+                        included_rule_plans,
                         checks,
                     },
                 )
@@ -583,7 +624,9 @@ impl Workflow {
             !self.has_candidate(attempt),
             "a candidate is already registered for this attempt"
         );
-        validate_checks(&candidate.checks)?;
+        if !candidate.checks.is_empty() {
+            validate_checks(&candidate.checks)?;
+        }
         let previous = attempt
             .target_commit
             .as_deref()
@@ -614,17 +657,48 @@ impl Workflow {
             "candidate includes an unaccepted or already integrated delivery"
         );
         ensure!(
-            ready.iter().any(|fix| covers(owner, fix)),
+            ready.iter().any(|fix| covers(owner, fix))
+                || self
+                    .rule_plans
+                    .selected_cover(&candidate.included_rule_plans, owner),
             "candidate must include an accepted delivery covering the current failure"
         );
+        if !candidate.included_rule_plans.is_empty() {
+            let policy = self
+                .rule_plans
+                .render(root, previous, &candidate.included_rule_plans)?;
+            ensure!(
+                rule_plans::committed_policy(root, head, &policy.path)? == policy.rendered,
+                "candidate policy does not match the selected Session rule plans"
+            );
+        }
         api_grouping::validate_committed_catalog(
             root,
             self.groups.api_work_for(&candidate.included_fixes),
         )?;
         let completed = self.groups.mark_integrated(&candidate.included_fixes);
+        for (group, sequences) in self
+            .rule_plans
+            .mark_integrated(&candidate.included_rule_plans)
+        {
+            self.consume_rule_sequences(&group, &sequences);
+        }
         self.candidate = Some(candidate);
         Ok(completed)
     }
+}
+
+fn fix_summary(fix: &Fix) -> Value {
+    if fix.sequences.len() <= 32 {
+        return json!(fix);
+    }
+    json!({
+        "group": fix.group,
+        "assignment_id": fix.assignment_id.simple().to_string(),
+        "commit": fix.commit,
+        "sequence_count": fix.sequences.len(),
+        "checks": fix.checks
+    })
 }
 
 fn attempt_uuid(attempt: &E2eEventSessionResult) -> Result<Uuid> {
@@ -636,23 +710,13 @@ fn covers(owner: Option<&Ownership>, fix: &Fix) -> bool {
 }
 
 fn validate_scope(scope: &str) -> Result<()> {
-    let is_api = scope
-        .strip_prefix("api:")
-        .and_then(|api| api.split_once(' '))
-        .is_some_and(|(method, path)| {
-            !method.is_empty()
-                && method
-                    .bytes()
-                    .all(|byte| byte.is_ascii_uppercase() || byte == b'-')
-                && path.starts_with('/')
-                && !path.contains(char::is_whitespace)
-        });
+    let is_api = api_scope_path(scope).is_some();
     let is_job = scope
         .strip_prefix("job:")
         .is_some_and(|name| !name.is_empty() && !name.contains(char::is_whitespace));
     ensure!(
         is_api || is_job || matches!(scope, "startup" | "shutdown"),
-        "scope must be api:METHOD /path, job:NAME, startup, or shutdown"
+        "scope must be api:/case/pattern, job:NAME, startup, or shutdown"
     );
     Ok(())
 }

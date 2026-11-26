@@ -17,8 +17,9 @@ When coordinating a managed round, read the coordinator entrypoint and start wit
 `dispatch_task`, launch the named role through the agent runtime. Ask the
 agent to load this skill for its assigned role. Register the handle returned
 by the runtime. At `await_delivery`, monitor the agent and submit its returned
-artifact. Use engine-provided assignments to launch implementers and use the
-engine's verdict to verify the result.
+artifact. Use engine-provided assignments to launch implementers. On the
+first `complete`, follow the coordinator's pre-final validation and Replay
+steps for delivery.
 [Coordinator](references/coordinator.md)
 
 ## Work in your assigned role
@@ -29,9 +30,9 @@ invocation tool.
 
 | Role | Owns | Reference |
 | --- | --- | --- |
-| `issue-analyst` | Read-only API grouping or ownership of the failed sequence | [Issue Analyst](references/issue-analyst.md) |
-| `api-implementer` | Diagnosis and tested repairs, reviews, or engine gaps for assigned sequences | [Implementer](references/api-implementer.md) |
-| `code-integrator` | Integration and validation of accepted fixes in the integration worktree | [Code integrator](references/code-integrator.md) |
+| `issue-analyst` | Read-only API grouping and ownership of the failed event or unassigned window sequences | [Issue Analyst](references/issue-analyst.md) |
+| `api-implementer` | Evidence-based claims, Target repairs, rule proposals, and focused tests for assigned work | [Implementer](references/api-implementer.md) |
+| `code-integrator` | Merge accepted fixes, apply selected rule plans, and deliver the exact candidate | [Code integrator](references/code-integrator.md) |
 
 Use the exact recording, attempt, revision, and worktree supplied with the
 assignment. Preserve sealed recordings, private evidence, and

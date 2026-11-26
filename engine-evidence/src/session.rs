@@ -16,9 +16,13 @@ pub use traffic_recording_store::session_summary::recording_end_sequence;
 use traffic_recording_store::{session, source::recording};
 
 mod dispatch_window;
-pub use dispatch_window::{DispatchWindow, WindowApi, WindowOwner, dispatch_window};
+pub use dispatch_window::{
+    DispatchWindow, WindowApi, WindowMatch, WindowMatchKind, WindowOwner, dispatch_window,
+};
 mod progress;
 pub use progress::{SessionApiCounts, publish_passed_progress};
+mod request_lookup;
+pub use request_lookup::{ApiRequest, first_api_request};
 mod recorded_apis;
 pub use recorded_apis::{RecordedApi, recorded_apis};
 

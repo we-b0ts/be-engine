@@ -22,8 +22,10 @@ fn exposes_the_flat_source_commands() {
             "apis",
             "events",
             "dependency",
+            "sequences",
             "target",
             "plan",
+            "rule",
             "report"
         ]
     );
@@ -40,7 +42,6 @@ fn exposes_the_flat_source_commands() {
         "implementer",
         "evidence",
         "evidence-detail",
-        "rule",
         "recorder-capture",
         "route",
         "repair",

@@ -154,7 +154,16 @@ pub(super) fn attempt_action(
                             Task::integration(&round.run_key, &last.attempt_id, ready, Some(seq));
                         return Ok(delegated_action(round, task, detail, state_label));
                     }
-                    round.workflow.repair_action(owner)
+                    let repair = round.workflow.repair_action(owner);
+                    if repair["kind"] != "setup_required"
+                        && round.workflow.can_dispatch_lookahead()
+                        && let Some(task) = round
+                            .workflow
+                            .lookahead_task(&round.run_key, &last.attempt_id)
+                    {
+                        return Ok(delegated_action(round, task, detail, state_label));
+                    }
+                    repair
                 } else {
                     let task = Task::ownership(&round.run_key, &last.attempt_id, seq);
                     return Ok(delegated_action(round, task, detail, state_label));

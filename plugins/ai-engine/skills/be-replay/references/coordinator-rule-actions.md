@@ -6,12 +6,15 @@ rule change, require Source code proof, exact selectors, and the smallest
 supported declaration. See
 [rule diagnosis](api-implementer-rule-diagnosis.md).
 
-1. Give the assigned implementer the failed sequence and available evidence
-   references. Ask the implementer to establish the value relationship and
-   deliver the supported policy edit with the Source proof and checks.
-2. Review the returned diff and evidence, then register the delivery with a
-   `fixes` report. Ask the implementer to resolve any remaining diagnosis.
-3. Follow the delegated integration task to publish and report the validated
-   candidate. Use `status` to verify it on the same sealed recording.
+1. Give the implementer the assigned sequence context and available evidence
+   references. The implementer returns the policy proposal, sequence file,
+   Source proof, and focused test results.
+2. Register the proposal in the canonical Target with
+   `be-replay rule plan --file /absolute/plan.json`. The engine returns
+   `rule_plan.id` after validation. Send any rejection to the implementer.
+3. At `integration_required`, use `status --with-assignments` to get the ready
+   rule plans. Pass the selected plan IDs to the registered code integrator.
+   Publish and report the returned candidate with `included_rule_plans`, then
+   follow `status` to verify the same sealed recording.
 
 See [shared rule evidence](rule-policy.md) and [Session regression](session-regression.md).

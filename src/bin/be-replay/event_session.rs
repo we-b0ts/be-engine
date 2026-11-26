@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use traffic_e2e::session;
 
+mod rule;
 mod status;
 mod target;
 mod workflow;
@@ -37,11 +38,23 @@ pub(super) enum SourceCommand {
         #[arg(long)]
         with_assignments: bool,
     },
-    /// List the recorded APIs, case patterns, groups and first Source sequences.
+    /// List recorded APIs or locate a request for one catalog case pattern.
     Apis {
         /// Show only recorded labels without a case pattern and group.
         #[arg(long)]
         ungrouped: bool,
+        /// Find the first request for this canonical case pattern, across HTTP methods.
+        #[arg(long, conflicts_with = "ungrouped")]
+        case_pattern: Option<String>,
+        /// Start the case-pattern lookup at this Source sequence, inclusively.
+        #[arg(long, requires = "case_pattern")]
+        from_seq: Option<u64>,
+        /// Continue after this request sequence, exclusively.
+        #[arg(long, requires = "case_pattern")]
+        after_seq: Option<u64>,
+        /// End the case-pattern lookup at this Source sequence, inclusively.
+        #[arg(long, requires = "case_pattern")]
+        through_seq: Option<u64>,
     },
     /// Read a bounded page of the Source timeline.
     Events {
@@ -66,6 +79,19 @@ pub(super) enum SourceCommand {
     },
     /// Inspect one protected dependency exchange by its admission sequence.
     Dependency { sequence: u64 },
+    /// Write the assigned Source sequences or outstanding ownership gaps, one per line.
+    Sequences {
+        #[arg(long, required_unless_present = "task_id", conflicts_with = "task_id")]
+        assignment_id: Option<uuid::Uuid>,
+        #[arg(long, required_unless_present = "assignment_id")]
+        task_id: Option<String>,
+        #[arg(long, requires = "assignment_id")]
+        scope: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        after_seq: u64,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Inspect a protected Target observation from the failed attempt.
     Target {
         /// UUID of a Replay attempt for the active recording.
@@ -76,7 +102,7 @@ pub(super) enum SourceCommand {
         report: Option<PathBuf>,
         observation_id: uuid::Uuid,
     },
-    /// Submit the registered issue analyst's API groupings or event ownership.
+    /// Submit the registered analyst's API groupings or ownership findings.
     Plan {
         /// JSON findings with the current task_id and agent_handle.
         #[arg(long)]
@@ -84,6 +110,11 @@ pub(super) enum SourceCommand {
         /// Set the maximum active implementers for this round (default 16).
         #[arg(long)]
         max_implementers: Option<usize>,
+    },
+    /// Plan or apply Session policy changes.
+    Rule {
+        #[command(subcommand)]
+        command: rule::Command,
     },
     /// Register agent dispatches, worker states, or deliveries.
     Report {
@@ -120,8 +151,34 @@ pub(super) async fn run(
             with_assignments,
             pretty,
         ),
-        SourceCommand::Apis { ungrouped } => {
+        SourceCommand::Apis {
+            ungrouped,
+            case_pattern,
+            from_seq,
+            after_seq,
+            through_seq,
+        } => {
             let recording = workflow::evidence_recording(&target_root, id)?;
+            if let Some(pattern) = case_pattern {
+                let request = session::first_api_request(
+                    &target_root,
+                    &recording.root,
+                    &pattern,
+                    from_seq.unwrap_or_default(),
+                    after_seq.unwrap_or_default(),
+                    through_seq,
+                )?;
+                let cursor = request.as_ref().map(|request| request.request_seq);
+                return super::print_json(
+                    &serde_json::json!({
+                        "recording_id": recording.id,
+                        "case_pattern": pattern,
+                        "request": request,
+                        "next_after_sequence": cursor,
+                    }),
+                    pretty,
+                );
+            }
             let mut apis = session::recorded_apis(&target_root, &recording.root)?;
             if ungrouped {
                 apis.retain(|api| api.group.is_none());
@@ -135,6 +192,7 @@ pub(super) async fn run(
             findings,
             max_implementers,
         } => workflow::plan(&target_root, id, &findings, max_implementers, pretty),
+        SourceCommand::Rule { command } => rule::run(&target_root, id, command, pretty),
         SourceCommand::Report { file } => workflow::report(&target_root, id, &file, pretty),
         SourceCommand::Events {
             from_seq,
@@ -164,6 +222,21 @@ pub(super) async fn run(
             let recording = workflow::evidence_recording(&target_root, id)?;
             super::print_json(&session::dependency(&recording.root, sequence)?, pretty)
         }
+        SourceCommand::Sequences {
+            assignment_id,
+            task_id,
+            scope,
+            after_seq,
+            limit,
+        } => workflow::sequences(
+            &target_root,
+            id,
+            assignment_id,
+            task_id.as_deref(),
+            scope.as_deref(),
+            after_seq,
+            limit,
+        ),
         SourceCommand::Target {
             attempt,
             report,

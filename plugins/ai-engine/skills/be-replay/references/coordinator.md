@@ -1,7 +1,7 @@
 # Rewrite Coordinator
 
 Own the canonical Target, orchestration, candidate publication, and Replay.
-Delegate grouping and failure ownership to the Issue Analyst, diagnosis and
+Delegate grouping and unresolved ownership to the Issue Analyst, diagnosis and
 repairs to implementers, and candidate assembly to the code integrator.
 
 ## Run and inspect
@@ -24,8 +24,8 @@ supporting state. [Source Session status](session-regression.md#inspect-a-replay
   `engine_changed` reason authorizes one retry on the eligible engine
   revision. For `wait_required`, follow the active Replay or registered
   workers and refresh `status` when they have news.
-- For `complete`, report the recording ID, passing attempt, exact revision,
-  and verified API counts.
+- The first `complete` on the candidate starts
+  [pre-final validation and Replay](#pre-final-validation-and-replay).
 
 ## Dispatch and accept a delegated task
 
@@ -35,9 +35,16 @@ Target location, and available Source and Target revisions in its assignment.
 Ask the agent to load the current `be-replay` skill for the assigned role.
 Use the Source revision from the recording handoff and the canonical Target's
 current commit. For `ownership_required`, pass the attempt, failed sequence,
-and any evidence references already available. For `integration_required`,
-use `status --with-assignments` to get the ready fixes. Pass the selected fixes,
-canonical base, current attempt, and integration worktree.
+and any evidence references already available. For `lookahead_ownership_required`,
+pass the task identity and Source window. For `integration_required`, use
+`status --with-assignments` to get the ready fixes and rule plans. Pass the
+selected commit and rule plan IDs, canonical base, current attempt, and
+integration worktree. Request the exact merged candidate and test results
+only for any conflict resolution. Keep
+follow-ups within merge conflicts and route product repairs or refactors to
+the responsible implementer. Engine `review check`, formatting commands,
+standalone builds, and `cargo clippy` are prohibited in integration assignments
+and follow-ups during progression.
 
 Once the runtime returns a handle, register it with
 `be-replay report --file FILE`. The receipt uses `kind: task_dispatch` and
@@ -48,12 +55,13 @@ cannot start the required role, report the blocker and keep the task pending.
 At `await_delivery`, follow the registered `agent_handle` in the runtime.
 Once it returns the artifact, submit it with the current `task_id` and
 `agent_handle`. Use `be-replay plan --findings FILE` for grouping or ownership
-and `be-replay report --file FILE` for a candidate. If the agent exits without
+and `be-replay report --file FILE` for a candidate. Follow `status` if a ready
+repair moves integration ahead of lookahead analysis. If the agent exits without
 delivering, report its exit and follow the resulting dispatch action. Return
 incomplete artifacts to the responsible role for correction. For an API
 grouping delivery, the engine writes the catalog and requests its commit
 before implementation dispatch. For an integration delivery, confirm the
-canonical base, publish the exact validated commit, and submit its receipt for
+canonical base, publish the exact returned commit, and submit its receipt for
 the current attempt. [Task and delivery receipts](session-regression.md#dispatch-and-monitor-delegated-tasks)
 
 ## Dispatch and follow implementers
@@ -62,21 +70,43 @@ Use `status --with-assignments` for engine-issued assignments. Resolve the
 `worktree` against the canonical Target root and prepare it at
 `base_commit` if needed. Before reusing a slot for a different assignment,
 coordinate the previous worker's exit and preserve its changes. Give each
-worker its group, `assignment_id`, scopes, sequences, applicable API work,
+worker its group, `assignment_id`, scopes, applicable API work, window bounds,
 and recording or attempt context. Reuse an active worker and worktree when
 the engine adds to the same group.
 
 At `dispatch_required`, or when `pending_dispatch` appears alongside another
 action, launch assignments without handles in parallel. Ask each implementer
-to load the current `be-replay` skill for its role. Register the handles
-returned by the runtime with `be-replay report --file FILE`. At
-`worker_status_required`, query the runtime and report the observed states.
+to load the current `be-replay` skill for its role and run only tests for its
+assignment. Engine `review check` and `cargo clippy` are prohibited in
+implementer assignments and follow-ups during progression. Register the
+handles returned by the runtime with
+`be-replay report --file FILE`. At `worker_status_required`, query the runtime
+and report the observed states.
 If it confirms a worker exited without delivering, report `state: exited`
 and resume or replace it in the same reservation.
 [Implementer receipts](session-regression.md#plan-implement-and-verify)
 
-Register returned fixes, reviews, or engine gaps with the original recording
-and `assignment_id`. Deliveries can arrive while Replay runs. Route a
-confirmed engine gap with the recording and attempt IDs, the Source sequence,
-observed behavior, and needed capability. Apply supported coordinator-owned
-inputs before the relevant Replay. [Rule actions](coordinator-rule-actions.md)
+Register returned ownership claims before accepting any delivery for the
+claimed sequences. Submit fixes, tested no-change confirmations, rule plans,
+and engine gaps with the original recording and `assignment_id`. Implementer
+reports can arrive while Replay runs. Register rules against a finished
+attempt. Route a confirmed engine gap with the recording and attempt IDs,
+the Source sequence, observed behavior, and needed capability. Apply supported
+coordinator-owned inputs before the relevant Replay. [Rule actions](coordinator-rule-actions.md)
+
+## Pre-final validation and Replay
+
+When a full Replay first passes on the current commit and `status` reports
+`complete`, freeze that commit, recording, and Target inputs for delivery.
+The coordinator runs `cargo clippy` for a Rust Target and the engine's final
+`review check` when the active workflow provides it. The standalone
+`review check` entrypoint belongs to the Case workflow.
+
+After the checks pass, run `be-replay run` again on the same commit, inputs,
+and recording for final revalidation. Use that attempt's passing result and
+`complete` status for delivery. Record the commit, recording ID, final attempt,
+API counts, and check results together.
+
+Run final checks once per delivery revision. Checking intermediate candidates
+repeats work as fixes arrive. If a check requires a change, route it to the
+responsible implementer and resume progression on the corrected revision.

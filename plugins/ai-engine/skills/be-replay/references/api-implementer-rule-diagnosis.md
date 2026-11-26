@@ -7,7 +7,7 @@ relationship the comparison must preserve. Use the
 
 ## Source Event Session
 
-Start at the failed sequence. For dependency evidence, inspect the recorded
+Start at the assigned sequence. For dependency evidence, inspect the recorded
 request and result by admission sequence and use the report-bound Target
 observation when available. Inspect related sequences to establish where the
 value came from and where it is reused. See [session workflow](session-regression.md).
@@ -30,5 +30,41 @@ Check that the live runtime binds the proposed format at the observed carrier.
 JSON paths are root-relative to the recognized document. Session Replay compares
 primary SSE and NDJSON body parts as bytes.
 
-Deliver the policy commit, exact Source sequences, and focused check results.
-The coordinator verifies the integrated change with a fresh full session.
+## Submit a rule plan
+
+Write the smallest additive `traffic-policy/v3` fragment that describes the
+proven relationship. Supply local `proof` where the declaration requires it.
+The plan preserves the Source revision, time defaults, capture scope, and
+other declarations. An API-specific policy selector still uses the actual
+method when its schema requires it. [Traffic Policy](../../../../../docs/replay-policy.md)
+
+For a proven Unix-seconds field, `rule.yaml` can contain the following.
+
+```yaml
+format: traffic-policy/v3
+json:
+  fields:
+    /report/created_at: {kind: time, formats: [unix_seconds]}
+```
+
+Supply `plan.json`, its proposal, and the exact sequences file to the
+coordinator for `be-replay rule plan --file /absolute/plan.json`. File paths
+can be absolute or relative to `plan.json`. The engine registers the plan
+against the active assignment and current failed Replay attempt.
+
+```json
+{
+  "group": "reports",
+  "assignment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "sequences_file": "rule-sequences.txt",
+  "proposal_file": "rule.yaml",
+  "source_evidence": {
+    "source": "src/reports/serializer.rs#map_report",
+    "fact": "map_report writes created_at using the wall clock in Unix seconds."
+  },
+  "checks": ["assigned report timestamp regression passed"]
+}
+```
+
+The code integrator applies selected plans together. The coordinator verifies
+the integrated policy with a fresh full session. [Integration workflow](code-integrator.md)

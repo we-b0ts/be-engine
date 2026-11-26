@@ -3014,6 +3014,7 @@ dependencies = [
  "traffic-protocol-mysql",
  "traffic-recorder",
  "traffic-recording-store",
+ "traffic-rewrite-rules",
  "uuid",
  "zip",
 ]

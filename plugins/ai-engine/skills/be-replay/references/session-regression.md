@@ -96,7 +96,9 @@ command, such as `["status"]`. Historical attempts have `action: null`.
 
 Default `status` shows counts and the current action. Use `action.query`
 when present to obtain supporting detail. `status --with-assignments` gives
-the worktrees, worker states, full handoffs, and ready fixes for integration.
+the worktrees, worker states, window bounds, and ready fixes and rule plans
+for integration. Each item gives a scope and sequence count. Use `sequences`
+to read the full list when the handoff contains only the count.
 
 | `action.kind` | Coordinator responsibility |
 | --- | --- |
@@ -113,7 +115,7 @@ the worktrees, worker states, full handoffs, and ready fixes for integration.
 | `implementation_required` | Follow the registered implementers and register ready deliveries. |
 | `advance_required` | Start a full Replay with `action.command`. |
 | `wait_required` | Follow the active Replay or outstanding assignments and refresh `status`. |
-| `complete` | Report the passing attempt and its verified revision after any required API work. |
+| `complete` | The candidate passed full Replay and required API work is complete. [Pre-final validation and Replay](coordinator.md#pre-final-validation-and-replay) |
 
 The engine checks that `.traffic-e2e/project.yaml`, `.traffic-e2e/apis.yaml`,
 and the effective policy are committed before `run`, `plan`, and candidate
@@ -132,7 +134,8 @@ uses the existing identity.
 `dispatch_task` and `await_delivery` use `action.details.task` for the
 `task_id`, `role`, `requirement`, and task-specific context. The requirement
 is `api_grouping_required` for new API groupings, `ownership_required` for
-an unowned failed sequence, or `integration_required` for a candidate.
+an unowned failed sequence, `lookahead_ownership_required` for outstanding
+window ownership, or `integration_required` for a candidate.
 
 At `dispatch_task`, launch the named role through the agent runtime and pass
 its task context. Ask the agent to load `be-replay` for its assigned role.
@@ -169,12 +172,14 @@ For `setup_required`, the coordinator uses the reported error to resolve the
 recording, configuration, or launch inputs. `failure.seq` identifies the
 failed Source read or preparation position when available.
 
-On a mismatch, the engine looks ahead 60 seconds of Source time from the
-failed sequence and assigns the API groups in the previously uncovered
-part of the window. Another failure at the same sequence reuses that window.
-A recorded request link or lifecycle event can establish the owner of the
-failed sequence for direct assignment. Other work can proceed while the owner
-is being determined.
+On a mismatch, the engine opens a fixed 60-second window of Source time
+starting at the failed sequence. It tracks primary requests and dependency
+admissions that require matching. Recorded request links and lifecycle
+events establish ownership where available. A dependency can refer to an
+earlier request outside the window. Server push deliveries are outside the
+lookahead claim list. The actual failed event always receives a diagnosis.
+The engine considers overlapping sequences on subsequent failed attempts.
+A ready repair for the actual failure can advance while window work continues.
 
 The analyst and implementers run evidence queries from the canonical Target
 or provide `--target-root /absolute/target`.
@@ -193,6 +198,12 @@ or provide `--target-root /absolute/target`.
 - `dependency --recording-run-id ID SEQ` reads the protected semantic request
   and result for a dependency's **admission** sequence. The exact Source event
   may identify it in `dependency_sequence`.
+- `apis --case-pattern '/reports/*' --from-seq FROM --through-seq THROUGH`
+  locates the first primary request for that catalog pattern across methods.
+  The bounds include both endpoints. The `request` gives `request_seq`, actual
+  `method`, `path`, `offset_micros`, and `exchange` for related Source events.
+  Repeat with `--after-seq` set to `next_after_sequence`, keeping the original
+  bounds, until `request` is `null`.
 - `target --attempt UUID OBSERVATION_ID` reads an authenticated Target
   observation for the active recording using the exact attempt and observation
   ID. Use `--report /absolute/report.json` to read a specific report file.
@@ -247,22 +258,62 @@ failed sequence, together with that task and its registered handle.
 }
 ```
 
-Use `api:METHOD /path` with the catalog group, `job:NAME` with its
+Use `api:/case/pattern` with the catalog group, `job:NAME` with its
 implementation group, or `startup` or `shutdown` with the corresponding
 group. Group names use 1–128 ASCII letters, digits, periods, underscores,
 or hyphens.
+
+### Lookahead ownership
+
+The Issue Analyst reads the current task's outstanding matching sequences
+and delivers evidence-backed findings with `be-replay plan --findings FILE`.
+Sequences that share an owner can be batched in one file. Omit both `scope`
+and `group` and give an unresolved reason when the evidence is insufficient.
+
+```sh
+be-replay sequences --task-id TASK --limit 100
+be-replay sequences --task-id TASK --after-seq LAST_SEQ --limit 100
+```
+
+```json
+{
+  "task_id": "lookahead-task-id-from-status",
+  "agent_handle": "agent-a1b2c3",
+  "lookahead": [
+    {
+      "sequences_file": "report-dependencies.txt",
+      "scope": "api:/reports/*",
+      "group": "reports",
+      "evidence": "The recorded request and Source handler call path identify the report store reads."
+    },
+    {
+      "sequences_file": "unresolved.txt",
+      "evidence": "The dependency has no recorded owner and the Source has two possible callers."
+    }
+  ]
+}
+```
+
+### Implementer handoffs
 
 Each active group gets one reservation. Different jobs and APIs can share a
 group. When the runtime has fewer than 16 implementer slots, add
 `--max-implementers N` to the plan submission for the slots it can run.
 The flag accepts 1 to 16 and defaults to 16. Use
 `status --with-assignments` for each group's `assignment_id`, `base_commit`,
-and items, including their scopes, sequences, and applicable API work.
+and items, including their scopes, sequence counts, and applicable API work.
 Resolve the reserved `worktree` against the canonical Target root. It uses
 `.traffic-e2e/local/rewrite-worktrees/api-implementer-<n>`. Reuse the worker
 and worktree when the engine adds items to the same group. Different recordings
 can use the same slot. A recording switch restores that recording's own
 assignment IDs and paths.
+
+`sequences --assignment-id UUID` prints assigned sequences in increasing order,
+one per line. Add `--scope 'api:/reports/*'` for just that scope. Assignment
+and task queries both support an exclusive `--after-seq` and optional `--limit`.
+Redirect output to a file when handling a large assignment. Lookahead uses
+one `api:/case/pattern` scope across methods. First-run `apis` work retains
+its actual method and pattern.
 
 Use `status --with-assignments` to get the full handoffs. The engine counts
 reservations without a registered handle in `action.details.pending_dispatch`.
@@ -296,13 +347,42 @@ If API groups are still queued because all slots are in use, follow
 The first Replay starts after every selected API task has an accepted delivery
 or a worker confirmed running. Run when `status` returns `advance_required`.
 
+### Claim window dependencies
+
+Register a `kind: claim` receipt with `be-replay report --file FILE` when an
+active API implementer can use Source evidence to connect unassigned window
+dependencies to an assigned API. Use an in-window primary request as the
+anchor and provide the subsequent dependency admission sequences in the file.
+Accepted claims assign those sequences to the implementer. Submit the
+comparison or repair outcome separately.
+
+```json
+{
+  "kind": "claim",
+  "group": "reports",
+  "assignment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "scope": "api:/reports/*",
+  "request_seq": 88,
+  "sequences_file": "claimed-dependencies.txt",
+  "evidence": "Source report handler at src/reports/handler.rs calls the store query recorded at these admissions."
+}
+```
+
+### Submit implementation outcomes
+
 Give each implementer its items, evidence query context, frozen base, and
 absolute worktree. The implementer diagnoses assigned events and delivers
-tested Target changes or Source-proven time, ID, or token rules. Keep plan
-and receipt files in the ignored Target runtime directory or outside the
-checkout. Submit ready commits and exact sequences using
-`be-replay report --file /absolute/fixes.json`. Copy `assignment_id` from the
-full handoff into each fix and into each review or engine-gap receipt. This
+tested Target changes or Source-proven time, ID, or token rules. Run only
+assignment-specific tests and include the results in `checks`. Review checks,
+standalone builds, and Clippy are prohibited for implementers. Keep plan and
+receipt files in the ignored Target runtime directory or outside the checkout.
+Submit ready commits and exact sequences using
+`be-replay report --file /absolute/fixes.json`. A `sequences_file` contains
+positive Source sequences separated by commas or newlines. Paths are absolute
+or relative to the containing receipt, finding, or rule plan JSON. Fixes,
+reviews, and engine gaps also accept the inline `sequences` array as an
+alternative. Copy `assignment_id` from the full handoff into each fix and
+into each review or engine-gap receipt. This
 binds the receipt to the assignment issued for that recording. Submit new
 deliveries with that recording selected and the assignment's worker handle
 registered. Replay can keep running while you register deliveries.
@@ -316,7 +396,7 @@ registered. Replay can keep running while you register deliveries.
       "group": "cache-refresh",
       "assignment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       "commit": "1111111111111111111111111111111111111111",
-      "sequences": [42, 47],
+      "sequences_file": "cache-refresh-fix.txt",
       "checks": ["cache refresh regression passed"]
     }
   ]
@@ -324,11 +404,12 @@ registered. Replay can keep running while you register deliveries.
 ```
 
 For assigned lookahead sequences whose behavior already meets the Source
-contract, submit a review with the checks performed. The current failed
-sequence requires a repair or a confirmed engine gap.
+contract, submit a `kind: review` receipt with the focused test results. This
+receipt records tested existing behavior. The current failed sequence
+requires a repair or a confirmed engine gap.
 If an implementer verifies an assigned API is already implemented, use the
 same receipt with `"confirms_apis": true`, its exact assigned sequences, and
-the checks that verified the active route and handler. The catalog must
+the tests that verified the active route and handler. The catalog must
 already be committed for that API.
 
 ```json
@@ -336,8 +417,8 @@ already be committed for that API.
   "kind": "review",
   "group": "reports",
   "assignment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-  "sequences": [88],
-  "checks": ["report route and handler verified against Source"]
+  "sequences_file": "reports-reviewed.txt",
+  "checks": ["assigned report route regression passed"]
 }
 ```
 
@@ -349,21 +430,33 @@ behavior and route the report to the engine owner.
   "kind": "engine_gap",
   "group": "cache-refresh",
   "assignment_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-  "sequences": [42],
+  "sequences_file": "cache-refresh-engine-gap.txt",
   "evidence": "Source seq 42 and the Target observation establish that an unsupported engine operation rejected the request before comparison."
 }
 ```
 
-When a delivery covers the failed sequence, the engine can request an
-`integration_required` task. Use `status --with-assignments` for the ready
-fixes. The code integrator builds a candidate from the selected fixes and
-the canonical base. Other compatible ready deliveries can be included.
-Independent groups can continue working. On delivery, publish the exact
-validated candidate to the canonical branch and submit it with
+Register Source-proven policy changes with `be-replay rule plan --file FILE`.
+[Rule plan format](api-implementer-rule-diagnosis.md#submit-a-rule-plan)
+
+### Integrate the candidate
+
+When a fix or rule plan covers the failed sequence, the engine can request an
+`integration_required` task ahead of remaining lookahead analysis. Use
+`status --with-assignments` for ready fixes and rule plans. The code integrator
+merges the selected fixes onto the canonical base and applies the selected
+rule plans in the integration worktree. Other compatible ready deliveries can
+be included. Deliver a clean integration immediately. If the merge conflicts,
+resolve the conflicts and run only tests directly related to the resolution.
+Review checks, standalone
+builds, and Clippy are prohibited for integrators. Independent groups can
+continue working. On delivery, publish the exact candidate to the canonical
+branch and submit it with
 `be-replay report --file /absolute/candidate.json` for the registered task,
 agent handle, and current finished attempt. The candidate's `commit` is
 the canonical branch's current `HEAD`, and `included_fixes` contains the
-delivered commit SHAs.
+delivered commit SHAs. `included_rule_plans` contains the applied plan IDs.
+Omit `checks` after a clean merge. Include related test results in `checks`
+when resolving conflicts. [Rule application](code-integrator.md#apply-selected-rule-plans)
 
 ```json
 {
@@ -373,7 +466,7 @@ delivered commit SHAs.
   "attempt_id": "11111111-1111-4111-8111-111111111111",
   "commit": "2222222222222222222222222222222222222222",
   "included_fixes": ["1111111111111111111111111111111111111111"],
-  "checks": ["repository validation passed"]
+  "included_rule_plans": ["sha256:3333333333333333333333333333333333333333333333333333333333333333"]
 }
 ```
 

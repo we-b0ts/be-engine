@@ -12,6 +12,8 @@ observation when available. Trace the assigned event's dynamic value to its
 Source generator or validator.
 
 The implementer confirms the exact selector and supported value relationship,
-then delivers the policy commit and focused check results through the standard
-fixes report. Review the integrated policy diff and verify it with a fresh
-complete `run` of the same sealed Source recording. [Coordinator rule actions](coordinator-rule-actions.md)
+then delivers an additive policy proposal, a sequence file, and focused test
+results. The engine validates the proposal with `be-replay rule plan`. The
+integrator uses `be-replay rule apply` for the selected plans, and the
+coordinator verifies the candidate with a complete `run` of the same sealed
+recording. [Plan format](api-implementer-rule-diagnosis.md#submit-a-rule-plan) · [Coordinator rule actions](coordinator-rule-actions.md)

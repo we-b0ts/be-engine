@@ -51,7 +51,105 @@ fn dispatch_receipt(state: &Value, handle: &str, update: &str) -> Value {
 
 fn candidate(attempt: &Value, head: &str, included: &[&str]) -> Value {
     json!({"kind":"candidate","attempt_id":attempt["attempt_id"],"commit":head,
-        "included_fixes":included,"checks":["integration checks passed"]})
+        "included_fixes":included})
+}
+
+#[tokio::test]
+async fn a_session_rule_plan_repairs_a_failure_through_the_integration_candidate() {
+    let target = tempfile::tempdir().unwrap();
+    let integration = tempfile::tempdir().unwrap();
+    let root = target.path();
+    configure(root);
+    fs::write(root.join(".traffic-e2e/apis.yaml"), "fixture: [/items/*]\n").unwrap();
+    commit_catalog(root);
+    seal_events_with_apis(&recording_dir(root), &[(800, "GET", "/items/1")]).await;
+    let attempt = run_attempt_with_invalid_source(
+        root,
+        &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
+    );
+    publish_mismatch(attempt.clone(), 8);
+    register_implementers(root);
+    let assigned = assignments(root);
+    let worker = group(&assigned, "fixture");
+
+    let delivery = tempfile::tempdir().unwrap();
+    let proposal = delivery.path().join("proposal.json");
+    let sequences = delivery.path().join("claimed.txt");
+    fs::write(
+        delivery.path().join("policy.yaml"),
+        "format: traffic-policy/v3\njson:\n  fields:\n    /fixture_at: {kind: time, formats: [unix_seconds]}\n",
+    ).unwrap();
+    fs::write(&proposal, serde_json::to_vec(&json!({
+        "group":"fixture", "assignment_id":worker["assignment_id"],
+        "sequences_file":"claimed.txt", "proposal_file":"policy.yaml",
+        "source_evidence":{"source":"src/fixture.rs:7", "fact":"The handler emits the current time in Unix seconds."},
+        "checks":["Verified the handler uses the current clock"]
+    })).unwrap()).unwrap();
+    let register = ["rule", "plan", "--file", proposal.to_str().unwrap()];
+    fs::write(&sequences, "9\n").unwrap();
+    assert!(!command(root, &register).status.success());
+    fs::write(&sequences, "8\n").unwrap();
+    let plan_output = successful(command(root, &register));
+    assert_eq!(successful(command(root, &register)), plan_output);
+    let plan_id = plan_output["rule_plan"]["id"].as_str().unwrap();
+
+    let pending = assignments(root);
+    assert_dispatch(&pending, "integration_required", "code-integrator");
+    assert_eq!(pending["action"]["details"]["rule_plans"][0]["id"], plan_id);
+    let registered = register_task(root, &pending, "fixture-integrator");
+    let task = registered["action"]["details"]["task"]["task_id"]
+        .as_str()
+        .unwrap();
+    let apply = |worktree: &Path| {
+        command(
+            root,
+            &[
+                "rule",
+                "apply",
+                "--worktree",
+                worktree.to_str().unwrap(),
+                "--task-id",
+                task,
+                "--agent-handle",
+                "fixture-integrator",
+                "--plan-id",
+                plan_id,
+            ],
+        )
+    };
+    let policy_path = ".traffic-e2e/policy.yaml";
+    let original = fs::read(root.join(policy_path)).unwrap();
+    assert!(!apply(root).status.success());
+    let worktree = integration.path().join("candidate");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            worktree.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    assert_eq!(successful(apply(&worktree))["changed"], true);
+    assert_eq!(successful(apply(&worktree))["changed"], false);
+    assert_eq!(fs::read(root.join(policy_path)).unwrap(), original);
+
+    git(&worktree, &["add", policy_path]);
+    git(&worktree, &["commit", "-qm", "apply reviewed rule"]);
+    let commit = git(&worktree, &["rev-parse", "HEAD"]);
+    git(root, &["merge", "--ff-only", &commit]);
+    let delivery = bind_delivery(
+        json!({
+            "kind":"candidate", "attempt_id":attempt["attempt_id"], "commit":commit,
+            "included_fixes":[], "included_rule_plans":[plan_id]
+        }),
+        &registered,
+    );
+    assert_eq!(
+        successful(report(root, delivery))["action"]["kind"],
+        "advance_required"
+    );
 }
 
 #[tokio::test]
@@ -197,12 +295,17 @@ async fn new_api_grouping_gates_first_replay_but_implementation_runs_in_parallel
     assert!(!command(root, &["run"]).status.success());
     let bound = bind_delivery(candidate, &ready);
     assert_eq!(bound, unregistered);
+    let mut invalid = bound.clone();
+    invalid["checks"] = json!([" "]);
+    assert!(!report(root, invalid).status.success());
     assert_eq!(
         successful(report(root, bound.clone()))["action"]["kind"],
         "advance_required"
     );
+    let mut retried = bound;
+    retried["checks"] = json!([]);
     assert_eq!(
-        successful(report(root, bound))["action"]["kind"],
+        successful(report(root, retried))["action"]["kind"],
         "advance_required"
     );
 
@@ -464,4 +567,110 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
         group(&restored, "batch")["assignment_id"],
         group(&promoted, "batch")["assignment_id"]
     );
+}
+
+#[tokio::test]
+async fn lookahead_delegates_unowned_matches_and_validates_sequence_files() {
+    let target = tempfile::tempdir().unwrap();
+    let root = target.path();
+    configure(root);
+    fs::write(root.join(".traffic-e2e/apis.yaml"), "users: [/users/*]\n").unwrap();
+    commit_catalog(root);
+    let recording = recording_dir(root);
+    seal_events_for_window(
+        &recording,
+        &[(800, "GET", "/users/1"), (900, "PATCH", "/users/2")],
+        &[1_000, 60_000_400],
+    )
+    .await;
+    git(root, &["switch", "-qc", "codex/replay/fixture"]);
+    successful(command(root, &["switch-recording-id", RECORDING_ID]));
+    let initial = run_attempt_with_invalid_source(root, &["run"]);
+    publish_mismatch(initial, 2);
+    register_implementers(root);
+
+    let dispatch = assignments(root);
+    assert_dispatch(&dispatch, "lookahead_ownership_required", "issue-analyst");
+    let task = &dispatch["action"]["details"]["task"];
+    assert_eq!(task["from_seq"], 2);
+    assert_eq!(task["through_seq"], 11);
+    assert_eq!(task["sequence_count"], 2);
+    let worker = group(&dispatch, "users");
+    let id = worker["assignment_id"].as_str().unwrap();
+    let items = worker["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["scope"], "api:/users/*");
+    let read_sequences = |args: &[&str]| {
+        let result = command(root, args);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let owned = [
+        "sequences",
+        "--assignment-id",
+        id,
+        "--scope",
+        "api:/users/*",
+    ];
+    assert_eq!(read_sequences(&owned), "8\n9\n");
+    let unowned = ["sequences", "--task-id", task["task_id"].as_str().unwrap()];
+    assert_eq!(read_sequences(&unowned), "5\n10\n");
+
+    let analyst = register_task(root, &dispatch, "lookahead-analyst");
+    let claim = json!({"kind":"claim", "group":"users", "assignment_id":id, "scope":"api:/users/*",
+        "request_seq":8, "sequences_file":"claim.seq", "evidence":"Source call path."});
+    fs::write(recording.join("claim.seq"), "9\n10\n").unwrap();
+    let rejected = report(root, claim.clone());
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("seq 9 is not an unowned dependency")
+    );
+    fs::write(recording.join("claim.seq"), "5\n").unwrap();
+    let rejected = report(root, claim.clone());
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("seq 5 must follow"));
+    fs::write(recording.join("claim.seq"), "10\n").unwrap();
+    successful(report(root, claim));
+    assert_eq!(read_sequences(&owned), "8\n9\n10\n");
+    assert_eq!(read_sequences(&unowned), "5\n");
+
+    let findings = bind_delivery(
+        json!({"lookahead":[{
+            "sequences_file":"ownership.seq", "scope":"api:/users/*", "group":"users",
+            "evidence":"Source call path associates this dependency with the users API."
+        }]}),
+        &analyst,
+    );
+    fs::write(recording.join("ownership.seq"), "5,6\n").unwrap();
+    let rejected = plan(root, findings.clone());
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("seq 6"));
+    fs::write(recording.join("ownership.seq"), "5, 10\n").unwrap();
+    successful(plan(root, findings));
+    assert_eq!(read_sequences(&owned), "5\n8\n9\n10\n");
+
+    let review = json!({"kind":"review", "group":"users", "assignment_id":id,
+        "sequences_file":"review.seq", "checks":["focused comparison passed"]});
+    fs::write(recording.join("review.seq"), "5, 8\n6\n").unwrap();
+    let rejected = report(root, review.clone());
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("assigned sequences in users"));
+    fs::write(recording.join("review.seq"), "5, 8\n").unwrap();
+    successful(report(root, review));
+    assert_eq!(read_sequences(&owned), "9\n10\n");
+
+    let branch = git(root, &["branch", "--show-current"]);
+    let commit = fixture_fix(root, "worker-lookahead", "users.txt", &branch);
+    fs::write(recording.join("fix.seq"), "9\n10\n").unwrap();
+    successful(report(
+        root,
+        json!({"kind":"fixes", "fixes":[{
+            "group":"users", "assignment_id":id, "commit":commit,
+            "sequences_file":"fix.seq", "checks":["users API test passed"]
+        }]}),
+    ));
 }

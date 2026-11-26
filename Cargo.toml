@@ -238,6 +238,7 @@ default-run = "traffic-e2e"
 
 [dependencies]
 traffic-e2e-app = { workspace = true }
+traffic-rewrite-rules = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive", "env"] }

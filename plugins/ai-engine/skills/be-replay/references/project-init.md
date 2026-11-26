@@ -103,9 +103,10 @@ scope only and is not a Docker build input. Do not use `COPY ../...`, change the
 default context to the outer Git repository, or infer sibling paths that the
 project configuration does not declare.
 
-Specify formatting, tests, lint, and other Target validation requirements in
-`AGENTS.md` or `CLAUDE.md`. The integrator runs the required checks on the
-committed candidate before the coordinator runs full Session verification.
+Document the Target repository's validation commands in `AGENTS.md` or
+`CLAUDE.md`. Managed integration follows the
+[code integrator guide](code-integrator.md), and the coordinator runs full
+Session verification.
 
 The generated target exposes a readiness GET endpoint. The readiness path
 must be literal, with no captures, query, fragment, whitespace, or trailing

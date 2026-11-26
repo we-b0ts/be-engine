@@ -1,14 +1,15 @@
 # Target Code Rules
 
-Read before changing assigned target product code, startup, configuration, or
-integration code. These rules apply to the code author and integrator.
+Read before changing assigned Target product code, startup, or configuration.
+Apply these rules to implementation and to code changed while resolving merge
+conflicts.
 
 These rules apply only to an existing initialized target repository.
 
 ## Scope And Compatibility
 
-- Repository instructions and established build, runtime, and module contracts
-  are authoritative.
+- Follow the repository's code conventions and established build, runtime, and
+  module contracts.
 - Preserve the source service's observable API, error, side-effect, ordering,
   configuration, dependency, startup, and shutdown behavior unless the current
   work item proves a narrower intentional difference.
@@ -119,9 +120,9 @@ and keep each choice compatible with the source submission contract.
 
 ## Validation
 
-Validate changed behavior with focused local tests. Preserve the exact delivered
-code and evidence identity in your result. Follow your role's delivery protocol
-for its required reports; local success does not establish formal acceptance.
+Follow your role's test scope and delivery protocol. Preserve the exact
+delivered code and evidence identity in your result. The coordinator runs the
+full Session Replay for acceptance.
 
 - Performance, throughput, capacity, scalability, and availability claims
   require measured evidence for the stated workload and environment. Otherwise

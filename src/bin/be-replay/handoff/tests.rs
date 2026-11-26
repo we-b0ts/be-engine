@@ -23,17 +23,26 @@ fn failed_attempt(id: u128, base: &str) -> E2eEventSessionResult {
 }
 
 fn workflow_at_failure(attempt: &E2eEventSessionResult, seq: u64) -> Workflow {
-    Workflow {
-        window: Some(Window {
-            from_seq: seq,
-            through_seq: seq + 60,
-        }),
-        failure: Some(Failure {
-            attempt_id: attempt_uuid(attempt).unwrap(),
+    let mut workflow = Workflow::default();
+    observe_fixture_window(&mut workflow, attempt, seq);
+    workflow
+}
+
+fn observe_fixture_window(workflow: &mut Workflow, attempt: &E2eEventSessionResult, seq: u64) {
+    workflow
+        .observe_window(
+            attempt.target_commit.as_deref().unwrap(),
+            attempt_uuid(attempt).unwrap(),
             seq,
-        }),
-        ..Workflow::default()
-    }
+            traffic_e2e::session::DispatchWindow {
+                from_seq: seq,
+                through_seq: seq + 60,
+                apis: Vec::new(),
+                matches: BTreeMap::new(),
+                failure_owner: None,
+            },
+        )
+        .unwrap();
 }
 
 fn item(scope: &str, sequences: &[u64]) -> WorkItem {
@@ -131,6 +140,7 @@ fn candidate(attempt: &E2eEventSessionResult, head: &str, delivered: &[&str]) ->
             .iter()
             .map(|commit| (*commit).to_owned())
             .collect(),
+        included_rule_plans: BTreeSet::new(),
         checks: vec!["fixture integration checks".to_owned()],
     }
 }
@@ -225,6 +235,18 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             )
             .is_err()
     );
+    assert!(
+        workflow
+            .report(
+                root,
+                &pipelines,
+                Some(&attempt),
+                Some(9),
+                None,
+                fix("pipelines", pipelines_id, &pipelines, &[9, 11]),
+            )
+            .is_err()
+    );
     workflow
         .report(
             root,
@@ -232,9 +254,12 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             Some(&attempt),
             Some(9),
             None,
-            fix("pipelines", pipelines_id, &pipelines, &[9, 11]),
+            fix("pipelines", pipelines_id, &pipelines, &[11]),
         )
         .unwrap();
+    workflow
+        .groups
+        .enqueue("refresh", item("job:refresh", &[15]), &base);
     let partial = commit(root, "another sequence");
     workflow
         .report(
@@ -243,7 +268,7 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             Some(&attempt),
             Some(9),
             None,
-            fix("refresh", refresh_id, &partial, &[8]),
+            fix("refresh", refresh_id, &partial, &[15]),
         )
         .unwrap();
     assert!(
@@ -321,9 +346,7 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
     assert_eq!(workflow.candidate_commit(&attempt), Some(repair.as_str()));
 
     let retry = failed_attempt(3, &repair);
-    workflow
-        .observe_failure(root, root, &repair, &retry, 9)
-        .unwrap();
+    observe_fixture_window(&mut workflow, &retry, 9);
     assert!(!workflow.has_candidate(&retry));
     assert!(workflow.groups.pending("refresh", 9));
     assert_eq!(
@@ -388,9 +411,7 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
     );
 
     let retry = failed_attempt(2, BASE);
-    workflow
-        .observe_failure(root, root, BASE, &retry, 9)
-        .unwrap();
+    observe_fixture_window(&mut workflow, &retry, 9);
     let action = workflow.with_assignments(
         workflow.repair_action(workflow.failure_owner(9).unwrap()),
         AssignmentDetail::Full,
@@ -400,5 +421,56 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
     assert_eq!(
         action["details"]["assignments"][0]["name"],
         "api-implementer-1"
+    );
+}
+
+#[test]
+fn a_new_attempt_reopens_checked_work_in_the_overlapping_window() {
+    use traffic_e2e::session::{DispatchWindow, WindowMatch, WindowMatchKind, WindowOwner};
+
+    let candidate = || WindowMatch {
+        kind: WindowMatchKind::PrimaryRequest,
+        owner: Some(WindowOwner {
+            scope: "api:/accounts".into(),
+            group: Some("accounts".into()),
+        }),
+    };
+    let dispatch = |from| DispatchWindow {
+        from_seq: from,
+        through_seq: 20,
+        apis: Vec::new(),
+        matches: [(12, candidate()), (17, candidate())].into(),
+        failure_owner: None,
+    };
+    let mut workflow = Workflow::default();
+    workflow
+        .observe_window(BASE, Uuid::from_u128(1), 5, dispatch(5))
+        .unwrap();
+    workflow.reserve_worktrees(|| Ok(0)).unwrap();
+    let assignment = assignment_id(&workflow, "accounts");
+    start_worker(&mut workflow, "accounts", assignment);
+    workflow
+        .groups
+        .review(
+            "accounts",
+            assignment,
+            [12].into(),
+            vec!["focused check".into()],
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        workflow.assignment_sequences(assignment, None).unwrap(),
+        [17].into()
+    );
+
+    workflow
+        .observe_window(BASE, Uuid::from_u128(2), 7, dispatch(7))
+        .unwrap();
+    assert_eq!(
+        workflow
+            .assignment_sequences(assignment, Some("api:/accounts"))
+            .unwrap(),
+        [12, 17].into()
     );
 }

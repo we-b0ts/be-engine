@@ -1,5 +1,10 @@
 //! Round mutations for Replay, reviewed findings and delivery receipts.
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::{self, Write},
+    path::Path,
+};
 
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
@@ -7,9 +12,10 @@ use traffic_e2e::{
     E2eEventSessionOptions, E2eEventSessionResult, E2eEventSessionState, E2eEventSessionStatus,
     execution_identity, run_e2e_event_session_with_apis, session, status_e2e_event_session,
 };
+use uuid::Uuid;
 
 use crate::{
-    handoff::{AssignmentDetail, CatalogUpdate, Plan, Receipt, Registration},
+    handoff::{AssignmentDetail, CatalogUpdate, Plan, Receipt, Registration, read_receipt},
     print_json,
     round::{Recording, Repository, Round, RoundLock},
 };
@@ -137,9 +143,16 @@ pub(super) fn plan(
     let recording = round_recording(&repo, &round, id)?;
     let current = current_attempt(&repo, &round, &recording)?;
     update_round(&repo, &mut round, &recording, &current)?;
-    let task = current_action(&repo, &round, &current)?
-        .task
-        .context("no delegated plan is currently required; inspect status")?;
+    let task = if plan.lookahead.is_some() {
+        current.attempt.as_ref().and_then(|attempt| {
+            round
+                .workflow
+                .lookahead_delivery_task(&round.run_key, &attempt.attempt_id)
+        })
+    } else {
+        current_action(&repo, &round, &current)?.task
+    }
+    .context("no delegated plan is currently required; inspect status")?;
     let binding = Registration {
         task_id: plan.task_id,
         agent_handle: plan.agent_handle,
@@ -148,8 +161,8 @@ pub(super) fn plan(
     if let Some(max_implementers) = max_implementers {
         round.workflow.set_max_implementers(max_implementers)?;
     }
-    let catalog = match (plan.apis, plan.ownership) {
-        (Some(apis), None) => {
+    let catalog = match (plan.apis, plan.ownership, plan.lookahead) {
+        (Some(apis), None, None) => {
             ensure!(
                 task.is_grouping(),
                 "the current delegated task does not request API groupings"
@@ -159,7 +172,7 @@ pub(super) fn plan(
             round.api_backlog.register_groupings(&apis);
             Some(catalog)
         }
-        (None, Some(mut owner)) => {
+        (None, Some(mut owner), None) => {
             ensure!(
                 failed_sequence(&current) == Some(owner.seq),
                 "ownership must refer to the current failed sequence"
@@ -173,7 +186,21 @@ pub(super) fn plan(
             repo.reserve_worktrees(&lock, &mut round)?;
             None
         }
-        _ => anyhow::bail!("supply API groupings or current event ownership"),
+        (None, None, Some(findings)) => {
+            ensure!(
+                task.is_lookahead(),
+                "the current task does not request lookahead ownership"
+            );
+            round.workflow.apply_lookahead_findings(
+                &repo.root,
+                &repo.head,
+                path.parent().unwrap_or_else(|| Path::new("")),
+                findings,
+            )?;
+            repo.reserve_worktrees(&lock, &mut round)?;
+            None
+        }
+        _ => anyhow::bail!("supply API groupings, current event ownership, or lookahead findings"),
     };
     // Keep the implementation obligations even if publication is interrupted.
     let round = repo.save_round(&lock, round)?;
@@ -185,8 +212,7 @@ pub(super) fn plan(
 }
 
 pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -> Result<()> {
-    let receipt: Receipt =
-        serde_json::from_slice(&fs::read(path)?).context("parse delivery receipt")?;
+    let receipt = read_receipt(path)?;
     let repo = Repository::load(root)?;
     let _run = receipt
         .is_candidate()
@@ -196,8 +222,11 @@ pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -
     let mut round = require_round(&repo)?;
     let recording = round_recording(&repo, &round, id)?;
     let current = current_attempt(&repo, &round, &recording)?;
-    let dispatch = matches!(&receipt, Receipt::TaskDispatch { .. });
-    if dispatch || receipt.is_candidate() {
+    let dispatch = match &receipt {
+        Receipt::TaskDispatch { task_id, .. } => Some(task_id.as_str()),
+        _ => None,
+    };
+    if dispatch.is_some() || receipt.is_candidate() {
         require_committed_configuration(&repo.root)?;
     }
     if receipt.is_candidate() {
@@ -218,8 +247,20 @@ pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -
             "group the new APIs before publishing a candidate; inspect status"
         );
     }
-    let current_task = if dispatch {
-        current_action(&repo, &round, &current)?.task
+    let current_task = if let Some(id) = dispatch {
+        let lookahead = current
+            .attempt
+            .as_ref()
+            .and_then(|attempt| {
+                round
+                    .workflow
+                    .lookahead_task(&round.run_key, &attempt.attempt_id)
+            })
+            .filter(|task| task.id() == id);
+        match lookahead {
+            Some(task) => Some(task),
+            None => current_action(&repo, &round, &current)?.task,
+        }
     } else {
         None
     };
@@ -235,6 +276,42 @@ pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -
     repo.reserve_worktrees(&lock, &mut round)?;
     let round = repo.save_round(&lock, round)?;
     print_action(&repo, &round, &recording, &current, pretty)
+}
+
+pub(super) fn sequences(
+    root: &Path,
+    id: Option<&str>,
+    assignment_id: Option<Uuid>,
+    task_id: Option<&str>,
+    scope: Option<&str>,
+    after_seq: u64,
+    limit: Option<usize>,
+) -> Result<()> {
+    let repo = Repository::load(root)?;
+    let round = require_round(&repo)?;
+    ensure!(
+        id.is_none_or(|id| id == round.recording_id),
+        "select the active recording to query assignments"
+    );
+    let seqs = if let Some(id) = assignment_id {
+        round.workflow.assignment_sequences(id, scope)?
+    } else {
+        round.workflow.lookahead_task_sequences(
+            &round.run_key,
+            task_id.context("supply a task or assignment ID")?,
+        )?
+    };
+    let mut out = io::stdout().lock();
+    for seq in seqs
+        .range((
+            std::ops::Bound::Excluded(after_seq),
+            std::ops::Bound::Unbounded,
+        ))
+        .take(limit.unwrap_or(usize::MAX))
+    {
+        writeln!(out, "{seq}")?;
+    }
+    Ok(())
 }
 
 pub(super) fn needs_round_sync(round: &Round, current: &E2eEventSessionStatus, head: &str) -> bool {

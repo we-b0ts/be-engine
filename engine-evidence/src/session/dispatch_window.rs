@@ -1,4 +1,4 @@
-//! Compact API dispatch evidence for a failed Source event.
+//! Matchable requests and their recorded ownership around a failed Source event.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -8,7 +8,7 @@ use std::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use traffic_engine_config::config::api_catalog::{self, ApiCatalog};
-use traffic_recording_store::session::{PrimaryRoute, WindowFailureOwner, primary_dispatch_window};
+use traffic_recording_store::session::{WindowFailureOwner, primary_dispatch_window};
 
 const WINDOW_MICROS: u64 = 60_000_000;
 
@@ -17,7 +17,22 @@ pub struct DispatchWindow {
     pub from_seq: u64,
     pub through_seq: u64,
     pub apis: Vec<WindowApi>,
+    #[serde(default)]
+    pub matches: BTreeMap<u64, WindowMatch>,
     pub failure_owner: Option<WindowOwner>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowMatch {
+    pub kind: WindowMatchKind,
+    pub owner: Option<WindowOwner>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowMatchKind {
+    PrimaryRequest,
+    DependencyRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +48,8 @@ pub struct WindowOwner {
     pub group: Option<String>,
 }
 
-/// Find recorded primary requests in the minute starting at the failed event.
+/// Find the business ingress and dependency admissions in a minute of Source time.
+/// `after_sequence` only filters the legacy API summary.
 pub fn dispatch_window(
     target_root: &Path,
     recording_root: &Path,
@@ -42,50 +58,64 @@ pub fn dispatch_window(
 ) -> Result<DispatchWindow> {
     let catalog = ApiCatalog::load(&target_root.join(api_catalog::PATH))?.unwrap_or_default();
     let patterns = catalog.case_paths();
-    let window = primary_dispatch_window(
-        recording_root,
-        failed_sequence,
-        WINDOW_MICROS,
-        after_sequence,
-    )?;
+    let window = primary_dispatch_window(recording_root, failed_sequence, WINDOW_MICROS, 0)?;
     let mut apis = BTreeMap::new();
+    let mut matches = BTreeMap::new();
     for (sequence, route) in window.requests {
-        let (api, group) = label(&catalog, &patterns, route);
-        let entry = apis.entry(api.clone()).or_insert_with(|| WindowApi {
-            api,
-            group,
-            sequences: BTreeSet::new(),
-        });
-        entry.sequences.insert(sequence);
+        let path = matching_pattern(&patterns, &route.path);
+        let owner = api_owner(&catalog, path);
+        if sequence > after_sequence {
+            let api = format!("{} {path}", route.method);
+            let entry = apis.entry(api.clone()).or_insert_with(|| WindowApi {
+                api,
+                group: owner.group.clone(),
+                sequences: BTreeSet::new(),
+            });
+            entry.sequences.insert(sequence);
+        }
+        matches.insert(
+            sequence,
+            WindowMatch {
+                kind: WindowMatchKind::PrimaryRequest,
+                owner: Some(owner),
+            },
+        );
+    }
+    for (sequence, source) in window.dependencies {
+        matches.insert(
+            sequence,
+            WindowMatch {
+                kind: WindowMatchKind::DependencyRequest,
+                owner: source.map(|source| owner(&catalog, &patterns, source)),
+            },
+        );
     }
     Ok(DispatchWindow {
         from_seq: failed_sequence,
         through_seq: window.through_sequence,
         apis: apis.into_values().collect(),
+        matches,
         failure_owner: window
             .failure_owner
             .map(|source| owner(&catalog, &patterns, source)),
     })
 }
 
-fn label(
-    catalog: &ApiCatalog,
-    patterns: &[String],
-    route: PrimaryRoute,
-) -> (String, Option<String>) {
-    let path = api_catalog::matching_case_pattern(patterns, &route.path).unwrap_or(&route.path);
-    let api = format!("{} {path}", route.method);
-    (api, catalog.routes().get(path).cloned())
+fn matching_pattern<'a>(patterns: &'a [String], path: &'a str) -> &'a str {
+    api_catalog::matching_case_pattern(patterns, path).unwrap_or(path)
+}
+
+fn api_owner(catalog: &ApiCatalog, pattern: &str) -> WindowOwner {
+    WindowOwner {
+        scope: format!("api:{pattern}"),
+        group: catalog.routes().get(pattern).cloned(),
+    }
 }
 
 fn owner(catalog: &ApiCatalog, patterns: &[String], source: WindowFailureOwner) -> WindowOwner {
     match source {
         WindowFailureOwner::Request(route) => {
-            let (api, group) = label(catalog, patterns, route);
-            WindowOwner {
-                scope: format!("api:{api}"),
-                group,
-            }
+            api_owner(catalog, matching_pattern(patterns, &route.path))
         }
         lifecycle => {
             let scope = match lifecycle {

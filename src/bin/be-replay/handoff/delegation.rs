@@ -26,6 +26,12 @@ enum Requirement {
         attempt_id: String,
         seq: u64,
     },
+    Lookahead {
+        attempt_id: String,
+        from_seq: u64,
+        through_seq: u64,
+        sequence_count: usize,
+    },
     Integration {
         attempt_id: String,
         ready_fixes: usize,
@@ -52,6 +58,30 @@ impl Task {
             Requirement::Ownership {
                 attempt_id: attempt_id.to_owned(),
                 seq,
+            },
+        )
+    }
+
+    pub fn lookahead(
+        run_key: &str,
+        attempt_id: &str,
+        from_seq: u64,
+        through_seq: u64,
+        sequence_count: usize,
+    ) -> Self {
+        Self::new(
+            json!([
+                "lookahead_ownership_required",
+                run_key,
+                attempt_id,
+                from_seq,
+                through_seq
+            ]),
+            Requirement::Lookahead {
+                attempt_id: attempt_id.to_owned(),
+                from_seq,
+                through_seq,
+                sequence_count,
             },
         )
     }
@@ -91,6 +121,10 @@ impl Task {
         matches!(self.requirement, Requirement::Ownership { .. })
     }
 
+    pub fn is_lookahead(&self) -> bool {
+        matches!(self.requirement, Requirement::Lookahead { .. })
+    }
+
     pub fn action(&self, registration: Option<&Registration>) -> Value {
         let (role, mut task) = match &self.requirement {
             Requirement::Grouping { ungrouped_apis } => (
@@ -104,6 +138,18 @@ impl Task {
                 "issue-analyst",
                 json!({
                     "requirement":"ownership_required", "attempt_id":attempt_id, "seq":seq
+                }),
+            ),
+            Requirement::Lookahead {
+                attempt_id,
+                from_seq,
+                through_seq,
+                sequence_count,
+            } => (
+                "issue-analyst",
+                json!({
+                    "requirement":"lookahead_ownership_required", "attempt_id":attempt_id,
+                    "from_seq":from_seq, "through_seq":through_seq, "sequence_count":sequence_count,
                 }),
             ),
             Requirement::Integration {

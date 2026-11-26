@@ -19,11 +19,11 @@ rules: []
 ```
 
 For managed Source session regression, the assigned implementer establishes
-the Source contract for a generated time, ID, or token and updates the
-applicable policy declaration. Register the tested policy commit with
-`be-replay report` and verify the integrated candidate by rerunning the
-selected recording with `be-replay run`.
-[Source session regression](session-regression.md)
+the Source contract for a generated time, ID, or token and proposes the
+applicable policy declaration. Register the proposal with `be-replay rule plan`.
+The integrator applies the selected plans with `be-replay rule apply` and commits
+the resulting policy. Verify the integrated candidate with `be-replay run` on
+the selected recording. [Source session regression](session-regression.md) · [Session rule plan format](../plugins/ai-engine/skills/be-replay/references/api-implementer-rule-diagnosis.md#submit-a-rule-plan)
 
 <details>
 <summary>Case policy contracts and historical coordinator authoring</summary>

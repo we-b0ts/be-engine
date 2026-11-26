@@ -1,29 +1,27 @@
-//! Select primary route metadata from a bounded forward window of Source time.
+//! Select matchable requests and exact ownership from a bounded Source time window.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{BufRead, BufReader},
+    iter::Peekable,
     path::Path,
 };
 
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
-use traffic_model::{recording::identity::IdentityKind, trace::CaptureEvent};
+use traffic_model::{
+    recording::{CapturePhase, identity::IdentityKind},
+    trace::CaptureEvent,
+};
 use uuid::Uuid;
 
 use super::{
-    PrimaryEventKind, decode_document, linked_request_sequence, parse, parse_prefix, primary_kind,
+    PrimaryEventKind, PrimaryRoute, linked_request_sequence, parse, parse_prefix, primary_kind,
+    request_lookup::read_primary_route,
 };
 use crate::{
-    event_format, session_integrity,
+    event_format, session_integrity, session_schedule, session_summary,
     source::{recording, segment_window::SegmentWindow},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrimaryRoute {
-    pub method: String,
-    pub path: String,
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum WindowFailureOwner {
@@ -36,6 +34,7 @@ pub enum WindowFailureOwner {
 pub struct PrimaryDispatchWindow {
     pub through_sequence: u64,
     pub requests: BTreeMap<u64, PrimaryRoute>,
+    pub dependencies: BTreeMap<u64, Option<WindowFailureOwner>>,
     pub failure_owner: Option<WindowFailureOwner>,
 }
 
@@ -54,11 +53,34 @@ pub fn primary_dispatch_window(
         "Source session capture is incomplete"
     );
     let input = session_integrity::events(&root, &manifest)?;
+    let unscheduled = if manifest
+        .files
+        .iter()
+        .any(|file| file.path == session_summary::FILE)
+    {
+        session_summary::read(&root)?
+            .unscheduled_admissions
+            .into_iter()
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    let schedule: Schedule = if manifest
+        .files
+        .iter()
+        .any(|file| file.path == session_schedule::FILE)
+    {
+        Box::new(session_schedule::read(&root)?)
+    } else {
+        Box::new(std::iter::empty())
+    };
     let mut scanner = WindowScanner {
         epoch: manifest.run_epoch,
         segments: SegmentWindow::new_copying(root).with_seal(&manifest),
-        preceding_requests: BTreeMap::new(),
-        dependency_requests: BTreeMap::new(),
+        primary_requests: BTreeMap::new(),
+        dependency_owners: BTreeMap::new(),
+        unscheduled,
+        schedule: schedule.peekable(),
     };
     scanner.scan(
         BufReader::with_capacity(64 * 1024, input),
@@ -68,11 +90,27 @@ pub fn primary_dispatch_window(
     )
 }
 
+type Schedule = Box<dyn Iterator<Item = Result<session_schedule::SessionDecision>>>;
+
+enum RequestRoute {
+    Encoded(Vec<u8>),
+    Resolved(Option<PrimaryRoute>),
+}
+
+#[derive(Clone, Copy)]
+enum OwnerLink {
+    Request(u64),
+    Startup,
+    Shutdown,
+}
+
 struct WindowScanner {
     epoch: Uuid,
     segments: SegmentWindow,
-    preceding_requests: BTreeMap<u64, Vec<u8>>,
-    dependency_requests: BTreeMap<u64, u64>,
+    primary_requests: BTreeMap<u64, RequestRoute>,
+    dependency_owners: BTreeMap<u64, OwnerLink>,
+    unscheduled: BTreeSet<u64>,
+    schedule: Peekable<Schedule>,
 }
 
 impl WindowScanner {
@@ -87,6 +125,7 @@ impl WindowScanner {
         let mut previous = (0, 0);
         let mut through_sequence = 0;
         let mut requests = BTreeMap::new();
+        let mut dependencies = BTreeMap::new();
         let mut failure_owner = None;
         let mut end_offset = None;
         while input.read_until(b'\n', &mut row)? != 0 {
@@ -96,36 +135,43 @@ impl WindowScanner {
                 "unordered session event {sequence}"
             );
             previous = (sequence, offset);
-            if sequence < failed_sequence {
-                self.observe_preceding(sequence, kind, fields, &row)?;
-            } else {
-                if sequence == failed_sequence {
-                    end_offset = Some(offset.saturating_add(duration_micros));
-                    failure_owner = self.failure_owner(sequence, kind, fields, &row)?;
-                    if duration_micros == 0 {
-                        through_sequence = sequence;
-                        break;
-                    }
-                    self.preceding_requests.clear();
-                    self.dependency_requests.clear();
-                }
+            if sequence == failed_sequence {
+                end_offset = Some(offset.saturating_add(duration_micros));
+            }
+            if sequence >= failed_sequence {
                 let end = end_offset.with_context(|| {
                     format!("Source session does not contain failed sequence {failed_sequence}")
                 })?;
                 if offset > end {
                     break;
                 }
-                if sequence > after_sequence && kind == b"primary_request" {
-                    let route = match (sequence == failed_sequence, &failure_owner) {
-                        (true, Some(WindowFailureOwner::Request(route))) => Some(route.clone()),
-                        (true, _) => None,
-                        (false, _) => self.read_route(fields)?,
-                    };
-                    if let Some(route) = route {
-                        requests.insert(sequence, route);
-                    }
-                }
                 through_sequence = sequence;
+            }
+            self.observe(sequence, kind, fields, &row)?;
+            if sequence == failed_sequence {
+                failure_owner = self.failure_owner(sequence, kind, fields)?;
+                if duration_micros == 0 {
+                    break;
+                }
+            }
+            if sequence >= failed_sequence && sequence > after_sequence {
+                match kind {
+                    b"primary_request" => {
+                        if let Some(WindowFailureOwner::Request(route)) =
+                            self.request_owner(sequence)?
+                        {
+                            requests.insert(sequence, route);
+                        }
+                    }
+                    b"capture_started" if self.target_admission_required(sequence)? => {
+                        dependencies.insert(sequence, self.dependency_owner(sequence)?);
+                    }
+                    _ => {}
+                }
+            }
+            if kind == b"capture_terminated" && !self.dependency_owners.is_empty() {
+                let dependency = parse(first_field(fields), "dependency sequence")?;
+                self.dependency_owners.remove(&dependency);
             }
             row.clear();
         }
@@ -136,31 +182,24 @@ impl WindowScanner {
         Ok(PrimaryDispatchWindow {
             through_sequence,
             requests,
+            dependencies,
             failure_owner,
         })
     }
 
-    fn observe_preceding(
-        &mut self,
-        sequence: u64,
-        kind: &[u8],
-        fields: &[u8],
-        row: &[u8],
-    ) -> Result<()> {
+    fn observe(&mut self, sequence: u64, kind: &[u8], fields: &[u8], row: &[u8]) -> Result<()> {
         match kind {
             b"primary_request" => {
-                self.preceding_requests.insert(sequence, fields.to_vec());
+                self.primary_requests
+                    .insert(sequence, RequestRoute::Encoded(fields.to_vec()));
             }
-            // The third capture-start field is the admitted Case. Most
-            // Source Session dependencies carry no admission link.
-            b"capture_started" if !fields.ends_with(b"\t-") => {
-                if let Some(request) = self.admitted_request(row)? {
-                    self.dependency_requests.insert(sequence, request);
+            // Runtime observations without an admitted Case carry no ownership link.
+            b"capture_started"
+                if !fields.starts_with(b"runtime\t") || !fields.ends_with(b"\t-") =>
+            {
+                if let Some(link) = self.admission_owner(row)? {
+                    self.dependency_owners.insert(sequence, link);
                 }
-            }
-            b"capture_terminated" if !self.dependency_requests.is_empty() => {
-                let dependency = parse(first_field(fields), "dependency sequence")?;
-                self.dependency_requests.remove(&dependency);
             }
             _ => {}
         }
@@ -172,21 +211,20 @@ impl WindowScanner {
         sequence: u64,
         kind: &[u8],
         fields: &[u8],
-        row: &[u8],
     ) -> Result<Option<WindowFailureOwner>> {
         use PrimaryEventKind::*;
-        let request = match primary_kind(kind) {
-            Some(SourceStart | Ready) => return Ok(Some(WindowFailureOwner::Startup)),
-            Some(Stop | SourceExit) => return Ok(Some(WindowFailureOwner::Shutdown)),
-            Some(PrimaryRequest) => return self.read_route(fields).map(|route| Some(owner(route))),
+        match primary_kind(kind) {
+            Some(SourceStart | Ready) => Ok(Some(WindowFailureOwner::Startup)),
+            Some(Stop | SourceExit) => Ok(Some(WindowFailureOwner::Shutdown)),
+            Some(PrimaryRequest) => self.request_owner(sequence),
             Some(
                 PrimaryResponseHeaders
                 | PrimaryResponsePart
                 | PrimaryResponseTrailers
                 | PrimaryResponseEnd
                 | PrimaryCancel,
-            ) => Some(linked_request_sequence(first_field(fields), sequence)?),
-            None if kind == b"capture_started" => self.admitted_request(row)?,
+            ) => self.request_owner(linked_request_sequence(first_field(fields), sequence)?),
+            None if kind == b"capture_started" => self.dependency_owner(sequence),
             None if matches!(
                 kind,
                 b"wire_output_started"
@@ -196,48 +234,72 @@ impl WindowScanner {
             ) =>
             {
                 let dependency = parse(first_field(fields), "dependency sequence")?;
-                self.dependency_requests.get(&dependency).copied()
+                self.dependency_owner(dependency)
             }
-            None => None,
-        };
-        let Some(request) = request else {
-            return Ok(None);
-        };
-        let Some(document) = self.preceding_requests.remove(&request) else {
-            return Ok(None);
-        };
-        self.read_route(&document).map(|route| Some(owner(route)))
-    }
-
-    fn admitted_request(&self, row: &[u8]) -> Result<Option<u64>> {
-        match event_format::decode_stream_event(row, self.epoch)? {
-            Some(event) => match event.event {
-                CaptureEvent::Started { admitted_case, .. } => Ok(
-                    admitted_case.and_then(|case| IdentityKind::Case.sequence(self.epoch, case))
-                ),
-                _ => Ok(None),
-            },
             None => Ok(None),
         }
     }
 
-    fn read_route(&mut self, document: &[u8]) -> Result<Option<PrimaryRoute>> {
-        #[derive(Deserialize)]
-        struct RequestFields {
-            method: String,
-            uri: String,
-            #[serde(default, rename = "_session_probe")]
-            probe: bool,
-        }
-        let request: RequestFields = decode_document(document, &mut self.segments)?;
-        if request.probe {
+    fn admission_owner(&self, row: &[u8]) -> Result<Option<OwnerLink>> {
+        let Some(event) = event_format::decode_stream_event(row, self.epoch)? else {
             return Ok(None);
+        };
+        let CaptureEvent::Started {
+            phase,
+            admitted_case,
+            ..
+        } = event.event
+        else {
+            return Ok(None);
+        };
+        if let Some(case) = admitted_case {
+            return Ok(IdentityKind::Case
+                .sequence(self.epoch, case)
+                .map(OwnerLink::Request));
         }
-        let uri: http::Uri = request.uri.parse().context("invalid primary URI")?;
-        Ok(Some(PrimaryRoute {
-            method: request.method,
-            path: uri.path().to_owned(),
-        }))
+        Ok(match phase {
+            CapturePhase::Startup => Some(OwnerLink::Startup),
+            CapturePhase::Runtime => None,
+            CapturePhase::Shutdown => Some(OwnerLink::Shutdown),
+        })
+    }
+
+    fn dependency_owner(&mut self, sequence: u64) -> Result<Option<WindowFailureOwner>> {
+        match self.dependency_owners.get(&sequence).copied() {
+            Some(OwnerLink::Request(request)) => self.request_owner(request),
+            Some(OwnerLink::Startup) => Ok(Some(WindowFailureOwner::Startup)),
+            Some(OwnerLink::Shutdown) => Ok(Some(WindowFailureOwner::Shutdown)),
+            None => Ok(None),
+        }
+    }
+
+    fn request_owner(&mut self, sequence: u64) -> Result<Option<WindowFailureOwner>> {
+        let route = match self.primary_requests.get(&sequence) {
+            Some(RequestRoute::Encoded(document)) => {
+                read_primary_route(document, &mut self.segments)?
+            }
+            Some(RequestRoute::Resolved(route)) => return Ok(Some(owner(route.clone()))),
+            None => return Ok(None),
+        };
+        self.primary_requests
+            .insert(sequence, RequestRoute::Resolved(route.clone()));
+        Ok(Some(owner(route)))
+    }
+
+    fn target_admission_required(&mut self, sequence: u64) -> Result<bool> {
+        while let Some(decision) = self.schedule.peek() {
+            if decision
+                .as_ref()
+                .is_ok_and(|decision| decision.sequence > sequence)
+            {
+                break;
+            }
+            let decision = self.schedule.next().expect("peeked schedule decision")?;
+            if decision.sequence == sequence && decision.driver_prelude.is_some() {
+                return Ok(false);
+            }
+        }
+        Ok(!self.unscheduled.contains(&sequence))
     }
 }
 
@@ -264,6 +326,7 @@ mod tests {
         session::SessionEvent,
         trace::{OutputKind, RecordedEvent},
     };
+    use traffic_protocol::connection::DriverPrelude;
 
     #[tokio::test]
     async fn window_uses_exact_links_and_stops_after_the_source_minute() -> Result<()> {
@@ -338,22 +401,82 @@ mod tests {
                 )
                 .await?;
         }
+        for (sequence, event) in [
+            (
+                7,
+                CaptureEvent::MessageStarted {
+                    dependency_sequence: 7,
+                },
+            ),
+            (
+                8,
+                CaptureEvent::Output {
+                    dependency_sequence: 7,
+                    output: OutputKind::End,
+                },
+            ),
+            (
+                9,
+                CaptureEvent::Started {
+                    dependency_sequence: 9,
+                    phase: CapturePhase::Shutdown,
+                    observed_case: None,
+                    admitted_case: None,
+                },
+            ),
+            (
+                10,
+                CaptureEvent::Started {
+                    dependency_sequence: 10,
+                    phase: CapturePhase::Runtime,
+                    observed_case: None,
+                    admitted_case: None,
+                },
+            ),
+            (
+                11,
+                CaptureEvent::Started {
+                    dependency_sequence: 11,
+                    phase: CapturePhase::Runtime,
+                    observed_case: None,
+                    admitted_case: None,
+                },
+            ),
+        ] {
+            ledger
+                .append_event(
+                    &mut files,
+                    &RecordedEvent {
+                        sequence,
+                        offset_micros: 60,
+                        event,
+                    },
+                )
+                .await?;
+        }
+        ledger.note_unscheduled_admission(10);
         for (sequence, offset_micros, path) in [
-            (7, 61, "/included?detail=yes"),
-            (8, 62, "/probe"),
-            (9, 60_000_060, "/last"),
-            (10, 60_000_061, "/outside"),
+            (12, 61, "/included?detail=yes"),
+            (13, 62, "/probe"),
+            (14, 60_000_060, "/last"),
+            (15, 60_000_061, "/outside"),
         ] {
             ledger.append_session_event(&mut files, &RecordedEvent {
                 sequence,
                 offset_micros,
                 event: SessionEvent::PrimaryRequest {
                     exchange: IdentityKind::Case.bridge(epoch, sequence),
-                    request: json!({"method": "GET", "uri": path, "_session_probe": sequence == 8}),
+                    request: json!({"method": "GET", "uri": path, "_session_probe": sequence == 13}),
                 },
             }).await?;
         }
-        write_session_manifest(root, epoch, process, ledger.seal(&mut files).await?)?;
+        let decisions = vec![session_schedule::SessionDecision {
+            sequence: 11,
+            step: None,
+            driver_prelude: Some(DriverPrelude::MysqlSqlalchemyPymysql),
+        }];
+        let identities = ledger.seal_with_schedule(&mut files, decisions).await?;
+        write_session_manifest(root, epoch, process, identities)?;
 
         for seq in [3, 4, 5] {
             let exact = primary_dispatch_window(root, seq, 0, 0)?;
@@ -366,20 +489,32 @@ mod tests {
                 }))
             );
         }
+        let before = primary_dispatch_window(root, 3, 60_000_000, 0)?;
+        assert_eq!(
+            before.dependencies.get(&4),
+            Some(&Some(WindowFailureOwner::Request(PrimaryRoute {
+                method: "POST".into(),
+                path: "/previous".into(),
+            })))
+        );
         let window = primary_dispatch_window(root, 6, 60_000_000, 0)?;
-        assert_eq!(window.through_sequence, 9);
+        assert_eq!(window.through_sequence, 14);
         assert_eq!(window.failure_owner, None);
+        assert_eq!(
+            window.dependencies,
+            [(6, None), (9, Some(WindowFailureOwner::Shutdown))].into(),
+        );
         assert_eq!(
             window
                 .requests
                 .iter()
                 .map(|(&seq, route)| (seq, route.path.as_str()))
                 .collect::<Vec<_>>(),
-            [(7, "/included"), (9, "/last")],
+            [(12, "/included"), (14, "/last")],
         );
-        let rolled = primary_dispatch_window(root, 7, 60_000_000, window.through_sequence)?;
-        assert_eq!(rolled.through_sequence, 10);
-        assert_eq!(rolled.requests.keys().copied().collect::<Vec<_>>(), [10]);
+        let rolled = primary_dispatch_window(root, 12, 60_000_000, window.through_sequence)?;
+        assert_eq!(rolled.through_sequence, 15);
+        assert_eq!(rolled.requests.keys().copied().collect::<Vec<_>>(), [15]);
         assert!(matches!(
             rolled.failure_owner,
             Some(WindowFailureOwner::Request(_))

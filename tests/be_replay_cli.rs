@@ -271,6 +271,14 @@ async fn seal_events(recording: &Path) {
 }
 
 async fn seal_events_with_apis(recording: &Path, requests: &[(u64, &str, &str)]) {
+    seal_events_for_window(recording, requests, &[]).await;
+}
+
+async fn seal_events_for_window(
+    recording: &Path,
+    requests: &[(u64, &str, &str)],
+    dependency_offsets: &[u64],
+) {
     fs::create_dir_all(recording).unwrap();
     let run_epoch = uuid::Uuid::new_v4();
     let process_epoch = uuid::Uuid::new_v4();
@@ -337,6 +345,24 @@ async fn seal_events_with_apis(recording: &Path, requests: &[(u64, &str, &str)])
             .append_session_event(&mut stream, &row)
             .await
             .unwrap();
+    }
+    for &at in dependency_offsets {
+        offset = at;
+        let dependency_sequence = sequence + 1;
+        for mut row in [
+            json!({"event_type":"capture_started", "dependency_sequence":dependency_sequence,
+                "phase":"runtime"}),
+            json!({"event_type":"wire_output", "dependency_sequence":dependency_sequence,
+                "output":{"kind":"end"}}),
+        ] {
+            sequence += 1;
+            row["sequence"] = json!(sequence);
+            row["offset_micros"] = json!(offset);
+            ledger
+                .append_event(&mut stream, &serde_json::from_value(row).unwrap())
+                .await
+                .unwrap();
+        }
     }
     for event in ["stop", "source_exit"] {
         sequence += 1;
@@ -687,5 +713,69 @@ async fn flat_events_queries_the_recording_without_starting_replay() {
     let exact = query_events(&["--seq", "3", "--seq", "4", "--seq", "6"]);
     assert_eq!(sequences(&exact), [3, 4, 6]);
 
+    assert!(!traffic_e2e::internal_runtime::root(root).exists());
+}
+
+#[tokio::test]
+async fn case_pattern_lookup_follows_the_source_cursor_across_methods() {
+    let target = tempfile::tempdir().unwrap();
+    let root = target.path();
+    configure(root);
+    fs::write(
+        root.join(".traffic-e2e/apis.yaml"),
+        "users: [/users/*]\ncurrent: [/users/current]\n",
+    )
+    .unwrap();
+    seal_events_with_apis(
+        &recording_dir(root),
+        &[
+            (800, "GET", "/users/1?include=detail"),
+            (900, "POST", "/users/current"),
+            (1000, "POST", "/other"),
+            (1100, "PUT", "/users/2"),
+            (1200, "DELETE", "/users/3"),
+        ],
+    )
+    .await;
+
+    let lookup = |extra: &[&str]| {
+        let mut args = vec![
+            "apis",
+            "--recording-run-id",
+            RECORDING_ID,
+            "--case-pattern",
+            "/users/*",
+            "--from-seq",
+            "8",
+            "--through-seq",
+            "11",
+        ];
+        args.extend_from_slice(extra);
+        successful(command(root, &args))
+    };
+    let first = lookup(&[]);
+    assert_eq!(first["recording_id"], RECORDING_ID);
+    assert_eq!(first["case_pattern"], "/users/*");
+    assert_eq!(first["request"]["request_seq"], 8);
+    assert_eq!(first["request"]["method"], "GET");
+    assert_eq!(first["request"]["path"], "/users/1");
+    assert_eq!(first["request"]["offset_micros"], 800);
+    assert_eq!(first["next_after_sequence"], 8);
+    let evidence = successful(command(
+        root,
+        &["events", "--recording-run-id", RECORDING_ID, "--seq", "8"],
+    ));
+    assert_eq!(
+        first["request"]["exchange"],
+        evidence["events"][0]["exchange"]
+    );
+
+    let next = lookup(&["--after-seq", "8"]);
+    assert_eq!(next["request"]["request_seq"], 11);
+    assert_eq!(next["request"]["method"], "PUT");
+    assert_eq!(next["next_after_sequence"], 11);
+    let exhausted = lookup(&["--after-seq", "11"]);
+    assert!(exhausted["request"].is_null());
+    assert!(exhausted["next_after_sequence"].is_null());
     assert!(!traffic_e2e::internal_runtime::root(root).exists());
 }

@@ -36,8 +36,22 @@ boundary. Use `dependency SEQ` for the admission record and
 Use explicit request links, Source call paths, or lifecycle evidence to
 establish ownership of concurrent traffic. [Evidence commands](session-regression.md#diagnose-the-first-failure)
 
-Return `ownership` with `seq`, `scope`, and `group`. Use `api:METHOD /path`
-and its catalog group for API work. Use `job:NAME`, `startup`, or `shutdown`
-with a group that owns the corresponding subsystem. The engine handles the
-60-second API discovery window. The implementer diagnoses the assigned event
-and chooses the repair. [Ownership format](session-regression.md#plan-implement-and-verify)
+Return `ownership` with `seq`, `scope`, and `group`. Use `api:/case/pattern`
+and its catalog group for API work, or `job:NAME`, `startup`, or `shutdown`
+with the group that owns the subsystem. [Ownership format](session-regression.md#plan-implement-and-verify)
+
+## Lookahead ownership
+
+For `lookahead_ownership_required`, read the outstanding sequences for `task_id`
+with `be-replay sequences --task-id TASK`. Use `--limit` and the last returned
+sequence as `--after-seq` to work in batches. Inspect each affected primary
+request or dependency admission. Trace the matching request, dependency or
+lifecycle evidence to its scope. A request can precede the window. Consecutive
+Source sequences can belong to different requests.
+
+Group sequences that share an evidence-backed scope and group in one file.
+Return a `lookahead` finding per file with `sequences_file`, `scope`, `group`,
+and a short `evidence` reference. If the available facts cannot establish
+ownership, omit both `scope` and `group` and state the missing evidence. The
+implementer handles comparison and repair after ownership is accepted.
+[Lookahead receipt](session-regression.md#lookahead-ownership)
