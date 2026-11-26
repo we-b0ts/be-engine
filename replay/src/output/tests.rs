@@ -178,6 +178,50 @@ async fn native_events_share_ordered_batching_and_retain_the_callers_terminal_re
 }
 
 #[tokio::test]
+async fn native_target_stop_cannot_consume_an_end_or_precede_target_exit() {
+    for terminal in [EventKind::TargetStop, EventKind::ResponseEnd] {
+        let plan = SequencePlan::compile(
+            [
+                (1, EventKind::Request),
+                (1, EventKind::ResponseHeaders),
+                (1, terminal),
+                (0, EventKind::SessionSourceExit),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (dependency_sequence, kind))| SourceEvent {
+                sequence: index as u64 + 1,
+                dependency_sequence,
+                offset_micros: index as u64,
+                kind,
+            }),
+        )
+        .unwrap();
+        let runtime = SequenceRuntime::with_session_timing(plan, Some(Duration::ZERO), []);
+        let claim = runtime.admit(1).unwrap();
+        claim
+            .wait_delivery(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        let mut output = Output {
+            parts: 0,
+            chunks: VecDeque::from([
+                chunk("headers", OutputBoundary::Headers, true),
+                chunk("", OutputBoundary::TargetStop, true),
+            ]),
+        };
+        let mut writer = Writer::default();
+        assert!(
+            deliver(&mut writer, &mut output, Some(&claim))
+                .await
+                .is_err()
+        );
+        assert_eq!(writer.flushes, [b"headers".to_vec()]);
+        assert_eq!(runtime.expected().unwrap().kind, terminal);
+    }
+}
+
+#[tokio::test]
 async fn another_dependency_barrier_prevents_the_next_native_part_from_becoming_visible() {
     let runtime = runtime(&[
         (1, EventKind::Request),

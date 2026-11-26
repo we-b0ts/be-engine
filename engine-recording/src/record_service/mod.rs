@@ -18,7 +18,12 @@ use crate::{
     AppState, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
 use anyhow::{Context, Result, bail, ensure};
-use std::{future::Future, path::Path, pin::Pin, time::Duration};
+use std::{
+    future::Future,
+    path::Path,
+    pin::Pin,
+    time::{Duration, Instant},
+};
 use tokio::{
     net::TcpListener,
     sync::{oneshot, watch},
@@ -240,6 +245,7 @@ async fn run_prepared(
     let _ = stop_adapter.send(true);
     // Source exit can emit disconnect dependencies. Keep Recorder and active
     // ownership alive until the process has exited, before draining relay/cases.
+    let mut managed_session_source_exit = None;
     let source_cleanup = if let Some(source) = &mut source {
         let stop_receipt = if state.session_events() {
             state.session_event(SessionEvent::Stop)
@@ -249,11 +255,10 @@ async fn run_prepared(
         let cleanup = process::stop_source(source).await;
         cleanup.and_then(|stopped| {
             if state.session_events() {
-                let forced_by_recorder = source_ready
-                    && normal_shutdown
-                    && result.is_ok()
-                    && stop_receipt.is_ok()
-                    && stopped.forced_by_recorder;
+                let expected_shutdown =
+                    source_ready && normal_shutdown && result.is_ok() && stop_receipt.is_ok();
+                let forced_by_recorder = expected_shutdown && stopped.forced_by_recorder;
+                let observed_at = Instant::now();
                 state.session_event(SessionEvent::SourceExit {
                     status: stopped.status,
                     forced_by_recorder,
@@ -265,6 +270,9 @@ async fn run_prepared(
                     if result.is_ok() {
                         result = Err(error);
                     }
+                } else if expected_shutdown && (stopped.graceful_by_recorder || forced_by_recorder)
+                {
+                    managed_session_source_exit = Some(observed_at);
                 }
             }
             stop_receipt
@@ -273,14 +281,7 @@ async fn run_prepared(
         Ok(())
     };
     if source_cleanup.is_ok() && state.inner.active_cases.is_quiescing() {
-        // Source has exited and cannot start more work. End retained sockets as
-        // engine cleanup, so an upstream that never replies cannot strand drain.
-        let reset = state.dependency_connections().reset_open_connections();
-        if !reset.connections_by_protocol.is_empty() {
-            warn!(connections_by_protocol = ?reset.connections_by_protocol,
-                reset_errors = ?reset.errors,
-                "closed retained dependency connections after Source exit");
-        }
+        reset_dependencies_after_source_exit(&state, managed_session_source_exit);
     }
     if tokio::time::timeout(Duration::from_secs(60), relay.drain())
         .await
@@ -343,12 +344,6 @@ async fn run_prepared(
     source_cleanup?;
     let manifest = state.recorder().run_dir.join("recording-run.json");
     let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)?;
-    let close_limit_case = close_limit_case.map(|id| state.recorder().case_label(id));
-    ensure!(
-        usable_recording(&report, close_limit_case.as_deref()),
-        "recording finalized with errors; inspect {}",
-        manifest.display()
-    );
     if state.session_events() {
         let ledger = state.recorder().run_dir.join("dependency-manifest.json");
         let document: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&ledger).await?)?;
@@ -358,6 +353,12 @@ async fn run_prepared(
             ledger.display()
         );
     }
+    let close_limit_case = close_limit_case.map(|id| state.recorder().case_label(id));
+    ensure!(
+        usable_recording(&report, close_limit_case.as_deref()),
+        "recording finalized with errors; inspect {}",
+        manifest.display()
+    );
     crate::command_output::stdout_line(format_args!(
         "{}",
         serde_json::json!({
@@ -367,6 +368,21 @@ async fn run_prepared(
             "completion_reason": report["completion_reason"]
         })
     ))
+}
+
+fn reset_dependencies_after_source_exit(state: &AppState, managed_source_exit: Option<Instant>) {
+    // Source cannot start more work. Wake dependency streams whose upstream
+    // is still open so their capture reservations can drain.
+    let connections = state.dependency_connections();
+    let reset = match managed_source_exit {
+        Some(boundary) => connections.reset_after_managed_source_exit(boundary),
+        None => connections.reset_open_connections(),
+    };
+    if !reset.connections_by_protocol.is_empty() {
+        warn!(connections_by_protocol = ?reset.connections_by_protocol,
+            reset_errors = ?reset.errors,
+            "closed retained dependency connections after Source exit");
+    }
 }
 
 fn usable_recording(report: &serde_json::Value, close_limit_case: Option<&str>) -> bool {

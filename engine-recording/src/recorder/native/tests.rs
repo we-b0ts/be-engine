@@ -197,5 +197,42 @@ async fn session_notification_is_available_before_its_wire_output_attempt() -> R
         traffic_recording_store::session_records::dependency(root, sequence)?["event_type"],
         "redis_pub_sub_push"
     );
+    let report: Value = serde_json::from_slice(&std::fs::read(root.join("recording-run.json"))?)?;
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["capture_complete"], true);
+    assert_eq!(report["capture_failures"], 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn incomplete_session_capture_marks_runtime_success_as_failed() -> Result<()> {
+    use traffic_model::session::SessionEvent;
+
+    let directory = tempfile::tempdir()?;
+    let mut config = AppConfig::default();
+    config.recording.output_dir = directory.path().join("recordings");
+    config.recording.session_events = true;
+    config.http_gateway.enabled = false;
+    config.tls.ca_cert_path = directory.path().join("ca.pem");
+    config.tls.ca_key_path = directory.path().join("ca-key.pem");
+    let state = AppState::new_with_providers(config, crate::protocols::default_providers()).await?;
+    state.session_event(SessionEvent::SourceStart)?;
+    state.session_event(SessionEvent::Ready)?;
+    drop(
+        state.capture_dependency_start(ProtocolRef::observation(Uuid::new_v4(), "connect_attempt")),
+    );
+    state.session_event(SessionEvent::Stop)?;
+    state.session_event(SessionEvent::SourceExit {
+        status: Some(0),
+        forced_by_recorder: false,
+    })?;
+    let recorder = state.recorder();
+    recorder.finish_run_after_runtime(true).await?;
+
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(recorder.run_dir.join("recording-run.json"))?)?;
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["capture_complete"], false);
+    assert_eq!(report["capture_failures"], 1);
     Ok(())
 }

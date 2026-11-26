@@ -95,6 +95,33 @@ fn configure(target: &Path) {
 }
 
 #[tokio::test]
+async fn switching_rejects_incomplete_capture_even_if_the_runtime_report_completed() {
+    let target = tempfile::tempdir().unwrap();
+    let root = target.path();
+    configure(root);
+    git(root, &["switch", "-qc", "codex/replay/fixture"]);
+    let recording = recording_dir(root);
+    seal_events(&recording).await;
+    let manifest = recording.join("dependency-manifest.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    document["capture_complete"] = json!(false);
+    document["coverage"]["capture_failures"] = json!(1);
+    fs::write(&manifest, serde_json::to_vec(&document).unwrap()).unwrap();
+    fs::write(
+        recording.join("recording-run.json"),
+        br#"{"status":"completed"}"#,
+    )
+    .unwrap();
+
+    let output = command(root, &["switch-recording-id", RECORDING_ID]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("Source session capture is incomplete"));
+    assert!(error.contains("capture_failures=1"));
+    assert!(error.contains(manifest.to_str().unwrap()));
+}
+
+#[tokio::test]
 async fn status_starts_a_new_round_on_approval_and_preserves_attempt_history() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();

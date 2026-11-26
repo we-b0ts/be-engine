@@ -24,6 +24,7 @@ async fn a_reset_reported_only_by_flush_is_observed_before_body_release() {
         }
     }
     let termination = ClientTermination::default();
+    let started = Instant::now();
     let mut writer = ObservedClientIo::new(FlushReset, termination.clone());
     writer.write_all(b"prefix").await.unwrap();
     assert_eq!(
@@ -37,6 +38,18 @@ async fn a_reset_reported_only_by_flush_is_observed_before_body_release() {
             .termination
             .kind,
         TerminationKind::Reset
+    );
+    let boundary = Instant::now();
+    termination
+        .connection_observation()
+        .observe_engine_stop_at_boundary(boundary);
+    assert!(termination.has_failed_delivery_before(started, boundary));
+    assert!(termination.cancelled().is_none());
+    assert!(
+        termination
+            .connection_observation()
+            .connection_end_before(TerminationSide::Client, boundary)
+            .is_some()
     );
 }
 

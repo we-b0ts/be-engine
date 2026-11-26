@@ -67,9 +67,11 @@ async fn recovery_marks_engine_origin_before_socket_eof_is_observed() {
         .unwrap();
     termination.observe_client_eof();
     registry.reset_open_connections();
+    registry.reset_after_managed_source_exit(Instant::now());
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
     termination.observe_server_eof();
     assert!(termination.engine_stopped());
+    assert!(termination.engine_stop_boundary().is_none());
     assert!(
         termination
             .outcome_since(std::time::Instant::now())

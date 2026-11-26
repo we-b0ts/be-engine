@@ -285,6 +285,7 @@ impl Inventory {
                     }),
                 )?)
             }
+            None if self.event_session => native.recorded_session_exchange(event, secrets)?,
             None => native.recorded_exchange_with_secrets(event, secrets)?,
         };
         let Some(mut exchange) = exchange else {

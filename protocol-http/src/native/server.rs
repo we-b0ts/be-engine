@@ -6,6 +6,7 @@ use traffic_protocol::connection::{ConnectionIo, NativeFuture, RequestHost, Resp
 pub(super) struct Server;
 struct Framer {
     check_http10_head: bool,
+    target_stopped: bool,
 }
 
 impl ResponseFramer for Framer {
@@ -18,6 +19,10 @@ impl ResponseFramer for Framer {
             ensure!(!chunked, "chunked HTTP Replay requires an HTTP/1.1 request");
         }
         Ok(bytes)
+    }
+
+    fn target_stopped(&mut self) {
+        self.target_stopped = true;
     }
 }
 
@@ -54,8 +59,13 @@ impl ServerSession for Server {
                 let delivery = host.execute(request).await?;
                 let mut framer = Framer {
                     check_http10_head: !http11,
+                    target_stopped: false,
                 };
                 delivery.write(&mut reader.io, &mut framer).await?;
+                if framer.target_stopped {
+                    // The Target process has exited. Drop the transport without a TLS close alert.
+                    return Ok(());
+                }
             }
             reader.io.shutdown().await?;
             Ok(())
@@ -70,12 +80,14 @@ mod tests {
     fn http10_rejects_chunked_framing_only_in_the_response_head() {
         let mut framer = Framer {
             check_http10_head: true,
+            target_stopped: false,
         };
         let wire = Bytes::from_static(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n");
         assert!(framer.frame(wire).is_err());
 
         let mut framer = Framer {
             check_http10_head: true,
+            target_stopped: false,
         };
         let wire = Bytes::from_static(
             b"HTTP/1.1 200 OK\r\ncontent-length: 26\r\n\r\ntransfer-encoding: chunked",

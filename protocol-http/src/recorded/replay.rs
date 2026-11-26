@@ -213,6 +213,7 @@ impl RecordedExchange {
             }],
             end_ms: at_ms,
             complete: true,
+            stopped_at_source_exit: false,
             trailers: None,
         });
     }

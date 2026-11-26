@@ -16,6 +16,7 @@ use tokio::process::{Child, Command};
 use tracing::warn;
 
 const SOURCE_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+const SIGTERM_EXIT_STATUS: i32 = 128 + libc::SIGTERM;
 const JAVA_TRUSTSTORE_PASSWORD: &str = "changeit";
 
 pub(super) struct RuntimeDirectory {
@@ -291,14 +292,17 @@ pub fn verify_fixed_identity_read(path: &Path, label: &str) -> Result<()> {
 pub(super) struct SourceStop {
     pub(super) status: Option<i32>,
     pub(super) forced_by_recorder: bool,
+    pub(super) graceful_by_recorder: bool,
 }
 
 impl SourceStop {
-    fn observed(status: ExitStatus, recorder_sent_sigkill: bool) -> Self {
+    fn observed(status: ExitStatus, sent_sigterm: bool, sent_sigkill: bool) -> Self {
         let signal = status.signal();
+        let status = status.code().or_else(|| signal.map(|signal| 128 + signal));
         Self {
-            status: status.code().or_else(|| signal.map(|signal| 128 + signal)),
-            forced_by_recorder: recorder_sent_sigkill && signal == Some(libc::SIGKILL),
+            status,
+            forced_by_recorder: sent_sigterm && sent_sigkill && signal == Some(libc::SIGKILL),
+            graceful_by_recorder: sent_sigterm && matches!(status, Some(0 | SIGTERM_EXIT_STATUS)),
         }
     }
 }
@@ -309,18 +313,19 @@ pub(super) async fn stop_source(source: &mut Child) -> Result<SourceStop> {
 
 async fn stop_source_with_timeout(source: &mut Child, timeout: Duration) -> Result<SourceStop> {
     if let Some(status) = source.try_wait().context("failed to inspect Source")? {
-        return Ok(SourceStop::observed(status, false));
+        return Ok(SourceStop::observed(status, false, false));
     }
     let sent_sigterm =
         signal_process_group(source, libc::SIGTERM).context("failed to stop Source")?;
     if let Ok(status) = tokio::time::timeout(timeout, source.wait()).await {
         return Ok(SourceStop::observed(
             status.context("failed to wait for Source after SIGTERM")?,
+            sent_sigterm,
             false,
         ));
     }
     if let Some(status) = source.try_wait().context("failed to inspect Source")? {
-        return Ok(SourceStop::observed(status, false));
+        return Ok(SourceStop::observed(status, sent_sigterm, false));
     }
     warn!("Source did not stop after SIGTERM; sending SIGKILL");
     let sent_sigkill = signal_process_group(source, libc::SIGKILL).unwrap_or(false);
@@ -329,7 +334,7 @@ async fn stop_source_with_timeout(source: &mut Child, timeout: Duration) -> Resu
         .wait()
         .await
         .context("failed to reap Source after SIGKILL")?;
-    Ok(SourceStop::observed(status, sent_sigterm && sent_sigkill))
+    Ok(SourceStop::observed(status, sent_sigterm, sent_sigkill))
 }
 
 fn signal_process_group(child: &Child, signal: libc::c_int) -> Result<bool> {
@@ -520,6 +525,24 @@ mod tests {
             let stopped = stop_source(source).await.unwrap();
             assert_eq!(stopped.status, Some(SIGKILL_EXIT_STATUS));
             assert!(!stopped.forced_by_recorder);
+        }
+    }
+
+    #[test]
+    fn graceful_stop_requires_recorder_sigterm_and_a_normal_status() {
+        for (status, graceful) in [
+            (0, true),
+            (libc::SIGTERM, true),
+            (143 << 8, true),
+            (1 << 8, false),
+            (libc::SIGSEGV, false),
+        ] {
+            let status = ExitStatus::from_raw(status);
+            assert_eq!(
+                SourceStop::observed(status, true, false).graceful_by_recorder,
+                graceful
+            );
+            assert!(!SourceStop::observed(status, false, false).graceful_by_recorder);
         }
     }
 }

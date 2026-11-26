@@ -42,12 +42,23 @@ struct TerminationState {
     client: PeerTermination,
     server: PeerTermination,
     engine_stopped: bool,
+    engine_stop_boundary: Option<Instant>,
 }
 
 #[derive(Debug, Default)]
 struct PeerTermination {
     first: Option<ObservedTermination>,
     connection_end: Option<ObservedTermination>,
+}
+
+impl TerminationState {
+    fn peer_connection_end(&self, side: TerminationSide) -> Option<ObservedTermination> {
+        match side {
+            TerminationSide::Client => self.client.connection_end,
+            TerminationSide::Server => self.server.connection_end,
+            TerminationSide::Engine => None,
+        }
+    }
 }
 
 impl ConnectionTermination {
@@ -67,8 +78,21 @@ impl ConnectionTermination {
     }
 
     pub fn observe_engine_stop(&self) {
+        self.observe_engine_stop_with_boundary(None);
+    }
+
+    /// The owning engine supplied an independently recorded lifecycle cutoff.
+    pub fn observe_engine_stop_at_boundary(&self, boundary: Instant) {
+        self.observe_engine_stop_with_boundary(Some(boundary));
+    }
+
+    fn observe_engine_stop_with_boundary(&self, boundary: Option<Instant>) {
         let mut state = self.state.lock().expect("connection termination poisoned");
+        if state.engine_stopped {
+            return;
+        }
         state.engine_stopped = true;
+        state.engine_stop_boundary = boundary;
         state.first.get_or_insert_with(|| ObservedTermination {
             termination: DependencyTermination {
                 side: TerminationSide::Engine,
@@ -168,11 +192,20 @@ impl ConnectionTermination {
         if state.engine_stopped {
             return None;
         }
-        match side {
-            TerminationSide::Client => state.client.connection_end,
-            TerminationSide::Server => state.server.connection_end,
-            TerminationSide::Engine => None,
-        }
+        state.peer_connection_end(side)
+    }
+
+    /// Read peer connection evidence that predates an independently known cutoff.
+    pub fn connection_end_before(
+        &self,
+        side: TerminationSide,
+        boundary: Instant,
+    ) -> Option<ObservedTermination> {
+        self.state
+            .lock()
+            .expect("connection termination poisoned")
+            .peer_connection_end(side)
+            .filter(|end| end.at <= boundary)
     }
 
     pub fn engine_stopped(&self) -> bool {
@@ -180,6 +213,13 @@ impl ConnectionTermination {
             .lock()
             .expect("connection termination poisoned")
             .engine_stopped
+    }
+
+    pub fn engine_stop_boundary(&self) -> Option<Instant> {
+        self.state
+            .lock()
+            .expect("connection termination poisoned")
+            .engine_stop_boundary
     }
 
     /// Engine-owned cleanup cannot certify a peer's replayable termination.

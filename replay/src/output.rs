@@ -9,7 +9,7 @@ use traffic_protocol::output::{OutputBoundary, OutputStream};
 use crate::{EventKind, SequenceClaim};
 
 /// Publish streamed headers and parts after their actual flush. The caller
-/// retains the final wire receipt and the once-only semantic completion.
+/// retains the terminal receipt and the once-only semantic completion.
 pub async fn deliver(
     writer: &mut (impl AsyncWrite + Unpin + Send + ?Sized),
     output: &mut (impl OutputStream + ?Sized),
@@ -19,10 +19,17 @@ pub async fn deliver(
         sequence.filter(|claim| claim.reserved_kind() == Some(EventKind::ResponseHeaders));
     let mut cursor = Cursor::new(output.part_count(), sequence);
     while let Some(chunk) = output.next()? {
+        let target_stop = chunk.boundary == OutputBoundary::TargetStop;
+        ensure!(
+            !target_stop || chunk.bytes.is_empty() && chunk.complete,
+            "native Target-stop output must be a complete, zero-byte boundary"
+        );
         cursor.begin(chunk.boundary).await?;
-        let written = writer.write_all(&chunk.bytes).await;
-        output.written(written.is_ok());
-        written.context(output.write_context())?;
+        if !target_stop {
+            let written = writer.write_all(&chunk.bytes).await;
+            output.written(written.is_ok());
+            written.context(output.write_context())?;
+        }
         if chunk.complete {
             cursor.finish(writer, output, chunk.boundary).await?;
         }
@@ -85,7 +92,11 @@ impl<'a> Cursor<'a> {
                     "native streamed output precedes its headers"
                 );
             }
-            OutputBoundary::End => {
+            OutputBoundary::End | OutputBoundary::TargetStop => {
+                ensure!(
+                    boundary != OutputBoundary::TargetStop || self.sequence.is_some(),
+                    "native Target-stop output requires recorded headers and parts"
+                );
                 ensure!(
                     self.parts == self.part_count,
                     "native response omitted declared output parts"
@@ -107,14 +118,15 @@ impl<'a> Cursor<'a> {
         if boundary == OutputBoundary::Part && self.part_budget != 0 {
             return Ok(());
         }
-        sequence
-            .wait_delivery(Instant::now() + Duration::from_secs(30))
-            .await?;
         let expected = match boundary {
             OutputBoundary::Headers => EventKind::ResponseHeaders,
             OutputBoundary::Part => EventKind::ResponsePart,
             OutputBoundary::End => EventKind::ResponseEnd,
+            OutputBoundary::TargetStop => return sequence.wait_target_stop().await,
         };
+        sequence
+            .wait_delivery(Instant::now() + Duration::from_secs(30))
+            .await?;
         ensure!(
             sequence.reserved_kind() == Some(expected),
             "native output differs from its recorded boundary"
@@ -155,8 +167,10 @@ impl<'a> Cursor<'a> {
                     }
                 }
             }
-            OutputBoundary::End => {
-                flush(writer, output, boundary).await?;
+            OutputBoundary::End | OutputBoundary::TargetStop => {
+                if boundary == OutputBoundary::End {
+                    flush(writer, output, boundary).await?;
+                }
                 self.ended = true;
             }
         }

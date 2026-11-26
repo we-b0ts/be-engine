@@ -112,7 +112,7 @@ impl OutputStream for ResponseOutput<'_> {
         match boundary {
             OutputBoundary::Headers => "failed to flush MySQL result metadata",
             OutputBoundary::Part => "failed to flush MySQL result rows",
-            OutputBoundary::End => self.end_context,
+            OutputBoundary::End | OutputBoundary::TargetStop => self.end_context,
         }
     }
 }

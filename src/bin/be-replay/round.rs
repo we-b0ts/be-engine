@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use traffic_e2e::{
     E2eEventSessionResult, E2eEventSessionState, build_info,
     config::project::config::{PROJECT_CONFIG_FILE, load_project_config},
+    dependency::observation::MANIFEST_FILE,
     dependency_index::recording,
     execution_identity, internal_runtime, policy_evidence,
     repository::{LOCAL_ARTIFACTS_ROOT, TRAFFIC_E2E_ROOT},
@@ -401,7 +402,11 @@ impl Recording {
         );
         ensure!(
             manifest.capture_complete,
-            "Source session capture is incomplete"
+            "Source session capture is incomplete (capture_failures={}, inventory_gaps={}, pending={}); inspect {}",
+            manifest.coverage.capture_failures,
+            manifest.coverage.inventory_gaps,
+            manifest.coverage.pending.len(),
+            root.join(MANIFEST_FILE).display(),
         );
         ensure!(
             manifest

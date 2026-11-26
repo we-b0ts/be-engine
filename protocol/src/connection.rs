@@ -266,6 +266,9 @@ pub trait ResponseFramer: Send {
     fn frame(&mut self, response: Bytes) -> Result<Bytes> {
         Ok(response)
     }
+
+    /// Observe a recorded process-stop boundary in the response plan.
+    fn target_stopped(&mut self) {}
 }
 
 /// The host retains response bytes, claims and delivery receipts. Native framing
@@ -573,6 +576,14 @@ pub trait NativeProtocol: Send + Sync {
         _secrets: &dyn crate::evidence::EvidenceSecrets,
     ) -> Result<Option<RecordedExchange>> {
         self.recorded_exchange(event)
+    }
+    /// Decode a native exchange whose delivery is governed by a whole Source session.
+    fn recorded_session_exchange(
+        &self,
+        event: &Value,
+        secrets: &dyn crate::evidence::EvidenceSecrets,
+    ) -> Result<Option<RecordedExchange>> {
+        self.recorded_exchange_with_secrets(event, secrets)
     }
     fn recorded_protocol(&self, _event: &Value) -> Result<Option<crate::ProtocolId>> {
         Ok(None)

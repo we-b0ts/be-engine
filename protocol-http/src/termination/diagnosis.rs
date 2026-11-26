@@ -91,6 +91,23 @@ impl ClientTermination {
         self.io_diagnosis.has_transport_failure_since(started)
     }
 
+    pub(crate) fn has_failed_delivery_before(&self, started: Instant, boundary: Instant) -> bool {
+        self.io_diagnosis
+            .0
+            .lock()
+            .expect("HTTP IO diagnosis poisoned")
+            .iter()
+            .any(|((_, operation), failure)| {
+                failure.at >= started
+                    && failure.at <= boundary
+                    && (matches!(operation, IoOperation::Write | IoOperation::Flush)
+                        || matches!(
+                            failure.kind,
+                            io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset
+                        ))
+            })
+    }
+
     pub fn diagnosis(&self, started: Instant) -> serde_json::Value {
         serde_json::json!({
             "engine_stopped": self.engine_stopped(),

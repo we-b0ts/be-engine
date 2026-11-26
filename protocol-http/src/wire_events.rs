@@ -1,5 +1,6 @@
 //! Framework response boundaries are committed by the actual HTTP writer's flush.
 use super::termination::{ClientTermination, DeliveryProgress, FlushReceipt};
+use crate::stream_capture::RecordedStream;
 use std::sync::Arc;
 
 pub trait CaptureWire: Send + Sync {
@@ -53,6 +54,9 @@ impl Observer {
     fn failed(&self) {
         match self {
             Self::Record(capture, termination) => {
+                if capture.wire_terminal() {
+                    return;
+                }
                 capture.failed(
                     termination
                         .connection_observation()
@@ -96,7 +100,8 @@ impl Observer {
 
 struct ObservedBody {
     last_event: Option<u64>,
-    inner: WireBody,
+    inner: Option<WireBody>,
+    recorded_stream: Option<RecordedStream>,
     observer: Observer,
     progress: DeliveryProgress,
     gate: Option<Gate>,
@@ -106,7 +111,12 @@ struct ObservedBody {
 }
 
 impl ObservedBody {
-    fn new(inner: WireBody, observer: Observer, progress: DeliveryProgress) -> Self {
+    fn new(
+        inner: WireBody,
+        observer: Observer,
+        progress: DeliveryProgress,
+        recorded_stream: Option<RecordedStream>,
+    ) -> Self {
         let empty = inner.is_end_stream();
         let granular = match &observer {
             Observer::Record(..) => true,
@@ -124,22 +134,34 @@ impl ObservedBody {
                 claim.reserved_kind() == Some(traffic_replay::EventKind::ResponseHeaders)
             }
         };
-        if headers {
-            progress.observe_flush(observer.receipt(OutputKind::Headers));
-        }
-        if empty {
-            progress.observe_flush(observer.receipt(OutputKind::End));
-        }
-        Self {
+        let body = Self {
             last_event: None,
-            inner,
+            inner: Some(inner),
+            recorded_stream,
             observer,
             progress,
             gate: None,
             finished: empty,
             queued: empty,
             granular,
+        };
+        if headers {
+            body.observe_flush(OutputKind::Headers);
         }
+        if empty {
+            body.observe_flush(OutputKind::End);
+        }
+        body
+    }
+
+    fn observe_flush(&self, kind: OutputKind) {
+        let mut receipt = self.observer.receipt(kind);
+        if matches!(kind, OutputKind::Headers | OutputKind::Part)
+            && let Some(stream) = &self.recorded_stream
+        {
+            receipt = receipt.with_timestamp(stream.0.clone());
+        }
+        self.progress.observe_flush(receipt);
     }
 }
 
@@ -173,7 +195,8 @@ impl Body for ObservedBody {
                 Poll::Ready(Ok(())) => this.gate = None,
             }
         }
-        let frame = match Pin::new(&mut this.inner).poll_frame(cx) {
+        let inner = this.inner.as_mut().expect("live response body");
+        let frame = match Pin::new(&mut *inner).poll_frame(cx) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(frame) => frame,
         };
@@ -186,14 +209,14 @@ impl Body for ObservedBody {
                 if let Observer::Replay(claim) = &this.observer {
                     this.last_event = claim.reserved_event().map(|event| event.sequence);
                 }
-                this.finished = frame.is_none() || this.inner.is_end_stream();
+                this.finished = frame.is_none() || inner.is_end_stream();
                 let kind = if this.finished {
                     OutputKind::End
                 } else {
                     OutputKind::Part
                 };
                 if this.granular || this.finished {
-                    this.progress.observe_flush(this.observer.receipt(kind));
+                    this.observe_flush(kind);
                 }
             }
         }
@@ -202,23 +225,34 @@ impl Body for ObservedBody {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.finished || self.inner.is_end_stream()
+        self.finished
+            || self
+                .inner
+                .as_ref()
+                .expect("live response body")
+                .is_end_stream()
     }
     fn size_hint(&self) -> SizeHint {
-        self.inner.size_hint()
+        self.inner.as_ref().expect("live response body").size_hint()
     }
 }
 
 impl Drop for ObservedBody {
     fn drop(&mut self) {
-        if !self.finished {
-            self.observer.failed();
+        if self.finished {
+            return;
         }
+        if self.recorded_stream.is_some() {
+            // The shutdown marker can arrive during drop. Settle Session
+            // stream evidence before reporting generic delivery failure.
+            drop(self.inner.take());
+        }
+        self.observer.failed();
     }
 }
 
 pub fn record(
-    response: Response<WireBody>,
+    mut response: Response<WireBody>,
     capture: Option<Arc<dyn CaptureWire>>,
     termination: ClientTermination,
 ) -> Response<WireBody> {
@@ -229,8 +263,15 @@ pub fn record(
         return response;
     }
     let progress = termination.delivery();
+    let recorded_stream = response.extensions_mut().remove::<RecordedStream>();
     response.map(|body| {
-        ObservedBody::new(body, Observer::Record(capture, termination), progress).boxed()
+        ObservedBody::new(
+            body,
+            Observer::Record(capture, termination),
+            progress,
+            recorded_stream,
+        )
+        .boxed()
     })
 }
 
@@ -243,5 +284,5 @@ pub fn replay(
     let Some(claim) = claim else {
         return response;
     };
-    response.map(|body| ObservedBody::new(body, Observer::Replay(claim), progress).boxed())
+    response.map(|body| ObservedBody::new(body, Observer::Replay(claim), progress, None).boxed())
 }

@@ -10,6 +10,8 @@ pub struct ResponseStream {
     pub chunks: Vec<ResponseChunk>,
     pub end_ms: u64,
     pub complete: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped_at_source_exit: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trailers: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
@@ -26,6 +28,10 @@ impl ResponseStream {
         ensure!(
             self.complete,
             "HTTP dependency stream capture is incomplete"
+        );
+        ensure!(
+            !self.stopped_at_source_exit,
+            "HTTP dependency stream cannot be both complete and stopped at Source exit"
         );
         self.validate_prefix(payload_len)
     }

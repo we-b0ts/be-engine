@@ -24,6 +24,9 @@ impl StreamHost for Host {
             .active_cases
             .source_stop_requested_for(&self.0.targets)
     }
+    fn managed_session(&self) -> bool {
+        self.0.state.session_events()
+    }
     fn output(&self, output: OutputKind) {
         if let Some(capture) = &self.0.targets.capture {
             capture.output(output);
@@ -41,6 +44,11 @@ impl StreamHost for Host {
         native: serde_json::Value,
         recover_after_drain: bool,
     ) {
+        if self.0.state.session_events()
+            && let Some(capture) = &self.0.targets.capture
+        {
+            capture.note_terminal("http_stream_capture_incomplete".into(), false);
+        }
         let context = CaseInvalidationContext {
             category: "http_stream_capture".into(),
             elapsed_ms,

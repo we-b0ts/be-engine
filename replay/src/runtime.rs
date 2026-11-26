@@ -45,6 +45,7 @@ struct State {
     pending: usize,
     pending_bytes: usize,
     progressed_at: Option<Instant>,
+    target_exited: bool,
     frontier_waiters: FrontierWaiters,
     message_batch_reserved: bool,
 }
@@ -173,6 +174,7 @@ impl SequenceRuntime {
                 pending: 0,
                 pending_bytes: 0,
                 progressed_at: None,
+                target_exited: false,
                 frontier_waiters: FrontierWaiters::default(),
                 message_batch_reserved: false,
             }),
@@ -274,7 +276,12 @@ impl SequenceRuntime {
                 .is_none_or(|due| Instant::now() >= due),
             "driver event {sequence} is earlier than its scheduled delivery"
         );
+        let source_exit = state
+            .scheduler
+            .expected()
+            .is_some_and(|event| event.kind == EventKind::SessionSourceExit);
         state.scheduler.commit_driver(sequence)?;
+        state.target_exited |= source_exit;
         state.record_progress();
         let notifications = state.notifications(true);
         drop(state);
@@ -494,6 +501,7 @@ enum Delivery {
     Reserved {
         ticket: DeliveryTicket,
         source: SourceEvent,
+        after_target_exit: bool,
     },
     TerminalPublished(DeliveryTicket),
     Finished,
@@ -551,7 +559,33 @@ impl SequenceClaim {
         }
     }
     pub async fn wait_delivery(&self, deadline: Instant) -> Result<()> {
-        self.wait_output(deadline, false, None).await
+        self.wait_output(Some(deadline), false, None).await
+    }
+    pub(crate) async fn wait_target_stop(&self) -> Result<()> {
+        ensure!(
+            self.0.runtime.is_session_trace(),
+            "native Target-stop output requires a managed Source session"
+        );
+        // This stream may stay open for the rest of the session. Its terminal
+        // wait ends with the driver-controlled Target exit or a Replay failure.
+        self.wait_output(None, false, None).await?;
+        let Delivery::Reserved {
+            source:
+                SourceEvent {
+                    kind: EventKind::TargetStop,
+                    ..
+                },
+            after_target_exit,
+            ..
+        } = *self.0.delivery.lock().expect("sequence delivery poisoned")
+        else {
+            anyhow::bail!("native output differs from its recorded Target-stop boundary");
+        };
+        ensure!(
+            after_target_exit,
+            "recorded native Target-stop output precedes the observed Target exit"
+        );
+        Ok(())
     }
     pub async fn wait_body_delivery(&self, deadline: Instant) -> Result<()> {
         self.wait_body_delivery_after(deadline, None).await
@@ -561,12 +595,12 @@ impl SequenceClaim {
         deadline: Instant,
         after: Option<u64>,
     ) -> Result<()> {
-        self.wait_output(deadline, true, after).await
+        self.wait_output(Some(deadline), true, after).await
     }
 
     async fn wait_output(
         &self,
-        deadline: Instant,
+        deadline: Option<Instant>,
         after_headers: bool,
         after: Option<u64>,
     ) -> Result<()> {
@@ -609,7 +643,11 @@ impl SequenceClaim {
                         let previous = state.scheduler.previous();
                         if let Some(ticket) = state.scheduler.reserve_delivery(self.0.dependency)? {
                             let source = ticket.receipt;
-                            *delivery = Delivery::Reserved { ticket, source };
+                            *delivery = Delivery::Reserved {
+                                ticket,
+                                source,
+                                after_target_exit: state.target_exited,
+                            };
                             let progressed = state.scheduler.previous() != previous;
                             if progressed && self.0.runtime.tracks_progress() {
                                 state.record_progress();
@@ -625,17 +663,24 @@ impl SequenceClaim {
                 // Subscribe before releasing the lock that protects the cursor.
                 changes.get_or_insert_with(|| self.0.runtime.subscribe())
             };
-            if let Some(due) = due.filter(|due| *due < deadline) {
+            if let Some(due) = due.filter(|due| deadline.is_none_or(|deadline| *due < deadline)) {
                 tokio::select! {
                     result = changed.changed() => { result.context("recorded output sequence closed")?; }
                     _ = tokio::time::sleep_until(due) => {}
                 }
                 continue;
             }
-            tokio::time::timeout_at(deadline, changed.changed())
-                .await
-                .context("recorded output sequence wait timed out")?
-                .context("recorded output sequence closed")?;
+            if let Some(deadline) = deadline {
+                tokio::time::timeout_at(deadline, changed.changed())
+                    .await
+                    .context("recorded output sequence wait timed out")?
+                    .context("recorded output sequence closed")?;
+            } else {
+                changed
+                    .changed()
+                    .await
+                    .context("recorded output sequence closed")?;
+            }
         }
     }
 
@@ -683,7 +728,10 @@ impl SequenceClaim {
     }
     pub fn publish_parts(&self, count: usize) -> Result<()> {
         let mut delivery = self.0.delivery.lock().expect("sequence delivery poisoned");
-        let Delivery::Reserved { mut ticket, source } = *delivery else {
+        let Delivery::Reserved {
+            mut ticket, source, ..
+        } = *delivery
+        else {
             anyhow::bail!("sequence output has no reserved wire delivery");
         };
         let mut state = self

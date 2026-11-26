@@ -12,6 +12,8 @@ pub enum OutputBoundary {
     Headers,
     Part,
     End,
+    /// An engine-observed process stop. This boundary carries no wire bytes.
+    TargetStop,
 }
 
 pub struct OutputChunk {
@@ -85,7 +87,11 @@ impl OutputStream for FramedOutput<'_> {
         let Some(mut chunk) = self.output.next()? else {
             return Ok(None);
         };
-        chunk.bytes = self.framer.frame(chunk.bytes)?;
+        if chunk.boundary == OutputBoundary::TargetStop {
+            self.framer.target_stopped();
+        } else {
+            chunk.bytes = self.framer.frame(chunk.bytes)?;
+        }
         Ok(Some(chunk))
     }
     fn written(&mut self, success: bool) {
