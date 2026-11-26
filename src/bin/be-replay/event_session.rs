@@ -76,16 +76,16 @@ pub(super) enum SourceCommand {
         report: Option<PathBuf>,
         observation_id: uuid::Uuid,
     },
-    /// Group new recorded APIs or assign ownership to the current failed event.
+    /// Submit the registered issue analyst's API groupings or event ownership.
     Plan {
-        /// JSON file with new API groupings or the current event's ownership.
+        /// JSON findings with the current task_id and agent_handle.
         #[arg(long)]
         findings: PathBuf,
         /// Set the maximum active implementers for this round (default 16).
         #[arg(long)]
         max_implementers: Option<usize>,
     },
-    /// Register implementers, deliveries, or the published integration candidate.
+    /// Register agent dispatches, worker states, or deliveries.
     Report {
         /// JSON registration or delivery receipt.
         #[arg(long)]

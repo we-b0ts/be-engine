@@ -5,8 +5,11 @@ use std::process::{Command, Output};
 use serde_json::{Value, json};
 use traffic_recording_store::writer::{JsonlBufferSettings, JsonlWriterPool, LedgerFiles};
 
+#[path = "be_replay_cli/delegation.rs"]
+mod delegation;
 #[path = "be_replay_cli/worktrees.rs"]
 mod worktrees;
+use delegation::{assert_dispatch, bind_delivery, register_task};
 use worktrees::{assignments, commit_catalog, register_implementers};
 
 const RECORDING_ID: &str = "20261125131020";
@@ -373,6 +376,21 @@ fn persist_attempt(attempt: &Value) {
     fs::write(result, serde_json::to_vec(attempt).unwrap()).unwrap();
 }
 
+fn allow_engine_retry(root: &Path, failed: &mut Value) {
+    let round_file = fs::read_dir(traffic_e2e::internal_runtime::root(root).join("replay-rounds"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .unwrap();
+    let mut round: Value = serde_json::from_slice(&fs::read(&round_file).unwrap()).unwrap();
+    round.as_object_mut().unwrap().remove("attempted_engines");
+    fs::write(round_file, serde_json::to_vec(&round).unwrap()).unwrap();
+    failed["engine_revision"] = json!("fixture-older-engine");
+}
+
 fn publish_mismatch(mut attempt: Value, sequence: u64) {
     let expected = json!({"sequence":sequence, "kind":"request", "dependency_sequence":sequence});
     attempt["events"] = json!({"total":null, "matched":2, "complete":false,
@@ -450,12 +468,15 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     let status = || successful(command(root, &["status"]));
     let blocked = command(root, &["run"]);
     assert!(!blocked.status.success());
-    assert_eq!(status()["action"]["kind"], "ownership_required");
+    let dispatch = status();
+    assert_dispatch(&dispatch, "ownership_required", "issue-analyst");
+    let analyst = register_task(root, &dispatch, "fixture-analyst");
 
     let report = recording.join("candidate.json");
     fs::write(
         &report,
-        json!({"kind":"candidate", "attempt_id":first["attempt_id"], "commit":first["target_commit"],
+        json!({"kind":"candidate", "task_id":"fixture-integrator-task", "agent_handle":"fixture-integrator",
+            "attempt_id":first["attempt_id"], "commit":first["target_commit"],
             "included_fixes":[], "checks":["fixture checked"]})
             .to_string(),
     )
@@ -463,7 +484,11 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     let findings = recording.join("findings.json");
     fs::write(
         &findings,
-        json!({"ownership":{"seq":5,"scope":"startup","group":"startup"}}).to_string(),
+        bind_delivery(
+            json!({"ownership":{"seq":5,"scope":"startup","group":"startup"}}),
+            &analyst,
+        )
+        .to_string(),
     )
     .unwrap();
     let plan = ["plan", "--findings", findings.to_str().unwrap()];
@@ -473,19 +498,8 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
 
     // Store a prior engine fingerprint on a failed attempt while keeping its
     // real sequence, Target revision and pending repair.
-    let round_file = fs::read_dir(traffic_e2e::internal_runtime::root(root).join("replay-rounds"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "json")
-        })
-        .unwrap();
-    let mut round: Value = serde_json::from_slice(&fs::read(&round_file).unwrap()).unwrap();
-    round.as_object_mut().unwrap().remove("attempted_engines");
-    fs::write(round_file, serde_json::to_vec(&round).unwrap()).unwrap();
-    let old_engine = json!("fixture-older-engine");
-    first["engine_revision"] = old_engine.clone();
+    allow_engine_retry(root, &mut first);
+    let old_engine = first["engine_revision"].clone();
     publish_mismatch(first.clone(), 5);
     assert_eq!(status()["action"]["details"]["reason"], "engine_changed");
 
@@ -545,7 +559,7 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
 
     publish_mismatch(next.clone(), 7);
     let current = status();
-    assert_eq!(current["action"]["kind"], "ownership_required");
+    assert_dispatch(&current, "ownership_required", "issue-analyst");
     assert_eq!(
         current["progress"],
         json!({"apis":"1/3","cases":"1/6","events":"6/9","previous_events":"4/9"})
@@ -556,7 +570,7 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     // fingerprint difference alone cannot reopen the consumed retry.
     next["engine_revision"] = old_engine;
     publish_mismatch(next, 7);
-    assert_eq!(status()["action"]["kind"], "ownership_required");
+    assert_dispatch(&status(), "ownership_required", "issue-analyst");
     assert!(!command(root, &["run"]).status.success());
 }
 
@@ -596,325 +610,6 @@ fn delivery(worker: &Value, commit: &str, seq: u64) -> Value {
         "sequences":[seq],"checks":["focused checks passed"]}]})
 }
 
-fn candidate(attempt: &Value, head: &str, included: &[&str]) -> Value {
-    json!({"kind":"candidate","attempt_id":attempt["attempt_id"],"commit":head,
-        "included_fixes":included,"checks":["integration checks passed"]})
-}
-
-#[tokio::test]
-async fn new_api_grouping_gates_first_replay_but_implementation_runs_in_parallel() {
-    let target = tempfile::tempdir().unwrap();
-    let root = target.path();
-    configure(root);
-    let catalog = root.join(".traffic-e2e/apis.yaml");
-    fs::write(&catalog, "users: [/users/*]\n").unwrap();
-    git(root, &["add", ".traffic-e2e/apis.yaml"]);
-    git(root, &["commit", "-qm", "existing catalog"]);
-    let recording = recording_dir(root);
-    seal_events_with_apis(
-        &recording,
-        &[
-            (800, "GET", "/users/1"),
-            (900, "GET", "/users/2"),
-            (1000, "POST", "/new"),
-        ],
-    )
-    .await;
-
-    let inventory = successful(command(root, &["apis", "--recording-run-id", RECORDING_ID]));
-    assert_eq!(inventory["apis"][0]["requests"], 2);
-    assert_eq!(inventory["apis"][0]["group"], "users");
-    assert!(inventory["apis"][1].get("case_pattern").is_none());
-
-    let preflight = confirm_recording(root);
-    assert_eq!(preflight["action"]["kind"], "api_grouping_required");
-    assert_eq!(preflight["action"]["details"]["ungrouped_apis"], 1);
-    assert_eq!(preflight["action"]["query"], json!(["apis", "--ungrouped"]));
-    assert!(preflight["session"].is_null());
-    let missing = successful(command(root, &["apis", "--ungrouped"]));
-    assert_eq!(missing["apis"].as_array().unwrap().len(), 1);
-    assert_eq!(missing["apis"][0]["api"], "POST /new");
-    assert_eq!(
-        successful(command(root, &["run"]))["action"]["kind"],
-        "api_grouping_required"
-    );
-    let known = json!({"api":"GET /users/*","case_pattern":"/users/*","group":"users"});
-    assert!(!plan(root, json!({"apis":[known]})).status.success());
-    assert!(
-        !plan(
-            root,
-            json!({"apis":[known,{"api":"POST /new","case_pattern":"/new","group":"new-api"}]})
-        )
-        .status
-        .success()
-    );
-    assert_eq!(fs::read_to_string(&catalog).unwrap(), "users: [/users/*]\n");
-    fs::create_dir_all(root.join(".traffic-e2e/local/rewrite-worktrees/api-implementer-0"))
-        .unwrap();
-    let reviewed = successful(plan(
-        root,
-        json!({"apis":[{"api":"POST /new","case_pattern":"/new","group":"new-api"}]}),
-    ));
-    assert_eq!(reviewed["action"]["kind"], "configuration_commit_required");
-    assert_eq!(
-        reviewed["action"]["details"]["files"],
-        json!([".traffic-e2e/apis.yaml"])
-    );
-    assert!(reviewed["action"]["details"]["assignments"].is_null());
-    assert!(!command(root, &["run"]).status.success());
-    assert_eq!(
-        successful(command(root, &["status"]))["action"],
-        reviewed["action"]
-    );
-    commit_catalog(root);
-    let assigned = assignments(root);
-    let worker = group(&assigned, "new-api");
-    assert_eq!(worker["name"], "api-implementer-1");
-    assert_eq!(worker["base_commit"], git(root, &["rev-parse", "HEAD"]));
-    assert_eq!(worker["items"][0]["scope"], "api:POST /new");
-    assert_eq!(worker["items"][0]["apis"][0]["case_pattern"], "/new");
-    assert_eq!(
-        register_implementers(root)["action"]["kind"],
-        "advance_required"
-    );
-
-    let attempt = run_attempt_with_invalid_source(root, &["run"]);
-    publish_mismatch(attempt.clone(), 10);
-    let failed = successful(command(root, &["status", "--with-assignments"]));
-    assert_eq!(failed["action"]["kind"], "implementation_required");
-    assert_eq!(group(&failed, "new-api")["worktree"], worker["worktree"]);
-
-    let branch = git(root, &["branch", "--show-current"]);
-    let fix = fixture_fix(root, "worker-api", "new.rs", &branch);
-    assert_eq!(
-        successful(report(root, delivery(worker, &fix, 10)))["action"]["kind"],
-        "integration_required"
-    );
-    git(root, &["merge", "--ff-only", &fix]);
-    let head = git(root, &["rev-parse", "HEAD"]);
-    assert_eq!(
-        successful(report(root, candidate(&attempt, &head, &[&fix])))["action"]["kind"],
-        "advance_required"
-    );
-
-    let verified = run_as_passed(run_attempt_with_invalid_source(root, &["run"]), 2);
-    let status = successful(command(root, &["status"]));
-    assert_eq!(status["state"], "passed");
-    assert_status_attempt(&status, &json!({"session":verified}));
-    assert_eq!(status["action"]["kind"], "complete");
-    seal_events_with_apis(
-        &recording.with_file_name(OTHER_RECORDING_ID),
-        &[(800, "POST", "/new")],
-    )
-    .await;
-    let switched = successful(command(root, &["switch-recording-id", OTHER_RECORDING_ID]));
-    assert_eq!(switched["action"]["kind"], "advance_required");
-}
-
-#[tokio::test]
-async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_delivery() {
-    let target = tempfile::tempdir().unwrap();
-    let root = target.path();
-    configure(root);
-    fs::write(
-        root.join(".traffic-e2e/apis.yaml"),
-        "users: [/users/*]\nbatch: [/users/me]\nlater: [/outside]\n",
-    )
-    .unwrap();
-    git(root, &["add", ".traffic-e2e/apis.yaml"]);
-    git(root, &["commit", "-qm", "recorded catalog"]);
-    let recording = recording_dir(root);
-    seal_events_with_apis(
-        &recording,
-        &[
-            (800, "GET", "/users/1"),
-            (900, "GET", "/users/me"),
-            (950, "GET", "/users/me"),
-            (60_000_700, "GET", "/outside"),
-        ],
-    )
-    .await;
-    git(root, &["switch", "-qc", "codex/replay/fixture"]);
-    let selected = successful(command(root, &["switch-recording-id", RECORDING_ID]));
-    assert_eq!(selected["action"]["kind"], "advance_required");
-
-    let initial = run_attempt_with_invalid_source(root, &["run"]);
-    publish_mismatch(initial.clone(), 5);
-    let status = || assignments(root);
-    let failed = status();
-    assert_eq!(failed["failure"]["seq"], 5);
-    assert_eq!(failed["action"]["kind"], "ownership_required");
-    assert_eq!(failed["action"]["details"]["role"], "issue-analyst");
-    assert_eq!(
-        failed["action"]["command"],
-        json!(["plan", "--findings", "<ownership.json>"])
-    );
-    assert_eq!(
-        failed["action"]["details"]["assignments"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    assert_eq!(group(&failed, "users")["items"][0]["sequences"], json!([8]));
-    assert_eq!(
-        group(&failed, "batch")["items"][0]["sequences"],
-        json!([9, 10])
-    );
-    assert!(!command(root, &["run"]).status.success());
-    assert!(
-        !plan(
-            root,
-            json!({"ownership":{"seq":3,"scope":"job:sync_users","group":"sync"}})
-        )
-        .status
-        .success()
-    );
-
-    let assigned = successful(plan(
-        root,
-        json!({"ownership":{"seq":5,
-        "scope":"job:sync_users","group":"sync"}}),
-    ));
-    assert_eq!(assigned["action"]["kind"], "dispatch_required");
-    let assigned = status();
-    assert_eq!(
-        group(&assigned, "sync")["items"][0]["sequences"],
-        json!([5])
-    );
-    assert_eq!(
-        group(&assigned, "users")["worktree"],
-        group(&failed, "users")["worktree"]
-    );
-    assert_eq!(
-        register_implementers(root)["action"]["kind"],
-        "implementation_required"
-    );
-
-    let branch = git(root, &["branch", "--show-current"]);
-    let job_fix = fixture_fix(root, "worker-job", "job.txt", &branch);
-    let users_fix = fixture_fix(root, "worker-users", "users.txt", &branch);
-    let batch_fix = fixture_fix(root, "worker-batch", "batch.txt", &branch);
-    let mut stale = delivery(group(&assigned, "users"), &users_fix, 8);
-    stale["fixes"][0]["assignment_id"] = json!(uuid::Uuid::new_v4());
-    assert!(!report(root, stale).status.success());
-    assert_eq!(
-        successful(report(
-            root,
-            delivery(group(&assigned, "users"), &users_fix, 8)
-        ))["action"]["kind"],
-        "implementation_required"
-    );
-    assert!(!command(root, &["run"]).status.success());
-    let ready = successful(report(
-        root,
-        delivery(group(&assigned, "sync"), &job_fix, 5),
-    ));
-    assert_eq!(ready["action"]["kind"], "integration_required");
-    assert_eq!(ready["action"]["details"]["ready_fixes"], 2);
-    assert!(ready["action"]["details"]["fixes"].is_null());
-    assert!(ready["action"]["details"]["assignments"].is_null());
-    assert_eq!(
-        status()["action"]["details"]["fixes"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    let detail = status();
-    let batch_worker = group(&detail, "batch");
-    let other_worker_exited = successful(report(
-        root,
-        json!({"kind":"implementers",
-        "workers":[{"group":"batch", "assignment_id":batch_worker["assignment_id"],
-            "agent_handle":batch_worker["agent_handle"], "state":"exited"}]}),
-    ));
-    assert_eq!(
-        other_worker_exited["action"]["kind"],
-        "integration_required"
-    );
-    git(root, &["merge", "--ff-only", &job_fix]);
-    assert!(
-        !report(root, candidate(&initial, &job_fix, &[&users_fix]))
-            .status
-            .success()
-    );
-    let published = successful(report(root, candidate(&initial, &job_fix, &[&job_fix])));
-    assert_eq!(published["action"]["kind"], "advance_required");
-    assert_eq!(published["action"]["details"]["pending_dispatch"], 1);
-    assert_eq!(
-        group(&status(), "batch")["worktree"],
-        group(&failed, "batch")["worktree"]
-    );
-
-    let next = run_attempt_with_invalid_source(root, &["run"]);
-    // Exercise the live receipt path using the same lock and snapshot layout
-    // as a running Replay, without needing a Target image.
-    let attempt_dir = Path::new(next["progress"].as_str().unwrap())
-        .parent()
-        .unwrap();
-    let result = attempt_dir.join("event-result.json");
-    let terminal = fs::read(&result).unwrap();
-    fs::remove_file(&result).unwrap();
-    let running = fs::File::options()
-        .read(true)
-        .write(true)
-        .open(attempt_dir.join("attempt.lock"))
-        .unwrap();
-    running.try_lock().unwrap();
-    let run_lock = fs::File::options()
-        .read(true)
-        .write(true)
-        .open(traffic_e2e::internal_runtime::root(root).join("replay-run.lock"))
-        .unwrap();
-    run_lock.try_lock().unwrap();
-    assert_eq!(status()["state"], "running");
-    register_implementers(root);
-    successful(report(
-        root,
-        delivery(group(&assigned, "batch"), &batch_fix, 9),
-    ));
-    assert_eq!(
-        group(&status(), "batch")["items"][0]["sequences"],
-        json!([10])
-    );
-    fs::write(result, terminal).unwrap();
-    drop(running);
-    drop(run_lock);
-
-    publish_mismatch(next.clone(), 8);
-    let promoted = status();
-    assert_eq!(promoted["action"]["kind"], "integration_required");
-    assert_eq!(
-        promoted["action"]["details"]["fixes"][0]["commit"],
-        users_fix
-    );
-    assert_eq!(
-        group(&promoted, "later")["items"][0]["sequences"],
-        json!([11])
-    );
-    assert_eq!(
-        group(&promoted, "batch")["worktree"],
-        group(&failed, "batch")["worktree"]
-    );
-
-    seal_events(&recording.with_file_name(OTHER_RECORDING_ID)).await;
-    let switched = successful(command(root, &["switch-recording-id", OTHER_RECORDING_ID]));
-    assert_eq!(switched["state"], "not_started");
-    let restored = successful(command(root, &["switch-recording-id", RECORDING_ID]));
-    assert_eq!(restored["action"]["kind"], "integration_required");
-    let restored = status();
-    assert_eq!(
-        restored["action"]["details"]["fixes"],
-        promoted["action"]["details"]["fixes"]
-    );
-    assert_eq!(restored["action"]["details"]["pending_dispatch"], 2);
-    assert_eq!(
-        group(&restored, "batch")["assignment_id"],
-        group(&promoted, "batch")["assignment_id"]
-    );
-}
-
 #[tokio::test]
 async fn an_assigned_implementer_can_escalate_the_current_failed_sequence() {
     let target = tempfile::tempdir().unwrap();
@@ -928,24 +623,26 @@ async fn an_assigned_implementer_can_escalate_the_current_failed_sequence() {
     );
     publish_mismatch(run.clone(), 5);
 
+    let analyst = register_task(root, &assignments(root), "fixture-analyst");
     let assigned = successful(plan(
         root,
-        json!({
-            "ownership":{"seq":5,"scope":"startup","group":"startup"}
-        }),
+        bind_delivery(
+            json!({"ownership":{"seq":5,"scope":"startup","group":"startup"}}),
+            &analyst,
+        ),
     ));
     assert_eq!(assigned["action"]["kind"], "dispatch_required");
     let details = assignments(root);
     assert_eq!(group(&details, "startup")["items"][0]["scope"], "startup");
 
-    let reported = successful(report(
-        root,
-        json!({
-            "kind":"engine_gap","group":"startup","sequences":[5],
-            "assignment_id":group(&details, "startup")["assignment_id"],
-            "evidence":"Source seq 5 and the Target observation show the same request."
-        }),
-    ));
+    let gap = json!({
+        "kind":"engine_gap","group":"startup","sequences":[5],
+        "assignment_id":group(&details, "startup")["assignment_id"],
+        "evidence":"Source seq 5 and the Target observation show the same request."
+    });
+    assert!(!report(root, gap.clone()).status.success());
+    register_implementers(root);
+    let reported = successful(report(root, gap));
     assert_eq!(reported["action"]["kind"], "setup_required");
     assert_eq!(
         successful(command(root, &["status"]))["action"],

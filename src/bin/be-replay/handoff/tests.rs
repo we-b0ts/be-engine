@@ -92,6 +92,17 @@ fn assignment_id(workflow: &Workflow, group: &str) -> Uuid {
         .unwrap()
 }
 
+fn start_worker(workflow: &mut Workflow, group: &str, assignment_id: Uuid) {
+    let workers = serde_json::from_value(json!([{
+        "group": group,
+        "assignment_id": assignment_id,
+        "agent_handle": format!("worker-{group}"),
+        "state": "started",
+    }]))
+    .unwrap();
+    workflow.groups.update_implementers(workers).unwrap();
+}
+
 fn fix(group: &str, assignment_id: Uuid, commit: &str, sequences: &[u64]) -> Receipt {
     Receipt::Fixes {
         fixes: vec![Fix {
@@ -105,7 +116,15 @@ fn fix(group: &str, assignment_id: Uuid, commit: &str, sequences: &[u64]) -> Rec
 }
 
 fn candidate(attempt: &E2eEventSessionResult, head: &str, delivered: &[&str]) -> Receipt {
+    let task = Task::integration(
+        &attempt.run_key,
+        &attempt.attempt_id,
+        delivered.len(),
+        Some(9),
+    );
     Receipt::Candidate {
+        task_id: task.id().to_owned(),
+        agent_handle: "integrator".into(),
         attempt_id: attempt_uuid(attempt).unwrap(),
         commit: head.to_owned(),
         included_fixes: delivered
@@ -125,15 +144,8 @@ fn ownership_reuses_the_existing_group_and_only_accepts_the_current_sequence() {
         .enqueue("pipelines", item("api:POST /pipelines", &[11, 13]), BASE);
     workflow.reserve_worktrees(|| Ok(2)).unwrap();
 
-    let action =
-        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
     let lease = assignment_id(&workflow, "pipelines");
-    assert_eq!(action["kind"], "ownership_required");
-    assert_eq!(action["details"]["seq"], 9);
-    assert_eq!(
-        action["details"]["assignments"][0]["name"],
-        "api-implementer-2"
-    );
+    assert!(workflow.failure_owner(9).is_none());
 
     assert!(
         workflow
@@ -151,8 +163,11 @@ fn ownership_reuses_the_existing_group_and_only_accepts_the_current_sequence() {
     workflow
         .reserve_worktrees(|| panic!("reuse the assigned worktree"))
         .unwrap();
-    let action =
-        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
+    let action = workflow.with_assignments(
+        workflow.repair_action(workflow.failure_owner(9).unwrap()),
+        AssignmentDetail::Full,
+        false,
+    );
     assert_eq!(action["kind"], "dispatch_required");
     let assignments = action["details"]["assignments"].as_array().unwrap();
     assert_eq!(assignments.len(), 1);
@@ -189,6 +204,8 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
         .unwrap();
     let pipelines_id = assignment_id(&workflow, "pipelines");
     let refresh_id = assignment_id(&workflow, "refresh");
+    start_worker(&mut workflow, "pipelines", pipelines_id);
+    start_worker(&mut workflow, "refresh", refresh_id);
 
     let pipelines = commit(root, "another group");
     let mut another_round = workflow_at_failure(&attempt, 9);
@@ -203,6 +220,7 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
                 &pipelines,
                 Some(&attempt),
                 Some(9),
+                None,
                 fix("pipelines", pipelines_id, &pipelines, &[9, 11]),
             )
             .is_err()
@@ -213,6 +231,7 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             &pipelines,
             Some(&attempt),
             Some(9),
+            None,
             fix("pipelines", pipelines_id, &pipelines, &[9, 11]),
         )
         .unwrap();
@@ -223,20 +242,15 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             &partial,
             Some(&attempt),
             Some(9),
+            None,
             fix("refresh", refresh_id, &partial, &[8]),
         )
         .unwrap();
-    assert_eq!(workflow.failed_action(9)["kind"], "implementation_required");
-    let error = workflow
-        .report(
-            root,
-            &partial,
-            Some(&attempt),
-            Some(9),
-            candidate(&attempt, &partial, &[&pipelines, &partial]),
-        )
-        .unwrap_err();
-    assert!(error.to_string().contains("current failure"));
+    assert!(
+        workflow
+            .ready_integration(workflow.failure_owner(9))
+            .is_none()
+    );
 
     let repair = commit(root, "current failed event");
     workflow
@@ -245,23 +259,53 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             &repair,
             Some(&attempt),
             Some(9),
+            None,
             fix("refresh", refresh_id, &repair, &[9]),
         )
         .unwrap();
+    let ready = workflow
+        .ready_integration(workflow.failure_owner(9))
+        .unwrap();
+    let task = Task::integration(&attempt.run_key, &attempt.attempt_id, ready, Some(9));
     let action =
-        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
-    assert_eq!(action["kind"], "integration_required");
+        workflow.with_assignments(workflow.task_action(&task), AssignmentDetail::Full, false);
+    assert_eq!(action["kind"], "dispatch_task");
     assert_eq!(action["details"]["fixes"].as_array().unwrap().len(), 3);
     assert_eq!(
         action["details"]["assignments"][0]["items"][0]["sequences"],
         json!([13])
     );
+    workflow
+        .report(
+            root,
+            &repair,
+            Some(&attempt),
+            Some(9),
+            Some(&task),
+            Receipt::TaskDispatch {
+                task_id: task.id().into(),
+                agent_handle: "integrator".into(),
+                state: DispatchState::Started,
+            },
+        )
+        .unwrap();
+    let error = workflow
+        .report(
+            root,
+            &repair,
+            Some(&attempt),
+            Some(9),
+            None,
+            candidate(&attempt, &repair, &[&pipelines, &partial]),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("current failure"));
 
     let stale = failed_attempt(2, &base);
     let receipt = candidate(&stale, &repair, &[&repair, &pipelines]);
     assert!(
         workflow
-            .report(root, &repair, Some(&attempt), Some(9), receipt)
+            .report(root, &repair, Some(&attempt), Some(9), None, receipt)
             .is_err()
     );
     workflow
@@ -270,6 +314,7 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             &repair,
             Some(&attempt),
             Some(9),
+            None,
             candidate(&attempt, &repair, &[&repair, &pipelines]),
         )
         .unwrap();
@@ -281,7 +326,10 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
         .unwrap();
     assert!(!workflow.has_candidate(&retry));
     assert!(workflow.groups.pending("refresh", 9));
-    assert_eq!(workflow.failed_action(9)["kind"], "implementation_required");
+    assert_eq!(
+        workflow.repair_action(workflow.failure_owner(9).unwrap())["kind"],
+        "implementation_required"
+    );
 }
 
 #[test]
@@ -294,6 +342,7 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
         .unwrap();
     workflow.reserve_worktrees(|| Ok(1)).unwrap();
     let lease = assignment_id(&workflow, "startup");
+    start_worker(&mut workflow, "startup", lease);
     assert!(
         workflow
             .report(
@@ -301,6 +350,7 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
                 BASE,
                 Some(&attempt),
                 Some(9),
+                None,
                 Receipt::Review {
                     group: "startup".into(),
                     assignment_id: lease,
@@ -319,7 +369,7 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
     };
     assert!(
         workflow
-            .report(root, BASE, Some(&attempt), Some(9), gap(" "))
+            .report(root, BASE, Some(&attempt), Some(9), None, gap(" "))
             .is_err()
     );
     workflow
@@ -328,18 +378,25 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
             BASE,
             Some(&attempt),
             Some(9),
+            None,
             gap("Observed rejected frame."),
         )
         .unwrap();
-    assert_eq!(workflow.failed_action(9)["kind"], "setup_required");
+    assert_eq!(
+        workflow.repair_action(workflow.failure_owner(9).unwrap())["kind"],
+        "setup_required"
+    );
 
     let retry = failed_attempt(2, BASE);
     workflow
         .observe_failure(root, root, BASE, &retry, 9)
         .unwrap();
-    let action =
-        workflow.with_assignments(workflow.failed_action(9), AssignmentDetail::Full, false);
-    assert_eq!(action["kind"], "dispatch_required");
+    let action = workflow.with_assignments(
+        workflow.repair_action(workflow.failure_owner(9).unwrap()),
+        AssignmentDetail::Full,
+        false,
+    );
+    assert_eq!(action["kind"], "worker_status_required");
     assert_eq!(
         action["details"]["assignments"][0]["name"],
         "api-implementer-1"

@@ -1127,25 +1127,19 @@ ID once the caller approves.
 be-replay --target-root /absolute/target status
 be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
 be-replay --target-root /absolute/target status
-be-replay --target-root /absolute/target apis
-be-replay --target-root /absolute/target plan --findings /absolute/apis.json
-be-replay --target-root /absolute/target run
-be-replay --target-root /absolute/target events --from-seq 182 --window-seconds 60
 ```
 
 The work branch keeps the recording for retries. Use `status --attempt-id UUID`
 to inspect a specific attempt with its recording ID and run key when needed.
-Submit the complete `apis` review before the first Replay. Missing API
-implementations proceed alongside Replay. After an event failure, use
-`failure.seq` to query the Source timeline and `action.kind` to select the
-workflow step. When present, `action.command` provides the next `be-replay`
-arguments as an array. The engine assigns APIs in the following 60 seconds
-of Source time. For `ownership_required`, the analyst identifies the failed
-sequence's scope and group and the coordinator submits it using
-`plan --findings FILE`. Use the engine's group, worker name, worktree, and
-base for each assignment. Implementers diagnose the assigned events and
-deliver exact sequences with their repairs. Register the deliveries, engine
-gaps, and published candidate with `report --file FILE`.
+Follow `action.kind` at each step. For `dispatch_task`, start the role named
+in `action.details.task` and register its runtime handle. At `await_delivery`,
+submit the agent's completed artifact for that task and handle. The analyst
+looks up uncatalogued APIs or identifies ownership of a failed event. The
+integrator prepares the candidate for the coordinator to publish. The engine
+issues implementer assignments and verifies the published revision at
+`advance_required`. After a mismatch, the engine finds API work from the
+following 60 seconds of Source time. The assignment's group, worker,
+worktree, and base remain the basis for implementer deliveries.
 [Source session regression](session-regression.md)
 
 <details>

@@ -243,7 +243,7 @@ impl Repository {
                 return Ok(current.into_active());
             }
             let api_backlog = current.take_api_backlog();
-            current.active.workflow.clear_worker_handles();
+            current.active.workflow.clear_runtime_handles();
             current
                 .inactive
                 .insert(current.active.recording_id.clone(), current.active);

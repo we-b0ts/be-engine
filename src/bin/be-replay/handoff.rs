@@ -16,12 +16,14 @@ use uuid::Uuid;
 
 mod api_backlog;
 mod api_grouping;
+mod delegation;
 mod groups;
 #[cfg(test)]
 mod tests;
 
 pub(super) use api_backlog::ApiBacklog;
 pub(super) use api_grouping::CatalogUpdate;
+pub(super) use delegation::{DispatchState, Registration, Task};
 use groups::{Fix, Gap, Groups, ImplementerUpdate, WorkItem};
 
 const DEFAULT_IMPLEMENTERS: usize = 16;
@@ -41,6 +43,8 @@ pub(super) struct Workflow {
     failure: Option<Failure>,
     owners: BTreeMap<String, Ownership>,
     candidate: Option<Candidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_registration: Option<Registration>,
 }
 
 impl Default for Workflow {
@@ -52,6 +56,7 @@ impl Default for Workflow {
             failure: None,
             owners: BTreeMap::new(),
             candidate: None,
+            task_registration: None,
         }
     }
 }
@@ -98,6 +103,8 @@ impl Ownership {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Plan {
+    pub task_id: String,
+    pub agent_handle: String,
     pub apis: Option<Vec<ApiGrouping>>,
     pub ownership: Option<Ownership>,
 }
@@ -113,6 +120,11 @@ struct Candidate {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Receipt {
+    TaskDispatch {
+        task_id: String,
+        agent_handle: String,
+        state: DispatchState,
+    },
     Implementers {
         workers: Vec<ImplementerUpdate>,
     },
@@ -134,6 +146,8 @@ pub(super) enum Receipt {
         evidence: String,
     },
     Candidate {
+        task_id: String,
+        agent_handle: String,
         attempt_id: Uuid,
         commit: String,
         included_fixes: BTreeSet<String>,
@@ -148,6 +162,14 @@ impl Receipt {
 }
 
 impl Workflow {
+    pub fn task_action(&self, task: &Task) -> Value {
+        task.action(self.task_registration.as_ref())
+    }
+
+    pub fn require_task_delivery(&self, task: &Task, binding: &Registration) -> Result<()> {
+        task.require_delivery(self.task_registration.as_ref(), binding)
+    }
+
     pub fn set_max_implementers(&mut self, max: usize) -> Result<()> {
         traffic_e2e::event_work::validate_max_implementers(max)?;
         self.max_implementers = max;
@@ -293,15 +315,16 @@ impl Workflow {
         self.groups.reserve(self.max_implementers, allocate)
     }
 
-    pub fn clear_worker_handles(&mut self) {
+    pub fn clear_runtime_handles(&mut self) {
         self.groups.clear_worker_handles();
+        self.task_registration = None;
     }
 
     pub fn first_run_action(&self) -> Option<Value> {
         let queued = self.groups.queued_api_groups();
         (queued > 0).then(|| json!({
             "kind":"implementation_required",
-            "summary":"Report a finished API group to free a slot for the remaining groups before the first Replay.",
+            "summary":"Report a finished API group to free a slot for the remaining groups before Replay.",
             "details":{"role":"api-implementer", "queued_api_groups":queued},
             "command":["report", "--file", "<delivery.json>"]
         }))
@@ -315,6 +338,11 @@ impl Workflow {
     ) -> Value {
         let pending_dispatch = self.groups.pending_dispatch();
         let pending_worker_status = self.groups.pending_worker_status();
+        if action["details"]["reason"] == "engine_changed" && self.groups.needs_api_dispatch() {
+            action = self
+                .first_run_action()
+                .unwrap_or_else(|| self.implementation_action());
+        }
         let needs_workers = match action["kind"].as_str() {
             Some("advance_required") => first_run,
             Some("implementation_required" | "wait_required") => true,
@@ -341,7 +369,7 @@ impl Workflow {
         if pending_worker_status > 0 {
             action["details"]["pending_worker_status"] = json!(pending_worker_status);
         }
-        let integration = action["kind"] == "integration_required";
+        let integration = action["details"]["task"]["requirement"] == "integration_required";
         if pending_dispatch > 0
             || pending_worker_status > 0
             || integration
@@ -378,19 +406,12 @@ impl Workflow {
         })
     }
 
-    pub fn failed_action(&self, seq: u64) -> Value {
-        let Some(owner) = self.owners.get(&seq.to_string()) else {
-            return json!({
-                "kind":"ownership_required", "summary":"Identify the owner of the current failed event.",
-                "details":{"role":"issue-analyst", "seq":seq},
-                "command":["plan","--findings","<ownership.json>"]
-            });
-        };
-        if let Some(mut action) = self.integration_action(Some(owner)) {
-            action["details"]["group"] = json!(owner.group);
-            return action;
-        }
-        if let Some(gap) = self.groups.gap(&owner.group, seq) {
+    pub fn failure_owner(&self, seq: u64) -> Option<&Ownership> {
+        self.owners.get(&seq.to_string())
+    }
+
+    pub fn repair_action(&self, owner: &Ownership) -> Value {
+        if let Some(gap) = self.groups.gap(&owner.group, owner.seq) {
             return json!({
                 "kind":"setup_required",
                 "summary":"Resolve the reported engine gap, then retry Replay.",
@@ -416,17 +437,11 @@ impl Workflow {
         self.groups.retire_lookahead_work();
     }
 
-    pub fn integration_action(&self, owner: Option<&Ownership>) -> Option<Value> {
+    pub fn ready_integration(&self, owner: Option<&Ownership>) -> Option<usize> {
         if !self.groups.ready_fixes().any(|fix| covers(owner, fix)) {
             return None;
         }
-        let ready_fixes = self.groups.ready_fixes().count();
-        Some(json!({
-            "kind":"integration_required",
-            "summary":"Integrate the accepted delivery and any compatible ready fixes.",
-            "details":{"role":"code-integrator", "ready_fixes":ready_fixes},
-            "command":["report","--file","<candidate.json>"]
-        }))
+        Some(self.groups.ready_fixes().count())
     }
 
     pub fn candidate_commit(&self, attempt: &E2eEventSessionResult) -> Option<&str> {
@@ -447,9 +462,27 @@ impl Workflow {
         head: &str,
         attempt: Option<&E2eEventSessionResult>,
         seq: Option<u64>,
+        current_task: Option<&Task>,
         receipt: Receipt,
     ) -> Result<Vec<ApiConfirmation>> {
         match receipt {
+            Receipt::TaskDispatch {
+                task_id,
+                agent_handle,
+                state,
+            } => {
+                let task = current_task
+                    .context("no delegated task is currently required; inspect status")?;
+                task.register(
+                    &mut self.task_registration,
+                    Registration {
+                        task_id,
+                        agent_handle,
+                    },
+                    state,
+                )?;
+                Ok(Vec::new())
+            }
             Receipt::Implementers { workers } => {
                 self.groups.update_implementers(workers)?;
                 Ok(Vec::new())
@@ -492,6 +525,8 @@ impl Workflow {
                 Ok(Vec::new())
             }
             Receipt::Candidate {
+                task_id,
+                agent_handle,
                 attempt_id,
                 commit,
                 included_fixes,
@@ -499,6 +534,19 @@ impl Workflow {
             } => {
                 let attempt =
                     attempt.context("publish a candidate for a finished Replay attempt")?;
+                let task = Task::integration(
+                    &attempt.run_key,
+                    &attempt.attempt_id,
+                    self.groups.ready_fixes().count(),
+                    seq,
+                );
+                self.require_task_delivery(
+                    &task,
+                    &Registration {
+                        task_id,
+                        agent_handle,
+                    },
+                )?;
                 self.accept_candidate(
                     root,
                     head,

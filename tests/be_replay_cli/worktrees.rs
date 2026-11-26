@@ -65,11 +65,14 @@ async fn implementer_can_confirm_an_existing_api_without_a_code_commit() {
     let recording = recording_dir(root);
     seal_events_with_apis(&recording, &requests).await;
     seal_events_with_apis(&recording.with_file_name(OTHER_RECORDING_ID), &requests).await;
-    confirm_recording(root);
+    let grouping = confirm_recording(root);
+    let analyst = register_task(root, &grouping, "fixture-analyst");
     successful(plan(
         root,
-        json!({"apis":[{"api":"GET /existing",
-        "case_pattern":"/existing", "group":"existing"}]}),
+        bind_delivery(
+            json!({"apis":[{"api":"GET /existing","case_pattern":"/existing", "group":"existing"}]}),
+            &analyst,
+        ),
     ));
     commit_catalog(root);
     register_implementers(root);
@@ -98,12 +101,12 @@ async fn recordings_reuse_worktree_slots_with_independent_assignments() {
         &[(800, "POST", "/new/456"), (900, "GET", "/new/789")],
     )
     .await;
-    confirm_recording(root);
+    let analyst = register_task(root, &confirm_recording(root), "fixture-analyst");
 
     let grouping = json!({"apis":[{"api":"POST /new/123",
         "case_pattern":"/new/*", "group":"new-api"}]});
     assert_eq!(
-        successful(plan(root, grouping))["action"]["kind"],
+        successful(plan(root, bind_delivery(grouping, &analyst)))["action"]["kind"],
         "configuration_commit_required"
     );
     commit_catalog(root);
@@ -167,10 +170,9 @@ async fn status_waits_for_every_dispatched_worker_before_first_replay() {
         .map(|(index, path)| (800 + index as u64, "GET", path.as_str()))
         .collect();
     seal_events_with_apis(&recording_dir(root), &requests).await;
-    assert_eq!(
-        confirm_recording(root)["action"]["kind"],
-        "api_grouping_required"
-    );
+    let grouping = confirm_recording(root);
+    assert_dispatch(&grouping, "api_grouping_required", "issue-analyst");
+    let analyst = register_task(root, &grouping, "fixture-analyst");
     let groupings: Vec<_> = paths
         .iter()
         .map(|path| {
@@ -178,7 +180,10 @@ async fn status_waits_for_every_dispatched_worker_before_first_replay() {
             "case_pattern":path, "group":path.trim_start_matches('/')})
         })
         .collect();
-    let planned = successful(plan(root, json!({"apis":groupings})));
+    let planned = successful(plan(
+        root,
+        bind_delivery(json!({"apis":groupings}), &analyst),
+    ));
     assert_eq!(planned["action"]["kind"], "configuration_commit_required");
     commit_catalog(root);
     let status = assignments(root);
@@ -255,4 +260,53 @@ async fn status_waits_for_every_dispatched_worker_before_first_replay() {
         register_implementers(root)["action"]["kind"],
         "advance_required"
     );
+}
+
+#[tokio::test]
+async fn newly_grouped_apis_are_dispatched_before_an_optional_engine_retry() {
+    let target = tempfile::tempdir().unwrap();
+    let root = target.path();
+    configure(root);
+    let catalog = root.join(".traffic-e2e/apis.yaml");
+    fs::write(&catalog, "prior: [/onboard]\n").unwrap();
+    commit_catalog(root);
+    seal_events_with_apis(&recording_dir(root), &[(800, "GET", "/onboard")]).await;
+    let mut failed = run_attempt_with_invalid_source(
+        root,
+        &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
+    );
+    allow_engine_retry(root, &mut failed);
+    publish_mismatch(failed.clone(), 5);
+    let before = assignments(root);
+    assert_eq!(before["action"]["kind"], "advance_required");
+    assert_eq!(before["action"]["details"]["reason"], "engine_changed");
+
+    fs::write(&catalog, "unrelated: [/unused]\n").unwrap();
+    commit_catalog(root);
+    let ungrouped = assignments(root);
+    assert_dispatch(&ungrouped, "api_grouping_required", "issue-analyst");
+    let analyst = register_task(root, &ungrouped, "fixture-analyst");
+    successful(plan(
+        root,
+        bind_delivery(
+            json!({"apis":[{"api":"GET /onboard","case_pattern":"/onboard","group":"onboard"}]}),
+            &analyst,
+        ),
+    ));
+    commit_catalog(root);
+
+    let dispatched = assignments(root);
+    assert_eq!(dispatched["action"]["kind"], "dispatch_required");
+    let worker = group(&dispatched, "onboard");
+    assert_eq!(worker["base_commit"], git(root, &["rev-parse", "HEAD"]));
+    let blocked = successful(command(root, &["run"]));
+    assert_eq!(blocked["action"]["kind"], "dispatch_required");
+    assert_eq!(blocked["session"]["attempt_id"], failed["attempt_id"]);
+    assert_eq!(
+        launch_implementers(root)["action"]["kind"],
+        "worker_status_required"
+    );
+    let retry = confirm_running(root);
+    assert_eq!(retry["action"]["kind"], "advance_required");
+    assert_eq!(retry["action"]["details"]["reason"], "engine_changed");
 }

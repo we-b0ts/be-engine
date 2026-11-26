@@ -22,5 +22,5 @@ under the same reservation.
    checks. For a confirmed engine gap, provide the observed evidence and the
    engine behavior needed. [Implementation delivery](api-implementer-delivery.md)
 
-The coordinator registers the delivery and integrates it when needed to
-advance Replay.
+The coordinator registers the delivery against the worker's assignment and
+dispatches the code integrator when the engine requests a candidate.

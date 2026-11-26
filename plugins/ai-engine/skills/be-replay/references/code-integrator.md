@@ -1,8 +1,8 @@
 # Code Integrator
 
-Receive the coordinator's reviewed deliveries, canonical base, absolute
-integration worktree, and delivery commits selected for `integration_required`.
-Retain those identities while integrating and checking the candidate.
+For a delegated `integration_required` task, use the coordinator's reviewed
+deliveries, canonical base, current attempt, and absolute integration
+worktree. Retain those identities while integrating and checking the candidate.
 
 1. Confirm each delivered commit and its claimed sequences against the frozen
    base.
@@ -17,6 +17,6 @@ Retain those identities while integrating and checking the candidate.
    sequences, conflict resolutions, and check results. Flag any outstanding
    code, rule, or startup input.
 
-The coordinator publishes the exact candidate and registers its commit,
-included fixes, and check results before running full Replay.
-See [Source Session verification](session-regression.md#plan-implement-and-verify).
+The coordinator publishes the exact candidate and submits the receipt with
+the registered task and agent identities before running full Replay.
+[Candidate receipt](session-regression.md#plan-implement-and-verify)

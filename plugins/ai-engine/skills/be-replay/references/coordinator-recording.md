@@ -7,6 +7,8 @@ entire sealed tree, including `dependency-manifest.json`, `events.tsv`, the
 network manifest, indexes, and payload segments. Encrypted headers require
 the matching private key at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`.
 Keep the key outside the Target process and preserve its private permissions.
+For delegated analysis, use the Source repository and revision supplied by
+the recording owner with that recording.
 
 Recorder captures concurrent ingress and dependencies on one Source timeline
 from launch through exit. The recording caller selects ingress through the

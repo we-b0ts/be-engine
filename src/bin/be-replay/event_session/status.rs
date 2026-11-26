@@ -12,7 +12,7 @@ use traffic_e2e::{
 use uuid::Uuid;
 
 use crate::{
-    handoff::AssignmentDetail,
+    handoff::{AssignmentDetail, Task},
     print_json,
     round::{self, Recording, Repository, Round},
 };
@@ -91,7 +91,8 @@ pub(super) fn round_status(
     } else if needs_switch {
         (json!(status.state), switch_action(&recording.id))
     } else {
-        attempt_action(repo, &round, status.state, status.attempt.as_ref(), detail)?
+        let action = attempt_action(repo, &round, status.state, status.attempt.as_ref(), detail)?;
+        (action.state, action.output)
     };
     let mut output = attempt_fields(&status, &recording.root);
     output["recording_id"] = json!(recording.id);
@@ -101,27 +102,30 @@ pub(super) fn round_status(
     print_json(&output, pretty)
 }
 
+pub(super) struct AttemptAction {
+    pub state: Value,
+    pub output: Value,
+    pub task: Option<Task>,
+}
+
 pub(super) fn attempt_action(
     repo: &Repository,
     round: &Round,
     state: E2eEventSessionState,
     attempt: Option<&E2eEventSessionResult>,
     detail: AssignmentDetail,
-) -> Result<(Value, Value)> {
+) -> Result<AttemptAction> {
     use E2eEventSessionState::{Failed, Interrupted, NotStarted, Passed, Running};
 
     let mut state_label = json!(state);
     if state != Running && round.ungrouped_apis() > 0 {
-        return Ok((
-            state_label,
-            json!({
-                "kind":"api_grouping_required",
-                "summary":"Have the issue analyst group the new recorded APIs and submit the plan.",
-                "details":{"role":"issue-analyst", "ungrouped_apis":round.ungrouped_apis()},
-                "query":["apis", "--ungrouped"],
-                "command":["plan", "--findings", "<apis.json>"]
-            }),
-        ));
+        let task = Task::grouping(
+            &round.recording_id,
+            &round.run_key,
+            &repo.head,
+            round.ungrouped_apis(),
+        );
+        return Ok(delegated_action(round, task, detail, state_label));
     }
     let action = match (state, attempt) {
         (NotStarted, _) => round
@@ -144,8 +148,16 @@ pub(super) fn attempt_action(
                         "details":{"reason":"engine_changed"},
                         "command":["run"]
                     })
+                } else if let Some(owner) = round.workflow.failure_owner(seq) {
+                    if let Some(ready) = round.workflow.ready_integration(Some(owner)) {
+                        let task =
+                            Task::integration(&round.run_key, &last.attempt_id, ready, Some(seq));
+                        return Ok(delegated_action(round, task, detail, state_label));
+                    }
+                    round.workflow.repair_action(owner)
                 } else {
-                    round.workflow.failed_action(seq)
+                    let task = Task::ownership(&round.run_key, &last.attempt_id, seq);
+                    return Ok(delegated_action(round, task, detail, state_label));
                 }
             } else {
                 json!({
@@ -158,8 +170,9 @@ pub(super) fn attempt_action(
         (Passed, Some(last)) => {
             if let Some(commit) = round.workflow.candidate_commit(last) {
                 candidate_action(commit, &repo.head)
-            } else if let Some(action) = round.workflow.integration_action(None) {
-                action
+            } else if let Some(ready) = round.workflow.ready_integration(None) {
+                let task = Task::integration(&round.run_key, &last.attempt_id, ready, None);
+                return Ok(delegated_action(round, task, detail, state_label));
             } else if last.target_commit.as_deref() != Some(&repo.head)
                 || !last.target_inputs.as_deref().is_some_and(|inputs| {
                     execution_identity::repository_fingerprint(&repo.root)
@@ -183,7 +196,28 @@ pub(super) fn attempt_action(
             .workflow
             .with_assignments(action, detail, state == NotStarted)
     };
-    Ok((state_label, action))
+    Ok(AttemptAction {
+        state: state_label,
+        output: action,
+        task: None,
+    })
+}
+
+fn delegated_action(
+    round: &Round,
+    task: Task,
+    detail: AssignmentDetail,
+    state: Value,
+) -> AttemptAction {
+    let mut output = round.workflow.task_action(&task);
+    if !task.is_grouping() {
+        output = round.workflow.with_assignments(output, detail, false);
+    }
+    AttemptAction {
+        state,
+        output,
+        task: Some(task),
+    }
 }
 
 fn candidate_action(commit: &str, head: &str) -> Value {

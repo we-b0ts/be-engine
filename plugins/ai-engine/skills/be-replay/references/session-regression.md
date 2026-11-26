@@ -1,11 +1,8 @@
 # Source Session Regression
 
-Use this workflow for the sealed event recording produced by `traffic-e2e
-record`. The coordinator owns Replay, evidence routing, and publication of
-integrated code. The Issue Analyst groups uncatalogued API paths and
-identifies the owner of the failed event when the engine asks. Implementers
-diagnose and repair their assigned groups in dedicated worktrees. The
-integrator combines selected changes for the next full Replay.
+The commands and receipts below apply to a managed round for a sealed
+`traffic-e2e record` session. Read the [coordinator workflow](coordinator.md)
+for role dispatch and handoffs.
 
 ## Run the selected recording
 
@@ -26,15 +23,16 @@ be-replay --target-root /absolute/target run --user-confirm --recording-run-id 2
 ```
 
 The confirmed command creates a `codex/replay/YYYYMMDD-N` work branch and
-selects the recording. Follow `api_grouping_required` for new API paths and
-commit the catalog produced by `plan`. Launch and register implementers at
-`dispatch_required`. At `worker_status_required`, query the agent runtime
-and report its status. Start Replay when the engine returns `advance_required`.
+selects the recording. Follow the returned `action`. For uncatalogued API
+paths, the engine requests a delegated grouping and a commit of the resulting
+catalog before dispatching implementers. Start Replay at `advance_required`.
 On a named work branch, use
 `be-replay switch-recording-id ID` to change the active recording in the
 current checkout. Plain `status` and `run` use the active recording.
-Switching back restores that recording's run key, attempts and assignments.
-API implementation work follows the branch across recordings.
+Switching back restores that recording's run key, attempts, and assignments.
+Switching recordings clears delegated-role and implementer registrations.
+Check the runtime before registering any previously launched agent again.
+The catalog and API implementation backlog follow the branch across recordings.
 Every new attempt launches an isolated Target on
 the current committed code and replays from Source launch.
 One Source timeline interleaves startup, readiness, concurrent ingress,
@@ -97,9 +95,8 @@ present, `action.command` is the argument array for the next `be-replay`
 command, such as `["status"]`. Historical attempts have `action: null`.
 
 Default `status` shows counts and the current action. Use `action.query`
-when present to obtain supporting detail. `apis --ungrouped` lists the paths
-that need grouping. `status --with-assignments` gives the worktrees, worker
-states, full handoffs, and the ready fixes for an integration action.
+when present to obtain supporting detail. `status --with-assignments` gives
+the worktrees, worker states, full handoffs, and ready fixes for integration.
 
 | `action.kind` | Coordinator responsibility |
 | --- | --- |
@@ -109,12 +106,11 @@ states, full handoffs, and the ready fixes for an integration action.
 | `switch_recording` | Run `action.command` to select a different recording on the current branch. |
 | `configuration_commit_required` | Review the paths in `action.details.files`, commit the intended configuration, and check `status` again. |
 | `setup_required` | Resolve the setup error or route a confirmed engine issue to its owner. |
-| `api_grouping_required` | Have the Issue Analyst group the uncatalogued API paths and submit the plan. |
-| `ownership_required` | Identify the owner of `failure.seq` and submit its scope and group. Dispatch any available API assignments in parallel. |
+| `dispatch_task` | Launch the role named in `action.details.task` and register the returned runtime handle. |
+| `await_delivery` | Follow the registered agent and submit its completed artifact or report its exit. |
 | `dispatch_required` | Launch every assignment without an `agent_handle` in parallel and register the handles. |
 | `worker_status_required` | Query the agent runtime for the registered handles and report their actual state. |
 | `implementation_required` | Follow the registered implementers and register ready deliveries. |
-| `integration_required` | Integrate the selected deliveries, publish the candidate, and register its receipt. |
 | `advance_required` | Start a full Replay with `action.command`. |
 | `wait_required` | Follow the active Replay or outstanding assignments and refresh `status`. |
 | `complete` | Report the passing attempt and its verified revision after any required API work. |
@@ -124,11 +120,44 @@ and the effective policy are committed before `run`, `plan`, and candidate
 publication. Paths in `action.details.files` are relative to the Target root.
 
 When an updated engine qualifies for a retry after a mismatch, `status`
-returns `advance_required` with `action.details.reason` set to `engine_changed`.
-Run a fresh attempt against the same Target code. Commits limited to managed
-configuration are eligible. The retry is keyed by committed engine revision.
+first requests any required API dispatch and runtime status reports. At
+`advance_required` with `action.details.reason: engine_changed`, run a fresh
+attempt against the same Target code. Commits limited to managed configuration
+are eligible. The retry is keyed by committed engine revision.
 Rebuilding at the same revision or returning to an already tried revision
 uses the existing identity.
+
+## Dispatch and monitor delegated tasks
+
+`dispatch_task` and `await_delivery` use `action.details.task`. The task
+identifies its `task_id`, `role`, `requirement`, and `role_reference` relative
+to the loaded `be-replay` skill. The requirement describes what the agent
+delivers. It is `api_grouping_required` for new API groupings,
+`ownership_required` for an unowned failed sequence, or
+`integration_required` for a candidate. Pass any task-specific inputs to
+the delegated role. For grouping, `input_query` gives the analyst its
+inventory lookup.
+
+Start the named role through the agent runtime for `dispatch_task`. Use
+`task.register_command` to submit the task ID and the actual runtime handle.
+
+```json
+{
+  "kind": "task_dispatch",
+  "task_id": "task-id-from-status",
+  "agent_handle": "agent-a1b2c3",
+  "state": "started"
+}
+```
+
+The engine then returns `await_delivery` with the registered `agent_handle`
+and `task.submit_command`. Follow that handle through the runtime. Submit the
+agent's artifact when ready, using the current task and handle in the receipt.
+When the runtime confirms an agent exited without delivering, use
+`report --file FILE` with the same `task_dispatch` receipt and
+`state: exited` to make dispatch available again. Grouping and ownership use
+`plan --findings FILE`. Candidates use `report --file FILE`.
+[Delivery formats](#plan-implement-and-verify)
 
 ## Diagnose the first failure
 
@@ -143,20 +172,14 @@ recording, configuration, or launch inputs. `failure.seq` identifies the
 failed Source read or preparation position when available.
 
 On a mismatch, the engine looks ahead 60 seconds of Source time from the
-failed sequence and dispatches the API groups in the previously uncovered
+failed sequence and assigns the API groups in the previously uncovered
 part of the window. Another failure at the same sequence reuses that window.
 A recorded request link or lifecycle event can establish the owner of the
 failed sequence for direct assignment. Other work can proceed while the owner
 is being determined.
 
-For `ownership_required`, dispatch one read-only `issue-analyst` for
-`failure.seq`. Include `recording_id`, `session.attempt_id`, the expected
-event, any Target observation ID, and the Source and Target repositories
-and revisions. The analyst identifies just the failed sequence's scope and
-group. Assignments can still appear under `action.details.assignments`.
-
-Run the evidence queries from the canonical Target or provide
-`--target-root /absolute/target`.
+The analyst and implementers run evidence queries from the canonical Target
+or provide `--target-root /absolute/target`.
 
 - `events --recording-run-id ID --seq SEQ` reads the exact Source event.
   Repeat `--seq` to read multiple exact positions. Explicitly selected server
@@ -187,15 +210,18 @@ See [dependency diagnosis](api-implementer-dependency-diagnosis.md),
 
 ## Plan, implement, and verify
 
-Use `be-replay apis --ungrouped` for the recorded paths that need grouping.
-Use Source routes to supply `case_pattern` and `group` for each label and
-submit them with `be-replay plan --findings FILE`. The proposed pattern
-must match the recorded paths. Use the literal path for a static route.
-Several literal paths for a dynamic route can share the same pattern and
+For the `api_grouping_required` task, the Issue Analyst reads the ungrouped
+paths from `be-replay apis --ungrouped` and supplies a complete list based
+on Source routes. The coordinator adds the registered task and agent
+identities to those rows and submits them with `be-replay plan --findings FILE`.
+The proposed pattern must match the recorded path. Static routes use literal
+paths. Several literal paths for a dynamic route can share a pattern and
 group.
 
 ```json
 {
+  "task_id": "grouping-task-id-from-status",
+  "agent_handle": "agent-a1b2c3",
   "apis": [
     {"api":"POST /reports/42","case_pattern":"/reports/*","group":"reports"}
   ]
@@ -208,11 +234,13 @@ by method and pattern. Commit the updated catalog as requested by
 group. An HTTP method first seen in a later recording for a tracked route
 becomes an implementation task in its existing group.
 
-If `status` asks for the owner of a failed event, submit one record for that
-sequence.
+For the `ownership_required` task, submit the analyst's ownership for the
+failed sequence, together with that task and its registered handle.
 
 ```json
 {
+  "task_id": "ownership-task-id-from-status",
+  "agent_handle": "agent-d4e5f6",
   "ownership": {
     "seq": 42,
     "scope": "job:cache-refresh",
@@ -227,7 +255,9 @@ group. Group names use 1–128 ASCII letters, digits, periods, underscores,
 or hyphens.
 
 Each active group gets one reservation. Different jobs and APIs can share a
-group. `--max-implementers` accepts 1 to 16 and defaults to 16. Use
+group. When the runtime has fewer than 16 implementer slots, add
+`--max-implementers N` to the plan submission for the slots it can run.
+The flag accepts 1 to 16 and defaults to 16. Use
 `status --with-assignments` for each group's `assignment_id`, `base_commit`,
 and items, including their scopes, sequences, and applicable API work.
 Resolve the reserved `worktree` against the canonical Target root. It uses
@@ -275,9 +305,9 @@ and receipt files in the ignored Target runtime directory or outside the
 checkout. Submit ready commits and exact sequences using
 `be-replay report --file /absolute/fixes.json`. Copy `assignment_id` from the
 full handoff into each fix and into each review or engine-gap receipt. This
-binds the receipt to the assignment issued for that recording, including
-after a recording switch. Submit it with that recording selected. Replay can
-keep running while you register deliveries.
+binds the receipt to the assignment issued for that recording. Submit new
+deliveries with that recording selected and the assignment's worker handle
+registered. Replay can keep running while you register deliveries.
 [Rule contract](rule-policy.md) · [Startup inputs](coordinator-startup-inputs.md)
 
 ```json
@@ -326,19 +356,22 @@ behavior and route the report to the engine owner.
 }
 ```
 
-When a new delivery covers the failed sequence, follow
-`integration_required` and query the ready fixes with `status --with-assignments`.
-Give the integrator the selected fixes and
-canonical base. A candidate can include other ready, compatible deliveries.
-Independent groups continue working. Publish the exact validated candidate
-to the canonical branch and submit it with
-`be-replay report --file /absolute/candidate.json`. Use the current
-finished attempt's ID. The candidate's `commit` is the canonical branch's
-current `HEAD`, and `included_fixes` contains the delivered commit SHAs.
+When a delivery covers the failed sequence, the engine can request an
+`integration_required` task. Use `status --with-assignments` for the ready
+fixes. The code integrator builds a candidate from the selected fixes and
+the canonical base. Other compatible ready deliveries can be included.
+Independent groups can continue working. On delivery, publish the exact
+validated candidate to the canonical branch and submit it with
+`be-replay report --file /absolute/candidate.json` for the registered task,
+agent handle, and current finished attempt. The candidate's `commit` is
+the canonical branch's current `HEAD`, and `included_fixes` contains the
+delivered commit SHAs.
 
 ```json
 {
   "kind": "candidate",
+  "task_id": "integration-task-id-from-status",
+  "agent_handle": "agent-g7h8i9",
   "attempt_id": "11111111-1111-4111-8111-111111111111",
   "commit": "2222222222222222222222222222222222222222",
   "included_fixes": ["1111111111111111111111111111111111111111"],

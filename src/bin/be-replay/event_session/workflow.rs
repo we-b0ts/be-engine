@@ -9,7 +9,7 @@ use traffic_e2e::{
 };
 
 use crate::{
-    handoff::{AssignmentDetail, CatalogUpdate, Plan, Receipt},
+    handoff::{AssignmentDetail, CatalogUpdate, Plan, Receipt, Registration},
     print_json,
     round::{Recording, Repository, Round, RoundLock},
 };
@@ -49,18 +49,11 @@ pub(super) async fn replay(
     let recording = round_recording(&repo, &round, id)?;
     let current = current_attempt(&repo, &round, &recording)?;
     round = sync_round(&repo, &lock, round, &recording, &current)?;
-    let (_, action) = attempt_action(
-        &repo,
-        &round,
-        current.state,
-        current.attempt.as_ref(),
-        AssignmentDetail::Summary,
-    )?;
-    if matches!(
-        action["kind"].as_str(),
-        Some("api_grouping_required" | "dispatch_required" | "worker_status_required")
-    ) || (current.state == E2eEventSessionState::NotStarted
-        && action["kind"] != "advance_required")
+    let action = current_action(&repo, &round, &current)?;
+    let kind = action.output["kind"].as_str();
+    if action.task.as_ref().is_some_and(|task| task.is_grouping())
+        || matches!(kind, Some("dispatch_required" | "worker_status_required"))
+        || (current.state == E2eEventSessionState::NotStarted && kind != Some("advance_required"))
     {
         drop(lock);
         return round_status(&repo, round, false, AssignmentDetail::Summary, pretty);
@@ -68,6 +61,10 @@ pub(super) async fn replay(
     ensure!(
         current.state != E2eEventSessionState::Running,
         "a Replay is already running; inspect status"
+    );
+    ensure!(
+        action.task.is_none(),
+        "complete the current delegated task before Replay; inspect status"
     );
     if let Some(candidate) = current
         .attempt
@@ -87,7 +84,7 @@ pub(super) async fn replay(
             .is_some()
     {
         ensure!(
-            action["kind"] == "advance_required",
+            kind == Some("advance_required"),
             "complete the current handoff before Replay; inspect status"
         );
     }
@@ -139,14 +136,23 @@ pub(super) fn plan(
     let mut round = require_round(&repo)?;
     let recording = round_recording(&repo, &round, id)?;
     let current = current_attempt(&repo, &round, &recording)?;
+    update_round(&repo, &mut round, &recording, &current)?;
+    let task = current_action(&repo, &round, &current)?
+        .task
+        .context("no delegated plan is currently required; inspect status")?;
+    let binding = Registration {
+        task_id: plan.task_id,
+        agent_handle: plan.agent_handle,
+    };
+    round.workflow.require_task_delivery(&task, &binding)?;
     if let Some(max_implementers) = max_implementers {
         round.workflow.set_max_implementers(max_implementers)?;
     }
     let catalog = match (plan.apis, plan.ownership) {
         (Some(apis), None) => {
             ensure!(
-                current.state != E2eEventSessionState::Running,
-                "wait for the current Replay before updating API groups"
+                task.is_grouping(),
+                "the current delegated task does not request API groupings"
             );
             let inventory = session::recorded_apis(&repo.root, &recording.root)?;
             let catalog = CatalogUpdate::prepare(&repo.root, &inventory, &apis)?;
@@ -158,10 +164,9 @@ pub(super) fn plan(
                 failed_sequence(&current) == Some(owner.seq),
                 "ownership must refer to the current failed sequence"
             );
-            update_round(&repo, &mut round, &recording, &current)?;
             ensure!(
-                round.ungrouped_apis() == 0,
-                "group the new APIs before assigning event ownership"
+                task.is_ownership(),
+                "the current delegated task does not request event ownership"
             );
             owner.resolve_api(&repo.root)?;
             round.workflow.set_owner(owner, &repo.head)?;
@@ -191,8 +196,11 @@ pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -
     let mut round = require_round(&repo)?;
     let recording = round_recording(&repo, &round, id)?;
     let current = current_attempt(&repo, &round, &recording)?;
-    if receipt.is_candidate() {
+    let dispatch = matches!(&receipt, Receipt::TaskDispatch { .. });
+    if dispatch || receipt.is_candidate() {
         require_committed_configuration(&repo.root)?;
+    }
+    if receipt.is_candidate() {
         ensure!(
             matches!(
                 current.state,
@@ -204,11 +212,23 @@ pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -
     if configuration_action(&repo.root)?.is_none() {
         update_round(&repo, &mut round, &recording, &current)?;
     }
+    if receipt.is_candidate() {
+        ensure!(
+            round.ungrouped_apis() == 0,
+            "group the new APIs before publishing a candidate; inspect status"
+        );
+    }
+    let current_task = if dispatch {
+        current_action(&repo, &round, &current)?.task
+    } else {
+        None
+    };
     let completed = round.workflow.report(
         &repo.root,
         &repo.head,
         current.attempt.as_ref(),
         failed_sequence(&current),
+        current_task.as_ref(),
         receipt,
     )?;
     round.api_backlog.complete(completed);
@@ -303,16 +323,7 @@ fn print_action(
 ) -> Result<()> {
     let action = match configuration_action(&repo.root)? {
         Some(action) => action,
-        None => {
-            attempt_action(
-                repo,
-                round,
-                current.state,
-                current.attempt.as_ref(),
-                AssignmentDetail::Summary,
-            )?
-            .1
-        }
+        None => current_action(repo, round, current)?.output,
     };
     print_json(
         &json!({"recording_id":recording.id, "action":action}),
@@ -371,6 +382,20 @@ pub(super) fn current_attempt(
     status_e2e_event_session(&repo.root, &recording.root, Some(&round.run_key), None)
 }
 
+fn current_action(
+    repo: &Repository,
+    round: &Round,
+    current: &E2eEventSessionStatus,
+) -> Result<super::status::AttemptAction> {
+    attempt_action(
+        repo,
+        round,
+        current.state,
+        current.attempt.as_ref(),
+        AssignmentDetail::Summary,
+    )
+}
+
 fn publish_result(
     repo: &Repository,
     round: &Round,
@@ -389,10 +414,10 @@ fn publish_result(
     } else {
         E2eEventSessionState::Failed
     };
-    let (_, action) = attempt_action(repo, round, state, Some(&result), AssignmentDetail::Summary)?;
+    let action = attempt_action(repo, round, state, Some(&result), AssignmentDetail::Summary)?;
     let mut report = json!({
         "recording_id":recording.id, "branch":round.branch, "session":result, "apis":apis,
-        "progress_published":progress.as_ref().copied().unwrap_or(false), "action":action
+        "progress_published":progress.as_ref().copied().unwrap_or(false), "action":action.output
     });
     if let Err(error) = &progress {
         report["progress_publication_error"] = json!(format!("{error:#}"));

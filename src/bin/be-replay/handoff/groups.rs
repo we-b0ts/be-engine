@@ -185,6 +185,9 @@ impl Groups {
                     })
             });
             if !assigned && !delivered {
+                if let Some(work) = self.work.get_mut(group) {
+                    work.refresh_dispatch_base(base);
+                }
                 self.enqueue(
                     group,
                     WorkItem {
@@ -291,6 +294,16 @@ impl Groups {
             .filter_map(|group| group.assignment.as_ref())
             .filter(|assignment| assignment.needs_worker_status(now))
             .count()
+    }
+
+    pub(super) fn needs_api_dispatch(&self) -> bool {
+        let now = Utc::now();
+        self.work.values().any(|work| {
+            work.items.iter().any(|item| !item.apis.is_empty())
+                && work.assignment.as_ref().is_none_or(|assignment| {
+                    assignment.agent_handle.is_none() || assignment.needs_worker_status(now)
+                })
+        })
     }
 
     pub(super) fn queued_api_groups(&self) -> usize {
@@ -432,6 +445,7 @@ impl Groups {
                 continue;
             }
             let work = self.active(&fix.group, fix.assignment_id)?;
+            work.require_worker(&fix.group)?;
             validate_sequences(&fix.sequences)?;
             validate_checks(&fix.checks)?;
             validate_commit(root, &fix.commit)?;
@@ -486,6 +500,7 @@ impl Groups {
             return Ok(Vec::new());
         }
         work.validate_assignment(group, assignment_id)?;
+        work.require_worker(group)?;
         ensure!(
             review.sequences.iter().all(|seq| {
                 work.reviewed.values().any(|prior| prior.contains(seq))
@@ -514,7 +529,8 @@ impl Groups {
         if self.gaps.iter().any(|reported| reported.gap == gap) {
             return Ok(());
         }
-        self.active(&gap.group, gap.assignment_id)?;
+        self.active(&gap.group, gap.assignment_id)?
+            .require_worker(&gap.group)?;
         validate_sequences(&gap.sequences)?;
         ensure!(
             !gap.evidence.trim().is_empty(),
@@ -629,12 +645,35 @@ impl Groups {
 }
 
 impl Group {
+    fn refresh_dispatch_base(&mut self, base: &str) {
+        if let Some(assignment) = &mut self.assignment {
+            if assignment.agent_handle.is_some() {
+                assignment.running_reported_at = None;
+                return;
+            }
+            if self.base_commit != base {
+                assignment.id = Uuid::new_v4();
+            }
+        }
+        base.clone_into(&mut self.base_commit);
+    }
+
     fn validate_assignment(&self, group: &str, assignment_id: Uuid) -> Result<()> {
         ensure!(
             self.assignment
                 .as_ref()
                 .is_some_and(|assignment| assignment.id == assignment_id),
             "delivery does not match the active assignment for group {group}"
+        );
+        Ok(())
+    }
+
+    fn require_worker(&self, group: &str) -> Result<()> {
+        ensure!(
+            self.assignment
+                .as_ref()
+                .is_some_and(|assignment| assignment.agent_handle.is_some()),
+            "register the implementer handle before accepting a delivery for group {group}"
         );
         Ok(())
     }
@@ -691,6 +730,17 @@ mod tests {
         }
     }
 
+    fn start_worker(groups: &mut Groups, group: &str, assignment_id: Uuid) {
+        groups
+            .update_implementers(vec![ImplementerUpdate {
+                group: group.into(),
+                assignment_id,
+                agent_handle: format!("worker-{group}"),
+                state: ImplementerState::Started,
+            }])
+            .unwrap();
+    }
+
     #[test]
     fn an_unconfirmed_or_expired_worker_requires_a_runtime_check() {
         let now = Utc::now();
@@ -706,6 +756,36 @@ mod tests {
         assert!(assignment.needs_worker_status(now + WORKER_STATUS_TTL));
         assignment.agent_handle = None;
         assert!(!assignment.needs_worker_status(now));
+    }
+
+    #[test]
+    fn a_new_api_refreshes_the_base_of_an_unstarted_group() {
+        let mut groups = Groups::default();
+        groups.enqueue("things", item("job:refresh", &[5]), "before-catalog");
+        groups.reserve(1, || Ok(4)).unwrap();
+        let prior = groups.assignments();
+        let api = RecordedApi {
+            api: "POST /things".into(),
+            method: "POST".into(),
+            paths: vec!["/things".into()],
+            requests: 1,
+            first_seq: 7,
+            case_pattern: Some("/things".into()),
+            group: Some("things".into()),
+        };
+        let mut backlog = ApiBacklog::default();
+        backlog.register_groupings(&[traffic_e2e::event_work::ApiGrouping {
+            api: api.api.clone(),
+            case_pattern: "/things".into(),
+            group: "things".into(),
+        }]);
+        groups.refresh_api_work(&[api], &backlog, "after-catalog");
+
+        let current = groups.assignments();
+        assert_eq!(current[0]["name"], prior[0]["name"]);
+        assert_eq!(current[0]["base_commit"], "after-catalog");
+        assert_ne!(current[0]["assignment_id"], prior[0]["assignment_id"]);
+        assert!(groups.needs_api_dispatch());
     }
 
     #[test]
@@ -727,6 +807,7 @@ mod tests {
         assert_eq!(assigned[0]["assignment_id"], lease.simple().to_string());
         assert_eq!(assigned[0]["items"][0]["sequences"], json!([11, 13, 17]));
 
+        start_worker(&mut groups, "things", lease);
         groups
             .review(
                 "things",
@@ -769,6 +850,7 @@ mod tests {
         groups.enqueue("things", item(scope, &[11, 13]), "base");
         groups.reserve(1, || Ok(0)).unwrap();
         let lease = groups.work["things"].assignment.as_ref().unwrap().id;
+        start_worker(&mut groups, "things", lease);
         groups
             .review(
                 "things",
@@ -791,6 +873,7 @@ mod tests {
         groups.enqueue("things", item(scope, &[11]), "base");
         groups.reserve(1, || Ok(4)).unwrap();
         let lease = groups.work["things"].assignment.as_ref().unwrap().id;
+        start_worker(&mut groups, "things", lease);
         groups
             .review("things", lease, [11].into(), vec!["checks".into()], None)
             .unwrap();
