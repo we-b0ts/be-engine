@@ -15,6 +15,8 @@ use traffic_model::{
 pub use traffic_recording_store::session_summary::recording_end_sequence;
 use traffic_recording_store::{session, source::recording};
 
+mod dispatch_window;
+pub use dispatch_window::{DispatchWindow, WindowApi, WindowOwner, dispatch_window};
 mod progress;
 pub use progress::{SessionApiCounts, publish_passed_progress};
 mod recorded_apis;

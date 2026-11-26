@@ -16,8 +16,16 @@ pub(super) struct ApiReview {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ApiTask {
-    pub finding: Finding,
+    #[serde(alias = "finding")]
+    pub assignment: ApiAssignment,
     pub apis: Vec<ApiConfirmation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct ApiAssignment {
+    pub scope: String,
+    pub group: String,
+    pub sequences: BTreeSet<u64>,
 }
 
 impl ApiReview {
@@ -25,8 +33,6 @@ impl ApiReview {
         target: &Path,
         recording: &Path,
         confirmations: Vec<ApiConfirmation>,
-        reviewed_findings: &[&Finding],
-        used_causes: &BTreeSet<&str>,
     ) -> Result<Self> {
         let mut submitted = BTreeMap::new();
         for row in confirmations {
@@ -100,49 +106,16 @@ impl ApiReview {
             row.case_pattern = Some(pattern.clone());
             row.group = Some(group.clone());
             let scope = format!("api:{} {pattern}", api.method);
-            let related = |finding: &&Finding| {
-                finding.scope.as_deref().is_some_and(|value| {
-                    value == scope
-                        || value.strip_prefix("api:").is_some_and(|label| {
-                            label == api.api
-                                || label
-                                    .strip_prefix(&api.method)
-                                    .and_then(|suffix| suffix.strip_prefix(' '))
-                                    .is_some_and(|path| {
-                                        api.paths.iter().any(|recorded| recorded == path)
-                                    })
-                        })
-                })
-            };
-            let mut related = reviewed_findings.iter().copied().filter(related);
-            let prior = related.next();
-            for finding in prior.into_iter().chain(related) {
-                ensure!(
-                    finding.group.as_deref().is_none_or(|value| value == group),
-                    "finding {} must use API group {group}",
-                    finding.root_cause
-                );
-            }
             if !row.implemented || uncatalogued {
-                let cause = prior.map_or_else(
-                    || api_cause(&scope, used_causes),
-                    |finding| finding.root_cause.clone(),
-                );
-                let entry = tasks.entry(cause.clone()).or_insert_with(|| ApiTask {
-                    finding: Finding {
-                        root_cause: cause,
-                        summary: if row.implemented {
-                            format!("Register the case pattern and group for {}.", api.api)
-                        } else {
-                            format!("Implement {} in the Target.", api.api)
-                        },
+                let entry = tasks.entry(scope.clone()).or_insert_with(|| ApiTask {
+                    assignment: ApiAssignment {
                         sequences: BTreeSet::new(),
-                        scope: Some(scope),
-                        group: Some(group),
+                        scope,
+                        group,
                     },
                     apis: Vec::new(),
                 });
-                entry.finding.sequences.insert(api.first_seq);
+                entry.assignment.sequences.insert(api.first_seq);
                 entry.apis.push(row.clone());
             }
             confirmations.push(row);
@@ -191,15 +164,27 @@ impl ApiReview {
         Ok(())
     }
 
-    pub fn validate_candidate<'a>(
-        &self,
+    pub fn api_scope(&self, label: &str) -> Option<(String, String)> {
+        let (method, path) = label.split_once(' ')?;
+        self.confirmations
+            .iter()
+            .filter_map(|row| {
+                let (row_method, _) = row.api.split_once(' ')?;
+                let pattern = row.case_pattern.as_deref()?;
+                let group = row.group.as_ref()?;
+                (method == row_method
+                    && (label == row.api || path == pattern || matches_path_pattern(pattern, path)))
+                .then_some((label != row.api, pattern.contains('*'), pattern, group))
+            })
+            .min()
+            .map(|(_, _, pattern, group)| (format!("api:{method} {pattern}"), group.clone()))
+    }
+
+    pub fn validate_catalog<'a>(
         root: &Path,
-        causes: impl Iterator<Item = &'a str>,
+        apis: impl Iterator<Item = &'a ApiConfirmation>,
     ) -> Result<()> {
-        let mut apis = causes
-            .filter_map(|cause| self.tasks.get(cause))
-            .flat_map(|task| &task.apis)
-            .peekable();
+        let mut apis = apis.peekable();
         if apis.peek().is_none() {
             return Ok(());
         }
@@ -226,15 +211,4 @@ impl ApiReview {
         }
         Ok(())
     }
-}
-
-fn api_cause(scope: &str, used_causes: &BTreeSet<&str>) -> String {
-    let base = format!("API review for {scope}");
-    if !used_causes.contains(base.as_str()) {
-        return base;
-    }
-    (2..)
-        .map(|suffix| format!("{base} ({suffix})"))
-        .find(|candidate| !used_causes.contains(candidate.as_str()))
-        .expect("finite set of used finding identities")
 }

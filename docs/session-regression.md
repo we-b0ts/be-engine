@@ -59,14 +59,16 @@ be-replay --target-root /absolute/target run --user-confirm --recording-run-id 2
 be-replay --target-root /absolute/target status
 ```
 
-The confirmed `run` creates a `codex/replay/YYYYMMDD-N` work branch, selects
-the recording, and verifies the isolated Target from process launch. On a
-named work branch, `switch-recording-id` changes the active recording in the
-current checkout. Use `run --recording-run-id ID` to select and run in one
-command.
+The confirmed `run` creates a `codex/replay/YYYYMMDD-N` work branch and
+selects the recording. Follow `api_review_required` to confirm every API
+before the first Replay. Replay can start while implementers work on the
+missing APIs. On a named work branch, `switch-recording-id` changes the active
+recording in the current checkout.
 
 ```sh
 be-replay --target-root /absolute/target switch-recording-id 20261125113932
+be-replay --target-root /absolute/target apis
+be-replay --target-root /absolute/target plan --findings /absolute/apis.json
 be-replay --target-root /absolute/target run
 ```
 
@@ -91,11 +93,10 @@ an `expected` event summary, a `reason`, and a `target_observation_id`.
 `be-replay`, such as `["status"]`. Historical attempts have `action: null`.
 
 When the action has assignments, `status` lists each `group`, its `pending`
-finding count, and any reserved worker `name` and `worktree` under
-`action.details.assignments`. Use `status --with-assignments` for the complete
-current assignment details, including the originating attempt, frozen base,
-findings, and any API work. `plan` and `report` return the full details when
-their actions include assignments.
+item count, and the reserved worker `name` and `worktree` under
+`action.details.assignments`. Use `status --with-assignments` for the
+`assignment_id`, frozen base, and each item's scope, sequences, and applicable
+API work.
 
 The top-level `phase` advances through `preparing_replay`, `building`,
 `starting_target`, `replaying`, and `finalizing`, then reaches `complete` after a
@@ -127,8 +128,8 @@ recorded cancellation. An unavailable total appears as `?`.
 | `confirm_regression` | Obtain caller approval and use the confirmed `run` command. |
 | `configuration_commit_required` | Review the paths in `action.details.files`, commit the intended configuration, and check `status` again. |
 | `setup_required` | Resolve the setup error or route a confirmed engine issue to its owner. |
-| `analysis_required` | Assign the first divergence to an Issue Analyst. Start the API review in parallel when requested in `action.details`. |
-| `api_review_required` | Submit a confirmation for every recorded API after a pass with outstanding review. |
+| `api_review_required` | Submit a confirmation for every recorded API before the first Replay. |
+| `ownership_required` | Have an Issue Analyst identify the scope and group of `failure.seq`. Dispatch any available API assignments in parallel. |
 | `implementation_required` | Dispatch the engine's groups using their assigned worktree paths and accept tested fixes as they arrive. |
 | `integration_required` | Integrate the selected fixes, validate and publish the candidate, and submit its receipt. |
 | `advance_required` | Run `action.command` to start a full Replay on the selected revision. |
@@ -148,31 +149,33 @@ retry identity.
 
 ```mermaid
 flowchart LR
-    replay[Full Replay] -->|first failed Source seq| analysis[Issue Analyst]
+    select[Select recording] --> review[Confirm all recorded APIs]
+    review --> replay[Full Replay]
+    review -->|missing implementations| work[Implementer groups]
+    replay -->|first failed Source seq| window[Find APIs in next 60 seconds of Source time]
+    window -->|API groups and known owner| work
+    window -->|failed event owner unknown| analysis[Issue Analyst]
+    analysis -->|scope and group of failed seq| work
     replay -->|execution error| setup[Coordinator resolves setup]
     setup --> replay
-    analysis -->|first_unmatched with scope and group| plan[Engine selects assignments]
-    analysis -->|recorded API inventory| review[API review]
-    replay -->|pass with review outstanding| review
-    review -->|findings.apis with work outstanding| plan
-    review -->|passing attempt and APIs confirmed| complete[Complete]
-    plan -->|group, worker name, worktree, and frozen base| work[Implementers]
-    work -->|engine gap at first unmatched event| setup
-    work -->|tested fix for current priority| integration[Integrator]
+    work -->|engine gap covering failed seq| setup
+    work -->|tested fix covering failed seq| integration[Integrator]
     integration -->|registered candidate commit| replay
-    replay -->|full pass with review and repairs complete| complete
+    replay -->|full pass with API work complete| complete[Complete]
 ```
 
 ## Inspect evidence
 
 The coordinator handles `setup_required`, including unreadable Source
 artifacts. `failure.seq` identifies the Source position when available. An
-event failure stops delivery at the first divergence. When `action.kind` is
-`analysis_required`, keep one active analyst per attempt. Pass the recording
-and attempt IDs, `failure.seq`, and the Source and Target repository locations
-and revisions. The analyst groups symptoms that appear to share one repair.
-The findings JSON describes the first failure in `first_unmatched` and can
-include other findings under `others`.
+event failure stops delivery at the first divergence. The engine looks ahead
+60 seconds of Source time from each distinct failed sequence and assigns API
+work from the previously uncovered part of the window. Repeated failures at
+the same sequence reuse its window. The engine assigns the
+failed sequence directly when a recorded request link or lifecycle event
+establishes its owner. At `ownership_required`, give one analyst the recording and
+attempt IDs, `failure.seq`, and the Source and Target revisions. The analyst
+returns the scope and group of that sequence while other assignments proceed.
 
 Read the exact Source event and page the surrounding timeline using the
 recording ID and sequence from status. Use `--from-seq` before the failure to
@@ -197,43 +200,40 @@ Explicit `--report` remains available for reading a specific report file.
 
 ## Plan, implement, and verify
 
-The coordinator reviews the findings JSON and runs the `plan` in
-`action.command` with the reviewed file. `--attempt-id` binds the findings
-to the exact attempt. The first submission must include `failure.seq` in
-`first_unmatched.sequences`. Use `others` to add findings to the same attempt.
-Each finding includes a stable `root_cause`, a `summary`, and `sequences`.
-Its required `scope` is `api:METHOD /path`, `job:NAME`, `startup`, or
-`shutdown`. Its required `group` identifies a set of findings one worker
-can implement together. The planner prioritizes `first_unmatched` and fills
-available slots by group up to `--max-implementers N` (1 to 16, default 16).
-The engine supplies each worker's name, base commit, and fixed Target-relative
-worktree under `.traffic-e2e/local/rewrite-worktrees/api-implementer-<n>`.
+Before the first Replay, `be-replay apis` lists each API label and its
+recorded literal paths, request count, first sequence, case pattern, and
+group. Check each handler and the effective Target routes for all of its
+paths. Submit the complete `apis` review with `be-replay plan --findings FILE`.
+Include `implemented` for every API and propose a case pattern and group
+for uncatalogued APIs. The coordinator can start Replay while the
+assigned groups implement missing APIs and catalog entries.
 
-The analyst can submit the first unmatched finding before finishing the
-API review. `be-replay apis` uses the sealed Session summary and Target catalog
-to list API labels and literal paths. The analyst confirms every label under
-`findings.apis`, marking whether it is implemented and providing a case
-pattern and group for uncatalogued labels. The engine dispatches missing
-implementations and mappings with the corresponding groups. A passing Replay
-can still require this review and subsequent implementation.
+For a requested owner, submit `ownership` with the current `failure.seq`,
+`scope`, and `group`. Use `api:METHOD /path` and the catalog group for
+an API, or `job:NAME`, `startup`, or `shutdown` with the group responsible
+for the work. The engine assigns work from the API window and adds the
+failed sequence to its owner's group. Each active group uses one worker
+and a fixed path under `.traffic-e2e/local/rewrite-worktrees/api-implementer-<n>`.
+Use `--max-implementers N` to set the number of available slots from 1 to 16.
 
-Implementers confirm the cause and deliver a tested Target or time, ID, or
-token policy repair.
-Events after the failure provide context for investigation and receive
-verification credit when a later Replay reaches them.
+Implementers diagnose the assigned events and deliver tested Target
+changes or Source-proven time, ID, or token rules. Use
+`be-replay report --file FILE` to register the group, `assignment_id`, exact
+sequences, full commit ID, and checks. Register ready deliveries while Replay
+is running. The assignment ID binds fixes, reviews, and engine-gap reports to
+the recording that issued the assignment. A review can close assigned
+lookahead sequences whose behavior already meets the Source contract. When an
+implementer confirms an engine gap, register the evidence and route the gap
+to the engine owner.
 
-Submit ready fixes with `be-replay report --file FILE`. Each `fixes` receipt
-binds the originating attempt to the causes, commits, and checks it delivers.
-When an implementer confirms a gap in Replay, the coordinator registers an
-`engine_gap` report with the originating attempt, `root_cause`, and observed
-evidence. The coordinator routes it to the engine owner and follows
-`setup_required` to retry when the gap accounts for the first unmatched
-event. Once a fix for that event is ready, the coordinator can integrate
-it while independent work continues. The integrator
-checks the candidate, and the coordinator publishes and registers its exact
-commit. The `candidate` receipt names the current finished attempt, the
-published `HEAD`, the included fix commits, and the checks. Follow `status`
-to run full Replay against the candidate. [Finding and report formats](../plugins/ai-engine/skills/be-replay/references/session-regression.md#plan-implement-and-verify)
+A delivery covering the failed sequence enables integration. The
+coordinator may include other ready, compatible repairs while the rest
+continue. Publish the validated candidate and register its exact commit,
+included delivery commits, and checks against the current finished attempt.
+Follow `advance_required` to start a full Replay. The engine verifies the
+sequences when Replay reaches them. A full pass closes remaining lookahead
+work. API implementation and catalog tasks required by the initial review
+remain open until delivered and integrated. [Plan and report formats](../plugins/ai-engine/skills/be-replay/references/session-regression.md#plan-implement-and-verify)
 
 Session Replay advances recorded I/O on the shared timeline as soon as its
 matching request, delivery receipt, or timer gate allows it. Recorded intervals

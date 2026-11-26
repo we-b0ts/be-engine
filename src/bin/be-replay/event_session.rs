@@ -33,7 +33,7 @@ pub(super) enum SourceCommand {
         /// Read one attempt by its UUID.
         #[arg(long)]
         attempt_id: Option<uuid::Uuid>,
-        /// Include full findings and API work in the current assignments.
+        /// Include scopes, sequences and API work in the current assignments.
         #[arg(long)]
         with_assignments: bool,
     },
@@ -72,17 +72,14 @@ pub(super) enum SourceCommand {
         report: Option<PathBuf>,
         observation_id: uuid::Uuid,
     },
-    /// Group analysis findings and select independent work for implementers.
+    /// Confirm recorded APIs or assign ownership to the current failed event.
     Plan {
-        /// JSON file with first_unmatched and optional others.
+        /// JSON file with the recorded API confirmations or the current event's ownership.
         #[arg(long)]
         findings: PathBuf,
-        /// Maximum implementers to assign in this plan.
-        #[arg(long, default_value_t = 16)]
-        max_implementers: usize,
-        /// Require the latest failed attempt to have this identity.
+        /// Set the maximum active implementers for this round (default 16).
         #[arg(long)]
-        attempt_id: uuid::Uuid,
+        max_implementers: Option<usize>,
     },
     /// Register accepted fixes, an engine gap, or the published integration candidate.
     Report {
@@ -130,15 +127,7 @@ pub(super) async fn run(
         SourceCommand::Plan {
             findings,
             max_implementers,
-            attempt_id,
-        } => workflow::plan(
-            &target_root,
-            id,
-            &findings,
-            max_implementers,
-            attempt_id,
-            pretty,
-        ),
+        } => workflow::plan(&target_root, id, &findings, max_implementers, pretty),
         SourceCommand::Report { file } => workflow::report(&target_root, id, &file, pretty),
         SourceCommand::Events {
             from_seq,

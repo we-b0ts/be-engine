@@ -5,15 +5,13 @@ use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use traffic_e2e::{
     E2eEventSessionOptions, E2eEventSessionResult, E2eEventSessionState, E2eEventSessionStatus,
-    event_work, execution_identity, run_e2e_event_session_with_apis, session,
-    status_e2e_event_session,
+    execution_identity, run_e2e_event_session_with_apis, session, status_e2e_event_session,
 };
-use uuid::Uuid;
 
 use crate::{
-    handoff::{AssignmentDetail, Receipt},
+    handoff::{AssignmentDetail, Plan, Receipt},
     print_json,
-    round::{Recording, Repository, Round},
+    round::{Recording, Repository, Round, RoundLock},
 };
 
 use super::status::{attempt_action, configuration_action, mismatch_sequence, round_status};
@@ -31,6 +29,7 @@ pub(super) async fn replay(
         !repo.on_base() || user_confirm,
         "starting a regression on pr_base requires user approval and `run --user-confirm`"
     );
+    let _run = repo.lock_replay()?;
     let lock = repo.lock()?;
     require_committed_configuration(&repo.root)?;
     let mut round = if let Some(id) = id {
@@ -49,38 +48,62 @@ pub(super) async fn replay(
     };
     let recording = round_recording(&repo, &round, id)?;
     let current = current_attempt(&repo, &round, &recording)?;
-    if let Some(last) = current.attempt.as_ref() {
-        let engine_retry = current.state == E2eEventSessionState::Failed
-            && mismatch_sequence(last).is_some()
-            && round.engine_retry_available(&repo, last)?;
-        if !engine_retry {
-            ensure!(
-                current.state != E2eEventSessionState::Failed
-                    || last.target_commit.as_deref() != Some(&repo.head)
-                    || mismatch_sequence(last).is_none()
-                    || round.workflow.next(last, &repo.head).is_some(),
-                "submit reviewed findings for the first Replay mismatch; inspect be-replay status"
-            );
-            round.workflow.require_replay_candidate(last, &repo.head)?;
-        }
+    round = sync_round(&repo, &lock, round, &recording, &current)?;
+    let (_, action) = attempt_action(
+        &repo,
+        &round,
+        &recording,
+        current.state,
+        current.attempt.as_ref(),
+        AssignmentDetail::Summary,
+    )?;
+    if action["kind"] == "api_review_required" {
+        drop(lock);
+        return round_status(&repo, round, false, AssignmentDetail::Summary, pretty);
+    }
+    ensure!(
+        current.state != E2eEventSessionState::Running,
+        "a Replay is already running; inspect status"
+    );
+    if let Some(candidate) = current
+        .attempt
+        .as_ref()
+        .and_then(|attempt| round.workflow.candidate_commit(attempt))
+    {
+        ensure!(
+            candidate == repo.head,
+            "restore the registered Target candidate {candidate}"
+        );
+    }
+    if current.state == E2eEventSessionState::Failed
+        && current
+            .attempt
+            .as_ref()
+            .and_then(mismatch_sequence)
+            .is_some()
+    {
+        ensure!(
+            action["kind"] == "advance_required",
+            "complete the current handoff before Replay; inspect status"
+        );
     }
     repo.check_checkout(&lock)?;
     if round.note_engine_attempt(current.attempt.as_ref()) {
         round = repo.save_round(&lock, round)?;
     }
-    let (result, apis) = run_e2e_event_session_with_apis(E2eEventSessionOptions {
+    let options = E2eEventSessionOptions {
         target_root: repo.root.clone(),
         recording_root: recording.root.clone(),
         run_key: Some(round.run_key.clone()),
         expected_target_commit: Some(repo.head.clone()),
-    })
-    .await?;
-    if result.passed && round.workflow.has_pending_api_work() {
-        let limit = round.workflow.max_implementers();
-        round.workflow.queue_api_repairs(&result, limit)?;
-        repo.reserve_worktrees(&lock, &mut round)?;
-        round = repo.save_round(&lock, round)?;
-    }
+    };
+    drop(lock);
+
+    let (result, apis) = run_e2e_event_session_with_apis(options).await?;
+    let lock = repo.lock_round_for_update()?;
+    let round = require_round(&repo)?;
+    let current = current_attempt(&repo, &round, &recording)?;
+    let round = sync_round(&repo, &lock, round, &recording, &current)?;
     publish_result(&repo, &round, &recording, result, apis, pretty)
 }
 
@@ -90,129 +113,176 @@ pub(super) fn switch_recording(root: &Path, id: &str, pretty: bool) -> Result<()
         !repo.on_base(),
         "start a regression from pr_base with run --user-confirm --recording-run-id {id}"
     );
+    let _run = repo.lock_replay()?;
     let lock = repo.lock()?;
     let recording = Recording::load(&repo.root, id)?;
     let round = repo.select_round(&lock, recording, false, None)?;
+    drop(lock);
     round_status(&repo, round, false, AssignmentDetail::Full, pretty)
 }
 
 pub(super) fn plan(
     root: &Path,
     id: Option<&str>,
-    findings: &Path,
-    max_implementers: usize,
-    attempt_id: Uuid,
+    path: &Path,
+    max_implementers: Option<usize>,
     pretty: bool,
 ) -> Result<()> {
-    require_committed_configuration(root)?;
+    let plan: Plan = serde_json::from_slice(&fs::read(path)?).context("parse Replay plan")?;
     let repo = Repository::load(root)?;
-    let lock = repo.lock()?;
+    let lock = repo.lock_round_for_update()?;
     require_committed_configuration(&repo.root)?;
     let mut round = require_round(&repo)?;
     let recording = round_recording(&repo, &round, id)?;
     let current = current_attempt(&repo, &round, &recording)?;
-    ensure!(
-        matches!(
-            current.state,
-            E2eEventSessionState::Failed | E2eEventSessionState::Passed
-        ),
-        "expected a finished Replay attempt; inspect status"
-    );
-    let last = current.attempt.context("Replay attempt is missing")?;
-    ensure!(
-        last.target_commit.as_deref() == Some(repo.head.as_str()),
-        "the attempt belongs to a different Target revision"
-    );
-    ensure!(
-        last.attempt_id.parse::<Uuid>()? == attempt_id,
-        "findings refer to a stale attempt"
-    );
-    let mut findings: event_work::Findings =
-        serde_json::from_slice(&fs::read(findings)?).context("parse event findings")?;
-    if let Some(apis) = findings.apis.take() {
-        round
-            .workflow
-            .confirm_apis(&repo.root, &recording.root, apis, &findings)?;
+    if let Some(max_implementers) = max_implementers {
+        round.workflow.set_max_implementers(max_implementers)?;
     }
-    if current.state == E2eEventSessionState::Passed {
-        ensure!(
-            findings.first_unmatched.is_none() && findings.others.is_empty(),
-            "submit only API confirmations after a passing Replay"
-        );
-        ensure!(
-            round.workflow.apis_reviewed(),
-            "confirm every recorded API in findings.apis"
-        );
-        round.workflow.queue_api_repairs(&last, max_implementers)?;
-    } else {
-        let failed_seq = mismatch_sequence(&last)
-            .context("the failed attempt has no event mismatch to plan; inspect status")?;
+    if let Some(apis) = plan.apis {
         round
             .workflow
-            .set_plan(&last, failed_seq, findings, max_implementers)?;
+            .confirm_apis(&repo.root, &recording.root, apis)?;
+    } else {
+        ensure!(
+            plan.ownership.is_some(),
+            "supply API confirmations or event ownership"
+        );
+    }
+    update_round(&repo, &mut round, &recording, &current)?;
+    if let Some(owner) = plan.ownership {
+        ensure!(
+            failed_sequence(&current) == Some(owner.seq),
+            "ownership must refer to the current failed sequence"
+        );
+        round.workflow.set_owner(owner, &repo.head)?;
     }
     repo.reserve_worktrees(&lock, &mut round)?;
-    let mut output = match round.workflow.current_plan(&last) {
-        Some(plan) => serde_json::to_value(plan)?,
-        None => json!({}),
-    };
-    output["action"] = attempt_action(
-        &repo,
-        &round,
-        current.state,
-        Some(&last),
-        AssignmentDetail::Full,
-    )?
-    .1;
-    repo.save_round(&lock, round)?;
-    print_json(&output, pretty)
+    let round = repo.save_round(&lock, round)?;
+    print_action(&repo, &round, &recording, &current, pretty)
 }
 
 pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -> Result<()> {
     let receipt: Receipt =
         serde_json::from_slice(&fs::read(path)?).context("parse delivery receipt")?;
     let repo = Repository::load(root)?;
-    let lock = repo.lock()?;
+    let _run = receipt
+        .is_candidate()
+        .then(|| repo.lock_replay())
+        .transpose()?;
+    let lock = repo.lock_round_for_update()?;
     let mut round = require_round(&repo)?;
     let recording = round_recording(&repo, &round, id)?;
-    let latest = current_attempt(&repo, &round, &recording)?;
-    if matches!(&receipt, Receipt::Candidate { .. }) {
+    let current = current_attempt(&repo, &round, &recording)?;
+    if receipt.is_candidate() {
         require_committed_configuration(&repo.root)?;
         ensure!(
             matches!(
-                latest.state,
+                current.state,
                 E2eEventSessionState::Failed | E2eEventSessionState::Passed
             ),
             "publish an integration candidate for the current finished attempt; inspect status"
         );
     }
-    let last = latest
-        .attempt
-        .as_ref()
-        .context("round has no Replay attempt")?;
-    round
-        .workflow
-        .report(&repo.root, &repo.head, last, receipt)?;
+    update_round(&repo, &mut round, &recording, &current)?;
+    round.workflow.report(
+        &repo.root,
+        &repo.head,
+        current.attempt.as_ref(),
+        failed_sequence(&current),
+        receipt,
+    )?;
     repo.reserve_worktrees(&lock, &mut round)?;
+    let round = repo.save_round(&lock, round)?;
+    print_action(&repo, &round, &recording, &current, pretty)
+}
+
+pub(super) fn needs_round_sync(round: &Round, current: &E2eEventSessionStatus) -> bool {
+    round.workflow.needs_api_work_queue()
+        || (current.state == E2eEventSessionState::Passed && round.workflow.has_lookahead_work())
+        || failed_sequence(current).is_some_and(|seq| {
+            current
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| !round.workflow.failure_observed(attempt, seq))
+        })
+}
+
+pub(super) fn sync_round(
+    repo: &Repository,
+    lock: &RoundLock,
+    mut round: Round,
+    recording: &Recording,
+    current: &E2eEventSessionStatus,
+) -> Result<Round> {
+    if update_round(repo, &mut round, recording, current)? {
+        repo.reserve_worktrees(lock, &mut round)?;
+        return repo.save_round(lock, round);
+    }
+    Ok(round)
+}
+
+fn update_round(
+    repo: &Repository,
+    round: &mut Round,
+    recording: &Recording,
+    current: &E2eEventSessionStatus,
+) -> Result<bool> {
+    if !needs_round_sync(round, current)
+        || round
+            .workflow
+            .needs_api_review(&repo.root, &recording.root)?
+    {
+        return Ok(false);
+    }
+    round.workflow.queue_api_work(&repo.head);
+    if current.state == E2eEventSessionState::Passed {
+        round.workflow.retire_lookahead_work();
+    }
+    if let Some(seq) = failed_sequence(current) {
+        let attempt = current
+            .attempt
+            .as_ref()
+            .context("a failure has no Replay attempt")?;
+        round
+            .workflow
+            .observe_failure(&repo.root, &recording.root, &repo.head, attempt, seq)?;
+    }
+    Ok(true)
+}
+
+fn failed_sequence(current: &E2eEventSessionStatus) -> Option<u64> {
+    if current.state == E2eEventSessionState::Failed {
+        current.attempt.as_ref().and_then(mismatch_sequence)
+    } else {
+        None
+    }
+}
+
+fn print_action(
+    repo: &Repository,
+    round: &Round,
+    recording: &Recording,
+    current: &E2eEventSessionStatus,
+    pretty: bool,
+) -> Result<()> {
     let action = match configuration_action(&repo.root)? {
-        Some(action) => action,
+        Some(action) => round
+            .workflow
+            .with_assignments(action, AssignmentDetail::Full),
         None => {
             attempt_action(
-                &repo,
-                &round,
-                latest.state,
-                Some(last),
+                repo,
+                round,
+                recording,
+                current.state,
+                current.attempt.as_ref(),
                 AssignmentDetail::Full,
             )?
             .1
         }
     };
-    repo.save_round(&lock, round)?;
     print_json(
-        &json!({
-            "recording_id":recording.id, "attempt_id":last.attempt_id,
-            "action":action
-        }),
+        &json!({"recording_id":recording.id, "action":action}),
         pretty,
     )
 }
@@ -286,7 +356,14 @@ fn publish_result(
     } else {
         E2eEventSessionState::Failed
     };
-    let (_, action) = attempt_action(repo, round, state, Some(&result), AssignmentDetail::Full)?;
+    let (_, action) = attempt_action(
+        repo,
+        round,
+        recording,
+        state,
+        Some(&result),
+        AssignmentDetail::Full,
+    )?;
     let mut report = json!({
         "recording_id":recording.id, "branch":round.branch, "session":result, "apis":apis,
         "progress_published":progress.as_ref().copied().unwrap_or(false), "action":action

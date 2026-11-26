@@ -1,6 +1,6 @@
 # API Implementer Diagnosis
 
-Start from the assigned finding, recording ID, expected sequence, and Target
+Start from the assigned scope, recording ID, expected sequence, and Target
 attempt. Inspect the exact Source event, dependency admission, and
 authenticated Target observation when available. Use the earlier events for
 startup, background work, and concurrent inputs that affect this event. Later

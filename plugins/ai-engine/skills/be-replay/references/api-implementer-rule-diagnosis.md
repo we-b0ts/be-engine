@@ -30,5 +30,5 @@ Check that the live runtime binds the proposed format at the observed carrier.
 JSON paths are root-relative to the recognized document. Session Replay compares
 primary SSE and NDJSON body parts as bytes.
 
-Deliver the policy commit and focused check results for the assigned finding.
+Deliver the policy commit, exact Source sequences, and focused check results.
 The coordinator verifies the integrated change with a fresh full session.

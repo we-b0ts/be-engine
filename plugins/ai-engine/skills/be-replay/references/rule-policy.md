@@ -8,7 +8,7 @@ other fields, physical resource identity, and the finite sequence of exchanges. 
 
 Use `failure.seq` from `status` with the [evidence queries](session-regression.md#diagnose-the-first-failure).
 Query the Source event and dependency admission, and read the authenticated
-Target observation when available. Trace the assigned finding's dynamic value
+Target observation when available. Trace the assigned event's dynamic value
 back to its Source generator or validator.
 
 The implementer confirms the exact selector and supported value relationship,

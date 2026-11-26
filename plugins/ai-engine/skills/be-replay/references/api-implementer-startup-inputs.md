@@ -49,6 +49,6 @@ Use commands available in the actual final stage; do not assume `install`,
 or credential trees. Return `target.runtime_outputs` requirements when content
 must survive container shutdown; these are outputs, not startup snapshots.
 
-Return startup inputs with the finding and Source sequences. Include the
+Return startup inputs with the scope and Source sequences. Include the
 code handoff when code changed. The coordinator applies the inputs and runs
 full Session verification.

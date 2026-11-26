@@ -131,12 +131,28 @@ impl Repository {
     }
 
     pub fn lock(&self) -> Result<RoundLock> {
+        self.lock_file("replay-round.lock", false)
+    }
+
+    pub fn lock_round_for_update(&self) -> Result<RoundLock> {
+        self.lock_file("replay-round.lock", true)
+    }
+
+    pub fn lock_replay(&self) -> Result<RoundLock> {
+        self.lock_file("replay-run.lock", false)
+    }
+
+    fn lock_file(&self, name: &str, wait: bool) -> Result<RoundLock> {
         let root = internal_runtime::root(&self.root);
         git::require_ignored(&self.root, &root)?;
         fs::create_dir_all(&root)?;
-        let file = open_lock(&root.join("replay-round.lock"))?;
-        file.try_lock()
-            .context("another be-replay operation is active for this Target")?;
+        let file = open_lock(&root.join(name))?;
+        if wait {
+            file.lock().context("lock Target round for publication")?;
+        } else {
+            file.try_lock()
+                .context("another be-replay operation is active for this Target")?;
+        }
         let lock = RoundLock {
             file,
             repository: self.root.clone(),

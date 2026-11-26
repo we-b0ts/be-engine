@@ -1,10 +1,11 @@
 # Code Integrator
 
-Receive the coordinator's reviewed findings, canonical base, absolute
+Receive the coordinator's reviewed deliveries, canonical base, absolute
 integration worktree, and delivery commits selected for `integration_required`.
 Retain those identities while integrating and checking the candidate.
 
-1. Confirm each delivered commit and its finding against the frozen base.
+1. Confirm each delivered commit and its claimed sequences against the frozen
+   base.
 2. Integrate the exact commits in the assigned worktree. Resolve real conflicts
    while preserving the participating Source behavior and unrelated existing
    edits. Return behavior conflicts that need a new Source decision to the

@@ -233,6 +233,10 @@ async fn status_starts_a_new_round_on_approval_and_preserves_attempt_history() {
 }
 
 async fn seal_events(recording: &Path) {
+    seal_events_with_apis(recording, &[]).await;
+}
+
+async fn seal_events_with_apis(recording: &Path, requests: &[(u64, &str, &str)]) {
     fs::create_dir_all(recording).unwrap();
     let run_epoch = uuid::Uuid::new_v4();
     let process_epoch = uuid::Uuid::new_v4();
@@ -243,7 +247,8 @@ async fn seal_events(recording: &Path) {
         capacity: 4096,
         flush_interval: std::time::Duration::from_secs(1),
     });
-    for (index, (dependency, mut row)) in [
+    let mut sequence = 0;
+    for (dependency, mut row) in [
         (false, json!({"event_type": "source_start"})),
         (false, json!({"event_type": "ready"})),
         (
@@ -270,14 +275,10 @@ async fn seal_events(recording: &Path) {
             json!({"event_type": "wire_output", "dependency_sequence": 5,
             "output": {"kind": "end"}}),
         ),
-        (false, json!({"event_type": "stop"})),
-        (false, json!({"event_type": "source_exit", "status": 0})),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        row["sequence"] = json!(index + 1);
-        row["offset_micros"] = json!(index * 100);
+    ] {
+        sequence += 1;
+        row["sequence"] = json!(sequence);
+        row["offset_micros"] = json!((sequence - 1) * 100);
         if dependency {
             let row = serde_json::from_value(row).unwrap();
             ledger.append_event(&mut stream, &row).await.unwrap();
@@ -288,6 +289,32 @@ async fn seal_events(recording: &Path) {
                 .await
                 .unwrap();
         }
+    }
+    let mut offset = (sequence - 1) * 100;
+    for &(at, method, path) in requests {
+        sequence += 1;
+        offset = at;
+        let row = serde_json::from_value(json!({
+            "sequence":sequence, "offset_micros": offset, "event_type":"primary_request",
+            "exchange":uuid::Uuid::new_v4(), "request":{"method":method,"uri":path}
+        }))
+        .unwrap();
+        ledger
+            .append_session_event(&mut stream, &row)
+            .await
+            .unwrap();
+    }
+    for event in ["stop", "source_exit"] {
+        sequence += 1;
+        offset += 100;
+        let mut row = json!({"sequence":sequence, "offset_micros":offset, "event_type":event});
+        if event == "source_exit" {
+            row["status"] = json!(0);
+        }
+        ledger
+            .append_session_event(&mut stream, &serde_json::from_value(row).unwrap())
+            .await
+            .unwrap();
     }
     let files = ledger.seal(&mut stream).await.unwrap();
     let manifest = json!({
@@ -338,7 +365,11 @@ fn fixture_fix(root: &Path, work: &str, filename: &str, return_to: &str) -> Stri
 }
 
 fn run_attempt_with_invalid_source(root: &Path, args: &[&str]) -> Value {
+    let events = recording_dir(root).join("events.tsv");
+    let sealed = fs::read(&events).unwrap();
+    fs::write(&events, b"broken\n").unwrap();
     let output = command(root, args);
+    fs::write(events, sealed).unwrap();
     assert!(!output.status.success());
     serde_json::from_slice::<Value>(&output.stdout).unwrap_or_else(|error| {
         panic!(
@@ -347,25 +378,6 @@ fn run_attempt_with_invalid_source(root: &Path, args: &[&str]) -> Value {
         );
     })["session"]
         .clone()
-}
-
-fn fixture_recorded_routes(recording: &Path, routes: Value) {
-    let summary_path = recording.join("session-summary.json");
-    let mut summary: Value = serde_json::from_slice(&fs::read(&summary_path).unwrap()).unwrap();
-    summary["routes"] = routes;
-    let bytes = serde_json::to_vec(&summary).unwrap();
-    fs::write(summary_path, &bytes).unwrap();
-    let manifest_path = recording.join("dependency-manifest.json");
-    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    let identity = manifest["files"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|file| file["path"] == "session-summary.json")
-        .unwrap();
-    identity["length"] = json!(bytes.len());
-    identity["sha256"] = json!(traffic_recording_store::source::digest(&bytes));
-    fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 }
 
 fn run_as_passed(mut attempt: Value, api_total: usize) -> Value {
@@ -397,19 +409,17 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
 
     let recording = recording_dir(root);
     seal_events(&recording).await;
-    fs::write(recording.join("events.tsv"), b"broken\n").unwrap();
     let mut first = run_attempt_with_invalid_source(
         root,
         &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
     );
     let current_engine = first["engine_revision"].clone();
-    let attempt_id = first["attempt_id"].as_str().unwrap().to_owned();
     assert!(current_engine.is_string());
     publish_mismatch(first.clone(), 5);
     let status = || successful(command(root, &["status"]));
     let blocked = command(root, &["run"]);
     assert!(!blocked.status.success());
-    assert!(String::from_utf8_lossy(&blocked.stderr).contains("submit reviewed findings"));
+    assert_eq!(status()["action"]["kind"], "ownership_required");
 
     let report = recording.join("candidate.json");
     fs::write(
@@ -422,20 +432,10 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     let findings = recording.join("findings.json");
     fs::write(
         &findings,
-        json!({"first_unmatched":{
-            "root_cause":"fixture_mismatch", "summary":"Fixture mismatch",
-            "scope":"startup", "group":"startup", "sequences":[5]
-        }})
-        .to_string(),
+        json!({"ownership":{"seq":5,"scope":"startup","group":"startup"}}).to_string(),
     )
     .unwrap();
-    let plan = [
-        "plan",
-        "--attempt-id",
-        &attempt_id,
-        "--findings",
-        findings.to_str().unwrap(),
-    ];
+    let plan = ["plan", "--findings", findings.to_str().unwrap()];
     assert_eq!(
         successful(command(root, &plan))["action"]["kind"],
         "implementation_required"
@@ -446,7 +446,10 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     let round_file = fs::read_dir(traffic_e2e::internal_runtime::root(root).join("replay-rounds"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .find(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .unwrap();
     let mut round: Value = serde_json::from_slice(&fs::read(&round_file).unwrap()).unwrap();
     round.as_object_mut().unwrap().remove("attempted_engines");
@@ -512,7 +515,7 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
 
     publish_mismatch(next.clone(), 7);
     let current = status();
-    assert_eq!(current["action"]["kind"], "analysis_required");
+    assert_eq!(current["action"]["kind"], "ownership_required");
     assert_eq!(
         current["progress"],
         json!({"apis":"1/3","cases":"1/6","events":"6/9","previous_events":"4/9"})
@@ -523,12 +526,53 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     // fingerprint difference alone cannot reopen the consumed retry.
     next["engine_revision"] = old_engine;
     publish_mismatch(next, 7);
-    assert_eq!(status()["action"]["kind"], "analysis_required");
+    assert_eq!(status()["action"]["kind"], "ownership_required");
     assert!(!command(root, &["run"]).status.success());
 }
 
+fn submit(root: &Path, command_name: &str, flag: &str, value: Value) -> Output {
+    let file = recording_dir(root).join(format!("{command_name}-submission.json"));
+    fs::write(&file, value.to_string()).unwrap();
+    command(root, &[command_name, flag, file.to_str().unwrap()])
+}
+
+fn plan(root: &Path, value: Value) -> Output {
+    submit(root, "plan", "--findings", value)
+}
+
+fn report(root: &Path, value: Value) -> Output {
+    submit(root, "report", "--file", value)
+}
+
+fn group<'a>(state: &'a Value, group: &str) -> &'a Value {
+    state["action"]["details"]["assignments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["group"] == group)
+        .unwrap_or_else(|| panic!("missing assignment {group} in {state}"))
+}
+
+fn confirm_recording(root: &Path) -> Value {
+    successful(command(
+        root,
+        &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
+    ))
+}
+
+fn delivery(worker: &Value, commit: &str, seq: u64) -> Value {
+    json!({"kind":"fixes","fixes":[{"group":worker["group"],
+        "assignment_id":worker["assignment_id"],"commit":commit,
+        "sequences":[seq],"checks":["focused checks passed"]}]})
+}
+
+fn candidate(attempt: &Value, head: &str, included: &[&str]) -> Value {
+    json!({"kind":"candidate","attempt_id":attempt["attempt_id"],"commit":head,
+        "included_fixes":included,"checks":["integration checks passed"]})
+}
+
 #[tokio::test]
-async fn every_recorded_api_is_reviewed_and_missing_api_work_is_integrated() {
+async fn api_confirmation_gates_first_replay_but_missing_api_work_runs_in_parallel() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();
     configure(root);
@@ -537,390 +581,306 @@ async fn every_recorded_api_is_reviewed_and_missing_api_work_is_integrated() {
     git(root, &["add", ".traffic-e2e/apis.yaml"]);
     git(root, &["commit", "-qm", "existing catalog"]);
     let recording = recording_dir(root);
-    seal_events(&recording).await;
-    fixture_recorded_routes(
+    seal_events_with_apis(
         &recording,
-        json!([
-            {"method":"GET","path":"/users/1","requests":2,"first_seq":3},
-            {"method":"GET","path":"/users/2","requests":1,"first_seq":4},
-            {"method":"POST","path":"/new","requests":1,"first_seq":7}
-        ]),
-    );
-    fs::write(recording.join("events.tsv"), b"broken\n").unwrap();
+        &[
+            (800, "GET", "/users/1"),
+            (900, "GET", "/users/2"),
+            (1000, "POST", "/new"),
+        ],
+    )
+    .await;
+
     let inventory = successful(command(root, &["apis", "--recording-run-id", RECORDING_ID]));
-    assert_eq!(inventory["apis"][0]["requests"], 3);
+    assert_eq!(inventory["apis"][0]["requests"], 2);
     assert_eq!(inventory["apis"][0]["group"], "users");
     assert!(inventory["apis"][1].get("case_pattern").is_none());
 
-    let receipt = recording.join("receipt.json");
-    let report = |value: Value| {
-        fs::write(&receipt, value.to_string()).unwrap();
-        command(root, &["report", "--file", receipt.to_str().unwrap()])
-    };
-    let path = recording.join("findings.json");
-    let submit = |attempt: &str, value: Value| {
-        fs::write(&path, value.to_string()).unwrap();
-        command(
-            root,
-            &[
-                "plan",
-                "--attempt-id",
-                attempt,
-                "--findings",
-                path.to_str().unwrap(),
-            ],
-        )
-    };
-    let initial = run_attempt_with_invalid_source(
-        root,
-        &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
+    let preflight = confirm_recording(root);
+    assert_eq!(preflight["action"]["kind"], "api_review_required");
+    assert!(preflight["session"].is_null());
+    assert_eq!(
+        successful(command(root, &["run"]))["action"]["kind"],
+        "api_review_required"
     );
-    publish_mismatch(initial.clone(), 7);
-    let initial_id = initial["attempt_id"].as_str().unwrap();
-    let first_cause = "API review for api:POST /new";
-    successful(submit(
-        initial_id,
-        json!({"first_unmatched":{
-            "root_cause":first_cause,"summary":"First API divergence",
-            "scope":"api:POST /new","group":"new-api","sequences":[7]
-        }}),
-    ));
-    let branch = git(root, &["branch", "--show-current"]);
-    let first_fix = fixture_fix(root, "worker-first", "first.rs", &branch);
-    successful(report(
-        json!({"kind":"fixes","attempt_id":initial_id,"fixes":[{
-            "root_cause":first_cause,"commit":first_fix,"checks":["mismatch repaired"]
-        }]}),
-    ));
-    git(root, &["merge", "--ff-only", &first_fix]);
-    successful(report(json!({"kind":"candidate","attempt_id":initial_id,
-        "commit":first_fix,"included_fixes":[first_fix],"checks":["integration checked"]
-    })));
-    let passed = run_as_passed(run_attempt_with_invalid_source(root, &["run"]), 2);
-    let attempt = passed["attempt_id"].as_str().unwrap();
-    let status = || successful(command(root, &["status"]));
-    assert_eq!(status()["action"]["kind"], "api_review_required");
-    let review = |apis: Value| submit(attempt, json!({"apis":apis}));
     let known = json!({"api":"GET /users/*","implemented":true});
-    assert!(!review(json!([known])).status.success());
+    assert!(!plan(root, json!({"apis":[known]})).status.success());
     assert!(
-        !review(json!([known,{"api":"POST /new","implemented":false}]))
-            .status
-            .success()
+        !plan(
+            root,
+            json!({"apis":[known,{"api":"POST /new","implemented":false}]})
+        )
+        .status
+        .success()
     );
     fs::create_dir_all(root.join(".traffic-e2e/local/rewrite-worktrees/api-implementer-0"))
         .unwrap();
-    let planned = successful(review(json!([known,{"api":"POST /new","implemented":false,
-        "case_pattern":"/new","group":"new-api"}])));
-    let assignment = &planned["action"]["details"]["assignments"][0];
-    assert_eq!(assignment["name"], "api-implementer-1");
-    assert_eq!(assignment["apis"][0]["case_pattern"], "/new");
-    assert_eq!(assignment["findings"][0]["scope"], "api:POST /new");
-    assert_ne!(assignment["findings"][0]["root_cause"], first_cause);
-    assert_eq!(
-        status()["action"]["details"]["assignments"],
-        json!([{
-            "group": "new-api",
-            "name": "api-implementer-1",
-            "worktree": ".traffic-e2e/local/rewrite-worktrees/api-implementer-1",
-            "pending": 1,
-        }])
-    );
-    assert_eq!(
-        successful(command(root, &["status", "--with-assignments"]))["action"],
-        planned["action"]
-    );
-
-    let fix = fixture_fix(root, "worker-api", "new.rs", &branch);
-    successful(report(
-        json!({"kind":"fixes", "attempt_id":attempt, "fixes":[{
-            "root_cause":assignment["findings"][0]["root_cause"], "commit":fix, "checks":["API exercised"]
-        }]}),
+    let reviewed = successful(plan(
+        root,
+        json!({"apis":[known,{"api":"POST /new",
+        "implemented":false,"case_pattern":"/new","group":"new-api"}]}),
     ));
+    assert_eq!(reviewed["action"]["kind"], "advance_required");
+    let worker = group(&reviewed, "new-api");
+    assert_eq!(worker["name"], "api-implementer-1");
+    assert_eq!(worker["items"][0]["scope"], "api:POST /new");
+    assert_eq!(worker["items"][0]["apis"][0]["case_pattern"], "/new");
+
+    let attempt = run_attempt_with_invalid_source(root, &["run"]);
+    publish_mismatch(attempt.clone(), 10);
+    let failed = successful(command(root, &["status", "--with-assignments"]));
+    assert_eq!(failed["action"]["kind"], "implementation_required");
+    assert_eq!(group(&failed, "new-api")["worktree"], worker["worktree"]);
+
+    let branch = git(root, &["branch", "--show-current"]);
+    let fix = fixture_fix(root, "worker-api", "new.rs", &branch);
+    assert_eq!(
+        successful(report(root, delivery(worker, &fix, 10)))["action"]["kind"],
+        "integration_required"
+    );
     git(root, &["merge", "--ff-only", &fix]);
-    let candidate = |head: &str| {
-        json!({"kind":"candidate","attempt_id":attempt,
-        "commit":head,"included_fixes":[fix],"checks":["integration checked"]})
-    };
-    assert!(!report(candidate(&fix)).status.success());
+    assert!(
+        !report(root, candidate(&attempt, &fix, &[&fix]))
+            .status
+            .success()
+    );
     fs::write(&catalog, "users: [/users/*]\nnew-api: [/new]\n").unwrap();
     git(root, &["add", ".traffic-e2e/apis.yaml"]);
     git(root, &["commit", "-qm", "register new API"]);
     let head = git(root, &["rev-parse", "HEAD"]);
     assert_eq!(
-        successful(report(candidate(&head)))["action"]["kind"],
+        successful(report(root, candidate(&attempt, &head, &[&fix])))["action"]["kind"],
         "advance_required"
     );
-    run_as_passed(run_attempt_with_invalid_source(root, &["run"]), 2);
-    assert_eq!(status()["action"]["kind"], "complete");
+
+    let verified = run_as_passed(run_attempt_with_invalid_source(root, &["run"]), 2);
+    let status = successful(command(root, &["status"]));
+    assert_eq!(status["state"], "passed");
+    assert_status_attempt(&status, &json!({"session":verified}));
+    assert_eq!(status["action"]["kind"], "complete");
 }
 
 #[tokio::test]
-async fn first_unmatched_group_advances_replay_while_other_work_keeps_its_assignment() {
+async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_delivery() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();
     configure(root);
+    fs::write(
+        root.join(".traffic-e2e/apis.yaml"),
+        "users: [/users/*]\nbatch: [/users/me]\nlater: [/outside]\n",
+    )
+    .unwrap();
+    git(root, &["add", ".traffic-e2e/apis.yaml"]);
+    git(root, &["commit", "-qm", "recorded catalog"]);
     let recording = recording_dir(root);
-    seal_events(&recording).await;
-    // Run up to the sealed input check and simulate the matching engine's
-    // published failures. This exercises real CLI and Git without Docker.
-    fs::write(recording.join("events.tsv"), b"broken\n").unwrap();
-    let failed_run = |args: &[&str]| run_attempt_with_invalid_source(root, args);
-    let initial = failed_run(&["run", "--user-confirm", "--recording-run-id", RECORDING_ID]);
-    publish_mismatch(initial.clone(), 5);
-    let attempt_id = initial["attempt_id"].as_str().unwrap();
-    let status = || successful(command(root, &["status"]));
-    let detailed_status = || successful(command(root, &["status", "--with-assignments"]));
-    let failure = status();
+    seal_events_with_apis(
+        &recording,
+        &[
+            (800, "GET", "/users/1"),
+            (900, "GET", "/users/me"),
+            (950, "GET", "/users/me"),
+            (60_000_700, "GET", "/outside"),
+        ],
+    )
+    .await;
     assert_eq!(
-        failure["failure"],
-        json!({"seq":5,"expected":{"kind":"request","dependency_sequence":5},
-            "reason":"fixture mismatch","target_observation_id":uuid::Uuid::from_u128(2)})
+        confirm_recording(root)["action"]["kind"],
+        "api_review_required"
     );
-    assert_eq!(failure["action"]["kind"], "analysis_required");
-    assert_eq!(failure["action"]["details"]["role"], "issue-analyst");
-    assert_eq!(failure["phase"], "replaying");
     assert_eq!(
-        failure["progress"],
-        json!({"apis":"1/3","cases":"1/6","events":"4/9"})
-    );
-    assert!(failure["action"].get("commands").is_none());
-    assert_eq!(
-        failure["action"]["command"],
-        json!([
-            "plan",
-            "--attempt-id",
-            attempt_id,
-            "--findings",
-            "<findings.json>"
-        ])
-    );
-    let blocked = command(root, &["run"]);
-    assert!(!blocked.status.success());
-    assert!(String::from_utf8_lossy(&blocked.stderr).contains("submit reviewed findings"));
-    assert_eq!(status(), failure);
-
-    let findings = recording.join("findings.json");
-    let submit_findings = |attempt_id: &str, findings_value: Value| {
-        fs::write(&findings, serde_json::to_vec(&findings_value).unwrap()).unwrap();
-        command(
+        successful(plan(
             root,
-            &[
-                "plan",
-                "--attempt-id",
-                attempt_id,
-                "--findings",
-                findings.to_str().unwrap(),
-            ],
+            json!({"apis":[
+                {"api":"GET /users/*","implemented":true},
+                {"api":"GET /users/me","implemented":true},
+                {"api":"GET /outside","implemented":true}
+            ]})
+        ))["action"]["kind"],
+        "advance_required"
+    );
+
+    let initial = run_attempt_with_invalid_source(root, &["run"]);
+    publish_mismatch(initial.clone(), 5);
+    let status = || successful(command(root, &["status", "--with-assignments"]));
+    let failed = status();
+    assert_eq!(failed["failure"]["seq"], 5);
+    assert_eq!(failed["action"]["kind"], "ownership_required");
+    assert_eq!(failed["action"]["details"]["role"], "issue-analyst");
+    assert_eq!(
+        failed["action"]["command"],
+        json!(["plan", "--findings", "<ownership.json>"])
+    );
+    assert_eq!(
+        failed["action"]["details"]["assignments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(group(&failed, "users")["items"][0]["sequences"], json!([8]));
+    assert_eq!(
+        group(&failed, "batch")["items"][0]["sequences"],
+        json!([9, 10])
+    );
+    assert!(!command(root, &["run"]).status.success());
+    assert!(
+        !plan(
+            root,
+            json!({"ownership":{"seq":3,"scope":"job:sync_users","group":"sync"}})
         )
-    };
-    let later = json!({"root_cause":"later", "summary":"Independent Source dependency",
-        "scope":"job:sync_users", "group":"sync", "sequences":[3,7]});
-    let first = json!({"root_cause":"first", "summary":"First Source dependency",
-        "scope":"api:GET /users/{id}", "group":"users", "sequences":[5]});
-    let missing_first = submit_findings(attempt_id, json!({"others":[later]}));
-    assert!(!missing_first.status.success());
-    for (field, value) in [
-        ("code_paths", json!(["first.txt"])),
-        ("blocked_by", json!(["later"])),
-    ] {
-        let mut obsolete = first.clone();
-        obsolete[field] = value;
-        let rejected = submit_findings(attempt_id, json!({"first_unmatched":obsolete}));
-        assert!(!rejected.status.success());
-        assert!(String::from_utf8_lossy(&rejected.stderr).contains("unknown field"));
-    }
-    assert_eq!(status(), failure);
-    let initial_plan = successful(submit_findings(
-        attempt_id,
-        json!({"first_unmatched":first}),
+        .status
+        .success()
+    );
+
+    let assigned = successful(plan(
+        root,
+        json!({"ownership":{"seq":5,
+        "scope":"job:sync_users","group":"sync"}}),
     ));
-    assert_eq!(initial_plan["implementers"].as_array().unwrap().len(), 1);
-    let planned = successful(submit_findings(attempt_id, json!({"others":[later]})));
-    assert_eq!(planned["implementers"].as_array().unwrap().len(), 2);
-    assert_eq!(planned["implementers"][0]["root_cause"], "first");
-    assert_eq!(planned["implementers"][0]["scope"], "api:GET /users/{id}");
-    assert!(planned["implementers"][0].get("evidence").is_none());
-    assert_eq!(planned["action"]["details"]["first_unmatched"], "first");
-    let assignments = &planned["action"]["details"]["assignments"];
-    assert_eq!(assignments[0]["group"], "users");
-    assert_eq!(assignments[0]["name"], "api-implementer-0");
+    assert_eq!(assigned["action"]["kind"], "implementation_required");
     assert_eq!(
-        assignments[0]["worktree"],
-        ".traffic-e2e/local/rewrite-worktrees/api-implementer-0"
+        group(&assigned, "sync")["items"][0]["sequences"],
+        json!([5])
     );
     assert_eq!(
-        assignments[1]["worktree"],
-        ".traffic-e2e/local/rewrite-worktrees/api-implementer-1"
+        group(&assigned, "users")["worktree"],
+        group(&failed, "users")["worktree"]
     );
-    let compact = status();
-    assert_eq!(compact["action"]["kind"], "implementation_required");
-    assert_eq!(compact["failure"], failure["failure"]);
-    assert_eq!(compact["progress"], failure["progress"]);
-    assert_eq!(detailed_status()["action"], planned["action"]);
+
+    let branch = git(root, &["branch", "--show-current"]);
+    let job_fix = fixture_fix(root, "worker-job", "job.txt", &branch);
+    let users_fix = fixture_fix(root, "worker-users", "users.txt", &branch);
+    let batch_fix = fixture_fix(root, "worker-batch", "batch.txt", &branch);
+    let mut stale = delivery(group(&assigned, "users"), &users_fix, 8);
+    stale["fixes"][0]["assignment_id"] = json!(uuid::Uuid::new_v4());
+    assert!(!report(root, stale).status.success());
+    assert_eq!(
+        successful(report(
+            root,
+            delivery(group(&assigned, "users"), &users_fix, 8)
+        ))["action"]["kind"],
+        "implementation_required"
+    );
+    assert!(!command(root, &["run"]).status.success());
+    let ready = successful(report(
+        root,
+        delivery(group(&assigned, "sync"), &job_fix, 5),
+    ));
+    assert_eq!(ready["action"]["kind"], "integration_required");
+    assert_eq!(
+        ready["action"]["details"]["fixes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    git(root, &["merge", "--ff-only", &job_fix]);
+    assert!(
+        !report(root, candidate(&initial, &job_fix, &[&users_fix]))
+            .status
+            .success()
+    );
+    let published = successful(report(root, candidate(&initial, &job_fix, &[&job_fix])));
+    assert_eq!(published["action"]["kind"], "advance_required");
+    assert_eq!(
+        group(&published, "batch")["worktree"],
+        group(&failed, "batch")["worktree"]
+    );
+
+    let next = run_attempt_with_invalid_source(root, &["run"]);
+    // Exercise the live receipt path using the same lock and snapshot layout
+    // as a running Replay, without needing a Target image.
+    let attempt_dir = Path::new(next["progress"].as_str().unwrap())
+        .parent()
+        .unwrap();
+    let result = attempt_dir.join("event-result.json");
+    let terminal = fs::read(&result).unwrap();
+    fs::remove_file(&result).unwrap();
+    let running = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(attempt_dir.join("attempt.lock"))
+        .unwrap();
+    running.try_lock().unwrap();
+    let run_lock = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(traffic_e2e::internal_runtime::root(root).join("replay-run.lock"))
+        .unwrap();
+    run_lock.try_lock().unwrap();
+    assert_eq!(status()["state"], "running");
+    successful(report(
+        root,
+        delivery(group(&assigned, "batch"), &batch_fix, 9),
+    ));
+    assert_eq!(
+        group(&status(), "batch")["items"][0]["sequences"],
+        json!([10])
+    );
+    fs::write(result, terminal).unwrap();
+    drop(running);
+    drop(run_lock);
+
+    publish_mismatch(next.clone(), 8);
+    let promoted = status();
+    assert_eq!(promoted["action"]["kind"], "integration_required");
+    assert_eq!(
+        promoted["action"]["details"]["fixes"][0]["commit"],
+        users_fix
+    );
+    assert_eq!(
+        group(&promoted, "later")["items"][0]["sequences"],
+        json!([11])
+    );
+    assert_eq!(
+        group(&promoted, "batch")["worktree"],
+        group(&failed, "batch")["worktree"]
+    );
 
     seal_events(&recording.with_file_name(OTHER_RECORDING_ID)).await;
     let switched = successful(command(root, &["switch-recording-id", OTHER_RECORDING_ID]));
     assert_eq!(switched["state"], "not_started");
-    assert!(switched["session"].is_null());
     let restored = successful(command(root, &["switch-recording-id", RECORDING_ID]));
-    assert_eq!(restored["action"], planned["action"]);
-
-    let branch = git(root, &["branch", "--show-current"]);
-    let first_commit = fixture_fix(root, "worker-first", "first.txt", &branch);
-    let later_commit = fixture_fix(root, "worker-later", "later.txt", &branch);
-    let receipt = recording.join("receipt.json");
-    let report = |receipt_value: Value| {
-        fs::write(&receipt, serde_json::to_vec(&receipt_value).unwrap()).unwrap();
-        command(root, &["report", "--file", receipt.to_str().unwrap()])
-    };
-    let deliver = |attempt_id: &str, cause: &str, commit: &str| {
-        successful(report(
-            json!({"kind":"fixes", "attempt_id":attempt_id, "fixes":[{
-                "root_cause":cause, "commit":commit, "checks":["focused checks passed"]
-            }]}),
-        ))
-    };
-    let candidate = |attempt_id: &str, head: &str, commit: &str| {
-        json!({"kind":"candidate", "attempt_id":attempt_id, "commit":head,
-            "included_fixes":[commit], "checks":["integration checks passed"]})
-    };
-    let fixes = deliver(attempt_id, "first", &first_commit);
-    assert_eq!(fixes["action"]["kind"], "integration_required");
-    assert_eq!(
-        fixes["action"]["command"],
-        json!(["report", "--file", "<candidate.json>"])
-    );
-    assert_eq!(
-        fixes["action"]["details"]["fixes"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    let compact = status();
-    assert_eq!(compact["action"]["kind"], "integration_required");
-    assert_eq!(
-        compact["action"]["details"]["assignments"],
-        json!([{
-            "group": "sync",
-            "name": "api-implementer-1",
-            "worktree": ".traffic-e2e/local/rewrite-worktrees/api-implementer-1",
-            "pending": 1,
-        }])
-    );
-    assert_eq!(detailed_status()["action"], fixes["action"]);
-    assert!(
-        !report(candidate(attempt_id, &first_commit, &first_commit))
-            .status
-            .success()
-    );
-    git(root, &["merge", "--ff-only", &first_commit]);
-    let unrelated_attempt = uuid::Uuid::new_v4().to_string();
-    assert!(
-        !report(candidate(&unrelated_attempt, &first_commit, &first_commit))
-            .status
-            .success()
-    );
-    let registered = successful(report(candidate(attempt_id, &first_commit, &first_commit)));
-    assert_eq!(registered["action"]["kind"], "advance_required");
-    assert_eq!(registered["action"]["command"], json!(["run"]));
-    assert_eq!(detailed_status()["action"], registered["action"]);
-
-    let second = failed_run(&["run"]);
-    assert_eq!(second["target_commit"], first_commit);
-    let second_id = second["attempt_id"].as_str().unwrap();
-    assert_ne!(second_id, attempt_id);
-    assert_eq!(status()["action"]["kind"], "setup_required");
-    publish_mismatch(second.clone(), 7);
-    assert_eq!(status()["action"]["kind"], "analysis_required");
-    assert_eq!(status()["failure"]["seq"], 7);
-
-    let late_delivery = deliver(attempt_id, "later", &later_commit);
-    assert_eq!(late_delivery["action"]["kind"], "analysis_required");
-    let planned = successful(submit_findings(second_id, json!({"first_unmatched":later})));
-    let integration = &planned["action"];
-    assert_eq!(integration["kind"], "integration_required");
-    assert_eq!(integration["details"]["fixes"][0]["attempt_id"], attempt_id);
-    assert_eq!(integration["details"]["fixes"][0]["commit"], later_commit);
-
-    git(root, &["cherry-pick", &later_commit]);
-    let head = git(root, &["rev-parse", "HEAD"]);
-    let registered = successful(report(candidate(second_id, &head, &later_commit)));
-    assert_eq!(registered["action"]["kind"], "advance_required");
-    let passed = failed_run(&["run"]);
-    assert_eq!(passed["target_commit"], head);
-    run_as_passed(passed, 0);
-    let verified = status();
-    assert_eq!(verified["state"], "passed");
-    assert_eq!(verified["progress"]["events"], "9/9");
-    assert_eq!(verified["action"]["kind"], "complete");
-    assert!(verified.get("failure").is_none());
-    fs::write(root.join("later.txt"), "new unverified input").unwrap();
-    let changed = status();
-    assert_eq!(changed["state"], "candidate_changed");
-    assert_eq!(changed["action"]["kind"], "advance_required");
+    assert_eq!(restored["action"], promoted["action"]);
 }
 
 #[tokio::test]
-async fn an_assigned_implementer_can_escalate_the_first_unmatched_group() {
+async fn an_assigned_implementer_can_escalate_the_current_failed_sequence() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();
     configure(root);
     let recording = recording_dir(root);
     seal_events(&recording).await;
-    fs::write(recording.join("events.tsv"), b"broken\n").unwrap();
     let run = run_attempt_with_invalid_source(
         root,
         &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
     );
     publish_mismatch(run.clone(), 5);
 
-    let findings = recording.join("findings.json");
-    fs::write(
-        &findings,
-        json!({"first_unmatched":{
-            "root_cause":"first", "summary":"Missing interaction", "scope":"startup", "group":"startup", "sequences":[5]
-        }})
-        .to_string(),
-    )
-    .unwrap();
-    let plan = |attempt: &Value| {
-        successful(command(
-            root,
-            &[
-                "plan",
-                "--attempt-id",
-                attempt["attempt_id"].as_str().unwrap(),
-                "--findings",
-                findings.to_str().unwrap(),
-            ],
-        ))
-    };
-    let assigned = plan(&run);
+    let assigned = successful(plan(
+        root,
+        json!({
+            "ownership":{"seq":5,"scope":"startup","group":"startup"}
+        }),
+    ));
     assert_eq!(assigned["action"]["kind"], "implementation_required");
-    assert_eq!(assigned["implementers"][0]["scope"], "startup");
+    assert_eq!(group(&assigned, "startup")["items"][0]["scope"], "startup");
 
-    let file = recording.join("engine-gap.json");
-    fs::write(
-        &file,
-        json!({"kind":"engine_gap", "attempt_id":run["attempt_id"], "root_cause":"first",
-            "evidence":"Source seq 5 and the Target observation show the same request."})
-        .to_string(),
-    )
-    .unwrap();
-    let reported = successful(command(root, &["report", "--file", file.to_str().unwrap()]));
+    let reported = successful(report(
+        root,
+        json!({
+            "kind":"engine_gap","group":"startup","sequences":[5],
+            "assignment_id":group(&assigned, "startup")["assignment_id"],
+            "evidence":"Source seq 5 and the Target observation show the same request."
+        }),
+    ));
     assert_eq!(reported["action"]["kind"], "setup_required");
     assert_eq!(
-        successful(command(root, &["status"]))["action"],
+        successful(command(root, &["status", "--with-assignments"]))["action"],
         reported["action"]
     );
 
-    let retry = run_attempt_with_invalid_source(root, &["run"]);
-    assert_ne!(retry["attempt_id"], run["attempt_id"]);
-    assert_eq!(retry["target_commit"], run["target_commit"]);
-    publish_mismatch(retry.clone(), 5);
-    assert_eq!(plan(&retry)["action"]["kind"], "implementation_required");
+    assert!(!command(root, &["run"]).status.success());
 }
 
 #[tokio::test]

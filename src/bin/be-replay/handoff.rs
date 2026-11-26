@@ -1,4 +1,4 @@
-//! Reviewed work, delivery receipts, and candidate admission for a Replay round.
+//! Persist Replay handoffs by recording, and admit candidates that address the current failure.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
@@ -7,18 +7,17 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use traffic_e2e::{
-    E2eEventSessionResult,
-    event_work::{
-        ApiConfirmation, DispatchPlan, Finding, Findings, normalize, validate_max_implementers,
-        validate_scope,
-    },
+    E2eEventSessionResult, config::api_catalog, event_work::ApiConfirmation, session,
 };
 use uuid::Uuid;
 
 mod api_review;
-mod assignments;
+mod groups;
 #[cfg(test)]
 mod tests;
+
+use api_review::ApiReview;
+use groups::{Fix, Gap, Groups, WorkItem};
 
 const DEFAULT_IMPLEMENTERS: usize = 16;
 
@@ -28,89 +27,64 @@ pub(super) enum AssignmentDetail {
     Full,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub(super) struct Workflow {
-    repair: Option<Repair>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    earlier: BTreeMap<Uuid, Repair>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    api_review: Option<api_review::ApiReview>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Repair {
-    attempt_id: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    base_commit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    failed_sequence: Option<u64>,
-    #[serde(default, alias = "blocker", skip_serializing_if = "Option::is_none")]
-    first_unmatched: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    api_work: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    worktrees: BTreeMap<String, usize>,
-    #[serde(default = "default_implementers")]
+    api_review: Option<ApiReview>,
+    api_work_queued: bool,
+    groups: Groups,
     max_implementers: usize,
-    #[serde(deserialize_with = "read_saved_plan")]
-    plan: DispatchPlan,
-    fixes: Option<Vec<Fix>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    engine_gaps: BTreeMap<String, EngineGap>,
+    window: Option<Window>,
+    failure: Option<Failure>,
+    owners: BTreeMap<String, Ownership>,
     candidate: Option<Candidate>,
 }
 
-fn default_implementers() -> usize {
-    DEFAULT_IMPLEMENTERS
-}
-
-fn read_saved_plan<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<DispatchPlan, D::Error> {
-    let mut plan = Value::deserialize(deserializer)?;
-    let legacy_coordinator = plan
-        .as_object_mut()
-        .and_then(|plan| plan.remove("coordinator"));
-    if let Some(Value::Array(legacy_waiting)) = legacy_coordinator
-        && let Some(waiting) = plan.get_mut("waiting").and_then(Value::as_array_mut)
-    {
-        waiting.extend(legacy_waiting);
-    }
-    for group in ["implementers", "waiting"] {
-        if let Some(findings) = plan.get_mut(group).and_then(Value::as_array_mut) {
-            findings.retain_mut(|finding| {
-                finding.as_object_mut().is_none_or(|entry| {
-                    entry.remove("kind");
-                    entry.remove("evidence");
-                    entry.remove("code_paths");
-                    entry.remove("blocked_by");
-                    entry.remove("basis").as_ref().and_then(Value::as_str) != Some("hypothesis")
-                })
-            });
+impl Default for Workflow {
+    fn default() -> Self {
+        Self {
+            api_review: None,
+            api_work_queued: false,
+            groups: Groups::default(),
+            max_implementers: DEFAULT_IMPLEMENTERS,
+            window: None,
+            failure: None,
+            owners: BTreeMap::new(),
+            candidate: None,
         }
     }
-    serde_json::from_value(plan).map_err(serde::de::Error::custom)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EngineGap {
-    evidence: String,
-    reported_during: Uuid,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    retried_on: Option<Uuid>,
+#[derive(Debug, Serialize, Deserialize)]
+struct Window {
+    from_seq: u64,
+    through_seq: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Fix {
-    root_cause: String,
-    commit: String,
-    checks: Vec<String>,
+#[derive(Debug, Serialize, Deserialize)]
+struct Failure {
+    attempt_id: Uuid,
+    seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Candidate {
+pub(super) struct Ownership {
+    pub seq: u64,
+    pub scope: String,
+    pub group: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Plan {
+    pub apis: Option<Vec<ApiConfirmation>>,
+    pub ownership: Option<Ownership>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Candidate {
+    attempt_id: Uuid,
     commit: String,
     included_fixes: BTreeSet<String>,
     checks: Vec<String>,
@@ -120,12 +94,18 @@ pub(super) struct Candidate {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Receipt {
     Fixes {
-        attempt_id: Uuid,
         fixes: Vec<Fix>,
     },
+    Review {
+        group: String,
+        assignment_id: Uuid,
+        sequences: BTreeSet<u64>,
+        checks: Vec<String>,
+    },
     EngineGap {
-        attempt_id: Uuid,
-        root_cause: String,
+        group: String,
+        assignment_id: Uuid,
+        sequences: BTreeSet<u64>,
         evidence: String,
     },
     Candidate {
@@ -136,448 +116,431 @@ pub(super) enum Receipt {
     },
 }
 
+impl Receipt {
+    pub fn is_candidate(&self) -> bool {
+        matches!(self, Self::Candidate { .. })
+    }
+}
+
 impl Workflow {
-    pub(super) fn confirm_apis(
+    pub fn needs_api_review(&self, target: &Path, recording: &Path) -> Result<bool> {
+        Ok(self.api_review.is_none() && !session::recorded_apis(target, recording)?.is_empty())
+    }
+
+    pub fn confirm_apis(
         &mut self,
         target: &Path,
         recording: &Path,
-        confirmations: Vec<ApiConfirmation>,
-        submissions: &Findings,
+        rows: Vec<ApiConfirmation>,
     ) -> Result<()> {
         if let Some(review) = &self.api_review {
-            return review.check_resubmission(confirmations);
+            return review.check_resubmission(rows);
         }
-        let current = self
-            .repair
-            .iter()
-            .filter(|repair| repair.candidate.is_none());
-        let related: Vec<_> = submissions
-            .first_unmatched
-            .iter()
-            .chain(&submissions.others)
-            .chain(current.flat_map(Repair::findings))
-            .filter(|finding| {
-                !self
-                    .repairs()
-                    .any(|repair| repair.has_delivery(&finding.root_cause))
-            })
-            .collect();
-        let used_causes = self
-            .repairs()
-            .flat_map(Repair::findings)
-            .chain(
-                submissions
-                    .first_unmatched
-                    .iter()
-                    .chain(&submissions.others),
-            )
-            .map(|finding| finding.root_cause.as_str())
-            .collect();
-        let review =
-            api_review::ApiReview::load(target, recording, confirmations, &related, &used_causes)?;
-        self.api_review = Some(review);
+        self.api_review = Some(ApiReview::load(target, recording, rows)?);
         Ok(())
     }
 
-    pub(super) fn apis_reviewed(&self) -> bool {
-        self.api_review.is_some()
+    pub fn set_max_implementers(&mut self, max: usize) -> Result<()> {
+        traffic_e2e::event_work::validate_max_implementers(max)?;
+        self.max_implementers = max;
+        Ok(())
     }
 
-    pub(super) fn has_pending_api_work(&self) -> bool {
-        self.pending_api_findings().next().is_some()
+    pub fn needs_api_work_queue(&self) -> bool {
+        self.api_review.is_some() && !self.api_work_queued
     }
 
-    pub(super) fn max_implementers(&self) -> usize {
-        self.repair
-            .as_ref()
-            .map_or(DEFAULT_IMPLEMENTERS, |repair| repair.max_implementers)
-    }
-
-    fn pending_api_findings(&self) -> impl Iterator<Item = &Finding> {
-        self.api_review
-            .iter()
-            .flat_map(|review| review.tasks.values())
-            .filter_map(|task| {
-                let included = self
-                    .repair
-                    .iter()
-                    .chain(self.earlier.values())
-                    .any(|owner| owner.fix_was_integrated(self, &task.finding.root_cause));
-                (!included).then_some(&task.finding)
-            })
-    }
-
-    pub(super) fn queue_api_repairs(
-        &mut self,
-        attempt: &E2eEventSessionResult,
-        max_implementers: usize,
-    ) -> Result<()> {
-        let attempt_id = attempt.attempt_id.parse()?;
-        let mut findings: Vec<_> = self.pending_api_findings().cloned().collect();
-        findings.sort_by_key(|finding| finding.sequences.first().copied());
-        let Some(first) = findings.first() else {
-            return Ok(());
+    pub fn queue_api_work(&mut self, base: &str) {
+        let Some(review) = self.api_review.as_ref().filter(|_| !self.api_work_queued) else {
+            return;
         };
-        validate_max_implementers(max_implementers)?;
-        let mut repair = self.current(attempt).cloned().unwrap_or_else(|| Repair {
-            attempt_id,
-            base_commit: attempt.target_commit.clone(),
-            failed_sequence: None,
-            first_unmatched: None,
-            api_work: None,
-            worktrees: BTreeMap::new(),
-            max_implementers,
-            plan: DispatchPlan::default(),
-            fixes: None,
-            engine_gaps: BTreeMap::new(),
-            candidate: None,
-        });
-        repair.api_work = Some(first.root_cause.clone());
-        repair.max_implementers = max_implementers;
-        self.retire_replayed_gap(attempt_id);
-        repair.plan = self.schedule(&repair, findings);
-        if let Some(previous) = self.repair.replace(repair)
-            && previous.attempt_id != attempt_id
+        for task in review.tasks.values() {
+            self.groups.enqueue(
+                &task.assignment.group,
+                WorkItem {
+                    scope: task.assignment.scope.clone(),
+                    sequences: task.assignment.sequences.clone(),
+                    apis: task.apis.clone(),
+                },
+                base,
+            );
+        }
+        self.api_work_queued = true;
+    }
+
+    pub fn failure_observed(&self, attempt: &E2eEventSessionResult, seq: u64) -> bool {
+        self.failure.as_ref().is_some_and(|failure| {
+            failure.seq == seq && attempt_uuid(attempt).ok() == Some(failure.attempt_id)
+        })
+    }
+
+    pub fn observe_failure(
+        &mut self,
+        target: &Path,
+        recording: &Path,
+        base: &str,
+        attempt: &E2eEventSessionResult,
+        seq: u64,
+    ) -> Result<()> {
+        if self.failure_observed(attempt, seq) {
+            return Ok(());
+        }
+        let replayed_same_sequence = self
+            .failure
+            .as_ref()
+            .is_some_and(|failure| failure.seq == seq);
+        let window_owner = if self
+            .window
+            .as_ref()
+            .is_some_and(|window| window.from_seq == seq)
         {
-            self.earlier.insert(previous.attempt_id, previous);
+            None
+        } else {
+            let after = self
+                .window
+                .as_ref()
+                .filter(|window| (window.from_seq..=window.through_seq).contains(&seq))
+                .map_or(0, |window| window.through_seq);
+            let window = session::dispatch_window(target, recording, seq, after)?;
+            for api in window.apis {
+                if let Some((scope, group)) = self.api_scope(&api.api, api.group.as_deref()) {
+                    self.groups.enqueue(
+                        &group,
+                        WorkItem {
+                            scope,
+                            sequences: api.sequences,
+                            apis: Vec::new(),
+                        },
+                        base,
+                    );
+                }
+            }
+            self.window = Some(Window {
+                from_seq: window.from_seq,
+                through_seq: window.through_seq,
+            });
+            window.failure_owner
+        };
+        self.failure = Some(Failure {
+            attempt_id: attempt_uuid(attempt)?,
+            seq,
+        });
+        if let Some(owner) = self.owners.get(&seq.to_string()).cloned() {
+            if replayed_same_sequence {
+                self.groups.dismiss_gap(&owner.group, seq);
+            }
+            self.enqueue_owner(&owner, base);
+        } else if let Some(owner) = window_owner {
+            let resolved = if let Some(label) = owner.scope.strip_prefix("api:") {
+                self.api_scope(label, owner.group.as_deref())
+            } else {
+                owner.group.map(|group| (owner.scope, group))
+            };
+            if let Some((scope, group)) = resolved {
+                self.set_owner(Ownership { seq, scope, group }, base)?;
+            }
         }
         Ok(())
     }
 
-    pub(super) fn current_plan(&self, attempt: &E2eEventSessionResult) -> Option<&DispatchPlan> {
-        self.current(attempt).map(|repair| &repair.plan)
-    }
-
-    pub(super) fn set_plan(
-        &mut self,
-        attempt: &E2eEventSessionResult,
-        failed_sequence: u64,
-        submissions: Findings,
-        max_implementers: usize,
-    ) -> Result<&DispatchPlan> {
-        let attempt_id = attempt.attempt_id.parse()?;
-        let base_commit = attempt
-            .target_commit
-            .as_deref()
-            .context("attempt lacks Target identity")?;
-        validate_max_implementers(max_implementers)?;
+    pub fn set_owner(&mut self, mut owner: Ownership, base: &str) -> Result<()> {
         ensure!(
-            failed_sequence > 0,
-            "the failed attempt has no Source sequence to plan"
+            self.failure
+                .as_ref()
+                .is_some_and(|failure| failure.seq == owner.seq),
+            "ownership must describe the current failed sequence"
         );
-        let current = self
-            .repair
-            .as_ref()
-            .filter(|repair| repair.attempt_id == attempt_id);
-        let existing_first = current.and_then(|repair| repair.first_unmatched.as_deref());
-        let Findings {
-            first_unmatched,
-            others,
-            apis: _,
-        } = submissions;
-        for finding in first_unmatched.iter().chain(&others) {
-            validate_scope(finding)?;
-            if let Some(previous) = current.and_then(|repair| repair.finding(&finding.root_cause)) {
-                ensure!(
-                    previous
-                        .group
-                        .as_ref()
-                        .is_none_or(|group| Some(group) == finding.group.as_ref()),
-                    "finding {} already belongs to group {}",
-                    finding.root_cause,
-                    previous.dispatch_group()
-                );
-            }
-        }
-        if let Some(finding) = &first_unmatched {
-            ensure!(
-                finding.sequences.contains(&failed_sequence),
-                "first_unmatched must cover the first failed sequence {failed_sequence}"
-            );
-            ensure!(
-                existing_first.is_none_or(|cause| cause == finding.root_cause),
-                "the current attempt already has a different first_unmatched group"
-            );
-        }
-        let first_cause = first_unmatched
-            .as_ref()
-            .map(|finding| finding.root_cause.as_str())
-            .or(existing_first)
-            .with_context(|| {
-                format!("submit first_unmatched for the first failed sequence {failed_sequence}")
-            })?
-            .to_owned();
-        ensure!(
-            others
-                .iter()
-                .all(|finding| finding.root_cause != first_cause),
-            "submit changes to the first unmatched group under first_unmatched"
-        );
-        let combined = normalize(
-            self.pending_api_findings()
-                .chain(current.into_iter().flat_map(Repair::findings))
-                .cloned()
-                .chain(first_unmatched)
-                .chain(others)
-                .collect(),
-        )?;
-        if let Some(repair) = current {
-            ensure!(
-                repair
-                    .failed_sequence
-                    .is_none_or(|sequence| sequence == failed_sequence)
-                    && repair
-                        .base_commit
-                        .as_deref()
-                        .is_none_or(|commit| commit == base_commit),
-                "the reviewed plan belongs to another failure or Target revision"
-            );
-            if repair.candidate.is_some() {
-                ensure!(
-                    combined == normalize(repair.findings().cloned().collect())?,
-                    "this attempt already has an integrated candidate"
-                );
-                return Ok(&self.repair.as_ref().expect("current repair").plan);
-            }
-        }
-        let mut repair = current.cloned().unwrap_or_else(|| Repair {
-            attempt_id,
-            base_commit: None,
-            failed_sequence: None,
-            first_unmatched: None,
-            api_work: None,
-            worktrees: BTreeMap::new(),
-            max_implementers,
-            plan: DispatchPlan::default(),
-            fixes: None,
-            engine_gaps: BTreeMap::new(),
-            candidate: None,
-        });
-        repair.base_commit = Some(base_commit.to_owned());
-        repair.failed_sequence = Some(failed_sequence);
-        repair.first_unmatched = Some(first_cause);
-        repair.max_implementers = max_implementers;
-        self.retire_replayed_gap(attempt_id);
-        repair.plan = self.schedule(&repair, combined);
-        if let Some(previous) = self.repair.replace(repair)
-            && previous.attempt_id != attempt_id
+        if let Some(label) = owner.scope.strip_prefix("api:")
+            && let Some((scope, group)) = self.api_scope(label, None)
         {
-            self.earlier.insert(previous.attempt_id, previous);
+            ensure!(owner.group == group, "use the confirmed API group {group}");
+            owner.scope = scope;
         }
-        Ok(&self.repair.as_ref().expect("plan just assigned").plan)
+        api_catalog::validate_group(&owner.group)?;
+        validate_scope(&owner.scope)?;
+        let key = owner.seq.to_string();
+        if let Some(prior) = self.owners.get(&key) {
+            ensure!(prior == &owner, "this Source sequence already has an owner");
+        } else {
+            self.owners.insert(key, owner.clone());
+        }
+        self.enqueue_owner(&owner, base);
+        Ok(())
     }
 
-    pub(super) fn report(
+    fn api_scope(&self, label: &str, known_group: Option<&str>) -> Option<(String, String)> {
+        self.api_review
+            .as_ref()
+            .and_then(|review| review.api_scope(label))
+            .or_else(|| known_group.map(|group| (format!("api:{label}"), group.to_owned())))
+    }
+
+    fn enqueue_owner(&mut self, owner: &Ownership, base: &str) {
+        if self.groups.gap(&owner.group, owner.seq).is_none()
+            && !self.groups.pending(&owner.group, owner.seq)
+            && !self
+                .groups
+                .ready_fixes()
+                .any(|fix| fix.group == owner.group && fix.sequences.contains(&owner.seq))
+        {
+            self.groups.reopen(
+                &owner.group,
+                WorkItem {
+                    scope: owner.scope.clone(),
+                    sequences: [owner.seq].into(),
+                    apis: Vec::new(),
+                },
+                base,
+            );
+        }
+    }
+
+    pub fn active_worktree_slots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.groups.active_slots()
+    }
+
+    pub fn reserve_worktrees(&mut self, allocate: impl FnMut() -> Result<usize>) -> Result<()> {
+        self.groups.reserve(self.max_implementers, allocate)
+    }
+
+    pub fn with_assignments(&self, mut action: Value, detail: AssignmentDetail) -> Value {
+        let assignments = self.groups.assignments(detail);
+        if assignments.as_array().is_some_and(|rows| !rows.is_empty()) {
+            action["details"]["assignments"] = assignments;
+        }
+        action
+    }
+
+    pub fn implementation_action(&self) -> Value {
+        let (kind, summary) = if self.groups.has_active_assignments() {
+            (
+                "implementation_required",
+                "Dispatch or follow the assigned groups.",
+            )
+        } else {
+            (
+                "wait_required",
+                "Wait for an available implementer or an updated handoff.",
+            )
+        };
+        json!({
+            "kind":kind, "summary":summary,
+            "details":{"role":"api-implementer"}, "command":["report","--file","<delivery.json>"]
+        })
+    }
+
+    pub fn failed_action(&self, seq: u64) -> Value {
+        let Some(owner) = self.owners.get(&seq.to_string()) else {
+            return json!({
+                "kind":"ownership_required", "summary":"Identify the owner of the current failed event.",
+                "details":{"role":"issue-analyst", "seq":seq},
+                "command":["plan","--findings","<ownership.json>"]
+            });
+        };
+        if let Some(mut action) = self.integration_action(Some(owner)) {
+            action["details"]["group"] = json!(owner.group);
+            return action;
+        }
+        if let Some(gap) = self.groups.gap(&owner.group, seq) {
+            return json!({
+                "kind":"setup_required",
+                "summary":"Resolve the reported engine gap, then retry Replay.",
+                "details":{"group":owner.group, "scope":owner.scope, "evidence":gap.evidence},
+                "command":["run"]
+            });
+        }
+        let mut action = self.implementation_action();
+        action["details"]["group"] = json!(owner.group);
+        action["details"]["scope"] = json!(owner.scope);
+        action
+    }
+
+    pub fn pending_api_work(&self) -> bool {
+        self.groups.has_pending_api_work()
+    }
+
+    pub fn has_lookahead_work(&self) -> bool {
+        self.groups.has_lookahead_work()
+    }
+
+    pub fn retire_lookahead_work(&mut self) {
+        self.groups.retire_lookahead_work();
+    }
+
+    pub fn integration_action(&self, owner: Option<&Ownership>) -> Option<Value> {
+        let fixes: Vec<_> = self.groups.ready_fixes().collect();
+        if fixes.is_empty() || !fixes.iter().any(|fix| covers(owner, fix)) {
+            return None;
+        }
+        Some(json!({
+            "kind":"integration_required",
+            "summary":"Integrate the accepted delivery and any compatible ready fixes.",
+            "details":{"role":"code-integrator", "fixes":fixes},
+            "command":["report","--file","<candidate.json>"]
+        }))
+    }
+
+    pub fn candidate_commit(&self, attempt: &E2eEventSessionResult) -> Option<&str> {
+        let id = attempt_uuid(attempt).ok()?;
+        self.candidate
+            .as_ref()
+            .filter(|candidate| candidate.attempt_id == id)
+            .map(|candidate| candidate.commit.as_str())
+    }
+
+    pub fn has_candidate(&self, attempt: &E2eEventSessionResult) -> bool {
+        self.candidate_commit(attempt).is_some()
+    }
+
+    pub fn report(
         &mut self,
         root: &Path,
         head: &str,
-        attempt: &E2eEventSessionResult,
+        attempt: Option<&E2eEventSessionResult>,
+        seq: Option<u64>,
         receipt: Receipt,
     ) -> Result<()> {
         match receipt {
-            Receipt::Fixes { attempt_id, fixes } => {
-                self.accept_fixes(root, attempt_id, fixes)?;
-                self.refresh_assignments(attempt);
+            Receipt::Fixes { fixes } => self.groups.accept_fixes(root, fixes),
+            Receipt::Review {
+                group,
+                assignment_id,
+                sequences,
+                checks,
+            } => {
+                ensure!(
+                    seq.is_none_or(|seq| !sequences.contains(&seq)),
+                    "the current failed sequence requires a repair or an engine gap"
+                );
+                self.groups.review(&group, assignment_id, sequences, checks)
             }
             Receipt::EngineGap {
-                attempt_id,
-                root_cause,
+                group,
+                assignment_id,
+                sequences,
                 evidence,
-            } => {
-                self.accept_engine_gap(
-                    attempt_id,
-                    &root_cause,
-                    evidence,
-                    attempt.attempt_id.parse()?,
-                )?;
-                self.refresh_assignments(attempt);
-            }
+            } => self.groups.accept_gap(Gap {
+                group,
+                assignment_id,
+                sequences,
+                evidence,
+            }),
             Receipt::Candidate {
                 attempt_id,
                 commit,
                 included_fixes,
                 checks,
             } => {
-                let candidate = Candidate {
-                    commit,
-                    included_fixes,
-                    checks,
-                };
-                let repair = self
-                    .current(attempt)
-                    .context("submit a reviewed plan for the current failed attempt first")?;
-                let failed_commit = attempt
-                    .target_commit
-                    .as_deref()
-                    .context("attempt lacks Target identity")?;
-                ensure!(
-                    attempt_id == repair.attempt_id,
-                    "candidate refers to a stale attempt"
-                );
-                ensure!(
-                    candidate.commit == head,
-                    "candidate commit must be the current branch HEAD"
-                );
-                if repair.candidate.as_ref() == Some(&candidate) {
-                    return Ok(());
-                }
-                let first = repair
-                    .priority()
-                    .context("no scheduled repair to integrate")?;
-                let accepted = self.accepted_fix(first)
-                    .context("record the accepted fix for the first unmatched group before publishing a candidate")?;
-                ensure!(
-                    candidate.included_fixes == BTreeSet::from([accepted.commit.to_owned()]),
-                    "candidate must include exactly the accepted first unmatched fix"
-                );
-                validate_checks(&candidate.checks)?;
-                if let Some(review) = &self.api_review {
-                    review.validate_candidate(
-                        root,
-                        self.repairs()
-                            .flat_map(|repair| repair.fixes.iter().flatten())
-                            .filter_map(|fix| {
-                                candidate
-                                    .included_fixes
-                                    .contains(&fix.commit)
-                                    .then_some(fix.root_cause.as_str())
-                            }),
-                    )?;
-                }
-                ensure!(
-                    head != failed_commit,
-                    "candidate must advance the failed revision after integration"
-                );
-                ensure!(
-                    is_ancestor(root, failed_commit, head)?,
-                    "candidate must descend from the failed revision {failed_commit}"
-                );
-                self.repair.as_mut().expect("current plan").candidate = Some(candidate);
+                let attempt =
+                    attempt.context("publish a candidate for a finished Replay attempt")?;
+                self.accept_candidate(
+                    root,
+                    head,
+                    attempt,
+                    seq,
+                    Candidate {
+                        attempt_id,
+                        commit,
+                        included_fixes,
+                        checks,
+                    },
+                )
             }
         }
-        Ok(())
     }
 
-    pub(super) fn next(&self, attempt: &E2eEventSessionResult, head: &str) -> Option<Value> {
-        self.next_with_assignment_detail(attempt, head, AssignmentDetail::Full)
-    }
-
-    pub(super) fn next_with_assignment_detail(
-        &self,
-        attempt: &E2eEventSessionResult,
+    fn accept_candidate(
+        &mut self,
+        root: &Path,
         head: &str,
-        detail: AssignmentDetail,
-    ) -> Option<Value> {
-        let repair = self.current(attempt)?;
-        let attempt_id = repair.attempt_id.simple().to_string();
-        let base_commit = &attempt.target_commit;
-        if let Some(candidate) = &repair.candidate {
-            return Some(if candidate.commit == head {
-                let action = json!({
-                    "kind":"advance_required", "summary":"Verify the registered Target candidate.",
-                    "details":{"candidate_commit":candidate.commit},
-                    "command":["run"]
-                });
-                self.with_parallel_assignments(action, detail)
-            } else {
-                json!({
-                    "kind":"setup_required", "summary":"Restore the registered Target candidate, then retry.",
-                    "details":{"candidate_commit":candidate.commit, "head":head},
-                    "command":["run"]
-                })
-            });
-        }
-        let first = repair
-            .priority()
-            .filter(|cause| repair.finding(cause).is_some())?;
-        if let Some(gap) = self.engine_gap(repair, first) {
-            return Some(json!({
-                "kind":"setup_required", "summary":"Resolve the reported engine gap, then retry Replay.",
-                "details":gap, "command":["run"]
-            }));
-        }
-        if let Some(fix) = self.accepted_fix(first) {
-            let action = json!({
-                "kind":"integration_required", "summary":"Integrate the accepted fix for the current priority.",
-                "details":{"role":"code-integrator", "attempt_id":attempt_id, "base_commit":base_commit, "fixes":[fix]},
-                "command":["report", "--file", "<candidate.json>"]
-            });
-            return Some(self.with_parallel_assignments(action, detail));
-        }
-        let assignments = self.current_assignments(first);
-        if assignments.is_empty() {
-            return None;
-        }
-        let assignments = assignments::assignment_rows(&assignments, detail);
-        Some(json!({
-            "kind":"implementation_required", "summary":"Assign or follow the eligible Replay fixes.",
-            "details":{"role":"api-implementer", "first_unmatched":repair.first_unmatched, "priority":first, "assignments":assignments},
-            "command":["report", "--file", "<delivery.json>"]
-        }))
-    }
-
-    pub(super) fn with_parallel_assignments(
-        &self,
-        mut action: Value,
-        detail: AssignmentDetail,
-    ) -> Value {
-        let assignments = self.current_assignments("");
-        if !assignments.is_empty() {
-            action["details"]["assignments"] = assignments::assignment_rows(&assignments, detail);
-        }
-        action
-    }
-
-    pub(super) fn require_replay_candidate(
-        &self,
         attempt: &E2eEventSessionResult,
-        head: &str,
+        seq: Option<u64>,
+        candidate: Candidate,
     ) -> Result<()> {
-        let Some(repair) = self.current(attempt) else {
+        ensure!(
+            candidate.attempt_id == attempt_uuid(attempt)?,
+            "candidate refers to a stale attempt"
+        );
+        ensure!(
+            candidate.commit == head,
+            "candidate commit must be the current branch HEAD"
+        );
+        if self.candidate.as_ref() == Some(&candidate) {
             return Ok(());
-        };
-        if let Some(candidate) = &repair.candidate {
-            ensure!(
-                candidate.commit == head,
-                "restore the registered candidate {} before running Replay",
-                candidate.commit
-            );
-        } else if let Some(first) = repair.priority() {
-            ensure!(
-                self.engine_gap(repair, first).is_some(),
-                "register the integrated candidate before running Replay; inspect be-replay status"
-            );
         }
+        ensure!(
+            !self.has_candidate(attempt),
+            "a candidate is already registered for this attempt"
+        );
+        validate_checks(&candidate.checks)?;
+        let previous = attempt
+            .target_commit
+            .as_deref()
+            .context("attempt lacks Target identity")?;
+        ensure!(
+            previous != head && is_ancestor(root, previous, head)?,
+            "candidate must advance the Target revision {previous}"
+        );
+        let owner = seq
+            .map(|seq| {
+                self.owners
+                    .get(&seq.to_string())
+                    .context("confirm the current failed event's owner")
+            })
+            .transpose()?;
+        let ready: Vec<_> = self
+            .groups
+            .ready_fixes()
+            .filter(|fix| candidate.included_fixes.contains(&fix.commit))
+            .collect();
+        ensure!(
+            ready
+                .iter()
+                .map(|fix| &fix.commit)
+                .collect::<BTreeSet<_>>()
+                .len()
+                == candidate.included_fixes.len(),
+            "candidate includes an unaccepted or already integrated delivery"
+        );
+        ensure!(
+            ready.iter().any(|fix| covers(owner, fix)),
+            "candidate must include an accepted delivery covering the current failure"
+        );
+        ApiReview::validate_catalog(root, self.groups.api_work_for(&candidate.included_fixes))?;
+        self.groups.mark_integrated(&candidate.included_fixes);
+        self.candidate = Some(candidate);
         Ok(())
     }
+}
 
-    pub(super) fn has_candidate(&self, attempt: &E2eEventSessionResult) -> bool {
-        self.current(attempt)
-            .is_some_and(|repair| repair.candidate.is_some())
-    }
+fn attempt_uuid(attempt: &E2eEventSessionResult) -> Result<Uuid> {
+    Ok(attempt.attempt_id.parse()?)
+}
 
-    fn current(&self, attempt: &E2eEventSessionResult) -> Option<&Repair> {
-        let attempt_id = attempt.attempt_id.parse::<Uuid>().ok()?;
-        self.repair
-            .as_ref()
-            .filter(|repair| repair.attempt_id == attempt_id)
-    }
+fn covers(owner: Option<&Ownership>, fix: &Fix) -> bool {
+    owner.is_none_or(|owner| owner.group == fix.group && fix.sequences.contains(&owner.seq))
+}
 
-    fn refresh_assignments(&mut self, attempt: &E2eEventSessionResult) {
-        if let Some(repair) = self
-            .current(attempt)
-            .filter(|repair| repair.candidate.is_none())
-        {
-            let Some(first) = repair.priority() else {
-                return;
-            };
-            if self.accepted_fix(first).is_some() || self.engine_gap(repair, first).is_some() {
-                return;
-            }
-            let plan = self.schedule(repair, repair.findings().cloned().collect());
-            self.repair.as_mut().expect("current plan").plan = plan;
-        }
-    }
+fn validate_scope(scope: &str) -> Result<()> {
+    let is_api = scope
+        .strip_prefix("api:")
+        .and_then(|api| api.split_once(' '))
+        .is_some_and(|(method, path)| {
+            !method.is_empty()
+                && method
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'-')
+                && path.starts_with('/')
+                && !path.contains(char::is_whitespace)
+        });
+    let is_job = scope
+        .strip_prefix("job:")
+        .is_some_and(|name| !name.is_empty() && !name.contains(char::is_whitespace));
+    ensure!(
+        is_api || is_job || matches!(scope, "startup" | "shutdown"),
+        "scope must be api:METHOD /path, job:NAME, startup, or shutdown"
+    );
+    Ok(())
 }
 
 fn validate_checks(checks: &[String]) -> Result<()> {

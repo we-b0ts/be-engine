@@ -1,10 +1,9 @@
 # Rewrite Coordinator
 
-Use [Source Session regression](session-regression.md) for commands and the
-finding format. You own the canonical Target, publication, and Replay. The
-Issue Analyst classifies the first failed event and checks which recorded APIs
-are implemented. Implementers confirm the diagnosis and repair their groups.
-The integrator combines their exact commits.
+You own the canonical Target, publication, and Replay. The Issue Analyst
+confirms recorded APIs and identifies the owner of the failed event when the
+engine requests it. Implementers diagnose and repair their assigned groups.
+The integrator combines the selected commits. [Source Session regression](session-regression.md)
 
 ## Run and inspect
 
@@ -24,44 +23,37 @@ active Replay for a Target.
   before Replay, planning, and candidate publication.
 - For `setup_required`, investigate the reported setup error. Apply proven
   [startup inputs](coordinator-startup-inputs.md).
-- For `analysis_required`, check the task runtime for
-  an active analyst for the same attempt. Reuse that assignment or dispatch
-  the read-only `issue-analyst` role. Pass `recording_id`, `session.attempt_id`,
-  `failure.seq`, available failure evidence, and the Source and Target
-  repository locations and revisions. Request the first finding immediately.
-  When `action.details.api_review_required` is true, start the API review
-  concurrently and submit it as a separate delivery when ready.
-  See [Issue Analyst](issue-analyst.md).
-- For `api_review_required`, obtain or reuse the analyst's complete API review
-  and submit it against the current finished attempt. If an earlier attempt
-  has already advanced, attach the review to the next eligible attempt and
-  check the current catalog and implementation first.
+- For `api_review_required`, obtain the complete API review and submit it
+  using `plan --findings FILE`. Dispatch the missing API implementations and
+  start the first Replay when `status` allows it.
+- For `ownership_required`, check for an active analyst for `failure.seq` or
+  dispatch the read-only `issue-analyst` role. Pass the recording ID, failed
+  attempt, sequence, evidence, and the Source and Target locations and
+  revisions. Request only the event's scope and group, then submit its
+  `ownership` record using `plan --findings FILE`. [Issue Analyst](issue-analyst.md)
 
 ## Implement and verify
 
-Review the analyst's findings JSON and run the `plan` in `action.command`
-for that attempt. Confirm that `first_unmatched.sequences` contains `failure.seq`.
-Check each finding's `scope` and dispatch `group`, and check complete inventory
-coverage when submitting `apis`. See [Finding format](session-regression.md#plan-implement-and-verify).
+Check that the API review covers the sealed inventory. For a requested
+ownership record, check that `seq` matches `failure.seq` and that its scope
+and group follow the recorded evidence. [Plan format](session-regression.md#plan-implement-and-verify)
 
-For `implementation_required`, dispatch each eligible entry in
-`action.details.assignments` to one `api-implementer`. Use the full entries
-returned by `plan`, `report`, or `status --with-assignments` for worker
-handoffs. Use the supplied `name` and resolve `worktree` against the canonical
-Target root. Create the worktree at `base_commit` if needed. Pass the
-originating attempt, `findings`, any `apis` entries, and the evidence query
-context. Reuse the active worker for updates to its group. The engine promotes
-waiting groups as slots open. Set `--max-implementers` to the slots available
-to this round. Check the task runtime when work stops. If a worker exits
-without a delivery, resume it or reassign its existing reservation, using the
-same worker name and worktree. Include the Source sequence from the finding
-in the handoff. Coordinate any overlapping edits with the implementers and
-integrator.
+Dispatch each entry in `action.details.assignments` to one `api-implementer`
+while you follow the action for the round. Use `status --with-assignments`
+for the full handoff. Resolve `worktree` against the canonical Target root
+and create it at `base_commit` if needed. Pass the group, `assignment_id`,
+recording and attempt context when available, the assigned scopes and
+sequences, and any API work.
+Reuse the active worker and worktree for new items in the same group. The
+engine can assign other groups as slots open. Set `--max-implementers` to
+the slots available to this round. If a worker exits before delivering, resume
+or reassign its reservation using the same name and worktree.
 
-Register each ready delivery with `report --file FILE`, using its originating
-attempt ID, `root_cause`, exact commit, and focused check results. Handle
-required startup inputs before Replay. Use the same delivery flow for time,
-ID, and token policy changes. [Rule actions](coordinator-rule-actions.md)
+Register ready work with `report --file FILE` using the assigned group,
+`assignment_id`, exact sequences, and checks. Include the full commit ID for
+a code or policy repair. Keep the recording and assignment from the original
+handoff when receiving a late delivery. Deliveries can arrive while Replay
+runs. Handle required startup inputs before the relevant Replay. [Rule actions](coordinator-rule-actions.md)
 
 If an implementer confirms an engine gap, review its evidence and register the
 `engine_gap` receipt. Give the engine owner the recording and attempt IDs,
@@ -70,7 +62,7 @@ accounts for the first unmatched event, use the `setup_required` retry after
 the engine is fixed. [Report format](session-regression.md#plan-implement-and-verify)
 
 For `integration_required`, give the
-[code integrator](code-integrator.md) the selected fix and canonical base.
+[code integrator](code-integrator.md) the selected fixes and canonical base.
 Publish the exact candidate after checking that the canonical base
 still matches, then register it with `report --file FILE` for the current
 finished attempt. Apply supported coordinator-owned inputs as needed.

@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use traffic_model::{
     recording::identity::IdentityKind, session::SessionEvent, trace::RecordedEvent,
@@ -21,6 +22,11 @@ use crate::{
 };
 
 pub const FILE: &str = "events.tsv";
+
+mod window;
+pub use window::{
+    PrimaryDispatchWindow, PrimaryRoute, WindowFailureOwner, primary_dispatch_window,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimaryEventKind {
@@ -416,16 +422,20 @@ fn linked_exchange<'a>(
     recording_id: Uuid,
     sequence: u64,
 ) -> Result<Uuid> {
-    let cell = field(cells, "primary request sequence")?;
+    let request = linked_request_sequence(field(cells, "primary request sequence")?, sequence)?;
+    Ok(IdentityKind::Case.bridge(recording_id, request))
+}
+
+fn linked_request_sequence(cell: &[u8], sequence: u64) -> Result<u64> {
     let request: u64 = parse(cell, "primary request sequence")?;
     ensure!(
         request > 0 && request < sequence,
         "primary event has no preceding request sequence"
     );
-    Ok(IdentityKind::Case.bridge(recording_id, request))
+    Ok(request)
 }
 
-fn decode_document(cell: &[u8], segments: &mut SegmentWindow) -> Result<Value> {
+fn decode_document<T: DeserializeOwned>(cell: &[u8], segments: &mut SegmentWindow) -> Result<T> {
     if cell.starts_with(b"path:") {
         return Ok(serde_json::from_slice(
             &segments.read(&parse_reference(cell)?)?,
