@@ -33,6 +33,12 @@ pub struct RedisPolicy {
         deserialize_with = "traffic_policy_schema::strict_map::unique_map"
     )]
     pub keys: BTreeMap<String, GlobalField>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "traffic_policy_schema::strict_map::unique_map"
+    )]
+    pub key_identities: BTreeMap<String, GlobalField>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,12 +50,15 @@ pub struct HttpPolicy {
     pub headers: BTreeMap<String, GlobalField>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_metadata: Vec<traffic_protocol_http::request_metadata::RequestMetadataRule>,
+    #[serde(default, rename = "requests", skip_serializing_if = "Vec::is_empty")]
+    pub request_sigv4: Vec<traffic_protocol_http::request_sigv4::SigV4RequestRule>,
 }
 impl HttpPolicy {
     pub fn compile(&self, context: &crate::AuthoringContext<'_>) -> anyhow::Result<Self> {
         use anyhow::ensure;
         let mut headers = BTreeMap::new();
         traffic_protocol_http::request_metadata::validate_rules(&self.request_metadata)?;
+        traffic_protocol_http::request_sigv4::validate_rules(&self.request_sigv4)?;
         ensure!(
             self.headers.len() <= 4096,
             "http.headers exceeds 4096 entries"
@@ -98,6 +107,7 @@ impl HttpPolicy {
         Ok(Self {
             headers,
             request_metadata: self.request_metadata.clone(),
+            request_sigv4: self.request_sigv4.clone(),
         })
     }
 }

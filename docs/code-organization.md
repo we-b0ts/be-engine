@@ -2480,10 +2480,12 @@ explicit repository-wide audit.
 
 - `policy/authoring/api` owns API codec/envelope/header bindings and shared DOCX
   field declarations; signature positions delegate to the signature owner.
-  `policy/authoring/http` owns compact request path-identity declarations
-  and the separate `http.response_rewrite` acquisition list. Both lower to existing native owners, preserve Source proofs
-  and fold only lossless canonical forms. Ordered capture precedence remains
-  independent of generated IDs and rendering groups.
+  `policy/authoring/http` owns compact HTTP request declarations and the separate
+  `http.response_rewrite` acquisition list. Path identities and response rewrites
+  lower to native owners that preserve Source proofs and fold only lossless
+  canonical forms. `protocol-http/src/request_sigv4.rs` owns exact SigV4 request
+  selectors and authorization matching projections. Ordered capture precedence
+  remains independent of generated IDs and rendering groups.
   `policy/authoring/recording` groups independent async lifecycle and case path
   declarations. Only case paths lower to HTTP acquisition with their original
   Source revision/capture identity. The document adapter accepts the legacy

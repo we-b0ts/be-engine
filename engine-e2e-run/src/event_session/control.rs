@@ -10,8 +10,12 @@ use tokio::{
 };
 
 use super::E2eEventSessionProgress;
+use crate::{
+    replay::control::MAX_CONTROL_BYTES,
+    value_contract::{identities::IdentityPair, response_constraints::MAX_PAIRS},
+};
 
-const FRAME_LIMIT: usize = 16 * 1024;
+const REPLY_LIMIT: usize = 16 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) struct SessionControl {
@@ -43,11 +47,23 @@ impl SessionControl {
     }
 
     pub(super) async fn commit(&self, sequence: u64) -> Result<()> {
-        self.request(
-            json!({"command":"session_commit","sequence":sequence}),
-            Some(COMMAND_TIMEOUT),
-        )
-        .await?;
+        self.commit_with_response_identities(sequence, &[]).await
+    }
+
+    pub(super) async fn commit_with_response_identities(
+        &self,
+        sequence: u64,
+        pairs: &[IdentityPair],
+    ) -> Result<()> {
+        let mut request = json!({"command":"session_commit","sequence":sequence});
+        if !pairs.is_empty() {
+            ensure!(
+                pairs.len() <= MAX_PAIRS,
+                "response identity constraint bound exceeded"
+            );
+            request["identity_pairs"] = serde_json::to_value(pairs)?;
+        }
+        self.request(request, Some(COMMAND_TIMEOUT)).await?;
         Ok(())
     }
 
@@ -95,7 +111,7 @@ impl SessionControl {
             let mut stream = UnixStream::connect(&self.socket).await?;
             let mut frame = serde_json::to_vec(&request)?;
             ensure!(
-                frame.len() < FRAME_LIMIT,
+                frame.len() < MAX_CONTROL_BYTES,
                 "Replay control request exceeds its limit"
             );
             frame.push(b'\n');
@@ -107,11 +123,11 @@ impl SessionControl {
         let receive = async {
             let mut reply = Vec::new();
             BufReader::new(stream)
-                .take((FRAME_LIMIT + 1) as u64)
+                .take((REPLY_LIMIT + 1) as u64)
                 .read_until(b'\n', &mut reply)
                 .await?;
             ensure!(
-                reply.len() <= FRAME_LIMIT,
+                reply.len() <= REPLY_LIMIT,
                 "Replay control reply exceeds its limit"
             );
             let reply: Value = serde_json::from_slice(&reply)?;

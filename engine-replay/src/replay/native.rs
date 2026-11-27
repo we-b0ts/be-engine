@@ -9,6 +9,7 @@ use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
 pub mod diagnosis;
 mod global_report;
+mod http_request_time;
 mod redis_storage;
 mod report;
 pub mod request;
@@ -471,7 +472,14 @@ impl Inventory {
         let (request_bindings, request_policy) =
             match contracts.native_request_bindings(exchange)? {
                 Some(bindings) => (bindings, None),
-                None => (rules.request, contracts.document_policy(clocks)),
+                None => {
+                    let mut bindings = rules.request;
+                    if let Some(request) = exchange.request() {
+                        bindings.extend(contracts.additional_request_bindings(request)?);
+                        bindings.extend(http_request_time::binding(request, clocks, &bindings)?);
+                    }
+                    (bindings, contracts.document_policy(clocks))
+                }
             };
         let response = exchange
             .response
@@ -640,6 +648,21 @@ impl Inventory {
         );
         self.contracts
             .configure_session_identities(Self::EVENT_SESSION_VALUE_SCOPE, dependency_count)
+    }
+
+    pub fn commit_session_response_identities(
+        &self,
+        pairs: &[traffic_contract::identity::IdentityPair],
+    ) -> Result<()> {
+        ensure!(
+            self.event_session,
+            "session response identities require event Session Replay"
+        );
+        let identity =
+            self.contracts
+                .preview_identity_pairs(Self::EVENT_SESSION_VALUE_SCOPE, pairs, false)?;
+        self.contracts
+            .commit_comparison(Default::default(), identity)
     }
 
     pub fn scope(&self, index: usize) -> String {

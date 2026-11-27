@@ -475,6 +475,7 @@ async fn apply(
             return control.commit(sequence).await;
         }
     };
+    let mut response_identities = Vec::new();
     let completed = match event {
         SessionEvent::SourceStart => {
             control.commit(sequence).await?;
@@ -528,7 +529,7 @@ async fn apply(
             None
         }
         SessionEvent::PrimaryResponseEnd { exchange } => {
-            http.end(exchange).await?;
+            response_identities = http.end(exchange).await?;
             Some(exchange)
         }
         SessionEvent::PrimaryCancel { exchange, reason } => {
@@ -549,7 +550,9 @@ async fn apply(
             Some(exchange)
         }
     };
-    control.commit(sequence).await?;
+    control
+        .commit_with_response_identities(sequence, &response_identities)
+        .await?;
     if let Some(exchange) = completed {
         live.lock()
             .expect("Replay driver progress")

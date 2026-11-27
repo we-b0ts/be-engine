@@ -270,6 +270,15 @@ impl SequenceRuntime {
     }
 
     pub fn commit_driver(&self, sequence: u64) -> Result<()> {
+        self.commit_driver_with(sequence, |_| Ok(()))
+    }
+
+    /// Apply an accepted driver's observation before publishing sequence progress.
+    pub fn commit_driver_with(
+        &self,
+        sequence: u64,
+        before_advance: impl FnOnce(SourceEvent) -> Result<()>,
+    ) -> Result<()> {
         let mut state = self.state.lock().expect("sequence runtime poisoned");
         ensure!(
             self.driver_due_at_frontier(&state, sequence)
@@ -280,7 +289,7 @@ impl SequenceRuntime {
             .scheduler
             .expected()
             .is_some_and(|event| event.kind == EventKind::SessionSourceExit);
-        state.scheduler.commit_driver(sequence)?;
+        state.scheduler.commit_driver(sequence, before_advance)?;
         state.target_exited |= source_exit;
         state.record_progress();
         let notifications = state.notifications(true);

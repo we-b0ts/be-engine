@@ -500,14 +500,12 @@ fn compare_prepared(
     let service = context.host;
     let rules = providers.bindings().for_protocol(owner.kind.as_str());
     let comparison = match (&source.request, &target.request) {
-        (Some(source), Some(target)) => {
-            let request = crate::value_extensions::prepare_message_with_policy(
-                source.as_ref(),
-                &rules.request,
-                service.document_policy(context.clocks),
-            )?;
-            Some(request.compare(target.as_ref(), context.clocks, service.metadata())?)
-        }
+        (Some(source), Some(target)) => Some(compare_request(
+            source.as_ref(),
+            target.as_ref(),
+            rules.request,
+            context,
+        )?),
         (None, None) => {
             ensure!(
                 side == MessageSide::Response,
@@ -582,26 +580,52 @@ fn compare_source_message(
     let bindings = providers
         .bindings()
         .for_protocol(exchange.reference.protocol());
-    let (message, bindings) = if surface == Surface::DependencyResponse {
-        clocks.observation = Some(clocks.delivery);
-        (
-            exchange.response.as_ref() as &dyn traffic_protocol::message::ProtocolMessage,
-            &bindings.response,
-        )
-    } else {
-        (
-            exchange
-                .request()
-                .context("native output-only evidence has no request")?,
-            &bindings.request,
-        )
-    };
+    if surface == Surface::DependencyRequest {
+        let request = exchange
+            .request()
+            .context("native output-only evidence has no request")?;
+        return compare_request(
+            request,
+            request,
+            bindings.request,
+            &CompareContext {
+                host: service,
+                clocks,
+            },
+        );
+    }
+    clocks.observation = Some(clocks.delivery);
+    let message = exchange.response.as_ref();
     let prepared = crate::value_extensions::prepare_message_with_policy(
         message,
-        bindings,
+        &bindings.response,
         service.document_policy(clocks),
     )?;
     prepared.compare(message, clocks, service.metadata())
+}
+
+fn compare_request(
+    source: &dyn traffic_protocol::message::ProtocolMessage,
+    target: &dyn traffic_protocol::message::ProtocolMessage,
+    mut bindings: Vec<traffic_policy_value::RuleBinding>,
+    context: &CompareContext<'_>,
+) -> Result<Comparison> {
+    let host = context.host;
+    bindings.extend(host.additional_request_bindings(source)?);
+    let prepared = crate::value_extensions::prepare_message_with_policy(
+        source,
+        &bindings,
+        host.document_policy(context.clocks),
+    )?;
+    let mut comparison = prepared.compare(target, context.clocks, host.metadata())?;
+    if comparison
+        .evaluated
+        .iter()
+        .any(|id| id.starts_with("global.redis.key."))
+    {
+        comparison.evaluated.insert("global.redis".into());
+    }
+    Ok(comparison)
 }
 
 fn value_service(policy: &CompiledPolicy) -> Result<crate::policy::runtime::RequestContracts> {

@@ -176,6 +176,10 @@ struct MetadataRequest {
 }
 
 impl ProtocolMessage for MetadataRequest {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn project(&self) -> Result<ProjectedMessage> {
         Ok(ProjectedMessage {
             structure: self.projection.structure.clone(),
@@ -211,6 +215,20 @@ pub(crate) fn tls_target_request(raw: Arc<dyn ProtocolMessage>) -> Arc<dyn Proto
 
 struct TlsRequest {
     raw: Arc<dyn ProtocolMessage>,
+}
+
+/// The HTTP values stored underneath an optional transport or metadata view.
+pub(crate) fn wire_request(mut raw: &dyn ProtocolMessage) -> Option<&RequestMessage> {
+    loop {
+        let message = raw.as_any()?;
+        if let Some(tls) = message.downcast_ref::<TlsRequest>() {
+            raw = tls.raw.as_ref();
+        } else if let Some(metadata) = message.downcast_ref::<MetadataRequest>() {
+            raw = metadata.raw.as_ref();
+        } else {
+            return message.downcast_ref::<RequestMessage>();
+        }
+    }
 }
 
 impl ProtocolMessage for TlsRequest {

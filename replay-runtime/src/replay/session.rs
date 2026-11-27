@@ -8,6 +8,7 @@ mod tests;
 use super::*;
 use std::time::Duration;
 use tokio::time::Instant;
+use traffic_contract::identity::IdentityPair;
 use traffic_recording_store::{
     session::PrimaryEventKind,
     session_timeline::{self, SessionTimelineEvent},
@@ -244,8 +245,12 @@ async fn control_result<P: ReplayProtocolSet>(
 ) -> Result<()> {
     let mut locked = state.lock().await;
     ensure!(locked.finalized_at.is_none(), "Replay is already finalized");
-    let session = locked
-        .session_events
+    let RuntimeState {
+        native,
+        session_events,
+        ..
+    } = &mut *locked;
+    let session = session_events
         .as_mut()
         .context("session event Replay is not enabled")?;
     if request.command == "session_status" {
@@ -272,7 +277,24 @@ async fn control_result<P: ReplayProtocolSet>(
         );
     }
     if request.command == "session_commit" {
-        if let Err(error) = session.runtime.commit_driver(sequence) {
+        let committed = if let Some(pairs) = request.parameters.get("identity_pairs") {
+            // The driver already asserted the complete response and its formats.
+            let pairs: Vec<IdentityPair> = serde_json::from_value(serde_json::to_value(pairs)?)?;
+            ensure!(
+                pairs.len() <= crate::value_contract::response_constraints::MAX_PAIRS,
+                "response identity constraint bound exceeded"
+            );
+            session.runtime.commit_driver_with(sequence, |event| {
+                ensure!(
+                    event.kind == EventKind::PrimaryResponseEnd,
+                    "response identities require a primary response end"
+                );
+                native.commit_session_response_identities(&pairs)
+            })
+        } else {
+            session.runtime.commit_driver(sequence)
+        };
+        if let Err(error) = committed {
             session.fail(Some(sequence), None, &error.to_string());
         }
         return Ok(());

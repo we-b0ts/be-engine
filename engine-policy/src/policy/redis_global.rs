@@ -1,4 +1,4 @@
-//! Physical Redis scalar formats; structured values use the global JSON strategy.
+//! Redis key-segment identities and scalar value formats selected by physical keys.
 use super::GlobalField;
 use crate::policy::GlobalFieldRuntime;
 use anyhow::{Result, ensure};
@@ -12,11 +12,31 @@ pub const GLOBAL_REDIS_ID: &str = "global.redis";
 pub struct RedisPolicy {
     #[serde(default, deserialize_with = "super::strict_map::unique_map")]
     pub keys: BTreeMap<String, GlobalField>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "super::strict_map::unique_map"
+    )]
+    pub key_identities: BTreeMap<String, GlobalField>,
+}
+
+pub struct RedisKeyIdentity<'a> {
+    pub prefix: &'a str,
+    pub suffix: &'a str,
+    pub field: &'a GlobalField,
 }
 
 impl RedisPolicy {
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.keys.len() <= 4096, "redis.keys exceeds 4096 entries");
+        let identity_only = self
+            .key_identities
+            .keys()
+            .filter(|pattern| !self.keys.contains_key(*pattern))
+            .count();
+        ensure!(
+            self.keys.len() + identity_only <= 4096,
+            "redis.keys exceeds 4096 entries"
+        );
         for (pattern, field) in &self.keys {
             ensure!(
                 !pattern.is_empty()
@@ -45,7 +65,35 @@ impl RedisPolicy {
                 );
             }
         }
+        let identities = self.key_identities.iter().collect::<Vec<_>>();
+        for (index, (pattern, field)) in identities.iter().enumerate() {
+            traffic_policy_document::authoring::redis_keys::key_format::affixes(pattern)?;
+            ensure!(
+                matches!(field, GlobalField::Identity { .. }),
+                "standalone Redis key_format requires an identity format"
+            );
+            field.validate()?;
+            for (other, _) in &identities[index + 1..] {
+                ensure!(
+                    !overlap(pattern, other),
+                    "Redis key identity patterns {pattern:?} and {other:?} overlap"
+                );
+            }
+        }
         Ok(())
+    }
+
+    // Applicability comes from the recorded key. The identity is the complete
+    // wildcard segment, including any prefix declared by its identity format.
+    pub fn key_identity(&self, key: &[u8]) -> Option<RedisKeyIdentity<'_>> {
+        self.key_identities.iter().find_map(|(pattern, field)| {
+            let (prefix, suffix) = pattern.split_once('*')?;
+            matches_affixes(prefix, suffix, key).then_some(RedisKeyIdentity {
+                prefix,
+                suffix,
+                field,
+            })
+        })
     }
 
     #[allow(dead_code)]
@@ -66,13 +114,15 @@ impl RedisPolicy {
 
 fn matches(pattern: &str, value: &[u8]) -> bool {
     match pattern.split_once('*') {
-        Some((prefix, suffix)) => {
-            value.len() >= prefix.len() + suffix.len()
-                && value.starts_with(prefix.as_bytes())
-                && value.ends_with(suffix.as_bytes())
-        }
+        Some((prefix, suffix)) => matches_affixes(prefix, suffix, value),
         None => pattern.as_bytes() == value,
     }
+}
+
+fn matches_affixes(prefix: &str, suffix: &str, value: &[u8]) -> bool {
+    value.len() >= prefix.len() + suffix.len()
+        && value.starts_with(prefix.as_bytes())
+        && value.ends_with(suffix.as_bytes())
 }
 
 fn overlap(left: &str, right: &str) -> bool {

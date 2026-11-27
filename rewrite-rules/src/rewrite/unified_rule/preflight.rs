@@ -170,7 +170,7 @@ pub fn verify(
                 && policy
                     .redis
                     .as_ref()
-                    .is_some_and(|redis| redis.keys.is_empty())
+                    .is_some_and(|redis| redis.keys.is_empty() && redis.key_identities.is_empty())
             || id == crate::policy::GLOBAL_HTTP_ID
                 && policy
                     .http

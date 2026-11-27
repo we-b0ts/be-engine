@@ -1,6 +1,7 @@
 //! Compact HTTP carrier positions; native effects retain execution ownership.
 use super::*;
 use serde::{Deserialize, Deserializer, Serialize};
+use traffic_protocol_http::request_sigv4::SigV4RequestRule;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10,9 +11,16 @@ pub struct HttpDocument {
     #[serde(default)]
     pub request_metadata: Vec<traffic_protocol_http::request_metadata::RequestMetadataRule>,
     #[serde(default)]
-    pub requests: Vec<PathRequest>,
+    pub requests: Vec<RequestDeclaration>,
     #[serde(default)]
     pub response_rewrite: Vec<ResponseRewrite>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum RequestDeclaration {
+    PathIdentity(PathRequest),
+    SigV4(SigV4RequestRule),
 }
 
 pub fn optional_headers<'de, D: Deserializer<'de>>(

@@ -168,7 +168,10 @@ pub fn compact(
         let existing: Request = if collection == "response_rewrite" {
             serde_yaml::from_value::<ResponseRewrite>(existing.clone())?.into()
         } else {
-            serde_yaml::from_value::<PathRequest>(existing.clone())?.into()
+            match serde_yaml::from_value(existing.clone())? {
+                RequestDeclaration::PathIdentity(path) => path.into(),
+                RequestDeclaration::SigV4(_) => continue,
+            }
         };
         ensure!(
             position(&existing)? != selected,

@@ -151,11 +151,11 @@ pub fn redis_document(
         return Ok((None, vec![]));
     };
     let has_settings = value.keys.is_some();
-    let (keys, generated) = redis_keys::expand(value.keys.unwrap_or_default(), context)?;
+    let (policy, generated) = redis_keys::expand(value.keys.unwrap_or_default(), context)?;
     let policy = if !has_settings && value.rules.is_some() {
         None
     } else {
-        Some(crate::RedisPolicy { keys })
+        Some(policy)
     };
     let mut rules = value.rules.unwrap_or_default();
     rules.extend(generated);
@@ -297,7 +297,7 @@ pub fn compact_value(
         root.insert("mysql".into(), serde_yaml::to_value(mysql)?);
     }
     if let Some(redis) = &document.redis {
-        root.insert("redis".into(), serde_yaml::to_value(redis)?);
+        root.insert("redis".into(), redis_keys::compact_settings(redis)?);
     }
     if let Some(http) = &document.http {
         root.insert("http".into(), serde_yaml::to_value(http)?);

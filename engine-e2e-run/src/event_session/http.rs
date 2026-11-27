@@ -24,6 +24,7 @@ use uuid::Uuid;
 use super::super::model::ResolvedProjectConfig;
 use crate::{
     primary_protocol::assertion::ResponseAssertionRuntime, request_rules::RequestRuleRuntime,
+    value_contract::identities::IdentityPair,
 };
 use response::{Response, Verification, snapshot_headers};
 
@@ -176,7 +177,7 @@ impl<'a> Http<'a> {
             .context("Target primary HTTP trailers did not arrive before their deadline")?
     }
 
-    pub(super) async fn end(&mut self, id: Uuid) -> Result<()> {
+    pub(super) async fn end(&mut self, id: Uuid) -> Result<Vec<IdentityPair>> {
         let mut exchange = self
             .exchanges
             .remove(&id)

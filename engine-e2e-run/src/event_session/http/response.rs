@@ -11,7 +11,10 @@ use hyper::{HeaderMap, body::Incoming, header};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::primary_protocol::assertion::{ResponseAssertionOptions, ResponseAssertionRuntime};
+use crate::{
+    primary_protocol::assertion::{ResponseAssertionOptions, ResponseAssertionRuntime},
+    value_contract::identities::IdentityPair,
+};
 
 use super::{Connection, Opened};
 
@@ -194,10 +197,11 @@ impl Response {
     }
 
     pub(super) fn verify_headers(&self, verification: Verification<'_>) -> Result<()> {
-        self.assert(verification, true)
+        self.assert(verification, true)?;
+        Ok(())
     }
 
-    pub(super) fn verify(mut self, verification: Verification<'_>) -> Result<()> {
+    pub(super) fn verify(mut self, verification: Verification<'_>) -> Result<Vec<IdentityPair>> {
         if !self.streaming {
             let source_headers: Headers = serde_json::from_value(self.expected["headers"].clone())?;
             self.source_body = decoded_body(&self.source_body, &source_headers, self.limit)?;
@@ -209,7 +213,11 @@ impl Response {
         self.assert(verification, false)
     }
 
-    fn assert(&self, verification: Verification<'_>, headers_only: bool) -> Result<()> {
+    fn assert(
+        &self,
+        verification: Verification<'_>,
+        headers_only: bool,
+    ) -> Result<Vec<IdentityPair>> {
         let Verification {
             id,
             request,
@@ -257,7 +265,7 @@ impl Response {
             proof.passed,
             "Target primary HTTP response differs ({differences} differences)"
         );
-        Ok(())
+        Ok(proof.identity_pairs)
     }
 }
 

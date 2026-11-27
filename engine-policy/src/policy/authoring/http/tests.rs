@@ -35,6 +35,14 @@ const PATHS: &str = r#"requests:
       references: [storage, task_mysql]
 "#;
 
+const SIGV4: &str = r#"requests:
+  - host: s3.hj4.1.intra.weibo.com:9100
+    method: GET
+    path: /wegent-archives
+    query: 'location='
+    authorization: {kind: aws_sigv4}
+"#;
+
 fn named() -> BTreeMap<String, ResourceDeclaration> {
     serde_yaml::from_str(
         r#"storage: {protocol: http, endpoint: 'storage.example.test:9100'}
@@ -136,6 +144,90 @@ fn headers_keep_existing_normalization_and_do_not_create_a_second_runtime_owner(
     assert!(parsed("{}").unwrap().0.is_some());
     assert!(parsed("headers: {}\n").unwrap().0.is_some());
     assert!(parsed("headers:\n  X-Amz-Date: {kind: time, formats: [amz_date]}\n  x-amz-date: {kind: time, formats: [amz_date]}\n").is_err());
+}
+
+#[test]
+fn sigv4_request_round_trips_with_exact_query_and_runtime_scope() {
+    let document = |http: &str| {
+        format!(
+            "format: traffic-policy/v3\nhttp:\n  {}\n",
+            http.trim_end().replace('\n', "\n  ")
+        )
+    };
+    let raw = document(SIGV4);
+    let policy = crate::policy::parse_policy(&raw).unwrap();
+    let compiled = crate::policy::compile_policy(&policy).unwrap();
+    let [rule] = compiled.http.as_ref().unwrap().request_sigv4.as_slice() else {
+        panic!("one compiled SigV4 request");
+    };
+    assert_eq!(rule.host, "s3.hj4.1.intra.weibo.com:9100");
+    assert_eq!(rule.method, "GET");
+    assert_eq!(rule.path, "/wegent-archives");
+    assert_eq!(rule.query.as_deref(), Some("location="));
+
+    let rendered = crate::policy::render_policy(&policy).unwrap();
+    assert_eq!(
+        crate::policy::parse_and_compile_policy(&rendered).unwrap(),
+        compiled
+    );
+    let yaml: Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(
+        yaml["http"]["requests"][0]["authorization"]["kind"],
+        "aws_sigv4"
+    );
+    assert_eq!(yaml["http"]["requests"][0]["query"], "location=");
+    assert!(yaml["http"].get("request_sigv4").is_none());
+
+    let changed =
+        crate::policy::parse_and_compile_policy(&raw.replace("location=", "location")).unwrap();
+    assert_ne!(compiled.fingerprints.runtime, changed.fingerprints.runtime);
+    assert_eq!(compiled.fingerprints.capture, changed.fingerprints.capture);
+    assert_eq!(
+        compiled.fingerprints.classification,
+        changed.fingerprints.classification
+    );
+
+    for invalid in [
+        raw.replace(":9100", ""),
+        raw.replace("/wegent-archives", "/wegent-*"),
+        raw.replace("kind: aws_sigv4", "kind: aws_sigv4a"),
+        document(&format!(
+            "{SIGV4}{}",
+            SIGV4.strip_prefix("requests:\n").unwrap()
+        )),
+    ] {
+        assert!(
+            crate::policy::parse_policy(&invalid).is_err(),
+            "accepted {invalid}"
+        );
+    }
+}
+
+#[test]
+fn sigv4_and_path_identity_share_one_request_list() {
+    let raw = format!("{SIGV4}{}", PATHS.strip_prefix("requests:\n").unwrap());
+    let mut context = super::super::context();
+    context.admit_native = &|_| Ok(());
+    let parsed: HttpDocument = serde_yaml::from_str(&raw).unwrap();
+    let (http, native) =
+        traffic_policy_document::authoring::http::expand(Some(parsed), &named(), &context).unwrap();
+    let mut root = Mapping::from_iter([("http".into(), serde_yaml::to_value(&http).unwrap())]);
+    for rule in &native {
+        assert!(
+            traffic_policy_document::authoring::http::compact(
+                &serde_yaml::from_value(rule.clone()).unwrap(),
+                &named(),
+                &mut root,
+                &context,
+            )
+            .unwrap()
+        );
+    }
+    let rendered = serde_yaml::from_value(root.remove("http").unwrap()).unwrap();
+    let round_trip =
+        traffic_policy_document::authoring::http::expand(Some(rendered), &named(), &context)
+            .unwrap();
+    assert_eq!(round_trip, (http, native));
 }
 
 #[test]

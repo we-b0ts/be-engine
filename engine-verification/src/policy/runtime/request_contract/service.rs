@@ -18,6 +18,7 @@ use traffic_protocol::{
 
 mod document_policy;
 mod redis_eval_time;
+mod redis_key_identity;
 mod response_constraints;
 mod response_identities;
 
@@ -108,6 +109,15 @@ impl ValueRuleHost for RequestContracts {
             None => Ok(None),
         }
     }
+    fn additional_request_bindings(
+        &self,
+        source: &dyn ProtocolMessage,
+    ) -> Result<Vec<traffic_policy_value::RuleBinding>> {
+        match self.compiled.as_deref() {
+            Some(policy) => redis_key_identity::bindings(policy, source),
+            None => Ok(Vec::new()),
+        }
+    }
     fn native_request_projection(
         &self,
         protocol: ProtocolId,
@@ -122,6 +132,15 @@ impl ValueRuleHost for RequestContracts {
         if let Some(http) = http
             && matches!(protocol.as_str(), "http" | "https")
         {
+            let signed = traffic_protocol_http::request_sigv4::request(
+                &http.request_sigv4,
+                endpoint,
+                request.clone(),
+                source,
+            )?;
+            if !Arc::ptr_eq(&request, &signed) {
+                return Ok(signed);
+            }
             traffic_protocol_http::request_metadata::request(
                 &http.request_metadata,
                 endpoint,

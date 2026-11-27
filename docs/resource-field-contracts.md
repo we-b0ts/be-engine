@@ -298,15 +298,16 @@ Extra arguments, keys, hash fields, container shape and expiry remain strict.
 `commands` is an ordered list, with one-based value-argument indexes (the key is
 separate). Each time argument declares one format. The engine relates equal
 Source instants internally; no binding, relation or clock group is authored.
-EVAL/EVALSHA entries retain their exact script digest. `key_format` optionally
-describes a generated wildcard key segment; see [key contracts](redis-key-contracts.md).
+EVAL/EVALSHA entries retain their exact script digest. A standalone identity
+`key_format` declares the complete ID in a physical key's wildcard segment.
+It shares the Replay Session mapping with other declared ID positions.
+[Key contracts](redis-key-contracts.md)
 Key-local permissions retain their complete Source state and finite-inventory
 validation. They are not exemptions for asynchronous work.
 
-A supplied `redis` section adds scalar declarations by default. Compatible
-formats append to an existing key's formats in order, with exact duplicates
-removed; `redis: {keys: {}}` does not clear existing formats. Replacing or clearing
-the scalar map requires `traffic-policy-change/v1` with `replace_sections: [redis]`
+A supplied `redis` section adds scalar and key identity declarations by default.
+Compatible formats append in order, with exact duplicates removed.
+Replacing or clearing the map requires `traffic-policy-change/v1` with `replace_sections: [redis]`
 and the complete intended Redis map. Key-local behaviors compile to the existing
 native owners and retain their native rule lifecycle. Advanced native rules are retained only for relationships not covered
 by this declaration. Source proof is frozen in the separate plan record; the

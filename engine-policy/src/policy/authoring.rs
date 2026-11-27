@@ -29,10 +29,12 @@ fn view(policy: &TrafficPolicy) -> document::TrafficPolicy {
         }),
         redis: policy.redis.as_ref().map(|value| document::RedisPolicy {
             keys: value.keys.clone(),
+            key_identities: value.key_identities.clone(),
         }),
         http: policy.http.as_ref().map(|value| document::HttpPolicy {
             headers: value.headers.clone(),
             request_metadata: value.request_metadata.clone(),
+            request_sigv4: value.request_sigv4.clone(),
         }),
         async_api: policy.async_api.clone(),
         signatures: policy.signatures.clone(),
@@ -51,10 +53,14 @@ fn from_document(value: document::TrafficPolicy) -> TrafficPolicy {
         mysql: value.mysql.map(|value| MysqlPolicy {
             tables: value.tables,
         }),
-        redis: value.redis.map(|value| RedisPolicy { keys: value.keys }),
+        redis: value.redis.map(|value| RedisPolicy {
+            keys: value.keys,
+            key_identities: value.key_identities,
+        }),
         http: value.http.map(|value| HttpPolicy {
             headers: value.headers,
             request_metadata: value.request_metadata,
+            request_sigv4: value.request_sigv4,
         }),
         async_api: value.async_api,
         signatures: value.signatures,

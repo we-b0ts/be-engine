@@ -216,6 +216,44 @@ async fn replay_http(host: Arc<RecordedHost>, wire: &str) -> (String, Result<()>
 }
 
 #[tokio::test]
+async fn native_replay_matches_absent_and_bare_wildcard_accept() {
+    let capture = |value| serde_json::json!({"encoding":"utf8","data":value,"truncated":false});
+    let mut event = serde_json::json!({
+        "event_type":"http_exchange", "id":uuid::Uuid::nil(), "scheme":"http",
+        "authority":"api.test:80", "method":"GET", "uri":"/archive?location=",
+        "request_headers":{"Host":["api.test"],"Accept-Encoding":["identity"]},
+        "request_body":capture(""), "response_status":200,
+        "response_headers":{"Content-Type":["application/xml"]},
+        "response_body":capture("<location/>")
+    });
+    for source_has_accept in [false, true] {
+        if source_has_accept {
+            event["request_headers"]["Accept"] = serde_json::json!(["*/*"]);
+        }
+        let host = Arc::new(RecordedHost::new(&event));
+        for (query, accept, matches) in [
+            ("location=", "", true),
+            ("location=", "Accept: */*\r\n", true),
+            ("location=", "Accept: application/json\r\n", false),
+            ("location=", "Accept: */*\r\nAccept: */*\r\n", false),
+            ("location", "Accept: */*\r\n", false),
+        ] {
+            let wire = format!(
+                "GET /archive?{query} HTTP/1.1\r\nHost: api.test\r\nAccept-Encoding: gzip\r\n{accept}\r\n"
+            );
+            let (response, outcome) = replay_http(host.clone(), &wire).await;
+            if matches {
+                outcome.unwrap();
+                assert!(response.contains("content-type: application/xml\r\n"));
+                assert!(response.ends_with("\r\n\r\n<location/>"));
+            } else {
+                assert_eq!(outcome.unwrap_err().to_string(), "unmatched HTTP request");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn native_replay_delivers_only_the_matching_recorded_websocket_refusal() {
     let mut event = websocket_event(400);
     event["request_headers"]["Accept-Encoding"] = serde_json::json!(["gzip, deflate, br"]);

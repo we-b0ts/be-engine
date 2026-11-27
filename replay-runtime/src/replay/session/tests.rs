@@ -23,6 +23,99 @@ use traffic_recording_store::{
 
 use super::{EventKind, Instant, SequenceRuntime, plan};
 
+#[tokio::test]
+async fn primary_response_commit_shares_identity_state_with_dependencies() -> Result<()> {
+    use super::{
+        IdentityPair, MysqlReplayConfig, ReplayControlRequest, ReplayRuntime, SequencePlan,
+        Session, SourceEvent, control, write_test_recording_network_manifest,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    let case = root.join("case");
+    std::fs::create_dir(&case)?;
+    std::fs::write(case.join("dependencies.jsonl"), "")?;
+    write_test_recording_network_manifest(root);
+    let address = "127.0.0.1:0".parse()?;
+    let runtime = ReplayRuntime::load(
+        MysqlReplayConfig {
+            case_dir: root.to_owned(),
+            selected_case_ids: Vec::new(),
+            dns_listen: address,
+            tcp_listen: address,
+            fake_cidr: "198.18.0.0/15".into(),
+            report_path: None,
+            session_path: None,
+            control_socket_path: None,
+            ca_cert_path: Some(root.join("ca.pem")),
+            ca_key_path: Some(root.join("ca-key.pem")),
+            policy_path: None,
+            http_ignore_query_params: Vec::new(),
+            process_owned_dependencies: Vec::new(),
+            allowed_unused_http: None,
+        },
+        address,
+        address,
+    )
+    .await?;
+    let timeline = SequenceRuntime::new(SequencePlan::compile(
+        [EventKind::PrimaryResponseEnd, EventKind::PrimaryResponseEnd]
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| SourceEvent {
+                sequence: index as u64 + 1,
+                dependency_sequence: 0,
+                offset_micros: index as u64,
+                kind,
+            }),
+    )?);
+    let contracts = {
+        let mut state = runtime.state.lock().await;
+        state.native.prepare_event_session();
+        state.native.configure_session_identities(1)?;
+        state.session_events = Some(Session::new(timeline, Duration::from_secs(5)));
+        state.native.contracts.clone()
+    };
+    let pair = |source: char, target: char| IdentityPair {
+        source: json!(format!("vnc-{}", source.to_string().repeat(24))).to_string(),
+        target: json!(format!("vnc-{}", target.to_string().repeat(24))).to_string(),
+    };
+    let initial = contracts.preview_identity_pairs("session", &[pair('A', 'B')], false)?;
+    contracts.commit_comparison(Default::default(), initial)?;
+
+    let commit = |sequence, pairs: Vec<IdentityPair>| {
+        let state = runtime.state.clone();
+        async move {
+            let request: ReplayControlRequest = serde_json::from_value(json!({
+                "command": "session_commit",
+                "sequence": sequence,
+                "identity_pairs": pairs,
+            }))?;
+            Ok::<_, anyhow::Error>(control(&request, state).await)
+        }
+    };
+    let accepted = commit(1, vec![pair('A', 'B'), pair('D', 'E')]).await?;
+    assert_eq!(accepted["ok"], true);
+    assert!(!accepted.to_string().contains("vnc-"));
+    assert!(
+        contracts
+            .preview_identity_pairs("session", &[pair('D', 'F')], false)
+            .is_err()
+    );
+
+    let rejected = commit(2, vec![pair('G', 'H'), pair('A', 'C')]).await?;
+    assert_eq!(rejected["ok"], false);
+    assert_eq!(rejected["error"], "identity equality relationship changed");
+    assert!(!rejected.to_string().contains("vnc-"));
+    assert_eq!(rejected["session_events"]["last_sequence"], 1);
+    assert!(
+        contracts
+            .preview_identity_pairs("session", &[pair('G', 'I')], false)
+            .is_ok()
+    );
+    Ok(())
+}
+
 fn recorded<T>(sequence: u64, event: T) -> RecordedEvent<T> {
     RecordedEvent {
         sequence,

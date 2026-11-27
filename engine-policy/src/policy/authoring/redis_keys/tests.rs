@@ -54,6 +54,73 @@ fn key_command_contract_and_scalar_format_roundtrip_without_resource_aliases() {
 }
 
 #[test]
+fn standalone_key_identity_uses_the_complete_wildcard_and_roundtrips() {
+    let mut raw = policy(json!({
+        "vnc_session:*:metadata": {
+            "kind":"time", "formats":["unix_seconds"],
+            "key_format":{"kind":"identity","formats":[{"prefix":"vnc-","base64url":24}]}
+        }
+    }));
+    raw["json"] = json!({"fields":{
+        "/session_id": {"kind":"identity","formats":[{"prefix":"vnc-","base64url":24}]}
+    }});
+    let document = parse_policy(&raw.to_string()).unwrap();
+    let compiled = crate::policy::compile_policy(&document).unwrap();
+    assert!(compiled.native.is_empty());
+    let redis = compiled.redis.as_ref().unwrap();
+    let key = b"vnc_session:vnc-AAAAAAAAAAAAAAAAAAAAAAAA:metadata";
+    let identity = redis.key_identity(key).unwrap();
+    assert_eq!(identity.prefix, "vnc_session:");
+    assert_eq!(identity.suffix, ":metadata");
+    assert_eq!(
+        &key[identity.prefix.len()..key.len() - identity.suffix.len()],
+        b"vnc-AAAAAAAAAAAAAAAAAAAAAAAA"
+    );
+    assert_eq!(
+        identity.field,
+        &compiled.global_json.as_ref().unwrap().fields["/session_id"]
+    );
+    assert!(redis.field(key).unwrap().is_some());
+    assert!(redis.key_identity(b"vnc_session:vnc-AAAA").is_none());
+
+    let rendered = crate::policy::authoring::render_policy(&document).unwrap();
+    let authored: Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(authored["redis"], raw["redis"]);
+
+    raw["redis"]["keys"]["vnc_session:*:metadata"]
+        .as_object_mut()
+        .unwrap()
+        .remove("key_format");
+    let before = crate::policy::parse_and_compile_policy(&raw.to_string()).unwrap();
+    assert_ne!(before.fingerprints.runtime, compiled.fingerprints.runtime);
+    assert_eq!(before.fingerprints.capture, compiled.fingerprints.capture);
+    assert_eq!(
+        before.fingerprints.classification,
+        compiled.fingerprints.classification
+    );
+}
+
+#[test]
+fn standalone_key_identity_requires_unambiguous_bounded_patterns() {
+    let identity = json!({"key_format":{"kind":"identity","formats":[{"hex":64}]}});
+    for pattern in ["*", "no-wildcard", "prefix:*:*", "prefix:{value}:*"] {
+        let raw = policy(json!({(pattern):identity}));
+        assert!(parse_policy(&raw.to_string()).is_err(), "{pattern}");
+    }
+    let raw = policy(json!({"prefix:*":identity,"prefix:vnc-*":identity}));
+    assert!(parse_policy(&raw.to_string()).is_err());
+    for key_format in [
+        json!({"kind":"time_window","seconds":60}),
+        json!({"kind":"time","formats":["unix_seconds"]}),
+        json!({"kind":"jwt"}),
+        json!({"kind":"identity","formats":[]}),
+    ] {
+        let raw = policy(json!({"prefix:*":{"key_format":key_format}}));
+        assert!(parse_policy(&raw.to_string()).is_err(), "{raw}");
+    }
+}
+
+#[test]
 fn retired_redis_state_permissions_are_rejected_during_authoring() {
     for entry in [
         json!({"state":{"append":"concatenate"}}),

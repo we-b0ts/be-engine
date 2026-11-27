@@ -53,6 +53,13 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
     ) -> Result<Option<Vec<RuleBinding>>> {
         Ok(None)
     }
+    /// Add selected physical bindings alongside the usual document comparison.
+    fn additional_request_bindings(
+        &self,
+        _source: &dyn ProtocolMessage,
+    ) -> Result<Vec<RuleBinding>> {
+        Ok(Vec::new())
+    }
     fn native_request_projection(
         &self,
         _protocol: ProtocolId,

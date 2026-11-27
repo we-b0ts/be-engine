@@ -355,18 +355,23 @@ impl SequenceScheduler {
         self.event_at(self.cursor).map(|event| event.source)
     }
 
-    fn commit_driver(&mut self, sequence: u64) -> Result<()> {
+    fn commit_driver(
+        &mut self,
+        sequence: u64,
+        before_advance: impl FnOnce(SourceEvent) -> Result<()>,
+    ) -> Result<()> {
         ensure!(!self.failed, "Replay sequence has failed");
-        ensure!(
-            self.expected().is_some_and(|event| {
-                event.sequence == sequence && event.kind.is_session_driver_event()
-            }),
-            "driver event {sequence} is not the current Replay event"
-        );
+        let Some(event) = self
+            .expected()
+            .filter(|event| event.sequence == sequence && event.kind.is_session_driver_event())
+        else {
+            bail!("driver event {sequence} is not the current Replay event");
+        };
         ensure!(
             !self.event_is_gated(sequence),
             "driver event {sequence} is waiting for a Replay prerequisite"
         );
+        before_advance(event)?;
         self.advance();
         self.drain_receipts();
         Ok(())

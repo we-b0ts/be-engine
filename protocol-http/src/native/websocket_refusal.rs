@@ -1,5 +1,6 @@
 //! Matching the HTTP exchange when a WebSocket opening handshake ends in HTTP.
 use super::*;
+use crate::message::RequestView;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use traffic_protocol::message::{ProjectedMessage, ProjectedValue, ProtocolMessage};
 
@@ -91,7 +92,7 @@ impl ProtocolMessage for WebSocketOffer {
     }
 
     fn project(&self) -> Result<ProjectedMessage> {
-        let mut projection = self.request.project()?;
+        let mut projection = self.request.project_request(RequestView::WebSocket)?;
         projection.structure["websocket_offer"] = Value::Bool(true);
         // The opening handshake generates a fresh nonce on each connection.
         projection.values.insert(
@@ -119,7 +120,9 @@ impl ProtocolMessage for WebSocketOffer {
     }
 
     fn locate(&self, selector: &Value) -> Result<Vec<String>> {
-        let mut locations = self.request.locate(selector)?;
+        let mut locations = self
+            .request
+            .request_locations(selector, RequestView::WebSocket)?;
         if self.refusal_http_defaults {
             let projection = self.project()?;
             locations.retain(|location| projection.values.contains_key(location));

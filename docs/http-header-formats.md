@@ -1,6 +1,6 @@
 # Global HTTP header formats
 
-Declare a header once for all APIs and dependency endpoints:
+Declare a header once for primary API response assertions:
 
 ```yaml
 http:
@@ -24,12 +24,35 @@ JSON and storage fields. Repeated Source values require repeated Target values,
 and distinct Source identities cannot collapse. Header and body proposals are
 validated together; a failed candidate publishes neither mapping.
 
-Only declared headers receive format behavior. Transport, authentication,
-client-metadata, URI, body, framing and finite-inventory contracts retain their
-existing owners. Encrypted Source headers are decoded from the protected
-snapshot before comparison; public diagnostics retain value protection.
+Encrypted Source headers are decoded from the protected snapshot before
+comparison. Public diagnostics retain value protection.
 
 Use the ordinary global rule plan/apply transaction. Per-API request-header
 timestamp effects, separate timestamp validators and their special planners
 are retired. Native signed-input transformations retain their own execution
 owner.
+
+## Outbound SigV4 requests
+
+Managed Event Session Replay automatically compares outbound `x-amz-date`
+relative to each side's dependency request clock. This treatment also applies
+when a request carries the date header by itself.
+
+Add an exact request declaration for `AWS4-HMAC-SHA256` authorization.
+
+```yaml
+http:
+  requests:
+    - host: s3.example.test:9100
+      method: GET
+      path: /wegent-archives
+      query: 'location='
+      authorization: {kind: aws_sigv4}
+```
+
+Use the recorded host and port, method, path, and exact query, including empty
+values with an explicit `=`. Replay checks each side's Credential date against
+its own `x-amz-date` and compares the Access Key ID, region, service, scope
+terminator and signed header list. The signature can change between executions
+and must have the SigV4 HMAC digest format. Verify the policy through the managed
+Session rule plan/apply workflow. [Session rules](session-regression.md#plan-implement-and-verify)

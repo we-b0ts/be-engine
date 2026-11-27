@@ -27,10 +27,45 @@ pub enum RequestLocation {
     Header { name: String, index: Option<usize> },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestView {
+    Match,
+    WebSocket,
+    Evidence,
+}
+
 impl RequestMessage {
-    fn project_request(&self, for_evidence: bool) -> Result<ProjectedMessage> {
+    fn projected_headers(
+        &self,
+        view: RequestView,
+        required: &[&str],
+    ) -> crate::headers::HeaderSnapshot {
         let mut headers = crate::headers::normalized(&self.headers);
-        headers.retain(|name, _| projected_header(name, for_evidence));
+        headers.retain(|name, _| {
+            required.contains(&name.as_str())
+                || projected_header(name, view == RequestView::Evidence)
+        });
+        if view == RequestView::Match
+            && !required.contains(&"accept")
+            && headers
+                .get("accept")
+                .is_some_and(|values| values.as_slice() == ["*/*"])
+        {
+            headers.remove("accept");
+        }
+        headers
+    }
+
+    pub(crate) fn project_request(&self, view: RequestView) -> Result<ProjectedMessage> {
+        self.project_request_with_headers(view, &[])
+    }
+
+    pub(crate) fn project_request_with_headers(
+        &self,
+        view: RequestView,
+        required: &[&str],
+    ) -> Result<ProjectedMessage> {
+        let headers = self.projected_headers(view, required);
         let shape: BTreeMap<_, _> = headers
             .iter()
             .map(|(name, values)| (name.clone(), values.len()))
@@ -51,13 +86,15 @@ impl RequestMessage {
         })
     }
 
-    fn request_locations(&self, selector: &Value, for_evidence: bool) -> Result<Vec<String>> {
+    pub(crate) fn request_locations(
+        &self,
+        selector: &Value,
+        view: RequestView,
+    ) -> Result<Vec<String>> {
         match serde_json::from_value::<RequestLocation>(selector.clone())? {
-            RequestLocation::Request => Ok(self
-                .project_request(for_evidence)?
-                .values
-                .into_keys()
-                .collect()),
+            RequestLocation::Request => {
+                Ok(self.project_request(view)?.values.into_keys().collect())
+            }
             RequestLocation::PathSegment { index } => {
                 let (_, values) = uri_projection(&self.uri)?;
                 let location = format!("/uri/path/{index}");
@@ -89,21 +126,14 @@ impl RequestMessage {
             }
             RequestLocation::Body => Ok(vec!["/body".into()]),
             RequestLocation::Header { name, index } => {
-                let headers = crate::headers::normalized(&self.headers);
                 let name = name.to_ascii_lowercase();
                 ensure!(
-                    projected_header(&name, for_evidence),
+                    projected_header(&name, view == RequestView::Evidence),
                     "HTTP transport metadata has no request value location"
                 );
+                let headers = self.projected_headers(view, &[]);
                 let count = headers.get(&name).map_or(0, Vec::len);
-                if let Some(index) = index {
-                    ensure!(index < count, "HTTP header selector is out of range");
-                    Ok(vec![header_location(&name, index)])
-                } else {
-                    Ok((0..count)
-                        .map(|index| header_location(&name, index))
-                        .collect())
-                }
+                header_locations(&name, index, count)
             }
         }
     }
@@ -115,18 +145,18 @@ impl ProtocolMessage for RequestMessage {
     }
 
     fn project(&self) -> Result<ProjectedMessage> {
-        self.project_request(false)
+        self.project_request(RequestView::Match)
     }
 
     fn locate(&self, selector: &Value) -> Result<Vec<String>> {
-        self.request_locations(selector, false)
+        self.request_locations(selector, RequestView::Match)
     }
 
     fn evidence(&self, query: &Value) -> Result<Value> {
         // Keep the negotiation and tracing headers available for diagnosis.
-        let projection = self.project_request(true)?;
+        let projection = self.project_request(RequestView::Evidence)?;
         let values = self
-            .request_locations(query, true)?
+            .request_locations(query, RequestView::Evidence)?
             .into_iter()
             .map(|location| {
                 let capture = traffic_model::capture::capture_body(
@@ -155,6 +185,21 @@ fn is_framing_header(name: &str) -> bool {
         name,
         "connection" | "keep-alive" | "transfer-encoding" | "content-length" | "trailer"
     )
+}
+
+pub(crate) fn header_locations(
+    name: &str,
+    index: Option<usize>,
+    count: usize,
+) -> Result<Vec<String>> {
+    if let Some(index) = index {
+        ensure!(index < count, "HTTP header selector is out of range");
+        Ok(vec![header_location(name, index)])
+    } else {
+        Ok((0..count)
+            .map(|index| header_location(name, index))
+            .collect())
+    }
 }
 
 fn header_location(name: &str, index: usize) -> String {
@@ -205,6 +250,30 @@ fn uri_projection(target: &str) -> Result<(Value, BTreeMap<String, ProjectedValu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_accept_is_omitted_from_matching_locations_but_retained_in_evidence() {
+        let mut request = RequestMessage {
+            method: "GET".into(),
+            uri: "/archive?location=".into(),
+            headers: BTreeMap::from([("Accept".into(), vec![" \t*/* \t".into()])]),
+            body: Bytes::new(),
+        };
+        let accept = json!({"kind":"header", "name":"accept"});
+        let location = "/headers/accept/0";
+        assert!(!request.project().unwrap().values.contains_key(location));
+        assert!(request.locate(&accept).unwrap().is_empty());
+        assert_eq!(
+            request.evidence(&accept).unwrap()["values"][0]["location"],
+            location
+        );
+
+        request
+            .headers
+            .insert("Accept".into(), vec!["*/*;q=0".into()]);
+        assert_eq!(request.project().unwrap().values[location].bytes, "*/*;q=0");
+        assert_eq!(request.locate(&accept).unwrap(), [location]);
+    }
 
     #[test]
     fn negotiation_and_tracing_headers_are_evidence_only() {
