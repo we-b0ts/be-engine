@@ -70,6 +70,18 @@ pub(crate) struct IntegrationPolicy {
 }
 
 impl RulePlan {
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(super) fn sequences(&self) -> &BTreeSet<u64> {
+        &self.plan.request.sequences
+    }
+
+    pub(super) fn group(&self) -> &str {
+        &self.plan.request.group
+    }
+
     pub(crate) fn prepare(
         root: &Path,
         recording_identity: &str,
@@ -160,6 +172,16 @@ impl RulePlan {
 }
 
 impl RulePlans {
+    pub(super) fn integrated_sequences<'a>(
+        &'a self,
+        ids: &'a BTreeSet<String>,
+    ) -> impl Iterator<Item = u64> + 'a {
+        self.0
+            .iter()
+            .filter(|plan| plan.state == PlanState::Integrated && ids.contains(&plan.id))
+            .flat_map(|plan| plan.sequences().iter().copied())
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -227,27 +249,6 @@ impl RulePlans {
     pub(super) fn covers(&self, group: &str, seq: u64) -> bool {
         self.pending().any(|plan| {
             plan.plan.request.group == group && plan.plan.request.sequences.contains(&seq)
-        })
-    }
-
-    pub(super) fn ready_for(&self, owner: Option<&super::Ownership>) -> bool {
-        owner.map_or_else(
-            || self.pending().next().is_some(),
-            |owner| self.covers(&owner.group, owner.seq),
-        )
-    }
-
-    pub(super) fn selected_cover(
-        &self,
-        ids: &BTreeSet<String>,
-        owner: Option<&super::Ownership>,
-    ) -> bool {
-        self.pending().any(|plan| {
-            ids.contains(&plan.id)
-                && owner.is_none_or(|owner| {
-                    plan.plan.request.group == owner.group
-                        && plan.plan.request.sequences.contains(&owner.seq)
-                })
         })
     }
 

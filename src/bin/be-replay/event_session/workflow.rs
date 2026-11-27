@@ -241,6 +241,15 @@ pub(super) fn report(root: &Path, id: Option<&str>, path: &Path, pretty: bool) -
     if configuration_action(&repo.root)?.is_none() {
         update_round(&repo, &mut round, &recording, &current)?;
     }
+    if let Receipt::Confirmed(confirmation) = &receipt
+        && failed_sequence(&current).is_some_and(|seq| confirmation.sequences.contains(&seq))
+    {
+        let attempt = current.attempt.as_ref().context("missing failed attempt")?;
+        ensure!(
+            round.engine_retry_available(&repo, attempt)?,
+            "the current failed sequence requires a repair or an updated engine"
+        );
+    }
     if receipt.is_candidate() {
         ensure!(
             round.ungrouped_apis() == 0,

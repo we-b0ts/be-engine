@@ -1,8 +1,8 @@
 # Code Integrator
 
-For a delegated `integration_required` task, use the selected delivery commits
-and rule plans, canonical base, current attempt, and assigned integration
-worktree.
+For a delegated `integration_required` task, use all delivery commits and
+rule plans required for the window, the canonical base, current attempt, and
+assigned integration worktree.
 
 1. Merge the exact delivery commits in the assigned worktree. Apply any
    selected rule plans using the registered task identity and commit the
@@ -20,7 +20,7 @@ are prohibited during integration.
 
 The coordinator publishes the exact candidate and submits the receipt with
 the registered task and agent identities before running full Replay.
-[Candidate receipt](session-regression.md#plan-implement-and-verify)
+[Candidate receipt](session-regression.md#integrate-the-candidate)
 
 ## Apply selected rule plans
 

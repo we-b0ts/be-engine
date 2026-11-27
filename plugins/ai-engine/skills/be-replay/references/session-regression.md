@@ -112,7 +112,7 @@ to read the full list when the handoff contains only the count.
 | `await_delivery` | Follow the registered agent and submit its completed artifact or report its exit. |
 | `dispatch_required` | Launch every assignment without an `agent_handle` in parallel and register the handles. |
 | `worker_status_required` | Query the agent runtime for the registered handles and report their actual state. |
-| `implementation_required` | Follow the registered implementers and register ready deliveries. |
+| `implementation_required` | Follow the registered implementers and submit sequence confirmations, fixes, and rule plans as they arrive. |
 | `advance_required` | Start a full Replay with `action.command`. |
 | `wait_required` | Follow the active Replay or outstanding assignments and refresh `status`. |
 | `complete` | The candidate passed full Replay and required API work is complete. [Pre-final validation and Replay](coordinator.md#pre-final-validation-and-replay) |
@@ -121,13 +121,11 @@ The engine checks that `.traffic-e2e/project.yaml`, `.traffic-e2e/apis.yaml`,
 and the effective policy are committed before `run`, `plan`, and candidate
 publication. Paths in `action.details.files` are relative to the Target root.
 
-When an updated engine qualifies for a retry after a mismatch, `status`
-first requests any required API dispatch and runtime status reports. At
-`advance_required` with `action.details.reason: engine_changed`, run a fresh
-attempt against the same Target code. Commits limited to managed configuration
-are eligible. The retry is keyed by committed engine revision.
-Rebuilding at the same revision or returning to an already tried revision
-uses the existing identity.
+An eligible committed engine revision can qualify for a retry on the same
+Target code, including configuration-only commits. Follow the current
+`status` action for API dispatch and window confirmation. When it returns
+`advance_required` with `action.details.reason: engine_changed`, run the
+fresh attempt. The retry identity follows the committed engine revision.
 
 ## Dispatch and monitor delegated tasks
 
@@ -173,13 +171,13 @@ recording, configuration, or launch inputs. `failure.seq` identifies the
 failed Source read or preparation position when available.
 
 On a mismatch, the engine opens a fixed 60-second window of Source time
-starting at the failed sequence. It tracks primary requests and dependency
-admissions that require matching. Recorded request links and lifecycle
-events establish ownership where available. A dependency can refer to an
-earlier request outside the window. Server push deliveries are outside the
-lookahead claim list. The actual failed event always receives a diagnosis.
-The engine considers overlapping sequences on subsequent failed attempts.
-A ready repair for the actual failure can advance while window work continues.
+starting at the failed sequence. Every non-push sequence in the window with
+a matching Source exchange requires confirmation. Recorded request links and
+lifecycle events establish ownership where available. A dependency can refer
+to an earlier request outside the window. The actual failed event always
+receives a diagnosis. The engine considers overlapping sequences on subsequent
+failed attempts. Unresolved ownership and open engine gaps keep the window
+open until resolved.
 
 The analyst and implementers run evidence queries from the canonical Target
 or provide `--target-root /absolute/target`.
@@ -265,10 +263,11 @@ or hyphens.
 
 ### Lookahead ownership
 
-The Issue Analyst reads the current task's outstanding matching sequences
+The Issue Analyst reads one representative sequence per outstanding exchange
 and delivers evidence-backed findings with `be-replay plan --findings FILE`.
 Sequences that share an owner can be batched in one file. Omit both `scope`
 and `group` and give an unresolved reason when the evidence is insufficient.
+Accepting ownership assigns the linked sequences for implementer confirmation.
 
 ```sh
 be-replay sequences --task-id TASK --limit 100
@@ -354,7 +353,7 @@ active API implementer can use Source evidence to connect unassigned window
 dependencies to an assigned API. Use an in-window primary request as the
 anchor and provide the subsequent dependency admission sequences in the file.
 Accepted claims assign those sequences to the implementer. Submit the
-comparison or repair outcome separately.
+confirmation, repair, or rule plan for those sequences in the same assignment.
 
 ```json
 {
@@ -368,24 +367,41 @@ comparison or repair outcome separately.
 }
 ```
 
+### Confirm window sequences
+
+The implementer checks each assigned sequence's linked Source input and output
+against its Target implementation and branch. Submit every outcome with
+`be-replay report --file FILE` or `be-replay rule plan --file FILE`. Copy the
+`group` and `assignment_id` from the handoff, for APIs and jobs alike.
+Submit with the original recording selected and its worker handle registered.
+A `sequences_file` contains positive Source sequences separated by commas or
+newlines. Paths are absolute or relative to the containing JSON. Keep
+plan and receipt files in the ignored Target runtime directory or outside the
+checkout. [Implementer diagnosis](api-implementer-diagnosis.md#confirm-assigned-events)
+
+When the format matches and the branch is implemented, submit this receipt.
+Use `rule: covered` for a rule already in effect and `rule: not_needed` when
+the event needs no rule. Each file can cover multiple sequences with the same
+result. The fields shown are sufficient for unchanged window sequences.
+
+```json
+{
+  "kind": "confirmed",
+  "group": "reports",
+  "assignment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "sequences_file": "reports-confirmed.txt",
+  "format": "matches",
+  "rule": "not_needed"
+}
+```
+
 ### Submit implementation outcomes
 
-Give each implementer its items, evidence query context, frozen base, and
-absolute worktree. The implementer diagnoses assigned events and delivers
-tested Target changes or Source-proven time, ID, or token rules. Run only
-assignment-specific tests and include the results in `checks`. Review checks,
-standalone builds, and Clippy are prohibited for implementers. Keep plan and
-receipt files in the ignored Target runtime directory or outside the checkout.
-Submit ready commits and exact sequences using
-`be-replay report --file /absolute/fixes.json`. A `sequences_file` contains
-positive Source sequences separated by commas or newlines. Paths are absolute
-or relative to the containing receipt, finding, or rule plan JSON. Fixes,
-reviews, and engine gaps also accept the inline `sequences` array as an
-alternative. Copy `assignment_id` from the full handoff into each fix and
-into each review or engine-gap receipt. This
-binds the receipt to the assignment issued for that recording. Submit new
-deliveries with that recording selected and the assignment's worker handle
-registered. Replay can keep running while you register deliveries.
+Implement the required changes and submit the commits and exact sequences
+using `be-replay report --file /absolute/fixes.json`. Run focused tests for
+the changes and include their results in `checks`. Review checks, standalone
+builds, and Clippy are prohibited for implementers. Fixes, reviews, and engine
+gaps also accept the inline `sequences` array.
 [Rule contract](rule-policy.md) · [Startup inputs](coordinator-startup-inputs.md)
 
 ```json
@@ -403,14 +419,9 @@ registered. Replay can keep running while you register deliveries.
 }
 ```
 
-For assigned lookahead sequences whose behavior already meets the Source
-contract, submit a `kind: review` receipt with the focused test results. This
-receipt records tested existing behavior. The current failed sequence
-requires a repair or a confirmed engine gap.
-If an implementer verifies an assigned API is already implemented, use the
-same receipt with `"confirms_apis": true`, its exact assigned sequences, and
-the tests that verified the active route and handler. The catalog must
-already be committed for that API.
+For first-run API work, use `kind: review` with `"confirms_apis": true` when
+focused tests verify the existing route and handler. Use the exact assigned
+API sequences. The catalog must already be committed for that API.
 
 ```json
 {
@@ -418,12 +429,13 @@ already be committed for that API.
   "group": "reports",
   "assignment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   "sequences_file": "reports-reviewed.txt",
-  "checks": ["assigned report route regression passed"]
+  "checks": ["assigned report route regression passed"],
+  "confirms_apis": true
 }
 ```
 
-For a confirmed engine gap, include the evidence and required engine
-behavior and route the report to the engine owner.
+For an engine gap, include the evidence and required engine behavior and
+route it to the engine owner. The affected window sequence stays open.
 
 ```json
 {
@@ -435,20 +447,22 @@ behavior and route the report to the engine owner.
 }
 ```
 
-Register Source-proven policy changes with `be-replay rule plan --file FILE`.
+Register Source-proven policy changes with `be-replay rule plan --file FILE`
+as part of the same assignment. If a sequence needs both a rule and a code
+fix, register the plan before submitting the fix receipt.
 [Rule plan format](api-implementer-rule-diagnosis.md#submit-a-rule-plan)
 
 ### Integrate the candidate
 
-When a fix or rule plan covers the failed sequence, the engine can request an
-`integration_required` task ahead of remaining lookahead analysis. Use
-`status --with-assignments` for ready fixes and rule plans. The code integrator
-merges the selected fixes onto the canonical base and applies the selected
-rule plans in the integration worktree. Other compatible ready deliveries can
-be included. Deliver a clean integration immediately. If the merge conflicts,
-resolve the conflicts and run only tests directly related to the resolution.
-Review checks, standalone
-builds, and Clippy are prohibited for integrators. Independent groups can
+When every required sequence in the window has a confirmation or accepted
+repair and the window has ready changes, the engine requests
+`integration_required`. Use
+`status --with-assignments` for the ready fixes and rule plans. The code
+integrator merges all required window fixes onto the canonical base and
+applies all required window rule plans in the integration worktree. Deliver
+a clean integration immediately. If the merge conflicts, resolve the
+conflicts and run only tests directly related to the resolution. Review
+checks, standalone builds, and Clippy are prohibited for integrators. Independent groups can
 continue working. On delivery, publish the exact candidate to the canonical
 branch and submit it with
 `be-replay report --file /absolute/candidate.json` for the registered task,
@@ -470,9 +484,10 @@ when resolving conflicts. [Rule application](code-integrator.md#apply-selected-r
 }
 ```
 
+The candidate must include all required window fixes and applied plans.
 Follow `advance_required` to run the same complete recording against the
-published candidate. For `setup_required`, use the offered retry command
-after resolving the execution error or confirmed engine issue.
+published candidate. For `setup_required`, resolve the execution error or
+engine gap and refresh `status`.
 
 Full Replay closes outstanding lookahead work. Required API implementation
 tasks remain open until integrated or confirmed by a review of an existing

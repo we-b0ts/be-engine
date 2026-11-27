@@ -31,7 +31,7 @@ invocation tool.
 | Role | Owns | Reference |
 | --- | --- | --- |
 | `issue-analyst` | Read-only API grouping and ownership of the failed event or unassigned window sequences | [Issue Analyst](references/issue-analyst.md) |
-| `api-implementer` | Evidence-based claims, Target repairs, rule proposals, and focused tests for assigned work | [Implementer](references/api-implementer.md) |
+| `api-implementer` | Window sequence confirmations, Target repairs, rule proposals, and focused tests for assigned work | [Implementer](references/api-implementer.md) |
 | `code-integrator` | Merge accepted fixes, apply selected rule plans, and deliver the exact candidate | [Code integrator](references/code-integrator.md) |
 
 Use the exact recording, attempt, revision, and worktree supplied with the

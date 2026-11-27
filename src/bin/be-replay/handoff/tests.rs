@@ -324,7 +324,11 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
             candidate(&attempt, &repair, &[&pipelines, &partial]),
         )
         .unwrap_err();
-    assert!(error.to_string().contains("current failure"));
+    assert!(
+        error
+            .to_string()
+            .contains("candidate must include window fix")
+    );
 
     let stale = failed_attempt(2, &base);
     let receipt = candidate(&stale, &repair, &[&repair, &pipelines]);
@@ -347,6 +351,7 @@ fn candidate_requires_the_owning_groups_new_delivery_for_the_failed_sequence() {
 
     let retry = failed_attempt(3, &repair);
     observe_fixture_window(&mut workflow, &retry, 9);
+    workflow.reserve_worktrees(|| Ok(0)).unwrap();
     assert!(!workflow.has_candidate(&retry));
     assert!(workflow.groups.pending("refresh", 9));
     assert_eq!(
@@ -428,8 +433,9 @@ fn the_current_failure_needs_a_repair_or_demonstrated_engine_gap() {
 fn a_new_attempt_reopens_checked_work_in_the_overlapping_window() {
     use traffic_e2e::session::{DispatchWindow, WindowMatch, WindowMatchKind, WindowOwner};
 
-    let candidate = || WindowMatch {
+    let candidate = |sequence| WindowMatch {
         kind: WindowMatchKind::PrimaryRequest,
+        exchange_sequence: sequence,
         owner: Some(WindowOwner {
             scope: "api:/accounts".into(),
             group: Some("accounts".into()),
@@ -439,7 +445,7 @@ fn a_new_attempt_reopens_checked_work_in_the_overlapping_window() {
         from_seq: from,
         through_seq: 20,
         apis: Vec::new(),
-        matches: [(12, candidate()), (17, candidate())].into(),
+        matches: [(12, candidate(12)), (17, candidate(17))].into(),
         failure_owner: None,
     };
     let mut workflow = Workflow::default();
@@ -450,13 +456,12 @@ fn a_new_attempt_reopens_checked_work_in_the_overlapping_window() {
     let assignment = assignment_id(&workflow, "accounts");
     start_worker(&mut workflow, "accounts", assignment);
     workflow
-        .groups
-        .review(
-            "accounts",
-            assignment,
-            [12].into(),
-            vec!["focused check".into()],
-            None,
+        .confirm(
+            serde_json::from_value(json!({
+                "group":"accounts", "assignment_id":assignment,
+                "sequences":[12], "format":"matches", "rule":"not_needed",
+            }))
+            .unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -473,4 +478,110 @@ fn a_new_attempt_reopens_checked_work_in_the_overlapping_window() {
             .unwrap(),
         [12, 17].into()
     );
+}
+
+#[test]
+fn migrating_a_legacy_window_reuses_its_candidate_repair_and_awaits_new_confirmations() {
+    use traffic_e2e::session::{DispatchWindow, WindowMatch, WindowMatchKind};
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    git(root, &["init", "-q"]);
+    let base = commit(root, "base");
+    let attempt = failed_attempt(1, &base);
+    let mut workflow = workflow_at_failure(&attempt, 9);
+    workflow
+        .set_owner(owner(9, "job:refresh", "refresh"), &base)
+        .unwrap();
+    workflow.reserve_worktrees(|| Ok(0)).unwrap();
+    let lease = assignment_id(&workflow, "refresh");
+    start_worker(&mut workflow, "refresh", lease);
+    let repair = commit(root, "repair failed admission");
+    workflow
+        .report(
+            root,
+            &repair,
+            Some(&attempt),
+            Some(9),
+            None,
+            fix("refresh", lease, &repair, &[9]),
+        )
+        .unwrap();
+    let task = Task::integration(&attempt.run_key, &attempt.attempt_id, 1, Some(9));
+    workflow
+        .report(
+            root,
+            &repair,
+            Some(&attempt),
+            Some(9),
+            Some(&task),
+            Receipt::TaskDispatch {
+                task_id: task.id().into(),
+                agent_handle: "integrator".into(),
+                state: DispatchState::Started,
+            },
+        )
+        .unwrap();
+    workflow
+        .report(
+            root,
+            &repair,
+            Some(&attempt),
+            Some(9),
+            None,
+            candidate(&attempt, &repair, &[&repair]),
+        )
+        .unwrap();
+    assert_eq!(workflow.candidate_commit(&attempt), Some(repair.as_str()));
+
+    let mut legacy = serde_json::to_value(workflow).unwrap();
+    legacy["window"].as_object_mut().unwrap().remove("coverage");
+    let mut restored: Workflow = serde_json::from_value(legacy).unwrap();
+    assert!(!restored.failure_observed(&attempt, 9));
+    assert!(!restored.has_candidate(&attempt));
+
+    restored
+        .observe_window(
+            &repair,
+            attempt_uuid(&attempt).unwrap(),
+            9,
+            DispatchWindow {
+                from_seq: 9,
+                through_seq: 20,
+                apis: Vec::new(),
+                matches: [(
+                    12,
+                    WindowMatch {
+                        kind: WindowMatchKind::DependencyOutput,
+                        exchange_sequence: 9,
+                        owner: None,
+                    },
+                )]
+                .into(),
+                failure_owner: None,
+            },
+        )
+        .unwrap();
+    assert!(restored.failure_observed(&attempt, 9));
+    assert!(restored.failure_was_applied(9));
+    assert_eq!(restored.pending_confirmation(), Some([12].into()));
+    assert!(!restored.has_candidate(&attempt));
+
+    restored.reserve_worktrees(|| Ok(0)).unwrap();
+    let lease = assignment_id(&restored, "refresh");
+    assert_eq!(
+        restored.assignment_sequences(lease, None).unwrap(),
+        [12].into()
+    );
+    start_worker(&mut restored, "refresh", lease);
+    let confirmation = serde_json::from_value(json!({
+        "kind":"confirmed", "group":"refresh", "assignment_id":lease,
+        "sequences":[12], "format":"matches", "rule":"not_needed"
+    }))
+    .unwrap();
+    restored
+        .report(root, &repair, Some(&attempt), Some(9), None, confirmation)
+        .unwrap();
+    assert!(restored.window_ready());
+    assert_eq!(restored.candidate_commit(&attempt), Some(repair.as_str()));
 }

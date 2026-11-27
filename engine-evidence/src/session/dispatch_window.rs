@@ -1,4 +1,4 @@
-//! Matchable requests and their recorded ownership around a failed Source event.
+//! Matchable exchange events and their recorded ownership around a failed Source event.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,6 +25,7 @@ pub struct DispatchWindow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowMatch {
     pub kind: WindowMatchKind,
+    pub exchange_sequence: u64,
     pub owner: Option<WindowOwner>,
 }
 
@@ -32,7 +33,9 @@ pub struct WindowMatch {
 #[serde(rename_all = "snake_case")]
 pub enum WindowMatchKind {
     PrimaryRequest,
+    PrimaryOutput,
     DependencyRequest,
+    DependencyOutput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,7 +51,7 @@ pub struct WindowOwner {
     pub group: Option<String>,
 }
 
-/// Find the business ingress and dependency admissions in a minute of Source time.
+/// Find matchable events of business exchanges in a minute of Source time.
 /// `after_sequence` only filters the legacy API summary.
 pub fn dispatch_window(
     target_root: &Path,
@@ -77,7 +80,21 @@ pub fn dispatch_window(
             sequence,
             WindowMatch {
                 kind: WindowMatchKind::PrimaryRequest,
+                exchange_sequence: sequence,
                 owner: Some(owner),
+            },
+        );
+    }
+    for (sequence, (request, route)) in window.primary_outputs {
+        matches.insert(
+            sequence,
+            WindowMatch {
+                kind: WindowMatchKind::PrimaryOutput,
+                exchange_sequence: request,
+                owner: Some(api_owner(
+                    &catalog,
+                    matching_pattern(&patterns, &route.path),
+                )),
             },
         );
     }
@@ -86,6 +103,17 @@ pub fn dispatch_window(
             sequence,
             WindowMatch {
                 kind: WindowMatchKind::DependencyRequest,
+                exchange_sequence: sequence,
+                owner: source.map(|source| owner(&catalog, &patterns, source)),
+            },
+        );
+    }
+    for (sequence, (dependency, source)) in window.dependency_outputs {
+        matches.insert(
+            sequence,
+            WindowMatch {
+                kind: WindowMatchKind::DependencyOutput,
+                exchange_sequence: dependency,
                 owner: source.map(|source| owner(&catalog, &patterns, source)),
             },
         );

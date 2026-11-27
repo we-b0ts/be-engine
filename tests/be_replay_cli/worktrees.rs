@@ -281,8 +281,15 @@ async fn newly_grouped_apis_are_dispatched_before_an_optional_engine_retry() {
     allow_engine_retry(root, &mut failed);
     publish_mismatch(failed.clone(), 5);
     let before = assignments(root);
-    assert_eq!(before["action"]["kind"], "advance_required");
-    assert_eq!(before["action"]["details"]["reason"], "engine_changed");
+    assert_dispatch(&before, "ownership_required", "issue-analyst");
+    let analyst = register_task(root, &before, "ownership-analyst");
+    successful(plan(
+        root,
+        bind_delivery(
+            json!({"ownership":{"seq":5,"scope":"startup","group":"startup"}}),
+            &analyst,
+        ),
+    ));
 
     fs::write(&catalog, "unrelated: [/unused]\n").unwrap();
     commit_catalog(root);
@@ -309,7 +316,19 @@ async fn newly_grouped_apis_are_dispatched_before_an_optional_engine_retry() {
         launch_implementers(root)["action"]["kind"],
         "worker_status_required"
     );
-    let retry = confirm_running(root);
+    assert_eq!(
+        confirm_running(root)["action"]["kind"],
+        "implementation_required"
+    );
+    let active = assignments(root);
+    successful(report(
+        root,
+        window_confirmation(group(&active, "startup"), &[5, 7]),
+    ));
+    let retry = successful(report(
+        root,
+        window_confirmation(group(&active, "onboard"), &[8]),
+    ));
     assert_eq!(retry["action"]["kind"], "advance_required");
     assert_eq!(retry["action"]["details"]["reason"], "engine_changed");
 }

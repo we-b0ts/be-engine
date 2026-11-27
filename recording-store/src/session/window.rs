@@ -1,4 +1,4 @@
-//! Select matchable requests and exact ownership from a bounded Source time window.
+//! Select matchable exchanges and exact ownership from a bounded Source time window.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -30,11 +30,13 @@ pub enum WindowFailureOwner {
     Shutdown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PrimaryDispatchWindow {
     pub through_sequence: u64,
     pub requests: BTreeMap<u64, PrimaryRoute>,
     pub dependencies: BTreeMap<u64, Option<WindowFailureOwner>>,
+    pub primary_outputs: BTreeMap<u64, (u64, PrimaryRoute)>,
+    pub dependency_outputs: BTreeMap<u64, (u64, Option<WindowFailureOwner>)>,
     pub failure_owner: Option<WindowFailureOwner>,
 }
 
@@ -53,17 +55,14 @@ pub fn primary_dispatch_window(
         "Source session capture is incomplete"
     );
     let input = session_integrity::events(&root, &manifest)?;
-    let unscheduled = if manifest
+    let has_summary = manifest
         .files
         .iter()
-        .any(|file| file.path == session_summary::FILE)
-    {
+        .any(|file| file.path == session_summary::FILE);
+    let summary = if has_summary {
         session_summary::read(&root)?
-            .unscheduled_admissions
-            .into_iter()
-            .collect()
     } else {
-        BTreeSet::new()
+        session_summary::SessionSummary::default()
     };
     let schedule: Schedule = if manifest
         .files
@@ -78,8 +77,10 @@ pub fn primary_dispatch_window(
         epoch: manifest.run_epoch,
         segments: SegmentWindow::new_copying(root).with_seal(&manifest),
         primary_requests: BTreeMap::new(),
-        dependency_owners: BTreeMap::new(),
-        unscheduled,
+        active_admissions: BTreeMap::new(),
+        unscheduled: summary.unscheduled_admissions.into_iter().collect(),
+        cancelled_starts: summary.cancelled_output_starts.into_iter().collect(),
+        legacy_starts: (!has_summary).then(BTreeSet::new),
         schedule: schedule.peekable(),
     };
     scanner.scan(
@@ -108,8 +109,10 @@ struct WindowScanner {
     epoch: Uuid,
     segments: SegmentWindow,
     primary_requests: BTreeMap<u64, RequestRoute>,
-    dependency_owners: BTreeMap<u64, OwnerLink>,
+    active_admissions: BTreeMap<u64, Option<OwnerLink>>,
     unscheduled: BTreeSet<u64>,
+    cancelled_starts: BTreeSet<u64>,
+    legacy_starts: Option<BTreeSet<u64>>,
     schedule: Peekable<Schedule>,
 }
 
@@ -123,10 +126,7 @@ impl WindowScanner {
     ) -> Result<PrimaryDispatchWindow> {
         let mut row = Vec::new();
         let mut previous = (0, 0);
-        let mut through_sequence = 0;
-        let mut requests = BTreeMap::new();
-        let mut dependencies = BTreeMap::new();
-        let mut failure_owner = None;
+        let mut window = PrimaryDispatchWindow::default();
         let mut end_offset = None;
         while input.read_until(b'\n', &mut row)? != 0 {
             let (sequence, offset, kind, fields) = parse_prefix(&row)?;
@@ -143,48 +143,27 @@ impl WindowScanner {
                     format!("Source session does not contain failed sequence {failed_sequence}")
                 })?;
                 if offset > end {
+                    self.read_late_cancellations(&mut input, &mut row, &mut window)?;
                     break;
                 }
-                through_sequence = sequence;
+                window.through_sequence = sequence;
             }
             self.observe(sequence, kind, fields, &row)?;
             if sequence == failed_sequence {
-                failure_owner = self.failure_owner(sequence, kind, fields)?;
+                window.failure_owner = self.failure_owner(sequence, kind, fields)?;
                 if duration_micros == 0 {
                     break;
                 }
             }
-            if sequence >= failed_sequence && sequence > after_sequence {
-                match kind {
-                    b"primary_request" => {
-                        if let Some(WindowFailureOwner::Request(route)) =
-                            self.request_owner(sequence)?
-                        {
-                            requests.insert(sequence, route);
-                        }
-                    }
-                    b"capture_started" if self.target_admission_required(sequence)? => {
-                        dependencies.insert(sequence, self.dependency_owner(sequence)?);
-                    }
-                    _ => {}
-                }
-            }
-            if kind == b"capture_terminated" && !self.dependency_owners.is_empty() {
-                let dependency = parse(first_field(fields), "dependency sequence")?;
-                self.dependency_owners.remove(&dependency);
-            }
+            let included = sequence >= failed_sequence && sequence > after_sequence;
+            self.record_match(&mut window, sequence, kind, fields, included)?;
             row.clear();
         }
         ensure!(
             end_offset.is_some(),
             "Source session does not contain failed sequence {failed_sequence}"
         );
-        Ok(PrimaryDispatchWindow {
-            through_sequence,
-            requests,
-            dependencies,
-            failure_owner,
-        })
+        Ok(window)
     }
 
     fn observe(&mut self, sequence: u64, kind: &[u8], fields: &[u8], row: &[u8]) -> Result<()> {
@@ -193,15 +172,153 @@ impl WindowScanner {
                 self.primary_requests
                     .insert(sequence, RequestRoute::Encoded(fields.to_vec()));
             }
-            // Runtime observations without an admitted Case carry no ownership link.
-            b"capture_started"
-                if !fields.starts_with(b"runtime\t") || !fields.ends_with(b"\t-") =>
-            {
-                if let Some(link) = self.admission_owner(row)? {
-                    self.dependency_owners.insert(sequence, link);
-                }
+            b"capture_started" if self.target_admission_required(sequence)? => {
+                // Runtime observations without an admitted Case carry no ownership link.
+                let link = if fields.starts_with(b"runtime\t") && fields.ends_with(b"\t-") {
+                    None
+                } else {
+                    self.admission_owner(row)?
+                };
+                self.active_admissions.insert(sequence, link);
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn record_match(
+        &mut self,
+        window: &mut PrimaryDispatchWindow,
+        sequence: u64,
+        kind: &[u8],
+        fields: &[u8],
+        included: bool,
+    ) -> Result<()> {
+        use PrimaryEventKind::*;
+        match kind {
+            b"wire_output_started"
+            | b"wire_output"
+            | b"wire_output_cancelled"
+            | b"capture_terminated" => {
+                self.record_dependency_output(window, sequence, kind, fields, included)?;
+            }
+            _ if !included => {}
+            b"capture_started" if self.active_admissions.contains_key(&sequence) => {
+                window
+                    .dependencies
+                    .insert(sequence, self.dependency_owner(sequence)?);
+            }
+            _ => match primary_kind(kind) {
+                Some(PrimaryRequest) => {
+                    if let Some(WindowFailureOwner::Request(route)) =
+                        self.request_owner(sequence)?
+                    {
+                        window.requests.insert(sequence, route);
+                    }
+                }
+                Some(
+                    PrimaryResponseHeaders
+                    | PrimaryResponsePart
+                    | PrimaryResponseTrailers
+                    | PrimaryResponseEnd
+                    | PrimaryCancel,
+                ) => {
+                    let request = linked_request_sequence(first_field(fields), sequence)?;
+                    if let Some(WindowFailureOwner::Request(route)) = self.request_owner(request)? {
+                        window.primary_outputs.insert(sequence, (request, route));
+                    }
+                }
+                _ => {}
+            },
+        }
+        Ok(())
+    }
+
+    fn record_dependency_output(
+        &mut self,
+        window: &mut PrimaryDispatchWindow,
+        sequence: u64,
+        kind: &[u8],
+        fields: &[u8],
+        included: bool,
+    ) -> Result<()> {
+        if kind == b"wire_output_cancelled" {
+            return self.discard_cancelled_output(window, fields);
+        }
+        let mut cells = fields.split(|&byte| byte == b'\t');
+        let dependency = parse(cells.next().unwrap_or_default(), "dependency sequence")?;
+        if !self.active_admissions.contains_key(&dependency) {
+            return Ok(());
+        }
+        if included && !self.cancelled_starts.contains(&sequence) {
+            window
+                .dependency_outputs
+                .insert(sequence, (dependency, self.dependency_owner(dependency)?));
+            if kind == b"wire_output_started"
+                && let Some(starts) = &mut self.legacy_starts
+            {
+                starts.insert(sequence);
+            }
+        }
+        // The runtime removes an admission at its terminal output. Later
+        // capture terminals for that admission only describe storage state.
+        if kind == b"capture_terminated"
+            || (kind == b"wire_output"
+                && matches!(
+                    cells.next(),
+                    Some(b"end" | b"no_response" | b"target_stop" | b"terminated")
+                ))
+        {
+            self.active_admissions.remove(&dependency);
+        }
+        Ok(())
+    }
+
+    fn discard_cancelled_output(
+        &mut self,
+        window: &mut PrimaryDispatchWindow,
+        fields: &[u8],
+    ) -> Result<()> {
+        let mut cells = fields.split(|&byte| byte == b'\t');
+        let dependency: u64 = parse(cells.next().unwrap_or_default(), "dependency sequence")?;
+        let start = parse(
+            cells.next().unwrap_or_default(),
+            "cancelled output sequence",
+        )?;
+        if window
+            .dependency_outputs
+            .get(&start)
+            .is_some_and(|&(admission, _)| admission == dependency)
+        {
+            window.dependency_outputs.remove(&start);
+            if let Some(starts) = &mut self.legacy_starts {
+                starts.remove(&start);
+            }
+        }
+        Ok(())
+    }
+
+    fn read_late_cancellations(
+        &mut self,
+        input: &mut impl BufRead,
+        row: &mut Vec<u8>,
+        window: &mut PrimaryDispatchWindow,
+    ) -> Result<()> {
+        // Historical Session plans resolve output cancellations across the
+        // whole ledger. A sealed summary provides this index in current recordings.
+        while self
+            .legacy_starts
+            .as_ref()
+            .is_some_and(|starts| !starts.is_empty())
+        {
+            let (_, _, kind, fields) = parse_prefix(row)?;
+            if kind == b"wire_output_cancelled" {
+                self.discard_cancelled_output(window, fields)?;
+            }
+            row.clear();
+            if input.read_until(b'\n', row)? == 0 {
+                break;
+            }
         }
         Ok(())
     }
@@ -265,7 +382,7 @@ impl WindowScanner {
     }
 
     fn dependency_owner(&mut self, sequence: u64) -> Result<Option<WindowFailureOwner>> {
-        match self.dependency_owners.get(&sequence).copied() {
+        match self.active_admissions.get(&sequence).copied().flatten() {
             Some(OwnerLink::Request(request)) => self.request_owner(request),
             Some(OwnerLink::Startup) => Ok(Some(WindowFailureOwner::Startup)),
             Some(OwnerLink::Shutdown) => Ok(Some(WindowFailureOwner::Shutdown)),
@@ -490,12 +607,21 @@ mod tests {
             );
         }
         let before = primary_dispatch_window(root, 3, 60_000_000, 0)?;
+        let previous_route = PrimaryRoute {
+            method: "POST".into(),
+            path: "/previous".into(),
+        };
         assert_eq!(
             before.dependencies.get(&4),
-            Some(&Some(WindowFailureOwner::Request(PrimaryRoute {
-                method: "POST".into(),
-                path: "/previous".into(),
-            })))
+            Some(&Some(WindowFailureOwner::Request(previous_route.clone())))
+        );
+        assert_eq!(
+            before.primary_outputs,
+            [(3, (2, previous_route.clone()))].into()
+        );
+        assert_eq!(
+            before.dependency_outputs,
+            [(5, (4, Some(WindowFailureOwner::Request(previous_route))))].into(),
         );
         let window = primary_dispatch_window(root, 6, 60_000_000, 0)?;
         assert_eq!(window.through_sequence, 14);
@@ -504,6 +630,7 @@ mod tests {
             window.dependencies,
             [(6, None), (9, Some(WindowFailureOwner::Shutdown))].into(),
         );
+        assert!(window.dependency_outputs.is_empty());
         assert_eq!(
             window
                 .requests
@@ -519,6 +646,131 @@ mod tests {
             rolled.failure_owner,
             Some(WindowFailureOwner::Request(_))
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_includes_active_outputs_and_excludes_automatic_or_cancelled_ones() -> Result<()>
+    {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path();
+        let epoch = Uuid::new_v4();
+        let process = Uuid::new_v4();
+        let mut ledger = LedgerFiles::initialize_for_mode(root, epoch, process, true).await?;
+        let mut files = JsonlWriterPool::new(JsonlBufferSettings {
+            capacity: 4096,
+            flush_interval: std::time::Duration::from_secs(30),
+        });
+        ledger
+            .append_session_event(
+                &mut files,
+                &RecordedEvent {
+                    sequence: 1,
+                    offset_micros: 0,
+                    event: SessionEvent::SourceStart,
+                },
+            )
+            .await?;
+        let admission = |dependency_sequence| CaptureEvent::Started {
+            dependency_sequence,
+            phase: CapturePhase::Runtime,
+            observed_case: None,
+            admitted_case: None,
+        };
+        let output = |dependency_sequence, output| CaptureEvent::Output {
+            dependency_sequence,
+            output,
+        };
+        let started = |dependency_sequence, output| CaptureEvent::OutputStarted {
+            dependency_sequence,
+            output,
+        };
+        let terminal = |dependency_sequence| CaptureEvent::Terminal {
+            dependency_sequence,
+            outcome: "no_response".into(),
+            capture_complete: true,
+        };
+        for (sequence, offset_micros, event) in [
+            (2, 1, admission(2)),
+            (3, 2, started(2, OutputKind::Headers)),
+            (4, 3, output(2, OutputKind::Headers)),
+            (5, 4, started(2, OutputKind::Part)),
+            (6, 5, output(2, OutputKind::End)),
+            (7, 6, terminal(2)),
+            (8, 7, admission(8)),
+            (9, 8, output(8, OutputKind::End)),
+            (10, 9, admission(10)),
+            (11, 10, output(10, OutputKind::End)),
+            (12, 11, admission(12)),
+            (13, 12, terminal(12)),
+            (
+                14,
+                60_000_003,
+                CaptureEvent::OutputCancelled {
+                    dependency_sequence: 2,
+                    started_sequence: 5,
+                },
+            ),
+        ] {
+            ledger
+                .append_event(
+                    &mut files,
+                    &RecordedEvent {
+                        sequence,
+                        offset_micros,
+                        event,
+                    },
+                )
+                .await?;
+        }
+        ledger.note_unscheduled_admission(8);
+        let decisions = vec![session_schedule::SessionDecision {
+            sequence: 10,
+            step: None,
+            driver_prelude: Some(DriverPrelude::MysqlSqlalchemyPymysql),
+        }];
+        let identities = ledger.seal_with_schedule(&mut files, decisions).await?;
+        write_session_manifest(root, epoch, process, identities)?;
+
+        let window = primary_dispatch_window(root, 3, 60_000_000, 0)?;
+        assert_eq!(window.through_sequence, 13);
+        assert_eq!(window.dependencies, [(12, None)].into());
+        assert_eq!(
+            window.dependency_outputs,
+            [
+                (3, (2, None)),
+                (4, (2, None)),
+                (6, (2, None)),
+                (13, (12, None))
+            ]
+            .into(),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_window_detects_cancellation_beyond_the_cutoff() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let schedule: Schedule = Box::new(std::iter::empty());
+        let mut scanner = WindowScanner {
+            epoch: Uuid::nil(),
+            segments: SegmentWindow::new_copying(temporary.path().into()),
+            primary_requests: BTreeMap::new(),
+            active_admissions: BTreeMap::new(),
+            unscheduled: BTreeSet::new(),
+            cancelled_starts: BTreeSet::new(),
+            legacy_starts: Some(BTreeSet::new()),
+            schedule: schedule.peekable(),
+        };
+        let timeline = b"1\t0\tsource_start\n\
+            2\t1\tcapture_started\truntime\t-\t-\n\
+            3\t2\twire_output_started\t2\tpart\n\
+            4\t60000002\twire_output_cancelled\t2\t3\n\
+            5\t60000003\twire_output\t2\tend\n";
+        let window = scanner.scan(timeline.as_slice(), 2, 60_000_000, 0)?;
+        assert_eq!(window.through_sequence, 3);
+        assert_eq!(window.dependencies, [(2, None)].into());
+        assert!(window.dependency_outputs.is_empty());
         Ok(())
     }
 }

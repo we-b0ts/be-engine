@@ -12,17 +12,19 @@ under the same reservation.
    to the assigned scope. For first-run `apis` rows, implement each assigned
    HTTP method and case pattern using the catalog group.
    [Diagnosis and request lookup](api-implementer-diagnosis.md)
-2. Read [target code rules](target-code-rules.md) before editing. Return any
-   Source-proven [startup inputs](api-implementer-startup-inputs.md) to the
-   coordinator.
-3. Repair Target behavior or propose a time, ID, or token rule when Source
-   establishes a supported dynamic value relationship. Run only tests that
-   exercise the assigned behavior through normal Target entrypoints.
-   [Rule diagnosis](api-implementer-rule-diagnosis.md)
+2. Before editing, read the [Target code rules](target-code-rules.md) and apply
+   the required [Source collection compatibility](target-code-rules.md#source-collection-compatibility).
+   Return any Source-proven [startup inputs](api-implementer-startup-inputs.md)
+   to the coordinator.
+3. Confirm every assigned window sequence by comparing the event's input and
+   output formats and checking its Target branch. Implement missing or
+   mismatched behavior and prepare any Source-proven rule the event needs.
+   Run focused tests for changes and first-run API reviews through normal
+   Target entrypoints. [Confirm assigned events](api-implementer-diagnosis.md#confirm-assigned-events)
 4. Return the `assignment_id`, a file with the exact Source sequences addressed,
    and the result for those sequences. Include the commit ID and tests for a
-   code fix, focused tests for existing behavior, or evidence and the required
-   capability for a confirmed engine gap.
+   code fix, the format and rule result for unchanged window sequences, or
+   evidence and the required capability for an engine gap.
    [Implementation delivery](api-implementer-delivery.md)
 
 Clippy, standalone builds, and review-check commands are prohibited during

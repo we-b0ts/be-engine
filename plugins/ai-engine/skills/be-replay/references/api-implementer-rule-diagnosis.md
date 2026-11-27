@@ -5,6 +5,9 @@ establish the exact value location, the Source file and symbol, and the
 relationship the comparison must preserve. Use the
 [shared rule evidence contract](rule-policy.md).
 
+For a difference caused by a collection's iteration order, follow the Target
+implementation guidance in [Set and map iteration](api-implementer-diagnosis.md#set-and-map-iteration).
+
 ## Source Event Session
 
 Start at the assigned sequence. For dependency evidence, inspect the recorded

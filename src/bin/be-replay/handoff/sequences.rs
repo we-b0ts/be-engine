@@ -53,7 +53,9 @@ pub(crate) fn read_receipt(path: &Path) -> Result<Receipt> {
                 }
             }
         }
-        Some("claim" | "review" | "engine_gap") => load_sequence_field(path, &mut value)?,
+        Some("claim" | "confirmed" | "review" | "engine_gap") => {
+            load_sequence_field(path, &mut value)?
+        }
         _ => {}
     }
     serde_json::from_value(value).context("parse delivery receipt")

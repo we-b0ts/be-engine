@@ -54,6 +54,13 @@ fn candidate(attempt: &Value, head: &str, included: &[&str]) -> Value {
         "included_fixes":included})
 }
 
+fn confirmation(worker: &Value, file: &str, rule: &str) -> Value {
+    json!({
+        "kind":"confirmed", "group":worker["group"], "assignment_id":worker["assignment_id"],
+        "sequences_file":file, "format":"matches", "rule":rule
+    })
+}
+
 #[tokio::test]
 async fn a_session_rule_plan_repairs_a_failure_through_the_integration_candidate() {
     let target = tempfile::tempdir().unwrap();
@@ -62,7 +69,16 @@ async fn a_session_rule_plan_repairs_a_failure_through_the_integration_candidate
     configure(root);
     fs::write(root.join(".traffic-e2e/apis.yaml"), "fixture: [/items/*]\n").unwrap();
     commit_catalog(root);
-    seal_events_with_apis(&recording_dir(root), &[(800, "GET", "/items/1")]).await;
+    let recording = recording_dir(root);
+    seal_events_with_apis(
+        &recording,
+        &[
+            (800, "GET", "/items/1"),
+            (900, "GET", "/items/2"),
+            (1000, "GET", "/items/3"),
+        ],
+    )
+    .await;
     let attempt = run_attempt_with_invalid_source(
         root,
         &["run", "--user-confirm", "--recording-run-id", RECORDING_ID],
@@ -71,31 +87,54 @@ async fn a_session_rule_plan_repairs_a_failure_through_the_integration_candidate
     register_implementers(root);
     let assigned = assignments(root);
     let worker = group(&assigned, "fixture");
+    fs::write(recording.join("confirmed.seq"), "8\n").unwrap();
+    assert!(
+        !report(root, confirmation(worker, "confirmed.seq", "covered"))
+            .status
+            .success()
+    );
 
     let delivery = tempfile::tempdir().unwrap();
     let proposal = delivery.path().join("proposal.json");
-    let sequences = delivery.path().join("claimed.txt");
-    fs::write(
-        delivery.path().join("policy.yaml"),
-        "format: traffic-policy/v3\njson:\n  fields:\n    /fixture_at: {kind: time, formats: [unix_seconds]}\n",
-    ).unwrap();
+    let sequences = delivery.path().join("rule.seq");
+    let policy = delivery.path().join("policy.yaml");
+    let fragment = "format: traffic-policy/v3\njson:\n  fields:\n    /fixture_at: {kind: time, formats: [unix_seconds]}\n";
+    fs::write(&policy, fragment).unwrap();
     fs::write(&proposal, serde_json::to_vec(&json!({
         "group":"fixture", "assignment_id":worker["assignment_id"],
-        "sequences_file":"claimed.txt", "proposal_file":"policy.yaml",
+        "sequences_file":"rule.seq", "proposal_file":"policy.yaml",
         "source_evidence":{"source":"src/fixture.rs:7", "fact":"The handler emits the current time in Unix seconds."},
         "checks":["Verified the handler uses the current clock"]
     })).unwrap()).unwrap();
     let register = ["rule", "plan", "--file", proposal.to_str().unwrap()];
-    fs::write(&sequences, "9\n").unwrap();
+    fs::write(&sequences, "11\n").unwrap();
     assert!(!command(root, &register).status.success());
     fs::write(&sequences, "8\n").unwrap();
     let plan_output = successful(command(root, &register));
     assert_eq!(successful(command(root, &register)), plan_output);
     let plan_id = plan_output["rule_plan"]["id"].as_str().unwrap();
 
+    assert_eq!(
+        assignments(root)["action"]["kind"],
+        "implementation_required"
+    );
+    assert!(!command(root, &["run"]).status.success());
+    fs::write(&policy, fragment.replace("fixture_at", "other_at")).unwrap();
+    fs::write(&sequences, "9\n").unwrap();
+    let next_plan = successful(command(root, &register));
+    let next_plan_id = next_plan["rule_plan"]["id"].as_str().unwrap();
+    fs::write(recording.join("confirmed.seq"), "10\n").unwrap();
+    successful(report(
+        root,
+        confirmation(worker, "confirmed.seq", "covered"),
+    ));
     let pending = assignments(root);
     assert_dispatch(&pending, "integration_required", "code-integrator");
     assert_eq!(pending["action"]["details"]["rule_plans"][0]["id"], plan_id);
+    assert_eq!(
+        pending["action"]["details"]["rule_plans"][1]["id"],
+        next_plan_id
+    );
     let registered = register_task(root, &pending, "fixture-integrator");
     let task = registered["action"]["details"]["task"]["task_id"]
         .as_str()
@@ -114,6 +153,7 @@ async fn a_session_rule_plan_repairs_a_failure_through_the_integration_candidate
                 "fixture-integrator",
                 "--plan-id",
                 plan_id,
+                next_plan_id,
             ],
         )
     };
@@ -139,13 +179,15 @@ async fn a_session_rule_plan_repairs_a_failure_through_the_integration_candidate
     git(&worktree, &["commit", "-qm", "apply reviewed rule"]);
     let commit = git(&worktree, &["rev-parse", "HEAD"]);
     git(root, &["merge", "--ff-only", &commit]);
-    let delivery = bind_delivery(
+    let mut delivery = bind_delivery(
         json!({
             "kind":"candidate", "attempt_id":attempt["attempt_id"], "commit":commit,
             "included_fixes":[], "included_rule_plans":[plan_id]
         }),
         &registered,
     );
+    assert!(!report(root, delivery.clone()).status.success());
+    delivery["included_rule_plans"] = json!([plan_id, next_plan_id]);
     assert_eq!(
         successful(report(root, delivery))["action"]["kind"],
         "advance_required"
@@ -324,7 +366,7 @@ async fn new_api_grouping_gates_first_replay_but_implementation_runs_in_parallel
 }
 
 #[tokio::test]
-async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_delivery() {
+async fn window_requires_every_group_confirmation_and_repair_before_replay() {
     let target = tempfile::tempdir().unwrap();
     let root = target.path();
     configure(root);
@@ -397,7 +439,7 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
     let assigned = status();
     assert_eq!(
         group(&assigned, "sync")["items"][0]["sequences"],
-        json!([5])
+        json!([5, 7])
     );
     assert_eq!(
         group(&assigned, "users")["worktree"],
@@ -411,7 +453,6 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
     let branch = git(root, &["branch", "--show-current"]);
     let job_fix = fixture_fix(root, "worker-job", "job.txt", &branch);
     let users_fix = fixture_fix(root, "worker-users", "users.txt", &branch);
-    let batch_fix = fixture_fix(root, "worker-batch", "batch.txt", &branch);
     let mut stale = delivery(group(&assigned, "users"), &users_fix, 8);
     stale["fixes"][0]["assignment_id"] = json!(uuid::Uuid::new_v4());
     assert!(!report(root, stale).status.success());
@@ -423,10 +464,33 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
         "implementation_required"
     );
     assert!(!command(root, &["run"]).status.success());
-    let ready = successful(report(
+    let waiting = successful(report(
         root,
         delivery(group(&assigned, "sync"), &job_fix, 5),
     ));
+    assert_eq!(waiting["action"]["kind"], "implementation_required");
+    assert!(!command(root, &["run"]).status.success());
+
+    let file = "confirmed.seq";
+    let path = recording.join(file);
+    fs::write(&path, "7\n").unwrap();
+    let batch_worker = group(&assigned, "batch");
+    assert!(
+        !report(root, confirmation(batch_worker, file, "not_needed"))
+            .status
+            .success()
+    );
+    let confirmed = confirmation(group(&assigned, "sync"), file, "not_needed");
+    successful(report(root, confirmed.clone()));
+    successful(report(root, confirmed));
+    assert!(!command(root, &["run"]).status.success());
+
+    fs::write(&path, "9\n10\n").unwrap();
+    let route_review = json!({"kind":"review", "group":batch_worker["group"],
+        "assignment_id":batch_worker["assignment_id"], "sequences_file":file,
+        "checks":["Route is registered"]});
+    assert!(!report(root, route_review).status.success());
+    let ready = successful(report(root, confirmation(batch_worker, file, "not_needed")));
     assert_dispatch(&ready, "integration_required", "code-integrator");
     assert_eq!(ready["action"]["details"]["task"]["ready_fixes"], 2);
     assert!(ready["action"]["details"]["fixes"].is_null());
@@ -438,19 +502,6 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
             .len(),
         2
     );
-    let detail = status();
-    let batch_worker = group(&detail, "batch");
-    let other_worker_exited = successful(report(
-        root,
-        json!({"kind":"implementers",
-        "workers":[{"group":"batch", "assignment_id":batch_worker["assignment_id"],
-            "agent_handle":batch_worker["agent_handle"], "state":"exited"}]}),
-    ));
-    assert_dispatch(
-        &other_worker_exited,
-        "integration_required",
-        "code-integrator",
-    );
     let integrator = register_task(root, &ready, "fixture-integrator");
     git(root, &["merge", "--ff-only", &job_fix]);
     let awaiting_candidate = successful(command(root, &["status"]));
@@ -458,78 +509,53 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
         awaiting_candidate["action"]["details"]["task"],
         integrator["action"]["details"]["task"]
     );
-    assert!(
-        !report(
-            root,
-            bind_delivery(candidate(&initial, &job_fix, &[&users_fix]), &integrator)
-        )
-        .status
-        .success()
-    );
+    git(root, &["merge", "--no-edit", &users_fix]);
+    let head = git(root, &["rev-parse", "HEAD"]);
+    let incomplete = bind_delivery(candidate(&initial, &head, &[&job_fix]), &integrator);
+    assert!(!report(root, incomplete).status.success());
+    assert!(!command(root, &["run"]).status.success());
     let published = successful(report(
         root,
-        bind_delivery(candidate(&initial, &job_fix, &[&job_fix]), &integrator),
+        bind_delivery(
+            candidate(&initial, &head, &[&job_fix, &users_fix]),
+            &integrator,
+        ),
     ));
     assert_eq!(published["action"]["kind"], "advance_required");
-    assert_eq!(published["action"]["details"]["pending_dispatch"], 1);
-    assert_eq!(
-        group(&status(), "batch")["worktree"],
-        group(&failed, "batch")["worktree"]
-    );
 
     let next = run_attempt_with_invalid_source(root, &["run"]);
-    // Exercise the live receipt path using the same lock and snapshot layout
-    // as a running Replay, without needing a Target image.
-    let attempt_dir = Path::new(next["progress"].as_str().unwrap())
-        .parent()
-        .unwrap();
-    let result = attempt_dir.join("event-result.json");
-    let terminal = fs::read(&result).unwrap();
-    fs::remove_file(&result).unwrap();
-    let running = fs::File::options()
-        .read(true)
-        .write(true)
-        .open(attempt_dir.join("attempt.lock"))
-        .unwrap();
-    running.try_lock().unwrap();
-    let run_lock = fs::File::options()
-        .read(true)
-        .write(true)
-        .open(traffic_e2e::internal_runtime::root(root).join("replay-run.lock"))
-        .unwrap();
-    run_lock.try_lock().unwrap();
-    assert_eq!(status()["state"], "running");
-    register_implementers(root);
-    successful(report(
-        root,
-        delivery(group(&assigned, "batch"), &batch_fix, 9),
-    ));
-    assert_eq!(
-        group(&status(), "batch")["items"][0]["sequences"],
-        json!([10])
-    );
-    fs::write(result, terminal).unwrap();
-    drop(running);
-    drop(run_lock);
-
     publish_mismatch(next.clone(), 8);
-    let promoted = status();
-    assert_dispatch(&promoted, "integration_required", "code-integrator");
+    let renewed = status();
+    assert_eq!(renewed["action"]["kind"], "dispatch_required");
     assert_ne!(
-        promoted["action"]["details"]["task"]["task_id"],
-        integrator["action"]["details"]["task"]["task_id"]
+        group(&renewed, "batch")["assignment_id"],
+        batch_worker["assignment_id"]
     );
     assert_eq!(
-        promoted["action"]["details"]["fixes"][0]["commit"],
-        users_fix
-    );
-    assert_eq!(
-        group(&promoted, "later")["items"][0]["sequences"],
+        group(&renewed, "later")["items"][0]["sequences"],
         json!([11])
     );
+    register_implementers(root);
+    let next_fix = fixture_fix(root, "worker-next", "users-next.txt", &branch);
+    successful(report(
+        root,
+        delivery(group(&renewed, "users"), &next_fix, 8),
+    ));
+    successful(report(
+        root,
+        confirmation(group(&renewed, "batch"), file, "not_needed"),
+    ));
+    assert!(!command(root, &["run"]).status.success());
+    fs::write(&path, "11\n").unwrap();
+    successful(report(
+        root,
+        confirmation(group(&renewed, "later"), file, "not_needed"),
+    ));
+    let promoted = status();
+    assert_dispatch(&promoted, "integration_required", "code-integrator");
     assert_eq!(
-        group(&promoted, "batch")["worktree"],
-        group(&failed, "batch")["worktree"]
+        promoted["action"]["details"]["fixes"][0]["commit"],
+        next_fix
     );
     let new_integrator = register_task(root, &promoted, "next-integrator");
     let obsolete_candidate =
@@ -561,11 +587,6 @@ async fn window_dispatches_api_groups_during_ownership_and_replays_on_covering_d
     assert_eq!(
         restored["action"]["details"]["fixes"],
         promoted["action"]["details"]["fixes"]
-    );
-    assert_eq!(restored["action"]["details"]["pending_dispatch"], 2);
-    assert_eq!(
-        group(&restored, "batch")["assignment_id"],
-        group(&promoted, "batch")["assignment_id"]
     );
 }
 
@@ -635,8 +656,26 @@ async fn lookahead_delegates_unowned_matches_and_validates_sequence_files() {
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("seq 5 must follow"));
     fs::write(recording.join("claim.seq"), "10\n").unwrap();
     successful(report(root, claim));
-    assert_eq!(read_sequences(&owned), "8\n9\n10\n");
+    assert_eq!(read_sequences(&owned), "8\n9\n10\n11\n");
     assert_eq!(read_sequences(&unowned), "5\n");
+
+    let branch = git(root, &["branch", "--show-current"]);
+    let startup_fix = fixture_fix(root, "worker-startup", "startup.txt", &branch);
+    successful(report(
+        root,
+        delivery(group(&dispatch, "startup"), &startup_fix, 2),
+    ));
+    fs::write(recording.join("unresolved.seq"), "5\n").unwrap();
+    successful(plan(
+        root,
+        bind_delivery(
+            json!({"lookahead":[{
+                "sequences_file":"unresolved.seq", "evidence":"No ownership evidence yet."
+            }]}),
+            &analyst,
+        ),
+    ));
+    assert!(!command(root, &["run"]).status.success());
 
     let findings = bind_delivery(
         json!({"lookahead":[{
@@ -649,28 +688,45 @@ async fn lookahead_delegates_unowned_matches_and_validates_sequence_files() {
     let rejected = plan(root, findings.clone());
     assert!(!rejected.status.success());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("seq 6"));
-    fs::write(recording.join("ownership.seq"), "5, 10\n").unwrap();
-    successful(plan(root, findings));
-    assert_eq!(read_sequences(&owned), "5\n8\n9\n10\n");
-
-    let review = json!({"kind":"review", "group":"users", "assignment_id":id,
-        "sequences_file":"review.seq", "checks":["focused comparison passed"]});
-    fs::write(recording.join("review.seq"), "5, 8\n6\n").unwrap();
-    let rejected = report(root, review.clone());
+    let checked = confirmation(worker, "checked.seq", "not_needed");
+    fs::write(recording.join("checked.seq"), "8, 6\n").unwrap();
+    let rejected = report(root, checked.clone());
     assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("assigned sequences in users"));
-    fs::write(recording.join("review.seq"), "5, 8\n").unwrap();
-    successful(report(root, review));
-    assert_eq!(read_sequences(&owned), "9\n10\n");
+    fs::write(recording.join("checked.seq"), "8\n").unwrap();
+    successful(report(root, checked));
+    assert_eq!(read_sequences(&owned), "9\n10\n11\n");
 
-    let branch = git(root, &["branch", "--show-current"]);
     let commit = fixture_fix(root, "worker-lookahead", "users.txt", &branch);
     fs::write(recording.join("fix.seq"), "9\n10\n").unwrap();
-    successful(report(
+    let partial = successful(report(
         root,
         json!({"kind":"fixes", "fixes":[{
             "group":"users", "assignment_id":id, "commit":commit,
             "sequences_file":"fix.seq", "checks":["users API test passed"]
         }]}),
     ));
+    assert_ne!(
+        partial["action"]["details"]["task"]["requirement"],
+        "integration_required"
+    );
+    assert!(!command(root, &["run"]).status.success());
+    fs::write(recording.join("checked.seq"), "11\n").unwrap();
+    successful(report(root, confirmation(worker, "checked.seq", "covered")));
+    let blocked = assignments(root);
+    assert_eq!(blocked["action"]["kind"], "setup_required");
+    assert_eq!(blocked["action"]["details"]["seq"], 5);
+    assert!(!command(root, &["run"]).status.success());
+
+    fs::write(recording.join("ownership.seq"), "5, 10\n").unwrap();
+    successful(plan(root, findings));
+    register_implementers(root);
+    let assigned = assignments(root);
+    let worker = group(&assigned, "users");
+    assert_eq!(worker["items"][0]["sequences"], json!([5, 7]));
+    fs::write(recording.join("checked.seq"), "5, 7\n").unwrap();
+    let ready = successful(report(
+        root,
+        confirmation(worker, "checked.seq", "not_needed"),
+    ));
+    assert_dispatch(&ready, "integration_required", "code-integrator");
 }

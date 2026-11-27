@@ -166,9 +166,10 @@ fn apply(root: &Path, id: Option<&str>, args: Apply, pretty: bool) -> Result<()>
         },
     )?;
     let plans = args.plan_id.into_iter().collect::<BTreeSet<_>>();
-    let base = attempt
-        .target_commit
-        .as_deref()
+    let base = round
+        .workflow
+        .previous_candidate(attempt)
+        .or(attempt.target_commit.as_deref())
         .context("attempt lacks a Target commit")?;
     let policy = round.workflow.render_rule_plans(&repo.root, base, &plans)?;
     ensure!(

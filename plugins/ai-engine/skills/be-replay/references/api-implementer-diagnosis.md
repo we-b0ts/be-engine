@@ -20,13 +20,27 @@ calls. Trace the earliest event that explains the failure. For a response
 status mismatch, start with authentication, preconditions, configuration, and
 error mapping. Trace the response body through its construction, application
 state or cache, and the dependency behind it. Distinguish JSON null, absent
-fields, unavailable payloads, and non-JSON responses. For array order, check
-the Source ordering contract and the Target producer.
+fields, unavailable payloads, and non-JSON responses. For ordering differences,
+see [Set and map iteration](#set-and-map-iteration).
 
 If required data is unavailable, give the coordinator the precise missing
 observation and the Source code that needs it. For a known engine gap, include
 the unsupported behavior, exact evidence, and change required. Keep Target
 behavior compatible with production.
+
+## Set and map iteration
+
+When two JSON arrays differ, compare the complete typed elements and their
+duplicate counts to identify an order-only difference. Trace the sequence back
+to the Source producer. Preserve explicit sorting, insertion order, and
+duplicate-sensitive lists according to their Source contracts.
+
+Use the required Source-compatible collection in Target. For an ordering
+failure, use a focused test with synthetic inputs to verify the sequence
+emitted by the normal Target entrypoint. Keep Replay's order checks in place.
+Cite the available Source and Target evidence for the compared order in a
+gap report.
+[Source collection compatibility](target-code-rules.md#source-collection-compatibility)
 
 ## Look ahead from a recorded request
 
@@ -49,10 +63,31 @@ the in-window primary request anchor and evidence. Send links to requests
 before the window to the coordinator for the analyst's ownership finding.
 [Claim format](session-regression.md#claim-window-dependencies)
 
-Compare the recorded behavior with the available Target observation or the
-current Target code and a focused test. Sequence proximity alone cannot
-establish an owner. Sequences beyond the first failure remain ahead of the
-Replay frontier until a later attempt reaches them.
+Sequence proximity alone cannot establish an owner. After the engine
+accepts ownership, confirm the assigned events. Replay verifies the
+sequences when a later attempt reaches them.
+
+## Confirm assigned events
+
+Check each assigned window sequence against its recorded input and output.
+Use `events --seq` for the sequence and `dependency` with the admission
+sequence for a linked dependency exchange. Compare against the available
+Target observation or the code for the call or handler and the branch
+exercised by the event's inputs.
+
+1. Compare request and result formats, including SQL projection and bindings
+   or JSON structure and field types where applicable. For a dependency,
+   check what Target sends and how it reads the recorded result.
+2. Implement a missing call, handler, or branch and correct format
+   differences. If Source selects both `a.id` and `b.id` while Target selects
+   only `a.id`, add the required projection and test the query.
+3. Check whether a generated ID, timestamp, or similar value needs a rule.
+   Use the existing rule when it covers the behavior. Prepare a rule plan
+   for a new Source-proven relationship.
+
+Batch sequences that share the same implementation, input/output shape,
+and outcome in one sequence file. Include every sequence the result covers.
+[Implementation delivery](api-implementer-delivery.md) · [Rule diagnosis](api-implementer-rule-diagnosis.md)
 
 ## Rule Discovery From Source Diagnosis
 

@@ -141,7 +141,10 @@ pub(super) fn attempt_action(
             if let Some(commit) = round.workflow.candidate_commit(last) {
                 candidate_action(commit, &repo.head)
             } else if let Some(seq) = mismatch_sequence(last) {
-                if round.engine_retry_available(repo, last)? {
+                if round.workflow.window_ready()
+                    && !round.workflow.window_changes_ready()
+                    && round.engine_retry_available(repo, last)?
+                {
                     json!({
                         "kind":"advance_required",
                         "summary":"Replay once with the updated engine.",
@@ -155,8 +158,7 @@ pub(super) fn attempt_action(
                         return Ok(delegated_action(round, task, detail, state_label));
                     }
                     let repair = round.workflow.repair_action(owner);
-                    if repair["kind"] != "setup_required"
-                        && round.workflow.can_dispatch_lookahead()
+                    if round.workflow.can_dispatch_lookahead()
                         && let Some(task) = round
                             .workflow
                             .lookahead_task(&round.run_key, &last.attempt_id)

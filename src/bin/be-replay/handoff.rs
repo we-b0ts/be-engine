@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 mod api_backlog;
 mod api_grouping;
+mod confirmation;
 mod delegation;
 mod groups;
 mod lookahead;
@@ -26,6 +27,7 @@ mod tests;
 
 pub(super) use api_backlog::ApiBacklog;
 pub(super) use api_grouping::CatalogUpdate;
+use confirmation::Confirmation;
 pub(super) use delegation::{DispatchState, Registration, Task};
 use groups::{Fix, Gap, Groups, ImplementerUpdate, WorkItem};
 pub(super) use lookahead::WindowFinding;
@@ -138,6 +140,7 @@ pub(super) enum Receipt {
         workers: Vec<ImplementerUpdate>,
     },
     Claim(Claim),
+    Confirmed(Confirmation),
     Fixes {
         fixes: Vec<Fix>,
     },
@@ -216,10 +219,9 @@ impl Workflow {
         self.failure.as_ref().is_some_and(|failure| {
             failure.seq == seq
                 && attempt_uuid(attempt).ok() == Some(failure.attempt_id)
-                && self
-                    .window
-                    .as_ref()
-                    .is_some_and(|window| window.attempt_id == Some(failure.attempt_id))
+                && self.window.as_ref().is_some_and(|window| {
+                    window.attempt_id == Some(failure.attempt_id) && window.coverage.is_some()
+                })
         })
     }
 
@@ -255,11 +257,12 @@ impl Workflow {
             self.owners.insert(key, owner.clone());
         }
         self.enqueue_owner(&owner, base);
+        self.assign_linked(&owner, base);
         Ok(())
     }
 
     fn enqueue_owner(&mut self, owner: &Ownership, base: &str) {
-        if self.groups.gap(&owner.group, owner.seq).is_none()
+        if !self.failure_was_applied(owner.seq)
             && !self.groups.pending(&owner.group, owner.seq)
             && !self.ready_rule_covers(&owner.group, owner.seq)
             && !self
@@ -347,6 +350,9 @@ impl Workflow {
         if pending_worker_status > 0 {
             action["details"]["pending_worker_status"] = json!(pending_worker_status);
         }
+        if let Some(progress) = self.read_window_progress() {
+            action["details"]["window"] = progress;
+        }
         let integration = action["details"]["task"]["requirement"] == "integration_required";
         if integration {
             action["details"]["task"]["ready_fixes"] = json!(self.groups.ready_fixes().count());
@@ -363,9 +369,6 @@ impl Workflow {
             action["query"] = json!(["status", "--with-assignments"]);
         }
         if matches!(detail, AssignmentDetail::Full) {
-            if let Some(window) = &self.window {
-                action["details"]["window"] = window.handoff();
-            }
             if self.groups.has_active_assignments() {
                 action["details"]["assignments"] = self.groups.assignments();
             }
@@ -389,7 +392,7 @@ impl Workflow {
         let (kind, summary) = if self.groups.has_active_assignments() {
             (
                 "implementation_required",
-                "Follow the registered implementers and report ready deliveries.",
+                "Follow the registered implementers and submit confirmations and completed repairs.",
             )
         } else {
             (
@@ -408,13 +411,8 @@ impl Workflow {
     }
 
     pub fn repair_action(&self, owner: &Ownership) -> Value {
-        if let Some(gap) = self.groups.gap(&owner.group, owner.seq) {
-            return json!({
-                "kind":"setup_required",
-                "summary":"Resolve the reported engine gap, then retry Replay.",
-                "details":{"group":owner.group, "scope":owner.scope, "evidence":gap.evidence},
-                "command":["run"]
-            });
+        if let Some(blocker) = self.coverage_blocker() {
+            return blocker;
         }
         let mut action = self.implementation_action();
         action["details"]["group"] = json!(owner.group);
@@ -453,15 +451,26 @@ impl Workflow {
     }
 
     pub fn ready_integration(&self, owner: Option<&Ownership>) -> Option<usize> {
-        if !self.groups.ready_fixes().any(|fix| covers(owner, fix))
-            && !self.rule_plans.ready_for(owner)
-        {
+        if owner.is_some() && !self.window_ready() {
             return None;
         }
-        Some(self.groups.ready_fixes().count() + self.rule_plans.pending().count())
+        let ready = self.groups.ready_fixes().count() + self.rule_plans.pending().count();
+        (ready > 0).then_some(ready)
     }
 
     pub fn candidate_commit(&self, attempt: &E2eEventSessionResult) -> Option<&str> {
+        if self
+            .window
+            .as_ref()
+            .is_some_and(|window| window.attempt_id == attempt_uuid(attempt).ok())
+            && (!self.window_ready() || self.window_changes_ready())
+        {
+            return None;
+        }
+        self.previous_candidate(attempt)
+    }
+
+    pub(super) fn previous_candidate(&self, attempt: &E2eEventSessionResult) -> Option<&str> {
         let id = attempt_uuid(attempt).ok()?;
         self.candidate
             .as_ref()
@@ -510,11 +519,28 @@ impl Workflow {
                 Ok(Vec::new())
             }
             Receipt::Implementers { workers } => {
+                let exited: Vec<_> = workers
+                    .iter()
+                    .filter_map(|worker| worker.exited_group().map(str::to_owned))
+                    .collect();
                 self.groups.update_implementers(workers)?;
+                for group in exited {
+                    let planned = self
+                        .rule_plans
+                        .pending()
+                        .filter(|plan| plan.group() == group)
+                        .flat_map(|plan| plan.sequences().iter().copied())
+                        .collect();
+                    self.groups.consume_lookahead(&group, &planned);
+                }
                 Ok(Vec::new())
             }
             Receipt::Claim(claim) => {
                 self.claim(claim)?;
+                Ok(Vec::new())
+            }
+            Receipt::Confirmed(confirmation) => {
+                self.confirm(confirmation)?;
                 Ok(Vec::new())
             }
             Receipt::Fixes { fixes } => {
@@ -532,6 +558,7 @@ impl Workflow {
                     seq.is_none_or(|seq| !sequences.contains(&seq)),
                     "the current failed sequence requires a repair or an engine gap"
                 );
+                self.require_confirmed_review(&sequences)?;
                 self.groups.review(
                     &group,
                     assignment_id,
@@ -546,18 +573,12 @@ impl Workflow {
                 sequences,
                 evidence,
             } => {
-                let lookahead = sequences
-                    .iter()
-                    .copied()
-                    .filter(|&event| Some(event) != seq)
-                    .collect();
                 self.groups.accept_gap(Gap {
-                    group: group.clone(),
+                    group,
                     assignment_id,
                     sequences,
                     evidence,
                 })?;
-                self.groups.consume_lookahead(&group, &lookahead);
                 Ok(Vec::new())
             }
             Receipt::Candidate {
@@ -627,21 +648,17 @@ impl Workflow {
         if !candidate.checks.is_empty() {
             validate_checks(&candidate.checks)?;
         }
-        let previous = attempt
-            .target_commit
-            .as_deref()
+        let previous = self
+            .previous_candidate(attempt)
+            .or(attempt.target_commit.as_deref())
             .context("attempt lacks Target identity")?;
         ensure!(
             previous != head && is_ancestor(root, previous, head)?,
             "candidate must advance the Target revision {previous}"
         );
-        let owner = seq
-            .map(|seq| {
-                self.owners
-                    .get(&seq.to_string())
-                    .context("confirm the current failed event's owner")
-            })
-            .transpose()?;
+        if seq.is_some() {
+            self.require_window_candidate(&candidate)?;
+        }
         let ready: Vec<_> = self
             .groups
             .ready_fixes()
@@ -657,11 +674,8 @@ impl Workflow {
             "candidate includes an unaccepted or already integrated delivery"
         );
         ensure!(
-            ready.iter().any(|fix| covers(owner, fix))
-                || self
-                    .rule_plans
-                    .selected_cover(&candidate.included_rule_plans, owner),
-            "candidate must include an accepted delivery covering the current failure"
+            !ready.is_empty() || !candidate.included_rule_plans.is_empty(),
+            "candidate must include an accepted delivery"
         );
         if !candidate.included_rule_plans.is_empty() {
             let policy = self
@@ -676,12 +690,26 @@ impl Workflow {
             root,
             self.groups.api_work_for(&candidate.included_fixes),
         )?;
+        if let Some(coverage) = self
+            .window
+            .as_mut()
+            .and_then(|window| window.coverage.as_mut())
+        {
+            coverage.mark_applied(ready.iter().flat_map(|fix| fix.sequences.iter().copied()));
+        }
         let completed = self.groups.mark_integrated(&candidate.included_fixes);
         for (group, sequences) in self
             .rule_plans
             .mark_integrated(&candidate.included_rule_plans)
         {
             self.consume_rule_sequences(&group, &sequences);
+            if let Some(coverage) = self
+                .window
+                .as_mut()
+                .and_then(|window| window.coverage.as_mut())
+            {
+                coverage.mark_applied(sequences);
+            }
         }
         self.candidate = Some(candidate);
         Ok(completed)
@@ -703,10 +731,6 @@ fn fix_summary(fix: &Fix) -> Value {
 
 fn attempt_uuid(attempt: &E2eEventSessionResult) -> Result<Uuid> {
     Ok(attempt.attempt_id.parse()?)
-}
-
-fn covers(owner: Option<&Ownership>, fix: &Fix) -> bool {
-    owner.is_none_or(|owner| owner.group == fix.group && fix.sequences.contains(&owner.seq))
 }
 
 fn validate_scope(scope: &str) -> Result<()> {

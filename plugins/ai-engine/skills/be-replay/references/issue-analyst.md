@@ -43,15 +43,17 @@ with the group that owns the subsystem. [Ownership format](session-regression.md
 ## Lookahead ownership
 
 For `lookahead_ownership_required`, read the outstanding sequences for `task_id`
-with `be-replay sequences --task-id TASK`. Use `--limit` and the last returned
-sequence as `--after-seq` to work in batches. Inspect each affected primary
-request or dependency admission. Trace the matching request, dependency or
-lifecycle evidence to its scope. A request can precede the window. Consecutive
-Source sequences can belong to different requests.
+with `be-replay sequences --task-id TASK`. The list has one representative
+sequence per exchange. Use `--limit` and the last returned sequence as
+`--after-seq` to work in batches. Use the primary request or
+dependency admission linked to each exchange event. Trace the matching
+request, dependency or lifecycle evidence to its scope. A request can precede
+the window. Consecutive Source sequences can belong to different requests.
 
 Group sequences that share an evidence-backed scope and group in one file.
 Return a `lookahead` finding per file with `sequences_file`, `scope`, `group`,
 and a short `evidence` reference. If the available facts cannot establish
 ownership, omit both `scope` and `group` and state the missing evidence. The
-implementer handles comparison and repair after ownership is accepted.
+unresolved sequences keep the window open. The engine assigns linked events
+together. The implementer confirms each assigned sequence.
 [Lookahead receipt](session-regression.md#lookahead-ownership)

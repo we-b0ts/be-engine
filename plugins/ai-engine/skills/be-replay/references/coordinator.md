@@ -37,8 +37,8 @@ Use the Source revision from the recording handoff and the canonical Target's
 current commit. For `ownership_required`, pass the attempt, failed sequence,
 and any evidence references already available. For `lookahead_ownership_required`,
 pass the task identity and Source window. For `integration_required`, use
-`status --with-assignments` to get the ready fixes and rule plans. Pass the
-selected commit and rule plan IDs, canonical base, current attempt, and
+`status --with-assignments` to obtain every ready window fix and rule plan.
+Pass those commit and rule plan IDs, canonical base, current attempt, and
 integration worktree. Request the exact merged candidate and test results
 only for any conflict resolution. Keep
 follow-ups within merge conflicts and route product repairs or refactors to
@@ -55,8 +55,7 @@ cannot start the required role, report the blocker and keep the task pending.
 At `await_delivery`, follow the registered `agent_handle` in the runtime.
 Once it returns the artifact, submit it with the current `task_id` and
 `agent_handle`. Use `be-replay plan --findings FILE` for grouping or ownership
-and `be-replay report --file FILE` for a candidate. Follow `status` if a ready
-repair moves integration ahead of lookahead analysis. If the agent exits without
+and `be-replay report --file FILE` for a candidate. If the agent exits without
 delivering, report its exit and follow the resulting dispatch action. Return
 incomplete artifacts to the responsible role for correction. For an API
 grouping delivery, the engine writes the catalog and requests its commit
@@ -75,9 +74,10 @@ and recording or attempt context. Reuse an active worker and worktree when
 the engine adds to the same group.
 
 At `dispatch_required`, or when `pending_dispatch` appears alongside another
-action, launch assignments without handles in parallel. Ask each implementer
-to load the current `be-replay` skill for its role and run only tests for its
-assignment. Engine `review check` and `cargo clippy` are prohibited in
+action, launch assignments without handles in parallel. Tell the implementer
+to load the current `be-replay` skill, confirm every assigned sequence,
+implement required Target changes, and run focused tests for the changes.
+Engine `review check` and `cargo clippy` are prohibited in
 implementer assignments and follow-ups during progression. Register the
 handles returned by the runtime with
 `be-replay report --file FILE`. At `worker_status_required`, query the runtime
@@ -86,11 +86,13 @@ If it confirms a worker exited without delivering, report `state: exited`
 and resume or replace it in the same reservation.
 [Implementer receipts](session-regression.md#plan-implement-and-verify)
 
-Register returned ownership claims before accepting any delivery for the
-claimed sequences. Submit fixes, tested no-change confirmations, rule plans,
-and engine gaps with the original recording and `assignment_id`. Implementer
-reports can arrive while Replay runs. Register rules against a finished
-attempt. Route a confirmed engine gap with the recording and attempt IDs,
+Register ownership claims so the engine can assign the sequences for
+confirmation. Submit the implementer's confirmations, fixes, rule plans,
+and engine gaps with the original recording and `assignment_id`. The engine
+requests integration after every required sequence has a result. Follow
+`advance_required` for the next Replay after the engine accepts the candidate
+with all window repairs applied. Register rules against a finished attempt.
+Route an engine gap with the recording and attempt IDs,
 the Source sequence, observed behavior, and needed capability. Apply supported
 coordinator-owned inputs before the relevant Replay. [Rule actions](coordinator-rule-actions.md)
 

@@ -465,6 +465,13 @@ fn run_as_passed(mut attempt: Value, api_total: usize) -> Value {
     attempt
 }
 
+fn window_confirmation(worker: &Value, sequences: &[u64]) -> Value {
+    json!({
+        "kind":"confirmed", "group":worker["group"], "assignment_id":worker["assignment_id"],
+        "sequences":sequences, "format":"matches", "rule":"not_needed",
+    })
+}
+
 #[tokio::test]
 async fn an_engine_update_can_retry_once_after_managed_configuration_is_committed() {
     let target = tempfile::tempdir().unwrap();
@@ -498,9 +505,9 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     assert_dispatch(&dispatch, "ownership_required", "issue-analyst");
     let analyst = register_task(root, &dispatch, "fixture-analyst");
 
-    let report = recording.join("candidate.json");
+    let candidate_file = recording.join("candidate.json");
     fs::write(
-        &report,
+        &candidate_file,
         json!({"kind":"candidate", "task_id":"fixture-integrator-task", "agent_handle":"fixture-integrator",
             "attempt_id":first["attempt_id"], "commit":first["target_commit"],
             "included_fixes":[], "checks":["fixture checked"]})
@@ -527,6 +534,13 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     allow_engine_retry(root, &mut first);
     let old_engine = first["engine_revision"].clone();
     publish_mismatch(first.clone(), 5);
+    assert_eq!(status()["action"]["kind"], "implementation_required");
+    assert!(!command(root, &["run"]).status.success());
+    let assignment = assignments(root);
+    let worker = group(&assignment, "startup");
+    successful(report(root, window_confirmation(worker, &[5])));
+    assert_eq!(status()["action"]["kind"], "implementation_required");
+    successful(report(root, window_confirmation(worker, &[7])));
     assert_eq!(status()["action"]["details"]["reason"], "engine_changed");
 
     let policy_contents = fs::read_to_string(root.join(policy)).unwrap();
@@ -557,7 +571,7 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
     for args in [
         &["run"][..],
         &plan,
-        &["report", "--file", report.to_str().unwrap()],
+        &["report", "--file", candidate_file.to_str().unwrap()],
     ] {
         let rejected = command(root, args);
         assert!(!rejected.status.success(), "{args:?}");
@@ -585,19 +599,26 @@ async fn an_engine_update_can_retry_once_after_managed_configuration_is_committe
 
     publish_mismatch(next.clone(), 7);
     let current = status();
-    assert_dispatch(&current, "ownership_required", "issue-analyst");
+    assert_eq!(current["action"]["kind"], "dispatch_required");
+    assert_eq!(
+        group(&assignments(root), "startup")["items"][0]["sequences"],
+        json!([7])
+    );
     assert_eq!(
         current["progress"],
         json!({"apis":"1/3","cases":"1/6","events":"6/9","previous_events":"4/9"})
     );
-    assert!(!command(root, &["run"]).status.success());
+    let blocked = successful(command(root, &["run"]));
+    assert_eq!(blocked["session"]["attempt_id"], next["attempt_id"]);
+    assert_eq!(blocked["action"]["kind"], "dispatch_required");
 
     // Simulate falling back to the old engine for the latest attempt. A
     // fingerprint difference alone cannot reopen the consumed retry.
     next["engine_revision"] = old_engine;
-    publish_mismatch(next, 7);
-    assert_dispatch(&status(), "ownership_required", "issue-analyst");
-    assert!(!command(root, &["run"]).status.success());
+    publish_mismatch(next.clone(), 7);
+    let blocked = successful(command(root, &["run"]));
+    assert_eq!(blocked["session"]["attempt_id"], next["attempt_id"]);
+    assert_eq!(blocked["action"]["kind"], "dispatch_required");
 }
 
 fn submit(root: &Path, command_name: &str, flag: &str, value: Value) -> Output {

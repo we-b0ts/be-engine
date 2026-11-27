@@ -1,7 +1,6 @@
 //! Worktree reservations and sequenced deliveries for each implementation group.
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ops::RangeInclusive,
     path::Path,
 };
 
@@ -67,6 +66,12 @@ pub(crate) struct ImplementerUpdate {
     assignment_id: Uuid,
     agent_handle: String,
     state: ImplementerState,
+}
+
+impl ImplementerUpdate {
+    pub(super) fn exited_group(&self) -> Option<&str> {
+        (self.state == ImplementerState::Exited).then_some(&self.group)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
@@ -262,13 +267,13 @@ impl Groups {
         self.enqueue(group, item, base);
     }
 
-    pub(super) fn retain_lookahead(&mut self, bounds: RangeInclusive<u64>) {
+    pub(super) fn retain_lookahead(&mut self, keep: impl Fn(u64) -> bool) {
         for work in self.work.values_mut() {
             work.items.retain_mut(|item| {
                 if !item.apis.is_empty() {
                     return true;
                 }
-                item.sequences.retain(|seq| bounds.contains(seq));
+                item.sequences.retain(|seq| keep(*seq));
                 !item.sequences.is_empty()
             });
         }
@@ -635,14 +640,22 @@ impl Groups {
             .map(|accepted| &accepted.fix)
     }
 
-    pub(super) fn gap(&self, group: &str, seq: u64) -> Option<&Gap> {
+    pub(super) fn integrated_sequences<'a>(
+        &'a self,
+        commits: &'a BTreeSet<String>,
+    ) -> impl Iterator<Item = u64> + 'a {
+        self.fixes
+            .iter()
+            .filter(|accepted| accepted.integrated && commits.contains(&accepted.fix.commit))
+            .flat_map(|accepted| accepted.fix.sequences.iter().copied())
+    }
+
+    pub(super) fn gap_for_sequence(&self, seq: u64) -> Option<&Gap> {
         self.gaps
             .iter()
             .rev()
             .find(|reported| {
-                reported.gap.group == group
-                    && reported.gap.sequences.contains(&seq)
-                    && !reported.dismissed.contains(&seq)
+                reported.gap.sequences.contains(&seq) && !reported.dismissed.contains(&seq)
             })
             .map(|reported| &reported.gap)
     }

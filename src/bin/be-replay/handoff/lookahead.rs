@@ -15,7 +15,8 @@ use traffic_e2e::{
 use uuid::Uuid;
 
 use super::{
-    Ownership, Registration, Task, WorkItem, Workflow, read_sequence_file, validate_scope,
+    Ownership, Registration, Task, WorkItem, Workflow, confirmation::WindowCoverage,
+    read_sequence_file, validate_scope,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,6 +25,14 @@ pub(super) struct Window {
     pub through_seq: u64,
     #[serde(default)]
     pub attempt_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<WindowCoverage>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "sequence_entries"
+    )]
+    exchanges: BTreeMap<u64, u64>,
     #[serde(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
@@ -86,6 +95,10 @@ struct OwnershipProof {
 }
 
 impl Window {
+    pub(super) fn is_unresolved(&self, seq: u64) -> bool {
+        self.unresolved.contains_key(&seq)
+    }
+
     pub(super) fn handoff(&self) -> Value {
         json!({
             "from_seq": self.from_seq,
@@ -101,8 +114,32 @@ impl Window {
             &attempt_id.simple().to_string(),
             self.from_seq,
             self.through_seq,
-            self.unmatched.len(),
+            self.unowned_exchanges().len(),
         )
+    }
+
+    fn unowned_exchanges(&self) -> BTreeSet<u64> {
+        let mut seen = BTreeSet::new();
+        self.unmatched
+            .keys()
+            .copied()
+            .filter(|seq| seen.insert(self.exchanges.get(seq).copied().unwrap_or(*seq)))
+            .collect()
+    }
+
+    fn unowned_linked_to(&self, sequences: &BTreeSet<u64>) -> BTreeSet<u64> {
+        let anchors: BTreeSet<_> = sequences
+            .iter()
+            .filter_map(|seq| self.exchanges.get(seq).copied())
+            .collect();
+        self.exchanges
+            .iter()
+            .filter_map(|(&seq, anchor)| {
+                (anchors.contains(anchor)
+                    && (self.unmatched.contains_key(&seq) || self.unresolved.contains_key(&seq)))
+                .then_some(seq)
+            })
+            .collect()
     }
 }
 
@@ -128,10 +165,32 @@ impl Workflow {
             .take()
             .map(|window| (window.unresolved, window.proofs))
             .unwrap_or_default();
+        let mut coverage =
+            WindowCoverage::new(dispatch.matches.keys().copied().chain([seq]).collect());
+        if let Some(candidate) = self
+            .candidate
+            .as_ref()
+            .filter(|candidate| candidate.attempt_id == attempt_id && candidate.commit == base)
+        {
+            coverage.mark_applied(
+                self.groups
+                    .integrated_sequences(&candidate.included_fixes)
+                    .chain(
+                        self.rule_plans
+                            .integrated_sequences(&candidate.included_rule_plans),
+                    ),
+            );
+        }
         let mut window = Window {
             from_seq: dispatch.from_seq,
             through_seq: dispatch.through_seq,
             attempt_id: Some(attempt_id),
+            coverage: Some(coverage),
+            exchanges: dispatch
+                .matches
+                .iter()
+                .map(|(&seq, entry)| (seq, entry.exchange_sequence))
+                .collect(),
             requests: BTreeMap::new(),
             unmatched: BTreeMap::new(),
             unresolved,
@@ -141,12 +200,18 @@ impl Workflow {
         let bounds = window.from_seq..=window.through_seq;
         window
             .unresolved
-            .retain(|event, _| bounds.contains(event) && *event != seq);
+            .retain(|event, _| dispatch.matches.contains_key(event) && *event != seq);
         window.proofs.retain_mut(|proof| {
             proof.sequences.retain(|event| bounds.contains(event));
             !proof.sequences.is_empty()
         });
-        self.groups.retain_lookahead(bounds.clone());
+        self.groups.retain_lookahead(|event| {
+            (event == seq || dispatch.matches.contains_key(&event))
+                && !window
+                    .coverage
+                    .as_ref()
+                    .is_some_and(|coverage| coverage.is_applied(event))
+        });
         let ready: BTreeSet<_> = self
             .groups
             .ready_fixes()
@@ -166,18 +231,26 @@ impl Workflow {
             if sequence == seq {
                 continue;
             }
-            let owner = self.owners.get(&sequence.to_string()).cloned().or_else(|| {
-                let owner = entry.owner?;
-                Some(Ownership {
-                    seq: sequence,
-                    scope: owner.scope,
-                    group: owner.group?,
-                })
-            });
+            let owner = self
+                .owners
+                .get(&sequence.to_string())
+                .or_else(|| self.owners.get(&entry.exchange_sequence.to_string()))
+                .cloned()
+                .or_else(|| {
+                    let owner = entry.owner?;
+                    Some(Ownership {
+                        seq: sequence,
+                        scope: owner.scope,
+                        group: owner.group?,
+                    })
+                });
             if let Some(owner) = owner {
-                if !ready.contains(&(owner.group.as_str(), sequence))
+                if !window
+                    .coverage
+                    .as_ref()
+                    .is_some_and(|coverage| coverage.is_applied(sequence))
+                    && !ready.contains(&(owner.group.as_str(), sequence))
                     && !self.ready_rule_covers(&owner.group, sequence)
-                    && self.groups.gap(&owner.group, sequence).is_none()
                 {
                     work.entry((owner.group, owner.scope))
                         .or_default()
@@ -209,6 +282,7 @@ impl Workflow {
                 self.groups.dismiss_gap(&owner.group, seq);
             }
             self.enqueue_owner(&owner, base);
+            self.assign_linked(&owner, base);
         } else if let Some(owner) = dispatch.failure_owner
             && let Some(group) = owner.group
         {
@@ -250,7 +324,7 @@ impl Workflow {
             .context("inspect status to refresh the lookahead window")?;
         let task = window.task(run_key, attempt);
         ensure!(task.id() == task_id, "stale lookahead task; inspect status");
-        Ok(window.unmatched.keys().copied().collect())
+        Ok(window.unowned_exchanges())
     }
 
     pub fn apply_lookahead_findings(
@@ -271,7 +345,8 @@ impl Workflow {
                 !finding.evidence.trim().is_empty(),
                 "lookahead findings require evidence"
             );
-            let sequences = read_sequence_file(&directory.join(finding.sequences_file))?;
+            let mut sequences = read_sequence_file(&directory.join(finding.sequences_file))?;
+            sequences.extend(window.unowned_linked_to(&sequences));
             let owner = match (finding.scope, finding.group) {
                 (Some(scope), Some(group)) => {
                     api_catalog::validate_group(&group)?;
@@ -374,8 +449,10 @@ impl Workflow {
                 }),
             "claim must reference a primary request in the assignment's API scope and active window",
         );
+        let mut sequences = claim.sequences;
+        sequences.extend(window.unowned_linked_to(&sequences));
         let mut new = BTreeSet::new();
-        for seq in claim.sequences {
+        for seq in sequences {
             ensure!(
                 seq > claim.request_seq,
                 "dependency seq {seq} must follow its primary request"
@@ -395,8 +472,11 @@ impl Workflow {
                 .copied()
                 .or_else(|| window.unresolved.get(&seq).map(|(kind, _)| *kind));
             ensure!(
-                kind == Some(WindowMatchKind::DependencyRequest),
-                "seq {seq} is not an unowned dependency admission in the active window"
+                matches!(
+                    kind,
+                    Some(WindowMatchKind::DependencyRequest | WindowMatchKind::DependencyOutput)
+                ),
+                "seq {seq} is not an unowned dependency event in the active window"
             );
             new.insert(seq);
         }
@@ -433,6 +513,36 @@ impl Workflow {
 
     pub fn assignment_sequences(&self, id: Uuid, scope: Option<&str>) -> Result<BTreeSet<u64>> {
         self.groups.assignment_sequences(id, scope)
+    }
+
+    pub(super) fn assign_linked(&mut self, owner: &Ownership, base: &str) {
+        let Some(window) = &mut self.window else {
+            return;
+        };
+        let sequences = window.unowned_linked_to(&[owner.seq].into());
+        if sequences.is_empty() {
+            return;
+        }
+        for &seq in &sequences {
+            window.unmatched.remove(&seq);
+            window.unresolved.remove(&seq);
+            self.owners.insert(
+                seq.to_string(),
+                Ownership {
+                    seq,
+                    ..owner.clone()
+                },
+            );
+        }
+        self.groups.reopen(
+            &owner.group,
+            WorkItem {
+                scope: owner.scope.clone(),
+                sequences,
+                apis: Vec::new(),
+            },
+            base,
+        );
     }
 }
 

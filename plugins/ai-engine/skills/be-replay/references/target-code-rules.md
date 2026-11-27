@@ -31,6 +31,21 @@ These rules apply only to an existing initialized target repository.
 - Product behavior must not depend on tests, fixtures, debug branches, or
   developer-only defaults.
 
+## Source collection compatibility
+
+Use `brz-collections` for every Target counterpart of a Source set, hash map,
+or other collection with unstable iteration order. This applies to internal
+collections as well as collections used to produce outputs. Select the
+implementation and compatibility mode for the Source runtime. Preserve key
+types and equality, construction and mutation order, set membership, and map
+key/value associations and overwrite behavior.
+[Breeze Collections](https://github.com/we-breeze/collections)
+
+If the library lacks the required implementation, key type, or operation,
+return an `engine_gap` with the assigned Source sequences and code reference.
+Include the Source runtime, the `brz-collections` version checked, and the
+missing capability. [Implementation delivery](api-implementer-delivery.md)
+
 ## Evidence And Runtime Inputs
 
 - Target product code and configuration MUST NOT read traffic cases, recorded
