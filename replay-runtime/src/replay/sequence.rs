@@ -128,7 +128,7 @@ pub(super) use run::RunBindings;
 
 #[derive(Debug)]
 pub(super) enum Source {
-    Indexed(SourceEventIndex),
+    Indexed(Box<SourceEventIndex>),
     Inline(Arc<SequenceCatalog>),
 }
 
@@ -149,7 +149,7 @@ pub(super) fn load(source: &Path) -> Result<Option<Source>> {
         return Ok(None);
     }
     if let Some(index) = crate::dependency_index::recording::event_index_for_replay(source)? {
-        return Ok(Some(Source::Indexed(index)));
+        return Ok(Some(Source::Indexed(Box::new(index))));
     }
     let records = crate::dependency_index::recording::events(source)?;
     SequenceCatalog::try_prepare(records).map(|catalog| Some(Source::Inline(catalog)))

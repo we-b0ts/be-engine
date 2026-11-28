@@ -100,11 +100,11 @@ async fn replay_prepares_the_exact_policy_layout_and_native_inventory() {
     assert!(!run.join(".global-report-preparation.json").exists());
     assert!(!run.join("indexes/startup-dependencies/index.json").exists());
     assert!(!run.join(".replay/replay-ca.pem").exists());
-    let (_, manifest) = crate::dependency_index::recording::manifest(&run).unwrap();
+    let (_, manifest) = crate::dependency_index::recording::manifest(run).unwrap();
     let report = temp
         .path()
         .join(".traffic-e2e/local/artifacts/replays/first/report.json");
-    let runtime = load(&run, &policy, &config, &report).await;
+    let runtime = load(run, &policy, &config, &report).await;
     let state = runtime.state.lock().await;
     let fingerprint = state.replay_policy.as_ref().unwrap().report().fingerprint;
     assert_eq!(
@@ -163,13 +163,13 @@ async fn recording_seals_source_without_reading_a_target_workflow() {
     fs::create_dir_all(workflow.parent().unwrap()).unwrap();
     fs::write(&workflow, b"unrelated invalid Target workflow").unwrap();
     recorder.finish_run().await.unwrap();
-    let (_, manifest) = crate::dependency_index::recording::manifest(&recorder.run_dir()).unwrap();
+    let (_, manifest) = crate::dependency_index::recording::manifest(recorder.run_dir()).unwrap();
     assert!(manifest.capture_complete);
     // The frozen identity retains the run and sealed inventory binding even
     // when there is no overlay. It must not revert to the old hash of `[]`.
     let (decisions, snapshot) = crate::coordination::freeze_dependency_attribution(
         None,
-        &recorder.run_dir(),
+        recorder.run_dir(),
         &manifest.run_id,
     )
     .unwrap();
@@ -178,7 +178,7 @@ async fn recording_seals_source_without_reading_a_target_workflow() {
     assert!(
         crate::coordination::freeze_dependency_attribution(
             Some(temp.path()),
-            &recorder.run_dir(),
+            recorder.run_dir(),
             &manifest.run_id,
         )
         .is_err(),
@@ -194,7 +194,7 @@ async fn published_report_rejects_damaged_page() {
     let report = temp
         .path()
         .join(".traffic-e2e/local/artifacts/replays/fallback/report.json");
-    let runtime = load(&recorder.run_dir(), &policy, &config, &report).await;
+    let runtime = load(recorder.run_dir(), &policy, &config, &report).await;
     let state = runtime.state.lock().await;
     let evidence = super::regular::prepare_regular(&report, &state, "redis")
         .unwrap()
@@ -240,7 +240,7 @@ async fn changed_policy_has_distinct_projection_and_moved_recording_replays() {
     let initial_report = origin
         .path()
         .join(".traffic-e2e/local/artifacts/replays/initial/report.json");
-    let original = load(&run, &policy, &config, &initial_report).await;
+    let original = load(run, &policy, &config, &initial_report).await;
     let initial_key = {
         let state = original.state.lock().await;
         let evidence = super::regular::prepare_regular(&initial_report, &state, "redis")
@@ -282,7 +282,7 @@ async fn changed_policy_has_distinct_projection_and_moved_recording_replays() {
         .path()
         .join(".traffic-e2e/local/artifacts/replays/changed/report.json");
     let changed = load(
-        &recorder.run_dir(),
+        recorder.run_dir(),
         &policy,
         &changed_config,
         &changed_report,
@@ -300,7 +300,7 @@ async fn changed_policy_has_distinct_projection_and_moved_recording_replays() {
     let moved = destination
         .path()
         .join(".traffic-e2e/local/recordings/moved");
-    copy_tree(&run, &moved);
+    copy_tree(run, &moved);
     let moved_policy = destination.path().join(".traffic-e2e/policy.yaml");
     fs::write(&moved_policy, initial_policy).unwrap();
     fs::remove_dir_all(origin.path().join(".traffic-e2e")).unwrap();

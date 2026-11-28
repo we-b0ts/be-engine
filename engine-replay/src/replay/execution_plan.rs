@@ -4,6 +4,8 @@ use std::sync::Arc;
 #[cfg(test)]
 use super::ReplaySource;
 use traffic_policy_compiler::plan::{EvidenceRequirements, IndexRequirements, RuleExecutionPlan};
+#[cfg(test)]
+pub use traffic_replay::index::CaseMembership;
 
 /// Eligibility is frozen from Source selectors. Exact key/SQL/value guards still
 /// run against the genuine request; this is never a claim that a rule matched.
@@ -127,6 +129,3 @@ mod tests {
         assert_eq!(members.for_case("next").as_ref(), [3]);
     }
 }
-
-#[cfg(test)]
-pub use traffic_replay::index::CaseMembership;

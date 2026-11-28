@@ -90,6 +90,11 @@ impl DecisionHistory {
         usize::try_from(self.occurrences()).unwrap()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn is_empty(&self) -> bool {
+        self.occurrences() == 0
+    }
+
     fn validate(&self) -> Result<()> {
         ensure!(
             self.origins.is_empty() || self.origins.len() == self.groups.len(),

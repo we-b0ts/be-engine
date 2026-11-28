@@ -5,6 +5,8 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use serde_json::Value;
 
+#[cfg(test)]
+use crate::dependency_index::PageWriter;
 use crate::dependency_index::Paged;
 
 pub mod artifact;
@@ -208,6 +210,3 @@ mod tests {
         assert!(read_global_dependency_page(&destination, "redis", 0, 0).is_err());
     }
 }
-
-#[cfg(test)]
-use crate::dependency_index::PageWriter;

@@ -3,14 +3,14 @@ use super::*;
 
 pub(super) trait FinalizationCheck {
     fn is_dirty<S: traffic_replay::report::SessionSnapshot>(
-        self,
+        &self,
         report: &ReplayReport<S>,
         codecs: &traffic_protocol::report::CodecRegistry,
     ) -> bool;
 }
 impl FinalizationCheck for FinalizationScope {
     fn is_dirty<S: traffic_replay::report::SessionSnapshot>(
-        self,
+        &self,
         report: &ReplayReport<S>,
         codecs: &traffic_protocol::report::CodecRegistry,
     ) -> bool {
