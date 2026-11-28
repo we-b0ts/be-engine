@@ -567,6 +567,17 @@ impl Default for TlsConfig {
     }
 }
 
+pub fn project_policy_path(target_root: &Path) -> Result<std::path::PathBuf> {
+    let project = target_root.join(".traffic-e2e/project.yaml");
+    if project.is_file() {
+        crate::config::resolve_unified_policy_path(&project)
+    } else {
+        Ok(target_root.join(".traffic-e2e/policy.yaml"))
+    }
+}
+
+pub use crate::project;
+
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
@@ -921,14 +932,3 @@ mod tests {
         assert_eq!(config.dns_mock.hosts["multi-db.test"].len(), 2);
     }
 }
-
-pub fn project_policy_path(target_root: &Path) -> Result<std::path::PathBuf> {
-    let project = target_root.join(".traffic-e2e/project.yaml");
-    if project.is_file() {
-        crate::config::resolve_unified_policy_path(&project)
-    } else {
-        Ok(target_root.join(".traffic-e2e/policy.yaml"))
-    }
-}
-
-pub use crate::project;

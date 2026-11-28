@@ -202,13 +202,13 @@ mod tests {
         );
         let request = json!({"dependency_request_candidates":[{"capability":"redis_key_request"}]});
         let hints = hints(root, QUERY_DIRTY_CLUSTERS, &request);
-        assert!(
-            hints
-                .iter()
-                .any(|hint| hint.capability == "redis_key_request"
-                    && hint.hint.contains("not proof")
-                    && hint.hint.contains("key_format"))
-        );
+        assert!(hints.iter().any(|hint| {
+            hint.capability == "redis_key_request"
+                && hint
+                    .hint
+                    .contains("Submit Source evidence for plan and apply")
+                && hint.hint.contains("key_format")
+        }));
     }
 
     #[test]
