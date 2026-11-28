@@ -109,6 +109,30 @@ fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value[key].as_str().filter(|value| !value.is_empty())
 }
 
+pub(super) fn annotations(
+    event: &Value,
+    side: MessageSide,
+) -> anyhow::Result<serde_json::Map<String, Value>> {
+    let physical = observed(event, side);
+    let prefix = if side == MessageSide::Request {
+        "/sql_values"
+    } else {
+        "/request/sql_values"
+    };
+    let unavailable = physical["fields"].as_array().is_none_or(Vec::is_empty);
+    Ok(serde_json::from_value(json!({
+        "source_response_kind":event["response"]["status"],"physical_fields":physical,
+        "needs_sql_template":false,"needs_physical_location":unavailable,"needs_schema":false,
+        "protected_sql_value_pointers":{
+            "value":format!("{prefix}/<sql-token-index>/value"),
+            "decoded_json":format!("{prefix}/<sql-token-index>/json/<field-path>"),
+            "field":format!("{prefix}/<sql-token-index>/field"),
+            "instruction":"Use this witness_id with dependency_witness_query and a token index from physical_fields.fields[].observed_positions. Select a nested JSON field when the SQL value is large. Each statement retains its own physical positions; the candidate is not proof of a match."
+        },
+        "instruction":"MySQL JSON payloads use root json.fields automatically. Native DATE/DATETIME/TIMESTAMP metadata is inferred when mysql is enabled; historical and invalid scalar inputs stay exact unless a valid differing value is proved. mysql.tables declares remaining scalar formats across databases; recorded and Target physical connection identities must still match. Table patterns contain table names, without a database prefix. No JSON column codec or SQL statement template is needed. Unknown physical origins grant no scalar permission."
+    }))?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,28 +211,4 @@ mod tests {
             40 - POSITION_LIMIT
         );
     }
-}
-
-pub(super) fn annotations(
-    event: &Value,
-    side: MessageSide,
-) -> anyhow::Result<serde_json::Map<String, Value>> {
-    let physical = observed(event, side);
-    let prefix = if side == MessageSide::Request {
-        "/sql_values"
-    } else {
-        "/request/sql_values"
-    };
-    let unavailable = physical["fields"].as_array().is_none_or(Vec::is_empty);
-    Ok(serde_json::from_value(json!({
-        "source_response_kind":event["response"]["status"],"physical_fields":physical,
-        "needs_sql_template":false,"needs_physical_location":unavailable,"needs_schema":false,
-        "protected_sql_value_pointers":{
-            "value":format!("{prefix}/<sql-token-index>/value"),
-            "decoded_json":format!("{prefix}/<sql-token-index>/json/<field-path>"),
-            "field":format!("{prefix}/<sql-token-index>/field"),
-            "instruction":"Use this witness_id with dependency_witness_query and a token index from physical_fields.fields[].observed_positions. Select a nested JSON field when the SQL value is large. Each statement retains its own physical positions; the candidate is not proof of a match."
-        },
-        "instruction":"MySQL JSON payloads use root json.fields automatically. Native DATE/DATETIME/TIMESTAMP metadata is inferred when mysql is enabled; historical and invalid scalar inputs stay exact unless a valid differing value is proved. mysql.tables declares remaining scalar formats across databases; recorded and Target physical connection identities must still match. Table patterns contain table names, without a database prefix. No JSON column codec or SQL statement template is needed. Unknown physical origins grant no scalar permission."
-    }))?)
 }
