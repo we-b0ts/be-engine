@@ -9,7 +9,7 @@ use traffic_model::{
     attribution::DependencyOwner,
     capture::capture_body,
     recording::{
-        COMPACT_RECORDING_SCHEMA, CaptureCoverage, CapturePhase, MANIFEST_FILE, RecordingManifest,
+        CaptureCoverage, CapturePhase, MANIFEST_FILE, RecordingManifest, SESSION_RECORDING_SCHEMA,
         SemanticInventory, SourceArtifactIdentity,
     },
     session::SessionEvent,
@@ -22,6 +22,99 @@ use traffic_recording_store::{
 };
 
 use super::{EventKind, Instant, SequenceRuntime, plan};
+
+#[tokio::test]
+async fn primary_response_commit_shares_identity_state_with_dependencies() -> Result<()> {
+    use super::{
+        IdentityPair, MysqlReplayConfig, ReplayControlRequest, ReplayRuntime, SequencePlan,
+        Session, SourceEvent, control, write_test_recording_network_manifest,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    let case = root.join("case");
+    std::fs::create_dir(&case)?;
+    std::fs::write(case.join("dependencies.jsonl"), "")?;
+    write_test_recording_network_manifest(root);
+    let address = "127.0.0.1:0".parse()?;
+    let runtime = ReplayRuntime::load(
+        MysqlReplayConfig {
+            case_dir: root.to_owned(),
+            selected_case_ids: Vec::new(),
+            dns_listen: address,
+            tcp_listen: address,
+            fake_cidr: "198.18.0.0/15".into(),
+            report_path: None,
+            session_path: None,
+            control_socket_path: None,
+            ca_cert_path: Some(root.join("ca.pem")),
+            ca_key_path: Some(root.join("ca-key.pem")),
+            policy_path: None,
+            http_ignore_query_params: Vec::new(),
+            process_owned_dependencies: Vec::new(),
+            allowed_unused_http: None,
+        },
+        address,
+        address,
+    )
+    .await?;
+    let timeline = SequenceRuntime::new(SequencePlan::compile(
+        [EventKind::PrimaryResponseEnd, EventKind::PrimaryResponseEnd]
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| SourceEvent {
+                sequence: index as u64 + 1,
+                dependency_sequence: 0,
+                offset_micros: index as u64,
+                kind,
+            }),
+    )?);
+    let contracts = {
+        let mut state = runtime.state.lock().await;
+        state.native.prepare_event_session();
+        state.native.configure_session_identities(1)?;
+        state.session_events = Some(Session::new(timeline, Duration::from_secs(5)));
+        state.native.contracts.clone()
+    };
+    let pair = |source: char, target: char| IdentityPair {
+        source: json!(format!("vnc-{}", source.to_string().repeat(24))).to_string(),
+        target: json!(format!("vnc-{}", target.to_string().repeat(24))).to_string(),
+    };
+    let initial = contracts.preview_identity_pairs("session", &[pair('A', 'B')], false)?;
+    contracts.commit_comparison(Default::default(), initial)?;
+
+    let commit = |sequence, pairs: Vec<IdentityPair>| {
+        let state = runtime.state.clone();
+        async move {
+            let request: ReplayControlRequest = serde_json::from_value(json!({
+                "command": "session_commit",
+                "sequence": sequence,
+                "identity_pairs": pairs,
+            }))?;
+            Ok::<_, anyhow::Error>(control(&request, state).await)
+        }
+    };
+    let accepted = commit(1, vec![pair('A', 'B'), pair('D', 'E')]).await?;
+    assert_eq!(accepted["ok"], true);
+    assert!(!accepted.to_string().contains("vnc-"));
+    assert!(
+        contracts
+            .preview_identity_pairs("session", &[pair('D', 'F')], false)
+            .is_err()
+    );
+
+    let rejected = commit(2, vec![pair('G', 'H'), pair('A', 'C')]).await?;
+    assert_eq!(rejected["ok"], false);
+    assert_eq!(rejected["error"], "identity equality relationship changed");
+    assert!(!rejected.to_string().contains("vnc-"));
+    assert_eq!(rejected["session_events"]["last_sequence"], 1);
+    assert!(
+        contracts
+            .preview_identity_pairs("session", &[pair('G', 'I')], false)
+            .is_ok()
+    );
+    Ok(())
+}
 
 fn recorded<T>(sequence: u64, event: T) -> RecordedEvent<T> {
     RecordedEvent {
@@ -82,22 +175,21 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
     ledger
         .append_session_event(&mut files, &recorded(3, SessionEvent::Ready))
         .await?;
-    for (sequence, event) in [(4, output_start(2)), (5, output_end(2))] {
+    for (sequence, event) in [
+        (4, output_start(2)),
+        (
+            5,
+            CaptureEvent::OutputCancelled {
+                dependency_sequence: 2,
+                started_sequence: 4,
+            },
+        ),
+        (6, output_end(2)),
+    ] {
         ledger
             .append_event(&mut files, &recorded(sequence, event))
             .await?;
     }
-    ledger
-        .append_dependency(
-            &mut files,
-            dependency(2, "redis_exchange", b"+OK\r\n"),
-            &owner,
-            RecordKind::Exchange,
-            &RowLayout::default(),
-            None,
-            stamp(6),
-        )
-        .await?;
     ledger
         .append_event(
             &mut files,
@@ -152,17 +244,38 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
         .await?;
     for (sequence, event) in [
         (13, SessionEvent::Stop),
-        (14, SessionEvent::SourceExit { status: Some(0) }),
+        (
+            14,
+            SessionEvent::SourceExit {
+                status: Some(0),
+                forced_by_recorder: false,
+            },
+        ),
     ] {
         ledger
             .append_session_event(&mut files, &recorded(sequence, event))
             .await?;
     }
+    // Dependency records can be enqueued in completion order across
+    // connections. The earlier admission must still win over the push.
     ledger
-        .append_event(&mut files, &recorded(15, CaptureEvent::Sealed))
+        .append_dependency(
+            &mut files,
+            dependency(2, "redis_exchange", b"+OK\r\n"),
+            &owner,
+            RecordKind::Exchange,
+            &RowLayout::default(),
+            None,
+            stamp(15),
+        )
         .await?;
+    ledger
+        .append_event(&mut files, &recorded(16, CaptureEvent::Sealed))
+        .await?;
+    let mut identities = ledger.seal(&mut files).await?;
+    identities.extend(traffic_recording_store::session_schedule::seal(root, Vec::new()).await?);
     let manifest = RecordingManifest {
-        schema: COMPACT_RECORDING_SCHEMA.into(),
+        schema: SESSION_RECORDING_SCHEMA.into(),
         run_id: "unified-session".into(),
         run_epoch: epoch,
         process_epochs: vec![epoch],
@@ -185,7 +298,7 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
             ..Default::default()
         },
         inputs: Vec::new(),
-        files: ledger.seal(&mut files).await?,
+        files: identities,
     };
     std::fs::write(
         root.join(MANIFEST_FILE),
@@ -193,6 +306,7 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
     )?;
     assert!(!root.join("event-locations.bin").exists());
     assert!(!root.join("event-spans.bin").exists());
+    assert!(!root.join("dependency-locations.bin").exists());
     assert!(recording::event_index_for_replay(root)?.is_none());
 
     let plan = plan(root, [2, 7].into(), Default::default())?;
@@ -204,8 +318,7 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
             (1, EventKind::SessionSourceStart),
             (2, EventKind::Request),
             (3, EventKind::SessionReady),
-            (4, EventKind::ResponseEndStarted),
-            (5, EventKind::ResponseEnd),
+            (6, EventKind::ResponseEnd),
             (7, EventKind::Message),
             (8, EventKind::PrimaryRequest),
             (10, EventKind::ResponseEndStarted),
@@ -218,7 +331,7 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
     let path = recording::dependency_path(root);
     // SAFETY: This private temp fixture remains sealed and immutable until the reader drops.
     let reader = Arc::new(Mutex::new(unsafe { RecordReader::for_session_replay(0) }));
-    let source = RecordSource::new(&path, FileStamp::read_native(&path)?, reader);
+    let source = RecordSource::new(&path, FileStamp::read_native(&path)?, reader.clone());
     let body = source
         .reference(push)
         .load_response_bytes()?
@@ -235,9 +348,17 @@ async fn unified_session_plans_and_delivers_redis_push_from_recorded_bytes() -> 
         .map(|(path, value)| (path, value.bytes))
         .collect();
 
-    let runtime = SequenceRuntime::with_session_timing(plan, Some(Duration::ZERO), []);
+    let runtime = SequenceRuntime::streaming_session(Some(Duration::ZERO), []);
+    let summary = traffic_recording_store::session_summary::read(root)?;
+    let (mut rolling, first) =
+        super::streaming::Source::open(root, summary, 2, Default::default(), reader)?;
+    runtime.push_stream(vec![first], false)?;
+    assert_eq!(runtime.buffered(), 1);
+    assert_eq!(runtime.progress().total, None);
     let deadline = Instant::now() + Duration::from_secs(1);
     runtime.commit_driver(1)?;
+    rolling.append_test_window(&runtime)?;
+    assert_eq!(runtime.progress().total, Some(plan.event_count()));
     let request = runtime.admit(2)?;
     runtime.commit_driver(3)?;
     request.wait_delivery(deadline).await?;

@@ -1,5 +1,9 @@
 # Dependency attribution and verification
 
+This reference covers Case attribution and its persisted evidence. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 Current recordings use `traffic-recording/v4`, policy documents use
 `traffic-policy/v3`, and ownership submissions use `dependency-attribution/v3`.
 Old recording, report and workflow ownership semantics are unsupported.

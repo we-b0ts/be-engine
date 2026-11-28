@@ -1,13 +1,11 @@
 //! Attest an idle pool rollback immediately after a proven transaction end.
 use std::collections::BTreeMap;
 
-use anyhow::Result;
-use serde::Deserialize;
-use serde_json::Value;
 use traffic_model::recording::ProtocolRef;
 use traffic_protocol::connection::{DriverPrelude, ReplaySessionStep};
 use uuid::Uuid;
 
+use super::ScopeRecord;
 use crate::{recorded::RecordedMysqlExchange, session_control, session_identity};
 
 const SERVER_STATUS_IN_TRANS: u16 = 1;
@@ -16,27 +14,22 @@ const SERVER_QUERY_NO_INDEX_USED: u16 = 32;
 const QUERY_INDEX_FLAGS: u16 = SERVER_QUERY_NO_GOOD_INDEX_USED | SERVER_QUERY_NO_INDEX_USED;
 
 pub(super) fn prove(
-    records: &[(usize, &Value)],
+    records: &BTreeMap<usize, &ScopeRecord>,
     steps: &BTreeMap<usize, ReplaySessionStep>,
-) -> Result<BTreeMap<usize, DriverPrelude>> {
-    let mut wire_order = BTreeMap::<(Uuid, u64), Option<(usize, &Value)>>::new();
-    for &(position, event) in records {
-        if event["event_type"] != "mysql_exchange" {
-            continue;
-        }
-        let Some(connection) = event["connection_id"]
-            .as_str()
-            .and_then(|id| id.parse().ok())
-        else {
-            continue;
-        };
-        let Some(sequence) = event["query_sequence"].as_u64() else {
+    exclusions: &BTreeMap<usize, DriverPrelude>,
+) -> BTreeMap<usize, DriverPrelude> {
+    let mut wire_order = BTreeMap::<(Uuid, u64), Option<(usize, &ScopeRecord)>>::new();
+    for (&position, &record) in records {
+        let (Some(connection), Some(sequence)) = (
+            record.exchange.connection_id,
+            record.exchange.query_sequence,
+        ) else {
             continue;
         };
         wire_order
             .entry((connection, sequence))
             .and_modify(|entry| *entry = None)
-            .or_insert(Some((position, event)));
+            .or_insert(Some((position, record)));
     }
 
     let mut excluded = BTreeMap::new();
@@ -44,9 +37,9 @@ pub(super) fn prove(
         let Some((position, cleanup)) = *cleanup else {
             continue;
         };
-        if cleanup["command"] != "COM_QUERY"
-            || cleanup["server_status_before"] != 0
-            || !cleanup["sql"].as_str().is_some_and(|sql| {
+        if cleanup.exchange.command != "COM_QUERY"
+            || cleanup.exchange.server_status_before != Some(0)
+            || !cleanup.exchange.sql.as_deref().is_some_and(|sql| {
                 let sql = sql.trim();
                 sql.strip_suffix(';')
                     .unwrap_or(sql)
@@ -62,25 +55,23 @@ pub(super) fn prove(
         else {
             continue;
         };
-        if !matches!(
+        let proved_end = matches!(
             steps.get(&end_position),
             Some(
                 ReplaySessionStep::Continue { end: true, .. }
                     | ReplaySessionStep::ReadOnlyEnd { .. }
+                    | ReplaySessionStep::AutocommitCommit { .. }
             )
-        ) || end["capture_complete"] != true
-            || cleanup["capture_complete"] != true
-        {
+        ) || exclusions.get(&end_position)
+            == Some(&DriverPrelude::MysqlReadOnlyTransactionEnd);
+        if !proved_end || !end.complete || !cleanup.complete {
             continue;
         }
-        if idle_rollback_after(
-            &RecordedMysqlExchange::deserialize(end)?,
-            &RecordedMysqlExchange::deserialize(cleanup)?,
-        ) {
+        if idle_rollback_after(&end.exchange, &cleanup.exchange) {
             excluded.insert(position, DriverPrelude::MysqlPostTransactionIdleRollback);
         }
     }
-    Ok(excluded)
+    excluded
 }
 
 fn idle_rollback_after(end: &RecordedMysqlExchange, cleanup: &RecordedMysqlExchange) -> bool {

@@ -23,11 +23,7 @@ fn git(root: &Path, args: &[&str]) {
 fn fixture() -> tempfile::TempDir {
     let target = configured_target();
     git(target.path(), &["switch", "-q", "master"]);
-    fs::write(
-        target.path().join(".gitignore"),
-        "/.traffic-e2e/local/\n/.traffic-e2e/regression.yaml\n",
-    )
-    .unwrap();
+    fs::write(target.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
     git(target.path(), &["add", ".gitignore"]);
     git(target.path(), &["commit", "-qm", "ignore runtime"]);
     crate::test_support::install_source_snapshot(target.path());
@@ -245,11 +241,6 @@ fn authorization_and_exact_base_branch_are_mandatory_without_mutation() {
 #[test]
 fn new_round_preserves_recording_scope_and_replays_before_workers() {
     let target = fixture();
-    fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "only:\n  - /other\n",
-    )
-    .unwrap();
     let report = begin(options(target.path())).unwrap();
     let saved = RewriteStore::new(target.path())
         .unwrap()
@@ -261,7 +252,7 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
         report.previous_workflow_id.clone().unwrap()
     );
     assert_eq!(saved.recording_run_id, "20260802000000");
-    assert_eq!(saved.api, "GET /other");
+    assert_eq!(saved.api, "GET /api");
     assert_eq!(saved.phase, RewritePhase::ApiPending);
     assert!(saved.active_issue.is_none());
     assert!(!saved.delivery_review_required);
@@ -688,13 +679,8 @@ async fn every_base_status_requires_purpose_and_next_wait_cannot_resume_old_work
 }
 
 #[test]
-fn fresh_recording_supersedes_old_pin_without_needing_usable_old_evidence() {
+fn fresh_recording_waits_for_external_evidence() {
     let target = fixture();
-    fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "recording_run_id: '20260101000000'\n",
-    )
-    .unwrap();
     let mut request = options(target.path());
     request.record_new_traffic = true;
     let report = begin(request).unwrap();
@@ -731,7 +717,6 @@ fn fresh_recording_supersedes_old_pin_without_needing_usable_old_evidence() {
     }
     fs::write(run.join("recording-run.json"), serde_json::to_vec(&serde_json::json!({"status":"completed","recording_apis":state.recording_apis,"published_cases":2})).unwrap()).unwrap();
     let mut adopted = store.load().unwrap().unwrap();
-    assert!(!regression_scope::has_active_pin(target.path(), &adopted).unwrap());
     crate::recording_input::bind(target.path(), &mut adopted, None).unwrap();
     store.save(&adopted).unwrap();
     let status = rewrite::status_rewrite(rewrite::RewriteContext {

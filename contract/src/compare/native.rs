@@ -66,42 +66,35 @@ pub(super) fn verify(
 ) -> Result<(), Difference> {
     let observed =
         (field.verifier)(context).map_err(|error| difference(context.source_pointer, &error))?;
+    observe(field.rule_id, context.source_pointer, observed, decisions)
+}
+
+pub(super) fn observe(
+    rule_id: &str,
+    pointer: &str,
+    observed: LeafObservations,
+    decisions: &mut Decisions,
+) -> Result<(), Difference> {
     for pair in &observed.identities {
-        let source = serde_json::from_str(&pair.source).map_err(|_| {
-            difference(
-                context.source_pointer,
-                "invalid authenticated identity scalar",
-            )
-        })?;
-        let target = serde_json::from_str(&pair.target).map_err(|_| {
-            difference(
-                context.source_pointer,
-                "invalid authenticated identity scalar",
-            )
-        })?;
+        let source = serde_json::from_str(&pair.source)
+            .map_err(|_| difference(pointer, "invalid authenticated identity scalar"))?;
+        let target = serde_json::from_str(&pair.target)
+            .map_err(|_| difference(pointer, "invalid authenticated identity scalar"))?;
         decisions
             .identities
             .observe(&source, &target)
-            .map_err(|_| {
-                difference(
-                    context.source_pointer,
-                    "authenticated nonce bijection changed",
-                )
-            })?;
+            .map_err(|_| difference(pointer, "authenticated nonce bijection changed"))?;
     }
     for nonce in &observed.nonces {
         let values = decisions
             .nonces
-            .entry((field.rule_id.into(), nonce.claim.clone()))
+            .entry((rule_id.into(), nonce.claim.clone()))
             .or_default();
         if values.iter().any(|(source, target)| {
             (*source == nonce.source && *target != nonce.target)
                 || (*target == nonce.target && *source != nonce.source)
         }) {
-            return Err(difference(
-                context.source_pointer,
-                "authenticated nonce bijection changed",
-            ));
+            return Err(difference(pointer, "authenticated nonce bijection changed"));
         }
         if !values.contains(&(nonce.source, nonce.target)) {
             values.push((nonce.source, nonce.target));
@@ -109,7 +102,7 @@ pub(super) fn verify(
     }
     *decisions
         .time_validations
-        .entry(field.rule_id.into())
+        .entry(rule_id.into())
         .or_default() += observed.time_validations;
     Ok(())
 }

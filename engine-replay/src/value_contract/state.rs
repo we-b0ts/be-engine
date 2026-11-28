@@ -13,6 +13,7 @@ use traffic_contract::{
     time::ClockPair,
 };
 use traffic_policy_value::identity::IdentityDelivery;
+use traffic_protocol::{ProtocolId, connection::Endpoint, message::ProtocolMessage};
 
 #[derive(Clone, Default)]
 pub struct ValueState {
@@ -193,6 +194,20 @@ impl ValueState {
 impl ValueRuleHost for ValueState {
     fn metadata(&self) -> &(dyn traffic_contract::compare::RuleMetadata + 'static) {
         &crate::value_contract::json::PolicyMetadata
+    }
+
+    fn native_request_projection(
+        &self,
+        protocol: ProtocolId,
+        endpoint: &Endpoint,
+        request: Arc<dyn ProtocolMessage>,
+        source: Option<&Value>,
+    ) -> Result<Arc<dyn ProtocolMessage>> {
+        if matches!(protocol.as_str(), "http" | "https") {
+            traffic_protocol_http::request_sigv4::request(&[], endpoint, request, source)
+        } else {
+            Ok(request)
+        }
     }
 
     fn prefetch_source_response(&self) -> bool {

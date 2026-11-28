@@ -67,7 +67,7 @@ fn retired_generated_planner_preserves_policy_source_and_workflow() {
         input.redis_time = companion;
         let error = plan(root, &mut state, input).unwrap_err();
         assert!(error.to_string().contains("retired"));
-        assert!(error.to_string().contains("rule plan/apply"));
+        assert!(error.to_string().contains("project.policy"));
         assert_eq!(serde_json::to_value(&state).unwrap(), before);
         assert_eq!(fs::read(&policy).unwrap(), policy_before);
         assert_eq!(fs::read(&source).unwrap(), b"immutable recorded bytes");

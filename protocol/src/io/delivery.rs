@@ -1,16 +1,32 @@
 //! Commit queued output callbacks after their transport buffer flushes.
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::watch;
 
 #[derive(Clone, Debug)]
 pub struct DeliveryProgress {
     changed: watch::Sender<u64>,
-    pending: std::sync::Arc<std::sync::Mutex<Vec<FlushReceipt>>>,
+    pending: Arc<Mutex<Vec<FlushReceipt>>>,
 }
 
 pub struct FlushReceipt {
     delivered: Option<Box<dyn FnOnce() + Send>>,
     failed: Option<Box<dyn FnOnce() + Send>>,
+    timestamp: Option<FlushTimestamp>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FlushTimestamp(Arc<Mutex<Option<(Instant, usize)>>>);
+
+impl FlushTimestamp {
+    pub fn last(&self) -> Option<Instant> {
+        self.progress().map(|(at, _)| at)
+    }
+
+    pub fn progress(&self) -> Option<(Instant, usize)> {
+        *self.0.lock().expect("flush timestamp poisoned")
+    }
 }
 
 impl std::fmt::Debug for FlushReceipt {
@@ -27,12 +43,24 @@ impl FlushReceipt {
         Self {
             delivered: Some(Box::new(delivered)),
             failed: Some(Box::new(failed)),
+            timestamp: None,
         }
     }
+
+    /// Track when this receipt committed to compare it with a lifecycle boundary.
+    pub fn with_timestamp(mut self, timestamp: FlushTimestamp) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
     fn commit(mut self) {
         self.failed = None;
         if let Some(delivered) = self.delivered.take() {
             delivered();
+        }
+        if let Some(timestamp) = &self.timestamp {
+            let mut progress = timestamp.0.lock().expect("flush timestamp poisoned");
+            *progress = Some((Instant::now(), progress.map_or(1, |(_, count)| count + 1)));
         }
     }
 }

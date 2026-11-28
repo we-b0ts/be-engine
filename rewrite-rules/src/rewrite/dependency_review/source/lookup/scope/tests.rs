@@ -27,6 +27,7 @@ fn sealed_scope_stream_retains_requested_uuid_and_rejects_corrupt_or_escaping_in
             path: "process-scope.json".into(),
             length: bytes.len() as u64,
             sha256: digest(&bytes),
+            chunk_root: None,
         }
     };
     let identity = write(&scope);

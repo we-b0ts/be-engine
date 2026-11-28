@@ -269,10 +269,9 @@ impl RequestContracts {
         }
         let mut query_plan = None;
         let url_fields = match native {
-            Some(native) => native.iter().filter_map(|field| {
+            Some(native) => native.iter().filter(|field| {
                 matches!(&global.fields[&field.pattern], GlobalField::Url { formats } if formats == &[GlobalUrlFormat::Url])
-                    .then(|| field.pointer.clone())
-            }).collect(),
+            }).map(|field| field.pointer.clone()).collect(),
             None => url::selected(global, source)?,
         };
         for pointer in url_fields {

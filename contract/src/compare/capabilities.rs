@@ -13,6 +13,14 @@ pub trait RuleMetadata {
     fn accepts_exact_time(&self, _rule: &str) -> bool {
         false
     }
+    fn compare_unselected_text(
+        &self,
+        _source: &str,
+        _target: &str,
+        _clocks: super::AnchorClocks,
+    ) -> Option<(&'static str, super::LeafObservations)> {
+        None
+    }
 }
 
 pub struct ExplicitRules;

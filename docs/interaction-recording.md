@@ -167,8 +167,9 @@ changing its meaning. WebSocket protocol-level ping/pong and upgrade probes keep
 their existing transport handling; this program controls Engine.IO text PONGs.
 `expected-response.json.interaction` contains Source output events and closure.
 The runner independently writes `actual-response-*.json.interaction`. HTTP method
-and route identity preserve existing grouping, `prepare`, `run-api`, `run` and
-backend-rewrite orchestration. Semantic dependencies remain in
+and route identity preserve existing grouping and the Case commands
+`traffic-e2e prepare`, `traffic-e2e run-api`, and `traffic-e2e run`.
+Semantic dependencies remain in
 `dependencies.jsonl`; debug wire data never substitutes for them.
 
 The input driver never reads expected outputs. It opens a fresh Target session,
@@ -231,8 +232,8 @@ project:
     socketio_timing: auto # default; use recorded for the original input timeline
 ```
 
-Managed Replay with `replay_timing: fast` in `regression.yaml` also accelerates
-Socket.IO inputs in `auto`, using the same `replay_interval_cap_ms` (default 5 ms).
+Low-level Replay accepts `--stream-timing fast --stream-interval-cap-ms 5` to
+accelerate supported Socket.IO inputs in `auto`.
 Business inputs can advance after the original MySQL and Redis requests in
 their preceding interval have been admitted on the actual Target Case.
 Recorded completion and callback prerequisites still apply. If a preceding
@@ -329,8 +330,8 @@ protocols or explicit no-PONG programs disable compression while known Redis
 prefixes still gate business inputs. Missing Source clocks, unmanaged execution
 without dependency feedback, `preserve_input_timing: true`, or `recorded` mode
 retain the original timeline without additional delivery-prefix gates.
-Neither mode changes immutable recordings, their policy, lane
-matching or dependency assertions, and `regression.yaml` stream timing remains independent.
+Both modes use the same sealed recordings, policy, lane matching, and
+dependency assertions.
 
 ## Closing a case and background work
 

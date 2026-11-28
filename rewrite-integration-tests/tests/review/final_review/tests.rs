@@ -23,16 +23,7 @@ fn save(root: &Path, state: &RewriteState) {
 
 fn target(retained_current_index: bool) -> tempfile::TempDir {
     let target = crate::worker::tests::configured_target();
-    fs::write(
-        target.path().join(".gitignore"),
-        "/.traffic-e2e/local/\n/.traffic-e2e/regression.yaml\n",
-    )
-    .unwrap();
-    fs::write(
-        target.path().join(crate::config::regression::PATH),
-        "skip: [/skipped]\n",
-    )
-    .unwrap();
+    fs::write(target.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
     git(target.path(), &["add", ".gitignore"]);
     git(target.path(), &["commit", "-qm", "ignore engine runtime"]);
     install_ready_state(target.path(), retained_current_index);
@@ -61,8 +52,7 @@ fn install_ready_state(root: &Path, retained_current_index: bool) {
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
     state.target_fingerprint = Some(fingerprint);
-    crate::regression_scope::apply(root, &mut state).unwrap();
-    assert_eq!(state.api_inventory[2].status, RewriteApiStatus::Skipped);
+    state.api_inventory[2].status = RewriteApiStatus::Skipped;
     save(root, &state);
 }
 
@@ -358,8 +348,6 @@ fn final_receipt_expires_on_code_policy_recording_workflow_inventory_or_skip_cha
     let source = fs::read(&source_path).unwrap();
     let policy_path = root.join(".traffic-e2e/policy.yaml");
     let policy_bytes = fs::read(&policy_path).unwrap();
-    let regression_path = root.join(crate::config::regression::PATH);
-    let regression_bytes = fs::read(&regression_path).unwrap();
     for variant in [
         "code",
         "policy",
@@ -393,17 +381,13 @@ fn final_receipt_expires_on_code_policy_recording_workflow_inventory_or_skip_cha
                 state.api_inventory.push(item);
             }
             "source_route" => state.api_inventory[1].source_route = Some("/different".into()),
-            "skip" => {
-                fs::write(&regression_path, "skip: [/skipped, /other]\n").unwrap();
-                crate::regression_scope::apply(root, &mut state).unwrap();
-            }
+            "skip" => state.api_inventory[1].status = RewriteApiStatus::Skipped,
             _ => unreachable!(),
         }
         assert!(!current(root, &state), "{variant}");
         assert!(!completion_current(root, &state), "{variant}");
         fs::write(&source_path, &source).unwrap();
         fs::write(&policy_path, &policy_bytes).unwrap();
-        fs::write(&regression_path, &regression_bytes).unwrap();
     }
     assert!(current(root, &original));
 }

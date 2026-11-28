@@ -1,5 +1,9 @@
 # JWT request rules
 
+This reference covers JWT request contracts and historical rule authoring. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 For custom signed JSON timestamps, see
 [signed timestamp request rules](signed-timestamp-request-rules.md).
 

@@ -13,12 +13,14 @@ use std::{
 use traffic_model::recording::identity::IdentityKind;
 use traffic_model::recording::{
     COMPACT_RECORDING_SCHEMA, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest,
+    SESSION_RECORDING_SCHEMA,
 };
 use traffic_model::trace::{CaptureEvent, RecordedEvent};
 use uuid::Uuid;
 
 pub fn supported_recording_schema(schema: &str) -> bool {
     schema == COMPACT_RECORDING_SCHEMA
+        || schema == SESSION_RECORDING_SCHEMA
         || cfg!(any(test, feature = "test-support")) && schema == RECORDING_SCHEMA
 }
 
@@ -26,6 +28,8 @@ pub fn dependency_path(root: &Path) -> PathBuf {
     let compact = root.join(partitions::DIRECTORY);
     if compact.exists() {
         compact
+    } else if root.join(crate::session::FILE).is_file() {
+        root.join(crate::session::FILE)
     } else {
         root.join("dependencies.jsonl")
     }
@@ -55,6 +59,12 @@ pub fn manifest(path: &Path) -> Result<(PathBuf, RecordingManifest)> {
         ensure!(
             partitions::recording_id(&dependencies)? == manifest.run_epoch,
             "dependency partition directory belongs to a different recording"
+        );
+    }
+    if manifest.schema == SESSION_RECORDING_SCHEMA {
+        ensure!(
+            dependencies == root.join(crate::session::FILE),
+            "recording manifest requires a Source session event stream"
         );
     }
     Ok((root, manifest))
@@ -283,7 +293,17 @@ pub fn authenticate(path: &Path) -> Result<()> {
             "recording changed during authentication"
         );
     }
-    let required = if manifest.schema == COMPACT_RECORDING_SCHEMA {
+    let required = if manifest.schema == SESSION_RECORDING_SCHEMA {
+        vec![
+            crate::session::FILE,
+            partitions::FILES[partitions::OBSERVATIONS],
+            crate::dependency_columns::FILE,
+            crate::session_summary::FILE,
+            crate::session_integrity::INDEX,
+            crate::session_schedule::FILE,
+            crate::session_schedule::INDEX,
+        ]
+    } else if manifest.schema == COMPACT_RECORDING_SCHEMA {
         let session = seen.contains(crate::session::FILE);
         partitions::files(session)
             .chain(crate::original_scope::files(session))

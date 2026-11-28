@@ -18,7 +18,7 @@ pub fn dependency_attribution_candidates(
         state.dependency_review.revision == revision,
         "attribution revision changed; obtain fresh context before continuing pagination"
     );
-    let source = super::source::load(&state)?;
+    let source = super::source::load(state)?;
     let request = state
         .dependency_review
         .investigations
@@ -34,7 +34,7 @@ pub fn dependency_attribution_candidates(
         .target_observations
         .get(target)
         .context("Target observation is outside this authenticated investigation")?;
-    let active = super::rules::fingerprints(&super::rules::load(&root)?)?;
+    let active = super::rules::fingerprints(&super::rules::load(root)?)?;
     let owners = state
         .dependency_review
         .decisions
@@ -43,8 +43,8 @@ pub fn dependency_attribution_candidates(
         .map(|(id, decision)| (*id, decision.owner.clone()))
         .collect();
     Ok(candidate_page(
-        &root,
-        &state,
+        root,
+        state,
         &source,
         (investigation, target),
         observation,
@@ -100,11 +100,11 @@ pub fn candidate_page(
 }
 
 pub fn dependency_attribution_rules(root: &Path, state: &RewriteState) -> Result<Value> {
-    let policy = super::rules::load(&root)?;
+    let policy = super::rules::load(root)?;
     Ok(
         json!({"schema":SCHEMA,"policy_fingerprint":policy.fingerprints.full,"source_revision":state.source_revision,
         "rule_groups":super::rules::groups(&policy)?,"binding_contract":"Bind all selector rule IDs of one process task, or the actual origin API end-only lifecycle rule. Names alone are not proofs.",
-        "plan_command":crate::action::command(&root,vec!["rule".into(),"plan".into(),"--file".into(),"<proposal.json>".into(),"--evidence".into(),"<current-evidence-id>".into()],vec![]),
+        "plan_command":crate::action::command(root,vec!["rule".into(),"plan".into(),"--file".into(),"<proposal.json>".into(),"--evidence".into(),"<current-evidence-id>".into()],vec![]),
         "apply_contract":"Apply the planned rule first; then obtain fresh attribution context and submit its effective policy fingerprint and complete rule group."}),
     )
 }

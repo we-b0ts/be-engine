@@ -64,38 +64,36 @@ impl SequenceRuntime {
 
 impl SequenceScheduler {
     fn batch_dependencies(&self, limit: usize) -> impl Iterator<Item = u64> + '_ {
-        self.plan.events[self.cursor..]
-            .as_chunks::<EVENTS_PER_MESSAGE>()
-            .0
-            .iter()
-            .take(limit.min(MAX_MESSAGES))
-            .enumerate()
-            .map_while(|(ordinal, events @ [message, start, end])| {
-                let receipt = self.cursor + ordinal * EVENTS_PER_MESSAGE + 2;
-                (message.source.kind == EventKind::Message
-                    && start.source.kind == EventKind::ResponseEndStarted
-                    && end.source.kind == EventKind::ResponseEnd
-                    && message.slot == start.slot
-                    && start.slot == end.slot
-                    && start.receipt_cursor == receipt
-                    && self.slots[message.slot] == SlotState::Available
-                    && !self.pending_delivery.contains_key(&receipt)
-                    && !events
-                        .iter()
-                        .any(|event| self.event_is_gated(event.source.sequence)))
-                .then_some(message.source.dependency_sequence)
-            })
+        (0..limit.min(MAX_MESSAGES)).map_while(|ordinal| {
+            let cursor = self.cursor + ordinal * EVENTS_PER_MESSAGE;
+            let message = self.event_at(cursor)?;
+            let start = self.event_at(cursor + 1)?;
+            let end = self.event_at(cursor + 2)?;
+            let dependency = message.source.dependency_sequence;
+            let receipt = end.delivery_id();
+            (message.source.kind == EventKind::Message
+                && start.source.kind == EventKind::ResponseEndStarted
+                && end.source.kind == EventKind::ResponseEnd
+                && dependency == start.source.dependency_sequence
+                && dependency == end.source.dependency_sequence
+                && start.source.sequence == receipt
+                && self.slot_status(dependency) == Some(SlotState::Available)
+                && !self.pending_delivery.contains_key(&receipt)
+                && ![message, start, end]
+                    .iter()
+                    .any(|event| self.event_is_gated(event.source.sequence)))
+            .then_some(dependency)
+        })
     }
 
     fn publish_message_prefix(&mut self, count: usize) {
-        let end = self.cursor + count * EVENTS_PER_MESSAGE;
-        let (frames, remainder) =
-            self.plan.events[self.cursor..end].as_chunks::<EVENTS_PER_MESSAGE>();
-        debug_assert!(remainder.is_empty());
-        for [message, ..] in frames {
-            self.slots[message.slot] = SlotState::Consumed;
+        for _ in 0..count {
+            let message = self.expected().expect("reserved Session message");
+            self.set_slot(message.dependency_sequence, SlotState::Consumed);
+            for _ in 0..EVENTS_PER_MESSAGE {
+                self.advance();
+            }
         }
-        self.cursor = end;
         self.drain_receipts();
     }
 }

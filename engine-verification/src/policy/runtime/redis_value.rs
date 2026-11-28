@@ -5,9 +5,6 @@ use super::config::{DependencyProtocol, ReplayDependencyRule, ReplayScope};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub(super) enum RedisSelector {

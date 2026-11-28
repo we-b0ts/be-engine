@@ -18,6 +18,7 @@ use traffic_protocol::{
 mod evidence;
 mod recording;
 mod server;
+mod stopped;
 #[cfg(test)]
 mod tests;
 mod websocket_refusal;
@@ -39,14 +40,21 @@ impl NativeProtocol for Native {
         "http-native/v1"
     }
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>> {
-        self.decode(event, None)
+        self.decode(event, None, false)
     }
     fn recorded_exchange_with_secrets(
         &self,
         event: &Value,
         secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
     ) -> Result<Option<RecordedExchange>> {
-        self.decode(event, Some(secrets))
+        self.decode(event, Some(secrets), false)
+    }
+    fn recorded_session_exchange(
+        &self,
+        event: &Value,
+        secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+    ) -> Result<Option<RecordedExchange>> {
+        self.decode(event, Some(secrets), true)
     }
     fn recorded_protocol(&self, event: &Value) -> Result<Option<traffic_protocol::ProtocolId>> {
         if event["event_type"] != "http_exchange" {
@@ -107,6 +115,7 @@ impl Native {
         &self,
         event: &Value,
         secrets: Option<&dyn traffic_protocol::evidence::EvidenceSecrets>,
+        event_session: bool,
     ) -> Result<Option<RecordedExchange>> {
         if event["event_type"] != "http_exchange" {
             return Ok(None);
@@ -129,32 +138,15 @@ impl Native {
                 .all(|value| { !value.starts_with("traffic-e2e:enc:") && value != "<redacted>" }),
             "protected HTTP headers require an installed Source decryption capability"
         );
-        let response_headers = record
-            .response_headers
-            .take()
-            .context("HTTP response headers missing")?;
-        ensure!(
-            !event_stream_headers(&response_headers) || record.response_stream.is_some(),
-            "HTTP event stream is missing recorded stream evidence"
-        );
-        ensure!(
-            record.outcome == DependencyExchangeOutcome::Response && record.error.is_none(),
-            "HTTP Replay requires a complete response"
-        );
-        let status = record
-            .response_status
-            .context("HTTP response status missing")?;
-        ensure!(
-            status != 101,
-            "HTTP upgrades require an installed streaming capability"
-        );
         let (_, endpoint) = record.identity()?;
-        let body = recorded::decode_body(
+        let reference = ProtocolRef::exchange(
+            "http",
             record
-                .response_body
-                .as_ref()
-                .context("HTTP response body missing")?,
-        )?;
+                .id
+                .as_deref()
+                .context("HTTP exchange identity missing")?
+                .parse()?,
+        );
         let uri: hyper::Uri = record.uri.parse()?;
         let request = RequestMessage {
             method: record.method.to_ascii_uppercase(),
@@ -165,6 +157,87 @@ impl Native {
             headers: record.request_headers,
             body: recorded::decode_body(&record.request_body)?.into(),
         };
+        if record.outcome == DependencyExchangeOutcome::NoResponse {
+            ensure!(
+                event_session
+                    && record.error.is_none()
+                    && record.response_status.is_none()
+                    && record.response_headers.is_none()
+                    && record.response_body.is_none()
+                    && record.response_stream.is_none(),
+                "HTTP request stopped without a response requires managed Session evidence"
+            );
+            return Ok(Some(RecordedExchange {
+                reference,
+                endpoint,
+                lane: None,
+                response_delay: std::time::Duration::ZERO,
+                input: traffic_protocol::connection::RecordedInput::Request(Arc::new(request)),
+                response: Arc::new(stopped::StoppedResponse),
+            }));
+        }
+        let response_headers = record
+            .response_headers
+            .take()
+            .context("HTTP response headers missing")?;
+        ensure!(
+            !event_stream_headers(&response_headers) || record.response_stream.is_some(),
+            "HTTP event stream is missing recorded stream evidence"
+        );
+        let client_terminated = event_session
+            && record.outcome.termination().is_some_and(|end| {
+                end.side == traffic_model::TerminationSide::Client
+                    && matches!(
+                        (end.kind, end.scope),
+                        (
+                            traffic_model::TerminationKind::Cancelled,
+                            traffic_model::TerminationScope::Stream
+                        ) | (
+                            traffic_model::TerminationKind::Reset,
+                            traffic_model::TerminationScope::Connection
+                        )
+                    )
+            });
+        ensure!(
+            (record.outcome == DependencyExchangeOutcome::Response || client_terminated)
+                && record.error.is_none(),
+            "HTTP Replay requires a complete response"
+        );
+        let duration_ms = record.duration_ms.as_ref().and_then(Value::as_u64);
+        let response_delay_ms = if let Some(stream) = record
+            .response_stream
+            .as_ref()
+            .filter(|stream| stream.stopped_at_source_exit || client_terminated)
+        {
+            ensure!(
+                event_session,
+                "HTTP terminated response prefix requires managed Session Replay"
+            );
+            ensure!(
+                duration_ms == Some(stream.end_ms),
+                "HTTP terminated response duration differs from its captured prefix"
+            );
+            stream.headers_ms
+        } else {
+            ensure!(
+                !client_terminated,
+                "HTTP client termination requires stream evidence"
+            );
+            duration_ms.unwrap_or_default()
+        };
+        let status = record
+            .response_status
+            .context("HTTP response status missing")?;
+        ensure!(
+            status != 101,
+            "HTTP upgrades require an installed streaming capability"
+        );
+        let body = recorded::decode_body(
+            record
+                .response_body
+                .as_ref()
+                .context("HTTP response body missing")?,
+        )?;
         let response = ResponseMessage {
             status,
             headers: response_headers,
@@ -178,26 +251,14 @@ impl Native {
             record.response_stream.is_some(),
         );
         let response: Arc<dyn MessageEncoder> = match record.response_stream {
-            Some(stream) => Arc::new(StreamResponse::new(response, stream)?),
+            Some(stream) => Arc::new(StreamResponse::new(response, stream, client_terminated)?),
             None => Arc::new(response),
         };
         Ok(Some(RecordedExchange {
-            reference: ProtocolRef::exchange(
-                "http",
-                record
-                    .id
-                    .context("HTTP exchange identity missing")?
-                    .parse()?,
-            ),
+            reference,
             endpoint,
             lane: None,
-            response_delay: std::time::Duration::from_millis(
-                record
-                    .duration_ms
-                    .as_ref()
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
-            ),
+            response_delay: std::time::Duration::from_millis(response_delay_ms),
             input: traffic_protocol::connection::RecordedInput::Request(request),
             response,
         }))

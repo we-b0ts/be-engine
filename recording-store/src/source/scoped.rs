@@ -28,7 +28,12 @@ impl Source {
     /// Iterate compact ledger locations for Replay without reading payload cells.
     pub fn replay_locations(&self) -> Result<impl Iterator<Item = Result<RecordLocation>> + '_> {
         let mut selected = self.locations.as_deref().map(|rows| rows.iter());
-        let mut central = if selected.is_none() {
+        let mut session = if selected.is_none() && super::compact::is_session(&self.path) {
+            Some(super::RecordStream::open_for_replay(&self.path)?)
+        } else {
+            None
+        };
+        let mut central = if selected.is_none() && session.is_none() {
             let count = crate::partitions::record_count(FileStamp::read_native(&self.path)?.size)?;
             let directory = crate::partitions::Reader::open(&self.path)?;
             Some((directory, 1..=usize::try_from(count)?))
@@ -38,6 +43,9 @@ impl Source {
         Ok(std::iter::from_fn(move || {
             if let Some(rows) = &mut selected {
                 return rows.next().cloned().map(Ok);
+            }
+            if let Some(stream) = &mut session {
+                return stream.next_location_for_replay().transpose();
             }
             let (directory, lines) = central.as_mut()?;
             let line = lines.next()?;

@@ -104,9 +104,7 @@ impl ClaimTicket {
     }
     pub async fn wait_sequence_delivery(&self) -> anyhow::Result<()> {
         if let Some(sequence) = &self.sequence {
-            sequence
-                .wait_delivery(tokio::time::Instant::now() + std::time::Duration::from_secs(30))
-                .await?;
+            sequence.wait_initial_delivery().await?;
         }
         Ok(())
     }
@@ -190,6 +188,10 @@ pub enum Finish<T> {
 }
 
 impl Lifecycle {
+    pub(crate) fn discard(&mut self, index: usize) {
+        self.slots.remove(&index);
+    }
+
     pub fn notify_waiters(&self) {
         self.changed.notify_waiters();
         self.control_changed.notify_waiters();

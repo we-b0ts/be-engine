@@ -49,7 +49,15 @@ pub fn compare_with_native(
     native: &[NativeField<'_>],
     clocks: AnchorClocks,
 ) -> Comparison {
-    compare_all(source, target, fields, native, &[], clocks, &[])
+    compare_all(
+        [source, target],
+        fields,
+        native,
+        &[],
+        clocks,
+        &[],
+        &PolicyMetadata,
+    )
 }
 
 pub fn compare_with_verified(
@@ -60,7 +68,35 @@ pub fn compare_with_verified(
     verified: &[VerifiedField<'_>],
     clocks: AnchorClocks,
 ) -> Comparison {
-    compare_all(source, target, fields, native, verified, clocks, &[])
+    compare_with_verified_metadata(
+        source,
+        target,
+        fields,
+        native,
+        verified,
+        clocks,
+        &PolicyMetadata,
+    )
+}
+
+pub(crate) fn compare_with_verified_metadata(
+    source: &Value,
+    target: &Value,
+    fields: &[Field<'_>],
+    native: &[NativeField<'_>],
+    verified: &[VerifiedField<'_>],
+    clocks: AnchorClocks,
+    metadata: &dyn kernel::RuleMetadata,
+) -> Comparison {
+    compare_all(
+        [source, target],
+        fields,
+        native,
+        verified,
+        clocks,
+        &[],
+        metadata,
+    )
 }
 
 #[allow(dead_code)]
@@ -72,7 +108,15 @@ pub fn compare_with_verified_time_copies(
     clocks: AnchorClocks,
     copies: &[VerifiedTimeCopy],
 ) -> Comparison {
-    compare_all(source, target, fields, &[], verified, clocks, copies)
+    compare_all(
+        [source, target],
+        fields,
+        &[],
+        verified,
+        clocks,
+        copies,
+        &PolicyMetadata,
+    )
 }
 
 #[cfg(test)]
@@ -83,17 +127,25 @@ pub fn compare_with_time_copies(
     clocks: AnchorClocks,
     copies: &[VerifiedTimeCopy],
 ) -> Comparison {
-    compare_all(source, target, fields, &[], &[], clocks, copies)
+    compare_all(
+        [source, target],
+        fields,
+        &[],
+        &[],
+        clocks,
+        copies,
+        &PolicyMetadata,
+    )
 }
 
 fn compare_all(
-    source: &Value,
-    target: &Value,
+    [source, target]: [&Value; 2],
     fields: &[Field<'_>],
     native: &[NativeField<'_>],
     verified: &[VerifiedField<'_>],
     clocks: AnchorClocks,
     copies: &[VerifiedTimeCopy],
+    metadata: &dyn kernel::RuleMetadata,
 ) -> Comparison {
     let verifiers = native.iter().map(native::verifier).collect::<Vec<_>>();
     let native = native
@@ -110,14 +162,7 @@ fn compare_all(
         .map(|proof| proof as &dyn kernel::TimeCopyProof)
         .collect::<Vec<_>>();
     kernel::compare_all(
-        source,
-        target,
-        fields,
-        &native,
-        verified,
-        clocks,
-        &copies,
-        &PolicyMetadata,
+        source, target, fields, &native, verified, clocks, &copies, metadata,
     )
 }
 

@@ -68,6 +68,7 @@ pub fn merge_with_replacements(
         if replace.contains("redis") {
             candidate.redis = Some(redis.clone());
         } else if !redis.keys.is_empty()
+            || !redis.key_identities.is_empty()
             || proposed
                 .rules
                 .iter()
@@ -76,22 +77,25 @@ pub fn merge_with_replacements(
             // Key-local behavior declarations compact back into redis.keys.
             // Preserve that container even when it has no scalar formats, so
             // rendering cannot introduce a previously absent format section.
-            fields(
-                &mut candidate.redis.get_or_insert_default().keys,
-                &redis.keys,
-                "redis.keys",
-            )?;
+            let current = candidate.redis.get_or_insert_default();
+            fields(&mut current.keys, &redis.keys, "redis.keys")?;
+            for (pattern, field) in &redis.key_identities {
+                field_entry(&mut current.key_identities, pattern, field)
+                    .with_context(|| format!("redis.keys.{pattern}.key_format"))?;
+            }
         }
     }
     if let Some(http) = &proposed.http {
         if replace.contains("http") {
             candidate.http = Some(http.clone());
-        } else if !http.headers.is_empty() {
-            fields(
-                &mut candidate.http.get_or_insert_default().headers,
-                &http.headers,
-                "http.headers",
-            )?;
+        } else if !http.headers.is_empty() || !http.request_sigv4.is_empty() {
+            let current = candidate.http.get_or_insert_default();
+            fields(&mut current.headers, &http.headers, "http.headers")?;
+            for request in &http.request_sigv4 {
+                if !current.request_sigv4.contains(request) {
+                    current.request_sigv4.push(request.clone());
+                }
+            }
         }
     }
     if let Some(apis) = &proposed.async_api {
@@ -135,6 +139,23 @@ pub fn merge_with_replacements(
     let changed = &candidate != document;
     *document = candidate;
     Ok(changed)
+}
+
+pub(super) fn http_request_selector(
+    host: &str,
+    method: Option<&str>,
+    path: Option<&str>,
+    query: Option<&str>,
+) -> String {
+    let (Some(method), Some(path)) = (method, path) else {
+        return host.into();
+    };
+    let mut selector = format!("{method} {host}{path}");
+    if let Some(query) = query {
+        selector.push('?');
+        selector.push_str(query);
+    }
+    selector
 }
 
 fn fields(

@@ -24,6 +24,7 @@ pub struct RecordReader {
     source: Option<(PathBuf, super::scoped::Source)>,
     partitions: Option<(PathBuf, FileStamp, crate::partitions::Reader)>,
     compact: Option<(PathBuf, FileStamp, compact::Reader)>,
+    session_file: Option<(PathBuf, FileStamp, File)>,
     response_cell: Vec<u8>,
     pub source_bytes: u64,
     pub hits: usize,
@@ -45,6 +46,7 @@ impl RecordReader {
             source: None,
             partitions: None,
             compact: None,
+            session_file: None,
             response_cell: Vec::new(),
             source_bytes: 0,
             hits: 0,
@@ -82,6 +84,14 @@ impl RecordReader {
         stamp: &FileStamp,
         location: &RecordLocation,
     ) -> Result<serde_json::Value> {
+        if compact::is_session(path) {
+            let mut bytes = Vec::new();
+            let recording_id = self.read_session_cells(path, stamp, location, &mut bytes)?;
+            self.source_bytes += bytes.len() as u64;
+            return self
+                .compact_reader(path, stamp, recording_id)?
+                .read_header(&bytes);
+        }
         if !crate::partitions::is_directory(path) {
             return Ok(serde_json::from_slice(&self.read(path, stamp, location)?)?);
         }
@@ -119,13 +129,30 @@ impl RecordReader {
         stamp: &FileStamp,
         location: &RecordLocation,
     ) -> Result<Option<Bytes>> {
-        if self.verify || !crate::partitions::is_directory(path) {
+        if self.verify || !(compact::is_session(path) || crate::partitions::is_directory(path)) {
             return Ok(None);
         }
         let mut cell = std::mem::take(&mut self.response_cell);
         let result = self.read_response_cell(path, stamp, location, &mut cell);
         self.response_cell = cell;
         result
+    }
+
+    pub(super) fn read_request(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+    ) -> Result<serde_json::Value> {
+        ensure!(
+            compact::is_session(path),
+            "request projection requires a Session timeline"
+        );
+        let mut bytes = Vec::new();
+        let recording_id = self.read_session_cells(path, stamp, location, &mut bytes)?;
+        self.source_bytes += bytes.len() as u64;
+        self.compact_reader(path, stamp, recording_id)?
+            .read_request(&bytes)
     }
 
     fn read_response_cell(
@@ -135,16 +162,81 @@ impl RecordReader {
         location: &RecordLocation,
         cell: &mut Vec<u8>,
     ) -> Result<Option<Bytes>> {
-        let reader = self.partition_reader(path, stamp)?;
-        if !reader.read_response_cell(location.line, (location.offset, location.length), cell)? {
-            return Ok(None);
-        }
-        let recording_id = reader.recording_id;
+        let recording_id = if compact::is_session(path) {
+            let recording_id = self.read_session_cells(path, stamp, location, cell)?;
+            let end = cell
+                .len()
+                .saturating_sub(usize::from(cell.ends_with(b"\n")));
+            let start = cell[..end]
+                .iter()
+                .rposition(|&byte| byte == b'\t')
+                .map_or(0, |position| position + 1);
+            cell.copy_within(start..end, 0);
+            cell.truncate(end - start);
+            recording_id
+        } else {
+            let reader = self.partition_reader(path, stamp)?;
+            if !reader.read_response_cell(
+                location.line,
+                (location.offset, location.length),
+                cell,
+            )? {
+                return Ok(None);
+            }
+            reader.recording_id
+        };
         let body = self
             .compact_reader(path, stamp, recording_id)?
             .read_response_bytes(cell)?;
         self.source_bytes += cell.len() as u64 + body.as_ref().map_or(0, |body| body.len() as u64);
         Ok(body)
+    }
+
+    fn read_session_cells(
+        &mut self,
+        path: &Path,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+        bytes: &mut Vec<u8>,
+    ) -> Result<uuid::Uuid> {
+        if self
+            .session_file
+            .as_ref()
+            .is_none_or(|(prior, verified, _)| prior != path || verified != stamp)
+        {
+            ensure!(
+                FileStamp::read_native(path)? == *stamp,
+                "Session event file changed"
+            );
+            self.session_file = Some((path.to_owned(), stamp.clone(), File::open(path)?));
+        }
+        ensure!(
+            location
+                .offset
+                .checked_add(location.length)
+                .is_some_and(|end| end <= stamp.size),
+            "dependency record escapes Session event file"
+        );
+        let file = &mut self
+            .session_file
+            .as_mut()
+            .expect("opened Session event file")
+            .2;
+        file.seek(SeekFrom::Start(location.offset))?;
+        bytes.resize(usize::try_from(location.length)?, 0);
+        file.read_exact(bytes)?;
+        ensure!(
+            digest(bytes) == location.sha256,
+            "Session dependency checksum mismatch"
+        );
+        if let Some((prior, verified, compact)) = &self.compact
+            && prior == path
+            && verified == stamp
+        {
+            return Ok(compact.recording_id());
+        }
+        compact::flat_recording_id(path)?
+            .ok_or_else(|| anyhow::anyhow!("missing Session recording identity"))
     }
 
     fn partition_reader(
@@ -286,7 +378,9 @@ impl RecordReader {
             return json(bytes);
         }
         let mut bytes = Vec::new();
-        let recording_id = if crate::partitions::is_directory(path) {
+        let recording_id = if compact::is_session(path) {
+            Some(self.read_session_cells(path, stamp, location, &mut bytes)?)
+        } else if crate::partitions::is_directory(path) {
             let reader = self.partition_reader(path, stamp)?;
             reader.read(
                 location.line,
@@ -401,7 +495,13 @@ mod tests {
                 row_stamp(2),
             )
             .await?;
-        ledger.seal(&mut files).await?;
+        let identities = ledger.seal(&mut files).await?;
+        crate::writer::tests::write_session_manifest(
+            root,
+            recording_id,
+            process_epoch,
+            identities,
+        )?;
         assert!(root.join("payload").is_dir());
 
         let path = crate::source::recording::dependency_path(root);

@@ -14,6 +14,8 @@ use traffic_protocol::message::{
 };
 use traffic_value::codec::CodecRegistry;
 
+use crate::host::NativeRequestFallback;
+
 mod delivery;
 pub use delivery::{
     PrefetchedMessage, PreparedDeliveryGuard, PreparedDocumentDelivery, RenderedMessage,
@@ -47,6 +49,20 @@ pub trait DocumentPolicy: Send + Sync {
     }
 
     fn paths(&self, source: &traffic_value::Value) -> Result<Vec<String>>;
+    /// Retain recognized documents whose unselected values may use built-in comparison.
+    fn may_compare_unclaimed(&self) -> bool {
+        false
+    }
+
+    fn authenticated_paths(
+        &self,
+        _source: &traffic_value::Value,
+        _target: &traffic_value::Value,
+        _clocks: AnchorClocks,
+    ) -> Vec<String> {
+        Vec::new()
+    }
+
     fn prepare_source(&self, source: &traffic_value::Value) -> Result<DocumentPolicyPreparation> {
         Ok(DocumentPolicyPreparation {
             paths: self.paths(source)?,
@@ -140,6 +156,7 @@ struct BoundValue {
     pointers: Vec<String>,
     prepared_comparison: Option<Box<dyn PreparedDocumentComparison>>,
     prepared_delivery: Option<Box<dyn PreparedDocumentDelivery>>,
+    compare_unclaimed_only: bool,
 }
 
 /// Prepared once per immutable Source message. Each attempted candidate keeps
@@ -148,6 +165,7 @@ pub struct PreparedMessage {
     projection: ProjectedMessage,
     values: BTreeMap<String, BoundValue>,
     policy: Option<Arc<dyn DocumentPolicy>>,
+    request_fallback: Option<Box<dyn NativeRequestFallback>>,
 }
 
 fn json_heap_bytes(value: &Value) -> usize {
@@ -176,6 +194,11 @@ impl std::fmt::Debug for PreparedMessage {
 }
 
 impl PreparedMessage {
+    pub fn with_request_fallback(mut self, fallback: impl NativeRequestFallback + 'static) -> Self {
+        self.request_fallback = Some(Box::new(fallback));
+        self
+    }
+
     pub fn structure(&self) -> &Value {
         &self.projection.structure
     }
@@ -237,6 +260,7 @@ impl PreparedMessage {
                             pointers: Vec::new(),
                             prepared_comparison: None,
                             prepared_delivery: None,
+                            compare_unclaimed_only: false,
                         },
                     );
                 }
@@ -253,15 +277,23 @@ impl PreparedMessage {
             }
         }
         if let Some(policy) = &policy {
+            let mut recognition_metadata = None;
             for (location, value) in &projection.values {
                 if values.contains_key(location) {
                     continue;
                 }
-                let metadata = serde_json::from_value(serde_json::json!({
-                    "native":{"location":location,"structure":projection.structure},
-                }))?;
+                let metadata: &mut traffic_value::Value = match &mut recognition_metadata {
+                    Some(metadata) => metadata,
+                    slot => slot.insert(serde_json::from_value(serde_json::json!({
+                        "native":{"location":null,"structure":projection.structure},
+                    }))?),
+                };
+                *metadata
+                    .pointer_mut("/native/location")
+                    .expect("recognition metadata contains a native location") =
+                    traffic_value::Value::String(location.clone());
                 let Some((plan, decoded)) =
-                    CodecPlan::try_recognize_source(&value.bytes, &metadata, codecs)?
+                    CodecPlan::try_recognize_source(&value.bytes, metadata, codecs)?
                 else {
                     continue;
                 };
@@ -276,7 +308,10 @@ impl PreparedMessage {
                     _ => decode(&plan, &codec, value)?,
                 };
                 let prepared = prepare_document(policy.as_ref(), &codec, &source)?;
-                if prepared.paths.is_empty() {
+                let compare_unclaimed_only = prepared.paths.is_empty();
+                let compare_unclaimed = policy.may_compare_unclaimed()
+                    && (source.logical.is_array() || source.logical.is_object());
+                if compare_unclaimed_only && !compare_unclaimed {
                     continue;
                 }
                 values.insert(
@@ -290,6 +325,7 @@ impl PreparedMessage {
                         pointers: prepared.paths,
                         prepared_comparison: prepared.comparison,
                         prepared_delivery: None,
+                        compare_unclaimed_only,
                     },
                 );
             }
@@ -303,6 +339,7 @@ impl PreparedMessage {
             projection,
             values,
             policy,
+            request_fallback: None,
         })
     }
 
@@ -325,7 +362,7 @@ impl PreparedMessage {
     pub fn prefetch_retained_bytes(&self) -> Option<usize> {
         let mut bytes = std::mem::size_of::<Self>() + json_heap_bytes(&self.projection.structure);
         for (location, value) in &self.projection.values {
-            bytes += 128 + location.capacity() + value.bytes.len();
+            bytes += 128 + location.capacity() + value.retained_bytes();
         }
         for (location, bound) in &self.values {
             if !matches!(bound.codec.id(), "json" | "scalar") {
@@ -378,6 +415,7 @@ impl PreparedMessage {
             ));
             return result;
         }
+        let mut unmatched = Vec::new();
         for (location, source) in &self.projection.values {
             let stored = delivered_by_protocol.contains_key(location);
             let bound = self.values.get(location);
@@ -392,10 +430,14 @@ impl PreparedMessage {
                 continue;
             }
             let Some(bound) = bound else {
-                if source.bytes != target.bytes {
-                    result
-                        .differences
-                        .push(difference(location, "unselected native value changed"));
+                if !source.matches(target) {
+                    if self.request_fallback.is_some() {
+                        unmatched.push(location.as_str());
+                    } else {
+                        result
+                            .differences
+                            .push(difference(location, "unselected native value changed"));
+                    }
                 }
                 continue;
             };
@@ -417,8 +459,23 @@ impl PreparedMessage {
                     }
                 }
             };
-            let source = bound.source.logical_comparison_view(&bound.pointers);
-            let target = target.logical_comparison_view(&bound.pointers);
+            let additions = self
+                .policy
+                .as_ref()
+                .filter(|_| !stored && bound.source.retains_unselected_encoding())
+                .map(|policy| {
+                    policy.authenticated_paths(bound.source.value(), target.value(), clocks)
+                })
+                .unwrap_or_default();
+            let augmented;
+            let paths = if additions.is_empty() {
+                &bound.pointers
+            } else {
+                augmented = bound.pointers.iter().cloned().chain(additions).collect();
+                &augmented
+            };
+            let source = bound.source.logical_comparison_view(paths);
+            let target = target.logical_comparison_view(paths);
             let projection = std::ptr::eq(source.as_ref(), bound.source.value())
                 .then(|| bound.source.projection());
             let fields = bound
@@ -478,12 +535,42 @@ impl PreparedMessage {
                     ),
                 },
             };
+            if bound.compare_unclaimed_only
+                && comparison.passed()
+                && !comparison.evaluated.contains(crate::auth::RULE_ID)
+                && self.projection.values[location].bytes != actual.values[location].bytes
+            {
+                result
+                    .differences
+                    .push(difference(location, "unselected native value changed"));
+                continue;
+            }
             comparison.scope_observations(location);
             for difference in &mut comparison.differences {
                 difference.pointer = format!("{location}{}", difference.pointer);
             }
             result.merge_and_validate(comparison);
         }
+        if !unmatched.is_empty()
+            && result.passed()
+            && let Some(fallback) = &self.request_fallback
+        {
+            let compared = fallback.compare(&self.projection, actual, &mut unmatched, clocks);
+            if unmatched.is_empty() {
+                let mut staged = result.clone();
+                staged.merge_and_validate(compared);
+                if staged.passed() {
+                    result = staged;
+                } else {
+                    result.differences = staged.differences;
+                }
+            }
+        }
+        result.differences.extend(
+            unmatched
+                .into_iter()
+                .map(|location| difference(location, "unselected native value changed")),
+        );
         result
     }
 
@@ -542,9 +629,9 @@ impl PreparedMessage {
                 };
             values.insert(
                 location.clone(),
-                ProjectedValue {
-                    bytes,
-                    scalar_encoding: bound.scalar_encoding,
+                match bound.scalar_encoding {
+                    ScalarEncoding::Utf8 => ProjectedValue::bytes(bytes),
+                    ScalarEncoding::Json => ProjectedValue::json(bytes),
                 },
             );
         }

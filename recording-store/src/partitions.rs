@@ -14,7 +14,7 @@ pub(crate) const ORDINARY: usize = 0;
 const PROCESS: usize = 1;
 pub(crate) const PUSH: usize = 2;
 const UNATTRIBUTED: usize = 3;
-const OBSERVATIONS: usize = 4;
+pub(crate) const OBSERVATIONS: usize = 4;
 pub(crate) const FILES: [&str; 5] = [
     crate::format::DEPENDENCIES,
     "dependencies-process.tsv",

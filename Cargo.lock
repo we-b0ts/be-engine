@@ -3014,6 +3014,7 @@ dependencies = [
  "traffic-protocol-mysql",
  "traffic-recorder",
  "traffic-recording-store",
+ "traffic-rewrite-rules",
  "uuid",
  "zip",
 ]
@@ -3054,7 +3055,7 @@ dependencies = [
  "tracing",
  "traffic-contract",
  "traffic-engine-config",
- "traffic-engine-e2erun",
+ "traffic-engine-e2e-run",
  "traffic-engine-environment",
  "traffic-engine-evidence",
  "traffic-engine-policy",
@@ -3135,7 +3136,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "traffic-engine-e2erun"
+name = "traffic-engine-e2e-run"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3793,6 +3794,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "http",
  "serde",
  "serde_json",
  "sha2",
@@ -3832,6 +3834,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "http",
  "libc",
  "serde",
  "serde_json",
@@ -4096,12 +4099,13 @@ dependencies = [
  "sha2",
  "tempfile",
  "traffic-engine-config",
- "traffic-engine-e2erun",
+ "traffic-engine-e2e-run",
  "traffic-engine-environment",
  "traffic-engine-evidence",
  "traffic-engine-replay",
  "traffic-engine-verification",
  "traffic-policy",
+ "traffic-policy-value",
  "traffic-protocol",
  "traffic-recording-model",
  "traffic-rewrite-model",

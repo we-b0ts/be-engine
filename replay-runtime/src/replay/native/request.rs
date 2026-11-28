@@ -17,9 +17,30 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
         let Some(session) = &state.session_events else {
             return true;
         };
+        if session.runtime.is_streaming()
+            && error.kind == RejectionKind::NoMatch
+            && !self.admission.allows_local_response()
+            && !session.runtime.complete()
+        {
+            // A valid concurrent request can precede preparation of its
+            // Source slot. The finite request budget and progress deadline
+            // still apply at the first unmet Source event.
+            return true;
+        }
         let Some(expected) = session.runtime.expected() else {
-            return false;
+            return session.runtime.is_streaming() && !session.runtime.complete();
         };
+        if self.admission == RequestAdmission::SessionControl
+            && state.native.core.independent_request_at_head(
+                self.protocol,
+                &self.endpoint,
+                self.message.as_ref(),
+            )
+        {
+            // Waiting for a later control can block the earlier SQL that
+            // this connection will issue after its local BEGIN or end.
+            return false;
+        }
         let context = MatchContext {
             protocol: self.protocol,
             endpoint: &self.endpoint,
@@ -40,6 +61,10 @@ impl<P: ReplayProtocolSet> admission::request::DependencyRequestAdapter<RuntimeS
     }
 
     fn observe_once(&mut self, state: &mut RuntimeState<P>) -> admission::RequestAdmission {
+        if self.admission == RequestAdmission::AutocommitCompletion {
+            // Coverage uses the real UPDATE delivery instead of a second Target request.
+            return admission::RequestAdmission::capture(state, None, None, None, false);
+        }
         let case = state.active_case_id.as_deref();
         let event = state.native.order.reserve(case);
         let id = Uuid::new_v4();

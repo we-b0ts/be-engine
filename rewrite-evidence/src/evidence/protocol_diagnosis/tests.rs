@@ -5,37 +5,15 @@ use crate::model::RewriteIssueKind;
 fn attach_default(facts: &mut Value) {
     attach(facts, crate::protocols::default_providers().report_codecs()).unwrap();
 }
-fn limitations(facts: &Value) -> Vec<String> {
-    crate::protocols::default_providers()
-        .report_codecs()
-        .diagnose(facts)
-        .unwrap()
-        .limitations
-}
-fn next_step(facts: &Value) -> String {
-    super::next_step(
-        &crate::protocols::default_providers()
-            .report_codecs()
-            .diagnose(facts)
-            .unwrap(),
-    )
-}
-
 #[test]
-fn unused_read_guidance_preserves_uncertainty_and_does_not_offer_a_time_fix() {
+fn unused_mysql_read_does_not_offer_a_value_fix() {
     let mut facts = json!({
         "clusters": [{"cluster_id":"unused", "protocol":"mysql", "reason":"unused_recorded", "operations":{"COM_QUERY":1}}],
         "dependency_request_candidates":[], "dynamic_capture_candidates":[]
     });
-    let recorded_clusters = facts["clusters"].clone();
+    let original = facts.clone();
     attach_default(&mut facts);
-    assert_eq!(facts["clusters"], recorded_clusters);
-    let diagnosis = &facts["mysql_unused_diagnosis"];
-    assert_eq!(diagnosis["cluster_ids"], json!(["unused"]));
-    assert_eq!(diagnosis["ownership"], "unresolved");
-    assert_eq!(diagnosis["observation"], "recorded_calls_not_consumed");
-    assert!(!limitations(&facts).is_empty());
-    assert!(next_step(&facts).contains("mysql_unused_diagnosis.source_checks"));
+    assert_eq!(facts, original);
     for kind in [
         RewriteIssueKind::Replay,
         RewriteIssueKind::Dependency,
@@ -54,52 +32,13 @@ fn unused_read_guidance_preserves_uncertainty_and_does_not_offer_a_time_fix() {
                 .all(|p| p.capability != "resource_field_contract")
         );
     }
-    let hints = rule_guidance::rule_hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts);
-    let hint = hints
-        .iter()
-        .find(|h| h.capability == "api_triggered_process_traffic")
-        .unwrap();
-    assert!(hint.hint.contains("not evidence of process ownership"));
-}
-
-#[test]
-fn mysql_guidance_is_scoped_without_hiding_other_dirty_reasons() {
-    for cluster in [
-        json!({"protocol":"mysql", "reason":"unmatched_target"}),
-        json!({"protocol":"redis", "reason":"unused_recorded"}),
-    ] {
-        let mut facts = json!({"clusters":[cluster]});
-        let original = facts.clone();
-        attach_default(&mut facts);
-        assert_eq!(facts, original);
-        assert!(limitations(&facts).is_empty());
-        assert!(!next_step(&facts).contains("mysql_unused_diagnosis"));
-    }
-    let mut facts = json!({"clusters":[
-        {"cluster_id":"unused", "protocol":"mysql", "reason":"unused_recorded"},
-        {"cluster_id":"unmatched", "protocol":"mysql", "reason":"unmatched_target"}
-    ]});
-    attach_default(&mut facts);
-    assert_eq!(
-        facts["mysql_unused_diagnosis"]["cluster_ids"],
-        json!(["unused"])
-    );
-    let planners = rule_guidance::applicable_rule_planners(
-        Path::new("/target"),
-        RewriteIssueKind::Replay,
-        QUERY_DIRTY_CLUSTERS,
-        &facts,
-        "current",
-    );
     assert!(
-        planners
-            .iter()
-            .any(|p| p.capability == "resource_field_contract")
+        rule_guidance::rule_hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts).is_empty()
     );
 }
 
 #[test]
-fn unmatched_transaction_evidence_guides_the_write_interval_without_value_rules() {
+fn unmatched_transaction_evidence_remains_available_without_value_rules() {
     let cluster = json!({
         "cluster_id":"transaction", "protocol":"mysql", "reason":"unmatched_target", "count":1,
         "representative":{"difference":{"actual":{"signature":{
@@ -114,50 +53,15 @@ fn unmatched_transaction_evidence_guides_the_write_interval_without_value_rules(
     });
     let mut facts = json!({"clusters":[cluster.clone()]});
     attach_default(&mut facts);
-    assert_eq!(facts["clusters"], json!([cluster]));
-    assert!(facts.get("mysql_unused_diagnosis").is_none());
-    let diagnosis = &facts["mysql_autocommit_diagnosis"];
+    assert_eq!(facts, json!({"clusters":[cluster]}));
+    let diagnostic =
+        &facts["clusters"][0]["representative"]["difference"]["actual"]["signature"]["diagnostic"];
+    let interval = &diagnostic["source_transactions"][0];
+    assert_eq!(interval["write_count"], 2);
+    assert_eq!(interval["source_connection_id"], "source-connection");
+    assert_eq!(interval["last_query_sequence"], 9);
     assert_eq!(
-        diagnosis["clusters"][0]["transaction_evidence"]["source_transactions"][0]["write_count"],
-        2
-    );
-    assert_eq!(
-        diagnosis["clusters"][0]["connection_id"],
-        "source-connection"
-    );
-    assert_eq!(diagnosis["clusters"][0]["query_sequence"], 9);
-    let checks = diagnosis["target_checks"].to_string();
-    for text in [
-        "FIRST WRITE",
-        "trailing",
-        "Prefix",
-        "0x0002",
-        "with_transaction",
-        "first_difference",
-    ] {
-        assert!(checks.contains(text), "missing {text}");
-    }
-    for text in [
-        "affected_rows=0",
-        "affected_rows>0",
-        "UPDATE error",
-        "failed end controls",
-    ] {
-        assert!(
-            checks.contains(text),
-            "missing single-UPDATE guidance: {text}"
-        );
-    }
-    assert!(
-        diagnosis["source_checks"]
-            .to_string()
-            .contains("autocommit_eligible")
-    );
-    assert!(!limitations(&facts).is_empty());
-    assert!(next_step(&facts).contains("first-write-through-end"));
-    assert_eq!(
-        diagnosis["clusters"][0]["transaction_evidence"]["source_transactions"][0]["member_comparison"]
-            ["first_difference"]["actual"]["source_query_sequence"],
+        interval["member_comparison"]["first_difference"]["actual"]["source_query_sequence"],
         8
     );
     let planners = rule_guidance::applicable_rule_planners(

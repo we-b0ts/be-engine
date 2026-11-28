@@ -24,11 +24,6 @@ fn both_purposes_archive_obsolete_bytes_and_start_without_old_assignments() {
         let (previous_id, original) = obsolete_snapshot(target.path());
         let store = RewriteStore::new(target.path()).unwrap();
         assert!(store.load_snapshot().is_err());
-        fs::write(
-            target.path().join(".traffic-e2e/regression.yaml"),
-            "recording_run_id: '20260802000000'\n",
-        )
-        .unwrap();
         let report = begin(RewriteRegressionBeginOptions {
             record_new_traffic,
             ..options(target.path())
@@ -62,11 +57,6 @@ fn obsolete_state_survives_archive_and_branch_failures_byte_for_byte() {
     for block_archive in [false, true] {
         let target = fixture();
         let (_, original) = obsolete_snapshot(target.path());
-        fs::write(
-            target.path().join(".traffic-e2e/regression.yaml"),
-            "recording_run_id: '20260802000000'\n",
-        )
-        .unwrap();
         let block = if block_archive {
             crate::internal_runtime::root(target.path()).join("rewrite/history")
         } else {

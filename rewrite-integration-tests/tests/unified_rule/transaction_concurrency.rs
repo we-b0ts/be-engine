@@ -172,7 +172,7 @@ fn unrelated_prepared_index_bytes_do_not_invalidate_a_plan() {
 }
 
 #[test]
-fn json_identity_plan_survives_code_and_timing_drift_but_keeps_policy_cas() {
+fn json_identity_plan_survives_code_drift_but_keeps_policy_cas() {
     for policy_changed in [false, true] {
         let fixture = Fixture::new();
         fixture
@@ -186,12 +186,6 @@ fn json_identity_plan_survives_code_and_timing_drift_but_keeps_policy_cas() {
         fixture.confirm();
         let code = fixture.root().join("other-api.rs");
         fs::write(&code, "fn other_api() {}\n").unwrap();
-        let regression = fixture.root().join(".traffic-e2e/regression.yaml");
-        fs::write(
-            &regression,
-            "replay_timing: fast\nreplay_interval_cap_ms: 3\n",
-        )
-        .unwrap();
         let plan = fixture.plan().unwrap();
         assert_eq!(plan.traffic_e2e_report["target_replay_drift_at_plan"], true);
         let preflight = &plan.traffic_e2e_report["preflight"];
@@ -296,11 +290,6 @@ async fn pending_plan_precedes_next_replay_after_another_api_passes_or_needs_imp
         store.save(&in_flight).unwrap();
         drop(traffic);
         drop(lock);
-        fs::write(
-            fixture.root().join(".traffic-e2e/regression.yaml"),
-            "auto_next: true\n",
-        )
-        .unwrap();
         let envelope = crate::next_rewrite(crate::RewriteNextOptions {
             target_root: fixture.root().into(),
             api: None,

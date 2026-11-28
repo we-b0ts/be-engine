@@ -68,29 +68,18 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
     let feedback = worker::events::lock(&target_root)?;
     let previous = store.load_for_replacement(options.record_new_traffic)?;
     let previous_state = previous.as_ref().and_then(|old| old.current());
-    let policy = crate::config::regression::RegressionScope::load(&target_root)?;
     let mut state = match previous_state {
         Some(previous) => reset(previous.clone()),
-        None => super::initialization::new_state(
-            &target_root,
-            String::new(),
-            String::new(),
-            Vec::new(),
-        )?,
+        None => super::initialization::new_state(String::new(), String::new(), Vec::new()),
     };
     state.implementers = Some(super::implementer::ImplementerPool::new(
-        policy.max_implementers,
+        super::implementer::ImplementerPool::DEFAULT_CAPACITY,
     ));
     state.repository_analysis = None;
     state.group_replay = None;
     state.last_group_replay = None;
     if !options.record_new_traffic {
-        if previous_state.is_none() {
-            regression_scope::apply(&target_root, &mut state)?;
-        }
-        if state.recording_run_id.is_empty()
-            && !regression_scope::has_active_pin(&target_root, &state)?
-        {
+        if state.recording_run_id.is_empty() {
             super::recording_input::bind(&target_root, &mut state, None)?;
         }
         ensure!(
@@ -130,14 +119,7 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
         record_new_traffic: options.record_new_traffic,
         active_session_agent_count: Some(options.active_agent_count),
         session_runtime_query: Some(options.runtime_query),
-        superseded_recording_run_id: if options.record_new_traffic {
-            policy.recording_run_id
-        } else {
-            previous_state
-                .and_then(|s| s.regression.as_ref())
-                .and_then(|o| o.superseded_recording_run_id.clone())
-                .filter(|id| Some(id) == policy.recording_run_id.as_ref())
-        },
+        superseded_recording_run_id: None,
     });
     regression_scope::apply(&target_root, &mut state)?;
     require_base(&target_root, &project.pr_base)?;

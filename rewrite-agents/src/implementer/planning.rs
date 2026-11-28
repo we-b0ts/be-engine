@@ -1,7 +1,10 @@
 //! Plan implementer slot dispatches and project the current pool.
 use super::{
     binding, feedback,
-    model::{ImplementerDispatch, ImplementerPoolView, ImplementerSlotView, ImplementerTask},
+    model::{
+        ImplementerDispatch, ImplementerPool, ImplementerPoolView, ImplementerSlotView,
+        ImplementerTask,
+    },
     pool::{mapped_pool, worktree},
 };
 use crate::fingerprint;
@@ -147,8 +150,7 @@ pub fn view(
         })
         .collect();
     Ok(Some(ImplementerPoolView {
-        configured_max_implementers: crate::config::regression::RegressionScope::load(root)?
-            .max_implementers,
+        configured_max_implementers: ImplementerPool::DEFAULT_CAPACITY,
         effective_max_implementers: pool.effective_max_implementers,
         group_slots: pool.group_slots,
         slots,

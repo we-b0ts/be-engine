@@ -8,14 +8,15 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command as StdCommand, Stdio};
+use std::process::{Command as StdCommand, ExitStatus, Stdio};
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::warn;
 
 const SOURCE_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+const SIGTERM_EXIT_STATUS: i32 = 128 + libc::SIGTERM;
 const JAVA_TRUSTSTORE_PASSWORD: &str = "changeit";
 
 pub(super) struct RuntimeDirectory {
@@ -287,40 +288,66 @@ pub fn verify_fixed_identity_read(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn stop_source(source: &mut Child) -> Result<()> {
-    if source
-        .try_wait()
-        .context("failed to inspect Source")?
-        .is_some()
-    {
-        return Ok(());
+#[derive(Debug)]
+pub(super) struct SourceStop {
+    pub(super) status: Option<i32>,
+    pub(super) forced_by_recorder: bool,
+    pub(super) graceful_by_recorder: bool,
+}
+
+impl SourceStop {
+    fn observed(status: ExitStatus, sent_sigterm: bool, sent_sigkill: bool) -> Self {
+        let signal = status.signal();
+        let status = status.code().or_else(|| signal.map(|signal| 128 + signal));
+        Self {
+            status,
+            forced_by_recorder: sent_sigterm && sent_sigkill && signal == Some(libc::SIGKILL),
+            graceful_by_recorder: sent_sigterm && matches!(status, Some(0 | SIGTERM_EXIT_STATUS)),
+        }
     }
-    signal_process_group(source, libc::SIGTERM).context("failed to stop Source")?;
-    if let Ok(status) = tokio::time::timeout(SOURCE_STOP_TIMEOUT, source.wait()).await {
-        status.context("failed to wait for Source after SIGTERM")?;
-        return Ok(());
+}
+
+pub(super) async fn stop_source(source: &mut Child) -> Result<SourceStop> {
+    stop_source_with_timeout(source, SOURCE_STOP_TIMEOUT).await
+}
+
+async fn stop_source_with_timeout(source: &mut Child, timeout: Duration) -> Result<SourceStop> {
+    if let Some(status) = source.try_wait().context("failed to inspect Source")? {
+        return Ok(SourceStop::observed(status, false, false));
+    }
+    let sent_sigterm =
+        signal_process_group(source, libc::SIGTERM).context("failed to stop Source")?;
+    if let Ok(status) = tokio::time::timeout(timeout, source.wait()).await {
+        return Ok(SourceStop::observed(
+            status.context("failed to wait for Source after SIGTERM")?,
+            sent_sigterm,
+            false,
+        ));
+    }
+    if let Some(status) = source.try_wait().context("failed to inspect Source")? {
+        return Ok(SourceStop::observed(status, sent_sigterm, false));
     }
     warn!("Source did not stop after SIGTERM; sending SIGKILL");
-    let _ = signal_process_group(source, libc::SIGKILL);
+    let sent_sigkill = signal_process_group(source, libc::SIGKILL).unwrap_or(false);
     let _ = source.kill().await;
-    source
+    let status = source
         .wait()
         .await
         .context("failed to reap Source after SIGKILL")?;
-    Ok(())
+    Ok(SourceStop::observed(status, sent_sigterm, sent_sigkill))
 }
 
-pub fn signal_process_group(child: &Child, signal: libc::c_int) -> Result<()> {
+fn signal_process_group(child: &Child, signal: libc::c_int) -> Result<bool> {
     let Some(pid) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
-        return Ok(());
+        return Ok(false);
     };
     let result = unsafe { libc::kill(-pid, signal) };
     if result == 0 {
-        return Ok(());
+        return Ok(true);
     }
     let error = std::io::Error::last_os_error();
     if error.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
+        return Ok(false);
     }
     Err(error.into())
 }
@@ -448,4 +475,74 @@ fn normalize_path(path: PathBuf) -> PathBuf {
         }
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use traffic_model::session::SIGKILL_EXIT_STATUS;
+
+    fn source_command(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]).kill_on_drop(true);
+        command.as_std_mut().process_group(0);
+        command
+    }
+
+    async fn source_ignoring_sigterm() -> Child {
+        let mut source = source_command("trap '' TERM; echo ready; exec sleep 60")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        let mut output = BufReader::new(source.stdout.take().unwrap());
+        tokio::time::timeout(Duration::from_secs(5), output.read_line(&mut ready))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        source
+    }
+
+    #[tokio::test]
+    async fn recorder_sigkill_after_the_stop_deadline_preserves_provenance() {
+        let mut source = source_ignoring_sigterm().await;
+        let stopped = stop_source_with_timeout(&mut source, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert_eq!(stopped.status, Some(SIGKILL_EXIT_STATUS));
+        assert!(stopped.forced_by_recorder);
+    }
+
+    #[tokio::test]
+    async fn an_existing_sigkill_or_literal_exit_status_has_no_stop_provenance() {
+        let mut killed = source_ignoring_sigterm().await;
+        assert!(signal_process_group(&killed, libc::SIGKILL).unwrap());
+        let mut exited = source_command("exit 137").spawn().unwrap();
+        for source in [&mut killed, &mut exited] {
+            source.wait().await.unwrap();
+            let stopped = stop_source(source).await.unwrap();
+            assert_eq!(stopped.status, Some(SIGKILL_EXIT_STATUS));
+            assert!(!stopped.forced_by_recorder);
+        }
+    }
+
+    #[test]
+    fn graceful_stop_requires_recorder_sigterm_and_a_normal_status() {
+        for (status, graceful) in [
+            (0, true),
+            (libc::SIGTERM, true),
+            (143 << 8, true),
+            (1 << 8, false),
+            (libc::SIGSEGV, false),
+        ] {
+            let status = ExitStatus::from_raw(status);
+            assert_eq!(
+                SourceStop::observed(status, true, false).graceful_by_recorder,
+                graceful
+            );
+            assert!(!SourceStop::observed(status, false, false).graceful_by_recorder);
+        }
+    }
 }

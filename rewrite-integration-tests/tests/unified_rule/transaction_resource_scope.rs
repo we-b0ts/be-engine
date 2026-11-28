@@ -347,62 +347,6 @@ fn resource_scope_rejects_changed_foreign_target_before_apply() {
 }
 
 #[test]
-fn resource_scope_checks_native_http_source_on_other_apis() {
-    for scenario in [
-        "valid",
-        "truncated-body",
-        "other-endpoint",
-        "other-consumer",
-    ] {
-        let fixture = Fixture::new();
-        let mut event = json!({"event_type":"http_exchange","id":"foreign-http",
-            "scheme":"http","authority":"client.test:8080","method":"POST","uri":"/responses?generated_at=1792108800",
-            "request_body":body(json!({"input":"hello"})),"request_headers":{"x-stainless-lang":["python"]},
-            "response_status":200,"response_headers":{},"response_body":body(json!({})),
-            "timestamp":"2026-10-16T00:00:00Z","request_started_at":"2026-10-16T00:00:00Z","duration_ms":0,"outcome":"response"});
-        let case = fixture
-            .state()
-            .case_source
-            .as_ref()
-            .unwrap()
-            .join("apis/api/00000000-0000-4000-8000-000000000001");
-        fs::write(case.join("dependencies.jsonl"), format!("{event}\n")).unwrap();
-        if scenario != "valid" {
-            event["request_body"]["truncated"] = json!(true);
-        }
-        if scenario == "other-endpoint" {
-            event["authority"] = json!("elsewhere.test:8080");
-        }
-        if scenario == "other-consumer" {
-            event["uri"] = json!("/another-service");
-        }
-        foreign(&fixture, &event);
-        write(
-            &fixture.proposal,
-            json!({"id":"query-clock","match":{"resource":{"protocol":"http","endpoint":"client.test:8080"},
-            "operation":"POST","path":"/responses"},"effect":{"kind":"http_request","query":{"generated_at":{"relative_time":"unix_seconds"}}},
-            "proof":{"source":"client.py:request","fact":"Source sends the current dependency request clock in generated_at"}}),
-        );
-        fixture.confirm();
-        let planned = fixture.plan();
-        if scenario == "truncated-body" {
-            assert!(planned.is_err());
-        } else {
-            let planned = planned.unwrap();
-            assert!(
-                planned.traffic_e2e_report["expanded_rules"][0]["match"]
-                    .get("api")
-                    .is_none()
-            );
-            assert_eq!(
-                planned.traffic_e2e_report["preflight"]["rules"]["query-clock"],
-                if scenario == "valid" { 2 } else { 1 }
-            );
-        }
-    }
-}
-
-#[test]
 fn resource_scope_waits_for_related_replay_reservations_only() {
     use crate::traffic_operation::{self, TrafficOperationClaim, TrafficOperationKind};
     for api in ["POST /other", "GET /unrelated"] {

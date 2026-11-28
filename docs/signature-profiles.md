@@ -27,6 +27,34 @@ snapshot. Payload comparison performs no environment/file I/O, and reports do
 not expose key bytes. Planning freezes the relevant key evidence and checks it
 again before application.
 
+## Automatic authentication comparison
+
+Set `infer: true` on trusted JWT profiles to let Replay try those keys for
+changed credentials. Each profile uses a startup key reference. Up to 16
+profiles can participate, so different businesses can supply different keys.
+An RS256 profile accepts a trusted RSA public key or a local JWKS snapshot.
+
+```yaml
+signatures:
+  session: {kind: jwt, algorithm: HS256, infer: true, key: {kind: target_env, name: SECRET_KEY}}
+  oidc: {kind: jwt, algorithm: HS256, infer: true, key: {kind: target_env, name: OIDC_STATE_SECRET_KEY}}
+  dex: {kind: jwt, algorithm: RS256, infer: true, key: {kind: target_env, name: DEX_JWKS}}
+```
+
+Automatic comparison uses structured credentials from HTTP Authorization and
+query values, Location URLs, and logical string values provided by installed
+codecs. The source and target JWTs must verify under the same unambiguous
+profile and agree on their protected headers and stable claims. NumericDates
+use each side's observation clock. Parsed and verified tokens are cached in
+the private key snapshot. URL query comparisons retain the unselected bytes.
+Recognizable SigV4 presigned URLs can use built-in structure and time
+comparison with no JWT profile.
+
+An explicit rule retains ownership of its value, including authentication of
+equal tokens and any companion fields. Automatic comparison authorizes no
+credential rewriting. Request renewal and custom signed layouts retain their
+explicit rules.
+
 ## Global JSON JWT verification
 
 A declared JWT field verifies both signatures against its selected profile,

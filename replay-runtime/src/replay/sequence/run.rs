@@ -137,7 +137,7 @@ impl<P: ReplayProtocolSet> RuntimeState<P> {
                     .push((reference.index, reference.sequence));
             }
         }
-        for exchange in &self.native.core.exchanges {
+        for exchange in self.native.core.exchanges.iter() {
             if exchange.source.source.is_run_owned()
                 && let Some(capture) = &exchange.source.capture
             {

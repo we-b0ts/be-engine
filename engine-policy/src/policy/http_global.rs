@@ -1,4 +1,4 @@
-//! HTTP header formats apply to every API and dependency endpoint.
+//! HTTP header formats and route-scoped request matching declarations.
 use super::GlobalField;
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -12,6 +12,8 @@ pub struct HttpPolicy {
     pub headers: BTreeMap<String, GlobalField>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_metadata: Vec<traffic_protocol_http::request_metadata::RequestMetadataRule>,
+    #[serde(default, rename = "requests", skip_serializing_if = "Vec::is_empty")]
+    pub request_sigv4: Vec<traffic_protocol_http::request_sigv4::SigV4RequestRule>,
 }
 fn header_formats<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -23,6 +25,7 @@ fn normalize(headers: BTreeMap<String, GlobalField>) -> Result<BTreeMap<String, 
     Ok(traffic_policy_document::HttpPolicy {
         headers,
         request_metadata: Vec::new(),
+        request_sigv4: Vec::new(),
     }
     .compile(&super::authoring::context())?
     .headers)
@@ -31,9 +34,11 @@ fn normalize(headers: BTreeMap<String, GlobalField>) -> Result<BTreeMap<String, 
 impl HttpPolicy {
     pub fn compile(&self) -> Result<Self> {
         traffic_protocol_http::request_metadata::validate_rules(&self.request_metadata)?;
+        traffic_protocol_http::request_sigv4::validate_rules(&self.request_sigv4)?;
         Ok(Self {
             headers: normalize(self.headers.clone())?,
             request_metadata: self.request_metadata.clone(),
+            request_sigv4: self.request_sigv4.clone(),
         })
     }
 }
@@ -49,8 +54,6 @@ http:
       method: POST
       path: /stream/connect
       json_ipv4: [/localAddress]
-      traceparent: true
-      accept_encoding: gzip
 "#;
         let policy = crate::policy::parse_policy(raw).unwrap();
         let compiled = crate::policy::compile_policy(&policy).unwrap();
@@ -61,6 +64,12 @@ http:
             compiled
         );
         assert!(crate::policy::parse_policy(&raw.replace("/stream/connect", "/stream/*")).is_err());
+        for retired_field in ["traceparent: true", "accept_encoding: gzip"] {
+            assert!(
+                crate::policy::parse_policy(&format!("{raw}      {retired_field}\n")).is_err(),
+                "accepted retired HTTP request metadata field {retired_field}"
+            );
+        }
     }
 
     #[test]

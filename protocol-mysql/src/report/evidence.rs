@@ -2,7 +2,7 @@
 use serde_json::{Value, json};
 use traffic_protocol::report::{
     ReportCodec,
-    diagnostics::{Diagnosis, DiagnosticSchema, Direction, Field},
+    diagnostics::{DiagnosticSchema, Direction, Field},
 };
 
 pub struct EvidenceCodec;
@@ -40,11 +40,15 @@ impl ReportCodec for EvidenceCodec {
 }
 
 impl DiagnosticSchema for EvidenceCodec {
-    fn diagnose(&self, facts: &Value) -> Diagnosis {
-        super::guidance::diagnose(facts)
-    }
     fn has_value_difference(&self, facts: &Value) -> bool {
-        super::guidance::has_sql_mismatch(facts)
+        facts["clusters"].as_array().is_some_and(|clusters| {
+            clusters.iter().any(|cluster| {
+                cluster["protocol"] == "mysql"
+                    && cluster["reason"] == "unmatched_target"
+                    && (!has_transaction_diagnostic(cluster)
+                        || cluster["count"].as_u64().is_some_and(|count| count > 1))
+            })
+        })
     }
     fn section<'a>(&self, report: &'a Value, _: &str) -> &'a Value {
         report
@@ -93,4 +97,13 @@ impl DiagnosticSchema for EvidenceCodec {
             .as_str()
             .map(|sql| super::fnv1a64(sql.as_bytes()))
     }
+}
+
+// A transaction-only witness cannot justify a generated SQL-value rule. A
+// multi-event cluster's representative does not classify its other events.
+fn has_transaction_diagnostic(cluster: &Value) -> bool {
+    ["expected", "actual"].into_iter().any(|side| {
+        cluster["representative"]["difference"][side]["signature"]["diagnostic"]["kind"]
+            == "mysql_autocommit_transaction_coverage"
+    })
 }

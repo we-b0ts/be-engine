@@ -48,8 +48,17 @@ pub trait FiniteProcessRequest: Send + Sync {
     fn matches_evidence(&self, event: &Value) -> Result<bool>;
 }
 
+/// Protocol-local facts collected while semantic dependencies are written.
+pub trait SessionScopeFacts: Send + Sync {
+    fn observe(&mut self, event: &Value) -> Result<()>;
+    fn finish(self: Box<Self>) -> Result<Vec<crate::connection::SessionDecision>>;
+}
+
 pub trait EvidenceAdapter: Send + Sync {
     fn schema(&self) -> &'static str;
+    fn session_scope_facts(&self) -> Option<Box<dyn SessionScopeFacts>> {
+        None
+    }
     fn proof_selector(&self, event: &Value) -> Value {
         serde_json::json!({"event_type":event["event_type"], "capture":event["capture"], "capture_complete":event["capture_complete"]})
     }
@@ -181,6 +190,13 @@ impl std::fmt::Debug for EvidenceRegistry {
 }
 
 impl EvidenceRegistry {
+    pub fn session_scope_facts(&self) -> BTreeMap<String, Box<dyn SessionScopeFacts>> {
+        self.registrations
+            .iter()
+            .filter_map(|entry| Some((entry.name.clone(), entry.adapter.session_scope_facts()?)))
+            .collect()
+    }
+
     /// Read-only historical projections never reserve executable event names.
     pub fn register_index_fallback(
         &mut self,

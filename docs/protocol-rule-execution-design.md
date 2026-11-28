@@ -199,7 +199,7 @@ are required; an inventory-only workload is not a Case execution benchmark.
 
 Required repository checks are `cargo fmt --check`, `cargo test`,
 `cargo clippy --all-targets -- -D warnings`, `git diff --check`, and
-`CODE_ORG_BASE=origin/main plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization`.
+`CODE_ORG_BASE=origin/main plugins/ai-engine/skills/be-replay/scripts/check-code-organization`.
 
 The completed implementation passed 4,074 default tests with 33 existing ignored
 tests. Regression coverage includes the shared Redis/SQL literal/SQL-argument/

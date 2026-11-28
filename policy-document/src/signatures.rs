@@ -9,6 +9,8 @@ pub enum SignatureDefinition {
     Jwt {
         algorithm: SignatureAlgorithm,
         key: StartupKey,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        infer: bool,
     },
     Md5SortedFields {
         key: StartupKey,
@@ -16,6 +18,10 @@ pub enum SignatureDefinition {
 }
 
 impl SignatureDefinition {
+    pub fn inferred(&self) -> bool {
+        matches!(self, Self::Jwt { infer: true, .. })
+    }
+
     pub fn validate(&self) -> Result<()> {
         let key = match self {
             Self::Jwt { key, .. } | Self::Md5SortedFields { key } => key,
@@ -24,10 +30,20 @@ impl SignatureDefinition {
     }
 }
 
+pub const MAX_INFERRED_JWT_PROFILES: usize = 16;
+
 pub fn validate(definitions: &BTreeMap<String, SignatureDefinition>) -> Result<()> {
     ensure!(
         definitions.len() <= 256,
         "signatures exceeds 256 definitions"
+    );
+    ensure!(
+        definitions
+            .values()
+            .filter(|profile| profile.inferred())
+            .count()
+            <= MAX_INFERRED_JWT_PROFILES,
+        "signatures exceeds {MAX_INFERRED_JWT_PROFILES} inferred JWT profiles"
     );
     for (name, definition) in definitions {
         ensure!(

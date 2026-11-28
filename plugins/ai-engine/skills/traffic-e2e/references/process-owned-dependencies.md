@@ -1,0 +1,197 @@
+# Process-Owned Dependency Classification
+
+Use to interpret process-owned asynchronous traffic in existing Case-format
+recordings and their policy. Current Source Session regression follows the
+sealed event timeline. See
+[Source Session regression](../../be-replay/references/session-regression.md).
+
+## Ownership Model
+
+A process-owned dependency rule proves only that matching asynchronous work is process-scoped
+and case-independent. It carries no classification of whether the response
+affects business state. AI proves process ownership from source and runtime
+evidence; timing, repetition, scheduler names, shared hosts, and unused
+exchanges are not proof.
+
+Response causality remains a target concern. When source and case evidence show
+that a process-owned dependency drives local state, the target AI must implement
+the source-compatible initialization, refresh, cache, fallback, and readiness
+behavior. A process-owned dependency rule cannot replace or hide that implementation.
+
+## Replay Scope
+
+Case-format recordings have two dependency scopes:
+
+```text
+<case>/dependencies.jsonl
+<run>/global-dependencies.jsonl
+```
+
+Global contains startup and rule-matched dependencies. Replay prefers Case,
+then Global. Ordinary exchanges are consumed once. A Redis exchange marked as
+the seed of a run-local cache snapshot is reusable for repeated matching reads.
+
+Recorder adds:
+
+```text
+global_dependency_reason = bootstrap_window | background_rule
+global_dependency_phase = bootstrap | runtime
+global_dependency_matched_by = bootstrap_window | <rule-name>
+```
+
+Bootstrap rule matches use `reason=background_rule`, `phase=bootstrap`.
+Unruled ready-time idle traffic stays only in `traffic.jsonl`. Replay has no
+legacy bootstrap fallback.
+
+Finalized recordings also contain `source-process-traffic-summary.json`. It
+separates pre-readiness observations from configured process-owned rules and
+reports protocol, endpoint, operation, and bounded counts. Redis snapshot
+sections additionally report seeds, reuses, fill failures, and those counts by
+intercepted domain and port. Treat the summary as a lead for tracing the
+corresponding Source path and confirming ownership or response causality.
+
+## Supported Rules
+
+MySQL reclassification also reconciles value-rule applicability using the exact
+Source case/exchange occurrences stored in new Replay reports. A rule selected
+only by unused process-owned traffic no longer leaves an API obligation. Any
+remaining business occurrence or actual Target use remains checked. Restoration
+and rule removal restore the original obligation. Reports without occurrence
+proof require fresh Replay; ownership is never inferred from rule ids alone.
+
+The current narrow rule types are:
+
+- MySQL read-only SELECT templates scoped to exact host, port, database, username
+  and exact tables, bounded numeric shards, or single-wildcard table identifier
+  patterns; see [MySQL replay](../../../../../docs/mysql-replay.md)
+  for evidence requirements and table-bound column alias templates. Complete
+  unused Case evidence can support derived classification without changing
+  the recording JSONL;
+
+- exact HTTP authority, method, and path prefix;
+- exact Vintage service group plus Motan interface and method, with no endpoint,
+  Vintage alias, or payload persisted in the rule;
+- Redis `ZCOUNT` with one stable service port set and exact key prefix and
+  suffix, with no hostname persisted in the rule;
+- Redis `GET` with one stable service port set and an exact bounded key list.
+  Without `initial_load_timeout_ms`, each original exchange remains single-use;
+  this supports proven periodic process reads whose values can change. A positive
+  `initial_load_timeout_ms` retains initialization observation and snapshot reuse;
+- Redis `PUBLISH` with exact ports and channels. For a shared channel, scope the
+  publisher with Source-proven `when_message` conditions on the outgoing JSON
+  payload. A successful integer response remains finite; see
+  [process-owned Redis](../../../../../docs/process-owned-redis.md#finite-publish).
+- Redis bootstrap `HGET`/`HMGET` with a stable service port set, optional exact
+  keys, bounded numeric-middle key patterns, and the exact field sequence;
+- Redis process-owned `HSCAN` with a stable service port set and exact keys or
+  bounded numeric-middle key patterns. Cursor and scan options are not part of
+  the selector;
+- Breeze-backed Memcached `get` with one exact
+  resolved resource identity, and a bounded numeric key series
+  `<start..end><separator><suffix>` whose numeric bounds are unsigned 64-bit.
+
+Recorder can observe completed replay-safe initial-load matches from process
+startup. Redis GET counts each configured exact key once; Memcached counts every
+matching completed response. After HTTP ready, Recorder observes each rule with
+an initial-load timeout for up to `initial_load_timeout_ms`; it logs
+progress every 10 seconds and warns but continues case admission when the load
+remains incomplete. Replay does not wait for target-local initialization;
+repair target startup or readiness when that causes a response difference.
+
+For example, a proven independent monitor can declare a finite read:
+
+```yaml
+process_dependencies:
+  tasks:
+    actual_source_monitor:
+      requests:
+        - redis:
+            ports: [6379]
+            operation: GET
+            keys: [{kind: exact, value: monitor_state}]
+```
+
+The document still requires its root `source_revision` and complete Source proof
+for the entire selector. This declaration grants no key wildcard, default value,
+or response reuse. Each actual Target call must consume its own recorded response;
+exhaustion remains unmatched. Existing complete single-use recordings may be
+reclassified without recapture. Snapshot seeds and diagnostic snapshot hits cannot
+be converted into finite evidence.
+
+The task name is not captured caller identity. If request handlers and a monitor
+can issue the same GET/key, prove every selected occurrence's ownership using
+independent evidence or leave attribution unresolved. See
+[process-owned Redis](../../../../../docs/process-owned-redis.md) for finite
+Case ordering and snapshot compatibility.
+
+Global exchanges explicitly emitted by any process-owned rule use
+connection-independent replay. Ordinary process-owned exchanges remain
+single-use. An explicit Redis initial-load snapshot makes Recorder hold the first
+successful response for each logical rule/session/command/argument tuple for
+the rest of that run. Only that first exchange is semantic Global evidence;
+later snapshot hits remain diagnostic traffic. Replay reuses the marked seed
+for every identical target read. The snapshot is bounded and does not cache
+Redis error responses. Other case, bootstrap-only, legacy, HTTP, Motan, and
+Memcached exchanges retain their existing consumption and connection-order
+semantics. This replay treatment does not replace destination behavior.
+
+A previously authorized Redis rule may derive reusable-seed behavior without
+editing the recording when its complete snapshot proof is available. It
+does so only when every matching exchange has complete replay-safe evidence,
+each observed logical target/session/command/argument identity has a
+successful `bootstrap_window` Global seed, and all matching Global and Case
+responses for that identity are byte-consistent. The bounded overlay references
+the original exchange and is regenerated from the current rule and case source;
+errors, truncation, conflicts, incomplete configured-key coverage, or ambiguous
+Global ownership reject the whole rule overlay.
+
+Use the logical resource identity in the selector. Its resolution requires one
+compatible `mc` descriptor, retains its stable identity outside the dynamic port, and
+resolves the port when the source-created descriptor is available. Recorder
+may start while the identity is pending and binds the first matching event
+after the descriptor appears. Runtime uses port only as a coarse filter, then
+exact `get` and bounded key-series matching. Every configured identity must be
+resolved when the source HTTP ready probe succeeds; a missing descriptor at
+that boundary is a source or recording-configuration readiness error.
+
+## Policy declaration
+
+A historical process-owned selector is a typed rule in the policy named by
+`project.policy`. Its Source proof covers every claimed occurrence. The policy
+format and comparison boundaries are described in [unified rules](replay-policy.md).
+
+```yaml
+id: configuration-refresh
+match: {}
+effect:
+  kind: process_owned
+  source_revision: ''
+  selector:
+    protocol: http
+    authorities: [config.example]
+    methods: [GET]
+    path_prefixes: [/refresh]
+proof:
+  source: src/config/refresh.rs:42
+  fact: A process scheduler refreshes this endpoint independently of API handlers.
+```
+
+Evaluate selector coverage against the full finalized recording, including
+sibling Cases and Global evidence. Scope proof to the actual owner and require
+complete capture, including full MySQL result rows when those matter.
+
+API-triggered asynchronous work uses the `origin` contract with explicit
+request conditions, captures and nested proofs. Transaction members and Redis
+script selectors use their typed domain owner. Follow the returned schema;
+do not flatten an origin into a broad process permission.
+
+Classification-only changes can rebuild a derived report without modifying
+JSONL. Snapshot-producing Redis GET selectors require fresh recording under the
+current conservative authorization boundary. Capture plugins also require
+fresh recording to verify their output. Re-run Replay for the affected
+recording and preserve the proof for any retained snapshot overlay.
+
+Unbounded unused-host exemptions are retired. A finite-sharing rule is a
+separate bounded cross-case delivery permission and does not authorize unused
+work. Implement Source-compatible refresh, readiness and cache state in the
+Target even when the traffic is process owned.

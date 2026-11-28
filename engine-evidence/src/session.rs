@@ -1,15 +1,42 @@
 //! Read-only queries and public progress derived from the sealed Source timeline.
 
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeSet, HashSet},
+    path::Path,
+};
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
-use traffic_model::{session::SessionEvent, trace::RecordedEvent};
+use traffic_model::{
+    session::SessionEvent,
+    trace::{CaptureEvent, OutputKind, RecordedEvent},
+};
+pub use traffic_recording_store::session_summary::recording_end_sequence;
 use traffic_recording_store::{session, source::recording};
 
+mod dispatch_window;
+pub use dispatch_window::{
+    DispatchWindow, WindowApi, WindowMatch, WindowMatchKind, WindowOwner, dispatch_window,
+};
 mod progress;
-pub use progress::{SessionApiCounts, api_counts, publish_passed_progress};
+pub use progress::{SessionApiCounts, publish_passed_progress};
+mod request_lookup;
+pub use request_lookup::{ApiRequest, first_api_request};
+mod recorded_apis;
+pub use recorded_apis::{RecordedApi, recorded_apis};
+
+/// Return the recorded non-probe primary request count from the sealed summary.
+pub fn recording_case_total(root: &Path) -> Result<u64> {
+    traffic_recording_store::session_summary::read(root)?
+        .routes
+        .iter()
+        .try_fold(0_u64, |total, route| {
+            total
+                .checked_add(route.requests)
+                .context("recorded case count overflow")
+        })
+}
 
 #[derive(Debug, Serialize)]
 pub struct SessionEventPage {
@@ -18,21 +45,38 @@ pub struct SessionEventPage {
     pub next_after_sequence: Option<u64>,
 }
 
+#[derive(Debug)]
+pub struct SessionEventQuery {
+    pub from_sequence: u64,
+    pub after_sequence: u64,
+    pub window_ms: Option<u64>,
+    pub limit: usize,
+    pub payload: bool,
+    pub with_push_event: bool,
+    pub selected: BTreeSet<u64>,
+}
+
 /// Return a bounded evidence page in original Source sequence.
-pub fn events(
-    root: &Path,
-    from_sequence: u64,
-    after_sequence: u64,
-    window_ms: Option<u64>,
-    limit: usize,
-    payload: bool,
-    selected: &BTreeSet<u64>,
-) -> Result<SessionEventPage> {
+pub fn events(root: &Path, query: SessionEventQuery) -> Result<SessionEventPage> {
+    let SessionEventQuery {
+        from_sequence,
+        after_sequence,
+        window_ms,
+        limit,
+        payload,
+        with_push_event,
+        selected,
+    } = query;
     ensure!(
         (1..=200).contains(&limit),
         "event page limit must be between 1 and 200"
     );
-    let mut primary = session::evidence_events(root)?;
+    let first_sequence = if window_ms.is_none() {
+        from_sequence.max(selected.first().copied().unwrap_or_default())
+    } else {
+        from_sequence
+    };
+    let mut primary = session::evidence_events_from(root, first_sequence)?;
     let (root, manifest) = recording::manifest(root)?;
     let mut dependency = recording::events(&root)?;
     let mut next_primary = None;
@@ -40,6 +84,7 @@ pub fn events(
     let mut end = None;
     let mut previous_sequence = 0;
     let mut events = Vec::new();
+    let mut hidden_pushes = (!with_push_event && selected.is_empty()).then(HashSet::<u64>::new);
     loop {
         if next_primary.is_none() {
             next_primary = primary.next().transpose()?;
@@ -55,11 +100,18 @@ pub fn events(
         };
         let (sequence, offset, value) = if take_primary {
             let event = next_primary.take().expect("primary head exists");
-            let value = primary_value(&event, payload)?;
+            let value = Some(primary_value(&event, payload)?);
             (event.sequence, event.offset_micros, value)
         } else {
             let event = next_dependency.take().expect("dependency head exists");
-            let value = serde_json::to_value(&event)?;
+            // A delivery inside the window can belong to a notification that
+            // started before it. Update the filter before applying the cursor.
+            let hidden = hidden_pushes
+                .as_mut()
+                .is_some_and(|pushes| is_push_event(pushes, &event.event));
+            let value = (!hidden)
+                .then(|| serde_json::to_value(&event))
+                .transpose()?;
             (event.sequence, event.offset_micros, value)
         };
         ensure!(
@@ -67,7 +119,10 @@ pub fn events(
             "duplicate or unordered Source sequence {sequence}"
         );
         previous_sequence = sequence;
-        if sequence < from_sequence {
+        if selected.last().is_some_and(|&last| sequence > last) {
+            break;
+        }
+        if sequence < first_sequence {
             continue;
         }
         let end_offset = end.get_or_insert_with(|| {
@@ -79,6 +134,9 @@ pub fn events(
         if sequence <= after_sequence || (!selected.is_empty() && !selected.contains(&sequence)) {
             continue;
         }
+        let Some(value) = value else {
+            continue;
+        };
         if events.len() == limit {
             let next_after_sequence = events
                 .last()
@@ -96,6 +154,25 @@ pub fn events(
         events,
         next_after_sequence: None,
     })
+}
+
+fn is_push_event(pushes: &mut HashSet<u64>, event: &CaptureEvent) -> bool {
+    let Some(sequence) = event.dependency_sequence() else {
+        return false;
+    };
+    match event {
+        CaptureEvent::MessageStarted { .. } => {
+            pushes.insert(sequence);
+            true
+        }
+        // A sealed stream can omit capture termination after a wire terminal.
+        CaptureEvent::Terminal { .. }
+        | CaptureEvent::Output {
+            output: OutputKind::End | OutputKind::Terminated { .. },
+            ..
+        } => pushes.remove(&sequence),
+        _ => pushes.contains(&sequence),
+    }
 }
 
 fn primary_value(row: &RecordedEvent<SessionEvent>, payload: bool) -> Result<Value> {
@@ -127,18 +204,7 @@ fn primary_value(row: &RecordedEvent<SessionEvent>, payload: bool) -> Result<Val
 
 /// Resolve a dependency admission sequence to its protected semantic record.
 pub fn dependency(root: &Path, sequence: u64) -> Result<Value> {
-    let (root, manifest) = recording::manifest(root)?;
-    ensure!(manifest.capture_complete, "Source lead-in is incomplete");
-    recording::authenticate(&root)?;
-    let mut rows =
-        traffic_recording_store::source::RecordStream::open(&recording::dependency_path(&root))?;
-    while let Some((_, bytes)) = rows.next()? {
-        let row: Value = serde_json::from_slice(bytes)?;
-        if row["capture"]["sequence"].as_u64() == Some(sequence) {
-            return Ok(row);
-        }
-    }
-    None.context("no protected dependency record for that admission sequence")
+    traffic_recording_store::session_records::dependency(root, sequence)
 }
 
 /// Read a retained Target observation tied to this recording and Replay attempt.

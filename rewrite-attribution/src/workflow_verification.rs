@@ -26,20 +26,15 @@ pub fn methods(state: &RewriteState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Recapture may replace the current inventory, but only the user's existing
-/// only/skip policy can narrow the workflow's accumulated method requirement.
-pub fn required_scope_methods(root: &Path, state: &RewriteState) -> Result<BTreeSet<String>> {
-    let scope = traffic_engine::config::regression::RegressionScope::load(root)?;
+/// Recapture can replace the current inventory while retaining method requirements.
+pub fn required_scope_methods(_root: &Path, state: &RewriteState) -> Result<BTreeSet<String>> {
     Ok(state
         .dependency_review
         .required_method_apis
         .iter()
         .cloned()
         .chain(state.api_inventory.iter().map(|item| item.api.clone()))
-        .filter(|method| {
-            scope.includes(method)
-                && !traffic_rewrite_model::rewrite::inventory::is_skipped(state, method)
-        })
+        .filter(|method| !traffic_rewrite_model::rewrite::inventory::is_skipped(state, method))
         .collect())
 }
 

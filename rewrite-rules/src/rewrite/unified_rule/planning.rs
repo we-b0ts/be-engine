@@ -128,6 +128,14 @@ pub fn build(
     let rules_changed = proposal::merge(&mut document, change.policy.rules)?;
     let changed = declarations_changed || rules_changed || !replaced_rules.is_empty();
     let compiled = compile_policy(&document)?;
+    ensure!(
+        before
+            .http
+            .iter()
+            .flat_map(|http| &http.request_sigv4)
+            .eq(compiled.http.iter().flat_map(|http| &http.request_sigv4)),
+        "SigV4 outbound request rules require the managed Event Session rule workflow"
+    );
     if attribution_scope {
         ownership::validate_change(&before, &compiled)?;
     }

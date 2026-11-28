@@ -20,7 +20,7 @@ pub fn jwt_name(
 ) -> Option<String> {
     profile_name(definitions, |value| {
         matches!(value,
-        SignatureDefinition::Jwt { algorithm: selected, key: selected_key }
+        SignatureDefinition::Jwt { algorithm: selected, key: selected_key, .. }
         if *selected == algorithm && selected_key == key)
     })
 }

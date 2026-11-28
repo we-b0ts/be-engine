@@ -39,27 +39,17 @@ fn authenticate(
     if kid.is_some_and(|kid| header["kid"].as_str() != Some(kid)) {
         return Err(Failure::Claims);
     }
-    if !jsonwebtoken::crypto::verify(
-        parts[2],
-        format!("{}.{}", parts[0], parts[1]).as_bytes(),
+    if !verify(
         key,
-        jsonwebtoken::Algorithm::RS256,
-    )
-    .unwrap_or(false)
-    {
+        format!("{}.{}", parts[0], parts[1]).as_bytes(),
+        parts[2],
+    ) {
         return Err(Failure::Signature);
     }
     Ok((header, claims))
 }
 
-pub fn compare(
-    source: &Value,
-    target: &Value,
-    key: &[u8],
-    kid: Option<&str>,
-    anchors: [i128; 2],
-    dynamic: &[crate::nonce::DynamicClaim],
-) -> Result<contract::Validated, Failure> {
+pub(crate) fn prepare_spki(key: &[u8]) -> Result<jsonwebtoken::DecodingKey, Failure> {
     let mut reader = key;
     let Some(rustls_pemfile::Item::SubjectPublicKeyInfo(der)) =
         rustls_pemfile::read_one(&mut reader).map_err(|_| Failure::Signature)?
@@ -77,7 +67,25 @@ pub fn compare(
     if !rest.is_empty() || spki.algorithm.algorithm.to_id_string() != "1.2.840.113549.1.1.1" {
         return Err(Failure::Signature);
     }
-    let key = jsonwebtoken::DecodingKey::from_rsa_der(&spki.subject_public_key.data);
+    Ok(jsonwebtoken::DecodingKey::from_rsa_der(
+        &spki.subject_public_key.data,
+    ))
+}
+
+pub(crate) fn verify(key: &jsonwebtoken::DecodingKey, input: &[u8], signature: &str) -> bool {
+    jsonwebtoken::crypto::verify(signature, input, key, jsonwebtoken::Algorithm::RS256)
+        .unwrap_or(false)
+}
+
+pub fn compare(
+    source: &Value,
+    target: &Value,
+    key: &[u8],
+    kid: Option<&str>,
+    anchors: [i128; 2],
+    dynamic: &[crate::nonce::DynamicClaim],
+) -> Result<contract::Validated, Failure> {
+    let key = prepare_spki(key)?;
     let (source_header, source) = authenticate(source, &key, kid)?;
     let (target_header, target) = authenticate(target, &key, kid)?;
     if source_header != target_header {

@@ -54,4 +54,22 @@ impl<K: Clone + Eq + Hash> Postings<K> {
             },
         )
     }
+
+    pub(crate) fn discard(&mut self, key: &K, index: usize) {
+        let Some(bucket) = self.buckets.get_mut(key) else {
+            return;
+        };
+        assert!(bucket.pending.is_empty(), "native index was not prepared");
+        if bucket.frozen.binary_search(&index).is_ok() {
+            bucket.frozen = bucket
+                .frozen
+                .iter()
+                .copied()
+                .filter(|&old| old != index)
+                .collect();
+        }
+        if bucket.frozen.is_empty() {
+            self.buckets.remove(key);
+        }
+    }
 }

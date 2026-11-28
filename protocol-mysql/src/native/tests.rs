@@ -5,6 +5,7 @@ use traffic_protocol::message::ProtocolMessage;
 
 mod driver_prelude;
 mod prepared_execution;
+mod semantic_tx;
 mod session_recording;
 mod tuple_membership;
 

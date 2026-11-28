@@ -178,7 +178,7 @@ pub fn looks_like_jwt(value: &serde_json::Value) -> bool {
     })
 }
 
-fn aws_sigv4(context: LeafContext<'_>) -> Result<LeafObservations, String> {
+pub(crate) fn aws_sigv4(context: LeafContext<'_>) -> Result<LeafObservations, String> {
     let compare = || -> anyhow::Result<LeafObservations> {
         use anyhow::{Context, ensure};
         let names =
@@ -253,6 +253,9 @@ pub trait FormatHost: Send + Sync {
     fn time(&self) -> &crate::fields::TimePolicy;
     fn policies(&self) -> &PolicyRegistry;
     fn signing_key(&self, signature: &str) -> Result<(traffic_jwt::Algorithm, &[u8])>;
+    fn auth_matcher(&self) -> Option<crate::auth::Matcher> {
+        None
+    }
     fn compare_document(
         &self,
         source: &serde_json::Value,

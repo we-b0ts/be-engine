@@ -110,25 +110,6 @@ pub(super) fn report(
             ],
             vec![]
         ));
-        facts["mysql_sql_value_pointers"] = json!({
-            "request":"/sql_values/<sql-token-index>/value",
-            "decoded_json":"/sql_values/<sql-token-index>/json/<field-path>",
-            "response_request":"/request/sql_values/<sql-token-index>/value",
-            "token_indexes":"physical_fields.fields[].observed_positions in unified-rule-candidates; a candidate is not proof of a successful match"
-        });
-        facts["redis_target_argument_query"] = json!(super::super::action::command(
-            target_root,
-            vec![
-                "evidence-detail".into(),
-                "--api".into(),
-                super::super::api_selector::public_api(&state.api).to_owned(),
-                "--redis-target-event".into(),
-                "<case-id>:<target-event-index>".into(),
-                "--argument-index".into(),
-                "<zero-based-index>".into()
-            ],
-            vec![]
-        ));
     }
     // Retained issues may predate dependency-first attribution. Expose the
     // original execution cause without changing their persisted identity.

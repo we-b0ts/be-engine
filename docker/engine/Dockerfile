@@ -10,8 +10,8 @@ LABEL org.opencontainers.image.title="traffic-e2e engine" \
       org.opencontainers.image.revision="${ENGINE_REVISION}"
 
 USER 0:0
-COPY --chmod=0755 traffic-e2e backend-rewrite backend-rewrite-admin /usr/local/bin/
-RUN traffic-e2e --version && backend-rewrite --version && backend-rewrite-admin --version
+COPY --chmod=0755 traffic-e2e be-replay backend-rewrite-admin /usr/local/bin/
+RUN traffic-e2e --version && be-replay --version && backend-rewrite-admin --version
 
 ENV RUST_LOG=info
 WORKDIR /workspace

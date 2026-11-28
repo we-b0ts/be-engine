@@ -26,6 +26,9 @@ fn execution_context() -> traffic_policy_execution::ExecutionContext<'static> {
     }
 }
 impl traffic_policy_value::formats::FormatHost for crate::policy::CompiledJsonPolicy {
+    fn auth_matcher(&self) -> Option<traffic_policy_value::auth::Matcher> {
+        self.auth_matcher()
+    }
     fn fields(&self) -> &std::collections::BTreeMap<String, crate::policy::GlobalField> {
         &self.fields
     }
@@ -58,7 +61,7 @@ impl traffic_policy_value::formats::FormatHost for crate::policy::CompiledJsonPo
         fields: &std::collections::BTreeMap<String, crate::policy::GlobalField>,
         clocks: traffic_contract::compare::AnchorClocks,
     ) -> anyhow::Result<traffic_contract::compare::Comparison> {
-        let plan = self.with_fields(fields.clone());
+        let plan = self.with_fields(fields.clone()).without_auth_inference();
         traffic_policy_execution::global::compare_logical_with_time_copies::<
             crate::policy::CompiledRule,
         >(

@@ -7,12 +7,12 @@ use traffic_protocol::{
     output::OutputBoundary,
 };
 use traffic_replay::{
-    ReplaySource,
+    EventKind, ReplaySource, SequenceClaim, SequenceRuntime, SourceEvent, StreamEvent,
     exchange::{ExchangeInventory, ExchangeRules, MatchContext, Selection, SourceContext},
 };
 
 struct Host;
-struct Delivery(Arc<dyn MessageEncoder>);
+struct Delivery(Arc<dyn MessageEncoder>, Option<SequenceClaim>);
 impl RequestHost for Host {
     fn execute(
         &self,
@@ -24,12 +24,15 @@ impl RequestHost for Host {
                 request.values["/body"].bytes.as_ref() == br#"{"id":42}"#,
                 "unexpected body"
             );
-            Ok(Box::new(Delivery(Arc::new(ResponseMessage {
-                status: 200,
-                headers: Default::default(),
-                body: Bytes::from_static(b"ok"),
-                head_request: false,
-            }))) as Box<dyn ResponseDelivery>)
+            Ok(Box::new(Delivery(
+                Arc::new(ResponseMessage {
+                    status: 200,
+                    headers: Default::default(),
+                    body: Bytes::from_static(b"ok"),
+                    head_request: false,
+                }),
+                None,
+            )) as Box<dyn ResponseDelivery>)
         })
     }
 }
@@ -47,6 +50,15 @@ impl ResponseDelivery for Delivery {
                 .into_iter()
                 .map(|(path, value)| (path, value.bytes))
                 .collect();
+            if let Some(sequence) = &self.1 {
+                sequence
+                    .wait_delivery(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+                    .await?;
+                let output = self.0.output(&values)?;
+                let mut output = traffic_protocol::output::FramedOutput::new(output, framer);
+                traffic_replay::output::deliver(io, &mut output, Some(sequence)).await?;
+                return sequence.publish();
+            }
             io.write_all(&framer.frame(self.0.encode(&values)?)?)
                 .await?;
             io.flush().await?;
@@ -121,15 +133,26 @@ const WEBSOCKET_REQUEST: &str = concat!(
     "X-Sdk-Signature: business-value\r\n\r\n",
 );
 
-struct RecordedHost(ExchangeInventory);
+struct RecordedHost(ExchangeInventory, Option<Arc<SequenceRuntime>>);
 
 impl RecordedHost {
     fn new(event: &Value) -> Self {
+        Self::with_session(event, None)
+    }
+
+    fn with_session(event: &Value, runtime: Option<Arc<SequenceRuntime>>) -> Self {
+        let exchange = if runtime.is_some() {
+            Native.recorded_session_exchange(event, &Secrets)
+        } else {
+            Native.recorded_exchange(event)
+        }
+        .unwrap()
+        .unwrap();
         let mut inventory = ExchangeInventory::default();
         inventory
             .register(
                 ProtocolId::new("http"),
-                Native.recorded_exchange(event).unwrap().unwrap(),
+                exchange,
                 SourceContext {
                     source: ReplaySource::Startup,
                     case_id: None,
@@ -140,7 +163,7 @@ impl RecordedHost {
             )
             .unwrap();
         inventory.seal();
-        Self(inventory)
+        Self(inventory, runtime)
     }
 }
 
@@ -169,6 +192,10 @@ impl RequestHost for RecordedHost {
             };
             Ok(Box::new(Delivery(
                 self.0.exchanges[selected.index].native.response.clone(),
+                self.1
+                    .as_ref()
+                    .map(|runtime| runtime.admit(2))
+                    .transpose()?,
             )) as Box<dyn ResponseDelivery>)
         })
     }
@@ -189,8 +216,48 @@ async fn replay_http(host: Arc<RecordedHost>, wire: &str) -> (String, Result<()>
 }
 
 #[tokio::test]
+async fn native_replay_matches_absent_and_bare_wildcard_accept() {
+    let capture = |value| serde_json::json!({"encoding":"utf8","data":value,"truncated":false});
+    let mut event = serde_json::json!({
+        "event_type":"http_exchange", "id":uuid::Uuid::nil(), "scheme":"http",
+        "authority":"api.test:80", "method":"GET", "uri":"/archive?location=",
+        "request_headers":{"Host":["api.test"],"Accept-Encoding":["identity"]},
+        "request_body":capture(""), "response_status":200,
+        "response_headers":{"Content-Type":["application/xml"]},
+        "response_body":capture("<location/>")
+    });
+    for source_has_accept in [false, true] {
+        if source_has_accept {
+            event["request_headers"]["Accept"] = serde_json::json!(["*/*"]);
+        }
+        let host = Arc::new(RecordedHost::new(&event));
+        for (query, accept, matches) in [
+            ("location=", "", true),
+            ("location=", "Accept: */*\r\n", true),
+            ("location=", "Accept: application/json\r\n", false),
+            ("location=", "Accept: */*\r\nAccept: */*\r\n", false),
+            ("location", "Accept: */*\r\n", false),
+        ] {
+            let wire = format!(
+                "GET /archive?{query} HTTP/1.1\r\nHost: api.test\r\nAccept-Encoding: gzip\r\n{accept}\r\n"
+            );
+            let (response, outcome) = replay_http(host.clone(), &wire).await;
+            if matches {
+                outcome.unwrap();
+                assert!(response.contains("content-type: application/xml\r\n"));
+                assert!(response.ends_with("\r\n\r\n<location/>"));
+            } else {
+                assert_eq!(outcome.unwrap_err().to_string(), "unmatched HTTP request");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn native_replay_delivers_only_the_matching_recorded_websocket_refusal() {
-    let host = Arc::new(RecordedHost::new(&websocket_event(400)));
+    let mut event = websocket_event(400);
+    event["request_headers"]["Accept-Encoding"] = serde_json::json!(["gzip, deflate, br"]);
+    let host = Arc::new(RecordedHost::new(&event));
     let reqwest = WEBSOCKET_REQUEST.replace(
         "X-Sdk-Signature",
         "Accept: */*\r\nAccept-Encoding: gzip\r\nX-Sdk-Signature",
@@ -201,14 +268,14 @@ async fn native_replay_delivers_only_the_matching_recorded_websocket_refusal() {
         (reqwest.replace("*/*", "application/json"), false),
         (
             reqwest.replace("Accept-Encoding: gzip", "Accept-Encoding: gzip, br"),
-            false,
+            true,
         ),
         (
             reqwest.replace(
                 "Accept-Encoding: gzip",
                 "Accept-Encoding: gzip\r\nAccept-Encoding: gzip",
             ),
-            false,
+            true,
         ),
         (
             reqwest.replace(
@@ -432,6 +499,132 @@ fn native_replay_rejects_sse_without_complete_consistent_stream_evidence() {
     }
 }
 
+fn stopped_sse_event() -> Value {
+    let mut event = sse_event();
+    event["scheme"] = "http".into();
+    event["authority"] = "api.test:80".into();
+    event["duration_ms"] = 30.into();
+    event["response_stream"]["complete"] = false.into();
+    event["response_stream"]["stopped_at_source_exit"] = true.into();
+    event
+}
+
+#[test]
+fn stopped_http_prefix_requires_managed_session_and_consistent_evidence() {
+    let event = stopped_sse_event();
+    assert!(Native.recorded_exchange(&event).is_err());
+    let exchange = Native
+        .recorded_session_exchange(&event, &Secrets)
+        .unwrap()
+        .unwrap();
+    assert_eq!(exchange.response_delay.as_millis(), 10);
+
+    for (field, value) in [
+        ("complete", true.into()),
+        ("version", 1.into()),
+        ("end_ms", 31.into()),
+        ("trailers", serde_json::json!({"x-after":["done"]})),
+    ] {
+        let mut invalid = event.clone();
+        invalid["response_stream"][field] = value;
+        assert!(
+            Native
+                .recorded_session_exchange(&invalid, &Secrets)
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn stopped_http_prefix_waits_through_the_session_without_writing_chunked_eof() {
+    use EventKind::*;
+    use std::time::Duration;
+    use tokio::io::AsyncBufReadExt;
+
+    let runtime = SequenceRuntime::streaming_session(Some(Duration::ZERO), []);
+    runtime
+        .push_stream(
+            [
+                (1, 0, SessionSourceStart, None),
+                (2, 2, Request, None),
+                (3, 2, ResponseHeadersStarted, None),
+                (4, 2, ResponseHeaders, Some(3)),
+                (5, 2, ResponsePartStarted, None),
+                (6, 2, ResponsePart, Some(5)),
+                (7, 0, SessionStop, None),
+                (8, 2, ResponsePartStarted, None),
+                (9, 2, ResponsePart, Some(8)),
+                (10, 0, SessionSourceExit, None),
+                (11, 2, TargetStopStarted, None),
+                (12, 2, TargetStop, Some(11)),
+            ]
+            .into_iter()
+            .map(
+                |(sequence, dependency_sequence, kind, receipt_start)| StreamEvent {
+                    source: SourceEvent {
+                        sequence,
+                        dependency_sequence,
+                        offset_micros: sequence,
+                        kind,
+                    },
+                    receipt_start,
+                },
+            )
+            .collect(),
+            true,
+        )
+        .unwrap();
+    runtime.commit_driver(1).unwrap();
+    let (client, server) = tokio::io::duplex(4096);
+    let host = Arc::new(RecordedHost::with_session(
+        &stopped_sse_event(),
+        Some(runtime.clone()),
+    ));
+    let task = tokio::spawn(
+        Native
+            .server_session(info())
+            .unwrap()
+            .run(Box::new(server), host),
+    );
+    let mut client = tokio::io::BufReader::new(client);
+    client
+        .write_all(b"POST /messages HTTP/1.1\r\nHost: api.test\r\nContent-Length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        assert_ne!(client.read_line(&mut line).await.unwrap(), 0);
+        if line == "\r\n" {
+            break;
+        }
+    }
+    let mut first = [0; 12];
+    client.read_exact(&mut first).await.unwrap();
+    assert_eq!(&first, b"7\r\ndata: a\r\n");
+    assert_eq!(runtime.expected().unwrap().kind, SessionStop);
+    runtime.commit_driver(7).unwrap();
+    let mut second = [0; 16];
+    client.read_exact(&mut second).await.unwrap();
+    assert_eq!(&second, b"b\r\n\n\ndata: b\n\n\r\n");
+    assert_eq!(runtime.expected().unwrap().kind, SessionSourceExit);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), client.read_u8())
+            .await
+            .is_err()
+    );
+    runtime.commit_driver(10).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), client.read(&mut [0; 1]))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    task.await.unwrap().unwrap();
+    assert!(runtime.complete());
+}
+
 #[test]
 fn native_replay_requires_unchanged_sse_body_bytes() {
     let response = Native
@@ -451,6 +644,167 @@ fn native_replay_requires_unchanged_sse_body_bytes() {
         Bytes::from_static(b"data: x\n\ndata: b\n\n"),
     );
     assert!(response.output(&values).is_err());
+}
+
+#[tokio::test]
+async fn cancelled_http_prefix_waits_for_target_disconnect() {
+    use EventKind::*;
+    use std::time::Duration;
+    use tokio::io::AsyncBufReadExt;
+
+    let mut event = stopped_sse_event();
+    event["outcome"] = serde_json::to_value(traffic_model::DependencyExchangeOutcome::Terminated(
+        traffic_model::DependencyTermination {
+            side: traffic_model::TerminationSide::Client,
+            kind: traffic_model::TerminationKind::Cancelled,
+            scope: traffic_model::TerminationScope::Stream,
+        },
+    ))
+    .unwrap();
+    event["response_stream"]["complete"] = true.into();
+    event["response_stream"]
+        .as_object_mut()
+        .unwrap()
+        .remove("stopped_at_source_exit");
+    event["response_stream"]["chunks"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    event["response_body"]["data"] = "data: a".into();
+
+    let runtime = SequenceRuntime::streaming_session(Some(Duration::ZERO), []);
+    runtime
+        .push_stream(
+            [
+                (1, 0, SessionSourceStart, None),
+                (2, 2, Request, None),
+                (3, 2, ResponseHeadersStarted, None),
+                (4, 2, ResponseHeaders, Some(3)),
+                (5, 2, ResponsePartStarted, None),
+                (6, 2, ResponsePart, Some(5)),
+                (7, 2, ClientTerminationStarted, None),
+                (8, 2, ClientTermination, Some(7)),
+            ]
+            .into_iter()
+            .map(
+                |(sequence, dependency_sequence, kind, receipt_start)| StreamEvent {
+                    source: SourceEvent {
+                        sequence,
+                        dependency_sequence,
+                        offset_micros: sequence,
+                        kind,
+                    },
+                    receipt_start,
+                },
+            )
+            .collect(),
+            true,
+        )
+        .unwrap();
+    runtime.commit_driver(1).unwrap();
+    let (client, io) = tokio::io::duplex(4096);
+    let host = Arc::new(RecordedHost::with_session(&event, Some(runtime.clone())));
+    let task = tokio::spawn(
+        Native
+            .server_session(info())
+            .unwrap()
+            .run(Box::new(io), host),
+    );
+    let mut client = tokio::io::BufReader::new(client);
+    client
+        .write_all(b"POST /messages HTTP/1.1\r\nHost: api.test\r\nContent-Length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        assert_ne!(client.read_line(&mut line).await.unwrap(), 0);
+        if line == "\r\n" {
+            break;
+        }
+    }
+    let mut chunk = [0; 12];
+    client.read_exact(&mut chunk).await.unwrap();
+    assert_eq!(&chunk, b"7\r\ndata: a\r\n");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), client.read_u8())
+            .await
+            .is_err()
+    );
+    assert!(!runtime.complete());
+    client.shutdown().await.unwrap();
+    assert_eq!(client.read(&mut [0; 1]).await.unwrap(), 0);
+    task.await.unwrap().unwrap();
+    assert!(runtime.complete());
+}
+
+#[tokio::test]
+async fn source_exit_before_headers_emits_no_http_response() {
+    use EventKind::*;
+    use std::time::Duration;
+
+    let mut event = stopped_sse_event();
+    for key in [
+        "response_status",
+        "response_headers",
+        "response_body",
+        "response_stream",
+    ] {
+        event.as_object_mut().unwrap().remove(key);
+    }
+    event["outcome"] = "no_response".into();
+    assert!(Native.recorded_exchange(&event).is_err());
+    let runtime = SequenceRuntime::streaming_session(Some(Duration::ZERO), []);
+    runtime
+        .push_stream(
+            [
+                (1, 0, SessionSourceStart, None),
+                (2, 2, Request, None),
+                (3, 0, SessionStop, None),
+                (4, 0, SessionSourceExit, None),
+                (5, 2, TargetStopStarted, None),
+                (6, 2, TargetStop, Some(5)),
+            ]
+            .into_iter()
+            .map(
+                |(sequence, dependency_sequence, kind, receipt_start)| StreamEvent {
+                    source: SourceEvent {
+                        sequence,
+                        dependency_sequence,
+                        offset_micros: sequence,
+                        kind,
+                    },
+                    receipt_start,
+                },
+            )
+            .collect(),
+            true,
+        )
+        .unwrap();
+    runtime.commit_driver(1).unwrap();
+    let (mut client, io) = tokio::io::duplex(4096);
+    let host = Arc::new(RecordedHost::with_session(&event, Some(runtime.clone())));
+    let task = tokio::spawn(
+        Native
+            .server_session(info())
+            .unwrap()
+            .run(Box::new(io), host),
+    );
+    client
+        .write_all(b"POST /messages HTTP/1.1\r\nHost: api.test\r\nContent-Length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), client.read_u8())
+            .await
+            .is_err()
+    );
+    assert_eq!(runtime.expected().unwrap().kind, SessionStop);
+    runtime.commit_driver(3).unwrap();
+    runtime.commit_driver(4).unwrap();
+    assert_eq!(client.read(&mut [0; 1]).await.unwrap(), 0);
+    task.await.unwrap().unwrap();
+    assert!(runtime.complete());
 }
 
 #[tokio::test]

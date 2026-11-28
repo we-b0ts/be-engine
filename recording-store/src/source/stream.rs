@@ -27,6 +27,7 @@ pub struct RecordStream {
 enum Input {
     Flat(BufReader<File>),
     Partitioned(Box<partitions::Reader>, u64),
+    Session(Box<dyn BufRead + Send>),
 }
 
 type DecodedRow<'a> = (RecordLocation, &'a [u8], Option<Value>);
@@ -49,6 +50,17 @@ impl RecordStream {
             let reader = Box::new(partitions::Reader::open(&source.path)?);
             let recording_id = reader.recording_id;
             (Input::Partitioned(reader, records), Some(recording_id))
+        } else if compact::is_session(&source.path) {
+            let (root, manifest) = super::recording::manifest(&source.path)?;
+            let input: Box<dyn Read + Send> = if source.path.ends_with(crate::session::FILE) {
+                crate::session_integrity::events(&root, &manifest)?
+            } else {
+                Box::new(File::open(&source.path)?)
+            };
+            (
+                Input::Session(Box::new(BufReader::new(input))),
+                Some(manifest.run_epoch),
+            )
         } else {
             (
                 Input::Flat(BufReader::new(File::open(&source.path)?)),
@@ -84,7 +96,8 @@ impl RecordStream {
     }
 
     pub(super) fn uses_locations(&self) -> bool {
-        self.source.locations.is_some() || matches!(&self.reader, Input::Partitioned(..))
+        self.source.locations.is_some()
+            || matches!(&self.reader, Input::Partitioned(..) | Input::Session(_))
     }
 
     // Each result borrows the cursor's reusable read buffer.
@@ -125,6 +138,22 @@ impl RecordStream {
         Ok(Some((location, &self.buffer, value)))
     }
 
+    pub fn next_location_for_replay(&mut self) -> Result<Option<RecordLocation>> {
+        self.next_row(false)
+    }
+
+    pub fn next_session_reference_for_replay(&mut self) -> Result<Option<(u64, RecordLocation)>> {
+        ensure!(
+            matches!(&self.reader, Input::Session(_)),
+            "expected Session dependency stream"
+        );
+        let Some(location) = self.next_location_for_replay()? else {
+            return Ok(None);
+        };
+        let sequence = crate::session_records::compact_admission(&self.buffer)?;
+        Ok(Some((sequence, location)))
+    }
+
     fn next_row(&mut self, record_digest: bool) -> Result<Option<RecordLocation>> {
         self.buffer.clear();
         if let Some(locations) = &self.source.locations {
@@ -144,6 +173,9 @@ impl RecordStream {
                         Some((location.offset, location.length)),
                         &mut self.buffer,
                     )?;
+                }
+                Input::Session(_) => {
+                    anyhow::bail!("a Session timeline does not contain Case scopes")
                 }
             }
             ensure!(
@@ -179,6 +211,18 @@ impl RecordStream {
                     );
                     span.length()?
                 }
+            }
+            Input::Session(reader) => {
+                let next = crate::session_records::next_location(
+                    reader,
+                    &mut self.buffer,
+                    &mut self.offset,
+                    &mut self.line,
+                )?;
+                if next.is_none() {
+                    self.validate_stamp()?;
+                }
+                return Ok(next);
             }
         };
         if length == 0 {

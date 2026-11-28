@@ -130,6 +130,13 @@ pub fn validate_group(group: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn matching_case_pattern<'a>(patterns: &'a [String], path: &str) -> Option<&'a str> {
+    patterns
+        .iter()
+        .find(|pattern| crate::path_pattern::matches_path_pattern(pattern, path))
+        .map(String::as_str)
+}
+
 pub fn validate_route(route: &str) -> Result<()> {
     let parsed = route.parse::<RecordingApiScope>()?;
     ensure!(

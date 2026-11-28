@@ -21,5 +21,13 @@ pub fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+pub(crate) fn materialize_session_row(
+    root: &std::path::Path,
+    recording_id: uuid::Uuid,
+    cells: &[u8],
+) -> anyhow::Result<serde_json::Value> {
+    compact::Reader::open(&root.join(crate::session::FILE), recording_id)?.read(cells)
+}
+
 mod sealed;
 pub use sealed::SourceRecord;

@@ -1,17 +1,15 @@
-//! The complete SQLAlchemy/PyMySQL connection prelude is a driver recipe, not application I/O.
+//! Prove the SQLAlchemy/PyMySQL prelude on each physical connection.
 use std::collections::BTreeMap;
 
-use anyhow::Result;
-use serde::Deserialize;
-use serde_json::Value;
 use traffic_model::recording::ProtocolRef;
 use traffic_protocol::connection::DriverPrelude;
 use uuid::Uuid;
 
 use crate::{recorded::RecordedMysqlExchange, session_control, session_identity};
 
-use super::missing_table_metadata_read;
+use super::{ScopeRecord, missing_table_metadata_read, opens_implicit_read_transaction};
 
+const CONNECTION_COMMAND_COUNT: usize = 6;
 const STARTUP_COMMANDS: [&str; 12] = [
     "set names",
     "set time_zone",
@@ -27,77 +25,93 @@ const STARTUP_COMMANDS: [&str; 12] = [
     "rollback",
 ];
 
-pub(super) fn prove(records: &[(usize, &Value)]) -> Result<BTreeMap<usize, DriverPrelude>> {
-    let mut prefixes = BTreeMap::<Uuid, Vec<(u64, usize, &Value)>>::new();
-    for &(position, event) in records {
-        if event["event_type"] != "mysql_exchange" {
-            continue;
-        }
-        let (Some(connection), Some(sequence)) = (
-            event["connection_id"]
-                .as_str()
-                .and_then(|id| id.parse().ok()),
-            event["query_sequence"].as_u64(),
-        ) else {
+type PrefixEntry<'a> = (u64, usize, &'a ScopeRecord);
+
+pub(super) fn prove(records: &BTreeMap<usize, ScopeRecord>) -> BTreeMap<usize, DriverPrelude> {
+    let mut prefixes = BTreeMap::<Uuid, Vec<PrefixEntry<'_>>>::new();
+    for (&position, record) in records {
+        let event = &record.exchange;
+        let (Some(connection), Some(sequence)) = (event.connection_id, event.query_sequence) else {
             continue;
         };
         if sequence <= STARTUP_COMMANDS.len() as u64 + 2 {
             prefixes
                 .entry(connection)
                 .or_default()
-                .push((sequence, position, event));
+                .push((sequence, position, record));
         }
     }
     let mut excluded = BTreeMap::new();
     for mut prefix in prefixes.into_values() {
         prefix.sort_unstable_by_key(|(sequence, _, _)| *sequence);
-        let Some(prelude_and_probe) = prefix.get(..STARTUP_COMMANDS.len() + 1) else {
+        let command_count = if valid(&prefix, STARTUP_COMMANDS.len()) {
+            STARTUP_COMMANDS.len()
+        } else if valid_pooled_connection(&prefix) {
+            CONNECTION_COMMAND_COUNT
+        } else {
             continue;
         };
-        if !valid(prelude_and_probe)? {
-            continue;
-        }
-        for &(_, position, event) in &prefix[..STARTUP_COMMANDS.len()] {
-            if event["capture"]["semantic_required"] == true {
+        for &(_, position, record) in &prefix[..command_count] {
+            if record
+                .exchange
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.semantic_required)
+            {
                 excluded.insert(position, DriverPrelude::MysqlSqlalchemyPymysql);
             }
         }
-        if prefix.len() == STARTUP_COMMANDS.len() + 2
-            && let Some(&(sequence, position, event)) = prefix.get(STARTUP_COMMANDS.len() + 1)
-            && sequence == STARTUP_COMMANDS.len() as u64 + 2
-            && idle_metadata_rollback(prelude_and_probe[STARTUP_COMMANDS.len()].2, event)?
+        if command_count == STARTUP_COMMANDS.len()
+            && prefix.len() == command_count + 2
+            && let [.., (_, _, probe), (sequence, position, cleanup)] = prefix.as_slice()
+            && *sequence == command_count as u64 + 2
+            && idle_metadata_rollback(&probe.exchange, &cleanup.exchange)
         {
-            excluded.insert(position, DriverPrelude::MysqlIdleMetadataRollback);
+            excluded.insert(*position, DriverPrelude::MysqlIdleMetadataRollback);
         }
     }
-    Ok(excluded)
+    excluded
 }
 
-fn idle_metadata_rollback(probe: &Value, cleanup: &Value) -> Result<bool> {
-    let probe = RecordedMysqlExchange::deserialize(probe)?;
-    let cleanup = RecordedMysqlExchange::deserialize(cleanup)?;
-    let identity = session_identity::identity_from_exchange(&probe);
-    Ok(missing_table_metadata_read(&probe)
+fn idle_metadata_rollback(probe: &RecordedMysqlExchange, cleanup: &RecordedMysqlExchange) -> bool {
+    let identity = session_identity::identity_from_exchange(probe);
+    missing_table_metadata_read(probe)
         && probe.server_status_before.map(transaction_flags) == Some(0)
         && identity.is_some()
-        && session_identity::identity_from_exchange(&cleanup) == identity
+        && session_identity::identity_from_exchange(cleanup) == identity
         && cleanup.parse_warnings.is_empty()
-        && matches_command(&cleanup, 11, "rollback", None))
+        && matches_command(cleanup, 11, "rollback", None)
 }
 
-fn valid(prefix: &[(u64, usize, &Value)]) -> Result<bool> {
-    if prefix.len() != STARTUP_COMMANDS.len() + 1
-        || prefix
-            .iter()
-            .zip(1..)
-            .any(|((sequence, _, _), expected)| *sequence != expected)
+fn valid_pooled_connection(prefix: &[PrefixEntry<'_>]) -> bool {
+    let Some(prefix) = prefix.get(..=CONNECTION_COMMAND_COUNT) else {
+        return false;
+    };
+    // Later connections can omit the dialect probes. A complete ordinary
+    // read that opens a transaction marks the end of their initialization.
+    let first_app = &prefix[CONNECTION_COMMAND_COUNT].2.exchange;
+    prefix.iter().all(|(_, _, record)| record.complete)
+        && opens_implicit_read_transaction(first_app)
+        && valid(prefix, CONNECTION_COMMAND_COUNT)
+        && first_app.sql.as_deref().is_some_and(|sql| {
+            session_control::read::classify(sql) == session_control::read::Effect::ReadOnly
+        })
+}
+
+fn valid(prefix: &[PrefixEntry<'_>], command_count: usize) -> bool {
+    let Some(prefix) = prefix.get(..=command_count) else {
+        return false;
+    };
+    if prefix
+        .iter()
+        .zip(1..)
+        .any(|((sequence, _, _), expected)| *sequence != expected)
     {
-        return Ok(false);
+        return false;
     }
-    let first_app: RecordedMysqlExchange =
-        RecordedMysqlExchange::deserialize(prefix[STARTUP_COMMANDS.len()].2)?;
-    let Some(identity) = session_identity::identity_from_exchange(&first_app) else {
-        return Ok(false);
+    let first_app = &prefix[command_count].2.exchange;
+    let Some(identity) = session_identity::identity_from_exchange(first_app) else {
+        return false;
     };
     if first_app
         .capture
@@ -105,22 +119,26 @@ fn valid(prefix: &[(u64, usize, &Value)]) -> Result<bool> {
         .is_none_or(|metadata| !metadata.semantic_required)
         || first_app.server_status_before.map(transaction_flags) != Some(0)
     {
-        return Ok(false);
+        return false;
     }
-    for (index, ((_, _, event), expected)) in prefix.iter().zip(STARTUP_COMMANDS).enumerate() {
-        let record = RecordedMysqlExchange::deserialize(*event)?;
+    for (index, ((_, _, event), expected)) in prefix[..command_count]
+        .iter()
+        .zip(STARTUP_COMMANDS)
+        .enumerate()
+    {
+        let record = &event.exchange;
         let expected_before = match index {
             0 if record.server_status_before.is_none() => None,
             0..=2 => Some(2),
             _ => Some(0),
         };
-        if session_identity::identity_from_exchange(&record).as_ref() != Some(&identity)
-            || !matches_command(&record, index, expected, expected_before)
+        if session_identity::identity_from_exchange(record).as_ref() != Some(&identity)
+            || !matches_command(record, index, expected, expected_before)
         {
-            return Ok(false);
+            return false;
         }
     }
-    Ok(true)
+    true
 }
 
 fn matches_command(
@@ -163,7 +181,7 @@ fn matches_command(
             == Some(if index < 2 { 2 } else { 0 });
     let result_matches = if (6..=10).contains(&index) {
         session_control::complete_read(record)
-            && record.response.rows.len() == 1
+            && record.result_row_count() == Some(1)
             && record.response.columns.len() == 1
     } else {
         session_control::successful_control(record)

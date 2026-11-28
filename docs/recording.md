@@ -1,12 +1,8 @@
 # Standalone Source recording
 
-See [API-origin dependency observation](recording-api-origin-tail.md) for
-immediate HTTP response forwarding and rule-scoped asynchronous recording tails.
-
 `traffic-e2e record` is the single standalone Source recording service.
 It starts a co-located Source as UID/GID 998, starts Recorder, and optionally registers a
-reachable HTTP address in coordination Redis after readiness and the existing
-post-ready settle window. Optional `--config PATH` / `TRAFFIC_E2E_PROJECT_CONFIG`
+reachable HTTP address in coordination Redis for the ready Source. Optional `--config PATH` / `TRAFFIC_E2E_PROJECT_CONFIG`
 reuses the Recorder section of `.traffic-e2e/project.yaml` and the single
 `project.policy` reference, normally `.traffic-e2e/policy.yaml`.
 The app does not inspect Git or start the rewrite coordinator. Ingress selects API traffic. Recorder preserves the configured HTTP include/exclude
@@ -40,10 +36,9 @@ UDP, the Motan entry gateway and the dedicated MySQL proxy remain disabled.
 These declarations select required recording facilities; they are not a traffic
 allowlist. Protocol detection still observes incidental native dependencies so
 unexpected traffic is retained for analysis. Keep business include/exclude
-rules, readiness, streaming and timeout settings when they affect the project.
-For example, `http_gateway.record_streaming: true` selects streaming capture;
-`replay_timing` in `.traffic-e2e/regression.yaml` separately selects replay timing and defaults
-to `recorded`.
+rules, readiness and timeout settings for the project. Session recording
+forwards HTTP responses incrementally and captures their ordered parts.
+[Source session regression](session-regression.md)
 
 Transport settings remain optional overrides when a project needs a different
 listener, upstream DNS server, CA location or artifact directory. A declaration
@@ -56,6 +51,17 @@ and differing overrides without expanding derived infrastructure defaults.
 Documents without `capture` retain their explicit transport behavior. This
 translation happens when configuration is loaded; Replay request processing and
 dependency matching use the same effective runtime settings.
+
+Normal SIGTERM/SIGINT shutdown closes ingress, withdraws discovery and gives
+admitted requests up to 15 seconds to finish. The recorder records a
+`primary_cancel` event with reason `engine_shutdown` for remaining requests,
+then stops Source and seals the recording. An actual capture failure leaves
+incomplete evidence for diagnosis.
+
+<details>
+<summary>Historical Case recording shutdown and tail policies</summary>
+
+These notes describe the Case recorder and earlier capture profiles.
 
 Normal SIGTERM/SIGINT shutdown first withdraws discovery and closes admission of
 new cases. Source, Recorder and admitted sessions remain alive for up to **60
@@ -144,6 +150,8 @@ This HTTP transport budget does not limit asynchronous end observation after a
 complete primary response. Such observation uses the end/probe and business-idle
 boundaries below, or is explicitly interrupted.
 
+</details>
+
 HTTP include and exclude rules support `paths` for exact, case-sensitive URI
 path matching. Query strings are ignored when matching requests and must not
 appear in configured paths. `/api/jobs` does not match `/api/jobs/` or
@@ -161,13 +169,16 @@ recorder:
       paths: [/api/jobs]
 ```
 
-Standalone recording can load the Source effects of a `traffic-policy/v3`
-document with `--policy PATH` / `TRAFFIC_E2E_POLICY`. With `--config`, an explicit
-policy must resolve to the same file as `project.policy`; it cannot override the
-project authority. Without project configuration or policy, cases use literal
-URI paths. Capture, HTTP response acquisition and process ownership effects are
-applied once at startup. Comparison rules in the same file do not enable Replay
-or change Source business behavior. HTTP include/exclude rules still apply.
+Standalone recording loads the recorder projection of `traffic-policy/v3`
+from `--policy PATH` / `TRAFFIC_E2E_POLICY` or the configured `project.policy`.
+With `--config`, an explicit `--policy` must name that same file. HTTP gateway
+include/exclude rules select ingress and the Source event timeline preserves
+background dependencies across responses.
+
+<details>
+<summary>Historical Case policy and lifecycle examples</summary>
+
+These examples describe Case capture and its original policy contracts.
 
 An API that returns before its work finishes can retain the ordinary Case with
 `recording.async_api` in the same policy:
@@ -385,6 +396,8 @@ This optional display metadata is fixed with the recording. Historical recording
 without it retain an empty method set; readers never scan or rewrite old cases
 to populate it. It does not change Replay selection or verification gates.
 
+</details>
+
 Build the normal engine binary with the published `brz-http-gateway` and
 `brz-redis` versions pinned in the workspace. The Recorder enables the gateway
 SDK's Redis admission and route validation features. Gateway services executing
@@ -484,22 +497,11 @@ admissions, not successfully published cases, and limits remain approximate.
 There is no per-API override map or automatic shutdown when gateway counts reach
 the limit. Direct recording does not use this option or contact Redis.
 
-The existing per-API case limit remains enabled. With project configuration,
-Recorder settings, including limits, redaction, dependency timing, DNS strategies,
-and post-ready observation, are reused. HTTP include/exclude rules are retained exactly as configured. The standalone service still supplies its
-internal listener, Source origin, fixed 404 fallback and persistent mount paths;
-explicit readiness, request-timeout and case-limit options override project values.
-The project setting `recorder.http_gateway.record_streaming` is also retained;
-there is no separate CLI override. Its default is `false`. With `false`, any
-request whose `Accept` includes `text/event-stream` returns the fixed
-404 before Source dispatch, including mixed JSON/SSE MCP requests. The adapter
-releases the reservation on this response, allowing the gateway to use its
-original path. See [SSE recording selection](http-sse.md).
-Without project configuration the per-API default is `usize::MAX`
-(`u64::MAX` on the supported 64-bit deployment). `--case-limit N` or
-`TRAFFIC_E2E_CASE_LIMIT=N` applies a smaller positive limit. After an API hits
-its limit, Recorder returns the configured 404 so the gateway can use its
-original path. There is no duration limit; SIGTERM/SIGINT ends the session.
+The standalone service uses the configured HTTP include/exclude rules, body
+limits and required dependency recorders. Its concurrency setting applies across
+admitted ingress, including open streams. `--max-inflight-requests` overrides
+`recorder.recording.max_inflight_requests` (default 8). Source runs until the
+controller receives SIGTERM/SIGINT or a recording failure stops the run.
 
 | Parameter / environment | Default | Purpose |
 | --- | --- | --- |
@@ -523,14 +525,8 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--request-timeout-seconds` | project value or `30` seconds | Override request forwarding/response deadline |
 | `--dns-upstream` / `TRAFFIC_E2E_DNS_UPSTREAM` | project value or first system resolver | Override real DNS upstream before fake-IP projection |
 
-The post-ready cap is separate from the startup failure deadline. For example,
-`recorder.recording.post_ready_max_wait_ms: 30000` allows case admission after at most
-30 seconds of post-ready observation even when periodic Redis snapshot requests
-prevent a quiet period. Source startup and bootstrap dependency sealing are
-separate phases. `recorder.recording.post_ready_settle_ms` controls the quiet
-period, with a 15-second minimum for nonzero values. A missing or invalid
-explicit project configuration fails before Source startup and registration.
-Mount project YAML read-only alongside its policy and restart after edits.
+An invalid explicit project configuration fails before Source startup. Mount the
+project YAML read-only alongside its policy and restart after edits.
 
 Keep project configuration and policy outside the image and bind-mount them
 read-only. Preserve the `.traffic-e2e` directory and repository-relative path
@@ -543,49 +539,17 @@ unchanged:
 --env TRAFFIC_E2E_PROJECT_CONFIG=/etc/traffic-e2e/.traffic-e2e/project.yaml
 ```
 
-The mounted project contains `project.policy: .traffic-e2e/policy.yaml`.
-Package the Git-tracked `.traffic-e2e/apis.yaml` in the recording image beside
-`project.yaml`. Recorder reads its canonical paths at startup. Rebuild the
-image after committing catalog changes. For an image built without project
-configuration, mount the committed catalog beside the supplied policy.
-For a deployment without project YAML, mount that same policy and supply
-`--policy /etc/traffic-e2e/.traffic-e2e/policy.yaml` instead.
-
-An explicitly configured missing, non-regular or invalid policy fails startup;
-there is no fallback to literal-path grouping on errors. Policy overlays must
-also be compatible with the standalone Recorder configuration. Restart the
-container after changing policy; files are not watched or reloaded during a run.
-With `/api/teams/*/skills`, requests for different team IDs share the
-`apis/api-teams-wildcard-skills/` group and its case limit. Previously published
-recordings retain their existing groups.
-
-`--no-interception` is for local adapter tests only. Ordinary HTTP bodies remain
-buffered. With `recorder.http_gateway.record_streaming: true`, SSE, NDJSON
-and Socket.IO EIO4 sessions are forwarded incrementally. Raw binary response
-streams additionally require `recorder.http_gateway.record_raw_streaming: true`.
-Socket.IO supports polling, direct WebSocket and polling upgrade. One connection
-owns one case and one recording slot across authentication and multiple events.
-The default business idle is 10 seconds and the activity limit is 10 minutes.
-Normal closure keeps Source running. Primary HTTP streams retain their case for
-the [dependency tail](recording-stream-dependency-tail.md), including when the
-client cancels before business completion. The default idle window is 60 seconds,
-bounded by the original request budget. The 5-second writer drain begins after
-live dependency requests finish. Socket.IO retains its existing dependency window
-and transport cleanup policy.
-Protocol heartbeats do not reset business idle. An unfinished request times out
-explicitly and an activity-limit capture is incomplete.
-
-See [streaming and Socket.IO](interaction-recording.md) for completion profiles,
-input timing, dependency streaming and background-work policy. The former SSE 50 ms
-contract is retired; its recordings require re-recording. Request body limits
-still apply before Source dispatch.
+The mounted project contains `project.policy: .traffic-e2e/policy.yaml`. For a
+deployment without project YAML, mount the policy and supply
+`--policy /etc/traffic-e2e/.traffic-e2e/policy.yaml`. API route labels come from
+the Target catalog during regression. `--no-interception` supports local
+adapter tests.
 
 ## Direct standby and run identity
 
 Without `--coordination`, the service waits for direct HTTP requests after Source
 readiness. It never connects to Redis and requests need no reservation headers.
-The same local single-request slot, body limits, recording rules and finalization
-apply. Source's business `REDIS_URL` does not enable recording coordination.
+The same ingress concurrency, body limits, recording rules and finalization apply. Source's business `REDIS_URL` does not enable recording coordination.
 
 ```bash
 traffic-e2e record --data-root /data/traffic-e2e --source-workdir /app \
@@ -608,8 +572,6 @@ to the controller. Persist the entire data root, including private keys.
 Use a published engine image as a build stage and copy
 `/usr/local/bin/traffic-e2e` into the Source image. For Kubernetes recording,
 copy `/usr/local/bin/kubectl` from its separate versioned distribution image.
-Use the committed project checkout as the build input so the recording image
-includes the same `apis.yaml` that the Replay coordinator uses.
 See the
 [engine image build and publication](development.md#engine-binary-image)
 instructions; project recording builds do not compile the engine or need SSH.
@@ -780,12 +742,15 @@ privately at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec` when encryption is
 used. Do not expose secrets or expected responses to Target. Replay does not
 need the recording CA private key.
 
-`backend-rewrite next` consumes existing completed batches directly; it does not
-start recording, allocate recording IDs, restart Source, or recover recording
-containers. The selected batch stays fixed across failed Replay attempts.
-For deterministic selection, set `recording_run_id` in the existing local
-`.traffic-e2e/regression.yaml`. Without a pin, initial discovery selects an
-available completed batch with a usable scope; subsequent runs keep that identity.
-A new capture contract requires an externally produced newer batch; batches
-already present when refresh begins cannot satisfy it. Never edit
-old recordings to satisfy the new contract.
+Use `status` on the Target's configured pull-request base. After approval,
+start the round with the exact recorded run ID.
+
+```sh
+be-replay --target-root /absolute/target status
+be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
+```
+
+When the workload or capture configuration changes, have the recording owner
+seal a new run and use its identity for a new round. Keep earlier recordings
+immutable.
+[Source session regression](session-regression.md)

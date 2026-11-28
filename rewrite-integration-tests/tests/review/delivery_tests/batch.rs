@@ -102,19 +102,10 @@ fn skipping_a_peer_keeps_an_accepted_delivery_ahead_of_an_engine_retry() {
         &candidate_tree,
         &["merge", "--ff-only", &selection.handoff_id],
     );
-    let mut active_peer = store.load().unwrap().unwrap();
-    crate::inventory::activate_requested(&mut active_peer, Some(&"GET /peer".parse().unwrap()))
-        .unwrap();
-    store.save(&active_peer).unwrap();
-
-    // This is the production sequence: a ready delivery exists, then skipping
-    // the other unfinished route makes a changed-engine refresh available.
-    fs::write(
-        root.join(crate::config::regression::PATH),
-        "skip: [/peer]\n",
-    )
-    .unwrap();
     let mut ready = store.load().unwrap().unwrap();
+    ready.api_inventory[1].status = crate::model::RewriteApiStatus::Skipped;
+    store.save(&ready).unwrap();
+
     let issue = serde_json::to_value(&ready.active_issue).unwrap();
     assert!(worker::runtime::scopes(&ready).contains(&scope));
     assert!(!engine_retry::pending(&ready, &ready.active_slice));
@@ -247,12 +238,9 @@ fn batch_review_rejects_skipped_or_finished_handoffs_without_panicking() {
     for selection in &selections[1..] {
         git(&candidate_tree, &["cherry-pick", &selection.handoff_id]);
     }
-    fs::write(
-        root.join(crate::config::regression::PATH),
-        "skip: [/batch-live-1]\n",
-    )
-    .unwrap();
-    let skipped = store.load().unwrap().unwrap();
+    let mut skipped = store.load().unwrap().unwrap();
+    skipped.api_inventory[1].status = crate::model::RewriteApiStatus::Skipped;
+    store.save(&skipped).unwrap();
     assert!(
         skipped
             .worker_bindings
@@ -321,12 +309,9 @@ fn batch_review_rejects_skipped_or_finished_handoffs_without_panicking() {
 
     // Eligibility must also be checked if a scope is skipped after review.
     git(root, &["merge", "--ff-only", &report.head_revision]);
-    fs::write(
-        root.join(crate::config::regression::PATH),
-        "skip: [/api, /batch-live-1]\n",
-    )
-    .unwrap();
     let mut changed = store.load().unwrap().unwrap();
+    changed.api_inventory[0].status = crate::model::RewriteApiStatus::Skipped;
+    store.save(&changed).unwrap();
     let original = serde_json::to_value(&changed).unwrap();
     let error = candidate::accept_locked(
         root,

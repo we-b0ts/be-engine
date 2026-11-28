@@ -65,7 +65,7 @@ the current blocking action and an exact retry command. The top-level
 loop. Nothing is automatically scheduled to write the policy.
 
 After every completed Replay step, both passing and failing, the engine reloads
-pending plans before deciding whether to continue `auto_next`. A valid pending
+pending plans before deciding whether a grouped operation can continue. A valid pending
 plan produces `plan_apply_required` ahead of implementation/integration or the
 next Replay. This gate also applies to explicit API selection and revalidation.
 Current evidence and failure/implementation issues are preserved. A stale plan

@@ -5,6 +5,7 @@ use std::io;
 use std::net::{Shutdown, TcpStream as StdTcpStream};
 use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde::Serialize;
 use tokio::net::TcpStream;
@@ -82,6 +83,17 @@ impl DependencyConnections {
     }
 
     pub fn reset_open_connections(&self) -> ConnectionResetReport {
+        self.reset(None)
+    }
+
+    pub(crate) fn reset_after_managed_source_exit(
+        &self,
+        boundary: Instant,
+    ) -> ConnectionResetReport {
+        self.reset(Some(boundary))
+    }
+
+    fn reset(&self, managed_source_exit: Option<Instant>) -> ConnectionResetReport {
         let connections = self.0.lock().expect("dependency connections poisoned");
         let mut report = ConnectionResetReport {
             connections_by_protocol: BTreeMap::new(),
@@ -92,7 +104,10 @@ impl DependencyConnections {
         // a newly opened connection. Registration also waits for this lock.
         for (id, connection) in connections.iter() {
             if let Some(termination) = &connection.termination {
-                termination.observe_engine_stop();
+                match managed_source_exit {
+                    Some(boundary) => termination.observe_engine_stop_at_boundary(boundary),
+                    None => termination.observe_engine_stop(),
+                }
             }
             *report
                 .connections_by_protocol

@@ -1,6 +1,6 @@
 //! Read ahead immutable Session responses without admitting any events.
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt,
     sync::{
         Arc, Mutex,
@@ -11,7 +11,10 @@ use std::{
 
 use crate::replay::native::{LoadedResponse, ResponsePreparation};
 use anyhow::{Result, ensure};
-use tokio::{sync::Notify, task::JoinSet};
+use tokio::{
+    sync::{Notify, Semaphore},
+    task::JoinSet,
+};
 
 const WINDOW: usize = 256;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -23,6 +26,7 @@ type ScheduledResponse = (usize, ResponsePreparation);
 pub(in crate::replay) struct Responses {
     ordinals: HashMap<usize, usize>,
     shared: Arc<Shared>,
+    rolling_workers: Option<Arc<Semaphore>>,
 }
 
 pub(in crate::replay) struct CloseOnDrop(Arc<Shared>);
@@ -60,6 +64,14 @@ struct Window {
     waits: usize,
     producer_finished: bool,
     closed: bool,
+    rolling: RollingOrdinals,
+}
+
+#[derive(Default)]
+struct RollingOrdinals {
+    next: usize,
+    indices: HashMap<usize, usize>,
+    order: VecDeque<(usize, usize)>,
 }
 
 impl fmt::Debug for Responses {
@@ -82,11 +94,86 @@ impl Responses {
             .collect();
         let shared = Arc::new(Shared::default());
         tokio::spawn(produce(shared.clone(), responses));
-        Some(Arc::new(Self { ordinals, shared }))
+        Some(Arc::new(Self {
+            ordinals,
+            shared,
+            rolling_workers: None,
+        }))
+    }
+
+    pub(in crate::replay) fn rolling() -> Arc<Self> {
+        Arc::new(Self {
+            ordinals: HashMap::new(),
+            shared: Arc::new(Shared::default()),
+            rolling_workers: Some(Arc::new(Semaphore::new(PARALLEL_BATCHES))),
+        })
+    }
+
+    pub(in crate::replay) fn submit(&self, responses: Vec<ScheduledResponse>) {
+        let Some(workers) = &self.rolling_workers else {
+            return;
+        };
+        let mut responses = responses.into_iter().peekable();
+        while responses.peek().is_some() {
+            let Ok(permit) = workers.clone().try_acquire_owned() else {
+                return;
+            };
+            let batch = {
+                let mut state = self
+                    .shared
+                    .state
+                    .lock()
+                    .expect("response prefetch poisoned");
+                if state.closed {
+                    return;
+                }
+                let available = (WINDOW - state.rolling.order.len()).min(READ_BATCH);
+                responses
+                    .by_ref()
+                    .take(available)
+                    .filter_map(|(index, response)| {
+                        if state.rolling.indices.contains_key(&index) {
+                            return None;
+                        }
+                        let ordinal = state.rolling.next;
+                        state.rolling.next += 1;
+                        state.rolling.indices.insert(index, ordinal);
+                        state.rolling.order.push_back((ordinal, index));
+                        Some((ordinal, (index, response)))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if batch.is_empty() {
+                return;
+            }
+            let shared = self.shared.clone();
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                load_batch(&shared, batch);
+            });
+        }
+    }
+
+    fn ordinal(&self, state: &Window, index: usize) -> Option<usize> {
+        if self.rolling_workers.is_some() {
+            state.rolling.indices.get(&index).copied()
+        } else {
+            self.ordinals.get(&index).copied()
+        }
     }
 
     pub(in crate::replay) async fn take(&self, index: usize) -> Result<Option<LoadedResponse>> {
-        let Some(&ordinal) = self.ordinals.get(&index) else {
+        let ordinal = if self.rolling_workers.is_some() {
+            let state = self
+                .shared
+                .state
+                .lock()
+                .expect("response prefetch poisoned");
+            self.ordinal(&state, index)
+        } else {
+            self.ordinals.get(&index).copied()
+        };
+        let Some(ordinal) = ordinal else {
             return Ok(None);
         };
         let mut waiting = false;
@@ -160,7 +247,7 @@ impl Responses {
             let mut accepted = Vec::new();
             let mut next = None;
             for index in indices.into_iter().take(READ_BATCH) {
-                let Some(&ordinal) = self.ordinals.get(&index) else {
+                let Some(ordinal) = self.ordinal(&state, index) else {
                     break;
                 };
                 if next.is_some_and(|next| ordinal != next) {
@@ -250,6 +337,19 @@ impl Window {
         // Output starts are ordered, but different connection tasks can reach
         // the buffer in a different order. Earlier deliveries can load on demand.
         self.first = first;
+        while self
+            .rolling
+            .order
+            .front()
+            .is_some_and(|(ordinal, _)| *ordinal < self.first)
+        {
+            let (_, index) = self
+                .rolling
+                .order
+                .pop_front()
+                .expect("old response ordinal");
+            self.rolling.indices.remove(&index);
+        }
         while self
             .completed
             .first_key_value()
@@ -436,6 +536,7 @@ impl Shared {
         let mut state = self.state.lock().expect("response prefetch poisoned");
         state.closed = true;
         state.completed.clear();
+        state.rolling = RollingOrdinals::default();
         state.bytes = 0;
         let head = state.head_waiter.take();
         let stats = (
@@ -554,6 +655,7 @@ mod tests {
         let queue = Responses {
             ordinals: HashMap::from([(7, 0), (9, 1), (11, 2), (13, 3)]),
             shared: shared.clone(),
+            rolling_workers: None,
         };
         load_batch(
             &shared,
@@ -596,6 +698,7 @@ mod tests {
         let queue = Arc::new(Responses {
             ordinals: HashMap::from([(7, 0)]),
             shared: shared.clone(),
+            rolling_workers: None,
         });
         let consumer = tokio::spawn(async move { queue.take(7).await });
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -624,6 +727,7 @@ mod tests {
         let queue = Arc::new(Responses {
             ordinals: HashMap::from([(7, 0), (9, 1)]),
             shared: shared.clone(),
+            rolling_workers: None,
         });
         tokio::time::timeout(Duration::from_secs(5), async {
             let earlier = tokio::spawn({

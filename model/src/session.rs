@@ -7,6 +7,9 @@ use uuid::Uuid;
 /// The recording engine closed the primary connection during shutdown.
 pub const ENGINE_SHUTDOWN_CANCEL_REASON: &str = "engine_shutdown";
 
+/// Unix exit status reported for a process terminated by SIGKILL.
+pub const SIGKILL_EXIT_STATUS: i32 = 128 + 9;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionEvent {
@@ -15,6 +18,9 @@ pub enum SessionEvent {
     Stop,
     SourceExit {
         status: Option<i32>,
+        /// Recorder sent SIGKILL after its requested graceful stop timed out.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        forced_by_recorder: bool,
     },
     PrimaryRequest {
         exchange: Uuid,

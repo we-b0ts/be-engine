@@ -91,6 +91,22 @@ pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
 
 #[cfg(any(test, feature = "test-support"))]
 impl replay::Runtime<ReplayProtocols> {
+    #[cfg(test)]
+    pub(crate) async fn load_session_for_test(config: ReplayConfig) -> Result<Self> {
+        let listeners = (config.dns_listen, config.tcp_listen);
+        let loader = SourceLoader::new(&config);
+        Self::from_source(
+            config.into(),
+            listeners,
+            ReplayLifecycleConfig::default(),
+            crate::protocols::default_providers(),
+            loader,
+            Default::default(),
+            true,
+        )
+        .await
+    }
+
     pub(crate) async fn load(
         config: ReplayConfig,
         dns_listen: SocketAddr,

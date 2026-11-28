@@ -152,12 +152,12 @@ fn standalone_services_skip_unrelated_runtime_dependencies() {
             "traffic-engine-recording",
             &["traffic-engine-verification"][..],
         ),
-        ("traffic-engine-e2erun", &["traffic-engine-recording"]),
+        ("traffic-engine-e2e-run", &["traffic-engine-recording"]),
         (
             "traffic-replay-runtime",
             &[
                 "traffic-engine",
-                "traffic-engine-e2erun",
+                "traffic-engine-e2e-run",
                 "traffic-engine-recording",
             ],
         ),
@@ -165,7 +165,7 @@ fn standalone_services_skip_unrelated_runtime_dependencies() {
             "traffic-rewrite-model",
             &[
                 "traffic-engine",
-                "traffic-engine-e2erun",
+                "traffic-engine-e2e-run",
                 "traffic-engine-recording",
             ],
         ),
@@ -173,7 +173,7 @@ fn standalone_services_skip_unrelated_runtime_dependencies() {
             "traffic-rewrite-runtime",
             &[
                 "traffic-engine",
-                "traffic-engine-e2erun",
+                "traffic-engine-e2e-run",
                 "traffic-engine-recording",
             ],
         ),

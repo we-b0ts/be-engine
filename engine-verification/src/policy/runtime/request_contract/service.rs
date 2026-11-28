@@ -18,6 +18,7 @@ use traffic_protocol::{
 
 mod document_policy;
 mod redis_eval_time;
+mod redis_key_identity;
 mod response_constraints;
 mod response_identities;
 
@@ -108,6 +109,19 @@ impl ValueRuleHost for RequestContracts {
             None => Ok(None),
         }
     }
+    fn additional_request_bindings(
+        &self,
+        source: &dyn ProtocolMessage,
+    ) -> Result<Vec<traffic_policy_value::RuleBinding>> {
+        match self.compiled.as_deref() {
+            Some(policy) => redis_key_identity::bindings(policy, source),
+            None => Ok(Vec::new()),
+        }
+    }
+    fn native_request_auth(&self) -> Option<traffic_policy_value::auth::Matcher> {
+        self.global_json()
+            .and_then(crate::policy::CompiledJsonPolicy::auth_matcher)
+    }
     fn native_request_projection(
         &self,
         protocol: ProtocolId,
@@ -115,22 +129,31 @@ impl ValueRuleHost for RequestContracts {
         request: Arc<dyn ProtocolMessage>,
         source: Option<&Value>,
     ) -> Result<Arc<dyn ProtocolMessage>> {
-        let http = self
+        if !matches!(protocol.as_str(), "http" | "https") {
+            return Ok(request);
+        }
+        let Some(http) = self
             .compiled
             .as_ref()
-            .and_then(|compiled| compiled.http.as_ref());
-        if let Some(http) = http
-            && matches!(protocol.as_str(), "http" | "https")
-        {
-            traffic_protocol_http::request_metadata::request(
-                &http.request_metadata,
-                endpoint,
-                request,
-                source,
-            )
-        } else {
-            Ok(request)
+            .and_then(|compiled| compiled.http.as_ref())
+        else {
+            return traffic_protocol_http::request_sigv4::request(&[], endpoint, request, source);
+        };
+        let signed = traffic_protocol_http::request_sigv4::request(
+            &http.request_sigv4,
+            endpoint,
+            request.clone(),
+            source,
+        )?;
+        if !Arc::ptr_eq(&request, &signed) {
+            return Ok(signed);
         }
+        traffic_protocol_http::request_metadata::request(
+            &http.request_metadata,
+            endpoint,
+            request,
+            source,
+        )
     }
     fn may_bind_native_documents(&self) -> bool {
         self.global_json()

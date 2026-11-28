@@ -17,16 +17,21 @@ redis:
             1: {kind: time, formats: [unix_seconds]}
     'request:*':
       key_format: {kind: identity, formats: [{hex: 32}]}
-      commands: [SET]
 localcache:
   requests:
     - redis: {operation: HGET, key: token_v2, field: '3061639762'}
 ```
 
-`kind`/`formats` describe scalar values; complete JSON values are recognized
-and use `json.fields`. `key_format` describes the wildcard segment of a key
-and requires its ordered `commands` list. A time-window key uses
-`key_format: {kind: time_window, seconds: 60}`. Command arguments are one-based
+`kind` and `formats` describe scalar values. Recognized JSON values use
+`json.fields`. A standalone identity `key_format` describes the complete ID
+in the wildcard segment of a physical key. Replay uses the same typed ID
+mapping for key segments and other declared identity positions. The pattern's
+fixed text is checked on both sides. The identity format's own prefix stays
+part of the mapped ID. For example, `vnc_session:*` with a `vnc-` identity
+prefix maps the complete `vnc-xxx` value.
+
+Ordered command contracts retain their own `commands` list. A time-window key
+uses `key_format: {kind: time_window, seconds: 60}`. Command arguments are one-based
 value positions after the key. Time arguments declare one format; the engine
 infers equal Source instants internally without authored clock groups. EVALSHA
 requires its exact `script: {sha1: ...}`; EVAL requires `script: {sha256: ...}`.

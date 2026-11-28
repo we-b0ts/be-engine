@@ -217,7 +217,10 @@ fn export_rejects_duplicates_skipped_members_and_empty_batches() {
             .to_string()
             .contains("at least one API")
     );
-    fs::write(root.join(crate::config::regression::PATH), "skip: [/api]\n").unwrap();
+    let store = RewriteStore::new(root).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    state.api_inventory[0].status = crate::model::RewriteApiStatus::Skipped;
+    store.save(&state).unwrap();
     assert!(
         export(export_options(root, &candidate_tree, &scopes))
             .unwrap_err()

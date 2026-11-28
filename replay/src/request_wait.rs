@@ -72,6 +72,10 @@ impl RequestWait {
                 return None;
             }
             let Some(expected) = scope.runtime.expected() else {
+                if scope.runtime.is_streaming() && !scope.runtime.complete() {
+                    deadline =
+                        Some(deadline.map_or(overall, |before: Instant| before.min(overall)));
+                }
                 continue;
             };
             let until = if expected.kind == EventKind::Request

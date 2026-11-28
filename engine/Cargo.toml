@@ -5,10 +5,10 @@ edition.workspace = true
 build = "../build.rs"
 
 [features]
-test-support = ["traffic-engine-e2erun/test-support", "traffic-engine-recording/test-support", "traffic-engine-verification/test-support", "traffic-engine-replay/test-support", "traffic-engine-evidence/test-support", "traffic-engine-config/test-support", "traffic-engine-policy/test-support", "traffic-engine-environment/test-support", "dep:tempfile", "traffic-recorder/test-support", "traffic-recording-store/test-support", "traffic-contract/test-support", "traffic-policy-execution/test-support", "traffic-protocol-mysql/test-support"]
+test-support = ["traffic-engine-e2e-run/test-support", "traffic-engine-recording/test-support", "traffic-engine-verification/test-support", "traffic-engine-replay/test-support", "traffic-engine-evidence/test-support", "traffic-engine-config/test-support", "traffic-engine-policy/test-support", "traffic-engine-environment/test-support", "dep:tempfile", "traffic-recorder/test-support", "traffic-recording-store/test-support", "traffic-contract/test-support", "traffic-policy-execution/test-support", "traffic-protocol-mysql/test-support"]
 
 [dependencies]
-traffic-engine-e2erun = { workspace = true }
+traffic-engine-e2e-run = { workspace = true }
 traffic-engine-recording = { workspace = true }
 traffic-engine-verification = { workspace = true }
 traffic-engine-replay = { workspace = true }
@@ -52,7 +52,7 @@ zip = { workspace = true, features = ["deflate"] }
 tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
-traffic-engine-e2erun = { workspace = true, features = ["test-support"] }
+traffic-engine-e2e-run = { workspace = true, features = ["test-support"] }
 traffic-engine-recording = { workspace = true, features = ["test-support"] }
 traffic-engine-verification = { workspace = true, features = ["test-support"] }
 traffic-engine-replay = { workspace = true, features = ["test-support"] }

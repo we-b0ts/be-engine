@@ -22,6 +22,9 @@ impl<K: Clone + Eq + Hash> CandidateIndex<K> {
     pub fn seal(&mut self) {
         self.postings.seal();
     }
+    pub(crate) fn discard(&mut self, key: &K, index: usize) {
+        self.postings.discard(key, index);
+    }
     pub fn lookup(&self, key: &K) -> CandidateCursor {
         CandidateCursor::new(self.postings.lookup(key))
     }

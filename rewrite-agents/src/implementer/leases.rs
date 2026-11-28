@@ -123,16 +123,27 @@ pub fn confirm(
     slot.observed_at = Some(Utc::now().to_rfc3339());
     Ok(scopes)
 }
+struct LeaseIdentity<'a> {
+    slot_id: usize,
+    api: &'a str,
+    dispatch: &'a str,
+    generation: u64,
+    handle: &'a str,
+}
+
 fn validate_task<'a>(
     state: &'a RewriteState,
-    slot_id: usize,
-    api: &str,
-    dispatch: &str,
-    generation: u64,
-    handle: &str,
+    lease: LeaseIdentity<'_>,
     allow_retired: bool,
     active_scopes: &[RewriteWorkScope],
 ) -> Result<&'a ImplementerTask> {
+    let LeaseIdentity {
+        slot_id,
+        api,
+        dispatch,
+        generation,
+        handle,
+    } = lease;
     let slot = state
         .implementers
         .as_ref()
@@ -190,11 +201,13 @@ pub fn report(
 ) -> Result<Option<RewriteWorkScope>> {
     validate_task(
         state,
-        options.slot_id,
-        &api,
-        &options.dispatch_id,
-        options.lease_generation,
-        &options.agent_handle,
+        LeaseIdentity {
+            slot_id: options.slot_id,
+            api: &api,
+            dispatch: &options.dispatch_id,
+            generation: options.lease_generation,
+            handle: &options.agent_handle,
+        },
         options.activity == Activity::Idle,
         active_scopes,
     )?;
@@ -304,11 +317,13 @@ pub fn handoff(
         }
         validate_task(
             state,
-            options.slot_id,
-            &api,
-            &item.dispatch_id,
-            item.lease_generation,
-            &options.agent_handle,
+            LeaseIdentity {
+                slot_id: options.slot_id,
+                api: &api,
+                dispatch: &item.dispatch_id,
+                generation: item.lease_generation,
+                handle: &options.agent_handle,
+            },
             false,
             active_scopes,
         )?;

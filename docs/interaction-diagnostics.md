@@ -1,5 +1,9 @@
 # SSE response diagnostics
 
+This reference covers Case interaction diagnostics. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 Start with the representative response failure in
 `backend-rewrite --target-root <target> evidence --api '<route>'`. When the
 comparison needs more frames, use the coordinator's bound

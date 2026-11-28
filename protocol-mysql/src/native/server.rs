@@ -113,6 +113,8 @@ impl ServerSession for Server {
                 }
                 let finite = matches!(command.command_name.as_str(), "COM_QUERY" | "COM_INIT_DB");
                 let sql = command.query.as_deref().unwrap_or_default();
+                let autocommit = status & (TRANSACTION_STATUS | SERVER_STATUS_AUTOCOMMIT)
+                    == SERVER_STATUS_AUTOCOMMIT;
                 let mut target_session = RequestSession {
                     can_start: if finite && starts_transaction(sql) {
                         status & TRANSACTION_STATUS == 0
@@ -122,6 +124,8 @@ impl ServerSession for Server {
                                 || status & IN_TRANSACTION != 0)
                     },
                     after: predecessor.clone(),
+                    autocommit,
+                    autocommit_completion: false,
                     implicit_start_pending,
                     read_only_end_alternative: None,
                 };
@@ -305,12 +309,20 @@ impl ServerSession for Server {
                 } else {
                     host.execute_in_session(request, target_session).await?
                 };
+                let completes_in_autocommit = autocommit
+                    && delivery.session_step() == Some(&ReplaySessionStep::AutocommitWrite);
                 framer.transaction = match delivery.session_step() {
                     Some(ReplaySessionStep::Start | ReplaySessionStep::ImplicitStart) => {
                         Some(false)
                     }
+                    Some(ReplaySessionStep::AutocommitWrite) if !completes_in_autocommit => {
+                        Some(false)
+                    }
                     Some(ReplaySessionStep::Continue { end, .. }) => Some(*end),
-                    Some(ReplaySessionStep::ReadOnlyEnd { .. }) => Some(true),
+                    Some(
+                        ReplaySessionStep::ReadOnlyEnd { .. }
+                        | ReplaySessionStep::AutocommitCommit { .. },
+                    ) => Some(true),
                     _ => None,
                 };
                 ensure!(
@@ -322,7 +334,7 @@ impl ServerSession for Server {
                     delivery.session_step(),
                     Some(ReplaySessionStep::InTransaction)
                 );
-                let next = if framer.transaction == Some(false) {
+                let mut next = if framer.transaction == Some(false) || completes_in_autocommit {
                     let reference = delivery
                         .reference()
                         .context("MySQL transaction receipt missing")?;
@@ -332,6 +344,22 @@ impl ServerSession for Server {
                     None
                 };
                 delivery.write(&mut io, &mut framer).await?;
+                if completes_in_autocommit {
+                    ensure!(framer.successful, "MySQL autocommit write was unsuccessful");
+                    let after = next
+                        .take()
+                        .context("MySQL autocommit delivery receipt missing")?;
+                    let commit = RequestMessage {
+                        command: "COM_QUERY".into(),
+                        sql: Some("COMMIT".into()),
+                        params: None,
+                        database: identity.database.clone(),
+                        username: identity.username.clone(),
+                    };
+                    host.complete_autocommit(Arc::new(commit), after.clone())
+                        .await?;
+                    host.forget_anchor(&after);
+                }
                 implicit_start_pending = false;
                 if let Some(previous) = predecessor.take() {
                     host.forget_anchor(&previous);

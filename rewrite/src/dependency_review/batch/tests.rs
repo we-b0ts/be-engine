@@ -124,21 +124,7 @@ async fn a_narrow_recapture_does_not_erase_ninety_nine_historical_method_require
     let (_, required) = blocked(source_block(target.path(), &state));
     assert_eq!(required.len(), 99);
     assert!(required.iter().any(|item| item.contains("GET /api/99")));
-    fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "only: [/api/0]\n",
-    )
-    .unwrap();
-    assert!(source_block(target.path(), &state).is_none());
-    // Explicit policy narrows the active scope without deleting historical debt.
     assert_eq!(state.dependency_review.required_method_apis.len(), 100);
-    fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "skip: [/api/99]\n",
-    )
-    .unwrap();
-    let (_, required) = blocked(source_block(target.path(), &state));
-    assert_eq!(required.len(), 98);
 }
 
 #[tokio::test]

@@ -126,6 +126,14 @@ impl std::fmt::Debug for CaptureReservation {
 }
 
 impl CaptureRegistry {
+    pub fn note_successful_connection(&self) -> anyhow::Result<()> {
+        let result = self.0.writer.try_record_successful_connection();
+        if result.is_err() {
+            self.mark_inventory_gap();
+        }
+        result
+    }
+
     pub fn session_event(
         &self,
         event: traffic_model::session::SessionEvent,
@@ -455,6 +463,21 @@ impl CaptureReservation {
             Some((_, previous_complete)) => *previous_complete &= complete,
             None => facts.terminal = Some((outcome, complete)),
         }
+    }
+
+    pub fn cancel_unwritten_notification(&self) -> anyhow::Result<()> {
+        let mut facts = self.0.facts.lock().expect("capture facts poisoned");
+        anyhow::ensure!(
+            self.0.message
+                && !facts.wire_terminal
+                && facts
+                    .terminal
+                    .as_ref()
+                    .is_none_or(|(_, complete)| *complete),
+            "undelivered notification requires a staged message without a wire receipt"
+        );
+        facts.terminal = Some((traffic_model::trace::UNDELIVERED_NOTIFICATION.into(), true));
+        Ok(())
     }
 
     pub fn metadata(

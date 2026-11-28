@@ -13,6 +13,38 @@ use traffic_model::{
 };
 use uuid::Uuid;
 
+pub(crate) fn write_session_manifest(
+    root: &Path,
+    epoch: Uuid,
+    process_epoch: Uuid,
+    files: Vec<LedgerFileIdentity>,
+) -> Result<()> {
+    use traffic_model::recording::{
+        MANIFEST_FILE, RecordingManifest, SESSION_RECORDING_SCHEMA, SourceArtifactIdentity,
+    };
+
+    let manifest = RecordingManifest {
+        schema: SESSION_RECORDING_SCHEMA.into(),
+        run_id: "test".into(),
+        process_epochs: vec![process_epoch],
+        run_epoch: epoch,
+        capture_policy_identity: "test".into(),
+        source_artifact: SourceArtifactIdentity::Unavailable {
+            reason: "test".into(),
+        },
+        sealed: true,
+        capture_complete: true,
+        coverage: Default::default(),
+        records: 0,
+        unattributed_records: 0,
+        semantic_inventory: Default::default(),
+        inputs: Vec::new(),
+        files,
+    };
+    std::fs::write(root.join(MANIFEST_FILE), serde_json::to_vec(&manifest)?)?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn sealed_partitions_preserve_logical_rows_and_selected_event_order() -> Result<()> {
     let directory = tempfile::tempdir()?;
@@ -480,6 +512,7 @@ async fn session_uses_one_sealed_journal_and_resolves_dependency_cells() -> Resu
             .into_iter()
             .filter(|file| *file != "observations.tsv")
             .chain(event_index::FILES)
+            .chain([partitions::DIRECTORY])
             .all(|file| !root.join(file).exists())
     );
     assert!(
@@ -492,14 +525,14 @@ async fn session_uses_one_sealed_journal_and_resolves_dependency_cells() -> Resu
             .collect::<Vec<_>>(),
         [
             "source_start",
-            "request",
-            "response",
-            "message",
+            "dependency",
+            "notification",
             "capture_sealed"
         ]
     );
 
-    let path = root.join(partitions::DIRECTORY);
+    write_session_manifest(root, epoch, process_epoch, identities)?;
+    let path = root.join(crate::session::FILE);
     let mut stream = RecordStream::open(&path)?;
     let (first, row) = stream.next()?.context("missing request/response pair")?;
     let response = serde_json::to_value(traffic_model::capture::capture_body(
@@ -514,14 +547,36 @@ async fn session_uses_one_sealed_journal_and_resolves_dependency_cells() -> Resu
     assert_eq!(record["response"], response);
     let (_, row) = stream.next()?.context("missing message row")?;
     assert_eq!(serde_json::from_slice::<Value>(row)?["response"], response);
-    let (_, row) = stream.next()?.context("missing observation row")?;
-    assert_eq!(serde_json::from_slice::<Value>(row)?["response"], response);
     assert!(stream.next()?.is_none());
+    let mut observations = RecordStream::open(&crate::session_records::observation_path(root))?;
+    let (_, row) = observations.next()?.context("missing observation row")?;
+    assert_eq!(serde_json::from_slice::<Value>(row)?["response"], response);
+    assert!(observations.next()?.is_none());
+    let summary = crate::session_summary::read(root)?;
+    assert_eq!(summary.physical_events, 4);
+    assert_eq!(summary.last_sequence, Some(6));
+    assert_eq!(
+        crate::session_summary::recording_end_sequence(root)?,
+        Some(6)
+    );
+    assert!(summary.routes.is_empty());
+    assert_eq!(
+        crate::session_records::dependency(root, 3)?["response"],
+        response
+    );
 
-    let mut cells = Vec::new();
-    let mut reader = partitions::Reader::open(&path)?;
-    assert!(reader.read_response_cell(first.line, (first.offset, first.length), &mut cells)?);
-    assert!(crate::format::response_payload_ref(&cells)?.is_some());
+    let replay = RecordSource::new(
+        &path,
+        stream.stamp.clone(),
+        Arc::new(Mutex::new(RecordReader::for_replay(0))),
+    );
+    assert_eq!(
+        &replay
+            .reference(first)
+            .load_response_bytes()?
+            .context("missing raw response")?[..],
+        b"response"
+    );
     Ok(())
 }
 
@@ -594,7 +649,8 @@ async fn session_response_literals_skip_payload_and_preserve_the_original_record
     let terms = std::fs::read_to_string(root.join(dependency_columns::FILE))?;
     assert_eq!(terms.matches("literal\tredis_ok\t").count(), 1);
 
-    let mut stream = RecordStream::open(&root.join(partitions::DIRECTORY))?;
+    write_session_manifest(root, epoch, epoch, identities)?;
+    let mut stream = RecordStream::open(&root.join(crate::session::FILE))?;
     let (_, row) = stream.next()?.context("missing constant response")?;
     let record: Value = serde_json::from_slice(row)?;
     assert_eq!(record["response"], json!(reply));

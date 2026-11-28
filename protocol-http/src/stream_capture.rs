@@ -15,11 +15,19 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context as TaskContext, Poll},
+    time::Instant,
 };
+use traffic_protocol::io::delivery::FlushTimestamp;
+
+#[cfg(test)]
+mod tests;
 
 pub trait StreamHost: Send + Sync {
     fn activity(&self);
     fn source_stop_requested(&self) -> bool;
+    fn managed_session(&self) -> bool {
+        false
+    }
     fn output(&self, output: traffic_model::trace::OutputKind);
     fn finish(&self, event: crate::events::HttpExchangeEvent);
     fn invalidate(
@@ -30,6 +38,9 @@ pub trait StreamHost: Send + Sync {
         recover_after_drain: bool,
     );
 }
+
+#[derive(Clone, Default)]
+pub(crate) struct RecordedStream(pub(crate) FlushTimestamp);
 
 pub struct CaptureContext {
     pub host: Arc<dyn StreamHost>,
@@ -94,6 +105,9 @@ pub fn response(upstream: Response<Incoming>, mut context: CaptureContext) -> Re
     // EOF is part of this stream's evidence, even when the upstream knew length.
     headers.remove(hyper::header::CONTENT_LENGTH);
     parts.headers = headers;
+    if let Some(stream) = &capture.recorded_stream {
+        parts.extensions.insert(stream.clone());
+    }
     Response::from_parts(
         parts,
         CaptureBody {
@@ -113,6 +127,7 @@ pub struct Capture {
     finished: bool,
     upstream: Option<crate::client::UpstreamTermination>,
     prefix: Arc<PrefixDelivery>,
+    recorded_stream: Option<RecordedStream>,
 }
 
 impl Capture {
@@ -120,6 +135,7 @@ impl Capture {
         let prefix = Arc::new(PrefixDelivery::new(context.termination.delivery()));
         prefix.queued();
         let headers_ms = context.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let recorded_stream = context.host.managed_session().then(RecordedStream::default);
         Self {
             context,
             payload: Vec::new(),
@@ -129,12 +145,14 @@ impl Capture {
                 chunks: Vec::new(),
                 end_ms: headers_ms,
                 complete: false,
+                stopped_at_source_exit: false,
                 trailers: None,
             },
             error: None,
             finished: false,
             upstream: None,
             prefix,
+            recorded_stream,
         }
     }
 
@@ -186,7 +204,80 @@ impl Capture {
             .filter(|observed| self.context.accepts_server(*observed))
     }
 
+    fn source_exit_boundary(&self) -> Option<Instant> {
+        self.recorded_stream.as_ref()?;
+        self.context
+            .termination
+            .connection_observation()
+            .engine_stop_boundary()
+    }
+
+    fn can_stop_at_source_exit(&self, boundary: Instant) -> bool {
+        self.recorded_stream
+            .as_ref()
+            .and_then(|stream| stream.0.last())
+            .is_some_and(|flushed| flushed <= boundary)
+            && self.context.event.outcome == traffic_model::DependencyExchangeOutcome::Response
+            && self.context.event.error.is_none()
+            && self.stream.trailers.is_none()
+            && !self.context.event.request_body.truncated
+            && boundary
+                .saturating_duration_since(self.context.started)
+                .as_millis()
+                <= 86_400_000
+            && !self
+                .context
+                .termination
+                .has_failed_delivery_before(self.context.started, boundary)
+            && self
+                .context
+                .termination
+                .connection_observation()
+                .connection_end_before(traffic_model::TerminationSide::Client, boundary)
+                .is_none_or(|end| end.at < self.context.started)
+            && self
+                .upstream
+                .as_ref()
+                .and_then(|upstream| upstream.observed_since(self.context.started))
+                .is_none_or(|end| end.at > boundary)
+    }
+
+    fn cancelled_prefix(&mut self) -> Option<traffic_protocol::transport::ObservedTermination> {
+        let (flushed_at, receipts) = self.recorded_stream.as_ref()?.0.progress()?;
+        let cancelled = self
+            .context
+            .termination
+            .stream_cancelled_since(self.context.started)?;
+        let parts = receipts.checked_sub(1)?;
+        if self.error.is_some()
+            || self.context.event.request_body.truncated
+            || self.stream.trailers.is_some()
+            || parts > self.stream.chunks.len()
+            || flushed_at > cancelled.at
+            || self
+                .upstream
+                .as_ref()
+                .and_then(|upstream| upstream.observed_since(self.context.started))
+                .is_some_and(|end| end.at <= cancelled.at)
+        {
+            return None;
+        }
+        self.stream.chunks.truncate(parts);
+        self.payload
+            .truncate(self.stream.chunks.last().map_or(0, |part| part.end));
+        Some(cancelled)
+    }
+
     pub fn finish(&mut self, eof: bool, error: Option<String>) {
+        self.finish_with_client_end(eof, error, None);
+    }
+
+    fn finish_with_client_end(
+        &mut self,
+        eof: bool,
+        error: Option<String>,
+        delivered_prefix_end: Option<traffic_protocol::transport::ObservedTermination>,
+    ) {
         if self.finished {
             return;
         }
@@ -197,25 +288,40 @@ impl Capture {
         let capture_error = self.error.take();
         // Body drop alone is not proof of cancellation. Only the independently
         // observed downstream termination can complete a cancelled capture.
-        let client = (!eof)
-            .then(|| self.context.termination.cancelled())
-            .flatten();
+        let client = delivered_prefix_end.or_else(|| {
+            (!eof)
+                .then(|| self.context.termination.cancelled())
+                .flatten()
+        });
         let server = (!eof && capture_error.is_none())
             .then(|| self.server_end())
             .flatten()
             .filter(|observed| self.context.accepts_server(*observed));
         let terminated = server.or(client);
-        let source_stop = engine_stopped
-            && capture_error.is_none()
-            && self.prefix.is_complete()
-            && self.context.host.source_stop_requested();
-        self.error = capture_error.or_else(|| {
-            engine_stopped.then(|| {
-                "HTTP dependency response ended during engine cleanup before capture completed".into()
-            })
-        }).or(error);
+        let flushed_source_stop =
+            engine_stopped && capture_error.is_none() && self.prefix.is_complete();
+        let session_source_exit = self.source_exit_boundary().filter(|&boundary| {
+            flushed_source_stop && !eof && error.is_none() && self.can_stop_at_source_exit(boundary)
+        });
+        let session_source_stop = session_source_exit.is_some();
+        let managed_session = self.recorded_stream.is_some();
+        let source_stop = session_source_stop
+            || (!managed_session
+                && flushed_source_stop
+                && self.context.host.source_stop_requested());
+        let cleanup_error = engine_stopped.then(|| {
+            "HTTP dependency response ended during engine cleanup before capture completed".into()
+        });
+        self.error = if session_source_stop {
+            None
+        } else if managed_session {
+            capture_error.or(error).or(cleanup_error)
+        } else {
+            capture_error.or(cleanup_error).or(error)
+        };
         if server.is_none()
             && client.is_some()
+            && delivered_prefix_end.is_none()
             && !self.prefix.is_complete()
             && self.error.is_none()
         {
@@ -241,18 +347,20 @@ impl Capture {
                 }
             }
         }
-        let duration = terminated.map_or_else(
+        let end = session_source_exit.or(terminated.map(|observed| observed.at));
+        let duration = end.map_or_else(
             || self.context.started.elapsed(),
-            |observed| observed.at.saturating_duration_since(self.context.started),
+            |at| at.saturating_duration_since(self.context.started),
         );
         self.stream.complete =
             !engine_stopped && (eof || terminated.is_some()) && self.error.is_none();
+        self.stream.stopped_at_source_exit = session_source_stop;
         self.stream.end_ms = duration.as_millis().min(u64::MAX as u128) as u64;
         let mut event = self.context.event.clone();
-        event.timestamp = Utc::now();
+        event.timestamp =
+            end.map_or_else(Utc::now, traffic_protocol::transport::observed_wall_time);
         event.duration_ms = duration.as_millis();
         if let Some(observed) = terminated {
-            event.timestamp = traffic_protocol::transport::observed_wall_time(observed.at);
             event.outcome =
                 traffic_model::DependencyExchangeOutcome::Terminated(observed.termination);
             if self.error.is_none() {
@@ -285,6 +393,10 @@ impl Drop for Capture {
         if self.finished {
             return;
         }
+        if let Some(cancelled) = self.cancelled_prefix() {
+            self.finish_with_client_end(false, None, Some(cancelled));
+            return;
+        }
         let error = if self.context.termination.cancelled_at().is_some() {
             None
         } else {
@@ -314,6 +426,23 @@ impl CaptureBody {
     pub fn finish(&mut self, eof: bool, error: Option<String>) {
         self.capture.finish(eof, error);
     }
+
+    fn finish_at_source_exit(&mut self) {
+        let pending_error = self
+            .ending
+            .as_ref()
+            .and_then(|ending| ending.error.as_ref())
+            .map(ToString::to_string);
+        self.capture.finish(false, pending_error);
+    }
+}
+
+impl Drop for CaptureBody {
+    fn drop(&mut self) {
+        if self.capture.source_exit_boundary().is_some() {
+            self.finish_at_source_exit();
+        }
+    }
 }
 
 struct PendingServerEnd {
@@ -330,6 +459,15 @@ impl Body for CaptureBody {
         cx: &mut TaskContext<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         let this = self.get_mut();
+        if this.capture.source_exit_boundary().is_some() {
+            if this.capture.finished {
+                return Poll::Ready(None);
+            }
+            this.finish_at_source_exit();
+            return Poll::Ready(Some(Err(std::io::Error::other(
+                "HTTP connection closed after Source exit",
+            ))));
+        }
         if let Some(ending) = &mut this.ending {
             match ending.flush.as_mut().poll(cx) {
                 Poll::Pending => return Poll::Pending,

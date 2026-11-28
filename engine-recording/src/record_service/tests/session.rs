@@ -2,7 +2,9 @@ use super::*;
 use crate::dependency_index::{RecordStream, recording, scoped};
 use crate::protocols::recording::events::{RecorderEvent, RedisExchangeEvent};
 use traffic_model::session::{ENGINE_SHUTDOWN_CANCEL_REASON, SessionEvent};
+use traffic_model::trace::{CaptureEvent, OutputKind};
 use traffic_model::{DependencyExchangeOutcome, capture::capture_body};
+use traffic_recording_store::{session::PrimaryEventKind, session_timeline::SessionTimelineEvent};
 
 #[test]
 fn session_ingress_opens_while_startup_is_active_and_records_overlapping_responses() {
@@ -12,6 +14,148 @@ fn session_ingress_opens_while_startup_is_active_and_records_overlapping_respons
             .await
             .unwrap();
     });
+}
+
+#[tokio::test]
+async fn managed_source_exit_seals_only_the_flushed_http_stream_prefix() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    for flush_before_exit in [true, false] {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            stream_at_source_exit(flush_before_exit),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+async fn stream_at_source_exit(flush_before_exit: bool) {
+    use hyper_util::rt::TokioIo;
+    use std::time::Instant;
+    use tokio::net::TcpStream;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::AppConfig::default();
+    config.recording.session_events = true;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.recording.encrypt_request_headers.clear();
+    config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = crate::AppState::new(config).await.unwrap();
+    state.session_event(SessionEvent::SourceStart).unwrap();
+    state.session_event(SessionEvent::Ready).unwrap();
+
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let authority = upstream.local_addr().unwrap();
+    let (send_chunk, chunk_requested) = tokio::sync::oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = upstream.accept().await.unwrap();
+        assert!(read_request(&mut socket).await.starts_with("GET /stream "));
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").await.unwrap();
+        chunk_requested.await.unwrap();
+        socket.write_all(b"6\r\nprefix\r\n").await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let socket = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let proxy = tokio::spawn(crate::proxy::http::run_with_listener(
+        state.clone(),
+        listener,
+    ));
+    let (mut source, connection) = hyper::client::conn::http1::handshake(TokioIo::new(socket))
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    let mut body = source
+        .send_request(
+            Request::builder()
+                .uri(format!("http://{authority}/stream"))
+                .header("host", authority.to_string())
+                .body(Full::new(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .into_body();
+
+    let source_exit = || {
+        state.session_event(SessionEvent::Stop).unwrap();
+        let boundary = Instant::now();
+        state
+            .session_event(SessionEvent::SourceExit {
+                status: Some(0),
+                forced_by_recorder: false,
+            })
+            .unwrap();
+        boundary
+    };
+    let early_exit = (!flush_before_exit).then(source_exit);
+    send_chunk.send(()).unwrap();
+    assert_eq!(
+        body.frame().await.unwrap().unwrap().into_data().unwrap(),
+        "prefix"
+    );
+    let boundary = early_exit.unwrap_or_else(source_exit);
+    state.begin_case_quiescing();
+    super::super::reset_dependencies_after_source_exit(&state, Some(boundary));
+    assert!(body.frame().await.is_none_or(|frame| frame.is_err()));
+    assert!(state.close_dependency_capture().await);
+    state.recorder().finish_run().await.unwrap();
+
+    let run_dir = &state.recorder().run_dir;
+    let (_, manifest) = recording::manifest(run_dir).unwrap();
+    assert_eq!(manifest.capture_complete, flush_before_exit);
+    assert_eq!(
+        manifest.coverage.capture_failures,
+        u64::from(!flush_before_exit)
+    );
+    let mut records = RecordStream::open(&recording::dependency_path(run_dir)).unwrap();
+    let (_, row) = records.next().unwrap().unwrap();
+    let record: serde_json::Value = serde_json::from_slice(row).unwrap();
+    assert!(records.next().unwrap().is_none());
+    assert_eq!(record["outcome"], "response");
+    assert_eq!(record["response_body"]["data"], "cHJlZml4");
+    assert_eq!(record["response_stream"]["complete"], false);
+    assert_eq!(record["error"].is_null(), flush_before_exit);
+    if flush_before_exit {
+        assert_eq!(record["response_stream"]["stopped_at_source_exit"], true);
+        let events = traffic_recording_store::session_timeline::read(run_dir).unwrap();
+        let mut output = Vec::new();
+        let mut exit = None;
+        for event in events {
+            match event.unwrap() {
+                SessionTimelineEvent::Primary(row)
+                    if matches!(row.event, PrimaryEventKind::SourceExit) =>
+                {
+                    exit = Some(row.sequence);
+                }
+                SessionTimelineEvent::Dependency(row) => {
+                    if let CaptureEvent::Output { output: kind, .. } = row.event {
+                        output.push((row.sequence, kind));
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            output.iter().map(|(_, kind)| *kind).collect::<Vec<_>>(),
+            [
+                OutputKind::Headers,
+                OutputKind::Part,
+                OutputKind::TargetStop
+            ]
+        );
+        let exit = exit.unwrap();
+        assert!(output[1].0 < exit && exit < output[2].0);
+    } else {
+        assert!(record["response_stream"]["stopped_at_source_exit"].is_null());
+    }
+    proxy.abort();
+    upstream.abort();
+    connection.abort();
 }
 
 async fn verify_session() {
@@ -104,7 +248,10 @@ async fn verify_session() {
     gateway.abort();
     let _ = gateway.await;
     state
-        .session_event(SessionEvent::SourceExit { status: Some(0) })
+        .session_event(SessionEvent::SourceExit {
+            status: Some(0),
+            forced_by_recorder: false,
+        })
         .unwrap();
     state.recorder().finish_run().await.unwrap();
     let rows: Vec<SessionEvent> = traffic_recording_store::session::read(&state.recorder().run_dir)
@@ -128,7 +275,7 @@ async fn verify_session() {
             ..,
             SessionEvent::PrimaryCancel { exchange, reason },
             SessionEvent::Stop,
-            SessionEvent::SourceExit { status: Some(0) }
+            SessionEvent::SourceExit { status: Some(0), forced_by_recorder: false }
         ] if *exchange == long_id && reason == ENGINE_SHUTDOWN_CANCEL_REASON
     ));
     let run_dir = &state.recorder().run_dir;
@@ -141,6 +288,7 @@ async fn verify_session() {
         "dependencies-push.tsv",
         "dependencies-process.tsv",
         "dependencies-unattributed.tsv",
+        "dependency-locations.bin",
         "event-locations.bin",
         "event-spans.bin",
         "indexes/process-scope.bin",
@@ -176,6 +324,17 @@ async fn verify_session() {
         (location.line, location.offset, location.length)
     );
     assert!(locations.next().is_none());
+    let summary = traffic_recording_store::session_summary::read(run_dir).unwrap();
+    assert_eq!(summary.primary_cancelled, 1);
+    assert_eq!(summary.mandatory_by_protocol.get("redis"), Some(&1));
+    assert_eq!(
+        summary
+            .routes
+            .iter()
+            .map(|route| (route.path.as_str(), route.requests))
+            .collect::<Vec<_>>(),
+        [("/api/fast", 1), ("/api/long", 1), ("/api/slow", 1)]
+    );
     let report: serde_json::Value = serde_json::from_slice(
         &tokio::fs::read(state.recorder().run_dir.join("recording-run.json"))
             .await

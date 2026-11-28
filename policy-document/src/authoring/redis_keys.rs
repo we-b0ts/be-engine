@@ -17,6 +17,7 @@ pub const ID_PREFIX: &str = "redis.key.";
 #[derive(Debug)]
 pub struct Entry {
     pub scalar: Option<GlobalField>,
+    key_identity: Option<GlobalField>,
     commands: Option<CommandContract>,
     pub proof: Option<Proof>,
     declared_state: bool,
@@ -81,22 +82,31 @@ impl<'de> Deserialize<'de> for Entry {
                     set: SetTransition::Transition
                 })
             );
-            let key_format = fields
-                .remove("key_format")
-                .map(serde_yaml::from_value::<key_format::KeyFormat>)
-                .transpose()?;
-            let commands = fields
+            let key_format = fields.remove("key_format");
+            let declarations = fields
                 .remove("commands")
                 .map(serde_yaml::from_value::<commands::Commands>)
                 .transpose()?;
-            ensure!(
-                key_format.is_none() || commands.is_some(),
-                "Redis key_format requires its command declarations"
-            );
-            let commands = commands.map(|declarations| CommandContract {
-                key_format,
-                declarations,
-            });
+            let (commands, key_identity) = if let Some(declarations) = declarations {
+                let key_format = key_format.map(serde_yaml::from_value).transpose()?;
+                (
+                    Some(CommandContract {
+                        key_format,
+                        declarations,
+                    }),
+                    None,
+                )
+            } else {
+                let identity = key_format
+                    .map(serde_yaml::from_value::<GlobalField>)
+                    .transpose()
+                    .context("standalone Redis key_format requires an identity format")?;
+                ensure!(
+                    matches!(identity, None | Some(GlobalField::Identity { .. })),
+                    "standalone Redis key_format requires an identity format"
+                );
+                (None, identity)
+            };
             let scalar = if fields.is_empty() {
                 None
             } else {
@@ -105,7 +115,7 @@ impl<'de> Deserialize<'de> for Entry {
                 )?)
             };
             ensure!(
-                scalar.is_some() || commands.is_some() || declared_state,
+                scalar.is_some() || key_identity.is_some() || commands.is_some() || declared_state,
                 "Redis key declaration is empty"
             );
             ensure!(
@@ -114,6 +124,7 @@ impl<'de> Deserialize<'de> for Entry {
             );
             Ok(Self {
                 scalar,
+                key_identity,
                 commands,
                 proof,
                 declared_state,
@@ -208,9 +219,9 @@ fn lower(
 pub fn expand(
     entries: BTreeMap<String, Entry>,
     context: &crate::AuthoringContext<'_>,
-) -> Result<(BTreeMap<String, GlobalField>, Vec<Value>)> {
+) -> Result<(crate::RedisPolicy, Vec<Value>)> {
     ensure!(entries.len() <= 4096, "redis.keys exceeds 4096 entries");
-    let mut scalars = BTreeMap::new();
+    let mut policy = crate::RedisPolicy::default();
     let mut rules = Vec::new();
     for (pattern, entry) in entries {
         if let Some(commands) = entry.commands {
@@ -223,10 +234,34 @@ pub fn expand(
             )?)?);
         }
         if let Some(field) = entry.scalar {
-            scalars.insert(pattern, field);
+            policy.keys.insert(pattern.clone(), field);
+        }
+        if let Some(identity) = entry.key_identity {
+            policy.key_identities.insert(pattern, identity);
         }
     }
-    Ok((scalars, rules))
+    Ok((policy, rules))
+}
+
+pub fn compact_settings(policy: &crate::RedisPolicy) -> Result<Value> {
+    let mut keys = Mapping::new();
+    for (pattern, field) in &policy.keys {
+        keys.insert(pattern.as_str().into(), serde_yaml::to_value(field)?);
+    }
+    for (pattern, identity) in &policy.key_identities {
+        key_entry(&mut keys, pattern)?.insert("key_format".into(), serde_yaml::to_value(identity)?);
+    }
+    Ok(Value::Mapping(Mapping::from_iter([(
+        "keys".into(),
+        Value::Mapping(keys),
+    )])))
+}
+
+fn key_entry<'a>(keys: &'a mut Mapping, pattern: &str) -> Result<&'a mut Mapping> {
+    keys.entry(pattern.into())
+        .or_insert_with(|| Value::Mapping(Mapping::new()))
+        .as_mapping_mut()
+        .context("Redis key declaration requires a mapping")
 }
 
 pub fn generated(rule: &PolicyRule) -> bool {
@@ -285,11 +320,7 @@ pub fn compact(
         .or_insert_with(|| Value::Mapping(Mapping::new()))
         .as_mapping_mut()
         .context("Redis keys require a mapping")?;
-    let entry = keys
-        .entry(pattern.into())
-        .or_insert_with(|| Value::Mapping(Mapping::new()))
-        .as_mapping_mut()
-        .context("Redis key declaration requires a mapping")?;
+    let entry = key_entry(keys, &pattern)?;
     if let Some(format) = &commands.key_format {
         ensure!(
             entry

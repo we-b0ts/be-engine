@@ -186,7 +186,26 @@ impl PendingDependency {
         row: &[u8],
         recording_id: Uuid,
         terms: &ReadTerms,
+        read: impl FnMut(&PayloadRef) -> Result<Vec<u8>>,
+    ) -> Result<Value> {
+        Self::materialize_parts(row, recording_id, terms, read, true)
+    }
+
+    pub(crate) fn materialize_request(
+        row: &[u8],
+        recording_id: Uuid,
+        terms: &ReadTerms,
+        read: impl FnMut(&PayloadRef) -> Result<Vec<u8>>,
+    ) -> Result<Value> {
+        Self::materialize_parts(row, recording_id, terms, read, false)
+    }
+
+    fn materialize_parts(
+        row: &[u8],
+        recording_id: Uuid,
+        terms: &ReadTerms,
         mut read: impl FnMut(&PayloadRef) -> Result<Vec<u8>>,
+        with_response: bool,
     ) -> Result<Value> {
         let DependencyRow {
             prefix,
@@ -202,7 +221,9 @@ impl PendingDependency {
         } = RecordProjection::materialize(prefix, extension, recording_id, terms)?;
         payload::restore_fields(&mut native, &mut read)?;
         let request = payload::decode_cell("request", request, &mut read)?;
-        let response = if let PayloadCell::Literal(name) = response {
+        let response = if !with_response {
+            Map::new()
+        } else if let PayloadCell::Literal(name) = response {
             let event_type = native["event_type"]
                 .as_str()
                 .context("response literal has no event type")?;

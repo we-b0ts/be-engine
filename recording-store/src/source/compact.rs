@@ -16,14 +16,32 @@ use uuid::Uuid;
 use super::segment_window::SegmentWindow;
 
 pub(super) fn is_compact(path: &Path) -> bool {
-    partitions::is_directory(path)
+    is_session(path)
+        || partitions::is_directory(path)
         || path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| partitions::FILES.contains(&name))
 }
 
+pub(super) fn is_session(path: &Path) -> bool {
+    path.parent().is_some_and(|root| {
+        (path.ends_with(crate::session::FILE)
+            || path == crate::session_records::observation_path(root))
+            && !root.join(partitions::DIRECTORY).exists()
+            && root.join(crate::session::FILE).is_file()
+    })
+}
+
 pub(super) fn flat_recording_id(path: &Path) -> Result<Option<Uuid>> {
+    if is_session(path) {
+        let (_, manifest) = super::recording::manifest(path)?;
+        ensure!(
+            manifest.schema == traffic_model::recording::SESSION_RECORDING_SCHEMA,
+            "unsupported Session recording schema"
+        );
+        return Ok(Some(manifest.run_epoch));
+    }
     if !is_compact(path) {
         return Ok(None);
     }
@@ -39,6 +57,7 @@ pub(super) struct Reader {
     payload_dir_opened: Cell<bool>,
     segment: RefCell<Option<Segment>>,
     replay_segments: Option<RefCell<SegmentWindow>>,
+    verified_payloads: bool,
 }
 
 #[derive(Debug)]
@@ -49,6 +68,9 @@ struct Segment {
 }
 
 impl Reader {
+    pub(super) fn recording_id(&self) -> Uuid {
+        self.recording_id
+    }
     pub(super) fn open(path: &Path, recording_id: Uuid) -> Result<Self> {
         Self::open_with(path, recording_id, false, false)
     }
@@ -72,18 +94,25 @@ impl Reader {
             .parent()
             .context("compact dependency has no recording root")?
             .to_owned();
-        let (terms, stamp) = if replay {
+        let streaming_manifest = is_session(path)
+            .then(|| super::recording::manifest(path).map(|(_, manifest)| manifest))
+            .transpose()?;
+        let (terms, stamp) = if replay && streaming_manifest.is_none() {
             (ReadTerms::open_for_replay(&root)?, None)
         } else {
             let (terms, stamp) = ReadTerms::open(&root)?;
             (terms, Some(stamp))
         };
         let replay_segments = replay.then(|| {
-            RefCell::new(if map_payloads {
+            let window = if map_payloads {
                 // SAFETY: only the immutable Session Replay constructor enables mappings.
                 unsafe { SegmentWindow::new(root.clone()) }
             } else {
                 SegmentWindow::new_copying(root.clone())
+            };
+            RefCell::new(match &streaming_manifest {
+                Some(manifest) => window.with_seal(manifest),
+                None => window,
             })
         });
         Ok(Self {
@@ -94,6 +123,7 @@ impl Reader {
             payload_dir_opened: Cell::new(false),
             segment: RefCell::new(None),
             replay_segments,
+            verified_payloads: streaming_manifest.is_some(),
         })
     }
 
@@ -114,6 +144,12 @@ impl Reader {
         PendingDependency::materialize_header(row, self.recording_id, &self.terms)
     }
 
+    pub(super) fn read_request(&self, row: &[u8]) -> Result<serde_json::Value> {
+        PendingDependency::materialize_request(row, self.recording_id, &self.terms, |reference| {
+            self.read_payload(reference)
+        })
+    }
+
     pub(super) fn read_response_bytes(&self, cell: &[u8]) -> Result<Option<Bytes>> {
         let Some(window) = &self.replay_segments else {
             return Ok(None);
@@ -125,6 +161,11 @@ impl Reader {
     }
 
     fn read_payload(&self, reference: &PayloadRef) -> Result<Vec<u8>> {
+        if let Some(window) = &self.replay_segments
+            && self.verified_payloads
+        {
+            return Ok(window.borrow_mut().read(reference)?.to_vec());
+        }
         let mut segment = self.segment.borrow_mut();
         if segment
             .as_ref()

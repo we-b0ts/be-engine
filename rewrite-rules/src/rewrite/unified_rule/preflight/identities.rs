@@ -34,10 +34,9 @@ pub fn require_replay(
             .insert("global.mysql".into());
     }
     if selected.contains("global.redis")
-        && policy
-            .redis
-            .as_ref()
-            .is_some_and(|redis| redis.keys.values().any(|field| field.is_identity()))
+        && policy.redis.as_ref().is_some_and(|redis| {
+            !redis.key_identities.is_empty() || redis.keys.values().any(|field| field.is_identity())
+        })
     {
         result
             .stateful_target_obligations

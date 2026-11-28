@@ -123,6 +123,15 @@ pub trait RequestHost: Send + Sync {
             self.execute(request).await
         })
     }
+    /// Cover the sealed end of a single-statement transaction using the
+    /// successful autocommit write receipt from this connection.
+    fn complete_autocommit(
+        &self,
+        _request: Arc<dyn ProtocolMessage>,
+        _after: ProtocolRef,
+    ) -> NativeFuture<'_, ()> {
+        Box::pin(async { anyhow::bail!("native autocommit completion is unavailable") })
+    }
     /// Try an expected Source control before a protocol emits a safe local reply.
     fn try_execute_session_control(
         &self,
@@ -257,6 +266,13 @@ pub trait ResponseFramer: Send {
     fn frame(&mut self, response: Bytes) -> Result<Bytes> {
         Ok(response)
     }
+
+    /// Observe a recorded process-stop boundary in the response plan.
+    fn target_stopped(&mut self) {}
+
+    fn wait_for_client_close(&mut self) -> NativeFuture<'_, ()> {
+        Box::pin(async { anyhow::bail!("native connection cannot observe client termination") })
+    }
 }
 
 /// The host retains response bytes, claims and delivery receipts. Native framing
@@ -284,24 +300,37 @@ pub trait ResponseDelivery: Send {
 }
 
 /// Source slot roles supplied by a protocol after inspecting a complete scope.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReplaySessionStep {
     Optional,
     Unverified,
     InTransaction,
     Start,
     ImplicitStart,
+    AutocommitWrite,
+    AutocommitCommit { after: ProtocolRef },
     Continue { after: ProtocolRef, end: bool },
     ReadOnlyEnd { after: ProtocolRef },
 }
 
 /// A protocol provider's proof for a complete, non-business Source operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DriverPrelude {
     MysqlSqlalchemyPymysql,
     MysqlIdleMetadataRollback,
     MysqlPostTransactionIdleRollback,
+    MysqlTransactionBegin,
+    MysqlReadOnlyTransactionEnd,
+}
+
+/// A recorded protocol disposition indexed by its original admission sequence.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SessionDecision {
+    pub sequence: u64,
+    pub step: Option<ReplaySessionStep>,
+    pub driver_prelude: Option<DriverPrelude>,
 }
 
 #[derive(Default)]
@@ -315,6 +344,8 @@ pub struct EventSessionPreparation {
 pub struct RequestSession {
     pub can_start: bool,
     pub after: Option<ProtocolRef>,
+    pub autocommit: bool,
+    pub autocommit_completion: bool,
     pub implicit_start_pending: bool,
     pub read_only_end_alternative: Option<Arc<dyn ProtocolMessage>>,
 }
@@ -349,11 +380,27 @@ pub trait CaptureExchange: Send {
         &self,
         output: traffic_model::trace::OutputKind,
     ) -> Result<Box<dyn CaptureOutput>>;
+    fn supports_staged_output(&self) -> bool {
+        false
+    }
+    /// Publish fully observed content before acquiring its physical output receipt.
+    fn stage_output(
+        self: Box<Self>,
+        _event: CaptureSnapshot,
+        _output: traffic_model::trace::OutputKind,
+    ) -> NativeFuture<'static, Box<dyn CaptureOutput>> {
+        Box::pin(async { anyhow::bail!("staged capture output is unavailable") })
+    }
     fn complete(self: Box<Self>, event: CaptureSnapshot) -> NativeFuture<'static, ()>;
 }
 
 pub trait CaptureOutput: Send {
     fn commit(self: Box<Self>);
+
+    /// Cancel a staged notification when the closed peer accepted no bytes.
+    fn cancel_unwritten_notification(self: Box<Self>) -> Result<()> {
+        anyhow::bail!("capture output cannot cancel an unwritten notification")
+    }
 }
 
 #[derive(Clone, Default)]
@@ -502,6 +549,19 @@ pub trait NativeProtocol: Send + Sync {
 
     fn recorded_exchange(&self, event: &Value) -> Result<Option<RecordedExchange>>;
 
+    fn defers_recorded_response(&self) -> bool {
+        false
+    }
+
+    /// Construct a matching exchange with an authenticated deferred response.
+    fn recorded_request_with_stored_response(
+        &self,
+        _request: &Value,
+        _response: Arc<dyn MessageEncoder>,
+    ) -> Result<RecordedExchange> {
+        anyhow::bail!("stored responses are unavailable for this protocol")
+    }
+
     /// Prepare only the routing and timing of a server emission. Metadata has
     /// no request or response body. Providers may use the ordinary eager path.
     fn recorded_emission(
@@ -525,6 +585,14 @@ pub trait NativeProtocol: Send + Sync {
         _secrets: &dyn crate::evidence::EvidenceSecrets,
     ) -> Result<Option<RecordedExchange>> {
         self.recorded_exchange(event)
+    }
+    /// Decode a native exchange whose delivery is governed by a whole Source session.
+    fn recorded_session_exchange(
+        &self,
+        event: &Value,
+        secrets: &dyn crate::evidence::EvidenceSecrets,
+    ) -> Result<Option<RecordedExchange>> {
+        self.recorded_exchange_with_secrets(event, secrets)
     }
     fn recorded_protocol(&self, _event: &Value) -> Result<Option<crate::ProtocolId>> {
         Ok(None)

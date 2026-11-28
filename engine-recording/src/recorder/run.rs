@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tracing::info;
+use traffic_model::recording::RecordingManifest;
 use traffic_model::recording::identity::IdentityKind;
 use uuid::Uuid;
 
@@ -32,6 +33,10 @@ struct RecorderRunReport {
     failed_cases: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     completion_reason: Option<RecordingCompletionReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_failures: Option<u64>,
     errors: Vec<RecordingErrorSummary>,
 }
 
@@ -280,7 +285,7 @@ impl Recorder {
             let _guard = self.dependency_write_lock.lock().await;
             if let Err(error) = self.flush_all_dependency_files().await {
                 self.writer.seal(self.capture.coverage()).await?;
-                self.write_run_report("failed").await?;
+                self.write_final_run_report("failed").await?;
                 return Err(error).context(
                     "recording inventory could not be completed; partial ledger was sealed",
                 );
@@ -324,7 +329,7 @@ impl Recorder {
         };
         self.write_network_manifest().await?;
         self.writer.seal(self.capture.coverage()).await?;
-        self.write_run_report(status).await?;
+        self.write_final_run_report(status).await?;
         self.flush_traffic().await?;
         if let Some(owner) = self.artifact_owner {
             owner.assign_to(&self.run_dir).await.with_context(|| {
@@ -488,9 +493,42 @@ impl Recorder {
     }
 
     pub async fn write_run_report(&self, status: &'static str) -> Result<()> {
+        self.write_run_report_with_capture(status, None).await
+    }
+
+    async fn write_final_run_report(&self, status: &'static str) -> Result<()> {
+        if !self.session_events {
+            return self.write_run_report(status).await;
+        }
+        let manifest = self
+            .run_dir
+            .join(crate::dependency::observation::MANIFEST_FILE);
+        let bytes = tokio::fs::read(&manifest)
+            .await
+            .with_context(|| format!("read sealed capture manifest {}", manifest.display()))?;
+        let capture: RecordingManifest = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse sealed capture manifest {}", manifest.display()))?;
+        let status = if capture.capture_complete {
+            status
+        } else {
+            "failed"
+        };
+        self.write_run_report_with_capture(status, Some(&capture))
+            .await
+    }
+
+    async fn write_run_report_with_capture(
+        &self,
+        status: &'static str,
+        capture: Option<&RecordingManifest>,
+    ) -> Result<()> {
         let state = self.run_state.lock().await;
         let report = RecorderRunReport {
-            schema: crate::dependency::observation::COMPACT_RECORDING_SCHEMA,
+            schema: if self.session_events {
+                traffic_model::recording::SESSION_RECORDING_SCHEMA
+            } else {
+                traffic_model::recording::COMPACT_RECORDING_SCHEMA
+            },
             dependency_manifest: crate::dependency::observation::MANIFEST_FILE,
             run_id: state.run_id.clone(),
             status,
@@ -505,6 +543,8 @@ impl Recorder {
             published_cases: state.published_cases,
             failed_cases: state.failed_cases,
             completion_reason: state.completion_reason,
+            capture_complete: capture.map(|manifest| manifest.capture_complete),
+            capture_failures: capture.map(|manifest| manifest.coverage.capture_failures),
             errors: state.errors.clone(),
         };
         drop(state);

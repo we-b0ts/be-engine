@@ -4,6 +4,8 @@ use crate::replay::{ReplayControlRequest, ReplayDependencyLoading, ReplayLifecyc
 use serde_json::json;
 use traffic_protocol_mysql::{MysqlPacket, read_packet, write_packet};
 
+mod semantic_session;
+
 const READ: &str = "SELECT id FROM notes WHERE id = 7";
 const WRITE: &str = "UPDATE notes SET seen = 1 WHERE id = 7";
 const READ_AFTER_WRITE: &str = "SELECT seen FROM notes WHERE id = 7";
@@ -164,36 +166,40 @@ impl Fixture {
     }
 
     async fn connect(&self) -> (TcpStream, tokio::task::JoinHandle<anyhow::Result<()>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap())
-            .await
-            .unwrap();
-        let (server, _) = listener.accept().await.unwrap();
-        let target = crate::replay::ReplayTarget {
-            host: "mysql.test".into(),
-            port: 3306,
-            fake_ip: "198.18.0.1".parse().unwrap(),
-            protocol: crate::replay::ReplayProtocol::new(traffic_protocol::ProtocolId::new(
-                "mysql",
-            )),
-        };
-        let task = tokio::spawn(serve_native(server, target, self.runtime.state.clone()));
-        assert_eq!(packet(&mut client).await.unwrap().payload[0], 10);
-        let mut payload = vec![0; 32];
-        payload[..4].copy_from_slice(&0x8208_u32.to_le_bytes());
-        payload.extend_from_slice(b"reader\0\0app\0");
-        write_packet(
-            &mut client,
-            &MysqlPacket {
-                sequence_id: 1,
-                payload,
-            },
-        )
+        connect_mysql(&self.runtime).await
+    }
+}
+
+async fn connect_mysql(
+    runtime: &ReplayRuntime,
+) -> (TcpStream, tokio::task::JoinHandle<anyhow::Result<()>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap())
         .await
         .unwrap();
-        assert_eq!(packet(&mut client).await.unwrap().payload[0], 0);
-        (client, task)
-    }
+    let (server, _) = listener.accept().await.unwrap();
+    let target = crate::replay::ReplayTarget {
+        host: "mysql.test".into(),
+        port: 3306,
+        fake_ip: "198.18.0.1".parse().unwrap(),
+        protocol: crate::replay::ReplayProtocol::new(traffic_protocol::ProtocolId::new("mysql")),
+    };
+    let task = tokio::spawn(serve_native(server, target, runtime.state.clone()));
+    assert_eq!(packet(&mut client).await.unwrap().payload[0], 10);
+    let mut payload = vec![0; 32];
+    payload[..4].copy_from_slice(&0x8208_u32.to_le_bytes());
+    payload.extend_from_slice(b"reader\0\0app\0");
+    write_packet(
+        &mut client,
+        &MysqlPacket {
+            sequence_id: 1,
+            payload,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(packet(&mut client).await.unwrap().payload[0], 0);
+    (client, task)
 }
 
 async fn packet(client: &mut TcpStream) -> Option<MysqlPacket> {

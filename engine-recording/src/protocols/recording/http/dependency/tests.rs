@@ -104,3 +104,59 @@ fn event() -> HttpExchangeEvent {
         error: None,
     }
 }
+
+#[tokio::test]
+async fn pending_request_records_no_response_after_verified_source_exit() {
+    use traffic_model::session::SessionEvent;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.recording.session_events = true;
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = AppState::new(config).await.unwrap();
+    state.session_event(SessionEvent::SourceStart).unwrap();
+    state.session_event(SessionEvent::Ready).unwrap();
+    let event = event();
+    let targets = state.capture_dependency_start(
+        crate::dependency::observation::ProtocolRef::exchange("http", event.id),
+    );
+    let sequence = targets.capture.as_ref().unwrap().dependency_id();
+    let termination = ClientTermination::default();
+    let pending = PendingHttpCapture::new(
+        state.clone(),
+        targets,
+        event,
+        Instant::now(),
+        termination.clone(),
+    );
+    state.session_event(SessionEvent::Stop).unwrap();
+    state
+        .session_event(SessionEvent::SourceExit {
+            status: Some(0),
+            forced_by_recorder: false,
+        })
+        .unwrap();
+    termination
+        .connection_observation()
+        .observe_engine_stop_at_boundary(Instant::now());
+    drop(pending);
+    state
+        .recorder()
+        .finish_run_after_runtime(true)
+        .await
+        .unwrap();
+
+    let root = &state.recorder().run_dir;
+    let record = traffic_recording_store::session_records::dependency(root, sequence).unwrap();
+    assert_eq!(record["outcome"], "no_response");
+    assert!(record["response_status"].is_null());
+    assert!(record["error"].is_null());
+    assert!(
+        std::fs::read_to_string(root.join("events.tsv"))
+            .unwrap()
+            .lines()
+            .any(|line| line.ends_with(&format!("\twire_output\t{sequence}\ttarget_stop")))
+    );
+}

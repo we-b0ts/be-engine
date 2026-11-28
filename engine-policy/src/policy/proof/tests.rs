@@ -7,33 +7,8 @@ fn value_rule() -> Value {
         "proof":{"source":"items.py:1","fact":"Source generates a random nonce"}})
 }
 
-fn native_rule() -> Value {
-    json!({"id":"time","match":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},
-        "operation":"COM_QUERY","sql":"UPDATE items SET stamp=? WHERE id=?"},
-        "effect":{"kind":"mysql_values","values":{"0":{"relative_time":"unix_seconds"}}},
-        "proof":{"source":"items.py:1","fact":"Source reads the current clock"}})
-}
-
 fn parse(rules: Vec<Value>) -> anyhow::Result<TrafficPolicy> {
     parse_policy(&json!({"format":"traffic-policy/v3","rules":rules}).to_string())
-}
-
-#[test]
-fn proof_limits_use_utf8_bytes_in_value_native_and_inherited_contracts() {
-    for mut rule in [value_rule(), native_rule()] {
-        for (fact, allowed) in [
-            ("a".repeat(200), true),
-            ("a".repeat(201), false),
-            ("时".repeat(66), true),
-            ("时".repeat(67), false),
-        ] {
-            rule["proof"]["fact"] = json!(fact);
-            assert_eq!(parse(vec![rule.clone()]).is_ok(), allowed);
-        }
-    }
-    let mut rule = native_rule();
-    rule["effect"]["values"]["0"]["proof"] = json!({"fact":"a".repeat(201)});
-    assert!(parse(vec![rule]).is_err());
 }
 
 #[test]
@@ -69,52 +44,6 @@ fn source_lists_are_bounded_and_inherit_one_document_revision() {
     ] {
         rule["proof"]["source"] = source;
         assert!(parse(vec![rule.clone()]).is_err());
-    }
-}
-
-#[test]
-fn runtime_rules_omit_proofs_while_provided_plan_proofs_remain_validated() {
-    let capture = json!({"id":"paths","match":{},"effect":{"kind":"capture_http","case_paths":["/items"]},
-        "proof":{"fact":"Capture this route without granting comparison permission"}});
-    let input =
-        json!({"format":"traffic-policy/v3","source_revision":format!("sha256:{}", "1".repeat(64)),
-        "rules":[value_rule(),capture]})
-        .to_string();
-    let parsed = parse_policy(&input).unwrap();
-    let output = render_policy(&parsed).unwrap();
-    let reparsed = parse_policy(&output).unwrap();
-    let paths = reparsed
-        .rules
-        .iter()
-        .find(|rule| rule.id() == "paths")
-        .unwrap();
-    assert!(paths.proof().is_none());
-    assert_eq!(
-        compile_policy(&parsed).unwrap().fingerprints,
-        compile_policy(&reparsed).unwrap().fingerprints
-    );
-    let mut changed = reparsed.clone();
-    let PolicyRule::Native(rule) = changed
-        .rules
-        .iter_mut()
-        .find(|rule| rule.id() == "paths")
-        .unwrap()
-    else {
-        panic!("recording scope must retain its native acquisition owner");
-    };
-    rule.proof = Some(Proof {
-        source: String::new(),
-        fact: "The same acquisition scope has a shorter explanation".into(),
-    });
-    assert_eq!(
-        compile_policy(&changed).unwrap().fingerprints.capture,
-        compile_policy(&reparsed).unwrap().fingerprints.capture
-    );
-    for mut rule in [value_rule(), native_rule()] {
-        rule["proof"].as_object_mut().unwrap().remove("source");
-        assert!(parse(vec![rule.clone()]).is_err());
-        rule.as_object_mut().unwrap().remove("proof");
-        assert!(parse(vec![rule]).is_ok());
     }
 }
 

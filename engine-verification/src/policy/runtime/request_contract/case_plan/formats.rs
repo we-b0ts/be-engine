@@ -58,7 +58,11 @@ pub(super) fn compile(policy: &crate::policy::CompiledPolicy) -> Vec<FormatRequi
         add(
             "global.redis",
             Some(ProtocolKind::Redis),
-            redis.keys.values().collect(),
+            redis
+                .keys
+                .values()
+                .chain(redis.key_identities.values())
+                .collect(),
         );
     }
     if let Some(http) = &policy.http {

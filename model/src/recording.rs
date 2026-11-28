@@ -7,6 +7,7 @@ use super::attribution::DependencyOwner;
 
 pub const RECORDING_SCHEMA: &str = "traffic-recording/v4";
 pub const COMPACT_RECORDING_SCHEMA: &str = "traffic-recording/v13";
+pub const SESSION_RECORDING_SCHEMA: &str = "traffic-recording/v14";
 pub const SCOPE_SCHEMA: &str = "traffic-dependency-scope/v4";
 pub const MANIFEST_FILE: &str = "dependency-manifest.json";
 
@@ -151,6 +152,8 @@ pub struct LedgerFileIdentity {
     pub path: String,
     pub length: u64,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,6 +194,17 @@ impl SemanticInventory {
         owner: &DependencyOwner,
         replay_supported: bool,
     ) {
+        self.observe_mandatory_outcome(
+            owner,
+            (!replay_supported).then(|| event["event_type"].as_str().unwrap_or("unknown")),
+        );
+    }
+
+    pub fn observe_mandatory_outcome(
+        &mut self,
+        owner: &DependencyOwner,
+        unsupported: Option<&str>,
+    ) {
         let (kind, scope) = match owner {
             DependencyOwner::Case { origin_case_id, .. } => ("case", origin_case_id.to_string()),
             DependencyOwner::Startup { .. } => ("startup", "startup".into()),
@@ -201,13 +215,12 @@ impl SemanticInventory {
         self.total_mandatory += 1;
         *self.by_owner_kind.entry(kind.into()).or_default() += 1;
         self.unattributed_dependencies += u64::from(kind == "unattributed");
-        if !replay_supported {
-            let protocol = event["event_type"].as_str().unwrap_or("unknown");
+        if let Some(event_type) = unsupported {
             *self
                 .unsupported_by_scope
                 .entry(scope)
                 .or_default()
-                .entry(protocol.into())
+                .entry(event_type.into())
                 .or_default() += 1;
         }
     }

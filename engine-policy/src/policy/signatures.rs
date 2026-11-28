@@ -6,6 +6,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use traffic_jwt::verification::{Algorithm, PreparedKey};
+use traffic_policy_document::signatures::MAX_INFERRED_JWT_PROFILES;
+use traffic_policy_value::auth::Matcher;
 
 use super::native::{SignatureAlgorithm, StartupKey};
 use crate::signing::{ResolvedSigningKey, SigningKeyResolver, SigningKeySource};
@@ -28,7 +31,12 @@ fn source(key: &StartupKey) -> SigningKeySource {
 #[derive(Clone, Default)]
 pub struct SignatureRegistry {
     definitions: BTreeMap<String, SignatureDefinition>,
-    keys: Arc<OnceLock<BTreeMap<String, ResolvedSigningKey>>>,
+    prepared: Arc<OnceLock<PreparedSignatures>>,
+}
+
+struct PreparedSignatures {
+    keys: BTreeMap<String, ResolvedSigningKey>,
+    matcher: Matcher,
 }
 
 impl std::fmt::Debug for SignatureRegistry {
@@ -36,7 +44,7 @@ impl std::fmt::Debug for SignatureRegistry {
         formatter
             .debug_struct("SignatureRegistry")
             .field("definitions", &self.definitions)
-            .field("prepared", &self.keys.get().is_some())
+            .field("prepared", &self.prepared.get().is_some())
             .finish()
     }
 }
@@ -53,7 +61,7 @@ impl SignatureRegistry {
         definitions: &BTreeMap<String, SignatureDefinition>,
         required: &BTreeSet<String>,
     ) -> Result<Self> {
-        let definitions = required
+        let mut selected = required
             .iter()
             .map(|name| {
                 let definition = definitions
@@ -66,9 +74,17 @@ impl SignatureRegistry {
                 Ok((name.clone(), definition.clone()))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
+        let inferred = definitions
+            .iter()
+            .filter(|(_, definition)| definition.inferred());
+        ensure!(
+            inferred.clone().count() <= MAX_INFERRED_JWT_PROFILES,
+            "signatures exceeds {MAX_INFERRED_JWT_PROFILES} inferred JWT profiles"
+        );
+        selected.extend(inferred.map(|(name, definition)| (name.clone(), definition.clone())));
         Ok(Self {
-            definitions,
-            keys: Arc::default(),
+            definitions: selected,
+            prepared: Arc::default(),
         })
     }
 
@@ -77,11 +93,11 @@ impl SignatureRegistry {
     }
 
     pub fn needs_prepare(&self) -> bool {
-        !self.is_empty() && self.keys.get().is_none()
+        !self.is_empty() && self.prepared.get().is_none()
     }
 
     pub fn prepare(&self, root: &Path, resolver: SigningKeyResolver) -> Result<()> {
-        if self.keys.get().is_some() {
+        if self.prepared.get().is_some() {
             return Ok(());
         }
         let keys = self
@@ -99,7 +115,8 @@ impl SignatureRegistry {
             .collect::<Result<BTreeMap<_, _>>>()?;
         // Concurrent owners resolve the same managed startup inputs. The first
         // complete immutable snapshot wins; plans independently freeze witnesses.
-        let _ = self.keys.set(keys);
+        let matcher = prepare_matcher(&self.definitions, &keys)?;
+        let _ = self.prepared.set(PreparedSignatures { keys, matcher });
         Ok(())
     }
 
@@ -108,20 +125,30 @@ impl SignatureRegistry {
             anyhow::bail!("JWT signature definition is unavailable");
         };
         let key = self
-            .keys
+            .prepared
             .get()
-            .and_then(|keys| keys.get(name))
+            .and_then(|prepared| prepared.keys.get(name))
             .context("JWT signing key context has not been prepared")?;
         Ok((algorithm, key.bytes()))
     }
 
     pub fn resolved_keys(&self) -> Vec<ResolvedSigningKey> {
-        self.keys
+        self.prepared
             .get()
             .into_iter()
-            .flat_map(BTreeMap::values)
+            .flat_map(|prepared| prepared.keys.values())
             .cloned()
             .collect()
+    }
+
+    pub(crate) fn auth_matcher(&self) -> Option<Matcher> {
+        if let Some(prepared) = self.prepared.get() {
+            Some(prepared.matcher.clone())
+        } else if self.definitions.values().any(SignatureDefinition::inferred) {
+            None
+        } else {
+            Some(Matcher::default())
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -129,13 +156,43 @@ impl SignatureRegistry {
         definitions: BTreeMap<String, SignatureDefinition>,
         keys: BTreeMap<String, Vec<u8>>,
     ) -> Self {
+        let keys = keys
+            .into_iter()
+            .map(|(name, value)| (name, ResolvedSigningKey::for_test(&value)))
+            .collect();
+        let matcher = prepare_matcher(&definitions, &keys).expect("valid test JWT keys");
         Self {
             definitions,
-            keys: Arc::new(OnceLock::from(
-                keys.into_iter()
-                    .map(|(name, value)| (name, ResolvedSigningKey::for_test(&value)))
-                    .collect::<BTreeMap<_, _>>(),
-            )),
+            prepared: Arc::new(OnceLock::from(PreparedSignatures { keys, matcher })),
         }
     }
+}
+
+fn prepare_matcher(
+    definitions: &BTreeMap<String, SignatureDefinition>,
+    keys: &BTreeMap<String, ResolvedSigningKey>,
+) -> Result<Matcher> {
+    let mut inferred = Vec::new();
+    for (name, definition) in definitions {
+        let SignatureDefinition::Jwt {
+            algorithm,
+            infer: true,
+            ..
+        } = definition
+        else {
+            continue;
+        };
+        let key = keys.get(name).context("inferred JWT key is not prepared")?;
+        let algorithm = match algorithm {
+            SignatureAlgorithm::HS256 => Algorithm::HS256,
+            SignatureAlgorithm::HS384 => Algorithm::HS384,
+            SignatureAlgorithm::HS512 => Algorithm::HS512,
+            SignatureAlgorithm::RS256 => Algorithm::RS256,
+        };
+        inferred.push(
+            PreparedKey::new(algorithm, key.bytes())
+                .with_context(|| format!("cannot prepare inferred JWT profile {name:?}"))?,
+        );
+    }
+    Ok(Matcher::new(inferred))
 }

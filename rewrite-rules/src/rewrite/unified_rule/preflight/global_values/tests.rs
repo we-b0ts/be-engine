@@ -204,6 +204,43 @@ fn redis_global_comparison_sees_every_value_and_enforces_one_automatic_id_relati
 }
 
 #[test]
+fn redis_key_identity_preflight_counts_source_coverage_and_checks_json_consistency() {
+    let policy = crate::policy::parse_and_compile_policy(
+        r#"format: traffic-policy/v3
+json:
+  fields:
+    /session_id: {kind: identity, formats: [{prefix: vnc-, hex: 4}]}
+redis:
+  keys:
+    'vnc_session:*':
+      key_format: {kind: identity, formats: [{prefix: vnc-, hex: 4}]}
+"#,
+    )
+    .unwrap();
+    let source = args(&["vnc_session:vnc-1234", r#"{"session_id":"vnc-1234"}"#]);
+    let checked = |target: &[u8]| {
+        compare(
+            &redis("SET"),
+            Surface::DependencyRequest,
+            &source,
+            target,
+            &policy,
+            Default::default(),
+        )
+        .unwrap()
+    };
+    let mut proof = Preflight::default();
+    let selected = BTreeSet::from(["global.redis".into()]);
+    assert!(record_source(&checked(&source), &selected, &mut proof).unwrap());
+    assert_eq!(proof.rules["global.redis"], 1);
+    for (json_id, passed) in [("vnc-5678", true), ("vnc-9abc", false)] {
+        let value = json!({"session_id": json_id}).to_string();
+        let comparison = checked(&args(&["vnc_session:vnc-5678", &value]));
+        assert_eq!(comparison.passed(), passed, "{:?}", comparison.differences);
+    }
+}
+
+#[test]
 fn missing_fields_and_opaque_values_are_unavailable_but_paired_null_is_exact() {
     let policy = policy();
     let selected = BTreeSet::from([GLOBAL_JSON_ID.into()]);

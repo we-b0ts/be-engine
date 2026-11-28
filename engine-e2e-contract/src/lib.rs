@@ -11,7 +11,12 @@ use traffic_policy_content::model::{
 use traffic_policy_schema::response::ResponseBodyCodec;
 
 mod event_session;
-pub use event_session::{E2eEventSessionOptions, E2eEventSessionProgress, E2eEventSessionResult};
+pub use event_session::{
+    E2eEventSessionApiProgress, E2eEventSessionCaseProgress, E2eEventSessionCounts,
+    E2eEventSessionOptions, E2eEventSessionPhase, E2eEventSessionProgress, E2eEventSessionResult,
+    E2eEventSessionSequenceProgress, E2eEventSessionState, E2eEventSessionStatus,
+    E2eEventSessionStatusProgress,
+};
 
 #[derive(Debug, Clone)]
 pub struct E2eRunContext {

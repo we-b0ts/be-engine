@@ -287,7 +287,7 @@ Replay 的值规则复用现有类型化值 contract，并独立保留 native �
 | `traffic-contract` | Scalar/JSON/Protobuf codec、字段契约类型、时间运算与共享身份提案和状态 |
 | `traffic-response-rewrite` | 纯声明式文档改写内核 |
 
-根 crate 组合配置、存储、网络、规则准入、Recorder/Replay runtime 与 backend-rewrite 工作流。
+根 crate 组合配置、存储、网络、规则准入、Recorder/Replay runtime 与 be-replay 工作流。
 下层 lib 的依赖方向指向模型与协议 contract。
 后续按已稳定的责任继续提取 semantic capture、存储索引与值规则执行，逐次迁移正常入口并运行 workspace 验证。
 

@@ -75,6 +75,15 @@ pub struct RecordRef {
 }
 
 impl RecordRef {
+    pub fn load_request(&self) -> Result<serde_json::Value> {
+        self.source.validate()?;
+        self.source
+            .reader
+            .lock()
+            .map_err(|_| anyhow::anyhow!("dependency cache lock poisoned"))?
+            .read_request(&self.source.path, &self.source.stamp, &self.location)
+    }
+
     /// Load the envelope and protocol extension without restoring payload cells.
     pub fn load_metadata(&self) -> Result<serde_json::Value> {
         self.source.validate()?;

@@ -8,7 +8,7 @@ use traffic_engine_config::{
     plan_breeze_memcached_background_dependency, plan_mysql_background_dependency,
     plan_redis_background_dependency,
 };
-use traffic_engine_e2erun::{
+use traffic_engine_e2e_run::{
     E2eRunContext, build_info, e2e_run, execution_identity, resolve_e2e_response_rule_evidence,
 };
 use traffic_engine_environment::internal_runtime;

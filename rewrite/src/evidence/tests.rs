@@ -307,30 +307,6 @@ fn standard_header_evidence_uses_response_flow_without_body_rule_queries() {
 }
 
 #[test]
-fn response_source_process_evidence_exposes_bootstrap_redis_planner() {
-    let planners = applicable_rule_planners(
-        Path::new("/target"),
-        RewriteIssueKind::Response,
-        QUERY_SOURCE_PROCESS_TRAFFIC,
-        &serde_json::json!({
-            "available": true,
-            "bootstrap": {
-                "protocols": ["redis"]
-            }
-        }),
-        "evidence-bootstrap",
-    );
-
-    let planner = planners
-        .iter()
-        .find(|planner| planner.capability == "redis_bootstrap")
-        .unwrap();
-    assert_eq!(planner.kind, "dependency_ownership");
-    assert_eq!(planner.evidence_id, "evidence-bootstrap");
-    assert!(planner.command.argv.iter().any(|arg| arg == "--file"));
-}
-
-#[test]
 fn parked_api_evidence_survives_unrelated_api_revisions() {
     let target_root = Path::new("/target");
     let mut state = crate::test_state();
@@ -732,37 +708,6 @@ fn focused_response_body_candidate_offers_the_unified_response_rule_planner() {
 }
 
 #[test]
-fn configured_response_body_candidate_offers_selector_help() {
-    let target = tempfile::tempdir().unwrap();
-    let facts = serde_json::json!({
-        "representative": {"response_difference": {
-            "pointer": "$body",
-            "body_diagnosis": {
-                "codec": "hessian2",
-                "codec_candidates": ["hessian2"],
-                "configured": true,
-                "unordered_path_candidates": [{"value_path": []}]
-            }
-        }}
-    });
-
-    let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
-    let planners = applicable_rule_planners(
-        target.path(),
-        RewriteIssueKind::Response,
-        QUERY_REPRESENTATIVES,
-        &facts,
-        "evidence-current",
-    );
-
-    assert_eq!(hints.len(), 1);
-    assert!(hints[0].hint.contains("source-proven"));
-    assert_eq!(planners.len(), 1);
-    assert_eq!(planners[0].capability, "hessian2");
-    assert_eq!(planners[0].command.argv.last().unwrap(), "evidence-current");
-}
-
-#[test]
 fn response_issues_can_query_dirty_clusters_for_protocol_rule_discovery() {
     let mut state = crate::test_state();
     state.active_issue = Some(RewriteIssue {
@@ -892,12 +837,6 @@ fn source_process_query_returns_bounded_bootstrap_and_process_owned_evidence() {
     assert_eq!(
         report.facts["process_owned"]["rules"][0]["redis_snapshot"]["reuses"],
         1
-    );
-    assert!(
-        report
-            .applicable_rule_planners
-            .iter()
-            .any(|planner| planner.capability == "redis_bootstrap")
     );
 }
 

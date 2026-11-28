@@ -21,8 +21,6 @@ mod capture_refresh_transaction;
 mod change_transaction;
 #[path = "transaction_concurrency.rs"]
 mod concurrency_transaction;
-#[path = "transaction_conditional_identity.rs"]
-mod conditional_identity_transaction;
 #[path = "transaction_declaration_changes.rs"]
 mod declaration_changes_transaction;
 #[path = "transaction_definition_context.rs"]
@@ -37,8 +35,6 @@ mod global_formats_transaction;
 mod header_transaction;
 #[path = "transaction_http_body_jwt.rs"]
 mod http_body_jwt_transaction;
-#[path = "transaction_identity_references.rs"]
-mod identity_references_transaction;
 #[path = "transaction_interaction.rs"]
 mod interaction_transaction;
 #[path = "transaction_mysql_candidates.rs"]
@@ -51,12 +47,8 @@ mod mysql_table_values_transaction;
 mod native_transaction;
 #[path = "transaction_ownership.rs"]
 mod ownership_transaction;
-#[path = "transaction_partial_redis.rs"]
-mod partial_redis_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
-#[path = "transaction_redis_candidates.rs"]
-mod redis_candidates_transaction;
 #[path = "transaction_redis_pairs.rs"]
 mod redis_pairs_transaction;
 #[path = "transaction_resource_scope.rs"]

@@ -36,6 +36,21 @@ impl GlobalDocumentPolicy {
 }
 
 impl DocumentPolicy for GlobalDocumentPolicy {
+    fn may_compare_unclaimed(&self) -> bool {
+        policy(&self.owner).auth_matcher().is_some()
+    }
+
+    fn authenticated_paths(
+        &self,
+        source: &Value,
+        target: &Value,
+        clocks: AnchorClocks,
+    ) -> Vec<String> {
+        policy(&self.owner)
+            .auth_matcher()
+            .map(|matcher| matcher.matching_string_paths(source, target, clocks))
+            .unwrap_or_default()
+    }
     fn prepare_delivery(
         &self,
         source: &serde_json::Value,
@@ -219,8 +234,17 @@ impl PreparedDocumentComparison for PreparedFields {
         clocks: AnchorClocks,
     ) -> Result<Comparison> {
         if let Some(json) = &self.json {
+            let base = crate::value_contract::execution_context();
+            let auth = traffic_policy_value::auth::Metadata::new(
+                base.metadata,
+                policy(&self.owner).auth_matcher(),
+            );
+            let context = traffic_policy_execution::ExecutionContext {
+                metadata: auth.rules(),
+                ..base
+            };
             return Ok(traffic_policy_execution::global::compare_selected_fields(
-                &crate::value_contract::execution_context(),
+                &context,
                 source,
                 target,
                 fields,

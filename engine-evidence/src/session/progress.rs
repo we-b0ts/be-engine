@@ -1,84 +1,19 @@
 //! Project fully replayed primary exchanges onto the existing public progress schema.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::Path,
-};
+use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::Serialize;
-use traffic_model::{session::SessionEvent, trace::RecordedEvent};
 
-use crate::{
-    config::api_catalog::{self, ApiCatalog},
-    path_pattern::matches_path_pattern,
-    verification_progress::{
-        ApiObservation, EVENT_SESSION_RUN_PREFIX, LatestCounts, ProgressObservation,
-        ProgressReport, VerificationStage, fingerprint, load, lock_publication, write,
-    },
+use crate::verification_progress::{
+    ApiObservation, EVENT_SESSION_RUN_PREFIX, LatestCounts, ProgressObservation, ProgressReport,
+    VerificationStage, fingerprint, load, lock_publication, write,
 };
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct SessionApiCounts {
     pub recorded: u64,
     pub verified: u64,
-}
-
-pub fn api_counts(
-    target_root: &Path,
-    recording_root: &Path,
-    verified_through: Option<u64>,
-) -> Result<BTreeMap<String, SessionApiCounts>> {
-    let patterns = ApiCatalog::load(&target_root.join(api_catalog::PATH))?
-        .unwrap_or_default()
-        .case_paths();
-    project_counts(
-        traffic_recording_store::session::read(recording_root)?,
-        &patterns,
-        verified_through,
-    )
-}
-
-fn project_counts(
-    events: impl IntoIterator<Item = RecordedEvent<SessionEvent>>,
-    patterns: &[String],
-    verified_through: Option<u64>,
-) -> Result<BTreeMap<String, SessionApiCounts>> {
-    let mut apis = BTreeMap::<_, SessionApiCounts>::new();
-    let mut primary = HashMap::new();
-    for row in events {
-        match row.event {
-            SessionEvent::PrimaryRequest { exchange, request }
-                if request["_session_probe"] != true =>
-            {
-                let method = request["method"]
-                    .as_str()
-                    .context("missing primary HTTP method")?;
-                let uri = request["uri"]
-                    .as_str()
-                    .context("missing primary HTTP URI")?;
-                let uri: hyper::Uri = uri.parse().context("invalid recorded primary HTTP URI")?;
-                let path = uri.path();
-                let selector = patterns
-                    .iter()
-                    .find(|pattern| matches_path_pattern(pattern, path))
-                    .map_or(path, String::as_str);
-                let api = format!("{method} {selector}");
-                apis.entry(api.clone()).or_default().recorded += 1;
-                primary.insert(exchange, api);
-            }
-            SessionEvent::PrimaryResponseEnd { exchange }
-            | SessionEvent::PrimaryCancel { exchange, .. }
-                if verified_through.is_some_and(|verified| row.sequence <= verified) =>
-            {
-                if let Some(api) = primary.remove(&exchange) {
-                    apis.get_mut(&api).expect("recorded API exists").verified += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(apis)
 }
 
 /// A complete, strictly matched session contributes one logical regression.
@@ -148,46 +83,12 @@ pub fn publish_passed_progress(
 mod tests {
     use std::fs;
 
-    use serde_json::json;
     use traffic_model::recording::{
         COMPACT_RECORDING_SCHEMA, MANIFEST_FILE, RecordingManifest, SourceArtifactIdentity,
     };
     use uuid::Uuid;
 
     use super::*;
-
-    #[test]
-    fn pending_exchanges_and_readiness_probes_do_not_pass_as_apis() {
-        let (probe, first, second) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let events = [
-            SessionEvent::PrimaryRequest {
-                exchange: probe,
-                request: json!({"method":"GET", "uri":"/api/ready", "_session_probe":true}),
-            },
-            SessionEvent::PrimaryRequest {
-                exchange: first,
-                request: json!({"method":"GET", "uri":"/api/items/1?view=summary"}),
-            },
-            SessionEvent::PrimaryRequest {
-                exchange: second,
-                request: json!({"method":"GET", "uri":"/api/items/2"}),
-            },
-            SessionEvent::PrimaryResponseEnd { exchange: first },
-            SessionEvent::PrimaryResponseEnd { exchange: probe },
-            SessionEvent::PrimaryResponseEnd { exchange: second },
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, event)| RecordedEvent {
-            sequence: index as u64 + 1,
-            offset_micros: 0,
-            event,
-        });
-        let counts = project_counts(events, &["/api/items/*".into()], Some(5)).unwrap();
-        assert_eq!(counts.len(), 1);
-        assert_eq!(counts["GET /api/items/*"].recorded, 2);
-        assert_eq!(counts["GET /api/items/*"].verified, 1);
-    }
 
     #[tokio::test]
     async fn a_passing_recording_is_counted_once_across_retries_and_legacy_epochs() {

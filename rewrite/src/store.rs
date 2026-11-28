@@ -44,8 +44,6 @@ impl RewriteStore {
             super::group_replay::refresh(state);
             super::implementer::refresh(state)?;
             super::dependency_review::refresh_receipts(&self.target_root, state)?;
-        } else {
-            super::regression_scope::validate_uninitialized(&self.target_root)?;
         }
         Ok(state)
     }

@@ -20,28 +20,6 @@ pub struct RequestMetadataRule {
     pub path: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub json_ipv4: Vec<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub traceparent: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub accept_encoding: Option<ContentCoding>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentCoding {
-    Gzip,
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
-}
-
-impl ContentCoding {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Gzip => "gzip",
-        }
-    }
 }
 
 pub fn validate_rules(rules: &[RequestMetadataRule]) -> Result<()> {
@@ -64,7 +42,7 @@ pub fn validate_rules(rules: &[RequestMetadataRule]) -> Result<()> {
             "HTTP request metadata requires a unique exact route"
         );
         ensure!(
-            !rule.json_ipv4.is_empty() || rule.traceparent || rule.accept_encoding.is_some(),
+            !rule.json_ipv4.is_empty(),
             "HTTP request metadata requires a selected location"
         );
         ensure!(
@@ -83,9 +61,8 @@ pub fn validate_rules(rules: &[RequestMetadataRule]) -> Result<()> {
     Ok(())
 }
 
-/// Apply a declared metadata view to Source only when its finite response
-/// proves this representation is replayable. Target still supplies its raw
-/// form first, so an ordinary Source exchange always compares strictly.
+/// Apply the declared metadata view to a finite, successful HTTPS exchange.
+/// Target also supplies its ordinary request projection.
 pub fn request(
     rules: &[RequestMetadataRule],
     endpoint: &Endpoint,
@@ -113,7 +90,7 @@ pub fn request(
     }) else {
         return Ok(raw);
     };
-    if source.is_some_and(|source| !eligible_source(source, rule)) {
+    if rule.json_ipv4.is_empty() || source.is_some_and(|source| !eligible_source(source)) {
         return Ok(raw);
     }
     let Some(projection) = metadata_projection(http, rule)? else {
@@ -129,30 +106,13 @@ pub fn request(
     Ok(Arc::new(TargetRequest { raw, equivalent }))
 }
 
-fn eligible_source(record: &Value, rule: &RequestMetadataRule) -> bool {
-    let Some(scheme) = record["scheme"].as_str() else {
-        return false;
-    };
-    if !HttpScheme::from_recorded(scheme).is_ok_and(|scheme| scheme == HttpScheme::Https)
-        || !record["response_stream"].is_null()
-        || !record["response_status"]
+fn eligible_source(record: &Value) -> bool {
+    record["scheme"].as_str().is_some_and(|scheme| {
+        HttpScheme::from_recorded(scheme).is_ok_and(|scheme| scheme == HttpScheme::Https)
+    }) && record["response_stream"].is_null()
+        && record["response_status"]
             .as_u64()
             .is_some_and(|status| (200..300).contains(&status))
-    {
-        return false;
-    }
-    let Some(coding) = rule.accept_encoding else {
-        return true;
-    };
-    let Ok(headers) =
-        serde_json::from_value::<headers::HeaderSnapshot>(record["response_headers"].clone())
-    else {
-        return false;
-    };
-    let headers = headers::normalized(&headers);
-    !headers.contains_key("vary")
-        && single_header(&headers, "content-encoding")
-            .is_some_and(|value| value.eq_ignore_ascii_case(coding.name()))
 }
 
 fn metadata_projection(
@@ -160,83 +120,41 @@ fn metadata_projection(
     rule: &RequestMetadataRule,
 ) -> Result<Option<ProjectedMessage>> {
     let headers = headers::normalized(&request.headers);
-    if !single_header(&headers, "host").is_some_and(|host| host == rule.host) {
+    if !single_header(&headers, "host").is_some_and(|host| host == rule.host)
+        || single_header(&headers, "content-type") != Some("application/json")
+        || [
+            "content-md5",
+            "digest",
+            "content-digest",
+            "repr-digest",
+            "signature",
+            "signature-input",
+        ]
+        .iter()
+        .any(|name| headers.contains_key(*name))
+    {
         return Ok(None);
     }
-    let mut projection = request.project()?;
-    if !rule.json_ipv4.is_empty() {
-        if single_header(&headers, "content-type") != Some("application/json")
-            || [
-                "content-md5",
-                "digest",
-                "content-digest",
-                "repr-digest",
-                "signature",
-                "signature-input",
-            ]
-            .iter()
-            .any(|name| headers.contains_key(*name))
-        {
-            return Ok(None);
-        }
-        let Some(body) = traffic_codec_json::parse(&request.body) else {
+    let Some(body) = traffic_codec_json::parse(&request.body) else {
+        return Ok(None);
+    };
+    let mut body = serde_json::to_value(body)?;
+    for pointer in &rule.json_ipv4 {
+        let Some(value) = body
+            .pointer_mut(pointer)
+            .filter(|value| value.as_str().is_some_and(local_ipv4))
+        else {
             return Ok(None);
         };
-        let mut body = serde_json::to_value(body)?;
-        for pointer in &rule.json_ipv4 {
-            let Some(value) = body
-                .pointer_mut(pointer)
-                .filter(|value| value.as_str().is_some_and(local_ipv4))
-            else {
-                return Ok(None);
-            };
-            *value = Value::String("local IPv4 address".to_owned());
-        }
-        projection.values.insert(
-            "/body".to_owned(),
-            ProjectedValue::bytes(traffic_codec_json::canonical(&body)),
-        );
+        *value = Value::String("local IPv4 address".to_owned());
     }
-    if rule.traceparent
-        && let Some(trace) = headers.get("traceparent")
-    {
-        if !matches!(trace.as_slice(), [value] if valid_traceparent(value)) {
-            return Ok(None);
-        }
-        projection.structure["headers"]
-            .as_object_mut()
-            .expect("HTTP projected headers")
-            .remove("traceparent");
-        projection.values.remove("/headers/traceparent/0");
-    }
-    if let Some(coding) = rule.accept_encoding {
-        if !single_header(&headers, "accept-encoding")
-            .is_some_and(|value| accepts_coding(value, coding))
-        {
-            return Ok(None);
-        }
-        projection.values.insert(
-            "/headers/accept-encoding/0".to_owned(),
-            ProjectedValue::bytes(coding.name()),
-        );
-    }
+    let mut projection = request.project()?;
+    projection.values.insert(
+        "/body".to_owned(),
+        ProjectedValue::bytes(traffic_codec_json::canonical(&body)),
+    );
     projection.structure["finite_http_request_metadata"] = Value::Bool(true);
     Ok(Some(projection))
-}
-
-fn accepts_coding(value: &str, coding: ContentCoding) -> bool {
-    let mut seen = BTreeSet::new();
-    for offered in value.split(',') {
-        let offered = offered.trim().to_ascii_lowercase();
-        if !matches!(
-            offered.as_str(),
-            "br" | "deflate" | "gzip" | "identity" | "zstd"
-        ) || !seen.insert(offered)
-        {
-            return false;
-        }
-    }
-    seen.contains(coding.name())
 }
 
 fn single_header<'a>(headers: &'a headers::HeaderSnapshot, name: &str) -> Option<&'a str> {
@@ -252,29 +170,16 @@ fn local_ipv4(value: &str) -> bool {
         .is_ok_and(|addr| !addr.is_unspecified() && !addr.is_broadcast() && !addr.is_multicast())
 }
 
-fn valid_traceparent(value: &str) -> bool {
-    let mut fields = value.split('-');
-    let valid_hex = |value: &str, length| {
-        value.len() == length
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    };
-    let valid_id =
-        |value: &str, length| valid_hex(value, length) && value.bytes().any(|byte| byte != b'0');
-    fields.next() == Some("00")
-        && fields.next().is_some_and(|value| valid_id(value, 32))
-        && fields.next().is_some_and(|value| valid_id(value, 16))
-        && fields.next().is_some_and(|value| valid_hex(value, 2))
-        && fields.next().is_none()
-}
-
 struct MetadataRequest {
     projection: ProjectedMessage,
     raw: Arc<dyn ProtocolMessage>,
 }
 
 impl ProtocolMessage for MetadataRequest {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn project(&self) -> Result<ProjectedMessage> {
         Ok(ProjectedMessage {
             structure: self.projection.structure.clone(),
@@ -310,6 +215,20 @@ pub(crate) fn tls_target_request(raw: Arc<dyn ProtocolMessage>) -> Arc<dyn Proto
 
 struct TlsRequest {
     raw: Arc<dyn ProtocolMessage>,
+}
+
+/// The HTTP values stored underneath an optional transport or metadata view.
+pub(crate) fn wire_request(mut raw: &dyn ProtocolMessage) -> Option<&RequestMessage> {
+    loop {
+        let message = raw.as_any()?;
+        if let Some(tls) = message.downcast_ref::<TlsRequest>() {
+            raw = tls.raw.as_ref();
+        } else if let Some(metadata) = message.downcast_ref::<MetadataRequest>() {
+            raw = metadata.raw.as_ref();
+        } else {
+            return message.downcast_ref::<RequestMessage>();
+        }
+    }
 }
 
 impl ProtocolMessage for TlsRequest {

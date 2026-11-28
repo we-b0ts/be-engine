@@ -317,18 +317,30 @@ pub fn expand(
     let Some(document) = document else {
         return Ok((None, vec![]));
     };
+    let entry_count = document.requests.len() + document.response_rewrite.len();
     ensure!(
-        document.requests.len() + document.response_rewrite.len() <= 4096,
+        entry_count <= 4096,
         "HTTP requests and response rewrites exceed 4096 entries"
     );
+    let mut request_sigv4 = Vec::new();
+    let mut entries = Vec::with_capacity(entry_count);
+    for request in document.requests {
+        match request {
+            RequestDeclaration::PathIdentity(path) => entries.push(Request::from(path)),
+            RequestDeclaration::SigV4(rule) => request_sigv4.push(rule),
+        }
+    }
+    entries.extend(document.response_rewrite.into_iter().map(Request::from));
     let http = if document.headers.is_some()
         || !document.request_metadata.is_empty()
-        || document.requests.is_empty() && document.response_rewrite.is_empty()
+        || !request_sigv4.is_empty()
+        || entry_count == 0
     {
         Some(
             HttpPolicy {
                 headers: document.headers.unwrap_or_default(),
                 request_metadata: document.request_metadata,
+                request_sigv4,
             }
             .compile(context)?,
         )
@@ -336,12 +348,7 @@ pub fn expand(
         None
     };
     let mut positions = BTreeSet::new();
-    let mut rules = Vec::with_capacity(document.requests.len() + document.response_rewrite.len());
-    let entries = document
-        .requests
-        .into_iter()
-        .map(Request::from)
-        .chain(document.response_rewrite.into_iter().map(Request::from));
+    let mut rules = Vec::with_capacity(entries.len());
     for entry in entries {
         ensure!(
             positions.insert(position(&entry)?),

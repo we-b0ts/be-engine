@@ -158,7 +158,7 @@ pub fn report_scope(
                 .handoff_id
                 .as_deref()
                 .context("integration requires a handoff id")?;
-            let mut scopes = active_scopes.iter().cloned().filter(|scope| {
+            let mut scopes = active_scopes.iter().filter(|scope| {
                 observation(state, scope).is_some_and(|o| o.handoff_id.as_deref() == Some(handoff))
             });
             let scope = scopes
@@ -168,7 +168,7 @@ pub fn report_scope(
                 scopes.next().is_none(),
                 "handoff identifies multiple API deliveries"
             );
-            scope
+            scope.clone()
         }
     } else {
         let scopes = if runtime_observation {

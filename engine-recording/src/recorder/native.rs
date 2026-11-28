@@ -218,6 +218,33 @@ impl CaptureOutput for Output {
     }
 }
 
+struct StagedOutput {
+    receipt: Option<super::ledger::OutputReservation>,
+    capture: super::ledger::CaptureReservation,
+}
+
+impl CaptureOutput for StagedOutput {
+    fn commit(mut self: Box<Self>) {
+        if let Some(receipt) = self.receipt.take() {
+            receipt.commit();
+        }
+    }
+
+    fn cancel_unwritten_notification(mut self: Box<Self>) -> Result<()> {
+        self.capture.cancel_unwritten_notification()?;
+        drop(self.receipt.take());
+        Ok(())
+    }
+}
+
+impl Drop for StagedOutput {
+    fn drop(&mut self) {
+        if self.receipt.is_some() {
+            self.capture.delivery_failed();
+        }
+    }
+}
+
 impl CaptureExchange for Exchange {
     fn dependency_id(&self) -> Option<u64> {
         self.targets
@@ -235,6 +262,36 @@ impl CaptureExchange for Exchange {
             .prepare_output(output)
             .context("native response has no active capture reservation")?;
         Ok(Box::new(Output(reservation)))
+    }
+
+    fn supports_staged_output(&self) -> bool {
+        self.state.session_events()
+    }
+
+    fn stage_output(
+        self: Box<Self>,
+        event: CaptureSnapshot,
+        output: traffic_model::trace::OutputKind,
+    ) -> NativeFuture<'static, Box<dyn CaptureOutput>> {
+        Box::pin(async move {
+            anyhow::ensure!(
+                self.supports_staged_output(),
+                "staged output requires Session capture"
+            );
+            let capture = self
+                .targets
+                .capture
+                .clone()
+                .context("staged output has no capture")?;
+            self.complete(event).await?;
+            let receipt = capture
+                .prepare_output(output)
+                .context("staged output has no receipt")?;
+            Ok(Box::new(StagedOutput {
+                receipt: Some(receipt),
+                capture,
+            }) as Box<dyn CaptureOutput>)
+        })
     }
 
     fn complete(self: Box<Self>, event: CaptureSnapshot) -> NativeFuture<'static, ()> {

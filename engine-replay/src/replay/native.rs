@@ -9,6 +9,8 @@ use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
 pub mod diagnosis;
 mod global_report;
+mod http_request_auth;
+mod http_request_time;
 mod redis_storage;
 mod report;
 pub mod request;
@@ -36,6 +38,7 @@ pub struct Inventory {
     redis_storage: redis_storage::Storage,
     prepare_redis_storage: bool,
     pub(crate) event_session: bool,
+    streaming_session: bool,
     event_session_exclusions: BTreeMap<u64, DriverPreludeExclusion>,
 }
 
@@ -44,6 +47,11 @@ pub struct DriverPreludeExclusion {
     pub sequence: u64,
     pub reference: ProtocolRef,
     pub proof: DriverPrelude,
+}
+
+enum StoredExchange {
+    Request(crate::dependency_index::RecordRef),
+    Emission(crate::dependency_index::RecordRef),
 }
 
 impl Inventory {
@@ -66,6 +74,7 @@ impl Inventory {
             redis_storage: Default::default(),
             prepare_redis_storage: true,
             event_session: false,
+            streaming_session: false,
             event_session_exclusions: BTreeMap::new(),
         }
     }
@@ -85,15 +94,24 @@ impl Inventory {
         self.event_session_request_projection.clone()
     }
 
+    pub fn configure_streaming_contracts(
+        &mut self,
+        contracts: Arc<dyn policy::ValueRuleHost>,
+    ) -> Result<()> {
+        ensure!(
+            self.event_session && self.core.exchanges.is_empty(),
+            "streaming contracts must be configured before the first Session dependency"
+        );
+        self.contracts = contracts;
+        self.streaming_session = true;
+        Ok(())
+    }
+
     pub fn event_session_exclusions(&self) -> &BTreeMap<u64, DriverPreludeExclusion> {
         &self.event_session_exclusions
     }
 
-    pub(crate) fn exclude_driver_prelude(
-        &mut self,
-        event: &Value,
-        proof: DriverPrelude,
-    ) -> Result<()> {
+    pub fn exclude_driver_prelude(&mut self, event: &Value, proof: DriverPrelude) -> Result<()> {
         let capture: CaptureMetadata = serde_json::from_value(event["capture"].clone())?;
         ensure!(
             self.event_session && capture.semantic_required && capture.sequence > 0,
@@ -117,9 +135,10 @@ impl Inventory {
     /// Select the storage path once, before loading Source dependencies.
     pub fn configure_storage_preparation(&mut self, policy: Option<&dyn policy::ValueRuleHost>) {
         let redis = self.providers.bindings().for_protocol("redis");
-        self.prepare_redis_storage = !redis.request.is_empty()
-            || !redis.response.is_empty()
-            || policy.is_some_and(policy::ValueRuleHost::may_bind_native_documents);
+        self.prepare_redis_storage = !self.event_session
+            && (!redis.request.is_empty()
+                || !redis.response.is_empty()
+                || policy.is_some_and(policy::ValueRuleHost::may_bind_native_documents));
     }
 
     pub fn register(
@@ -180,8 +199,38 @@ impl Inventory {
             reference.location.line,
             targets,
             secrets,
-            Some(reference),
+            Some(StoredExchange::Emission(reference)),
             None,
+        )
+    }
+
+    pub fn register_stored_request(
+        &mut self,
+        metadata: &Value,
+        source: ReplaySource,
+        targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+        reference: crate::dependency_index::RecordRef,
+        secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
+        step: Option<ReplaySessionStep>,
+    ) -> Result<bool> {
+        if !self
+            .providers
+            .event_provider(metadata)
+            .and_then(|entry| entry.provider.native_protocol())
+            .is_some_and(|protocol| protocol.defers_recorded_response())
+        {
+            return Ok(false);
+        }
+        let request = reference.load_request()?;
+        self.register_source(
+            &request,
+            source,
+            None,
+            reference.location.line,
+            targets,
+            secrets,
+            Some(StoredExchange::Request(reference)),
+            step,
         )
     }
 
@@ -194,7 +243,7 @@ impl Inventory {
         position: usize,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         secrets: &dyn traffic_protocol::evidence::EvidenceSecrets,
-        stored: Option<crate::dependency_index::RecordRef>,
+        stored: Option<StoredExchange>,
         session_step: Option<ReplaySessionStep>,
     ) -> Result<bool> {
         let Some(entry) = self.providers.event_provider(event) else {
@@ -211,19 +260,35 @@ impl Inventory {
             );
             return Ok(false);
         };
-        let exchange = if let Some(reference) = stored {
-            let response = Arc::new(stored::Response {
-                reference,
-                providers: self.providers.clone(),
-                protocol: entry.kind,
-                structure: native.recorded_emission_structure(event),
-            });
-            let Some(exchange) = native.recorded_emission(event, response)? else {
-                return Ok(false);
-            };
-            Some(exchange)
-        } else {
-            native.recorded_exchange_with_secrets(event, secrets)?
+        let exchange = match stored {
+            Some(StoredExchange::Emission(reference)) => {
+                let Some(exchange) = native.recorded_emission(
+                    event,
+                    Arc::new(stored::Response {
+                        reference,
+                        providers: self.providers.clone(),
+                        protocol: entry.kind,
+                        structure: native.recorded_emission_structure(event),
+                    }),
+                )?
+                else {
+                    return Ok(false);
+                };
+                Some(exchange)
+            }
+            Some(StoredExchange::Request(reference)) => {
+                Some(native.recorded_request_with_stored_response(
+                    event,
+                    Arc::new(stored::Response {
+                        reference,
+                        providers: self.providers.clone(),
+                        protocol: entry.kind,
+                        structure: None,
+                    }),
+                )?)
+            }
+            None if self.event_session => native.recorded_session_exchange(event, secrets)?,
+            None => native.recorded_exchange_with_secrets(event, secrets)?,
         };
         let Some(mut exchange) = exchange else {
             ensure!(
@@ -252,7 +317,9 @@ impl Inventory {
                 capture.exchange_id,
                 capture.effect_index,
             );
-            if let Some(previous) = self.recorded.get(&key) {
+            if !self.streaming_session
+                && let Some(previous) = self.recorded.get(&key)
+            {
                 ensure!(
                     *previous == crate::policy_evidence::digest(&serde_json::to_vec(event)?),
                     "native Source capture changed between registrations"
@@ -321,13 +388,7 @@ impl Inventory {
             )?;
         }
         let prepared = self
-            .prepared_messages(
-                &exchange,
-                case,
-                capture.as_ref(),
-                self.contracts.as_ref(),
-                None,
-            )
+            .prepared_messages(&exchange, case, capture.as_ref(), self.contracts.as_ref())
             .with_context(|| match &capture {
                 Some(capture) => format!(
                     "prepare Source {} contracts at sequence {}",
@@ -336,8 +397,12 @@ impl Inventory {
                 ),
                 None => format!("prepare Source {} contracts", protocol.as_str()),
             })?;
-        let rules = self.providers.bindings().for_protocol(protocol.as_str());
-        let index = self.core.register(
+        let delivery = self
+            .providers
+            .bindings()
+            .for_protocol(protocol.as_str())
+            .rebase_time;
+        let index = self.core.register_prepared(
             protocol.id(),
             exchange,
             SourceContext {
@@ -346,10 +411,9 @@ impl Inventory {
                 position: u64::try_from(position)?,
                 capture: capture.clone(),
             },
-            crate::value_extensions::replay_rules(rules),
+            delivery,
+            prepared,
         )?;
-        self.core.exchanges[index].request = prepared.0;
-        self.core.exchanges[index].response = prepared.1;
         self.core.set_session_step(index, session_step);
         if self.prepare_redis_storage {
             self.redis_storage
@@ -367,6 +431,9 @@ impl Inventory {
         event: &Value,
         index: Option<usize>,
     ) -> Result<()> {
+        if self.streaming_session {
+            return Ok(());
+        }
         if let Some(case) = case
             && let Some(capture) = &capture
         {
@@ -393,7 +460,6 @@ impl Inventory {
         case: Option<&str>,
         capture: Option<&CaptureMetadata>,
         contracts: &dyn policy::ValueRuleHost,
-        loaded_response: Option<&dyn traffic_protocol::message::MessageEncoder>,
     ) -> Result<(
         Option<traffic_policy_value::PreparedMessage>,
         Option<traffic_policy_value::PreparedMessage>,
@@ -407,70 +473,84 @@ impl Inventory {
         let (request_bindings, request_policy) =
             match contracts.native_request_bindings(exchange)? {
                 Some(bindings) => (bindings, None),
-                None => (rules.request, contracts.document_policy(clocks)),
+                None => {
+                    let mut bindings = rules.request;
+                    if let Some(request) = exchange.request() {
+                        bindings.extend(contracts.additional_request_bindings(request)?);
+                        bindings.extend(http_request_time::binding(request, clocks, &bindings)?);
+                    }
+                    (bindings, contracts.document_policy(clocks))
+                }
             };
-        let response_clocks = stored::response_policy_clocks(clocks, delivered);
-        let response_policy = contracts.document_policy(response_clocks);
-        let response = loaded_response.or_else(|| {
-            exchange
-                .response
-                .stored()
-                .is_none()
-                .then_some(exchange.response.as_ref())
-        });
-        let prepared = (
-            exchange
-                .request()
-                .map(|request| {
-                    crate::value_extensions::prepare_message_with_policy(
-                        request,
-                        &request_bindings,
-                        request_policy,
-                    )
-                })
-                .transpose()?,
-            response
-                .map(|response| {
-                    crate::value_extensions::prepare_message_with_policy(
-                        response,
-                        &rules.response,
-                        response_policy,
-                    )
-                })
-                .transpose()?,
-        );
+        let response = exchange
+            .response
+            .stored()
+            .is_none()
+            .then_some(exchange.response.as_ref());
+        let prepared_request = exchange
+            .request()
+            .map(|request| -> Result<_> {
+                let prepared = crate::value_extensions::prepare_message_with_policy(
+                    request,
+                    &request_bindings,
+                    request_policy,
+                )?;
+                if matches!(exchange.reference.protocol(), "http" | "https") {
+                    Ok(prepared.with_request_fallback(http_request_auth::Fallback(
+                        contracts.native_request_auth().unwrap_or_default(),
+                    )))
+                } else {
+                    Ok(prepared)
+                }
+            })
+            .transpose()?;
         let source_clocks = stored::comparison_clocks(clocks);
-        let request = prepared
-            .0
+        let request = prepared_request
             .as_ref()
-            .zip(exchange.request())
-            .map(|(prepared, request)| {
-                prepared.compare(request, source_clocks, contracts.metadata())
-            })
-            .transpose()?;
-        let mut response_clocks = source_clocks;
-        response_clocks.observation = Some(source_clocks.delivery);
-        let response = prepared
-            .1
-            .as_ref()
-            .zip(response)
-            .map(|(prepared, response)| {
-                prepared.compare(response, response_clocks, contracts.metadata())
-            })
-            .transpose()?;
+            .map(|prepared| prepared.compare_source(source_clocks, contracts.metadata()));
         ensure!(
-            request.as_ref().is_none_or(|request| request.passed())
-                && response.as_ref().is_none_or(|response| response.passed()),
-            "Source projected value contract failed: request={:?}, response={:?}",
+            request.as_ref().is_none_or(|request| request.passed()),
+            "Source projected request contract failed: {:?}",
             request.as_ref().map(|request| &request.differences),
-            response.as_ref().map(|response| &response.differences)
         );
         if let Some(request) = &request {
             contracts.observe_source_comparison(request);
         }
-        if let Some(response) = &response {
-            contracts.observe_source_comparison(response);
-        }
+        let prepared_response = response
+            .map(|response| {
+                self.prepare_response_message(exchange, clocks, delivered, response, contracts)
+            })
+            .transpose()?;
+        Ok((prepared_request, prepared_response))
+    }
+
+    fn prepare_response_message(
+        &self,
+        exchange: &traffic_protocol::connection::RecordedExchange,
+        clocks: traffic_contract::compare::AnchorClocks,
+        delivered: Option<DateTime<Utc>>,
+        response: &dyn traffic_protocol::message::MessageEncoder,
+        contracts: &dyn policy::ValueRuleHost,
+    ) -> Result<traffic_policy_value::PreparedMessage> {
+        let policy = contracts.document_policy(stored::response_policy_clocks(clocks, delivered));
+        let rules = self
+            .providers
+            .bindings()
+            .for_protocol(exchange.reference.protocol());
+        let prepared = crate::value_extensions::prepare_message_with_policy(
+            response,
+            &rules.response,
+            policy,
+        )?;
+        let mut clocks = stored::comparison_clocks(clocks);
+        clocks.observation = Some(clocks.delivery);
+        let comparison = prepared.compare_source(clocks, contracts.metadata());
+        ensure!(
+            comparison.passed(),
+            "Source projected response contract failed: {:?}",
+            comparison.differences
+        );
+        contracts.observe_source_comparison(&comparison);
         Ok(prepared)
     }
 
@@ -485,7 +565,6 @@ impl Inventory {
                     exchange.source.case_id.as_deref(),
                     exchange.source.capture.as_ref(),
                     contracts.as_ref(),
-                    None,
                 )
             })
             .collect::<Result<Vec<_>>>()?;
@@ -577,6 +656,21 @@ impl Inventory {
         );
         self.contracts
             .configure_session_identities(Self::EVENT_SESSION_VALUE_SCOPE, dependency_count)
+    }
+
+    pub fn commit_session_response_identities(
+        &self,
+        pairs: &[traffic_contract::identity::IdentityPair],
+    ) -> Result<()> {
+        ensure!(
+            self.event_session,
+            "session response identities require event Session Replay"
+        );
+        let identity =
+            self.contracts
+                .preview_identity_pairs(Self::EVENT_SESSION_VALUE_SCOPE, pairs, false)?;
+        self.contracts
+            .commit_comparison(Default::default(), identity)
     }
 
     pub fn scope(&self, index: usize) -> String {

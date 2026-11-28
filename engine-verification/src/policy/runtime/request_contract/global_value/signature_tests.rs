@@ -37,6 +37,7 @@ json:
             "default".into(),
             SignatureDefinition::Jwt {
                 algorithm: SignatureAlgorithm::HS256,
+                infer: false,
                 key: StartupKey::TargetEnv {
                     name: "JWT_TEST_KEY".into(),
                 },

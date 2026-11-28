@@ -1,11 +1,14 @@
 //! One frozen timeline for dependency providers and the primary input driver.
+mod locations;
 pub(super) mod prefetch;
+pub(super) mod streaming;
 #[cfg(test)]
 mod tests;
 
 use super::*;
 use std::time::Duration;
 use tokio::time::Instant;
+use traffic_contract::identity::IdentityPair;
 use traffic_recording_store::{
     session::PrimaryEventKind,
     session_timeline::{self, SessionTimelineEvent},
@@ -21,6 +24,7 @@ pub(super) struct Session {
     pub(super) runtime: Arc<SequenceRuntime>,
     pub(super) no_progress_timeout: Duration,
     pub(super) prefetch: Option<Arc<prefetch::Responses>>,
+    pub(super) stream_task: Option<tokio::task::AbortHandle>,
     first_failure: Option<Failure>,
 }
 
@@ -55,6 +59,7 @@ impl Session {
             runtime,
             no_progress_timeout,
             prefetch: None,
+            stream_task: None,
             first_failure: None,
         }
     }
@@ -87,6 +92,9 @@ impl Session {
     }
 
     pub(super) fn stop_prefetch(&mut self) {
+        if let Some(task) = self.stream_task.take() {
+            task.abort();
+        }
         if let Some(prefetch) = self.prefetch.take() {
             prefetch.close();
         }
@@ -101,6 +109,26 @@ impl Session {
                 .map(|failure| failure.reason.as_str())
         });
         serde_json::json!({"ok": error.is_none(), "error": error, "session_events": report})
+    }
+}
+
+fn driver_event(event: traffic_model::trace::RecordedEvent<PrimaryEventKind>) -> SourceEvent {
+    SourceEvent {
+        sequence: event.sequence,
+        dependency_sequence: 0,
+        offset_micros: event.offset_micros,
+        kind: match event.event {
+            PrimaryEventKind::SourceStart => EventKind::SessionSourceStart,
+            PrimaryEventKind::Ready => EventKind::SessionReady,
+            PrimaryEventKind::Stop => EventKind::SessionStop,
+            PrimaryEventKind::SourceExit => EventKind::SessionSourceExit,
+            PrimaryEventKind::PrimaryRequest => EventKind::PrimaryRequest,
+            PrimaryEventKind::PrimaryResponseHeaders => EventKind::PrimaryResponseHeaders,
+            PrimaryEventKind::PrimaryResponsePart => EventKind::PrimaryResponsePart,
+            PrimaryEventKind::PrimaryResponseTrailers => EventKind::PrimaryResponseTrailers,
+            PrimaryEventKind::PrimaryResponseEnd => EventKind::PrimaryResponseEnd,
+            PrimaryEventKind::PrimaryCancel => EventKind::PrimaryCancel,
+        },
     }
 }
 
@@ -168,23 +196,7 @@ pub(super) fn plan(
     let events = session_timeline::read(root)?.filter_map(|row| match row {
         Err(error) => Some(Err(error)),
         Ok(SessionTimelineEvent::Primary(event)) => {
-            Some(Ok(SessionPlanEvent::Driver(SourceEvent {
-                sequence: event.sequence,
-                dependency_sequence: 0,
-                offset_micros: event.offset_micros,
-                kind: match event.event {
-                    PrimaryEventKind::SourceStart => EventKind::SessionSourceStart,
-                    PrimaryEventKind::Ready => EventKind::SessionReady,
-                    PrimaryEventKind::Stop => EventKind::SessionStop,
-                    PrimaryEventKind::SourceExit => EventKind::SessionSourceExit,
-                    PrimaryEventKind::PrimaryRequest => EventKind::PrimaryRequest,
-                    PrimaryEventKind::PrimaryResponseHeaders => EventKind::PrimaryResponseHeaders,
-                    PrimaryEventKind::PrimaryResponsePart => EventKind::PrimaryResponsePart,
-                    PrimaryEventKind::PrimaryResponseTrailers => EventKind::PrimaryResponseTrailers,
-                    PrimaryEventKind::PrimaryResponseEnd => EventKind::PrimaryResponseEnd,
-                    PrimaryEventKind::PrimaryCancel => EventKind::PrimaryCancel,
-                },
-            })))
+            Some(Ok(SessionPlanEvent::Driver(driver_event(event))))
         }
         Ok(SessionTimelineEvent::Dependency(event)) => {
             let sequence = event.event.dependency_sequence()?;
@@ -233,8 +245,12 @@ async fn control_result<P: ReplayProtocolSet>(
 ) -> Result<()> {
     let mut locked = state.lock().await;
     ensure!(locked.finalized_at.is_none(), "Replay is already finalized");
-    let session = locked
-        .session_events
+    let RuntimeState {
+        native,
+        session_events,
+        ..
+    } = &mut *locked;
+    let session = session_events
         .as_mut()
         .context("session event Replay is not enabled")?;
     if request.command == "session_status" {
@@ -254,12 +270,31 @@ async fn control_result<P: ReplayProtocolSet>(
         session.fail(Some(sequence), None, reason);
         return Ok(());
     }
-    ensure!(
-        session.runtime.driver_event(sequence).is_some(),
-        "Source sequence {sequence} is not a driver event"
-    );
+    if !session.runtime.is_streaming() {
+        ensure!(
+            session.runtime.driver_event(sequence).is_some(),
+            "Source sequence {sequence} is not a driver event"
+        );
+    }
     if request.command == "session_commit" {
-        if let Err(error) = session.runtime.commit_driver(sequence) {
+        let committed = if let Some(pairs) = request.parameters.get("identity_pairs") {
+            // The driver already asserted the complete response and its formats.
+            let pairs: Vec<IdentityPair> = serde_json::from_value(serde_json::to_value(pairs)?)?;
+            ensure!(
+                pairs.len() <= crate::value_contract::response_constraints::MAX_PAIRS,
+                "response identity constraint bound exceeded"
+            );
+            session.runtime.commit_driver_with(sequence, |event| {
+                ensure!(
+                    event.kind == EventKind::PrimaryResponseEnd,
+                    "response identities require a primary response end"
+                );
+                native.commit_session_response_identities(&pairs)
+            })
+        } else {
+            session.runtime.commit_driver(sequence)
+        };
+        if let Err(error) = committed {
             session.fail(Some(sequence), None, &error.to_string());
         }
         return Ok(());
@@ -280,6 +315,12 @@ async fn control_result<P: ReplayProtocolSet>(
             .is_some_and(|event| event.sequence == sequence)
             && !runtime.event_is_gated(sequence)
         {
+            ensure!(
+                progress
+                    .expected
+                    .is_some_and(|event| event.kind.is_session_driver_event()),
+                "Source sequence {sequence} is not a driver event"
+            );
             if let Some(due) = runtime
                 .driver_due(sequence)
                 .filter(|due| *due > Instant::now())
@@ -292,9 +333,10 @@ async fn control_result<P: ReplayProtocolSet>(
             }
             return Ok(());
         }
-        if progress
-            .expected
-            .is_none_or(|event| event.sequence > sequence)
+        if progress.complete
+            || progress
+                .expected
+                .is_some_and(|event| event.sequence > sequence)
         {
             anyhow::bail!("Source driver sequence {sequence} has already been passed");
         }

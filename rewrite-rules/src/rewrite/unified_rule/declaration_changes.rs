@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::policy::{GlobalField, TrafficPolicy};
 use serde_json::{Map, Value, json};
 
+use super::declarations::http_request_selector;
+
 pub fn summarize(
     before: &TrafficPolicy,
     after: &TrafficPolicy,
@@ -41,8 +43,8 @@ pub fn summarize(
         &mut changes,
         "redis",
         "redis.keys",
-        before.redis.as_ref().map(|policy| &policy.keys),
-        after.redis.as_ref().map(|policy| &policy.keys),
+        before.redis.as_ref().map(redis_entries).as_ref(),
+        after.redis.as_ref().map(redis_entries).as_ref(),
         false,
         replace.contains("redis"),
     );
@@ -52,6 +54,15 @@ pub fn summarize(
         "http.headers",
         before.http.as_ref().map(|policy| &policy.headers),
         after.http.as_ref().map(|policy| &policy.headers),
+        false,
+        replace.contains("http"),
+    );
+    section(
+        &mut changes,
+        "http.requests",
+        "http.requests",
+        http_request_entries(before).as_ref(),
+        http_request_entries(after).as_ref(),
         false,
         replace.contains("http"),
     );
@@ -100,7 +111,58 @@ pub fn summarize(
             mysql_fields(after.mysql.as_ref()),
         );
     }
+    if let Some(change) = changes.get_mut("redis") {
+        let added = added_formats(redis_key_fields(before), redis_key_fields(after));
+        if added.as_object().is_some_and(|formats| !formats.is_empty()) {
+            change["added_key_formats"] = added;
+        }
+    }
     Value::Object(changes)
+}
+
+fn http_request_entries(policy: &TrafficPolicy) -> Option<BTreeMap<String, ()>> {
+    let http = policy
+        .http
+        .as_ref()
+        .filter(|http| !http.request_sigv4.is_empty())?;
+    Some(
+        http.request_sigv4
+            .iter()
+            .map(|rule| {
+                (
+                    http_request_selector(
+                        &rule.host,
+                        rule.method.as_deref(),
+                        rule.path.as_deref(),
+                        rule.query.as_deref(),
+                    ),
+                    (),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn redis_key_fields(policy: &TrafficPolicy) -> BTreeMap<String, &GlobalField> {
+    policy
+        .redis
+        .iter()
+        .flat_map(|redis| &redis.key_identities)
+        .map(|(pattern, field)| (pattern.clone(), field))
+        .collect()
+}
+
+fn redis_entries(
+    policy: &crate::policy::RedisPolicy,
+) -> BTreeMap<String, (Option<&GlobalField>, Option<&GlobalField>)> {
+    let mut entries = BTreeMap::new();
+    for (pattern, field) in &policy.keys {
+        entries.entry(pattern.clone()).or_insert((None, None)).0 = Some(field);
+    }
+    for (pattern, field) in &policy.key_identities {
+        entries.entry(pattern.clone()).or_insert((None, None)).1 = Some(field);
+    }
+    entries
 }
 
 fn mysql_fields(policy: Option<&crate::policy::MysqlPolicy>) -> BTreeMap<String, &GlobalField> {
@@ -202,6 +264,40 @@ mod tests {
 
     fn policy(value: Value) -> TrafficPolicy {
         crate::policy::parse_policy(&value.to_string()).unwrap()
+    }
+
+    #[test]
+    fn reports_sigv4_route_selectors_with_the_exact_query() {
+        let before = policy(json!({"format":"traffic-policy/v3"}));
+        let after = policy(json!({"format":"traffic-policy/v3","http":{"requests":[{
+            "host":"s3.example.test:9100","method":"GET","path":"/wegent-archives",
+            "query":"location=","authorization":{"kind":"aws_sigv4"}
+        }]}}));
+        let changes = summarize(&before, &after, &BTreeSet::new());
+        assert_eq!(
+            changes["http.requests"]["added_entries"],
+            json!(["GET s3.example.test:9100/wegent-archives?location="])
+        );
+    }
+
+    #[test]
+    fn reports_sigv4_host_selection_when_replacing_an_exact_route() {
+        let before = policy(json!({"format":"traffic-policy/v3","http":{"requests":[{
+            "host":"s3.example.test:9100","method":"HEAD","path":"/wegent-archives",
+            "authorization":{"kind":"aws_sigv4"}
+        }]}}));
+        let after = policy(json!({"format":"traffic-policy/v3","http":{"requests":[{
+            "host":"s3.example.test:9100","authorization":{"kind":"aws_sigv4"}
+        }]}}));
+        let changes = summarize(&before, &after, &BTreeSet::from(["http".into()]));
+        assert_eq!(
+            changes["http.requests"]["added_entries"],
+            json!(["s3.example.test:9100"])
+        );
+        assert_eq!(
+            changes["http.requests"]["removed_entries"],
+            json!(["HEAD s3.example.test:9100/wegent-archives"])
+        );
     }
 
     #[test]

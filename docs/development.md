@@ -6,6 +6,18 @@ testing details. Keep `AGENTS.md` as the short navigation map.
 [Source session regression](session-regression.md) covers concurrent recording,
 event-based replay, failure evidence, and publication of API progress.
 
+Use the [traffic policy](replay-policy.md) for generated times, IDs and tokens,
+and [Replay timers](replay-timers.md) for a Target wait tied to a recorded
+sequence. Protocol references cover [MySQL driver behavior](mysql-replay.md)
+and [Redis Pub/Sub](redis-pubsub.md).
+
+<details>
+<summary>Case engine and policy references</summary>
+
+The following pages describe standalone Case behavior, library contracts and
+historical coordinator workflows. The [Source session guide](session-regression.md)
+documents the current migration commands.
+
 Author resource and API output fields once with the current
 [resource-owned field contracts](resource-field-contracts.md). Contextual clock
 relationships and stateful protocol effects retain explicit rules.
@@ -73,6 +85,8 @@ and scheduled-time offsets through explicit `preserve_relative` timestamps.
 string templates, HTTP acquisition/path declarations, shared DOCX fields, API
 encryption/header positions and default multipart comparison.
 
+</details>
+
 ## Rust Tooling
 
 [Protocol and execution contracts](protocol-rule-execution-design.md) describe
@@ -90,15 +104,21 @@ Use the standard Cargo workflow:
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
-plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
+plugins/ai-engine/skills/be-replay/scripts/check-code-organization
 cargo build --bins
 ```
 
 The repository includes `.cargo/config.toml` for the configured crates.io
 mirror. Do not replace that registry configuration unless explicitly asked.
-The build produces sibling `traffic-e2e`, `backend-rewrite`, and
+The build produces sibling `traffic-e2e`, `be-replay`, and
 `backend-rewrite-admin` executables. Keep them together in installed packages
-because detached coordinator actions delegate engine work to `traffic-e2e`.
+so managed Replay can launch the companion `traffic-e2e` binary.
+
+<details>
+<summary>Case engine retry, cleanup and evidence notes</summary>
+
+These notes describe the Case runner and its historical coordinator library.
+
 After an engine build changes, the coordinator permits one fresh Replay per API
 method for a runtime failure or a dependency-only failure with complete Replay
 and all responses passed. Historical attempts without an engine identity also
@@ -131,7 +151,7 @@ review, target quality, worker activity and traffic leases still apply.
 
 On Linux, a running `traffic-e2e` reexecs through `/proc/<pid>/exe`, retaining its
 running inode and engine revision even when its installed executable is replaced.
-Companion resolution also recognizes a replaced `backend-rewrite` executable.
+Companion resolution also recognizes a replaced `be-replay` executable.
 Container bind mounts continue to use installed filesystem paths rather than
 process-specific reexec handles.
 An interrupted focused attempt that failed before Replay readiness has no
@@ -190,13 +210,15 @@ differences remain in the report.
 If actual execution cleanup fails after Replay readiness, the runner stops Target and asks
 Replay to publish an interrupted diagnostic snapshot before stopping its process.
 `replay/control/interruption` seals captured payload observations and writes the
-report plus dependency index; `e2e_run/interrupted_evidence` builds runner-owned
+report plus dependency index; `engine-e2e-run/src/interrupted_evidence` builds runner-owned
 aggregate and executed-case assertion projections. Active ownership, in-flight
 exchanges and pending cases remain visible; `finalized` and aggregate `complete`
 remain false. These artifacts support dirty-cluster, HTTP request, response and
 rule-candidate diagnosis, but cannot anchor rule planning or count as passing
 verification. Missing or failed snapshots remain explicit errors. Response and
 dependency issues also expose bounded target runtime logs for attribution.
+
+</details>
 
 `traffic-e2e record` is built normally and supports optional Redis coordination.
 See [standalone recording](recording.md) for its container contract, direct
@@ -216,6 +238,9 @@ revision in their library version unless an explicit build revision is supplied.
 Verification evidence keeps its committed engine fingerprint.
 
 ## Coordinator decision history
+
+The administrator commands below operate on legacy Case coordinator history.
+For Source session attempts, use [the status query](session-regression.md).
 
 Coordinator state retains current workflow data, active ownership decisions and
 small ordered references to immutable historical decisions. Normal state saves
@@ -252,7 +277,7 @@ recordings and old Replay output; this change does not garbage-collect them.
 ### Engine binary image
 
 `docker/engine/Dockerfile` packages the prebuilt Linux/amd64 `traffic-e2e`,
-`backend-rewrite`, and `backend-rewrite-admin` executables together under
+`be-replay`, and `backend-rewrite-admin` executables together under
 `/usr/local/bin/`. Build the runtime first, then package the engine image:
 
 ```bash
@@ -359,119 +384,24 @@ Cargo builds use the configured package registry.
 
 ## CLI Boundaries
 
-Ordinary implementer delivery and integration do not require source review.
-Implementers own Source-correct logic, build/debug as needed, run focused tests
-for changed modules, format when needed and return committed delivery identities.
-They do not execute Clippy or other lint tools. Those tools belong to later
-consolidated quality work.
+Use `be-replay init` for one-time Target setup and `be-replay startup`
+for Target startup inputs. `status` guides round entry, attempt inspection,
+and verification of the integrated candidate. `run` verifies the bound Source
+recording. `events`, `dependency` and `target` expose bounded evidence and
+protected observations. `plan` records reviewed findings and selects independent
+work. `report` registers fix commits and the published candidate.
+[Source session regression](session-regression.md)
 
-Pooled `implementer handoff --deliveries FILE` accepts entries
-`{api, dispatch_id, lease_generation, handoff_id, delivery_commit}`. The engine
-validates the registered worktree, committed target/managed code, exact dispatch
-and commit ancestry, then freezes a private identity receipt and durable Git ref.
-No source scan, line limit, spawn evidence or repository command runs at handoff.
-Legacy dedicated worker handoff uses `worker report --activity handoff_ready
---handoff-id ID --delivery-commit COMMIT`. Existing review receipts remain
-readable for outstanding deliveries.
+Use `traffic-e2e` for direct traffic operations. `config init` initializes a
+project and `record` runs the Source capture service. Standalone Case
+workflows use `prepare`, `run-api`, `run`, `status`, `recover` and `abort`.
+`traffic-e2e replay --session-events` starts the low-level Replay listener for
+an event recording. The `diagnose` and `target` command groups provide engine
+inspection and target isolation. Repository scripts provide development checks
+and host trust-store tooling.
 
-Integration only merges the assigned accepted commits and resolves actual
-conflicts. It does not review code. A conflict-free merge executes no cargo
-build/test/fmt/clippy, lint or review check. If conflict resolution changes code,
-run tests for the affected modules and format only when needed; Clippy and other
-lint remain prohibited. No full build/test cycle is required for integration.
-The integrator returns the exact candidate commit and original handoff mapping.
-The coordinator publishes that commit and acknowledges each ready handoff with
-`worker report --activity integrated --handoff-id ID --delivery-commit COMMIT`.
-The returned command accepts `BACKEND_REWRITE_DELIVERY_COMMIT`. Admission checks
-identity and exact committed publication without source or repository checks.
-`inventory` exposes frozen `delivery_commit` and `worker_worktree`; do not consume
-a reused implementer checkout's current HEAD. A batch can share one published
-candidate while retaining each handoff's separate identity. Already integrated
-handoffs stay integrated, including after interrupted reporting.
-
-`review check` outside `--pre-revalidation` returns `passed`, explains that no
-check is needed, and captures only identity. It performs no source scans or
-repository checks. Neither implementer nor ordinary integrator needs to invoke
-it. Missing/stale ordinary review receipts do not block focused Replay. Worker
-evidence exposes `assignment` and optional repair findings,
-without a review check command.
-
-When the target is nested in a Git repository, keep `--target-root` at that
-project. Worktree paths may identify the outer Git worktree or project directory.
-`delivery.managed_paths` adds disjoint same-repository siblings; their paths are
-reported relative to target, such as `../backend-rs/src/lib.rs`. Changes outside
-this managed scope are rejected during identity admission.
-
-Only `pre_revalidation_review_required` requests consolidated review. A separate
-final-review assignment executes the configured `delivery.quality_check` and
-required project tests on the final committed candidate, then reports success:
-
-```bash
-backend-rewrite --target-root /absolute/canonical review check \
-  --pre-revalidation --quality-check TOOL --worktree /absolute/integration
-```
-
-This stage scans the whole PR, enforces changed production Rust files <=1000
-complete physical lines, validates startup ownership for added Tokio spawns,
-and checks Source/Replay isolation. Read the
-[Source review contract](../plugins/ai-software-engineering/skills/backend-rewrite/references/source-review-rules.md)
-for syntax scope, test-only exclusions and exact evidence. The engine never
-executes fmt, tests, Clippy or another repository command; the final assignee
-owns tool execution. The configured quality tool defaults to `cargo-clippy`.
-
-If final review splits or otherwise changes code, commit corrections and refresh
-affected checks. Publish the exact passing final candidate and invoke
-`review accept --report ...` to admit it for a complete final revalidation.
-Ordinary identity receipts and earlier API successes cannot prove this changed
-candidate. Final proof binds code, build inputs, policy, inventory and recording;
-relevant changes require fresh proof, while progress-only publication may reuse
-an already admitted matching receipt. A request to stop at ordinary API
-`completed` leaves this stage pending. `review rework` can route final findings
-to their responsible implementer; their repair and ordinary integration still
-submit committed identities without a review-check cycle.
-
-Use `traffic-e2e config ... init` for one-time target configuration and
-`traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
-workflow. Use `traffic-e2e config recorder|replay plan|apply` for
-evidence-driven managed rule changes. Use `traffic-e2e diagnose ...` only for
-recorder development or focused low-level diagnosis. Managed record, replay,
-target isolation, and host interception are implemented in the `traffic-e2e`
-binary.
-Repository scripts are development checks or explicit host trust-store tools
-only.
-
-Use the `backend-rewrite` binary and its `next`, `status`, `inventory`,
-`evidence`, `rule`, `route`, `repair`,
-`config`, and `recover` commands for AI-facing migration orchestration.
-`traffic-e2e` has no
-`rewrite` subcommand; `backend-rewrite` invokes the shared crate directly and
-delegates only engine-owned detached work to its sibling executable.
-
-When explicitly selecting a dynamic API before its first standard recording,
-`next --source-route` requires the complete source route, including every router
-mount prefix. For example, `GET /api/attachments/task/*/all` requires
-`/api/attachments/task/{task_id}/all`, not the local decorator path
-`/task/{task_id}/all`. APIs installed from a completed recording already have a
-confirmed `case_path_pattern`; when no more specific source-route binding exists,
-the coordinator uses that pattern as the route specification instead of stopping
-Replay for duplicate route confirmation. If an older engine saved an invalid
-route, repeat `next --api '/api/attachments/task/*/all' --source-route
-'/api/attachments/task/{task_id}/all'` with the corrected full route. Correction
-is allowed only while the API is pending, with no group or verification history;
-valid bindings remain fixed. Existing recording and workflow progress are retained.
-
-Confirmed dynamic source routes persist independently of recording batches and
-take precedence over the recorded-pattern fallback.
-Ordinary re-recording and recorder-contract refreshes reuse a valid binding for
-the exact API method/pattern, including APIs absent from an intermediate batch.
-Verification results still reset for the new recording. Existing workflow states
-retain their valid routes when their inventory is rebuilt; routes already lost
-by older resets fall back to their confirmed recorded patterns. New uncovered
-paths are handled by repository analysis before inventory installation;
-only an explicitly selected dynamic API without recorded pattern coverage needs
-source-route confirmation. An explicit `source_baseline_changed` external recording requirement
-discards retained source routes while recorded patterns remain usable. Restarting
-the coordinator session does not clear bindings.
+`backend-rewrite-admin` owns explicit repairs and snapshot replacement. Use
+its help for administrator commands.
 
 ## Running Locally
 
@@ -542,7 +472,7 @@ default include scope allows all methods and paths. API selection belongs to ing
 
 Each process creates one run. Stop normally to publish its final manifest. Place
 completed runs and authorized private key access in the target's conventional
-local layout; backend-rewrite consumes them directly and never executes capture.
+local layout; be-replay consumes them directly and never executes capture.
 See [recording.md](recording.md) for the complete deployment and storage contract.
 
 The managed runtime publishes Recorder lifecycle state on a Unix socket and
@@ -1188,33 +1118,36 @@ failures, not product behavior evidence.
 
 ## Migration E2E Runner
 
-Use the rewrite coordinator as the normal AI-facing migration command. It
-keeps engine-managed state under `.traffic-e2e/local/runtime/` and exposes one
-active issue. Coordinator APIs are the primary interface:
+The deployment caller supplies a finalized Source event recording under
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`. Use `status` on the
+configured pull-request base, then start the round with the exact recording
+ID once the caller approves.
 
 ```bash
-backend-rewrite next
-# After recording, select one canonical API route:
-backend-rewrite next --api '/api/widgets/*' \
-  --source-route '/api/widgets/:id'
-backend-rewrite status
-backend-rewrite status --api '/api/widgets/*'
-backend-rewrite inventory
-backend-rewrite evidence --api '/api/widgets/*'
-backend-rewrite repository-analysis context
-backend-rewrite repository-analysis apply <batch-id> --file /absolute/analysis.json
-# Provide finalized external recordings in .traffic-e2e/local/artifacts/recordings/<run-id>/.
-# Optionally select recording_run_id in .traffic-e2e/regression.yaml, then:
-backend-rewrite next
-backend-rewrite repair verify <repair-id>
-BACKEND_REWRITE_SUBAGENT_HANDLE='<replacement-handle>' \
-  backend-rewrite worker transfer --previous-agent-handle '<old-handle>' \
-  --reason 'stored handle is unavailable after session replacement' \
-  --approve-ownership-transfer
-backend-rewrite verification request \
-  --api '/api/widgets/*' \
-  --reason 'shared response mapper changed'
+be-replay --target-root /absolute/target status
+be-replay --target-root /absolute/target run --user-confirm --recording-run-id 20261123161021
+be-replay --target-root /absolute/target status
 ```
+
+The work branch keeps the recording for retries. Use `status --attempt-id UUID`
+to inspect a specific attempt with its recording ID and run key when needed.
+Follow `action.kind` at each step. For `dispatch_task`, start the role named
+in `action.details.task` and register its runtime handle. At `await_delivery`,
+submit the agent's completed artifact for that task and handle. The analyst
+looks up uncatalogued APIs or identifies ownership of a failed event. The
+integrator prepares the candidate for the coordinator to publish. The engine
+issues implementer assignments and verifies the published revision at
+`advance_required`. After a mismatch, the engine finds API work from the
+following 60 seconds of Source time. The assignment's group, worker,
+worktree, and base remain the basis for implementer deliveries.
+[Source session regression](session-regression.md)
+
+<details>
+<summary>Historical Case coordinator and migration API notes</summary>
+
+This archive describes persisted Case records and the former coordinator CLI.
+Its command examples identify historical interfaces. For active migration
+commands, use the Source session workflow above.
 
 Rewrite action schema v35 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
@@ -1375,12 +1308,10 @@ issues. The coordinator does not scan `unverified` to choose work. `inventory`
 expands the English `details.ready` and `details.waiting` breakdown and dedicated
 worker bindings; ready counts sum to `pending`.
 
-New workflows use a bounded, reusable implementer pool. Local
-`.traffic-e2e/regression.yaml` accepts `max_implementers: 16` (default 16, positive
-integer). The workflow freezes this value at creation; editing it affects the
-next workflow, not active slot count or group mapping. `inventory.implementers`
-exposes the effective limit, stable slots/handles, group mappings, queued tasks,
-current API and counts. An API’s recorded methods remain one implementation unit.
+Historical workflows used a bounded, reusable implementer pool. Its capacity
+was frozen at workflow creation. `inventory.implementers` recorded the limit,
+stable slots and handles, group mappings, queued tasks, current API and counts.
+An API's recorded methods remained one implementation unit.
 Action schema 38 adds `repository_analysis_required` and
 `implementer_dispatch_required`; `inventory` also exposes the adopted analysis,
 active group round and last partial/completed group summary. Existing workflows
@@ -1689,112 +1620,21 @@ After status returns
 adopted external run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next validation action.
 
-Regression settings are local to the target repository in
-`.traffic-e2e/regression.yaml`. Initialization generates this file and adds it to `.gitignore` and `.dockerignore`.
-It does not need a commit and is explicitly excluded from code and target
-fingerprints, even if manually tracked. Existing projects without the file use
-all recorded APIs in Case workflows. [Session Replay](session-regression.md)
-uses a fixed zero interval and verifies the full recording on each attempt.
+Historical Case settings selected API filters, replay timing, failed-only
+retries, automatic continuation, and implementer capacity. Existing reports
+may include `diagnosis.case_selection` with available, selected and skipped
+counts. Skipped passes describe scheduling history. Attempt counts describe
+the cases that executed, and partially selected reports carry partial coverage.
 
-```yaml
-# Optional: directly reuse this completed standard recording.
-# recording_run_id: "20260911093000"
-# Fixed implementation slots captured when the next workflow starts.
-max_implementers: 16
-# Optional: continue passing Replay beyond a completed group when selected.
-auto_next: false
-# Skip previously passed cases during repair Replay; final revalidation stays full.
-retry_failed_only: false
-# Optional: cap successful stream input intervals; omitted preserves Source timing.
-# replay_timing: fast
-# Per-interval cap in fast mode, in milliseconds (0 removes artificial waits).
-replay_interval_cap_ms: 5
-# Omitted or empty only selects every API in the recorded inventory.
-only:
-  - "/api/users/*"
-  - "/api/users"
-skip:
-  - "/api/users"
-```
+Standalone managed Case Replay uses recorded stream timing. The direct
+`traffic-e2e replay` command accepts `--stream-timing` and
+`--stream-interval-cap-ms` for stream timing diagnostics. The current managed
+Source workflow verifies the full recording for every attempt.
+[Source session regression](session-regression.md)
 
-Set `retry_failed_only: true` to skip previously passed cases during repair Replay.
-The caller continues using `next`; the engine selects APIs as usual and filters
-their cases internally. The first attempt runs every case. Later attempts retain
-failed, incomplete and unexecuted cases, including cases left by the per-API
-failure limit, and accumulate passed-case skips within the same workflow and
-unchanged Source/API inventory. Final revalidation and standalone `run`/`run-api`
-always execute the full selected API inventory. Only the latest attempt is read:
-if it ran two cases and one passed cleanly, the next repair selects only the
-remaining case. Cases already omitted by that latest selection stay omitted.
-Independently completed clean cases remain eligible even when later session
-cleanup fails. A latest full result without selection metadata
-can supply those outcomes when its complete Source/API inventory matches.
-There is no scan, restoration or separate ledger for older attempts. Missing
-latest evidence starts a full baseline. The setting defaults to false and can be changed
-between attempts without changing target fingerprints.
-
-Set `replay_timing: fast` to shorten artificial input waits for ordinary Case
-Redis Pub/Sub messages and complete successful HTTP dependency streams. Each
-recorded interval becomes `min(recorded interval, replay_interval_cap_ms)`;
-the cap defaults to 5 ms and accepts 0. Pub/Sub includes subscription-to-first-push
-and adjacent push intervals. HTTP includes request-to-headers, headers-to-first-chunk,
-adjacent chunks and final-chunk-to-EOF. Compressed offsets accumulate those
-individual gaps, preserving shorter gaps, payload order, framing and trailers.
-Target processing and dependency calls initiated by Target retain their real
-execution time. Process-owned Pub/Sub and abnormal or interrupted HTTP streams
-retain their existing lifecycle timing.
-
-The same fast setting and interval cap accelerate supported
-[Socket.IO input gaps and completed quiet tails](interaction-recording.md#completion-profiles).
-Managed fast replay caps each Case's execution and dependency wait at 120
-seconds from Case activation. Cleanup retains its own budget after a failure.
-
-`replay_timing: recorded` preserves Source stream timing; omitting it has the same
-behavior. The low-level equivalents are
-`traffic-e2e replay --stream-timing fast --stream-interval-cap-ms 5`.
-These settings reuse existing recordings. Mode and active fast-mode cap are
-bound to executed Replay identity, and changing either requires fresh passing
-evidence and resets previously passed repair-case skips. They remain excluded
-from target and code fingerprints.
-
-Skipped passes are scheduling history, never fresh response or dependency
-evidence. `diagnosis.case_selection` reports available, selected and skipped
-counts; other attempt counts describe only selected cases.
-Backend-rewrite API evidence includes Case counts for the retained method
-attempts. The runner's `case_selection` and the low-level Replay report's
-`mode` describe distinct facts. Missing selection metadata leaves skips
-unknown.
-Existing explicit localcache and cross-case dependency rules still load from the
-complete recording.
-Logical progress keeps the recorded case totals and cannot mark a partially
-selected API fully verified, even when that repair attempt passes.
-Skipping requests can nevertheless change application-local cache warmup or other
-state established by earlier requests. Use full Replay when cases depend on those
-side effects; the engine does not infer or synthesize cache contents.
-
-Set `auto_next: true` to let an unscoped `next` continue after fresh passing
-Replay when the next globally scheduled action is also Replay. During an active
-revalidation round, terminal failures also continue to its remaining members.
-Each step saves its result and releases its workflow lock and Replay lease before
-merging new feedback. A started round drains before worker dispatch, integration,
-repair acceptance or a new round. Outside a round, first-pass discovery and ready
-handoffs retain their existing priorities. Stale Replay, resource recovery,
-review, rule/input handling, waiting and final publication retain their gates.
-Changing `auto_next` to false stops continuation beyond the current group; a
-started group round still drains. Legacy workflows stop after the current step.
-The omitted field defaults to false; its value must be a boolean. Explicit API
-or source-route inputs use single entry selection; pooled group rounds still
-complete before returning to the coordinator. These local settings do not
-invalidate evidence or require a commit.
-
-While an operation runs, ordinary `status` returns `wait_required` unless a
-higher-priority independently executable worker/expert action is ready. Both wait
-and those independent actions expose `details.execution_mode` as `single` or
-`auto_next`; auto-next summaries say `automatically advancing Replay`, and wait
-summaries also include the current Replay phase and progress. The operation remains busy between APIs,
-so another command cannot start a competing Replay or admit an integration.
-Retries retain the mode and the last selected scope, rather than restarting the
-first API in the chain. Legacy operation markers default to single execution.
+Historical operation reports include `details.execution_mode`, Replay phase,
+and progress. A grouped operation retains its lease between APIs and retries
+from the last selected scope. Standalone Case invocations use single execution.
 
 When a route has several methods, selection prefers a pending first attempt or
 a method with precise rule/system-repair Replay admission over an active sibling
@@ -2242,10 +2082,14 @@ invalid, the old case-group index is restored automatically. After a successful
 repair, execute only the exact operation retry returned by `backend-rewrite
 status`.
 
+</details>
+
+## Initialize a Target
+
 Initialize a rewrite target once, before its first coordinator session:
 
 ```bash
-backend-rewrite --target-root ../target init \
+be-replay --target-root ../target init \
   --source-pod <pod> --namespace <namespace> \
   [--pod-container <regular-container>] \
   [--kubeconfig /path/to/kubeconfig] \
@@ -2270,7 +2114,7 @@ the ignored local source snapshot and do not require the Pod.
 Alternatively, initialize from a local Docker container by name or ID:
 
 ```bash
-backend-rewrite --target-root ../target init --source-container <container>
+be-replay --target-root ../target init --source-container <container>
 traffic-e2e config init --target-root ../target --source-container <container>
 ```
 
@@ -2445,22 +2289,6 @@ and pending references). Rule reclassification cannot waive an execution failure
 This setting does not change Recorder/Source runtime timing or the separate
 `dependency_loading.case_timeout_seconds` preparation budget.
 
-`review check` owns the Source/Replay-isolation standard and never executes
-repository quality commands. Outside pre-revalidation it returns success
-without source scans and explains that no check is needed. Configure the final tool identifier
-in `project.delivery.quality_check` (default `cargo-clippy`). At the existing
-`pre_revalidation_review_required` stage, the integrator executes that tool on
-the final committed target and managed projects. Only after success does it
-report `--quality-check TOOL` through `review check --pre-revalidation`. The
-engine matches the tool to canonical configuration and binds the agent's
-attestation to the candidate and inputs; execution remains the agent's
-responsibility. For `cargo-clippy`, use `cargo clippy --workspace --all-targets
--- -D warnings` in each applicable Rust project. Other language tools use their
-project configuration. Formatting and unit tests follow repository instructions
-and the changes being made. The existing publish, accept and full revalidation
-sequence remains unchanged. Repository-specific requirements in `AGENTS.md` or
-`CLAUDE.md` do not replace the engine Source/Replay-isolation standard.
-
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.
 
@@ -2469,8 +2297,8 @@ configuration files exists, the whole initialization refuses without creating
 another configuration file. Existing target source, Dockerfile, and unrelated
 ignore-file rules are preserved. Normal
 execution does not migrate or dual-read obsolete project schemas; migration
-and repair require administrator-owned tooling outside `backend-rewrite`. Use
-`backend-rewrite startup mount ensure <ABSOLUTE_PATH>` to add a path omitted
+and repair require administrator-owned tooling outside `be-replay`. Use
+`be-replay startup mount ensure <ABSOLUTE_PATH>` to add a path omitted
 during initialization. When an administrator intentionally replaces or
 refreshes captured content, recapture the exact declaration and then run
 preflight:
@@ -2515,19 +2343,13 @@ target startup declaration from that new source, and rolls the source snapshot
 back if startup recapture fails. The next managed source run automatically
 rebuilds an adaptor cached for another source image ID.
 
-When the coordinator issued this change through a `source_change` system
-repair, execute its exact `backend-rewrite repair verify <repair-id>` command
-after the administrator upgrade. Verification detects the new source image
-revision and requires fresh external standard recording evidence; the administrator
-command does not bypass that coordinator transition. A runtime-input-only
-upgrade does not change the image revision and therefore does not satisfy a
-`source_change` repair. Runtime-input repairs use `external_data_blocker`
-acceptance, which compares source runtime and startup snapshot revisions;
-execute the acceptance command issued for that repair.
+When a Source upgrade changes the behavior under verification, have the
+recording owner capture and seal a new session. Verify Target with the new
+recording identity.
 
-`backend-rewrite startup env` lists names, checks presence or exact equality,
+`be-replay startup env` lists names, checks presence or exact equality,
 ensures or removes a value, imports a dotenv file, and validates the canonical
-file without returning stored values. `backend-rewrite startup mount` lists,
+file without returning stored values. `be-replay startup mount` lists,
 checks, or adds a missing source-compatible absolute path while preserving
 existing captured content. Replacing or refreshing content remains
 administrator-owned.
@@ -3065,12 +2887,6 @@ changes may derive a report from immutable complete Source evidence, while
 Target context obligations still require Replay. The plan enumerates these
 obligations instead of inferring success from reclassification.
 
-The coordinator also detects an already-finalized attempt whose effective
-dependency view is clean but whose persisted errors still contain the obsolete
-strict dirty-finalize result. `backend-rewrite next` removes only that
-dependency-derived error, preserves genuine lifecycle errors, revises the same
-attempt, and completes the API without rerunning E2E.
-
 Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:
 
@@ -3421,53 +3237,16 @@ and the dirty-cluster evidence query expose these causes before downstream
 missing responses, stream events or unused calls. No expected output drives
 request execution and no response or ACK is synthesized.
 
-Backend rewrite issue selection prioritizes actual execution failures that
-prevent a response assertion. API evidence keeps the retained attempt and
-preserves independent response differences from other Cases. Unused inventory
-alone leaves the ordinary gate order in place.
-Global-format plan failures identify Source self-validation versus independent
-Target validation, the response/dependency surface and original case or trace
-record. Dependency comparisons retain witness and slot references; differences
-retain their logical JSON pointers. These locations expose no payload values.
+For managed Source session attempts, use `be-replay status` for the
+latest result and first failing sequence. Read recorded requests and
+deliveries at their own sequence numbers. Use the attempt ID and optional
+Target observation ID to read the authenticated observation.
+[Source session evidence](session-regression.md#inspect-evidence)
 
-Use `backend-rewrite evidence-detail --api <API> --witness <id> --pointer /client_ip`
-to read a specific protected witness value.
-It requires the confirmed current assignment and finalized attempt, authenticates
-the original Source exchange and private witness, and returns only the requested
-JSON value (up to 4096 bytes). `--value-index` selects a document in multi-value
-operations. Redis/HTTP/Memcached use logical JSON; MySQL uses the explicitly named
-native witness JSON envelope. Derived delivery is never labeled an independent
-Target observation. Null, missing and unavailable remain distinct.
-`recorded_request_context.header_names` includes encrypted interaction headers'
-actual names without their values; an empty public `headers` placeholder is not
-evidence that a forwarding or authentication header was absent. No plaintext
-artifacts are written by this query.
-
-For an unmatched Redis call without a paired Source witness, use
-`backend-rewrite evidence-detail --api <API> --redis-target-event
-<case-id>:<target-event-index> --argument-index <index>`.
-The zero-based argument index excludes the command name. An optional `--pointer`
-selects one JSON member inside that argument. The query authenticates independent
-Target observations and correlates the exact native request fingerprint within
-the confirmed assignment's finalized attempt. It returns at most 4096 bytes of
-the selected value, with separate missing, null and unavailable states. Identical
-requests can retain multiple observation IDs; the result does not assert a unique
-occurrence, Source counterpart or asynchronous task origin. It writes no plaintext
-artifact and changes no matching or acceptance result.
-`target_observations` retains up to sixteen authenticated observation IDs and
-their Case/dependency clocks, so admission time can be correlated with transport
-evidence without reading the private witness graph. A clock does not prove which
-application task initiated the call.
-
-For historical reports containing APPEND stream audits, `append_stream_progress`
-summarizes up to sixteen Source key fingerprint groups in that Case, with each
-group's last retained APPEND admission cursor and up to eight original Source
-connection/sequence fragments. Grouping by key fingerprint leaves physical
-resources and state epochs unspecified. Omitted groups, fragments and
-report-wide audit omissions remain explicit. These audits contain fingerprints and byte
-offsets, never stream contents. Admission does not prove transport delivery or
-Source consumption, and an omitted audit can advance a cursor beyond the last
-retained row. The selected unmatched call gains no inferred Source counterpart.
+For historical Case reports, global-format plan failures distinguish Source
+self-validation from independent Target validation. The report identifies the
+response or dependency surface, original Case or trace, and protected witness
+and field references. A clock identifies observation timing.
 
 Dependency-primary and Replay issues with a response representative also expose
 the existing bounded `case-response-differences` query. Dirty dependencies remain

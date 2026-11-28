@@ -10,19 +10,6 @@ use super::model::{
 };
 use super::{RewriteContext, RewriteNextOptions, configuration_commit, execution};
 
-pub(super) fn mode(options: &RewriteNextOptions) -> Result<RewriteExecutionMode> {
-    Ok(
-        if options.api.is_none()
-            && options.source_route.is_none()
-            && crate::config::regression::RegressionScope::load(&options.target_root)?.auto_next
-        {
-            RewriteExecutionMode::AutoNext
-        } else {
-            RewriteExecutionMode::Single
-        },
-    )
-}
-
 pub(super) fn selected_api(action: &RewriteAction) -> Result<Option<super::RewriteApiSelector>> {
     match action {
         RewriteAction::AdvanceRequired { api, .. } => api.as_deref().map(str::parse).transpose(),
@@ -31,8 +18,7 @@ pub(super) fn selected_api(action: &RewriteAction) -> Result<Option<super::Rewri
 }
 
 pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
-    let mode = mode(&options)?;
-    run_selected(options, mode).await
+    run_selected(options, RewriteExecutionMode::Single).await
 }
 
 pub(super) async fn run_selected(
@@ -128,16 +114,13 @@ where
         let status = super::status_rewrite(RewriteContext {
             target_root: options.target_root.clone(),
         })?;
-        if (!group_continues
-            && !crate::config::regression::RegressionScope::load(&options.target_root)?.auto_next)
-            || !matches!(
-                status.action,
-                RewriteAction::AdvanceRequired {
-                    kind: RewriteAdvanceKind::Replay,
-                    ..
-                }
-            )
-        {
+        if !matches!(
+            status.action,
+            RewriteAction::AdvanceRequired {
+                kind: RewriteAdvanceKind::Replay,
+                ..
+            }
+        ) {
             return Ok(execution::from_status(status));
         }
         options.api = selected_api(&status.action)?;

@@ -119,7 +119,7 @@ impl Inventory {
         close: bool,
     ) -> BTreeMap<String, traffic_replay::StartupCounts> {
         let mut counts = BTreeMap::<String, traffic_replay::StartupCounts>::new();
-        for exchange in &mut self.core.exchanges {
+        for exchange in self.core.exchanges.iter_mut() {
             counts
                 .entry(exchange.protocol.as_str().into())
                 .or_default()
@@ -175,7 +175,7 @@ impl Inventory {
                 .unmatched
                 .push(failure.clone());
         }
-        for exchange in &self.core.exchanges {
+        for exchange in self.core.exchanges.iter() {
             let report = reports
                 .entry(exchange.protocol.as_str().into())
                 .or_default();
@@ -224,7 +224,7 @@ impl Inventory {
                     .0 += count;
             }
         }
-        for exchange in &self.core.exchanges {
+        for exchange in self.core.exchanges.iter() {
             if let Some(case) = &exchange.source.case_id
                 && !self
                     .core

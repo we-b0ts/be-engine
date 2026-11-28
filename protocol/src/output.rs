@@ -12,6 +12,10 @@ pub enum OutputBoundary {
     Headers,
     Part,
     End,
+    /// The peer ended the response before a normal protocol end marker.
+    ClientTermination,
+    /// An engine-observed process stop. This boundary carries no wire bytes.
+    TargetStop,
 }
 
 pub struct OutputChunk {
@@ -27,6 +31,9 @@ pub struct OutputChunk {
 pub trait OutputStream: Send {
     fn part_count(&self) -> usize;
     fn next(&mut self) -> Result<Option<OutputChunk>>;
+    fn wait_for_client_close(&mut self) -> crate::connection::NativeFuture<'_, ()> {
+        Box::pin(async { anyhow::bail!("native output cannot observe client termination") })
+    }
     fn written(&mut self, _success: bool) {}
     fn flushed(&mut self, _success: bool) {}
     fn write_context(&self) -> &'static str {
@@ -85,8 +92,15 @@ impl OutputStream for FramedOutput<'_> {
         let Some(mut chunk) = self.output.next()? else {
             return Ok(None);
         };
-        chunk.bytes = self.framer.frame(chunk.bytes)?;
+        if chunk.boundary == OutputBoundary::TargetStop {
+            self.framer.target_stopped();
+        } else if chunk.boundary != OutputBoundary::ClientTermination {
+            chunk.bytes = self.framer.frame(chunk.bytes)?;
+        }
         Ok(Some(chunk))
+    }
+    fn wait_for_client_close(&mut self) -> crate::connection::NativeFuture<'_, ()> {
+        self.framer.wait_for_client_close()
     }
     fn written(&mut self, success: bool) {
         self.output.written(success);

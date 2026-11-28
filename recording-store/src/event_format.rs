@@ -340,7 +340,8 @@ pub(crate) fn decode_stream_event(
         .nth(2)
         .context("missing recording stream row type")?;
     match kind {
-        b"request" | b"response" | b"message" | b"observation" => Ok(None),
+        b"request" | b"response" | b"message" | b"observation" | b"dependency"
+        | b"notification" => Ok(None),
         _ => decode_event(std::str::from_utf8(row)?, recording_id).map(Some),
     }
 }

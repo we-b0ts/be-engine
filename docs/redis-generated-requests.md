@@ -1,5 +1,9 @@
 # Redis keys and value formats
 
+This reference covers Redis key and value contracts and historical rule authoring. Case
+coordinator command examples identify historical interfaces. Use the current
+[Source session commands](session-regression.md) for managed migration.
+
 Declare decoded JSON fields once in root `json.fields`, regardless of the API,
 Redis command, key, argument number or read/write direction:
 

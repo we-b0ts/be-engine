@@ -8,11 +8,27 @@ use traffic_contract::{
     compare::{AnchorClocks, Comparison},
     identity::{IdentityDecision, IdentityPair},
 };
-use traffic_protocol::{ProtocolId, connection::Endpoint, message::ProtocolMessage};
+use traffic_protocol::{
+    ProtocolId,
+    connection::Endpoint,
+    message::{ProjectedMessage, ProtocolMessage},
+};
 
 pub struct ValueDecision {
     pub comparison: Comparison,
     pub identity: Option<IdentityDecision>,
+}
+
+/// Compare native values left unequal by the exact and explicit comparison paths.
+/// An adapter removes only the remaining locations for which it proves equivalence.
+pub trait NativeRequestFallback: Send + Sync {
+    fn compare(
+        &self,
+        source: &ProjectedMessage,
+        target: &ProjectedMessage,
+        unmatched: &mut Vec<&str>,
+        clocks: AnchorClocks,
+    ) -> Comparison;
 }
 
 pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
@@ -52,6 +68,16 @@ pub trait ValueRuleHost: std::fmt::Debug + Send + Sync {
         _exchange: &traffic_protocol::connection::RecordedExchange,
     ) -> Result<Option<Vec<RuleBinding>>> {
         Ok(None)
+    }
+    /// Add selected physical bindings alongside the usual document comparison.
+    fn additional_request_bindings(
+        &self,
+        _source: &dyn ProtocolMessage,
+    ) -> Result<Vec<RuleBinding>> {
+        Ok(Vec::new())
+    }
+    fn native_request_auth(&self) -> Option<crate::auth::Matcher> {
+        None
     }
     fn native_request_projection(
         &self,

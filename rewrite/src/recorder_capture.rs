@@ -114,9 +114,9 @@ pub(super) fn plan_http_response(
             .trim_start_matches("fnv1a64:")
         ),
         issue_id: issue.id.clone(),
-        evidence_id: evidence_id,
-        endpoint: endpoint,
-        source_evidence: source_evidence,
+        evidence_id,
+        endpoint,
+        source_evidence,
         source_revision,
         project_config_revision,
         resource_identity,

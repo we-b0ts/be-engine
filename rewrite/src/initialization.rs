@@ -2,17 +2,14 @@
 use super::model::{
     RewritePhase, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
 };
-use anyhow::Result;
-use std::path::Path;
 
 pub(super) fn new_state(
-    target_root: &Path,
     api: String,
     source_route: String,
     recording_apis: Vec<String>,
-) -> Result<RewriteState> {
+) -> RewriteState {
     let recording_run_id = String::new();
-    Ok(RewriteState {
+    RewriteState {
         version: STATE_VERSION,
         revision: 1,
         workflow_id: format!("rewrite-{}", uuid::Uuid::new_v4().simple()),
@@ -31,7 +28,7 @@ pub(super) fn new_state(
         parked_slices: std::collections::BTreeMap::new(),
         worker_bindings: std::collections::BTreeMap::new(),
         implementers: Some(super::implementer::ImplementerPool::new(
-            crate::config::regression::RegressionScope::load(target_root)?.max_implementers,
+            super::implementer::ImplementerPool::DEFAULT_CAPACITY,
         )),
         repository_analysis: None,
         group_replay: None,
@@ -76,5 +73,5 @@ pub(super) fn new_state(
             rule_replay_pending: false,
             e2e_current: false,
         },
-    })
+    }
 }

@@ -88,8 +88,8 @@ fn same_identity_prefixes(
     prefixes(old) == prefixes(new)
 }
 
-/// A failed first streamed Case must be able to declare its generated scalar
-/// values without first completing the Cases it correctly stopped. This grants
+/// A failed first streamed Case can declare generated scalar values and key
+/// identities before completing later Cases. This grants
 /// no command/count/state permission. Whole-recording Source and independent
 /// Target preflight, frozen evidence and fresh Replay remain mandatory.
 fn changes_only_redis_identities(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
@@ -98,11 +98,27 @@ fn changes_only_redis_identities(before: &CompiledPolicy, after: &CompiledPolicy
     };
     let empty = crate::policy::RedisPolicy::default();
     let old = before.redis.as_ref().unwrap_or(&empty);
-    if old == new || old.keys.keys().any(|key| !new.keys.contains_key(key)) {
+    if old == new
+        || !redis_identity_changes(&old.keys, &new.keys)
+        || !redis_identity_changes(&old.key_identities, &new.key_identities)
+    {
         return false;
     }
-    for (key, field) in &new.keys {
-        let prior = old.keys.get(key);
+    let mut expected = before.clone();
+    expected.redis = after.redis.clone();
+    expected.fingerprints = after.fingerprints.clone();
+    expected == *after
+}
+
+fn redis_identity_changes(
+    old: &std::collections::BTreeMap<String, crate::policy::GlobalField>,
+    new: &std::collections::BTreeMap<String, crate::policy::GlobalField>,
+) -> bool {
+    if old.keys().any(|key| !new.contains_key(key)) {
+        return false;
+    }
+    for (key, field) in new {
+        let prior = old.get(key);
         if prior == Some(field) {
             continue;
         }
@@ -115,10 +131,7 @@ fn changes_only_redis_identities(before: &CompiledPolicy, after: &CompiledPolicy
             _ => return false,
         }
     }
-    let mut expected = before.clone();
-    expected.redis = after.redis.clone();
-    expected.fingerprints = after.fingerprints.clone();
-    expected == *after
+    true
 }
 
 #[cfg(test)]

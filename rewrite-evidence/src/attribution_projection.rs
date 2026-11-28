@@ -204,7 +204,7 @@ pub fn hypotheses(
         json!({"schema":"target-hypothesis-evidence/v3","api":api,"method":method,"actual_attempt":attempt,
         "actual_session_id":report["session_id"],"report_sha256":crate::policy_evidence::digest(&bytes),"candidate_id":candidate,
         "total":attempts.len(),"offset":offset,"items":attempts.iter().skip(offset).take(PAGE).collect::<Vec<_>>(),
-        "next_command":(offset.saturating_add(PAGE)<attempts.len()).then(||hypothesis_command(&root,&method_api,candidate,attempt,offset.saturating_add(PAGE))),
+        "next_command":(offset.saturating_add(PAGE)<attempts.len()).then(||hypothesis_command(root,&method_api,candidate,attempt,offset.saturating_add(PAGE))),
         "proof_status":"Every item is a diagnostic hypothesis, including passed probes; it does not establish Source business permission or waive any request."}),
     )
 }

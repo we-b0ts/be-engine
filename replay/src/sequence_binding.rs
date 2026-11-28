@@ -14,6 +14,15 @@ pub struct SequenceBinding {
 }
 
 impl SequenceBinding {
+    pub fn streaming_session(runtime: Arc<SequenceRuntime>) -> Self {
+        assert!(runtime.is_streaming());
+        Self {
+            runtime: Some(runtime.clone()),
+            runtimes: vec![runtime],
+            ..Self::default()
+        }
+    }
+
     pub fn new(
         runtime: Arc<SequenceRuntime>,
         references: impl Iterator<Item = (usize, u64)>,
@@ -71,7 +80,7 @@ impl SequenceBinding {
                     .iter()
                     .filter_map(|runtime| {
                         let event = runtime.admissible_request()?;
-                        run.positions.get(&event.dependency_sequence).copied()
+                        run.position(runtime, event.dependency_sequence)
                     })
                     .collect::<Vec<_>>()
                     .into(),
@@ -95,12 +104,21 @@ impl SequenceBinding {
         };
         Some(runtimes.iter().filter_map(move |runtime| {
             let event = runtime.admissible_message()?;
-            binding.positions.get(&event.dependency_sequence).copied()
+            binding.position(runtime, event.dependency_sequence)
         }))
     }
 
     pub(crate) fn session_position(&self, dependency: u64) -> Option<usize> {
-        self.session_run()?.0.positions.get(&dependency).copied()
+        let (run, runtime) = self.session_run()?;
+        run.position(runtime, dependency)
+    }
+
+    fn position(&self, runtime: &SequenceRuntime, dependency: u64) -> Option<usize> {
+        if runtime.is_streaming() {
+            usize::try_from(dependency).ok()
+        } else {
+            self.positions.get(&dependency).copied()
+        }
     }
 
     pub(crate) fn matches_message_batch(&self, batch: &PublishedMessageBatch) -> bool {
@@ -143,6 +161,13 @@ impl SequenceBinding {
     }
 
     pub fn claim(&self, index: usize) -> Result<Option<SequenceClaim>> {
+        if let Some(runtime) = self
+            .runtime
+            .as_ref()
+            .filter(|runtime| runtime.is_streaming())
+        {
+            return runtime.admit(u64::try_from(index)?).map(Some);
+        }
         let Some(dependency) = self.dependencies.get(&index) else {
             return self.run.as_ref().map_or(Ok(None), |run| run.claim(index));
         };

@@ -34,7 +34,6 @@ const TARGET_TEMPLATE_PACKAGE: &str = "traffic-e2e-target-template";
 const TARGET_TEMPLATE_CACHE_ID: &str = "traffic-e2e-template-target";
 const TARGET_GITIGNORE_RULES: &[&str] = &[
     crate::repository::LOCAL_GITIGNORE_RULE,
-    crate::config::regression::GITIGNORE_RULE,
     "/target/",
     "**/target/",
     "/data/",
@@ -51,7 +50,6 @@ const TARGET_GITIGNORE_RULES: &[&str] = &[
 const TARGET_DOCKERIGNORE_RULES: &[&str] = &[
     "/.git/",
     "/.traffic-e2e/local/",
-    crate::config::regression::GITIGNORE_RULE,
     "/target/",
     "**/target/",
     "/data/",
@@ -176,13 +174,6 @@ fn initialize_repository_config_with(
             crate::config::api_catalog::TEMPLATE.as_bytes().to_vec(),
         ),
     ];
-    let regression = target_root.join(crate::config::regression::PATH);
-    if !regression.exists() {
-        files.push((
-            regression,
-            crate::config::regression::TEMPLATE.as_bytes().to_vec(),
-        ));
-    }
     files.append(&mut target_files);
     let mut generated = files
         .iter()
@@ -195,7 +186,7 @@ fn initialize_repository_config_with(
         generated.push(gitignore.clone());
     }
     super::edit::create_many_atomic(&files)?;
-    let target_image_tag = traffic_engine_e2erun::target_image_tag(&target_root)?;
+    let target_image_tag = traffic_engine_e2e_run::target_image_tag(&target_root)?;
 
     Ok(RepositoryConfigInitResult {
         target_root,
@@ -218,7 +209,7 @@ fn initialize_repository_config_with(
                                   998:998 with the captured source application environment plus \
                                   target.env overrides and source-compatible startup mounts, \
                                   and owns readiness, signals, network namespace, and cleanup",
-        rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
+        rewrite_command: "be-replay run",
         preflight_command: "traffic-e2e diagnose preflight",
         record_command: "traffic-e2e record --config .traffic-e2e/project.yaml -- /app/start-source",
     })
@@ -405,7 +396,7 @@ fn validate_target_binary_name(name: &str) -> Result<()> {
 }
 
 fn target_cache_project(target_root: &Path) -> Result<String> {
-    let tag = traffic_engine_e2erun::target_image_tag(target_root)?;
+    let tag = traffic_engine_e2e_run::target_image_tag(target_root)?;
     tag.strip_prefix("traffic-e2e/")
         .and_then(|value| value.strip_suffix("-target:cache"))
         .map(str::to_string)
@@ -678,16 +669,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.generated.len(), 12);
+        assert_eq!(result.generated.len(), 11);
         assert!(
             result
                 .generated
                 .contains(&target.path().join(crate::config::api_catalog::PATH))
-        );
-        assert!(
-            result
-                .generated
-                .contains(&target.path().join(crate::config::regression::PATH))
         );
         assert_eq!(result.http_backend_port, 8_181);
         assert_eq!(result.http_gateway_port, 4_080);
@@ -718,10 +704,7 @@ mod tests {
         assert!(!updated);
         assert!(!created);
         assert_eq!(fs::read_to_string(&result.gitignore).unwrap(), gitignore);
-        assert_eq!(
-            result.rewrite_command,
-            "backend-rewrite next --api '<METHOD path-or-pattern>'"
-        );
+        assert_eq!(result.rewrite_command, "be-replay run");
         assert_eq!(result.preflight_command, "traffic-e2e diagnose preflight");
         assert_eq!(
             result.source_dockerfile,

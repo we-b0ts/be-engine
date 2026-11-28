@@ -123,3 +123,150 @@ async fn native_process_notification_does_not_hold_an_active_case_open() -> Resu
     assert!(capture["admitted_case"].is_null());
     Ok(())
 }
+
+#[tokio::test]
+async fn session_notification_is_available_before_its_wire_output_attempt() -> Result<()> {
+    for delivered in [true, false] {
+        verify_session_notification(delivered).await?;
+    }
+    Ok(())
+}
+
+async fn verify_session_notification(delivered: bool) -> Result<()> {
+    use traffic_model::session::SessionEvent;
+
+    let directory = tempfile::tempdir()?;
+    let mut config = AppConfig::default();
+    config.recording.output_dir = directory.path().join("recordings");
+    config.recording.session_events = true;
+    config.http_gateway.enabled = false;
+    config.tls.ca_cert_path = directory.path().join("ca.pem");
+    config.tls.ca_key_path = directory.path().join("ca-key.pem");
+    let state = AppState::new_with_providers(config, crate::protocols::default_providers()).await?;
+    state.session_event(SessionEvent::SourceStart)?;
+    state.session_event(SessionEvent::Ready)?;
+    let endpoint = Endpoint {
+        host: "cache.test".into(),
+        port: 6379,
+    };
+    let host = Host {
+        state: state.clone(),
+        protocol: DependencyProtocol::Redis,
+        info: ConnectionInfo {
+            endpoint,
+            client_addr: None,
+            upstream_addr: None,
+            max_frame_bytes: 1024,
+        },
+        transport: CaptureTransport::default(),
+    };
+    let response = crate::redis::encode_array(&[b"message".as_slice(), b"socketio", b"input"]);
+    let event = CaptureSnapshot::capture(&Notification(json!({
+        "id": Uuid::new_v4(),
+        "target_host": "cache.test",
+        "target_port": 6379,
+        "database": 0,
+        "connection_id": Uuid::nil(),
+        "subscription_sequence": 1,
+        "timestamp": chrono::Utc::now(),
+        "duration_ms": 1,
+        "replay_safe": true,
+        "response": crate::recorder::capture_body(&response, 1024),
+    })))?;
+    let pending = host
+        .begin_message(&event)
+        .await?
+        .context("missing notification admission")?;
+    let sequence = pending
+        .dependency_id()
+        .context("missing notification sequence")?;
+    let receipt = pending.stage_output(event, OutputKind::End).await?;
+    if delivered {
+        receipt.commit();
+    } else {
+        receipt.cancel_unwritten_notification()?;
+    }
+    state.session_event(SessionEvent::Stop)?;
+    state.session_event(SessionEvent::SourceExit {
+        status: Some(0),
+        forced_by_recorder: false,
+    })?;
+    state.recorder().finish_run().await?;
+    let root = &state.recorder().run_dir;
+    let timeline = std::fs::read_to_string(root.join(traffic_recording_store::session::FILE))?;
+    let kinds = timeline
+        .lines()
+        .filter_map(|row| row.split('\t').nth(2))
+        .collect::<Vec<_>>();
+    assert!(kinds.windows(4).any(|rows| rows
+        == [
+            "message_started",
+            "notification",
+            "wire_output_started",
+            if delivered {
+                "wire_output"
+            } else {
+                "wire_output_cancelled"
+            }
+        ]));
+    let (_, manifest) = crate::dependency_index::recording::manifest(root)?;
+    assert_eq!(
+        manifest.semantic_inventory.total_mandatory,
+        u64::from(delivered)
+    );
+    let summary: Value =
+        serde_json::from_slice(&std::fs::read(root.join("session-summary.json"))?)?;
+    if delivered {
+        assert_eq!(summary["mandatory_by_protocol"]["redis"], 1);
+        assert_eq!(summary["unscheduled_admissions"], json!([]));
+    } else {
+        assert_eq!(summary["mandatory_by_protocol"], json!({}));
+        assert_eq!(summary["unscheduled_admissions"], json!([sequence]));
+        assert!(timeline.lines().any(|row| row.ends_with(&format!(
+            "\tcapture_terminated\t{sequence}\t{}\t1",
+            traffic_model::trace::UNDELIVERED_NOTIFICATION
+        ))));
+    }
+    assert_eq!(
+        traffic_recording_store::session_records::dependency(root, sequence)?["event_type"],
+        "redis_pub_sub_push"
+    );
+    let report: Value = serde_json::from_slice(&std::fs::read(root.join("recording-run.json"))?)?;
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["capture_complete"], true);
+    assert_eq!(report["capture_failures"], 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn incomplete_session_capture_marks_runtime_success_as_failed() -> Result<()> {
+    use traffic_model::session::SessionEvent;
+
+    let directory = tempfile::tempdir()?;
+    let mut config = AppConfig::default();
+    config.recording.output_dir = directory.path().join("recordings");
+    config.recording.session_events = true;
+    config.http_gateway.enabled = false;
+    config.tls.ca_cert_path = directory.path().join("ca.pem");
+    config.tls.ca_key_path = directory.path().join("ca-key.pem");
+    let state = AppState::new_with_providers(config, crate::protocols::default_providers()).await?;
+    state.session_event(SessionEvent::SourceStart)?;
+    state.session_event(SessionEvent::Ready)?;
+    drop(
+        state.capture_dependency_start(ProtocolRef::observation(Uuid::new_v4(), "connect_attempt")),
+    );
+    state.session_event(SessionEvent::Stop)?;
+    state.session_event(SessionEvent::SourceExit {
+        status: Some(0),
+        forced_by_recorder: false,
+    })?;
+    let recorder = state.recorder();
+    recorder.finish_run_after_runtime(true).await?;
+
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(recorder.run_dir.join("recording-run.json"))?)?;
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["capture_complete"], false);
+    assert_eq!(report["capture_failures"], 1);
+    Ok(())
+}

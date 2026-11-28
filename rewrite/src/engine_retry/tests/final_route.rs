@@ -36,13 +36,6 @@ fn final_route_response_retry_preserves_revalidation_and_failure_across_restart(
         RewriteApiStatus::RevalidationPending,
     );
     item(&mut state, "GET /skip", RewriteApiStatus::Skipped);
-    // Store reload reapplies the source-controlled scope, so persist the skip
-    // as a real caller would rather than inventing an excluded ledger item.
-    std::fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "skip:\n  - /skip\n",
-    )
-    .unwrap();
     let issue = serde_json::to_value(&state.active_issue).unwrap();
     let inventory = serde_json::to_value(&state.api_inventory).unwrap();
     assert!(pending(&state, &state.active_slice));

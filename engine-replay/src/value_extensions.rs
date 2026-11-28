@@ -97,16 +97,6 @@ pub fn prepare_message_with_policy(
     PreparedMessage::compile_with_policy(message, bindings, policy, traffic_extensions::codecs())
 }
 
-pub fn replay_rules(
-    rules: traffic_policy_value::MessageRules,
-) -> traffic_replay::exchange::ExchangeRules<ValueRules> {
-    traffic_replay::exchange::ExchangeRules {
-        request: rules.request,
-        response: rules.response,
-        delivery: rules.rebase_time,
-    }
-}
-
 pub use traffic_policy_value::diagnosis::analysis::{
     analyze_context, analyze_source, analyze_values,
 };

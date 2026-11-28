@@ -34,6 +34,7 @@ hyper = { workspace = true, features = ["client", "http1", "server"], optional =
 libc = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["raw_value"] }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -50,7 +51,6 @@ traffic-protocol-mysql = { workspace = true, features = ["test-support"] }
 traffic-protocol-redis = { workspace = true }
 rustls = { workspace = true }
 sha2 = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tokio-rustls = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }

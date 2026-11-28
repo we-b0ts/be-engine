@@ -1,37 +1,13 @@
 //! Commit boundary for persistent configuration, independent of progress publication.
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
 
 use super::model::{
     RewriteAction, RewriteActionEnvelope, RewriteInputRequiredReason, RewriteStatusReport,
 };
 use super::store::{RewriteLockState, RewriteStore};
 use super::{action, traffic_operation};
-
-fn configuration_paths(target_root: &Path) -> Result<Vec<String>> {
-    let mut paths = vec![
-        ".traffic-e2e/project.yaml".to_string(),
-        crate::config::api_catalog::PATH.to_string(),
-    ];
-    // A malformed or deleted project still needs the configuration commit gate.
-    // Validation reports the parse failure after that review boundary.
-    let policy = super::fingerprint::policy_file(target_root)
-        .unwrap_or_else(|_| target_root.join(".traffic-e2e/policy.yaml"));
-    let relative = policy
-        .strip_prefix(target_root)
-        .context("traffic policy is outside the target repository")?;
-    paths.push(
-        relative
-            .to_str()
-            .context("traffic policy path is not UTF-8")?
-            .to_string(),
-    );
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
-}
 
 pub(super) fn status(target_root: &Path) -> Result<Option<RewriteStatusReport>> {
     Ok(pending(target_root)?.map(|envelope| RewriteStatusReport {
@@ -66,54 +42,14 @@ pub(super) fn pending(target_root: &Path) -> Result<Option<RewriteActionEnvelope
 /// Also checked by `next` after acquiring its coordinator lock and before execution.
 pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionEnvelope>> {
     let target_root = std::fs::canonicalize(target_root)?;
-    let target_prefix = git_target_prefix(&target_root)?;
-    let configuration_paths = configuration_paths(&target_root)?;
-    let output = Command::new("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(&target_root)
-        .args([
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignored=matching",
-            "--no-renames",
-            "-z",
-            "--",
-        ])
-        .args(&configuration_paths)
-        .output()
-        .context("failed to inspect managed configuration changes")?;
-    ensure!(
-        output.status.success(),
-        "cannot inspect managed configuration changes: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let mut required = Vec::new();
-    let mut summary = Vec::new();
-    for record in output.stdout.split(|byte| *byte == 0) {
-        if record.is_empty() {
-            continue;
-        }
-        let line = std::str::from_utf8(record)?;
-        let Some(path) = line.get(3..) else {
-            anyhow::bail!("invalid Git configuration status");
-        };
-        let Some(path) = path.strip_prefix(&target_prefix) else {
-            anyhow::bail!("unexpected configuration path {path:?}");
-        };
-        ensure!(
-            configuration_paths
-                .iter()
-                .any(|configured| configured == path),
-            "unexpected configuration path {path:?}"
-        );
-        required.push(path.to_string());
-        summary.push(format!("{} ({})", path, &line[..2]));
-    }
-    if required.is_empty() {
+    let changes = crate::execution_identity::configuration_changes(&target_root)?;
+    if changes.is_empty() {
         return Ok(None);
     }
+    let summary: Vec<_> = changes
+        .iter()
+        .map(|change| format!("{} ({})", change.path, change.status))
+        .collect();
     let action = RewriteAction::InputRequired {
         reason: RewriteInputRequiredReason::ConfigurationCommitRequired,
         summary: format!(
@@ -121,7 +57,7 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
             summary.join(", "),
             target_root.display()
         ),
-        required,
+        required: changes.into_iter().map(|change| change.path).collect(),
         recording_input_diagnosis: None,
     };
     let mut envelope = match RewriteStore::new(&target_root)?.load()? {
@@ -148,25 +84,6 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
     envelope.pending = 1;
     envelope.terminal_allowed = false;
     Ok(Some(envelope))
-}
-
-fn git_target_prefix(target_root: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(target_root)
-        .args(["rev-parse", "--show-prefix"])
-        .output()
-        .context("failed to resolve managed configuration Git prefix")?;
-    ensure!(
-        output.status.success(),
-        "cannot resolve managed configuration Git prefix: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let prefix = String::from_utf8(output.stdout)?;
-    let prefix = prefix.strip_suffix('\n').unwrap_or(&prefix);
-    let prefix = prefix.strip_suffix('\r').unwrap_or(prefix);
-    Ok(prefix.to_owned())
 }
 
 #[cfg(test)]

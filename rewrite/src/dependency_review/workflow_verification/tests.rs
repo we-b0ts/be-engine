@@ -137,64 +137,7 @@ fn debt(scope: VerificationScope, requirement: VerificationRequirement) -> Scope
 }
 
 #[tokio::test]
-async fn explicit_only_keeps_one_api_without_acquiring_other_methods_or_background_tasks() {
-    let (target, mut state) = accepted().await;
-    fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "only: [/api]\n",
-    )
-    .unwrap();
-    for number in 0..99 {
-        let mut item = state.api_inventory[0].clone();
-        item.api = format!("GET /other-{number}");
-        item.status = RewriteApiStatus::Skipped;
-        state.api_inventory.push(item);
-    }
-    state
-        .dependency_review
-        .required_method_apis
-        .insert("POST /historical-origin".into());
-    for number in 0..10 {
-        let obligation = debt(
-            VerificationScope::Process {
-                source_task: format!("task-{number}"),
-                process_epoch: Uuid::new_v4(),
-            },
-            VerificationRequirement::Replay,
-        );
-        state
-            .dependency_review
-            .obligations
-            .insert(obligation.id.clone(), obligation);
-    }
-    let startup = debt(
-        VerificationScope::Startup {
-            initialization_unit: "large-unimplemented-cache".into(),
-            process_epoch: Uuid::new_v4(),
-        },
-        VerificationRequirement::Capture,
-    );
-    state
-        .dependency_review
-        .obligations
-        .insert(startup.id.clone(), startup);
-    assert_eq!(methods(&state), BTreeSet::from(["GET /api".into()]));
-    assert!(current(target.path(), &state).unwrap());
-    assert!(!pending(&state));
-    assert!(crate::dependency_review::batch_pending(&state));
-    assert!(!super::super::batch_verification::current(target.path(), &state).unwrap());
-    assert!(
-        state
-            .dependency_review
-            .obligations
-            .values()
-            .all(|o| o.pending())
-    );
-    assert!(state.dependency_review.batch_receipt.is_none());
-}
-
-#[tokio::test]
-async fn recapture_cannot_shrink_an_existing_receipt_scope_without_only_or_skip() {
+async fn recapture_cannot_shrink_an_existing_receipt_scope() {
     let (target, mut state) = accepted().await;
     assert!(current(target.path(), &state).unwrap());
     state
@@ -212,16 +155,6 @@ async fn recapture_cannot_shrink_an_existing_receipt_scope_without_only_or_skip(
             .to_string()
             .contains("omits selected required workflow methods")
     );
-    fs::write(
-        target.path().join(".traffic-e2e/regression.yaml"),
-        "skip: [/other]\n",
-    )
-    .unwrap();
-    assert_eq!(
-        required_scope_methods(target.path(), &state).unwrap(),
-        methods(&state)
-    );
-    assert!(current(target.path(), &state).unwrap());
     assert!(
         state
             .dependency_review

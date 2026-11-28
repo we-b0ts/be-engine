@@ -49,6 +49,19 @@ impl LaneIndex {
         self.references.insert(index, (key, sequence));
     }
 
+    pub(crate) fn discard(&mut self, index: usize) -> bool {
+        let Some((key, _)) = self.references.remove(&index) else {
+            return false;
+        };
+        let entries = self.lanes.get_mut(&key).expect("registered lane");
+        entries.retain(|&(existing, _)| existing != index);
+        if entries.is_empty() {
+            self.lanes.remove(&key);
+            return true;
+        }
+        false
+    }
+
     pub fn blocker(
         &self,
         candidate: usize,

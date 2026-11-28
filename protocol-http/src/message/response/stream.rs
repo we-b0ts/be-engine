@@ -10,11 +10,24 @@ pub(crate) const CHUNKED_HEADER: &[u8] = b"transfer-encoding: chunked";
 pub(crate) struct StreamResponse {
     response: ResponseMessage,
     chunks: Arc<[ResponseChunk]>,
+    end: OutputBoundary,
 }
 
 impl StreamResponse {
-    pub(crate) fn new(response: ResponseMessage, stream: ResponseStream) -> Result<Self> {
-        stream.validate(response.body.len())?;
+    pub(crate) fn new(
+        response: ResponseMessage,
+        stream: ResponseStream,
+        client_terminated: bool,
+    ) -> Result<Self> {
+        if stream.stopped_at_source_exit {
+            ensure!(
+                stream.version == 2 && !stream.complete && !client_terminated,
+                "HTTP Source-stop response requires version-2 incomplete stream evidence"
+            );
+            stream.validate_prefix(response.body.len())?;
+        } else {
+            stream.validate(response.body.len())?;
+        }
         ensure!(
             stream.trailers.is_none(),
             "HTTP trailers require a native streaming capability"
@@ -26,6 +39,13 @@ impl StreamResponse {
         Ok(Self {
             response,
             chunks: stream.chunks.into(),
+            end: if stream.stopped_at_source_exit {
+                OutputBoundary::TargetStop
+            } else if client_terminated {
+                OutputBoundary::ClientTermination
+            } else {
+                OutputBoundary::End
+            },
         })
     }
 }
@@ -46,6 +66,10 @@ impl ProtocolMessage for StreamResponse {
 
 impl MessageEncoder for StreamResponse {
     fn encode(&self, values: &BTreeMap<String, Bytes>) -> Result<Bytes> {
+        ensure!(
+            self.end == OutputBoundary::End,
+            "HTTP terminated response prefix requires sequenced streaming output"
+        );
         let mut output = self.output(values)?;
         let mut wire = Vec::new();
         while let Some(chunk) = output.next()? {
@@ -68,7 +92,7 @@ impl MessageEncoder for StreamResponse {
             body: self.response.body.clone(),
             chunks: self.chunks.clone(),
             next_part: 0,
-            ended: false,
+            end: Some(self.end),
         }))
     }
 }
@@ -78,7 +102,7 @@ struct ChunkedOutput {
     body: Bytes,
     chunks: Arc<[ResponseChunk]>,
     next_part: usize,
-    ended: bool,
+    end: Option<OutputBoundary>,
 }
 
 impl OutputStream for ChunkedOutput {
@@ -97,8 +121,13 @@ impl OutputStream for ChunkedOutput {
             wire.extend_from_slice(body);
             wire.extend_from_slice(b"\r\n");
             (wire.into(), OutputBoundary::Part)
-        } else if !std::mem::replace(&mut self.ended, true) {
-            (Bytes::from_static(b"0\r\n\r\n"), OutputBoundary::End)
+        } else if let Some(end) = self.end.take() {
+            let bytes = if end == OutputBoundary::End {
+                Bytes::from_static(b"0\r\n\r\n")
+            } else {
+                Bytes::new()
+            };
+            (bytes, end)
         } else {
             return Ok(None);
         };

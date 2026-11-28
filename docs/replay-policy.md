@@ -18,6 +18,20 @@ format: traffic-policy/v3
 rules: []
 ```
 
+For managed Source session regression, the assigned implementer establishes
+the Source contract for a generated time, ID, or token and proposes the
+applicable policy declaration. Register the proposal with `be-replay rule plan`.
+The integrator applies the selected plans with `be-replay rule apply` and commits
+the resulting policy. Verify the integrated candidate with `be-replay run` on
+the selected recording. [Source session regression](session-regression.md) · [Session rule plan format](../plugins/ai-engine/skills/be-replay/references/api-implementer-rule-diagnosis.md#submit-a-rule-plan)
+
+<details>
+<summary>Case policy contracts and historical coordinator authoring</summary>
+
+This reference describes policy-library capabilities and the former Case
+coordinator workflow. Its old plan/apply command examples identify historical
+interfaces.
+
 Declare decoded content once under `json.fields`. The same pointers cover
 HTTP requests/responses, SSE data and complete JSON values in MySQL, Redis and
 other supported carriers. Unknown encodings compare exact bytes. Native SQL
@@ -141,3 +155,5 @@ raw policy edits still invalidate a planned transaction. Protocol identity,
 finite inventory, lane/transaction order, claims, response delivery and termination
 remain owned by the existing replay adapters. Payload equality never creates
 permission to share, classify, renew or consume another exchange.
+
+</details>

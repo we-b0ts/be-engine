@@ -81,6 +81,10 @@ pub trait ValueDocument: Send + Sync {
     fn value(&self) -> &Value;
     fn original_bytes(&self) -> &[u8];
     fn comparison_view<'a>(&'a self, selected: &[String]) -> Cow<'a, Value>;
+    /// True when accepted logical paths must also be selected in the wire view.
+    fn retains_unselected_encoding(&self) -> bool {
+        false
+    }
     fn encode(&self, logical: &Value, allowed: &[String]) -> Result<Vec<u8>>;
 
     fn transform(&self, logical: &Value, selected: &[String]) -> Result<Vec<u8>> {

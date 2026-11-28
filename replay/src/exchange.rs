@@ -15,8 +15,12 @@ use traffic_protocol::{
 };
 use uuid::Uuid;
 
+mod session_admission;
+use session_admission::accepts_session;
 mod sessions;
 pub use sessions::SessionBindings;
+mod stream;
+pub use stream::ExchangeEntries;
 
 use crate::{
     Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle, PublishedMessageBatch,
@@ -105,7 +109,7 @@ struct CandidateKey {
 type LaneIdentity = (ScopePartition, ProtocolId, Endpoint, String);
 
 pub struct ExchangeInventory<R: RuleRuntime = ExactRules> {
-    pub exchanges: Vec<PreparedExchange<R>>,
+    pub exchanges: ExchangeEntries<R>,
     pub lifecycle: Lifecycle,
     pub sessions: SessionBindings,
     candidates: CandidateIndex<CandidateKey>,
@@ -280,15 +284,6 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         source: SourceContext,
         rules: ExchangeRules<R>,
     ) -> Result<usize> {
-        ensure!(
-            native.reference.protocol() == protocol.as_str(),
-            "native reference protocol changed"
-        );
-        ensure!(
-            source.source != ReplaySource::Case || source.case_id.is_some(),
-            "Case exchange has no owner"
-        );
-        let index = self.exchanges.len();
         let request = native
             .request()
             .map(|request| R::prepare(request, &rules.request))
@@ -299,6 +294,32 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             .is_none()
             .then(|| R::prepare(native.response.as_ref(), &rules.response))
             .transpose()?;
+        self.register_prepared(
+            protocol,
+            native,
+            source,
+            rules.delivery,
+            (request, response),
+        )
+    }
+
+    pub fn register_prepared(
+        &mut self,
+        protocol: ProtocolId,
+        native: RecordedExchange,
+        source: SourceContext,
+        delivery: R::Delivery,
+        (request, response): (Option<R::Prepared>, Option<R::Prepared>),
+    ) -> Result<usize> {
+        ensure!(
+            native.reference.protocol() == protocol.as_str(),
+            "native reference protocol changed"
+        );
+        ensure!(
+            source.source != ReplaySource::Case || source.case_id.is_some(),
+            "Case exchange has no owner"
+        );
+        let index = self.exchanges.next_index(&source)?;
         let scope = ScopePartition::new(source.source, source.case_id.as_deref());
         let lane_id = native
             .lane
@@ -364,7 +385,7 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
             source,
             request,
             response,
-            delivery: rules.delivery,
+            delivery,
             status: ReplayExchangeStatus::Available,
             session_step: None,
             lane_id,
@@ -396,6 +417,9 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
         request: &dyn ProtocolMessage,
         head: crate::SourceEvent,
     ) -> bool {
+        if self.independent_request_at_head(protocol, endpoint, request) {
+            return false;
+        }
         self.transaction_starts
             .iter()
             .filter_map(|&index| {
@@ -934,30 +958,6 @@ impl<R: RuleRuntime> ExchangeInventory<R> {
     pub fn fail(&mut self, index: usize, ticket: &ClaimTicket) {
         self.lifecycle
             .fail(ticket, &mut self.exchanges[index].status);
-    }
-}
-
-fn accepts_session(step: Option<&ReplaySessionStep>, session: Option<&RequestSession>) -> bool {
-    let after = session.and_then(|session| session.after.as_ref());
-    if session.is_some_and(|session| session.implicit_start_pending) {
-        return step == Some(&ReplaySessionStep::ImplicitStart)
-            && after.is_none()
-            && session.is_some_and(|session| session.can_start);
-    }
-    match step {
-        None => after.is_none(),
-        Some(ReplaySessionStep::Optional | ReplaySessionStep::Unverified) => false,
-        Some(
-            ReplaySessionStep::Start
-            | ReplaySessionStep::ImplicitStart
-            | ReplaySessionStep::InTransaction,
-        ) => after.is_none() && session.is_some_and(|session| session.can_start),
-        Some(
-            ReplaySessionStep::Continue {
-                after: expected, ..
-            }
-            | ReplaySessionStep::ReadOnlyEnd { after: expected },
-        ) => after == Some(expected),
     }
 }
 

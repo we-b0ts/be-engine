@@ -1,4 +1,6 @@
 //! Default application composition for traffic execution and rewrite coordination.
+use std::collections::BTreeMap;
+
 pub use traffic_engine::*;
 pub use traffic_replay_runtime::ReplayTimerConfig;
 pub use traffic_replay_runtime::run_session_replay;
@@ -28,6 +30,16 @@ pub async fn run_e2e_event_session(
 ) -> anyhow::Result<E2eEventSessionResult> {
     initialize_application();
     traffic_engine::run_e2e_event_session(options).await
+}
+
+pub async fn run_e2e_event_session_with_apis(
+    options: E2eEventSessionOptions,
+) -> anyhow::Result<(
+    E2eEventSessionResult,
+    BTreeMap<String, session::SessionApiCounts>,
+)> {
+    initialize_application();
+    traffic_engine::run_e2e_event_session_with_apis(options).await
 }
 
 pub fn upgrade_source_snapshot(

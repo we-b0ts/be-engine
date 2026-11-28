@@ -6,7 +6,6 @@ use std::path::Path;
 use super::{
     RewriteAction, RewriteContext, RewriteNextOptions, action, fingerprint, group_replay,
     implementer::{self, ImplementerPool},
-    initialization,
     model::{RewriteApiStatus, RewriteState},
     repository_analysis::RepositoryAnalysisSnapshot,
     store::RewriteStore,
@@ -173,43 +172,6 @@ fn unfinished_group_round_precedes_dispatch_in_global_and_scoped_status() {
             "unfinished group was replaced by {action:?}"
         );
     }
-}
-
-#[test]
-fn changed_local_capacity_applies_to_the_next_workflow_and_is_visible_now() {
-    let target = target();
-    let root = target.path();
-    let config = root.join(".traffic-e2e/regression.yaml");
-    fs::write(&config, "max_implementers: 2\n").unwrap();
-    let first = initialization::new_state(root, String::new(), String::new(), Vec::new()).unwrap();
-    assert_eq!(
-        first
-            .implementers
-            .as_ref()
-            .unwrap()
-            .effective_max_implementers,
-        2
-    );
-    let mut active = state(&[("/api", "auth")], 2);
-    active.implementers = first.implementers;
-    persist(root, &active);
-    fs::write(&config, "max_implementers: 4\n").unwrap();
-    let report = super::inventory_rewrite(RewriteContext {
-        target_root: root.into(),
-    })
-    .unwrap();
-    let pool = report.implementers.unwrap();
-    assert_eq!(pool.configured_max_implementers, 4);
-    assert_eq!(pool.effective_max_implementers, 2);
-    assert_eq!(pool.slots.len(), 2);
-    let next = initialization::new_state(root, String::new(), String::new(), Vec::new()).unwrap();
-    assert_eq!(
-        next.implementers
-            .as_ref()
-            .unwrap()
-            .effective_max_implementers,
-        4
-    );
 }
 
 #[test]
