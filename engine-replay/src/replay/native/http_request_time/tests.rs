@@ -1,8 +1,8 @@
 use super::*;
 use chrono::{TimeZone, Utc};
 use traffic_contract::time::ClockPair;
-use traffic_protocol::connection::Endpoint;
-use traffic_protocol_http::{message::RequestMessage, request_sigv4};
+use traffic_protocol::{ProtocolId, connection::Endpoint};
+use traffic_protocol_http::message::RequestMessage;
 
 const HOST: &str = "s3.hj4.1.intra.weibo.com:9100";
 const URI: &str = "/wegent-archives?location=";
@@ -62,15 +62,7 @@ fn signing_date_is_independent_of_authorization() {
 }
 
 #[test]
-fn bucket_location_matches_both_the_signing_date_and_sigv4_structure() {
-    let rules = serde_json::from_value::<Vec<request_sigv4::SigV4RequestRule>>(json!([{
-        "host": HOST,
-        "method": "GET",
-        "path": "/wegent-archives",
-        "query": "location=",
-        "authorization": {"kind": "aws_sigv4"}
-    }]))
-    .unwrap();
+fn bucket_location_matches_signing_date_and_sigv4_without_policy() {
     let endpoint = Endpoint {
         host: "s3.hj4.1.intra.weibo.com".into(),
         port: 9100,
@@ -85,19 +77,24 @@ fn bucket_location_matches_both_the_signing_date_and_sigv4_structure() {
             .insert("authorization".into(), vec![authorization]);
         message
     };
-    let source = request_sigv4::request(
-        &rules,
-        &endpoint,
-        Arc::new(signed(SOURCE_DATE, "20261126", &"a".repeat(64))),
-        Some(&json!({"scheme":"fake_ip_http", "response_status":200})),
-    )
-    .unwrap();
+    let contracts = crate::value_extensions::strict_values();
+    let protocol = ProtocolId::new("http");
+    let record = json!({"scheme":"fake_ip_http", "response_status":200});
+    let source = contracts
+        .native_request_projection(
+            protocol,
+            &endpoint,
+            Arc::new(signed(SOURCE_DATE, "20261126", &"a".repeat(64))),
+            Some(&record),
+        )
+        .unwrap();
     let clocks = clocks();
     let binding = binding(source.as_ref(), clocks, &[]).unwrap().unwrap();
     let prepared = crate::value_extensions::prepare_message(source.as_ref(), &[binding]).unwrap();
-    let contracts = crate::value_extensions::strict_values();
     let compare = |target: RequestMessage| {
-        let target = request_sigv4::request(&rules, &endpoint, Arc::new(target), None).unwrap();
+        let target = contracts
+            .native_request_projection(protocol, &endpoint, Arc::new(target), None)
+            .unwrap();
         prepared
             .compare(target.as_ref(), clocks, contracts.metadata())
             .unwrap()

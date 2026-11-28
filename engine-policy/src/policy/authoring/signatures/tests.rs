@@ -261,6 +261,7 @@ fn proof_is_independent_from_ids_and_runtime_output_but_inherits_into_nonce_cont
         "default".into(),
         SignatureDefinition::Jwt {
             algorithm: SignatureAlgorithm::HS256,
+            infer: false,
             key: StartupKey::TargetEnv {
                 name: "OTHER_KEY".into(),
             },

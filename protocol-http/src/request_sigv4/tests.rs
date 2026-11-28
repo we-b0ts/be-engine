@@ -14,8 +14,8 @@ const TARGET_DATE: &str = "20261127T031000Z";
 fn rule(query: Option<&str>) -> SigV4RequestRule {
     SigV4RequestRule {
         host: HOST.into(),
-        method: "GET".into(),
-        path: PATH.into(),
+        method: Some("GET".into()),
+        path: Some(PATH.into()),
         query: query.map(str::to_owned),
         authorization: SigV4Authorization::AwsSigv4 {},
     }
@@ -98,19 +98,20 @@ fn signed_bucket_location_compares_scope_and_preserves_the_date_binding() {
     for (location, source_value) in source_projection.values {
         let target_value = &target_projection.values[&location];
         assert_eq!(
-            source_value.bytes == target_value.bytes,
+            source_value.matches(target_value),
             location != "/headers/x-amz-date/0",
             "{location}"
         );
     }
 
+    assert_eq!(target_projection.values[AUTHORIZATION_LOCATION].bytes, raw);
     let raw_target = target
         .exact_request_alternative()
         .unwrap()
         .project()
         .unwrap();
-    assert_eq!(raw_target.values["/headers/authorization/0"].bytes, raw);
-    assert!(raw_target.structure.get(PROJECTION).is_none());
+    let source_authorization = &source.project().unwrap().values[AUTHORIZATION_LOCATION];
+    assert!(!source_authorization.matches(&raw_target.values[AUTHORIZATION_LOCATION]));
     assert!(source.exact_request_alternative().is_none());
 }
 
@@ -202,9 +203,9 @@ fn signer_scope_and_signed_transport_header_values_remain_distinct() {
         );
         let target = project(target, false);
         assert!(applies(target.as_ref()));
-        assert_ne!(
-            expected.values["/headers/authorization/0"].bytes,
-            target.project().unwrap().values["/headers/authorization/0"].bytes
+        assert!(
+            !expected.values[AUTHORIZATION_LOCATION]
+                .matches(&target.project().unwrap().values[AUTHORIZATION_LOCATION])
         );
     }
 }
@@ -246,6 +247,92 @@ fn route_matches_exact_endpoint_method_path_and_query_spelling() {
     .unwrap();
     assert!(!applies(projected.as_ref()));
     assert!(validate_rules(&[rule(None), rule(None)]).is_err());
+}
+
+#[test]
+fn endpoint_scope_selects_each_signed_request_with_its_full_route() {
+    let host_only = json!({"host": HOST, "authorization": {"kind": "aws_sigv4"}});
+    let rule: SigV4RequestRule = serde_json::from_value(host_only.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&rule).unwrap(), host_only);
+    validate_rules(std::slice::from_ref(&rule)).unwrap();
+    for (method, uri) in [
+        ("GET", URI),
+        ("HEAD", PATH),
+        (
+            "HEAD",
+            "/wegent-archives/workspace-archives/task/archive.tar.gz",
+        ),
+    ] {
+        let mut raw = signed_request(SOURCE_DATE, 'a');
+        raw.method = method.into();
+        raw.uri = uri.into();
+        let original = raw.project().unwrap();
+        let selected = request(
+            std::slice::from_ref(&rule),
+            &endpoint(),
+            Arc::new(raw),
+            None,
+        )
+        .unwrap();
+        assert!(applies(selected.as_ref()), "{method} {uri}");
+
+        let projected = selected.project().unwrap();
+        assert_eq!(projected.structure["method"], original.structure["method"]);
+        assert_eq!(projected.structure["uri"], original.structure["uri"]);
+        for (location, value) in original.values {
+            if location != "/headers/authorization/0" {
+                assert_eq!(projected.values[&location].bytes, value.bytes, "{location}");
+            }
+        }
+    }
+    let mut unsigned = signed_request(SOURCE_DATE, 'a');
+    unsigned.headers.remove("Authorization");
+    let unsigned = request(
+        std::slice::from_ref(&rule),
+        &endpoint(),
+        Arc::new(unsigned),
+        None,
+    )
+    .unwrap();
+    assert!(!applies(unsigned.as_ref()));
+
+    let mut other_endpoint = endpoint();
+    other_endpoint.port = 9200;
+    let unselected = request(
+        &[rule],
+        &other_endpoint,
+        Arc::new(signed_request(SOURCE_DATE, 'a')),
+        None,
+    )
+    .unwrap();
+    assert!(!applies(unselected.as_ref()));
+}
+
+#[test]
+fn endpoint_scope_and_complete_routes_can_coexist() {
+    let host_only = SigV4RequestRule {
+        method: None,
+        path: None,
+        ..rule(None)
+    };
+    validate_rules(&[host_only.clone(), rule(None)]).unwrap();
+    assert!(validate_rules(&[host_only.clone(), host_only.clone()]).is_err());
+
+    for (method, path, query) in [
+        (Some("GET"), None, None),
+        (None, Some(PATH), None),
+        (None, None, Some("location=")),
+        (Some("GET"), None, Some("location=")),
+        (None, Some(PATH), Some("location=")),
+    ] {
+        let partial = SigV4RequestRule {
+            method: method.map(str::to_owned),
+            path: path.map(str::to_owned),
+            query: query.map(str::to_owned),
+            ..host_only.clone()
+        };
+        assert!(validate_rules(&[partial]).is_err());
+    }
 }
 
 #[test]

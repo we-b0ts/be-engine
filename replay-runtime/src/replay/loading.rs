@@ -179,7 +179,11 @@ async fn load_state<P: ReplayProtocolSet>(
         .as_ref()
         .map(|policy| policy.contracts().native_rules());
     if session_events {
-        native.configure_event_session_request_projection(native_policy.clone());
+        native.configure_event_session_request_projection(Some(
+            native_policy
+                .clone()
+                .unwrap_or_else(crate::value_extensions::strict_values),
+        ));
     }
     native.configure_storage_preparation(native_policy.as_deref());
     let capacity = lifecycle.dependency_loading.cache_bytes;

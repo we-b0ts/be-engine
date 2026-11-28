@@ -153,9 +153,20 @@ fn compare_decoded_selected<R: ValueRule + ?Sized>(
     let mut paths = encoded::comparison_paths(&source.logical, rules)?;
     paths.extend(selected.iter().map(|field| field.pointer.clone()));
     paths.extend(verified.iter().map(|field| field.pointer.to_owned()));
+    let matcher = plan.auth_matcher();
+    if source.retains_unselected_encoding()
+        && let Some(matcher) = &matcher
+    {
+        paths.extend(matcher.matching_string_paths(source.value(), target.value(), clocks));
+    }
     let source_view = source.logical_comparison_view(&paths);
     let target_view = target.logical_comparison_view(&paths);
     let fields = comparison_fields(&source.logical, &selected, rules);
+    let auth = traffic_policy_value::auth::Metadata::new(context.metadata, matcher);
+    let context = &ExecutionContext {
+        metadata: auth.rules(),
+        ..*context
+    };
     let mut comparison = json::compare_values(
         context,
         &source_view,
@@ -196,6 +207,11 @@ pub fn compare_logical_with_time_copies<R: ValueRule + ?Sized>(
     }
     let selected = selected_fields(context, source, plan, rules, clocks)?;
     let protocols = traffic_policy_value::formats::checks(plan, source)?;
+    let auth = traffic_policy_value::auth::Metadata::new(context.metadata, plan.auth_matcher());
+    let context = &ExecutionContext {
+        metadata: auth.rules(),
+        ..*context
+    };
     compare_selected_with_time_copies(
         context,
         source,
@@ -326,6 +342,11 @@ pub fn compare_projected_fields(
         }
     };
     let native = traffic_policy_value::formats::checks(plan, source.json())?;
+    let auth = traffic_policy_value::auth::Metadata::new(context.metadata, plan.auth_matcher());
+    let context = &ExecutionContext {
+        metadata: auth.rules(),
+        ..*context
+    };
     Ok(compare_selected_fields(
         context, source, target, fields, selected, &native, clocks,
     ))
@@ -376,6 +397,11 @@ pub fn compare_logical_with_verified(
         pointer: field.pointer,
         verifier: field.verifier,
     }));
+    let auth = traffic_policy_value::auth::Metadata::new(context.metadata, plan.auth_matcher());
+    let context = &ExecutionContext {
+        metadata: auth.rules(),
+        ..*context
+    };
     compare_selected_with_time_copies::<RuleBinding<'_>>(
         context,
         source,

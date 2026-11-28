@@ -248,8 +248,62 @@ fn url_and_authenticated_jwt_formats_roundtrip_without_carrier_ownership() {
     assert!(compiled.native.is_empty());
     assert!(rendered.contains("/access_token: {kind: jwt}"));
     assert!(rendered.contains("signatures:"));
+    assert!(!rendered.contains("infer:"));
     assert!(!rendered.contains("signing_key"));
     assert!(!rendered.contains("claims"));
+}
+
+#[test]
+fn inferred_jwt_is_loaded_without_authored_token_positions() {
+    let yaml = r#"format: traffic-policy/v3
+signatures:
+  automatic: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: AUTH_KEY}, infer: true}
+  explicit: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: UNUSED_KEY}}
+"#;
+    let policy = parse_policy(yaml).unwrap();
+    let rendered = render_policy(&policy).unwrap();
+    assert_eq!(parse_policy(&rendered).unwrap(), policy);
+    assert_eq!(rendered.matches("infer: true").count(), 1);
+
+    let global = compile_policy(&policy).unwrap().global_json.unwrap();
+    assert!(global.fields.is_empty());
+    assert!(global.signatures.needs_prepare());
+    assert!(global.auth_matcher().is_none());
+    global
+        .signatures
+        .prepare(std::path::Path::new("/"), |_, source| {
+            assert_eq!(
+                source,
+                &crate::signing::SigningKeySource::TargetEnv {
+                    name: "AUTH_KEY".into()
+                }
+            );
+            Ok((b"test-key".to_vec(), Vec::new()))
+        })
+        .unwrap();
+    assert!(global.auth_matcher().is_some());
+    assert_eq!(global.signatures.get("automatic").unwrap().1, b"test-key");
+    assert!(global.signatures.get("explicit").is_err());
+    assert!(
+        global
+            .without_auth_inference()
+            .with_fields(BTreeMap::new())
+            .auth_matcher()
+            .is_none()
+    );
+}
+
+#[test]
+fn jwt_inference_limits_the_number_of_prepared_profiles() {
+    let mut yaml = "format: traffic-policy/v3\nsignatures:\n".to_owned();
+    for index in 0..17 {
+        yaml.push_str(&format!("  key-{index}: {{kind: jwt, algorithm: HS256, key: {{kind: target_env, name: AUTH_KEY}}, infer: true}}\n"));
+    }
+    assert!(
+        parse_policy(&yaml)
+            .and_then(|policy| compile_policy(&policy))
+            .is_err()
+    );
 }
 
 #[test]

@@ -143,10 +143,13 @@ pub fn merge_with_replacements(
 
 pub(super) fn http_request_selector(
     host: &str,
-    method: &str,
-    path: &str,
+    method: Option<&str>,
+    path: Option<&str>,
     query: Option<&str>,
 ) -> String {
+    let (Some(method), Some(path)) = (method, path) else {
+        return host.into();
+    };
     let mut selector = format!("{method} {host}{path}");
     if let Some(query) = query {
         selector.push('?');

@@ -22,6 +22,7 @@ pub enum ScalarEncoding {
 pub struct ProjectedValue {
     pub bytes: Bytes,
     pub scalar_encoding: ScalarEncoding,
+    equivalent_bytes: Option<Bytes>,
 }
 
 impl ProjectedValue {
@@ -29,6 +30,7 @@ impl ProjectedValue {
         Self {
             bytes: bytes.into(),
             scalar_encoding: ScalarEncoding::Utf8,
+            equivalent_bytes: None,
         }
     }
 
@@ -36,7 +38,27 @@ impl ProjectedValue {
         Self {
             bytes: bytes.into(),
             scalar_encoding: ScalarEncoding::Json,
+            equivalent_bytes: None,
         }
+    }
+
+    /// Attach a canonical form for native comparison after an exact value mismatch.
+    pub fn with_equivalent_bytes(mut self, equivalent: impl Into<Bytes>) -> Self {
+        self.equivalent_bytes = Some(equivalent.into());
+        self
+    }
+
+    pub fn matches(&self, other: &Self) -> bool {
+        self.scalar_encoding == other.scalar_encoding
+            && (self.bytes == other.bytes
+                || self
+                    .equivalent_bytes
+                    .as_ref()
+                    .is_some_and(|equivalent| other.equivalent_bytes.as_ref() == Some(equivalent)))
+    }
+
+    pub fn retained_bytes(&self) -> usize {
+        self.bytes.len() + self.equivalent_bytes.as_ref().map_or(0, Bytes::len)
     }
 }
 

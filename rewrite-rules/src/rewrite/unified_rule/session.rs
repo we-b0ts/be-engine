@@ -63,8 +63,8 @@ fn rebase_document(policy: &str) -> Result<Value> {
         .map(|rule| {
             let selector = declarations::http_request_selector(
                 &rule.host,
-                &rule.method,
-                &rule.path,
+                rule.method.as_deref(),
+                rule.path.as_deref(),
                 rule.query.as_deref(),
             );
             Ok((selector, serde_yaml::to_value(rule)?))
@@ -77,8 +77,7 @@ fn rebase_document(policy: &str) -> Result<Value> {
         .get_mut("requests")
         .and_then(Value::as_sequence_mut)
         .context("rendered HTTP requests are absent")?;
-    // SigV4 selectors have unique routes. Keep other request declarations in
-    // their original positional review scope.
+    // Keep other request declarations in their original positional review scope.
     rows.retain(|row| row.get("authorization").is_none());
     if rows.is_empty() {
         http.remove("requests");
@@ -263,5 +262,42 @@ http:
             queries,
             std::collections::BTreeSet::from([Some("location="), Some("location")])
         );
+    }
+
+    #[test]
+    fn sigv4_host_and_exact_route_are_independent_session_declarations() {
+        let base = r#"format: traffic-policy/v3
+http:
+  headers:
+    x-amz-date: {kind: time, formats: [amz_date]}
+"#;
+        let host = r#"format: traffic-policy/v3
+http:
+  requests:
+    - host: s3.example.test:9100
+      authorization: {kind: aws_sigv4}
+"#;
+        let exact = r#"format: traffic-policy/v3
+http:
+  requests:
+    - host: s3.example.test:9100
+      method: GET
+      path: /wegent-archives
+      query: 'location='
+      authorization: {kind: aws_sigv4}
+"#;
+        let planned = preview(base, host, |_| true).unwrap();
+        let current = preview(base, exact, |_| true).unwrap();
+        verify_rebase(base, &planned, &current).unwrap();
+        verify_rebase(base, &current, &planned).unwrap();
+
+        let assembled = assemble(&current, [host, host]).unwrap();
+        let policy = parse_policy(&assembled).unwrap().http.unwrap();
+        assert!(policy.headers.contains_key("x-amz-date"));
+        assert_eq!(policy.request_sigv4.len(), 2);
+        assert_eq!(policy.request_sigv4[0].query.as_deref(), Some("location="));
+        assert_eq!(policy.request_sigv4[1].method, None);
+        assert_eq!(policy.request_sigv4[1].path, None);
+        assert_eq!(policy.request_sigv4[1].query, None);
     }
 }

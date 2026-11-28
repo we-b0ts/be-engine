@@ -165,6 +165,10 @@ impl ValueDocument for Document {
         &self.original
     }
 
+    fn retains_unselected_encoding(&self) -> bool {
+        true
+    }
+
     fn comparison_view<'a>(&'a self, selected: &[String]) -> Cow<'a, Value> {
         if selected.is_empty() {
             return Cow::Borrowed(&self.value);

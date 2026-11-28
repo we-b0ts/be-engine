@@ -38,21 +38,26 @@ Managed Event Session Replay automatically compares outbound `x-amz-date`
 relative to each side's dependency request clock. This treatment also applies
 when a request carries the date header by itself.
 
-Add an exact request declaration for `AWS4-HMAC-SHA256` authorization.
+Replay first compares the recorded and live `Authorization` values exactly.
+When the values differ, it can compare two recognized `AWS4-HMAC-SHA256`
+headers automatically. This works without a policy file or a request rule.
+
+To restrict SigV4 comparison to particular endpoints, declare their recorded
+hosts and ports in `http.requests`.
 
 ```yaml
 http:
   requests:
     - host: s3.example.test:9100
-      method: GET
-      path: /wegent-archives
-      query: 'location='
       authorization: {kind: aws_sigv4}
 ```
 
-Use the recorded host and port, method, path, and exact query, including empty
-values with an explicit `=`. Replay checks each side's Credential date against
-its own `x-amz-date` and compares the Access Key ID, region, service, scope
-terminator and signed header list. The signature can change between executions
-and must have the SigV4 HMAC digest format. Verify the policy through the managed
-Session rule plan/apply workflow. [Session rules](session-regression.md#plan-implement-and-verify)
+When SigV4 declarations are present, Replay uses their selectors. To limit a
+declaration to one route, specify both `method` and `path`. Use the exact
+`query` when present, including an explicit `=` for empty values. Replay
+compares each request's method, path and query against the recording.
+
+Replay checks each side's Credential date against its own `x-amz-date` and
+compares the Access Key ID, region, service, scope terminator and signed header
+list. The signature value can change between executions and must have the
+SigV4 HMAC digest format.

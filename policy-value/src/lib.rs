@@ -1,4 +1,5 @@
 //! Value-policy message preparation, comparison and authorized delivery.
+pub mod auth;
 pub mod diagnosis;
 pub mod host;
 pub mod inference;

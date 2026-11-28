@@ -31,6 +31,8 @@ pub struct CompiledJsonPolicy {
     pub signatures: super::signatures::SignatureRegistry,
     #[serde(skip)]
     selectors: Arc<traffic_policy_value::fields::FieldSelectors>,
+    #[serde(skip)]
+    auth_inference_disabled: bool,
 }
 
 impl PartialEq for CompiledJsonPolicy {
@@ -39,6 +41,7 @@ impl PartialEq for CompiledJsonPolicy {
             && self.time == other.time
             && self.fingerprint == other.fingerprint
             && self.signatures == other.signatures
+            && self.auth_inference_disabled == other.auth_inference_disabled
     }
 }
 
@@ -90,6 +93,7 @@ impl JsonPolicy {
                     })
                     .collect(),
             )?,
+            auth_inference_disabled: false,
         })
     }
 }
@@ -120,6 +124,19 @@ impl GlobalFieldRuntime for GlobalField {
 }
 
 impl CompiledJsonPolicy {
+    pub fn auth_matcher(&self) -> Option<traffic_policy_value::auth::Matcher> {
+        if self.auth_inference_disabled {
+            None
+        } else {
+            self.signatures.auth_matcher()
+        }
+    }
+
+    pub fn without_auth_inference(mut self) -> Self {
+        self.auth_inference_disabled = true;
+        self
+    }
+
     /// Derived views can share compiled paths for any retained declarations.
     pub fn with_fields(&self, fields: BTreeMap<String, GlobalField>) -> Self {
         Self {
@@ -128,6 +145,7 @@ impl CompiledJsonPolicy {
             fingerprint: self.fingerprint.clone(),
             signatures: self.signatures.clone(),
             selectors: self.selectors.clone(),
+            auth_inference_disabled: self.auth_inference_disabled,
         }
     }
 

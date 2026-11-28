@@ -47,26 +47,26 @@ argument index starts at the script text. The engine compares selected slots
 relative to each side's dependency request clock. The script, key, unselected
 arguments and every recorded call remain strict.
 
-For an outbound S3 request whose recorded `Authorization` uses
-`AWS4-HMAC-SHA256`, scope `aws_sigv4` to its exact host, method, path and query.
-This proposal matches the bucket-location request in `seq 4055`.
+Managed Replay automatically compares recognized outbound `AWS4-HMAC-SHA256`
+headers when `Authorization` differs from the recording. The bucket-location
+and `HEAD` requests on the Wegent S3 endpoint can use this built-in comparison
+with an empty list of SigV4 declarations. An explicit `aws_sigv4` declaration
+restricts comparison to its recorded host and port.
 
 ```yaml
 format: traffic-policy/v3
 http:
   requests:
     - host: s3.hj4.1.intra.weibo.com:9100
-      method: GET
-      path: /wegent-archives
-      query: 'location='
       authorization: {kind: aws_sigv4}
 ```
 
-Keep the trailing `=` from the recording. Managed Replay checks each signature's
-format and the agreement between its Credential date and `x-amz-date`. It
-compares the remaining Credential scope and `SignedHeaders` between executions.
-Outbound `x-amz-date` is a built-in request-relative time comparison and also
-applies to requests that carry the date header by itself.
+Replay compares each request's method, path and query against the recording.
+For SigV4 comparison it checks each signature's format and the agreement between its
+Credential date and `x-amz-date`, then compares the remaining Credential scope
+and `SignedHeaders` between executions. Outbound `x-amz-date` is a built-in
+request-relative time comparison, including when a request carries only the
+date header.
 
 Check that the live runtime binds the proposed format at the observed carrier.
 JSON paths are root-relative to the recognized document. Session Replay compares

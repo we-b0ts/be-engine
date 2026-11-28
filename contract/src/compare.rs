@@ -782,11 +782,17 @@ impl Comparator<'_> {
                 })
             };
             if scalar(source) || scalar(target) {
-                return if source.is_some() && source == target {
-                    Ok(())
-                } else {
-                    Err(difference(pointer, "unselected value or type changed"))
-                };
+                if source.is_some() && source == target {
+                    return Ok(());
+                }
+                if let (
+                    Some(traffic_value::Value::String(source)),
+                    Some(traffic_value::Value::String(target)),
+                ) = (source, target)
+                {
+                    return self.unselected_text(source, target, pointer, decisions);
+                }
+                return Err(difference(pointer, "unselected value or type changed"));
             }
         }
         match (source, target) {
@@ -845,8 +851,29 @@ impl Comparator<'_> {
                 }
             }
             _ if source == target && same_type(source, target) => (),
+            (Value::String(source), Value::String(target)) => {
+                return self.unselected_text(source, target, pointer, decisions);
+            }
             _ => return Err(difference(pointer, "unselected value or type changed")),
         }
+        Ok(())
+    }
+
+    fn unselected_text(
+        &self,
+        source: &str,
+        target: &str,
+        pointer: &str,
+        decisions: &mut Decisions,
+    ) -> Result<(), Difference> {
+        let Some((rule_id, observed)) =
+            self.rule_metadata
+                .compare_unselected_text(source, target, self.clocks)
+        else {
+            return Err(difference(pointer, "unselected value or type changed"));
+        };
+        native::observe(rule_id, pointer, observed, decisions)?;
+        decisions.evaluated.insert(rule_id.into());
         Ok(())
     }
 }

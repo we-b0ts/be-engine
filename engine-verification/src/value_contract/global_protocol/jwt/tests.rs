@@ -33,6 +33,7 @@ fn plan(algorithm: SignatureAlgorithm) -> CompiledJsonPolicy {
         "default".into(),
         SignatureDefinition::Jwt {
             algorithm,
+            infer: false,
             key: StartupKey::TargetEnv {
                 name: "JWT_TEST_KEY".into(),
             },

@@ -132,8 +132,8 @@ fn http_request_entries(policy: &TrafficPolicy) -> Option<BTreeMap<String, ()>> 
                 (
                     http_request_selector(
                         &rule.host,
-                        &rule.method,
-                        &rule.path,
+                        rule.method.as_deref(),
+                        rule.path.as_deref(),
                         rule.query.as_deref(),
                     ),
                     (),
@@ -277,6 +277,26 @@ mod tests {
         assert_eq!(
             changes["http.requests"]["added_entries"],
             json!(["GET s3.example.test:9100/wegent-archives?location="])
+        );
+    }
+
+    #[test]
+    fn reports_sigv4_host_selection_when_replacing_an_exact_route() {
+        let before = policy(json!({"format":"traffic-policy/v3","http":{"requests":[{
+            "host":"s3.example.test:9100","method":"HEAD","path":"/wegent-archives",
+            "authorization":{"kind":"aws_sigv4"}
+        }]}}));
+        let after = policy(json!({"format":"traffic-policy/v3","http":{"requests":[{
+            "host":"s3.example.test:9100","authorization":{"kind":"aws_sigv4"}
+        }]}}));
+        let changes = summarize(&before, &after, &BTreeSet::from(["http".into()]));
+        assert_eq!(
+            changes["http.requests"]["added_entries"],
+            json!(["s3.example.test:9100"])
+        );
+        assert_eq!(
+            changes["http.requests"]["removed_entries"],
+            json!(["HEAD s3.example.test:9100/wegent-archives"])
         );
     }
 

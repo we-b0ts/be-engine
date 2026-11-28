@@ -1,5 +1,6 @@
 //! Evaluate one primary response using native envelopes and content contracts.
 use super::*;
+mod auth;
 
 pub(super) fn evaluate_response(
     inputs: AssertionInputs,
@@ -28,6 +29,11 @@ pub(super) fn evaluate_response(
         actual_fingerprint,
     } = inputs;
     let clocks = crate::value_contract::json::AnchorClocks::for_response(request_times, times);
+    let global_json = loaded
+        .compiled
+        .as_ref()
+        .and_then(|policy| policy.global_json.as_ref());
+    let auth_matcher = global_json.and_then(crate::policy::CompiledJsonPolicy::auth_matcher);
     ensure!(
         loaded.document.version >= 3,
         "runner-owned response assertions require replay policy version 3"
@@ -195,14 +201,46 @@ pub(super) fn evaluate_response(
             }
         }
     }
+    if gateway_protocol == ResponseGatewayProtocol::Http
+        && let Some(matcher) = &auth_matcher
+    {
+        let global_http = loaded
+            .compiled
+            .as_ref()
+            .and_then(|policy| policy.http.as_ref());
+        let auth_clocks =
+            crate::value_contract::json::AnchorClocks::for_response(request_times, request_times);
+        auth::compare_headers(
+            expected_headers.as_ref(),
+            actual_headers.as_ref(),
+            &mut report,
+            |name, path| {
+                global_http.is_some_and(|http| http.headers.contains_key(name))
+                    || response_rules.headers.iter().any(|(api, rules)| {
+                        crate::policy::runtime::response_headers::matches(api, path)
+                            && rules
+                                .iter()
+                                .any(|rule| rule.header.eq_ignore_ascii_case(name))
+                    })
+                    || native_selected.iter().any(|rule| {
+                        matches!(
+                            &rule.rule.effect,
+                            crate::policy::NativeEffect::ResponseJwt(effect)
+                            if effect.location.as_ref().is_some_and(|location| {
+                                location.header.eq_ignore_ascii_case(name)
+                            })
+                        )
+                    })
+            },
+            |source| matcher.recognizes_authorization(source),
+            |source, target, carrier| matcher.compare(source, target, carrier, auth_clocks),
+        );
+    }
     if !body_available {
         report.finish(&[], &[]);
         return Ok(report);
     }
-    let global_body_selected = loaded
-        .compiled
-        .as_ref()
-        .and_then(|policy| policy.global_json.as_ref())
+    let global_body_selected = global_json
         .map(|plan| {
             if !plan.fields.is_empty() {
                 return Ok(true);
@@ -215,6 +253,9 @@ pub(super) fn evaluate_response(
             }
             crate::json_value::parse(expected_body.body())
                 .map(|source| {
+                    if auth_matcher.is_some() && gateway_protocol == ResponseGatewayProtocol::Http {
+                        return Ok(true);
+                    }
                     plan.selected_fields_with_clocks(&source, clocks)
                         .map(|fields| !fields.is_empty())
                 })
@@ -245,10 +286,7 @@ pub(super) fn evaluate_response(
                 expected_body.body(),
                 actual_body.body(),
                 &[],
-                loaded
-                    .compiled
-                    .as_ref()
-                    .and_then(|p| p.global_json.as_ref()),
+                global_json,
                 clocks,
             )?;
             applicable_ids.extend(context.rule_ids());
@@ -288,10 +326,7 @@ pub(super) fn evaluate_response(
                 "generic and native opaque body contracts require one compiled codec owner"
             );
             unified::compare(
-                loaded
-                    .compiled
-                    .as_ref()
-                    .and_then(|p| p.global_json.as_ref()),
+                global_json,
                 &expected_body,
                 &actual_body,
                 clocks,

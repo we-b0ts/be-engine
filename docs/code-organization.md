@@ -2483,9 +2483,15 @@ explicit repository-wide audit.
   `policy/authoring/http` owns compact HTTP request declarations and the separate
   `http.response_rewrite` acquisition list. Path identities and response rewrites
   lower to native owners that preserve Source proofs and fold only lossless
-  canonical forms. `protocol-http/src/request_sigv4.rs` owns exact SigV4 request
-  selectors and authorization matching projections. Ordered capture precedence
-  remains independent of generated IDs and rendering groups.
+  canonical forms. `protocol-http/src/request_sigv4.rs` owns automatic SigV4
+  recognition, the equivalent authorization value and optional endpoint and
+  route selectors. Native value execution checks exact bytes before trying an
+  equivalent value supplied by both messages. `policy-value::auth` owns shared
+  credential comparison after carrier extraction. The comparison kernel calls
+  it through rule metadata on unclaimed logical text. Codecs that retain raw
+  field representations expose that capability and receive confirmed comparison
+  paths before constructing the wire remainder. Ordered capture precedence remains
+  independent of generated IDs and rendering groups.
   `policy/authoring/recording` groups independent async lifecycle and case path
   declarations. Only case paths lower to HTTP acquisition with their original
   Source revision/capture identity. The document adapter accepts the legacy

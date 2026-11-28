@@ -9,6 +9,7 @@ use traffic_replay::exchange::{ExchangeInventory, SourceContext};
 
 pub mod diagnosis;
 mod global_report;
+mod http_request_auth;
 mod http_request_time;
 mod redis_storage;
 mod report;
@@ -488,12 +489,19 @@ impl Inventory {
             .then_some(exchange.response.as_ref());
         let prepared_request = exchange
             .request()
-            .map(|request| {
-                crate::value_extensions::prepare_message_with_policy(
+            .map(|request| -> Result<_> {
+                let prepared = crate::value_extensions::prepare_message_with_policy(
                     request,
                     &request_bindings,
                     request_policy,
-                )
+                )?;
+                if matches!(exchange.reference.protocol(), "http" | "https") {
+                    Ok(prepared.with_request_fallback(http_request_auth::Fallback(
+                        contracts.native_request_auth().unwrap_or_default(),
+                    )))
+                } else {
+                    Ok(prepared)
+                }
             })
             .transpose()?;
         let source_clocks = stored::comparison_clocks(clocks);

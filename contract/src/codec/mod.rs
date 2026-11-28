@@ -71,6 +71,10 @@ impl DecodedDocument {
         self.document.comparison_view(paths)
     }
 
+    pub fn retains_unselected_encoding(&self) -> bool {
+        self.document.retains_unselected_encoding()
+    }
+
     /// Borrow the projection of the full decoded value.
     pub fn projection(&self) -> crate::compare::LogicalProjection<'_> {
         crate::compare::LogicalProjection::borrowed(self.value(), &self.logical)

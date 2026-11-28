@@ -53,7 +53,7 @@ pub fn jwt<'a>(
     definitions: &'a BTreeMap<String, SignatureDefinition>,
     name: &str,
 ) -> Result<(crate::native::SignatureAlgorithm, &'a StartupKey)> {
-    let SignatureDefinition::Jwt { algorithm, key } = profile(definitions, name)? else {
+    let SignatureDefinition::Jwt { algorithm, key, .. } = profile(definitions, name)? else {
         anyhow::bail!("JWT position requires a JWT signature profile");
     };
     Ok((*algorithm, key))

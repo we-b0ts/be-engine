@@ -305,6 +305,11 @@ impl NativeResponseContext {
                     .map(|field| field.pointer.to_owned()),
             );
         }
+        if source.retains_unselected_encoding()
+            && let Some(matcher) = global.and_then(crate::policy::CompiledJsonPolicy::auth_matcher)
+        {
+            paths.extend(matcher.matching_string_paths(source.value(), target.value(), clocks));
+        }
         let source_paths =
             crate::value_contract::encoded::comparison_paths(&source.logical, rules)?
                 .into_iter()
@@ -609,8 +614,19 @@ impl NativeResponseContext {
         if let Some(checks) = &protocol_checks {
             verified.extend(checks.fields());
         }
-        let mut result =
-            json::compare_with_verified(source, target, &fields, &generated, &verified, clocks);
+        let metadata = traffic_policy_value::auth::Metadata::new(
+            &json::PolicyMetadata,
+            global.and_then(crate::policy::CompiledJsonPolicy::auth_matcher),
+        );
+        let mut result = json::compare_with_verified_metadata(
+            source,
+            target,
+            &fields,
+            &generated,
+            &verified,
+            clocks,
+            metadata.rules(),
+        );
         result.evaluated.extend(self.codec_ids.iter().cloned());
         Ok(result)
     }

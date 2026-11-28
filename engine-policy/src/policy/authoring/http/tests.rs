@@ -161,8 +161,8 @@ fn sigv4_request_round_trips_with_exact_query_and_runtime_scope() {
         panic!("one compiled SigV4 request");
     };
     assert_eq!(rule.host, "s3.hj4.1.intra.weibo.com:9100");
-    assert_eq!(rule.method, "GET");
-    assert_eq!(rule.path, "/wegent-archives");
+    assert_eq!(rule.method.as_deref(), Some("GET"));
+    assert_eq!(rule.path.as_deref(), Some("/wegent-archives"));
     assert_eq!(rule.query.as_deref(), Some("location="));
 
     let rendered = crate::policy::render_policy(&policy).unwrap();
@@ -201,6 +201,36 @@ fn sigv4_request_round_trips_with_exact_query_and_runtime_scope() {
             "accepted {invalid}"
         );
     }
+}
+
+#[test]
+fn sigv4_request_round_trips_with_only_the_endpoint() {
+    let raw = r#"format: traffic-policy/v3
+http:
+  requests:
+    - host: s3.hj4.1.intra.weibo.com:9100
+      authorization: {kind: aws_sigv4}
+"#;
+    let policy = crate::policy::parse_policy(raw).unwrap();
+    let compiled = crate::policy::compile_policy(&policy).unwrap();
+    let [rule] = compiled.http.as_ref().unwrap().request_sigv4.as_slice() else {
+        panic!("one compiled SigV4 request");
+    };
+    assert_eq!(rule.host, "s3.hj4.1.intra.weibo.com:9100");
+    assert_eq!(
+        (&rule.method, &rule.path, &rule.query),
+        (&None, &None, &None)
+    );
+
+    let rendered = crate::policy::render_policy(&policy).unwrap();
+    assert_eq!(
+        crate::policy::parse_and_compile_policy(&rendered).unwrap(),
+        compiled
+    );
+    let yaml: Value = serde_yaml::from_str(&rendered).unwrap();
+    let fields = yaml["http"]["requests"][0].as_mapping().unwrap();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields["authorization"]["kind"], "aws_sigv4");
 }
 
 #[test]

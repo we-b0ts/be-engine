@@ -9,6 +9,7 @@ use sha2::{Sha256, Sha384, Sha512};
 pub mod contract;
 pub mod key;
 pub mod nonce;
+pub mod verification;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Algorithm {
@@ -71,20 +72,8 @@ impl Token {
 
     pub fn verify(&self, key: &[u8]) -> bool {
         let input = format!("{}.{}", self.header, self.payload);
-        macro_rules! verify {
-            ($digest:ty) => {{
-                let Ok(mut mac) = Hmac::<$digest>::new_from_slice(key) else {
-                    return false;
-                };
-                mac.update(input.as_bytes());
-                mac.verify_slice(&self.signature).is_ok()
-            }};
-        }
-        match self.algorithm {
-            Algorithm::HS256 => verify!(Sha256),
-            Algorithm::HS384 => verify!(Sha384),
-            Algorithm::HS512 => verify!(Sha512),
-        }
+        verification::PreparedHmac::new(self.algorithm, key)
+            .verify(input.as_bytes(), &self.signature)
     }
 
     pub fn has_time_claims(&self) -> bool {
