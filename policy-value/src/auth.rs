@@ -112,6 +112,17 @@ impl Matcher {
             .is_some_and(|ring| ring.verify(authorization(source).1).is_some())
     }
 
+    pub fn may_recognize_value(&self, source: &str) -> bool {
+        self.jwt.is_some() && jwt_candidate(authorization(source).1)
+            || source.len() <= 16_384
+                && (source.starts_with('/') || source.starts_with("http"))
+                && if self.jwt.is_some() {
+                    source.contains('?')
+                } else {
+                    source.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256")
+                }
+    }
+
     pub fn compare(
         &self,
         source: &str,

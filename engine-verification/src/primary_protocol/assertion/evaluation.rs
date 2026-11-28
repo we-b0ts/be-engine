@@ -252,12 +252,18 @@ pub(super) fn evaluate_response(
                 return Ok(false);
             }
             crate::json_value::parse(expected_body.body())
-                .map(|source| {
-                    if auth_matcher.is_some() && gateway_protocol == ResponseGatewayProtocol::Http {
+                .map(|source| -> Result<bool> {
+                    if !plan
+                        .selected_fields_with_clocks(&source, clocks)?
+                        .is_empty()
+                    {
                         return Ok(true);
                     }
-                    plan.selected_fields_with_clocks(&source, clocks)
-                        .map(|fields| !fields.is_empty())
+                    Ok(gateway_protocol == ResponseGatewayProtocol::Http
+                        && body_rules.is_empty()
+                        && auth_matcher.as_ref().is_some_and(|matcher| {
+                            auth::body_matches(matcher, source, actual_body.body(), clocks)
+                        }))
                 })
                 .unwrap_or(Ok(false))
         })

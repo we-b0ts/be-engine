@@ -1,10 +1,43 @@
-//! Optional authentication comparison for captured primary response headers.
-use traffic_contract::compare::LeafObservations;
-use traffic_policy_value::auth::Carrier;
+//! Optional authentication comparison for primary responses.
+use serde_json::Value;
+use traffic_contract::compare::{AnchorClocks, LeafObservations};
+use traffic_policy_value::auth::{Carrier, Matcher};
 
 use crate::protocols::recording::events::HeaderMapSnapshot;
 
 use super::{ResponseAssertionCaseReport, ResponseDifference, ResponseDifferenceKind};
+
+pub(super) fn body_matches(
+    matcher: &Matcher,
+    source: Value,
+    target: &[u8],
+    clocks: AnchorClocks,
+) -> bool {
+    fn plausible(matcher: &Matcher, value: &Value) -> bool {
+        match value {
+            Value::String(value) => matcher.may_recognize_value(value),
+            Value::Array(values) => values.iter().any(|value| plausible(matcher, value)),
+            Value::Object(values) => values.values().any(|value| plausible(matcher, value)),
+            _ => false,
+        }
+    }
+
+    if !plausible(matcher, &source) {
+        return false;
+    }
+    let Some(target) = crate::json_value::parse(target) else {
+        return false;
+    };
+    let (Ok(source), Ok(target)) = (
+        serde_json::from_value(source),
+        serde_json::from_value(target),
+    ) else {
+        return false;
+    };
+    !matcher
+        .matching_string_paths(&source, &target, clocks)
+        .is_empty()
+}
 
 pub(super) fn compare_headers(
     source: Option<&HeaderMapSnapshot>,
@@ -92,6 +125,36 @@ fn is_protected(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::primary_protocol::assertion::ResponseGatewayProtocol;
+
+    #[test]
+    fn inferred_body_comparison_requires_a_matching_credential() {
+        let source_url = |date: &str, signature: char| {
+            let signature = signature.to_string().repeat(64);
+            format!(
+                "/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date={date}T010000Z&X-Amz-Credential=access%2F{date}%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature={signature}"
+            )
+        };
+        let source = serde_json::json!({"content": source_url("20261126", 'a')});
+        let target = serde_json::json!({"content": source_url("20261127", 'b')});
+        let times = traffic_contract::time::ClockPair {
+            source: Some("2026-11-26T01:00:00Z".parse().unwrap()),
+            target: Some("2026-11-27T01:00:00Z".parse().unwrap()),
+        };
+        let clocks = AnchorClocks::for_response(times, times);
+        let matcher = Matcher::default();
+        assert!(body_matches(
+            &matcher,
+            source.clone(),
+            &serde_json::to_vec(&target).unwrap(),
+            clocks,
+        ));
+        assert!(!body_matches(
+            &matcher,
+            source,
+            br#"{"content":"http://example.com/?credentials=unknown"}"#,
+            clocks,
+        ));
+    }
 
     fn report() -> ResponseAssertionCaseReport {
         ResponseAssertionCaseReport::new(
